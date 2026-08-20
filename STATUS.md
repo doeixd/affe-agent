@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 74 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 75 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -82,9 +82,18 @@ outside — with only the token — wakes it. This also means approvals (plan Ph
 7) already work: the tests are, structurally, human-in-the-loop approvals.
 
 Interruption is terminal under durability, and the cluster entity round-trips a
-sharded submit/steer/follow-up. Phase 5 — production wiring on `SingleRunner`
-with SQL — is the one phase not started, so "survives an actual process restart"
-remains unproven: every test runs in one process against in-memory storage.
+sharded submit/steer/follow-up. Phase 5 runs on `SingleRunner` with a SQLite
+journal on disk: a submission suspends and resumes against real SQL storage,
+replaying turn 1 rather than re-issuing it.
+
+**One claim remains unproven, and it is the headline one.** Tearing down the
+runner that started a suspended execution and resuming from a second runner over
+the same database records the execution as `Complete` with an
+`EntityNotAssignedToRunner` defect — the shard assignment is lost with the
+runner. So resumption replays persisted work correctly *within a runner's
+lifetime*; surviving the loss of that runner needs shard reassignment on
+startup, which is a deployment concern. Do not claim process-restart durability
+in user-facing material until it is closed.
 
 Phase 6 turned up a design error worth remembering: an entity handler must not
 block on a workflow. The handler holds the session's mailbox, and starting a

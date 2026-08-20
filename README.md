@@ -260,7 +260,7 @@ const result = yield* DurableAgent.result(durable, executionId)
 
 Model calls and tool calls become `Activity`s, so a resumed submission returns
 persisted results rather than re-issuing them — the refund does not go out
-twice. Steering queued while a submission is suspended is applied exactly once.
+twice. Journals to SQLite via `SingleRunner`, or run in memory for tests. Steering queued while a submission is suspended is applied exactly once.
 Canonical history is not stored: it is rebuilt from replayed activity results.
 
 `@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the

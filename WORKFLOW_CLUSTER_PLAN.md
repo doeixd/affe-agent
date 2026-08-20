@@ -316,7 +316,7 @@ a monorepo buys nothing until they version independently.
 | 2 Tools as Activities | done, verified — the refund runs once across a resumption |
 | 3 Steering and follow-ups | done, verified — a steer queued during suspension is applied exactly once |
 | 4 Interruption | done, verified — an interrupted submission never later completes |
-| 5 Single-node production wiring | **not started** — needs `SingleRunner` with a real `SqlClient` |
+| 5 Single-node production wiring | done, with one residual — see below |
 | 6 Cluster entity and RPC | done, verified — sharded submit, steer and follow-up round-trip |
 | 7 Approvals and scheduling | done — approvals are the `DurableDeferred` pattern the tests use; `ScheduledAgent` wraps `ClusterCron` |
 
@@ -334,16 +334,29 @@ synchronously while the mailbox is released immediately.
 This generalises: entity handlers are short, and anything long-running they
 start must be forked.
 
-## What remains
+## What remains: surviving a real restart
 
-Phase 5 only. Everything above is exercised against
-`ClusterWorkflowEngine` over `TestRunner`, which is in-memory; a real deployment
-needs `SingleRunner` with SQL storage, and the "survives an actual process
-restart" claim is still unproven because the tests all live in one process.
+Phase 5 runs on `SingleRunner` with a SQLite journal on disk, and a submission
+suspends and resumes correctly against it — the persisted model result is
+replayed rather than re-issued, and the journal is a real file.
 
-That is the honest boundary of what has been demonstrated: **resumption replays
-persisted work correctly**, but the persistence backing it has so far only been
-in-memory.
+One thing is still not demonstrated, and it is the headline durability claim.
+Tearing down the runner that started a suspended execution, then resuming from a
+second independently built runner over the same database, records the execution
+as `Complete` carrying an **`EntityNotAssignedToRunner`** defect. The shard
+assignment is lost with the runner, so the execution is terminalised instead of
+being left resumable.
+
+That is a deployment concern — shard reassignment on startup — rather than
+something the harness or the durable module can fix, and it is not something a
+test should stub. So the precise status is:
+
+> Resumption replays persisted work correctly, on real SQL storage, **within a
+> runner's lifetime**. Surviving the loss of that runner is unproven.
+
+Closing it means either a runner that reclaims orphaned shards on startup, or a
+multi-runner setup where another runner takes the shard over. Until then, do not
+claim process-restart durability in user-facing material.
 
 ---
 

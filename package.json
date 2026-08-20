@@ -69,6 +69,7 @@
   "devDependencies": {
     "@effect/ai-anthropic": "^4.0.0-rc.111",
     "@effect/language-service": "^0.87.2",
+    "@effect/sql-sqlite-node": "^4.0.0-rc.111",
     "@effect/vitest": "^4.0.0-rc.111",
     "effect": "^4.0.0-rc.111",
     "typescript": "^5.9.0",
