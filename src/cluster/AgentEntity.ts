@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { Prompt } from "effect/unstable/ai"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc } from "effect/unstable/rpc"
 import * as DurableAgent from "../durable/DurableAgent.js"
@@ -50,13 +51,14 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
         // gets it synchronously.
         submit: ({ payload }) =>
           Effect.gen(function* () {
+            const prompt = Prompt.make(payload.input)
             const executionId = yield* agent.definition.executionId({
               sessionId,
-              input: payload.input
+              prompt
             })
             yield* Effect.forkDetach(
               agent.definition
-                .execute({ sessionId, input: payload.input }, { discard: true })
+                .execute({ sessionId, prompt }, { discard: true })
                 .pipe(
                   // The caller already has its execution id, so a dispatch
                   // failure cannot be returned to it. Log rather than discard:

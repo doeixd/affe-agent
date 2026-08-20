@@ -15,7 +15,7 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly runId: RunId
   readonly turns: number
   readonly text: string
-  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools>>
+  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
 }
 
 /**
@@ -42,7 +42,7 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
 
     let turn = 0
     let text = ""
-    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools>> =
+    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
 
     while (true) {

@@ -107,6 +107,9 @@ condition, under the same submission:
 yield* AgentSession.followUp(session, "Then summarize the API.")
 ```
 
+`prompt`, `steer` and `followUp` all take `Prompt.RawInput`, so an image or a
+structured message steers a conversation exactly as a sentence does.
+
 `prompt` resolves only once the session goes quiet — after the initial prompt
 **and** every follow-up queued while it ran. Nothing keeps executing after
 `prompt` returns.

@@ -84,7 +84,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
   Tools extends Record<string, Tool.Any>
 >(
   handler: Toolkit.WithHandler<Tools>,
-  call: Response.ToolCallParts<Tools>,
+  call: Response.ToolCallParts<Tools, true>,
   options: Options
 ) {
     yield* Effect.annotateCurrentSpan({
@@ -202,7 +202,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
  */
 export const execute = <Tools extends Record<string, Tool.Any>>(
   handler: Toolkit.WithHandler<Tools>,
-  calls: ReadonlyArray<Response.ToolCallParts<Tools>>,
+  calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
   options: Options
 ): Effect.Effect<
   ReadonlyArray<Response.AnyPart>,

@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 96 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
+`npm test` — 101 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -74,6 +74,34 @@ than by anticipation (PLAN §42.2):
 
 `examples/typed-agent.ts` asserts at compile time that the sugar costs no
 inference: a handler parameter is still exactly its schema type.
+
+## Type-story gaps
+
+Three gaps where the types claimed more, or allowed less, than the runtime.
+
+**Tool parameters reach the loop encoded, and were typed decoded.** With
+`disableToolCallResolution: true` Effect AI leaves parameters in encoded schema
+form — `GenerateTextResponse`'s second type parameter defaults to `false`, so
+`GenerateTextResponse<Tools>` silently claimed decoded. Invisible for
+`{ query: Schema.String }`; wrong for any transforming schema. Now threaded as
+`true`, with a `Schema.DateFromString` test showing the loop observing the raw
+string while the handler receives a `Date`. See PLAN §33.5.
+
+**Tool requirements did not reach `AgentSession.make`.** A tool declaring
+`dependencies` produced a handler requiring those services, but `ToolkitInput`
+erased them, so the program typechecked and failed at the first call.
+`ToolkitInput<Tools, R>` now carries them into the agent's `R`; a type-level
+assertion proves omitting the service cannot compile. See PLAN §33.6.
+
+**Input was `string`, excluding multimodal prompts.** `prompt`, `steer` and
+`followUp` take `Prompt.RawInput`. `InputChannel` carries `Prompt`, and the
+durable store holds prompts encoded through their Schema, so a key-value store
+still backs it unchanged.
+
+A related ergonomic fix fell out: `Agent.make` accepts a bare function for
+`loop` and `contextTransform`, so writing one inline gets `Tools` by contextual
+typing from the toolkit on the same object — without that, `state.toolCalls` is
+`unknown` unless the user writes a type argument.
 
 ## Follow-up ordering and quiescence
 

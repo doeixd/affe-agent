@@ -23,11 +23,6 @@ export const commit = (
     history: Prompt.concat(s.history, prompt)
   }))
 
-export const userMessage = (text: string): Prompt.Prompt =>
-  Prompt.fromMessages([
-    Prompt.userMessage({ content: [Prompt.textPart({ text })] })
-  ])
-
 export const systemMessage = (text: string): Prompt.Prompt =>
   Prompt.fromMessages([Prompt.systemMessage({ content: text })])
 

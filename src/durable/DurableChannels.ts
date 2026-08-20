@@ -1,4 +1,5 @@
 import { Effect, Ref, Schema } from "effect"
+import { Prompt } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import type * as InputChannel from "../InputChannel.js"
 
@@ -22,6 +23,10 @@ import type * as InputChannel from "../InputChannel.js"
  * must survive until the workflow drains it. The backing store is supplied by
  * the caller so that this module does not dictate one; `memoryStore` is enough
  * for a single process, and a cluster deployment substitutes a shared store.
+ *
+ * Values are JSON-encoded prompts rather than `Prompt` objects, so any
+ * key-value store can back this without knowing anything about Effect AI.
+ * Encoding happens in `factory` below.
  */
 export interface Store {
   readonly offer: (key: string, input: string) => Effect.Effect<void>
@@ -62,6 +67,36 @@ export const memoryStore: Effect.Effect<Store> = Effect.map(
 const inputs = Schema.Array(Schema.String)
 
 /**
+ * Offer input from outside the workflow.
+ *
+ * Out-of-band senders must use this rather than writing to the store directly,
+ * so that what they write is encoded the same way the channel expects to read
+ * it.
+ */
+export const offer = (
+  store: Store,
+  sessionId: string,
+  name: "steering" | "followUps",
+  input: Prompt.RawInput
+): Effect.Effect<void> =>
+  Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
+    store.offer(`${sessionId}:${name}`, encoded)
+  )
+
+/** Prompts cross the store as JSON; an unencodable prompt is a bug, not a case. */
+const encodePrompt = (prompt: Prompt.Prompt): Effect.Effect<string> =>
+  Schema.encodeEffect(Prompt.Prompt)(prompt).pipe(
+    Effect.map((encoded) => JSON.stringify(encoded)),
+    Effect.orDie
+  )
+
+const decodePrompt = (encoded: string): Effect.Effect<Prompt.Prompt> =>
+  Effect.try(() => JSON.parse(encoded) as unknown).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Prompt.Prompt)),
+    Effect.orDie
+  )
+
+/**
  * Build channels whose drains are activities.
  *
  * `drainIndex` makes each drain's activity name unique and replay-stable. The
@@ -86,15 +121,22 @@ export const factory = (
         Effect.map(Ref.make(0), (drainIndex): InputChannel.InputChannel => {
           const key = `${sessionId}:${name}`
           return {
-            offer: (input) => store.offer(key, input),
+            offer: (input) =>
+              Effect.flatMap(encodePrompt(input), (encoded) =>
+                store.offer(key, encoded)
+              ),
             size: store.size(key),
             drain: Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(drainIndex, (n) => n + 1)
-              return yield* Activity.make({
+              const encoded = yield* Activity.make({
                 name: `${name}-drain-${index}`,
                 success: inputs,
                 execute: store.takeAll(key)
               }).pipe(Effect.provide(workflowContext))
+
+              // Decoding after the activity keeps the journalled value in its
+              // wire form, which is what makes the drain replayable.
+              return yield* Effect.forEach(encoded, decodePrompt)
             })
           }
         })

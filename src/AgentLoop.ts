@@ -19,8 +19,18 @@ export interface State<Tools extends Record<string, Tool.Any> = any> {
   readonly runId: RunId
   /** 1-based index of the turn that just completed. */
   readonly turnIndex: number
-  readonly response: LanguageModel.GenerateTextResponse<Tools>
-  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools>>
+  /**
+   * The response as the harness received it.
+   *
+   * Tool parameters are **encoded**, not decoded. The harness runs with
+   * `disableToolCallResolution: true` (§16), and Effect AI deliberately leaves
+   * parameters in their encoded schema form in that mode — the handler is what
+   * decodes them. For a tool whose parameters are a plain struct the two
+   * coincide, but for a transformed schema they do not, so a policy reading
+   * `params` must be typed for what is actually there.
+   */
+  readonly response: LanguageModel.GenerateTextResponse<Tools, true>
+  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
 }
 
 export type Decision = Continue | Stop

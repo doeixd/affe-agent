@@ -230,7 +230,7 @@ const release = (self: Session<any>): Effect.Effect<void> =>
 export const prompt = Effect.fn("AgentSession.prompt")(function* <
   Tools extends Record<string, Tool.Any>,
   E
->(session: AgentSession<Tools, E>, input: string) {
+>(session: AgentSession<Tools, E>, input: Prompt.RawInput) {
     const self = unwrap(session)
     const claimed = yield* claim(self)
 
@@ -248,7 +248,7 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     const submission = AgentSubmission.execute(
       self,
       submissionId,
-      input
+      Prompt.make(input)
     ).pipe(
       // The captured environment satisfies the model and any tool-handler
       // services; providing it leaves a submission with no requirements.
@@ -319,11 +319,11 @@ const requireRunning = (
  */
 export const steer = Effect.fn("AgentSession.steer")(function* (
   session: AgentSession<any, any>,
-  input: string
+  input: Prompt.RawInput
 ) {
     const self = unwrap(session)
     const submissionId = yield* requireRunning(self, "steer")
-    yield* self.steering.offer(input)
+    yield* self.steering.offer(Prompt.make(input))
     yield* EventBus.emit(
       self.bus,
       { submissionId },
@@ -334,7 +334,7 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
 /** Queue work to run after the active run reaches its stopping condition. */
 export const followUp = Effect.fn("AgentSession.followUp")(function* (
   session: AgentSession<any, any>,
-  input: string
+  input: Prompt.RawInput
 ) {
     const self = unwrap(session)
     const submissionId = yield* requireRunning(self, "followUp")
@@ -350,7 +350,7 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
         operation: "followUp"
       })
     }
-    yield* self.followUps.offer(input)
+    yield* self.followUps.offer(Prompt.make(input))
     yield* EventBus.emit(self.bus, { submissionId }, { _tag: "FollowUpQueued" })
   })
 

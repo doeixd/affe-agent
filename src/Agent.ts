@@ -1,5 +1,6 @@
 import { Effect, Option } from "effect"
 import { Toolkit } from "effect/unstable/ai"
+import type { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
 import * as ContextTransform from "./ContextTransform.js"
@@ -19,7 +20,12 @@ export interface AgentDefinition<
   R = never
 > {
   readonly instructions: Option.Option<string>
-  readonly toolkit: ToolkitInput<Tools>
+  /**
+   * `R` carries the toolkit's requirements as well as the loop's and the
+   * transform's, so a tool declaring `dependencies` makes those services
+   * required at `AgentSession.make` rather than failing at the first call.
+   */
+  readonly toolkit: ToolkitInput<Tools, R>
   readonly loop: AgentLoop.AgentLoop<E, R, Tools>
   readonly contextTransform: ContextTransform.ContextTransform<E, R>
   readonly toolExecution: ToolExecution.Strategy
@@ -33,24 +39,41 @@ export interface AgentDefinition<
  * effectful computation, resolved per turn, rather than a dynamic-capability
  * DSL of the harness's own invention.
  */
-export type ToolkitInput<Tools extends Record<string, Tool.Any>> =
-  | Toolkit.WithHandler<Tools>
-  | Effect.Effect<Toolkit.WithHandler<Tools>, never, any>
+export type ToolkitInput<
+  Tools extends Record<string, Tool.Any>,
+  R = never
+> = Toolkit.WithHandler<Tools> | Effect.Effect<Toolkit.WithHandler<Tools>, never, R>
 
 export interface Config<
   Tools extends Record<string, Tool.Any> = {},
   LE = never,
   LR = never,
   TE = never,
-  TR = never
+  TR = never,
+  KR = never
 > {
   readonly instructions?: string | undefined
-  readonly toolkit?: ToolkitInput<Tools> | undefined
-  /** Defaults to `AgentLoop.untilIdle()`. */
-  readonly loop?: AgentLoop.AgentLoop<LE, LR, Tools> | undefined
-  /** Defaults to `ContextTransform.identity`. */
+  readonly toolkit?: ToolkitInput<Tools, KR> | undefined
+  /**
+   * Defaults to `AgentLoop.untilIdle()`.
+   *
+   * A bare function is accepted as well as an `AgentLoop`, because writing one
+   * inline is how a policy gets its `Tools` by contextual typing — the toolkit
+   * on this same object determines them, so `state.toolCalls` is precise
+   * without a type argument.
+   */
+  readonly loop?:
+    | AgentLoop.AgentLoop<LE, LR, Tools>
+    | ((
+        state: AgentLoop.State<Tools>
+      ) => Effect.Effect<AgentLoop.Decision, LE, LR>)
+    | undefined
+  /** Defaults to `ContextTransform.identity`. A bare function is accepted. */
   readonly contextTransform?:
     | ContextTransform.ContextTransform<TE, TR>
+    | ((
+        context: ContextTransform.Context
+      ) => Effect.Effect<Prompt.Prompt, TE, TR>)
     | undefined
   /** Defaults to `ToolExecution.Parallel`. */
   readonly toolExecution?: ToolExecution.Strategy | undefined
@@ -86,10 +109,20 @@ export interface Config<
 export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
   tools: Tools,
   handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<Tools>>
-): Effect.Effect<Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>> => {
+): Effect.Effect<
+  Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>,
+  never,
+  Tool.HandlerServices<
+    Toolkit.ToolsByName<Tools>[keyof Toolkit.ToolsByName<Tools>]
+  >
+> => {
   const built = Toolkit.make(...tools)
   return built.pipe(Effect.provide(built.toLayer(handlers))) as Effect.Effect<
-    Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>
+    Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>,
+    never,
+    Tool.HandlerServices<
+      Toolkit.ToolsByName<Tools>[keyof Toolkit.ToolsByName<Tools>]
+    >
   >
 }
 
@@ -98,10 +131,11 @@ export const make = <
   LE = never,
   LR = never,
   TE = never,
-  TR = never
+  TR = never,
+  KR = never
 >(
-  config: Config<Tools, LE, LR, TE, TR> = {}
-): AgentDefinition<Tools, LE | TE, LR | TR> => ({
+  config: Config<Tools, LE, LR, TE, TR, KR> = {}
+): AgentDefinition<Tools, LE | TE, LR | TR | KR> => ({
   instructions: Option.fromUndefinedOr(config.instructions),
   // Always a toolkit, never `undefined`. An agent without tools gets an empty
   // one, so the engine has a single code path and the model call keeps its tool
@@ -111,8 +145,18 @@ export const make = <
   // `toolkit` was absent, in which case `Tools` was inferred as `{}` — but that
   // is a fact about inference the compiler cannot restate here.
   toolkit: config.toolkit ?? (Toolkit.empty as unknown as ToolkitInput<Tools>),
-  loop: config.loop ?? AgentLoop.untilIdle(),
-  contextTransform: config.contextTransform ?? ContextTransform.identity,
+  loop:
+    config.loop === undefined
+      ? AgentLoop.untilIdle()
+      : typeof config.loop === "function"
+        ? AgentLoop.make(config.loop)
+        : config.loop,
+  contextTransform:
+    config.contextTransform === undefined
+      ? ContextTransform.identity
+      : typeof config.contextTransform === "function"
+        ? ContextTransform.make(config.contextTransform)
+        : config.contextTransform,
   toolExecution: config.toolExecution ?? ToolExecution.Parallel,
   toolFailurePolicy: config.toolFailurePolicy ?? ToolExecution.ReturnToModel
 })

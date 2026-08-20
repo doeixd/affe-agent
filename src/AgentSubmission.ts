@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit, Option, SubscriptionRef } from "effect"
-import type { AiError, LanguageModel, Tool } from "effect/unstable/ai"
+import type { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as AgentRun from "./AgentRun.js"
@@ -27,7 +27,7 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly turns: number
   readonly text: string
   /** The final model response, so usage and finish reason are not discarded. */
-  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools>>
+  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
 }
 
 /**
@@ -42,19 +42,23 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
   R
->(session: Session<Tools, E, R>, submissionId: SubmissionId, input: string) {
+>(
+  session: Session<Tools, E, R>,
+  submissionId: SubmissionId,
+  input: Prompt.Prompt
+) {
     const correlation: Correlation = { submissionId }
     yield* Effect.annotateCurrentSpan({ submissionId })
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "SubmissionStarted"
     })
 
-    let next: string | undefined = input
-    const pending: Array<string> = []
+    let next: Prompt.Prompt | undefined = input
+    const pending: Array<Prompt.Prompt> = []
     let runs = 0
     let turns = 0
     let text = ""
-    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools>> =
+    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
 
     while (next !== undefined) {
@@ -64,7 +68,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
           _tag: "FollowUpApplied"
         })
       }
-      yield* History.commit(session.state, History.userMessage(next))
+      yield* History.commit(session.state, next)
       const runId = yield* session.ids.nextRun
       runs = runs + 1
 

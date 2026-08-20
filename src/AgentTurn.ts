@@ -9,8 +9,9 @@ import type { RunId, SubmissionId } from "./internal/ids.js"
 import type { Session } from "./internal/state.js"
 
 export interface Result<Tools extends Record<string, Tool.Any>> {
-  readonly response: LanguageModel.GenerateTextResponse<Tools>
-  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools>>
+  /** Tool parameters are encoded; see `AgentLoop.State`. */
+  readonly response: LanguageModel.GenerateTextResponse<Tools, true>
+  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
   readonly text: string
 }
 
@@ -28,7 +29,7 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
     const inputs = yield* session.steering.drain
     if (inputs.length === 0) return
     for (const input of inputs) {
-      yield* History.commit(session.state, History.userMessage(input))
+      yield* History.commit(session.state, input)
     }
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "SteeringApplied",

@@ -1,5 +1,6 @@
 import { Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
+import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import type { AgentDefinition } from "../Agent.js"
@@ -40,7 +41,9 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
   options: Options
 ) => {
   const definition = Workflow.make(name, {
-    payload: { sessionId: Schema.String, input: Schema.String },
+    // `Prompt` carries its own Schema, so a multimodal submission survives the
+    // journal exactly as a text one does.
+    payload: { sessionId: Schema.String, prompt: Prompt.Prompt },
     idempotencyKey: (payload) => `${name}:${payload.sessionId}`,
     success: Schema.String
   })
@@ -67,7 +70,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             channels,
             sessionId: payload.sessionId
           })
-          const result = yield* AgentSession.prompt(session, payload.input)
+          const result = yield* AgentSession.prompt(session, payload.prompt)
           return result.text
         })
       ).pipe(Effect.provide(modelLayer), Effect.orDie)
@@ -93,14 +96,15 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
 export const submit = <W extends ReturnType<typeof workflow>>(
   agent: W,
   sessionId: string,
-  input: string
+  input: Prompt.RawInput
 ): Effect.Effect<string, never, WorkflowEngine.WorkflowEngine> =>
   Effect.gen(function* () {
+    const prompt = Prompt.make(input)
     const executionId = yield* agent.definition.executionId({
       sessionId,
-      input
+      prompt
     })
-    yield* agent.definition.execute({ sessionId, input }, { discard: true })
+    yield* agent.definition.execute({ sessionId, prompt }, { discard: true })
     return executionId
   })
 
@@ -108,15 +112,17 @@ export const submit = <W extends ReturnType<typeof workflow>>(
 export const steer = (
   store: DurableChannels.Store,
   sessionId: string,
-  input: string
-): Effect.Effect<void> => store.offer(`${sessionId}:steering`, input)
+  input: Prompt.RawInput
+): Effect.Effect<void> =>
+  DurableChannels.offer(store, sessionId, "steering", input)
 
 /** Queue a follow-up, extending the submission rather than the current run. */
 export const followUp = (
   store: DurableChannels.Store,
   sessionId: string,
-  input: string
-): Effect.Effect<void> => store.offer(`${sessionId}:followUps`, input)
+  input: Prompt.RawInput
+): Effect.Effect<void> =>
+  DurableChannels.offer(store, sessionId, "followUps", input)
 
 /**
  * Await a terminal result.

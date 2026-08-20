@@ -3,6 +3,7 @@ import { Deferred, Effect, Ref } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as InputChannel from "../src/InputChannel.js"
+import { Prompt } from "effect/unstable/ai"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -16,6 +17,9 @@ describe("input channels", () => {
       const drains = yield* Ref.make<
         Array<readonly [string, ReadonlyArray<string>]>
       >([])
+      // Channels carry prompts; the test compares their user text.
+      const texts = (batch: ReadonlyArray<Prompt.Prompt>) =>
+        batch.flatMap(FakeModel.userTexts)
       const sessionRef = yield* Deferred.make<AgentSession.AgentSession<any>>()
 
       // Wraps the in-memory channel and records each drained batch.
@@ -28,7 +32,10 @@ describe("input channels", () => {
               size: inner.size,
               drain: Effect.tap(inner.drain, (batch) =>
                 batch.length > 0
-                  ? Ref.update(drains, (all) => [...all, [name, batch] as const])
+                  ? Ref.update(drains, (all) => [
+                      ...all,
+                      [name, texts(batch)] as const
+                    ])
                   : Effect.void
               )
             })

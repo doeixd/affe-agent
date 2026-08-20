@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Layer, Option, Schedule } from "effect"
+import { Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
+import { Prompt } from "effect/unstable/ai"
 import {
   ClusterWorkflowEngine,
   Entity,
@@ -23,6 +24,16 @@ import * as FakeModel from "./FakeModel.js"
  * the session id. That is the part of Phase 6 that belongs to this project.
  *
  */
+/** Decodes what a store holds back into plain text, for assertions. */
+const textsIn = (store: DurableChannels.Store, key: string) =>
+  Effect.map(store.takeAll(key), (encoded) =>
+    encoded.flatMap((json) =>
+      FakeModel.userTexts(
+        Schema.decodeUnknownSync(Prompt.Prompt)(JSON.parse(json))
+      )
+    )
+  )
+
 describe("agent entity", () => {
   it("exposes the session operations as entity RPCs", () => {
     // The surface a remote client sees, and the reason no core change was
@@ -49,13 +60,17 @@ describe("agent entity", () => {
       yield* DurableAgent.steer(store, "session-a", "for a")
       yield* DurableAgent.followUp(store, "session-b", "for b")
 
-      assert.deepStrictEqual(yield* store.takeAll("session-a:steering"), [
-        "for a"
-      ])
-      assert.deepStrictEqual(yield* store.takeAll("session-b:followUps"), [
-        "for b"
-      ])
-      assert.deepStrictEqual(yield* store.takeAll("session-b:steering"), [])
+      // The store holds encoded prompts, so compare their text rather than
+      // their wire form.
+      assert.deepStrictEqual(
+        yield* textsIn(store, "session-a:steering"),
+        ["for a"]
+      )
+      assert.deepStrictEqual(
+        yield* textsIn(store, "session-b:followUps"),
+        ["for b"]
+      )
+      assert.deepStrictEqual(yield* textsIn(store, "session-b:steering"), [])
     })
   )
 
@@ -85,7 +100,7 @@ describe("agent entity", () => {
 
       // Routed input landed under this session's keys.
       assert.deepStrictEqual(
-        yield* store.takeAll("session-alpha:followUps"),
+        yield* textsIn(store, "session-alpha:followUps"),
         ["and then this"]
       )
 

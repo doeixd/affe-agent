@@ -1948,6 +1948,44 @@ not `any`.
 
 ---
 
+## 33.5 Tool parameters reach the loop encoded
+
+The harness runs with `disableToolCallResolution: true` (§16), and Effect AI
+deliberately leaves tool-call parameters in their **encoded** schema form in
+that mode — decoding is the handler's job, and `Toolkit.handle` accordingly
+takes encoded parameters.
+
+`GenerateTextResponse<Tools, EncodedToolParameters>` defaults its second
+parameter to `false`, so writing `GenerateTextResponse<Tools>` silently claims
+*decoded*. `AgentLoop.State` and `AgentTurn.Result` must therefore both spell
+out `true`.
+
+The distinction is invisible for a parameter schema like
+`{ query: Schema.String }`, where encoded and decoded coincide — which is
+exactly why it is worth a test with a transforming schema. With
+`Schema.DateFromString`, a loop typed as decoded would claim a `Date` while
+holding a string.
+
+## 33.6 Requirements are complete, or they are misleading
+
+Three kinds of requirement reach a session, and all three must appear in
+`AgentSession.make`:
+
+```text
+LanguageModel        the model
+loop / transform     policy services            (§33)
+toolkit              a tool's `dependencies`    (Tool.HandlerServices)
+```
+
+The third is easy to drop. A tool declaring `dependencies: [Greeter]` produces a
+handler requiring `Greeter`; if `ToolkitInput` erases that to `any`, the program
+typechecks and fails at the first tool call — precisely the failure the Effect
+environment exists to prevent. `ToolkitInput<Tools, R>` carries it, and
+`Agent.make` unions it into the agent's `R`.
+
+> A requirement that is real at runtime and absent from the type is worse than
+> no type at all, because it is trusted.
+
 ## 33.3 Absence is `Option`, in domain types
 
 Domain types express absence with `Option`, never `null` or `undefined`:

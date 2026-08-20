@@ -1,4 +1,5 @@
 import { Effect, Queue } from "effect"
+import { Prompt } from "effect/unstable/ai"
 
 /**
  * Where out-of-band input to a running submission is held.
@@ -19,14 +20,14 @@ import { Effect, Queue } from "effect"
  * ordinary Layer substitution, and need nothing here.
  */
 export interface InputChannel {
-  readonly offer: (input: string) => Effect.Effect<void>
+  readonly offer: (input: Prompt.Prompt) => Effect.Effect<void>
   /**
    * Take everything pending, without waiting.
    *
    * A drain must never block: it happens at every turn boundary, and the queue
    * is usually empty.
    */
-  readonly drain: Effect.Effect<ReadonlyArray<string>>
+  readonly drain: Effect.Effect<ReadonlyArray<Prompt.Prompt>>
   readonly size: Effect.Effect<number>
 }
 
@@ -36,6 +37,11 @@ export interface InputChannel {
  * `name` identifies the channel within its session — `"steering"`,
  * `"followUps"` — so an implementation that needs durable identity can derive
  * one from the session and the name.
+ *
+ * Inputs are `Prompt`s rather than strings: steering a multimodal conversation
+ * with an image is the same operation as steering it with a sentence, and the
+ * channel should not be the thing that forbids it. `Prompt` has a Schema, so a
+ * durable channel can still encode what it holds.
  */
 export interface Factory {
   readonly make: (
@@ -48,7 +54,7 @@ export interface Factory {
 export const memory: Factory = {
   make: () =>
     Effect.map(
-      Queue.unbounded<string>(),
+      Queue.unbounded<Prompt.Prompt>(),
       (queue): InputChannel => ({
         offer: (input) => Queue.offer(queue, input).pipe(Effect.asVoid),
         // `clear` rather than `takeAll`: the latter waits for an element.
