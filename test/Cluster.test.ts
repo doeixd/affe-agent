@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
+import { Cron, Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import {
   ClusterWorkflowEngine,
@@ -7,7 +7,10 @@ import {
   ShardingConfig,
   TestRunner
 } from "effect/unstable/cluster"
+import type { Sharding } from "effect/unstable/cluster"
+import type { WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
+import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
 import * as AgentClient from "../src/cluster/AgentClient.js"
 import {
@@ -262,5 +265,69 @@ describe("agent client", () => {
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
       )
     )
+  )
+})
+
+describe("scheduled agent", () => {
+  /** True only when `T` is `any`, which is the failure being guarded against. */
+  type IsAny<T> = 0 extends 1 & T ? true : false
+  type RequirementsOf<L> = L extends Layer.Layer<infer _A, infer _E, infer R>
+    ? R
+    : never
+
+  it.effect("tracks its requirements instead of erasing them", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Cronned", Agent.make({}), { store })
+
+      const scheduled = ScheduledAgent.layer({
+        name: "nightly",
+        cron: Cron.make({
+          seconds: [0],
+          minutes: [0],
+          hours: [3],
+          days: [],
+          months: [],
+          weekdays: []
+        }),
+        agent: durable,
+        store,
+        input: "summarise the day"
+      })
+
+      type R = RequirementsOf<typeof scheduled>
+
+      // The signature used to be written as `WorkflowEngine | any`, which is
+      // just `any`: the layer claimed to need nothing in particular and every
+      // caller silently lost requirement checking. These two lines are the
+      // test -- they stop compiling if that regresses.
+      const notAny: IsAny<R> = false
+      assert.isFalse(notAny)
+
+      const needsSharding: Sharding.Sharding extends R ? true : false = true
+      assert.isTrue(needsSharding)
+
+      const needsEngine: WorkflowEngine.WorkflowEngine extends R ? true : false =
+        true
+      assert.isTrue(needsEngine)
+    })
+  )
+
+  it.effect("a reused session id would suppress every later firing", () =>
+    Effect.gen(function* () {
+      // Why `sessionId` defaults to one derived from the firing time. A
+      // submission's idempotency key is its session, so a scheduled agent that
+      // reuses one session runs once and then does nothing forever, while
+      // looking perfectly healthy.
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Repeat", Agent.make({}), { store })
+
+      const first = yield* DurableAgent.executionIdFor(durable, "fixed")
+      const second = yield* DurableAgent.executionIdFor(durable, "fixed")
+      assert.strictEqual(first, second, "the same session is the same execution")
+
+      const varying = yield* DurableAgent.executionIdFor(durable, "fixed-2")
+      assert.notStrictEqual(varying, first)
+    })
   )
 })

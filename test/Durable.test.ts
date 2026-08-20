@@ -355,6 +355,43 @@ describe("durable submissions", () => {
     })
   )
 
+
+  it.live("a provider failure survives the journal with its detail intact", () =>
+    Effect.gen(function* () {
+      // The model call is an activity, and an activity with no declared error
+      // schema cannot encode a failure -- the engine records an unencodable
+      // SchemaError in its place, destroying the provider error on the way
+      // out. DurableModel carries the outcome as a *value* to avoid that; this
+      // asserts the detail actually arrives at a caller.
+      const store = yield* DurableChannels.memoryStore
+      const { layer: modelLayer } = yield* FakeModel.layer([
+        { fail: "provider returned 503" }
+      ])
+
+      const durable = DurableAgent.workflow("Provider", Agent.make({}), { store })
+
+      const exit = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "s7", "go")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      assert.isTrue(Exit.isFailure(exit))
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+        : undefined
+      assert.isDefined(failure)
+      // Not a bare "something died": the provider's own message is still here.
+      assert.include(failure!.detail, "provider returned 503")
+    })
+  )
+
   it.live("an interrupted submission reaches a terminal state and stays there", () =>
     Effect.gen(function* () {
       // Phase 4: interruption under durability must be terminal — an

@@ -314,6 +314,39 @@ the sharded version; `wrap` is exposed separately so a test client gets the same
 treatment. Errors are matched by `_tag` rather than `instanceof`, since they are
 rebuilt by their schema on the far side of the wire.
 
+## Hardening pass: two bugs that only real storage could show
+
+**Every durable submission whose model called a tool failed.**
+`DurableAgent.workflow` defaulted its toolkit to `Toolkit.empty` when the
+`options.toolkit` override was absent, instead of taking it from the agent. An
+empty toolkit makes `Response.Part(toolkit)` produce a part union with no
+`tool-call` variant, so the first response containing a tool call failed to
+encode — surfacing as a model failure with nothing pointing at the toolkit. It
+went unnoticed because the API required passing the toolkit *twice*, to
+`Agent.make` and again to `workflow`, and every existing test happened to do
+both. The toolkit is now resolved from the agent, and the option is an override.
+
+**A tool returning a non-JSON value killed the submission on SQL storage.**
+Tool results were journalled under `Schema.Unknown`. A handler result carries an
+`encodedResult` (JSON, for the model) *and* a decoded `result` — whatever the
+tool's success schema produces: a `Date`, a class instance, a branded type.
+`Schema.Unknown` cannot encode those, so SQLite rejected the write with
+`SchemaError: Expected JSON value`. The in-memory engine does not enforce JSON,
+which is exactly why every test passed. Results are now journalled through the
+tool's own schema, split on success/failure because a failed call's `result`
+holds the tool's failure value, which a success schema would reject.
+
+Worth keeping: these were found by writing a test against SQLite rather than the
+in-memory engine. Both were invisible to `TestRunner`.
+
+**`ScheduledAgent` had no tests and a signature that erased its requirements.**
+It was annotated `Layer<never, never, WorkflowEngine | any>`, which is just
+`Layer<never, never, any>` — the union swallows everything, so callers lost
+requirement checking entirely, and a cast held it in place. The return type is
+now inferred. Its `sessionId` also defaults to one derived from the firing time:
+a submission's idempotency key is its session, so a scheduled agent that reused
+one session ran once and then silently did nothing forever.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

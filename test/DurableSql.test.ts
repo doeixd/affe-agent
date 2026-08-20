@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { Crypto, Deferred, Duration, Effect, Exit, Layer, Ref } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
 import { Schema } from "effect"
@@ -31,6 +31,7 @@ import { countingModel } from "./helpers.js"
  */
 const Gate = DurableDeferred.make("SqlGate", { success: Schema.String })
 const LossGate = DurableDeferred.make("LossGate", { success: Schema.String })
+const ReplayGate = DurableDeferred.make("ReplayGate", { success: Schema.String })
 
 /** Node's crypto, which `SingleRunner` needs for runner identity. */
 const CryptoLayer = Layer.succeed(
@@ -279,6 +280,126 @@ describe("process loss", () => {
           "the replacement runner must not re-issue turn 1"
         )
       }).pipe(Effect.scoped) as Effect.Effect<void>,
+    30_000
+  )
+})
+
+describe("replayed tool results", () => {
+  it.live(
+    "a replayed tool result keeps its decoded type",
+    () =>
+      Effect.gen(function* () {
+        // A tool's handler result carries both an `encodedResult` (JSON, for
+        // the model) and a decoded `result` (for the harness, its events, and
+        // canonical history). Journalling the pair under `Schema.Unknown` only
+        // round-trips the first: the decoded `Date` below goes into SQLite as a
+        // string and comes back a string, so a resumed run disagrees with a
+        // fresh one about what its own tool returned.
+        const file = yield* tempDatabase
+        const stamped = new Date("2026-01-01T00:00:00.000Z")
+
+        const Stamp = Tool.make("stamp", {
+          parameters: Schema.Struct({}),
+          success: Schema.DateFromString
+        })
+        const toolkit = yield* Agent.toolkit([Stamp], {
+          stamp: () => Effect.succeed(stamped)
+        })
+
+        const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+        const suspendOnce = yield* Ref.make(true)
+        const turns = yield* Ref.make(0)
+
+        // Suspends before turn 2, after turn 1's tool call is journalled.
+        const gating = ContextTransform.make((context) =>
+          Effect.gen(function* () {
+            const turn = yield* Ref.updateAndGet(turns, (n) => n + 1)
+            if (turn === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
+              const token = yield* DurableDeferred.token(ReplayGate)
+              yield* Deferred.succeed(gateReady, token)
+              yield* DurableDeferred.await(ReplayGate)
+            }
+            return context.prompt
+          })
+        )
+
+        const store = yield* DurableChannels.memoryStore
+        const agent = Agent.make({
+          toolkit,
+          contextTransform: gating,
+          loop: (state) =>
+            Effect.succeed(
+              state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+        })
+        const durable = DurableAgent.workflow("Replayed", agent, { store })
+
+        const script = [
+          { toolCalls: [{ id: "s1", name: "stamp", params: {} }] },
+          { text: "done" }
+        ]
+
+        // ---- Runner A: run the tool, journal it, then vanish -------------
+        const executionId = yield* Effect.gen(function* () {
+          const { layer: model } = yield* FakeModel.layer(script)
+          return yield* Effect.gen(function* () {
+            const id = yield* DurableAgent.submit(durable, store, "replay-1", "go")
+            yield* Deferred.await(gateReady)
+            yield* Effect.sleep(Duration.millis(500))
+            return id
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 1)),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+        yield* Effect.sleep(Duration.seconds(2))
+
+        // ---- Runner B: replays the tool call from SQLite -----------------
+        const prompts = yield* Effect.gen(function* () {
+          const { layer: model, recorder } = yield* FakeModel.layer(script)
+          return yield* Effect.gen(function* () {
+            const token = yield* Deferred.await(gateReady)
+            yield* DurableDeferred.succeed(ReplayGate, {
+              token,
+              value: "resume"
+            })
+            yield* DurableAgent.result(durable, executionId, {
+              interval: Duration.millis(50)
+            })
+            return yield* recorder.prompts
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 1)),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+        // The prompt carries the *encoded* result -- that is what the model
+        // is supposed to see, and it is the half that always round-tripped.
+        // What this test guards is that the submission survives at all: with
+        // the results journalled under `Schema.Unknown`, SQLite rejected the
+        // write with `SchemaError: Expected JSON value` and the run died
+        // before ever reaching turn 2.
+        const results = prompts.flatMap((prompt) =>
+          prompt.content.flatMap((message) =>
+            message.role === "tool"
+              ? message.content.flatMap((part) =>
+                  part.type === "tool-result" ? [part.result] : []
+                )
+              : []
+          )
+        )
+        assert.isAtLeast(results.length, 1, "no tool result reached the model")
+        assert.strictEqual(results[0], stamped.toISOString())
+      }),
     30_000
   )
 })

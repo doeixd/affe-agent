@@ -29,8 +29,12 @@ export interface Options {
    */
   readonly store: DurableChannels.Store
   /**
-   * Resolved toolkit. Handlers are wrapped as activities, so a tool that
-   * already ran is never executed twice.
+   * Override for the agent's own toolkit.
+   *
+   * Normally omitted: the toolkit is taken from the agent, and its handlers are
+   * wrapped as activities so a tool that already ran is never executed twice.
+   * Supply one only to substitute a different resolved toolkit than the agent
+   * carries.
    */
   readonly toolkit?: Toolkit.WithHandler<any> | undefined
 }
@@ -71,6 +75,15 @@ export class DurableAgentFailure extends Schema.TaggedError<DurableAgentFailure>
   }
 }
 
+/**
+ * A toolkit may be given directly or as an Effect producing one; the harness
+ * resolves it per turn, and so must this.
+ */
+const resolveToolkit = (
+  input: AgentDefinition<any, any, any>["toolkit"]
+): Effect.Effect<Toolkit.WithHandler<any>, never, any> =>
+  Effect.isEffect(input) ? input : Effect.succeed(input)
+
 /** The wire-safe projection of a submission's cause. */
 const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure => {
   const failure = AgentEvent.failureFromCause(cause)
@@ -108,8 +121,17 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       // Built inside the workflow body: activities need the workflow context,
       // and `LanguageModel.make` pins its provider's requirements, so the
       // context cannot be threaded in from outside.
-      const toolkit =
-        options.toolkit ?? ((yield* Toolkit.empty) as Toolkit.WithHandler<any>)
+      // Resolved from the agent, not defaulted to empty.
+      //
+      // This silently broke every durable submission whose model called a
+      // tool. `DurableModel` builds its parts schema with
+      // `Response.Part(toolkit)`, so an empty toolkit yields a union with no
+      // `tool-call` variant — and the first response containing a tool call
+      // failed to encode, reported as a model failure with no hint that the
+      // toolkit was the cause. The old signature required passing the toolkit
+      // *twice*, to `Agent.make` and again here, and every existing test
+      // happened to do so, which is why it went unnoticed.
+      const toolkit = options.toolkit ?? (yield* resolveToolkit(agent.toolkit))
       const durableTools = yield* DurableToolkit.wrap(toolkit)
       const modelLayer = yield* DurableModel.wrap(durableTools)
       const channels = yield* DurableChannels.factory(options.store)
