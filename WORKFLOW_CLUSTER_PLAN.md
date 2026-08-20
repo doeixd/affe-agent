@@ -45,11 +45,11 @@ toolkit is constructed.
 dependencies. Every phase below is therefore unit-testable; nothing needs a
 database to develop against.
 
-**Concurrent activities complete.** Concurrent `Activity.make` calls finish
-normally on `4.0.0-rc.111`, so
-[effect#6014](https://github.com/Effect-TS/effect/issues/6014) does not
-reproduce. Guarded by a test in `test/DurableAudit.test.ts`, because it is what
-lets durable tool execution keep PLAN §17's unbounded-concurrency default.
+**Concurrent activities complete, including on replay.** effect#6014 was a
+replay-path deadlock, so the fresh path alone would have tested the wrong thing.
+A suspended submission whose turn ran three parallel tool calls resumes, replays
+all three, and each tool executes exactly once in total. That is what lets
+durable tool execution keep PLAN §17's unbounded-concurrency default.
 
 ## 1.1 Consequences that shape this plan
 
@@ -337,18 +337,31 @@ synchronously while the mailbox is released immediately.
 This generalises: entity handlers are short, and anything long-running they
 start must be forked.
 
-## Open: typed failures at the workflow boundary
+## Resolved: activity failures were unencodable
 
-The durable body still uses `Effect.orDie`, so a typed agent failure crosses as
-a defect. The obvious fix — declare an `error` schema on the workflow and map
-failures into it — produces a `SchemaError` defect when a tool fails, with both
-a `Schema.TaggedError` and a plain `Schema.String` error channel. That the
-symptom is identical for both suggests the rejected encoding is not the error
-channel at all, and it has not been isolated.
+The `orDie` at the workflow boundary was a symptom, not the disease.
 
-Shipping a half-working error channel would be worse than an honest defect, so
-the `orDie` stands until the encoding is understood. Failures do still surface
-as failed exits rather than silent successes, which is asserted.
+`Activity.make` defaults its error schema to `Schema.Never`. An activity whose
+`execute` fails therefore cannot encode that failure, and the engine records an
+unencodable `SchemaError` defect in its place. Every tool failure and every
+provider failure under the durable interpreter took that path, so the failure
+information was destroyed on the way out — a strictly worse outcome than the
+`orDie` that was blamed for it.
+
+The fix is to stop letting activities fail. Both the tool and model activities
+now carry an **outcome as a value** — `Succeeded | Failed` — and the wrapper
+re-raises `DurableToolFailure` / `DurableModelFailure` outside the activity.
+Interruption is excluded deliberately: it is the run going away, not a tool
+outcome, and persisting it would make an interrupted call replay as failed.
+
+This also makes failures replayable: a tool that failed once fails the same way
+on resume rather than running again.
+
+One detail worth keeping: the outcome needs a **real schema**, not
+`Schema.Unknown`. Response parts are class instances that `Unknown` cannot
+encode, which is why the original code had a parts schema at all. Wrapping them
+in an `Unknown` envelope reintroduced the same `SchemaError` from the success
+side.
 
 ## What remains: surviving a real restart
 

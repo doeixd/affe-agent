@@ -68,7 +68,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
           _tag: "FollowUpApplied"
         })
       }
-      yield* History.commit(session.state, next)
+      yield* History.commit(session.history, next)
       const runId = yield* session.ids.nextRun
       runs = runs + 1
 

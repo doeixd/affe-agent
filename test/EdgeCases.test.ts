@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, Option, Ref } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Ref, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -256,11 +256,64 @@ describe("edge cases", () => {
 
           yield* AgentSession.prompt(session, "go")
           const after = yield* view.get
-          // History is owned by the session; the view only reflects it.
           assert.strictEqual(after.status, "idle")
-          assert.deepStrictEqual(FakeModel.userTexts(after.history), ["go"])
+
+          // History is deliberately NOT in the runtime state view: it is read
+          // through its own accessor, so a status subscriber is not handed the
+          // whole transcript on every turn.
+          assert.notProperty(after, "history")
+          assert.deepStrictEqual(
+            FakeModel.userTexts(yield* AgentSession.history(session)),
+            ["go"]
+          )
         }).pipe(Effect.provide(layer))
       )
+    })
+  )
+
+  it.effect("status subscribers are not woken by history growth", () =>
+    Effect.gen(function* () {
+      // The reason history lives in its own Ref: a UI watching progress should
+      // not receive an ever-growing transcript on every turn.
+      const observed = yield* Ref.make<Array<string>>([])
+      const { layer } = yield* FakeModel.layer([
+        { text: "one" },
+        { text: "two" }
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({
+              loop: (state) =>
+                Effect.succeed(
+                  state.turnIndex < 2
+                    ? { _tag: "Continue" }
+                    : { _tag: "Stop" }
+                )
+            })
+          )
+
+          yield* Effect.forkScoped(
+            Stream.runForEach(
+              AgentSession.state(session).changes,
+              (state) =>
+                Ref.update(observed, (all) => [
+                  ...all,
+                  `${state.status}:${state.turn}`
+                ])
+            )
+          )
+          yield* Effect.yieldNow
+
+          yield* AgentSession.prompt(session, "go")
+        }).pipe(Effect.provide(layer))
+      )
+
+      // Every emission describes runtime progress only; none carries history.
+      const seen = yield* Ref.get(observed)
+      assert.isAbove(seen.length, 0)
+      assert.isTrue(seen.every((entry) => /^(idle|running|closed):\d+$/.test(entry)))
     })
   )
 })

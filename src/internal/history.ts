@@ -1,6 +1,5 @@
-import { Effect, SubscriptionRef } from "effect"
+import { Effect, Ref } from "effect"
 import { Prompt, Response } from "effect/unstable/ai"
-import type { SessionState } from "./state.js"
 
 /**
  * Canonical conversation history.
@@ -10,18 +9,14 @@ import type { SessionState } from "./state.js"
  * lets an interrupted turn leave history untouched.
  */
 export const snapshot = (
-  state: SubscriptionRef.SubscriptionRef<SessionState>
-): Effect.Effect<Prompt.Prompt> =>
-  SubscriptionRef.get(state).pipe(Effect.map((s) => s.history))
+  history: Ref.Ref<Prompt.Prompt>
+): Effect.Effect<Prompt.Prompt> => Ref.get(history)
 
 export const commit = (
-  state: SubscriptionRef.SubscriptionRef<SessionState>,
+  history: Ref.Ref<Prompt.Prompt>,
   prompt: Prompt.Prompt
 ): Effect.Effect<void> =>
-  SubscriptionRef.update(state, (s) => ({
-    ...s,
-    history: Prompt.concat(s.history, prompt)
-  }))
+  Ref.update(history, (current) => Prompt.concat(current, prompt))
 
 export const systemMessage = (text: string): Prompt.Prompt =>
   Prompt.fromMessages([Prompt.systemMessage({ content: text })])

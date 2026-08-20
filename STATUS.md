@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 106 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
+`npm test` — 107 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -110,11 +110,26 @@ now check an admission marker the submission owns — the durable counterpart of
 core's `acceptingFollowUps` — opened by `submit` before dispatch and cleared
 however the submission ends.
 
-Two items are deliberately not done: separating canonical history from the
-observable `SubscriptionRef` (P3, explicitly optional — worth doing when a UI
-actually feels the weight of history updates), and preserving typed failures
-across the workflow boundary, which is recorded as an open gap with its symptom
-rather than guessed at.
+Both previously-deferred items are now done.
+
+**Canonical history moved out of the observable `SubscriptionRef`** into its own
+`Ref`. Both stay session-owned, but they change for different reasons: every
+commit appends to an ever-growing `Prompt`, and a UI subscribed for status and
+turn progress was being handed the entire transcript each turn. A test asserts
+that every state emission describes runtime progress only.
+
+**The typed-failure gap turned out to be a much worse bug than `orDie`.**
+`Activity.make` defaults its error schema to `Schema.Never`, so an activity whose
+`execute` fails cannot encode the failure and the engine records an unencodable
+`SchemaError` instead — every tool and provider failure under the durable
+interpreter was destroying its own failure information. Activities now carry an
+outcome as a value (`Succeeded | Failed`) and the wrapper re-raises
+`DurableToolFailure`/`DurableModelFailure`, which also makes failures replayable.
+Interruption is excluded: it is the run going away, not a tool outcome.
+
+The outcome needs a real schema rather than `Schema.Unknown` — response parts
+are class instances `Unknown` cannot encode, which is why a parts schema existed
+in the first place.
 
 ## Type-story gaps
 

@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
+import { DurableDeferred } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as ContextTransform from "../src/ContextTransform.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -17,6 +19,9 @@ const Ping = Tool.make("ping", {
   success: Schema.String
 })
 const PingToolkit = Toolkit.make(Ping)
+const ParallelGate = DurableDeferred.make("ParallelReplayGate", {
+  success: Schema.String
+})
 
 describe("durable edge cases", () => {
   it.live("a tool call id reused across turns still executes each time", () =>
@@ -275,11 +280,93 @@ describe("durable edge cases", () => {
         )
       )
 
-      // The submission fails rather than quietly succeeding. The failure
-      // currently arrives as a defect: giving the workflow a typed error
-      // channel ends in a SchemaError, and that is recorded as an open gap
-      // rather than papered over.
       assert.isTrue(Exit.isFailure(outcome))
+
+      // The failure survives as a described failure rather than an unencodable
+      // SchemaError. An activity with no declared error schema cannot encode a
+      // failure at all, so every tool failure used to be destroyed on the way
+      // out; the outcome is carried as a value instead.
+      if (Exit.isFailure(outcome)) {
+        const rendered = JSON.stringify(outcome.cause)
+        assert.notInclude(rendered, "SchemaError")
+        assert.include(rendered, "DurableToolFailure")
+      }
+    })
+  )
+
+  it.live("parallel tool calls replay without re-running or deadlocking", () =>
+    Effect.gen(function* () {
+      // effect#6014 was a *replay*-path deadlock with concurrent activities,
+      // and PLAN §17 runs a turn's tools at unbounded concurrency. Testing the
+      // fresh path only would leave exactly the case that historically broke.
+      const ran = yield* Ref.make<Array<string>>([])
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const suspendOnce = yield* Ref.make(true)
+
+      const toolkit = Agent.toolkit([Ping], {
+        ping: ({ n }) => Ref.update(ran, (all) => [...all, n]).pipe(Effect.as(n))
+      })
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: modelLayer } = yield* FakeModel.layer([
+        {
+          toolCalls: [
+            { id: "a", name: "ping", params: { n: "a" } },
+            { id: "b", name: "ping", params: { n: "b" } },
+            { id: "c", name: "ping", params: { n: "c" } }
+          ]
+        },
+        { text: "done" }
+      ])
+
+      // Suspends after the parallel tools have run, before the next turn — so
+      // the resumed execution must replay three concurrent activities.
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          if (
+            context.turnIndex === 2 &&
+            (yield* Ref.getAndSet(suspendOnce, false))
+          ) {
+            const token = yield* DurableDeferred.token(ParallelGate)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(ParallelGate)
+          }
+          return context.prompt
+        })
+      )
+
+      const durable = DurableAgent.workflow(
+        "ParallelReplay",
+        Agent.make({
+          toolkit,
+          contextTransform: gating,
+          loop: AgentLoop.bounded(2)
+        }),
+        { store, toolkit: yield* toolkit }
+      )
+
+      const outcome = yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, store, "par-2", "go")
+        const token = yield* Deferred.await(gateReady)
+        yield* DurableDeferred.succeed(ParallelGate, { token, value: "go" })
+        return yield* DurableAgent.result(durable, id)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        ),
+        Effect.timeoutOption("15 seconds")
+      )
+
+      assert.isTrue(
+        Option.isSome(outcome),
+        "replaying concurrent activities deadlocked — see effect#6014"
+      )
+      // Each tool ran exactly once across the suspension: the replay returned
+      // persisted results rather than executing them again.
+      assert.deepStrictEqual((yield* Ref.get(ran)).sort(), ["a", "b", "c"])
     })
   )
 })

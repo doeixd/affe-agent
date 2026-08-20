@@ -109,11 +109,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       acceptingFollowUps: false,
       activeRunId: Option.none(),
       turn: 0,
-      history: Option.match(agent.instructions, {
+    })
+
+    const history = yield* Ref.make(
+      Option.match(agent.instructions, {
         onNone: () => Prompt.empty,
         onSome: History.systemMessage
       })
-    })
+    )
 
     const bus = yield* EventBus.make(id)
     const channels = options?.channels ?? InputChannel.memory
@@ -128,6 +131,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       id,
       agent: agent as AgentDefinition<any, any>,
       state,
+      history,
       bus,
       steering,
       followUps,
@@ -370,7 +374,7 @@ export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
 export const history = (
   session: AgentSession<any, any>
 ): Effect.Effect<Prompt.Prompt> =>
-  History.snapshot(unwrap(session).state)
+  History.snapshot(unwrap(session).history)
 
 export const status = (session: AgentSession<any, any>): Effect.Effect<Status> =>
   SubscriptionRef.get(unwrap(session).state).pipe(Effect.map((s) => s.status))

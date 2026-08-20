@@ -1,4 +1,5 @@
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Ref, Schema, Stream } from "effect"
+import * as AgentEvent from "../AgentEvent.js"
 import { LanguageModel, Response, Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
@@ -22,6 +23,21 @@ import { Activity, WorkflowEngine } from "effect/unstable/workflow"
  * for a given toolkit. `GenerateTextResponse` is then reconstructed from those
  * parts on replay, so callers cannot tell the difference.
  */
+/** What a model activity persists: an outcome, never a failure. */
+type ModelOutcome =
+  | { readonly _tag: "Succeeded"; readonly parts: ReadonlyArray<any> }
+  | { readonly _tag: "Failed"; readonly failure: AgentEvent.Failure }
+
+/** A provider failure, as it survives the durable boundary. */
+export class DurableModelFailure extends Schema.TaggedError<DurableModelFailure>()(
+  "DurableModelFailure",
+  { failure: AgentEvent.Failure }
+) {
+  override get message() {
+    return `Model call failed: ${this.failure.message}`
+  }
+}
+
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>
 ): Effect.Effect<
@@ -45,30 +61,61 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     const callIndex = yield* Ref.make(0)
 
     const partsSchema = Schema.Array(Response.Part(toolkit))
+    // A real schema, not `Schema.Unknown`: response parts are class instances
+    // that `Unknown` cannot encode, which is how the original parts schema came
+    // to exist. The outcome union has to preserve that.
+    const outcomeSchema = Schema.Union([
+      Schema.TaggedStruct("Succeeded", { parts: partsSchema }),
+      Schema.TaggedStruct("Failed", { failure: AgentEvent.Failure })
+    ])
 
     const service: LanguageModel.Service = {
       ...underlying,
       generateText: ((options: any) =>
         Effect.gen(function* () {
           const index = yield* Ref.getAndUpdate(callIndex, (n) => n + 1)
-          const parts = yield* Activity.make({
+          // Like tool activities, this must not fail: an activity with no
+          // declared error schema cannot encode a failure, and the engine
+          // records an unencodable `SchemaError` instead of the provider error.
+          // The outcome is carried as a value and re-raised here.
+          const outcome = yield* Activity.make({
             name: `model-${index}`,
-            success: partsSchema,
-            execute: Effect.map(
+            success: outcomeSchema,
+            execute: (
               underlying.generateText(options) as unknown as Effect.Effect<
                 LanguageModel.GenerateTextResponse<Tools>,
-                never
-              >,
-              (response) => response.content as ReadonlyArray<
-                Response.Part<Tools, false>
+                unknown
               >
+            ).pipe(
+              Effect.map(
+                (response): ModelOutcome => ({
+                  _tag: "Succeeded",
+                  parts: response.content as ReadonlyArray<any>
+                })
+              ),
+              Effect.catchCause(
+                (cause): Effect.Effect<ModelOutcome> =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? (Effect.failCause(cause) as unknown as Effect.Effect<
+                        ModelOutcome
+                      >)
+                    : Effect.succeed<ModelOutcome>({
+                        _tag: "Failed",
+                        failure: AgentEvent.failureFromCause(cause)
+                      })
+              )
             )
           }).pipe(Effect.provide(workflowContext))
 
+          const result = outcome as ModelOutcome
+          if (result._tag === "Failed") {
+            return yield* new DurableModelFailure({ failure: result.failure })
+          }
+
           return new LanguageModel.GenerateTextResponse(
-            parts as Array<Response.Part<any, any>>
+            result.parts as Array<Response.Part<any, any>>
           )
-        })) as LanguageModel.Service["generateText"],
+        })) as unknown as LanguageModel.Service["generateText"],
       // Streaming is out of scope for v0.1 (PLAN §24). A stub that silently
       // bypassed durability would be worse than an explicit refusal.
       streamText: (() =>

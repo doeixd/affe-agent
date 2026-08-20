@@ -34,7 +34,7 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
     const inputs = yield* session.steering.drain
     if (inputs.length === 0) return
     for (const input of inputs) {
-      yield* History.commit(session.state, input)
+      yield* History.commit(session.history, input)
     }
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "SteeringApplied",
@@ -84,7 +84,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     // the run, so the snapshot includes it. The prompt is derived before
     // `TurnStarted` is emitted, so a transform that fails cannot leave an
     // orphaned `TurnStarted` with no matching `TurnCompleted`.
-    const canonicalPrompt = yield* History.snapshot(session.state)
+    const canonicalPrompt = yield* History.snapshot(session.history)
     // Ephemeral: the transform's output feeds this model call and nothing else.
     const context = yield* session.agent.contextTransform.transform({
       sessionId: session.id,
@@ -129,7 +129,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       History.fromResponseParts(response.content),
       History.fromResponseParts(toolResults)
     )
-    yield* History.commit(session.state, committed)
+    yield* History.commit(session.history, committed)
 
     const text = response.text
     if (text.length > 0) {

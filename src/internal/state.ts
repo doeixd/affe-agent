@@ -36,8 +36,6 @@ export interface SessionState {
   readonly acceptingFollowUps: boolean
   readonly activeRunId: Option.Option<RunId>
   readonly turn: number
-  /** Canonical conversation history; see `internal/history.ts`. */
-  readonly history: Prompt.Prompt
 }
 
 /**
@@ -52,6 +50,17 @@ export interface Session<
   readonly id: SessionId
   readonly agent: AgentDefinition<Tools, E, R>
   readonly state: SubscriptionRef.SubscriptionRef<SessionState>
+  /**
+   * Canonical history, held apart from the observable runtime state.
+   *
+   * Both are session-owned, but they change for different reasons and are read
+   * by different people. Every commit appends to an ever-growing `Prompt`; if
+   * that lived in the `SubscriptionRef`, a UI subscribed for status and turn
+   * progress would receive the entire transcript on every turn. A plain `Ref`
+   * keeps history out of the notification path, and `AgentSession.history`
+   * stays the way to read it.
+   */
+  readonly history: Ref.Ref<Prompt.Prompt>
   readonly bus: EventBus
   /** Out-of-band input; substitutable so a durable runtime can record it. */
   readonly steering: InputChannel

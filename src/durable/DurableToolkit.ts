@@ -1,4 +1,5 @@
-import { Effect, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Ref, Schema, Stream } from "effect"
+import * as AgentEvent from "../AgentEvent.js"
 import { Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
@@ -21,6 +22,31 @@ import { Activity, WorkflowEngine } from "effect/unstable/workflow"
  * provider and is stable within a response, which is exactly the property that
  * makes a replayed call recognisable as the same call.
  */
+/**
+ * What a tool activity persists: an outcome, never a failure.
+ *
+ * Effect AI's failure types are not generically encodable, and an activity that
+ * fails without a declared error schema is unencodable outright, so the outcome
+ * is modelled as data instead.
+ */
+type Outcome =
+  | { readonly _tag: "Succeeded"; readonly results: ReadonlyArray<unknown> }
+  | { readonly _tag: "Failed"; readonly failure: AgentEvent.Failure }
+
+/** A tool failure, as it survives the durable boundary. */
+export class DurableToolFailure extends Schema.TaggedError<DurableToolFailure>()(
+  "DurableToolFailure",
+  {
+    toolName: Schema.String,
+    toolCallId: Schema.String,
+    failure: AgentEvent.Failure
+  }
+) {
+  override get message() {
+    return `Tool ${this.toolName} failed: ${this.failure.message}`
+  }
+}
+
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>
 ): Effect.Effect<
@@ -52,20 +78,53 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         const index = yield* Ref.getAndUpdate(ordinal, (n) => n + 1)
         const id = toolCallId ?? "anonymous"
 
-        // The handler returns a stream so it can emit preliminary results; only
-        // the final one is committed, and only that one is worth persisting.
-        const results = yield* Activity.make({
+        // The activity must not fail.
+        //
+        // `Activity.make` defaults its error schema to `Schema.Never`, so an
+        // execute that fails cannot be encoded and the engine records a
+        // `SchemaError` defect instead — destroying the failure it was meant to
+        // persist. Every tool failure took that path.
+        //
+        // So the outcome is carried as a *value*: the activity always succeeds,
+        // and the wrapper re-raises. That also makes a failed tool call
+        // replayable — it fails the same way on resume instead of running
+        // again.
+        const outcome = (yield* Activity.make({
           name: `tool-${index}-${String(name)}-${id}`,
           success: Schema.Unknown,
-          execute: toolkit
-            .handle(name, params, toolCallId)
-            .pipe(
+          execute: (
+            toolkit.handle(name, params, toolCallId).pipe(
               Effect.flatMap(Stream.runCollect)
-            ) as unknown as Effect.Effect<ReadonlyArray<unknown>, never>
-        }).pipe(Effect.provide(workflowContext))
+            ) as unknown as Effect.Effect<ReadonlyArray<unknown>, unknown>
+          ).pipe(
+            Effect.map(
+              (results): Outcome => ({ _tag: "Succeeded", results })
+            ),
+            Effect.catchCause((cause): Effect.Effect<Outcome> =>
+              // Interruption is the run going away, not a tool outcome; it must
+              // stay interruption rather than becoming a persisted failure.
+              Cause.hasInterruptsOnly(cause)
+                ? // Interruption carries no typed error, so re-raising it
+                  // cannot widen the outcome's error channel.
+                  (Effect.failCause(cause) as unknown as Effect.Effect<Outcome>)
+                : Effect.succeed<Outcome>({
+                    _tag: "Failed",
+                    failure: AgentEvent.failureFromCause(cause)
+                  })
+            )
+          )
+        }).pipe(Effect.provide(workflowContext))) as Outcome
 
-        return Stream.fromIterable(results as ReadonlyArray<any>)
-      })) as Toolkit.WithHandler<Tools>["handle"]
+        if (outcome._tag === "Failed") {
+          return yield* new DurableToolFailure({
+            toolName: String(name),
+            toolCallId: id,
+            failure: outcome.failure
+          })
+        }
+
+        return Stream.fromIterable(outcome.results as ReadonlyArray<any>)
+      })) as unknown as Toolkit.WithHandler<Tools>["handle"]
 
     return { tools: toolkit.tools, handle }
   })
