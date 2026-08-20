@@ -8,6 +8,8 @@ import {
   TestRunner
 } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
+import type { AgentIdleError } from "../src/Errors.js"
+import * as AgentClient from "../src/cluster/AgentClient.js"
 import {
   AgentEntity,
   layer as entityLayer
@@ -173,6 +175,88 @@ describe("agent entity", () => {
       )
       assert.strictEqual(error._tag, "AgentIdleError")
       assert.strictEqual(error.operation, "steer")
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
+})
+
+describe("agent client", () => {
+  it.live("takes RawInput, and normalises it before it reaches the wire", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Wrapped", Agent.make({}), { store })
+
+      const runtime = durable.layer.pipe(
+        Layer.provideMerge(ClusterWorkflowEngine.layer),
+        Layer.provideMerge(modelLayer)
+      )
+      const handlers = entityLayer(durable, store).pipe(
+        Layer.provideMerge(runtime)
+      )
+
+      const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = AgentClient.wrap(yield* makeRaw("session-wrapped"))
+
+      // A bare string is what a caller reaches for. On the generated client
+      // this compiles and then fails at encode time, because `Prompt.Prompt`'s
+      // type-level input is looser than what it will actually encode.
+      const executionId = yield* client.submit("hello")
+      assert.isString(executionId)
+
+      // Structured input goes through the same door, unchanged.
+      yield* client.steer([{ role: "user", content: [{ type: "text", text: "stay on topic" }] }])
+      yield* client.followUp("and then this")
+
+      assert.deepStrictEqual(
+        yield* textsIn(store, "session-wrapped:steering"),
+        ["stay on topic"]
+      )
+      assert.deepStrictEqual(
+        yield* textsIn(store, "session-wrapped:followUps"),
+        ["and then this"]
+      )
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
+
+  it.live("keeps the one error a caller can act on, and drops the rest", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("WrappedIdle", Agent.make({}), {
+        store
+      })
+
+      const handlers = entityLayer(durable, store).pipe(
+        Layer.provideMerge(
+          durable.layer.pipe(
+            Layer.provideMerge(ClusterWorkflowEngine.layer),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = AgentClient.wrap(yield* makeRaw("never-submitted"))
+
+      // `steer` is typed as failing with `AgentIdleError` and nothing else:
+      // the cluster's own transport failures are retried and then died on,
+      // rather than being pushed into every call site's error handling.
+      const error: AgentIdleError = yield* Effect.flip(client.steer("too late"))
+      assert.strictEqual(error._tag, "AgentIdleError")
+      assert.strictEqual(error.operation, "steer")
+
+      // And `submit` has no error channel at all, so a caller writes no
+      // handling for it.
+      const noFailure: Effect.Effect<string, never> = client.submit("go")
+      void noFailure
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)

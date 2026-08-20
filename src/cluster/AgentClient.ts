@@ -1,0 +1,148 @@
+import { Duration, Effect, Schedule } from "effect"
+import { Prompt } from "effect/unstable/ai"
+import { AgentIdleError } from "../Errors.js"
+import { AgentEntity } from "./AgentEntity.js"
+
+/**
+ * The session operations, as a caller wants to call them.
+ *
+ * The generated entity client is a faithful rendering of the wire protocol,
+ * which is not the same thing as a good API. It asks for a `Prompt` where every
+ * other entry point in this library accepts `Prompt.RawInput`, and it carries
+ * the cluster's own failure modes — `EntityNotAssignedToRunner`, `MailboxFull`,
+ * `PersistenceError` — in the same error channel as the one domain failure a
+ * caller can actually act on.
+ *
+ * There is also a trap worth naming, because it is invisible at compile time:
+ * `Prompt.Prompt` as an RPC payload *accepts a bare string at the type level*
+ * and then rejects it when encoding. A call site that passes `"hello"` compiles
+ * and fails at runtime. Normalising through `Prompt.make` here closes that,
+ * and is why this wrapper takes `RawInput` rather than merely re-exporting the
+ * generated client.
+ */
+export interface AgentClient {
+  /** Start a submission. Resolves to its execution id. */
+  readonly submit: (input: Prompt.RawInput) => Effect.Effect<string>
+  /** Queue steering, applied at the next turn boundary. */
+  readonly steer: (
+    input: Prompt.RawInput
+  ) => Effect.Effect<void, AgentIdleError>
+  /** Queue a follow-up, extending the submission rather than the run. */
+  readonly followUp: (
+    input: Prompt.RawInput
+  ) => Effect.Effect<void, AgentIdleError>
+  /** Interrupt the session's submission, if it has one. */
+  readonly interrupt: Effect.Effect<void>
+}
+
+/**
+ * What this wrapper needs from a generated client.
+ *
+ * Written structurally so the sharded client and `Entity.makeTestClient`'s
+ * client both satisfy it, despite differing in their error channels. `E` is
+ * whatever infrastructure failures the transport adds.
+ */
+export interface RawAgentClient<E> {
+  readonly submit: (payload: {
+    readonly input: Prompt.Prompt
+  }) => Effect.Effect<string, E>
+  readonly steer: (payload: {
+    readonly input: Prompt.Prompt
+  }) => Effect.Effect<void, AgentIdleError | E>
+  readonly followUp: (payload: {
+    readonly input: Prompt.Prompt
+  }) => Effect.Effect<void, AgentIdleError | E>
+  readonly interrupt: (payload: void) => Effect.Effect<void, E>
+}
+
+/**
+ * Survives shard reassignment, and momentary backpressure on a session's
+ * mailbox.
+ *
+ * When a runner is lost its shards stay leased until `shardLockExpiration`
+ * elapses and are then reassigned; a call routed through a shard in that window
+ * is rejected. `MailboxFull` and `AlreadyProcessingMessage` are the same kind of
+ * thing at a smaller scale — the session is busy this instant, not broken. The
+ * schedule must outlast the lock expiration (35s by default) or a caller gives
+ * up moments before the shard it wants becomes available.
+ */
+const TRANSIENT = new Set([
+  "EntityNotAssignedToRunner",
+  "RunnerNotRegistered",
+  "RunnerUnavailable",
+  "MailboxFull",
+  "AlreadyProcessingMessage"
+])
+
+const tagOf = (error: unknown): string | undefined =>
+  typeof error === "object" &&
+  error !== null &&
+  typeof (error as { _tag?: unknown })._tag === "string"
+    ? (error as { _tag: string })._tag
+    : undefined
+
+const isTransient = (error: unknown): boolean => {
+  const tag = tagOf(error)
+  return tag !== undefined && TRANSIENT.has(tag)
+}
+
+/**
+ * Compared by tag rather than `instanceof`.
+ *
+ * The error crosses the wire and is rebuilt by its schema on the far side, so
+ * identity is not something to rely on here.
+ */
+const isIdle = (error: unknown): error is AgentIdleError =>
+  tagOf(error) === "AgentIdleError"
+
+const retryTransient = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  Effect.retry(effect, {
+    while: isTransient,
+    times: 600,
+    schedule: Schedule.spaced(Duration.millis(100))
+  })
+
+/**
+ * Nothing here is a domain failure, so anything that survives the retry is a
+ * defect. Dying is the honest outcome: a caller has no recovery for a broken
+ * transport that it would not also have for a broken process.
+ */
+const infrastructural = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, never, R> =>
+  Effect.catch(retryTransient(effect), (error: E) => Effect.die(error))
+
+/** As above, but `AgentIdleError` is a real answer and passes through. */
+const admitting = <A, E, R>(
+  effect: Effect.Effect<A, AgentIdleError | E, R>
+): Effect.Effect<A, AgentIdleError, R> =>
+  Effect.catch(retryTransient(effect), (error: AgentIdleError | E) =>
+    isIdle(error) ? Effect.fail(error) : Effect.die(error)
+  )
+
+/**
+ * Wrap a generated entity client in the ergonomic surface above.
+ *
+ * Exposed separately from `client` so a test client — which is built by a
+ * different constructor — gets the same treatment as a sharded one.
+ */
+export const wrap = <E>(raw: RawAgentClient<E>): AgentClient => ({
+  submit: (input) =>
+    infrastructural(raw.submit({ input: Prompt.make(input) })),
+  steer: (input) => admitting(raw.steer({ input: Prompt.make(input) })),
+  followUp: (input) => admitting(raw.followUp({ input: Prompt.make(input) })),
+  interrupt: infrastructural(raw.interrupt())
+})
+
+/**
+ * A sharded client, keyed by session id.
+ *
+ * The session id is the entity id, so a `steer` sent from any node reaches the
+ * node that owns the session.
+ */
+export const client = Effect.map(
+  AgentEntity.client,
+  (make) => (sessionId: string) => wrap(make(sessionId))
+)

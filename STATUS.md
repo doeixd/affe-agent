@@ -298,9 +298,21 @@ asking for one only allowed interrupting the wrong thing
 `Prompt`, matching core's multimodal surface. The `as unknown as` cast on the
 handler layer was unnecessary once the handlers stopped `orDie`-ing.
 
-One type-safety hole worth remembering: `Prompt.Prompt` as an RPC payload
-accepts a bare string at the type level but rejects it when encoding, so a wrong
-call site compiles and fails at runtime. Call sites pass `Prompt.make(...)`.
+`AgentClient` closes the wrapper gap. The generated entity client is a faithful
+rendering of the wire protocol, which is not the same as a good API: it demands
+a `Prompt` where the rest of the library takes `Prompt.RawInput`, and it carries
+the cluster's transport failures in the same channel as the one domain failure a
+caller can act on. Worse, `Prompt.Prompt` as an RPC payload *accepts a bare
+string at the type level* and rejects it at encode time, so a wrong call site
+compiles and fails at runtime — which is exactly how the cluster test broke.
+
+`AgentClient.wrap` normalises through `Prompt.make`, retries transient cluster
+conditions (reassignment, `MailboxFull`, `AlreadyProcessingMessage`), and dies
+on the rest. The result is `submit`/`interrupt` with no error channel at all and
+`steer`/`followUp` failing only with `AgentIdleError`. `AgentClient.client` is
+the sharded version; `wrap` is exposed separately so a test client gets the same
+treatment. Errors are matched by `_tag` rather than `instanceof`, since they are
+rebuilt by their schema on the far side of the wire.
 
 ## Breaking changes for the durable/distributed path
 
