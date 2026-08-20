@@ -1,10 +1,13 @@
-import { Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
+import { Cause, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow"
+import * as AgentEvent from "../AgentEvent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
+import { AgentIdleError } from "../Errors.js"
+import * as Ids from "../internal/ids.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableModel from "./DurableModel.js"
 import * as DurableToolkit from "./DurableToolkit.js"
@@ -20,7 +23,10 @@ import * as DurableToolkit from "./DurableToolkit.js"
  */
 
 export interface Options {
-  /** Where out-of-band steering and follow-up input is held. */
+  /**
+   * Where out-of-band steering and follow-up input is held, and where the
+   * submission's admission marker lives.
+   */
   readonly store: DurableChannels.Store
   /**
    * Resolved toolkit. Handlers are wrapped as activities, so a tool that
@@ -46,6 +52,13 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
     payload: { sessionId: Schema.String, prompt: Prompt.Prompt },
     idempotencyKey: (payload) => `${name}:${payload.sessionId}`,
     success: Schema.String
+    // NOTE: no `error` schema yet. Declaring one and mapping agent failures
+    // into it — the obvious way to stop `orDie` flattening typed failures into
+    // defects — currently ends in a `SchemaError` defect when a tool fails,
+    // and the encoding that rejects it has not been isolated. Shipping a
+    // half-working error channel would be worse than an honest defect, so the
+    // failure still crosses as a defect and the gap is recorded in
+    // WORKFLOW_CLUSTER_PLAN.
   })
 
   const layer = definition.toLayer((payload) =>
@@ -58,6 +71,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       const durableTools = yield* DurableToolkit.wrap(toolkit)
       const modelLayer = yield* DurableModel.wrap(durableTools)
       const channels = yield* DurableChannels.factory(options.store)
+      const store = options.store
 
       const durableAgent = {
         ...agent,
@@ -73,7 +87,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
           const result = yield* AgentSession.prompt(session, payload.prompt)
           return result.text
         })
-      ).pipe(Effect.provide(modelLayer), Effect.orDie)
+      ).pipe(
+        Effect.provide(modelLayer),
+        Effect.orDie,
+        Effect.ensuring(store.takeAll(openKey(payload.sessionId)))
+      )
     })
   )
 
@@ -95,6 +113,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
  */
 export const submit = <W extends ReturnType<typeof workflow>>(
   agent: W,
+  store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
 ): Effect.Effect<string, never, WorkflowEngine.WorkflowEngine> =>
@@ -104,25 +123,73 @@ export const submit = <W extends ReturnType<typeof workflow>>(
       sessionId,
       prompt
     })
+    // Opened here rather than inside the workflow body: `submit` has accepted
+    // the submission by the time it returns, so steering must be admissible
+    // from that moment. Marking it in the body instead leaves a window where a
+    // caller holding an execution id is told the session is idle.
+    yield* store.offer(openKey(sessionId), "open")
     yield* agent.definition.execute({ sessionId, prompt }, { discard: true })
     return executionId
   })
 
 /** Queue steering for a running submission. It is applied at a turn boundary. */
+/**
+ * Queue steering for a running submission.
+ *
+ * Admission is enforced the same way core enforces it: input for a submission
+ * that has already finished is rejected rather than written to a store nobody
+ * will drain. Without this the durable API would be a weaker sibling of the
+ * core one — accepting work that silently never runs.
+ */
 export const steer = (
   store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
-): Effect.Effect<void> =>
-  DurableChannels.offer(store, sessionId, "steering", input)
+): Effect.Effect<void, AgentIdleError> =>
+  admit(store, sessionId, "steer").pipe(
+    Effect.andThen(DurableChannels.offer(store, sessionId, "steering", input))
+  )
 
+/** Queue a follow-up, extending the submission rather than the current run. */
 /** Queue a follow-up, extending the submission rather than the current run. */
 export const followUp = (
   store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
-): Effect.Effect<void> =>
-  DurableChannels.offer(store, sessionId, "followUps", input)
+): Effect.Effect<void, AgentIdleError> =>
+  admit(store, sessionId, "followUp").pipe(
+    Effect.andThen(DurableChannels.offer(store, sessionId, "followUps", input))
+  )
+
+/**
+ * The durable analogue of core's "is this session still running".
+ *
+ * `Workflow.poll` cannot answer it: a suspended execution and a finished one
+ * are not reliably distinguishable from outside, and polling races a submission
+ * that has been dispatched but not yet begun.
+ *
+ * Instead the submission owns a marker in the same store the channels use — the
+ * durable counterpart of core's `acceptingFollowUps`. It is written when the
+ * submission starts and cleared however it ends, so an out-of-band sender sees
+ * the same admission contract a local caller would.
+ */
+const openKey = (sessionId: string) => `${sessionId}:open`
+
+const admit = (
+  store: DurableChannels.Store,
+  sessionId: string,
+  operation: "steer" | "followUp"
+): Effect.Effect<void, AgentIdleError> =>
+  Effect.flatMap(store.size(openKey(sessionId)), (open) =>
+    open > 0
+      ? Effect.void
+      : Effect.fail(
+          new AgentIdleError({
+            sessionId: Ids.sessionId(sessionId),
+            operation
+          })
+        )
+  )
 
 /**
  * Await a terminal result.
@@ -130,9 +197,9 @@ export const followUp = (
  * A resumed execution continues in the background, so this polls rather than
  * blocking on a fiber that may not exist in this process.
  *
- * Note that a failed submission is still a *completed* workflow: the returned
- * `Complete` carries an `exit` that may be a `Failure`. Check the exit —
- * `_tag === "Complete"` alone does not mean the agent succeeded.
+ * The returned `Exit` is where success and failure live: a failed submission is
+ * still a *completed* workflow. Its failure currently crosses as a defect
+ * rather than a typed error — see the note on the workflow definition.
  */
 export const result = <W extends ReturnType<typeof workflow>>(
   agent: W,

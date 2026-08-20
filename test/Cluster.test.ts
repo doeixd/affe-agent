@@ -57,8 +57,10 @@ describe("agent entity", () => {
       // What the entity handlers do with `address.entityId`: a steer for one
       // session is invisible to another, which is what makes the entity the
       // right home for routing.
-      yield* DurableAgent.steer(store, "session-a", "for a")
-      yield* DurableAgent.followUp(store, "session-b", "for b")
+      // Keying is what this test is about, so write through the channel
+      // directly rather than the admission-checked convenience functions.
+      yield* DurableChannels.offer(store, "session-a", "steering", "for a")
+      yield* DurableChannels.offer(store, "session-b", "followUps", "for b")
 
       // The store holds encoded prompts, so compare their text rather than
       // their wire form.

@@ -42,7 +42,7 @@ describe("durable submissions", () => {
       const durable = DurableAgent.workflow("Researcher", Researcher, { store })
 
       const text = yield* Effect.gen(function* () {
-        const executionId = yield* DurableAgent.submit(durable, "s1", "hello")
+        const executionId = yield* DurableAgent.submit(durable, store, "s1", "hello")
         const result = yield* DurableAgent.result(durable, executionId)
         return result
       }).pipe(
@@ -126,7 +126,7 @@ describe("durable submissions", () => {
       })
 
       yield* Effect.gen(function* () {
-        const executionId = yield* DurableAgent.submit(durable, "s2", "refund")
+        const executionId = yield* DurableAgent.submit(durable, store, "s2", "refund")
 
         // Wait for the suspension, then wake it as an external actor would.
         const token = yield* Deferred.await(gateReady)
@@ -190,7 +190,7 @@ describe("durable submissions", () => {
       const durable = DurableAgent.workflow("Steered", Looping, { store })
 
       yield* Effect.gen(function* () {
-        const executionId = yield* DurableAgent.submit(durable, "s3", "go")
+        const executionId = yield* DurableAgent.submit(durable, store, "s3", "go")
 
         const token = yield* Deferred.await(gateReady)
         // Queued while the submission is suspended — the realistic case.
@@ -249,7 +249,7 @@ describe("durable submissions", () => {
       const durable = DurableAgent.workflow("Interrupted", Suspending, { store })
 
       const outcome = yield* Effect.gen(function* () {
-        const executionId = yield* DurableAgent.submit(durable, "s4", "go")
+        const executionId = yield* DurableAgent.submit(durable, store, "s4", "go")
         yield* Deferred.await(gateReady)
 
         yield* durable.definition.interrupt(executionId)

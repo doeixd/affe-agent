@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 101 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
+`npm test` — 106 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -74,6 +74,47 @@ than by anticipation (PLAN §42.2):
 
 `examples/typed-agent.ts` asserts at compile time that the sugar costs no
 inference: a handler parameter is still exactly its schema type.
+
+## Review findings (REVIEW.md)
+
+All eleven core items are addressed. Five were already done; the rest:
+
+**`Tool.needsApproval` was silently bypassed (P0).** Effect AI's resolver
+honours it, and the harness resolves tools itself, so a tool marked as needing
+approval simply ran. It now fails with a typed `ToolApprovalRequiredError`,
+emitted as a `ToolCallFailed` so the lifecycle invariant still holds, and never
+returned to the model — this is the harness refusing, not an outcome the model
+can correct. A dynamic `needsApproval` counts as requiring approval, since
+deciding otherwise means evaluating it and acting on the answer.
+
+**Provider-executed tool calls were executed locally (P1).** `toolCalls` now
+means "calls this harness must execute": provider-executed ones are filtered,
+so they are neither re-run nor counted by `untilIdle` as outstanding work.
+
+**`ContextTransform.compose` overloaded `canonicalPrompt` (P2).** `Context` now
+carries both `canonicalPrompt` (always the committed snapshot) and `prompt`
+(the derivation so far). Threading the accumulator through `canonicalPrompt`
+made the field mean two things by position — the one distinction this design
+cannot blur.
+
+**The typed example was runtime-invalid (P2).** It steered after `prompt`
+resolved, which is by definition idle. It now forks the submission, waits for
+`running`, steers, and joins. Examples are copied verbatim, so this mattered.
+
+**Namespaces normalised (P3)** from `@effect-harness/*` to
+`@doeixd/effect-agent/*` before anyone persists a branded id.
+
+**Durable `steer`/`followUp` bypassed admission.** They wrote straight to the
+store, so input for a finished submission was accepted and never drained. They
+now check an admission marker the submission owns — the durable counterpart of
+core's `acceptingFollowUps` — opened by `submit` before dispatch and cleared
+however the submission ends.
+
+Two items are deliberately not done: separating canonical history from the
+observable `SubscriptionRef` (P3, explicitly optional — worth doing when a UI
+actually feels the weight of history updates), and preserving typed failures
+across the workflow boundary, which is recorded as an open gap with its symptom
+rather than guessed at.
 
 ## Type-story gaps
 

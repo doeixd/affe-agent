@@ -56,6 +56,9 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
               sessionId,
               prompt
             })
+            // Admission opens before dispatch, so a client that steers straight
+            // after submitting is not told the session is idle.
+            yield* store.offer(`${sessionId}:open`, "open")
             yield* Effect.forkDetach(
               agent.definition
                 .execute({ sessionId, prompt }, { discard: true })
@@ -73,10 +76,17 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             )
             return executionId
           }).pipe(Effect.orDie),
+        // Admission failures are reported as defects here: the entity's RPCs
+        // declare no error type, and inventing one is a protocol decision that
+        // belongs with the AG-UI/RPC surface rather than with this adapter.
         steer: ({ payload }) =>
-          DurableAgent.steer(store, sessionId, payload.input),
+          DurableAgent.steer(store, sessionId, payload.input).pipe(
+            Effect.orDie
+          ),
         followUp: ({ payload }) =>
-          DurableAgent.followUp(store, sessionId, payload.input),
+          DurableAgent.followUp(store, sessionId, payload.input).pipe(
+            Effect.orDie
+          ),
         interrupt: ({ payload }) =>
           agent.definition.interrupt(payload.executionId)
       }

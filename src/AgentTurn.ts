@@ -9,7 +9,12 @@ import type { RunId, SubmissionId } from "./internal/ids.js"
 import type { Session } from "./internal/state.js"
 
 export interface Result<Tools extends Record<string, Tool.Any>> {
-  /** Tool parameters are encoded; see `AgentLoop.State`. */
+  /**
+   * Tool parameters are encoded; see `AgentLoop.State`.
+   *
+   * `toolCalls` are the calls the harness must execute — provider-executed
+   * calls are excluded, since nothing is owed for them.
+   */
   readonly response: LanguageModel.GenerateTextResponse<Tools, true>
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
   readonly text: string
@@ -86,7 +91,8 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       submissionId,
       runId,
       turnIndex: turn,
-      canonicalPrompt
+      canonicalPrompt,
+      prompt: canonicalPrompt
     })
     const handler = yield* resolveToolkit(session)
 
@@ -100,7 +106,13 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       disableToolCallResolution: true
     })
 
-    const toolCalls = response.toolCalls
+    // Calls the provider already executed are resolved: their results are in
+    // the response, and Effect AI's own resolver skips them too. Running them
+    // locally would repeat a side effect the provider performed, and counting
+    // them as outstanding work would keep the loop going with nothing to do.
+    const toolCalls = response.toolCalls.filter(
+      (call) => call.providerExecuted !== true
+    )
 
     let toolResults: ReadonlyArray<Response.AnyPart> = []
     if (toolCalls.length > 0) {

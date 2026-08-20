@@ -3,6 +3,7 @@ import { Response } from "effect/unstable/ai"
 import type { Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
+import { ToolApprovalRequiredError } from "./Errors.js"
 import * as EventBus from "./internal/eventBus.js"
 
 /**
@@ -97,6 +98,30 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       name: call.name,
       params: call.params
     })
+
+    // Effect AI's own resolver honours `needsApproval`; because the harness
+    // resolves tools itself, it has to honour it too. A dynamic requirement is
+    // treated as requiring approval — deciding otherwise would mean evaluating
+    // it and then acting on the answer, which is the feature that does not
+    // exist yet.
+    //
+    // This is never returned to the model: it is the harness refusing, not a
+    // tool outcome the model could correct by trying again.
+    const tool = handler.tools[call.name as keyof Tools]
+    if (tool?.needsApproval !== undefined && tool.needsApproval !== false) {
+      const error = new ToolApprovalRequiredError({
+        toolName: String(call.name),
+        toolCallId: call.id
+      })
+      yield* EventBus.emit(options.bus, options.correlation, {
+        _tag: "ToolCallFailed",
+        id: call.id,
+        name: call.name,
+        failure: AgentEvent.failureFromCause(Cause.fail(error)),
+        returnedToModel: false
+      })
+      return yield* error
+    }
 
     // A handler returns a stream so it can emit preliminary results before its
     // final one. Only the final result is committed.
@@ -206,7 +231,7 @@ export const execute = <Tools extends Record<string, Tool.Any>>(
   options: Options
 ): Effect.Effect<
   ReadonlyArray<Response.AnyPart>,
-  Tool.HandlerError<Tools[keyof Tools]>,
+  Tool.HandlerError<Tools[keyof Tools]> | ToolApprovalRequiredError,
   Tool.HandlerServices<Tools[keyof Tools]>
 > =>
   Effect.all(

@@ -15,7 +15,22 @@ export interface Context {
   readonly runId: RunId
   /** 1-based index of the turn about to execute. */
   readonly turnIndex: number
+  /**
+   * The session's canonical history, as committed.
+   *
+   * Always the original snapshot, even part-way through a composition. The
+   * whole architecture rests on canonical-versus-derived, so this field must
+   * not quietly come to mean "the prompt so far".
+   */
   readonly canonicalPrompt: Prompt.Prompt
+  /**
+   * The prompt as derived so far.
+   *
+   * Equal to `canonicalPrompt` for the first transform in a chain; each
+   * subsequent transform sees the previous one's output here. Build from this
+   * unless you specifically want to discard earlier transforms' work.
+   */
+  readonly prompt: Prompt.Prompt
 }
 
 /**
@@ -48,9 +63,9 @@ export const make = <E = never, R = never>(
 const systemPrompt = (text: string): Prompt.Prompt =>
   Prompt.fromMessages([Prompt.systemMessage({ content: text })])
 
-/** Passes canonical history through untouched. */
+/** Passes the derived prompt through untouched. */
 export const identity: ContextTransform = make((context) =>
-  Effect.succeed(context.canonicalPrompt)
+  Effect.succeed(context.prompt)
 )
 
 /**
@@ -68,7 +83,7 @@ export const appendSystem = <E = never, R = never>(
 ): ContextTransform<E, R> =>
   make((context) =>
     Effect.map(message(context), (text) =>
-      Prompt.concat(context.canonicalPrompt, systemPrompt(text))
+      Prompt.concat(context.prompt, systemPrompt(text))
     )
   )
 
@@ -78,23 +93,25 @@ export const prependSystem = <E = never, R = never>(
 ): ContextTransform<E, R> =>
   make((context) =>
     Effect.map(message(context), (text) =>
-      Prompt.concat(systemPrompt(text), context.canonicalPrompt)
+      Prompt.concat(systemPrompt(text), context.prompt)
     )
   )
 
 /**
  * Left-to-right composition.
  *
- * Each transform sees the previous one's output in `canonicalPrompt`, so a
- * chain accumulates. Canonical history itself is still never touched — that
- * invariant is about the session's state, not about this field, which is simply
- * "the prompt so far".
+ * Each transform sees the previous one's output in `prompt`, while
+ * `canonicalPrompt` keeps pointing at the session's committed history. An
+ * earlier version threaded the accumulated value through `canonicalPrompt`
+ * itself, which quietly made the field mean two different things depending on
+ * position in the chain — the one distinction this design cannot afford to
+ * blur.
  */
 export const compose = <E = never, R = never>(
   ...transforms: ReadonlyArray<ContextTransform<E, R>>
 ): ContextTransform<E, R> =>
   make((context) =>
-    Effect.reduce(transforms, () => context.canonicalPrompt, (prompt, next) =>
-      next.transform({ ...context, canonicalPrompt: prompt })
+    Effect.reduce(transforms, () => context.prompt, (prompt, next) =>
+      next.transform({ ...context, prompt })
     )
   )

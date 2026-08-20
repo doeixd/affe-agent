@@ -337,6 +337,19 @@ synchronously while the mailbox is released immediately.
 This generalises: entity handlers are short, and anything long-running they
 start must be forked.
 
+## Open: typed failures at the workflow boundary
+
+The durable body still uses `Effect.orDie`, so a typed agent failure crosses as
+a defect. The obvious fix — declare an `error` schema on the workflow and map
+failures into it — produces a `SchemaError` defect when a tool fails, with both
+a `Schema.TaggedError` and a plain `Schema.String` error channel. That the
+symptom is identical for both suggests the rejected encoding is not the error
+channel at all, and it has not been isolated.
+
+Shipping a half-working error channel would be worse than an honest defect, so
+the `orDie` stands until the encoding is understood. Failures do still surface
+as failed exits rather than silent successes, which is asserted.
+
 ## What remains: surviving a real restart
 
 Phase 5 runs on `SingleRunner` with a SQLite journal on disk, and a submission

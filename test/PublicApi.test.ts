@@ -19,6 +19,7 @@ describe("public API", () => {
       "AgentSubmission",
       "ContextTransform",
       "InputChannel",
+      "ToolApprovalRequiredError",
       "ToolExecution"
     ])
   })

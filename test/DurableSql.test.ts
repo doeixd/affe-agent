@@ -116,7 +116,7 @@ describe("durable submissions on SQL storage", () => {
       const durable = DurableAgent.workflow("SqlBacked", Suspending, { store })
 
       const completed = yield* Effect.gen(function* () {
-        const executionId = yield* DurableAgent.submit(durable, "sql-1", "go")
+        const executionId = yield* DurableAgent.submit(durable, store, "sql-1", "go")
 
         const token = yield* Deferred.await(gateReady)
         yield* DurableDeferred.succeed(Gate, { token, value: "resume" })

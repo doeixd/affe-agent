@@ -2,6 +2,7 @@ import { Cron, Effect, Layer } from "effect"
 import { ClusterCron } from "effect/unstable/cluster"
 import type { WorkflowEngine } from "effect/unstable/workflow"
 import * as DurableAgent from "../durable/DurableAgent.js"
+import type * as DurableChannels from "../durable/DurableChannels.js"
 
 /**
  * A recurring agent submission.
@@ -18,6 +19,8 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
     readonly name: string
     readonly cron: Cron.Cron
     readonly agent: W
+    /** The same store the agent's channels use, for admission. */
+    readonly store: DurableChannels.Store
     /** Distinct per firing, or the idempotency key would suppress reruns. */
     readonly sessionId: Effect.Effect<string>
     readonly input: string
@@ -28,6 +31,11 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
     cron: options.cron,
     execute: Effect.gen(function* () {
       const sessionId = yield* options.sessionId
-      yield* DurableAgent.submit(options.agent, sessionId, options.input)
+      yield* DurableAgent.submit(
+        options.agent,
+        options.store,
+        sessionId,
+        options.input
+      )
     })
   }) as unknown as Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | any>

@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Fiber, Option, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -43,14 +43,35 @@ export const program = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* AgentSession.make(Researcher)
 
-    const result = yield* AgentSession.prompt(session, "Find Effect docs")
+    // `prompt` resolves at quiescence, by which point the session is idle — so
+    // steering *after* it would fail with `AgentIdleError`. Steering is for
+    // work that is still running, which means forking the submission and
+    // joining it afterwards.
+    const running = yield* Effect.forkChild(
+      AgentSession.prompt(session, "Find Effect docs")
+    )
 
-    // The final response should be typed by the toolkit. It is optional
-    // because an interrupted submission never produced one.
+    // Wait until the submission is actually active before steering it.
+    yield* Stream.runDrain(
+      Stream.take(
+        Stream.filter(
+          AgentSession.state(session).changes,
+          (state) => state.status === "running"
+        ),
+        1
+      )
+    )
+    yield* AgentSession.steer(session, "prefer primary sources").pipe(
+      // It may already have finished; steering is best-effort by nature.
+      Effect.ignore
+    )
+
+    const result = yield* Fiber.join(running)
+
+    // The final response is typed by the toolkit. It is optional because an
+    // interrupted submission never produced one.
     const usage = Option.map(result.response, (r) => r.usage)
     const finish = Option.map(result.response, (r) => r.finishReason)
-
-    yield* AgentSession.steer(session, "prefer primary sources")
 
     return { usage, finish, text: result.text }
   })

@@ -35,7 +35,7 @@ export type Result<Tools extends Record<string, Tool.Any> = {}> =
 
 
 
-const SessionTypeId: unique symbol = Symbol.for("@effect-harness/AgentSession")
+const SessionTypeId: unique symbol = Symbol.for("@doeixd/effect-agent/AgentSession")
 declare const ToolsVariance: unique symbol
 
 /**

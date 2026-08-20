@@ -30,6 +30,13 @@ export interface State<Tools extends Record<string, Tool.Any> = any> {
    * `params` must be typed for what is actually there.
    */
   readonly response: LanguageModel.GenerateTextResponse<Tools, true>
+  /**
+   * The calls this harness must execute.
+   *
+   * Provider-executed calls are excluded: the provider already ran them, so
+   * `untilIdle` must not treat their presence as outstanding work. The full
+   * set, including provider-side calls, is on `response.content`.
+   */
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
 }
 

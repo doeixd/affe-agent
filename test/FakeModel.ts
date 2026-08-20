@@ -10,6 +10,8 @@ export interface Turn {
     readonly id: string
     readonly name: string
     readonly params: unknown
+    /** Marks a call the provider already executed; see `AgentTurn`. */
+    readonly providerExecuted?: boolean
   }>
   /**
    * Runs while the model call is in flight, letting a test drive concurrent
@@ -56,7 +58,10 @@ const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
       type: "tool-call",
       id: call.id,
       name: call.name,
-      params: call.params
+      params: call.params,
+      ...(call.providerExecuted === undefined
+        ? {}
+        : { providerExecuted: call.providerExecuted })
     })
   }
   parts.push(finishPart())

@@ -53,3 +53,27 @@ export class AgentClosedError extends Schema.TaggedError<AgentClosedError>()(
     return `Session ${this.sessionId} is closed`
   }
 }
+
+/**
+ * Raised when a tool requires approval, which v0.1 does not implement.
+ *
+ * Effect AI lets a tool declare `needsApproval`, and its own resolver honours
+ * that. The harness resolves tools itself (PLAN §16), so it would otherwise
+ * bypass the check silently — a tool marked as needing approval would simply
+ * run. Failing loudly is the only safe reading of a safety annotation the
+ * runtime cannot yet satisfy.
+ *
+ * Approval belongs to a later interrupts capability; until then this is how the
+ * harness refuses to weaken a tool's declared semantics.
+ */
+export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRequiredError>()(
+  "ToolApprovalRequiredError",
+  {
+    toolName: Schema.String,
+    toolCallId: Schema.String
+  }
+) {
+  override get message() {
+    return `Tool ${this.toolName} requires approval, which is not supported`
+  }
+}
