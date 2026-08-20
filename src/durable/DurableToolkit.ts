@@ -3,6 +3,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import { Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
+import { activityName, nextOccurrence } from "../internal/toolActivity.js"
 
 /**
  * Makes every tool call a durable `Activity`.
@@ -121,15 +122,9 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
     >()
 
-    // A provider is only obliged to make tool call ids unique within a single
-    // response, so the id alone cannot identify an activity: a model that
-    // reuses one across turns would collide, and the later call would silently
-    // replay the earlier result instead of executing.
-    //
-    // The ordinal is what makes identity sound. Tool calls are consumed in a
-    // fixed order within a submission, so it is replay-stable, and the id is
-    // kept alongside it purely to keep traces readable.
-    const ordinal = yield* Ref.make(0)
+    // See `nextOccurrence`: identity counts repeats of a given call, rather
+    // than position in a global sequence.
+    const seen = yield* Ref.make(new Map<string, number>())
 
     const handle: Toolkit.WithHandler<Tools>["handle"] = ((
       name: any,
@@ -137,8 +132,8 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       toolCallId?: string
     ) =>
       Effect.gen(function* () {
-        const index = yield* Ref.getAndUpdate(ordinal, (n) => n + 1)
         const id = toolCallId ?? "anonymous"
+        const index = yield* Ref.modify(seen, nextOccurrence(String(name), id))
 
         // The activity must not fail.
         //
@@ -166,7 +161,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         ])
 
         const outcome = (yield* Activity.make({
-          name: `tool-${index}-${String(name)}-${id}`,
+          name: activityName(index, String(name), id),
           success: outcomeSchema,
           execute: (
             toolkit.handle(name, params, toolCallId).pipe(
