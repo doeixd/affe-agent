@@ -1,0 +1,679 @@
+# Implementation Review — `@doeixd/effect-agent`
+
+## Verdict
+
+The core architecture is right, and the implementation is good.
+
+This does not look like a superficial “agent loop written with Effect.” It actually uses Effect to remove machinery that other harnesses have to invent: scoped sessions, structured interruption, typed requirements, Layer substitution, ordinary Effect concurrency, Schema-defined events, and Workflow/Cluster integration outside the core.
+
+I would keep this architecture.
+
+I would not quite call v0.1 semantically finished yet. There are a handful of real issues at concurrency and Effect AI interoperability boundaries. Importantly, none of them require changing the central design.
+
+A rough assessment:
+
+- **Architecture:** ~9/10
+- **Current core implementation:** ~8/10
+
+The remaining problems are mostly edge semantics, not evidence that the abstractions are wrong.
+
+---
+
+## What is especially strong
+
+### 1. `Agent` is a reusable value, not a running service
+
+Keeping `Agent` as an inert definition and `AgentSession` as the acquired, scoped runtime instance is the right split.
+
+The model is supplied by the Effect environment rather than captured in the definition, so the same agent can run against different providers, routing layers, tests, or child-agent model choices without being redefined.
+
+This gives a clean shape:
+
+```text
+Agent definition
+      │
+      ▼
+AgentSession.make
+      │
+      ├─ capture model/services
+      ├─ acquire scope/resources
+      └─ create runtime state
+              │
+              ▼
+        AgentSession handle
+```
+
+That is very Effect-native.
+
+### 2. Capturing the environment at session creation is a good choice
+
+`AgentSession.make` captures the model and agent requirements once, leaving the returned handle without residual requirements.
+
+That makes a session behave like an acquired runtime resource, while still allowing a subagent session to be constructed under a completely different Layer.
+
+This is a strong fit with Effect's service model and structured resource lifetime.
+
+### 3. The idle-session claim is concurrency-correct
+
+The session does not perform a check-then-set sequence like:
+
+```ts
+if (status === "idle") {
+  status = "running"
+}
+```
+
+Instead, it uses an atomic `SubscriptionRef.modify` to claim the session and allocate the submission id in one transition.
+
+That correctly protects the invariant:
+
+> At most one active submission/run per session.
+
+This is exactly the kind of race that agent runtimes often miss.
+
+### 4. Manual tool resolution is the correct architectural boundary
+
+Disabling Effect AI's internal tool-call resolution and invoking the Toolkit directly is the right decision.
+
+It lets the harness own:
+
+```text
+model response
+    ↓
+tool calls
+    ↓
+ToolCallStarted
+    ↓
+handler execution
+    ↓
+ToolCallSucceeded / Failed / Interrupted
+    ↓
+canonical turn commit
+```
+
+Without that ownership, tool lifecycle events, concurrency policy, failure policy, and atomic commit semantics could not be implemented reliably.
+
+The coupling to `disableToolCallResolution: true` is real, but justified.
+
+### 5. Atomic turn commit is excellent
+
+The turn waits for model generation and all locally executed tools to complete before committing the assistant response and tool results together.
+
+That prevents interrupted turns from leaving malformed history like:
+
+```text
+assistant: requests refund tool
+refund tool call
+<missing tool result forever>
+```
+
+An interrupted tool call leaves the entire model/tool turn uncommitted rather than leaving a half-recorded state that the next model call cannot interpret cleanly.
+
+This is one of the strongest invariants in the implementation.
+
+### 6. Canonical history and derived context are correctly separated
+
+The session owns canonical conversation state.
+
+`ContextTransform` receives a snapshot and derives an ephemeral model-facing prompt without mutating canonical history.
+
+That is the right foundation for:
+
+- dynamic instructions
+- memory recall
+- RAG
+- compaction projections
+- workspace/environment context
+- permission-derived context
+
+without turning those concerns into hidden mutation of the conversation record.
+
+### 7. Loop policy is separate from execution
+
+`AgentRun` executes turns; `AgentLoop` decides whether to continue.
+
+That keeps continuation policy replaceable and effectful without asking the engine to understand concepts such as token budgets, feature flags, cost ceilings, or domain-specific stopping rules.
+
+The explicit `and` / `or` model is also better than overloading `.pipe()` with ambiguous logical composition.
+
+### 8. Typed `E` / `R` propagation is a major strength
+
+Loops and context transforms preserve their own typed failures and required services.
+
+That means a policy can require a normal Effect Service and fail with its own tagged error, while those requirements propagate naturally into session construction and prompt execution.
+
+This is exactly the advantage an Effect-native harness should exploit instead of inventing its own capability registry.
+
+### 9. Events are unusually rigorous
+
+The event system has several good properties:
+
+- events are a Schema-defined ADT;
+- every event is wrapped in a correlation envelope;
+- correlation includes session/submission/run/turn where appropriate;
+- each session has a monotonically increasing sequence number;
+- allocation and publication are serialized so delivery order matches sequence order even under parallel tool execution;
+- failures are projected to a wire-safe representation instead of trying to serialize an in-process `Cause`.
+
+This is a strong contract for UIs, logs, RPC adapters, persistence, testing, and remote clients.
+
+### 10. The read-only state view fixed an important ownership leak
+
+Exposing a writable `SubscriptionRef` would have violated the invariant that the session is the sole writer of canonical history and runtime state.
+
+Returning a view with only `get` and `changes` is the right capability boundary.
+
+### 11. `InputChannel` is a justified abstraction
+
+This abstraction was earned by the durable-runtime experiment rather than invented in advance.
+
+Model and tool outputs can be reproduced on Workflow replay because their results are journaled. Out-of-band queue drains cannot:
+
+```text
+original execution:
+queue = ["steer"]
+drain → ["steer"]
+
+replay:
+queue = []
+drain → []
+```
+
+Without a substitutable channel whose consumed batches can themselves be made durable, replay can derive a different prompt from the one associated with a persisted model result.
+
+That is a genuine semantic seam.
+
+### 12. The Workflow experiment strongly validates the design
+
+The durable implementation demonstrates the most important architectural claim:
+
+> The same `AgentDefinition` can be reinterpreted under stronger execution semantics without making durability part of core.
+
+The model can be replaced by a Layer whose calls are Workflow Activities. Tool handlers can be wrapped as Activities. Out-of-band input can be supplied through a durable `InputChannel` implementation.
+
+The fact that no giant `AgentExecutionInterpreter`, plugin lifecycle, or separate durable Agent abstraction had to be inserted into core is a very good sign.
+
+### 13. The engineering process is good
+
+The repository is not simply accumulating features. Several recent changes were driven by explicit counterexamples and invariant audits:
+
+- provider tool-call ids were found not to be globally unique enough for durable activity identity;
+- writable state exposure was closed;
+- empty loop conjunction/disjunction was made unrepresentable;
+- a cluster mailbox/workflow deadlock was found and corrected;
+- typed requirement coverage was added after noticing the missing channels;
+- subagent model isolation and interruption propagation were tested rather than merely documented.
+
+That is the right style for a concurrency-heavy execution kernel.
+
+---
+
+# Issues to fix before calling v0.1 complete
+
+## P0 — Quiescence vs. steer/follow-up admission race
+
+This is the most important core correctness issue.
+
+At the end of a run, `AgentSubmission.execute` drains follow-ups and decides whether the submission is finished. But the session remains `running` until `prompt()` later performs release/cleanup.
+
+`followUp()` independently:
+
+1. reads session state;
+2. sees `running`;
+3. offers to the follow-up channel.
+
+Those actions are not synchronized with the transition to quiescence.
+
+A possible interleaving is:
+
+```text
+Submission                         caller
+
+followUps.drain → []
+
+submission decides it is done
+                                   followUp("add tests")
+                                   sees running ✓
+                                   queues input ✓
+submission returns
+
+release()
+drains followUps
+
+"add tests" is lost
+```
+
+The API reported successful acceptance, but the accepted work never executes.
+
+A related race can leave an input queued after cleanup if the offer completes after the release drain.
+
+Steering has the same conceptual admission problem at terminal quiescence.
+
+### Recommended invariant
+
+> If `followUp()` or `steer()` succeeds, the input is guaranteed to belong to the active submission.
+
+### Recommended direction
+
+Add one session-level admission/quiescence synchronization point, probably a small `Semaphore(1)` or equivalent atomic state transition.
+
+Both of these operations must participate in it:
+
+```text
+accept out-of-band input
+vs.
+declare submission no longer accepting input
+```
+
+For example:
+
+```text
+running + accepting
+        │
+run reaches stopping point
+        │
+        ▼
+acquire admission permit
+        │
+        ├─ pending followups → consume and continue
+        │
+        └─ none → mark accepting=false
+        │
+release permit
+```
+
+`followUp` and `steer` acquire the same permit before checking and accepting.
+
+This should be fixed before relying on the quiescence contract.
+
+---
+
+## P0 — `Tool.needsApproval` is silently bypassed
+
+Effect AI tools support static and dynamic approval requirements through `needsApproval` / `setNeedsApproval`.
+
+Because the harness intentionally disables Effect AI's automatic tool resolution and calls `Toolkit.handle` itself, the harness also bypasses Effect AI's normal approval path.
+
+Currently, `ToolExecution` does not check `needsApproval` before invoking the handler.
+
+That means a user can define something like:
+
+```ts
+const DeleteEverything = Tool.make(/* ... */)
+  .setNeedsApproval(true)
+```
+
+and reasonably interpret that as:
+
+> This tool cannot execute without approval.
+
+But the harness may execute it directly.
+
+That is a semantic and safety footgun.
+
+### Recommended v0.1 behavior
+
+Full human-in-the-loop support does not need to ship yet.
+
+At minimum, detect tools requiring approval and fail explicitly with a typed unsupported-approval error rather than silently weakening the Tool's semantics.
+
+Later, approval can be implemented through a dedicated typed Service / interrupt abstraction and, under Workflow, a durable external-input primitive.
+
+The important invariant is:
+
+> Effect Agent must never silently ignore Effect AI tool safety semantics.
+
+---
+
+## P1 — Provider-executed tool calls should not be locally executed
+
+Effect AI distinguishes tool calls whose execution was performed by the provider using `providerExecuted`.
+
+Its own resolver does not locally invoke those calls.
+
+The harness currently takes `response.toolCalls` wholesale and sends all of them through local `ToolExecution`.
+
+The local execution set should instead be something like:
+
+```ts
+const executableToolCalls = response.toolCalls.filter(
+  (call) => call.providerExecuted !== true
+)
+```
+
+The continuation policy should also be reviewed so `untilIdle()` is based on calls requiring harness action, rather than merely the presence of any provider-side tool-call part.
+
+This will matter increasingly for provider-native web search, code execution, and other built-in tools.
+
+---
+
+## P1 — Encoded tool-parameter typing is currently unsound
+
+This is subtle but important for a type-safe library.
+
+When `disableToolCallResolution: true`, Effect AI intentionally preserves tool-call parameters in their encoded representation. Its response types track this with the encoded-parameters boolean.
+
+The harness currently exposes loop state approximately as:
+
+```ts
+Response.ToolCallParts<Tools>
+```
+
+which defaults to decoded parameters.
+
+For basic Schemas such as `Schema.String`, the problem is invisible because encoded and decoded forms are identical.
+
+It becomes incorrect with transformed Schemas, for example:
+
+```text
+encoded: string
+decoded: Date
+```
+
+A loop could then be statically typed as though `call.params.when` were a `Date`, while the raw model call actually contains the encoded string.
+
+### Recommended action
+
+Add a transformed-Schema test immediately.
+
+The raw tool-call representation returned by manual model resolution should likely preserve:
+
+```ts
+Response.ToolCallParts<Tools, true>
+```
+
+The Toolkit boundary is what validates and decodes encoded parameters before the handler receives them.
+
+---
+
+## P1 — Three or more follow-ups reorder
+
+`AgentSubmission.execute` currently drains all follow-ups, takes the first, and re-enqueues the remainder in reverse order.
+
+For queued inputs:
+
+```text
+A, B, C
+```
+
+it runs `A`, then re-enqueues:
+
+```text
+C, B
+```
+
+on a FIFO queue, producing:
+
+```text
+A, C, B
+```
+
+The existing FIFO test only queues two follow-ups, so it does not expose this.
+
+The immediate fix is simply not to reverse the remainder:
+
+```ts
+for (const remaining of queued.slice(1)) {
+  yield* session.followUps.offer(remaining)
+}
+```
+
+A three-or-more-item FIFO test should pin the invariant.
+
+---
+
+## P1 — Toolkit resolver requirements are erased
+
+`AgentLoop` and `ContextTransform` correctly preserve their `E` and `R` channels.
+
+The Effect-valued toolkit input currently erases its requirements with `any`.
+
+That weakens one of the project's most important claims: that runtime capability resolution is ordinary typed Effect computation.
+
+An effectful toolkit should preserve its own error and requirement channels and union them into the Agent definition, just like loops and transforms.
+
+Conceptually:
+
+```ts
+ToolkitInput<Tools, E, R>
+```
+
+rather than an Effect whose requirement channel is `any`.
+
+Also add compile-time coverage for tools with request-level dependencies such as `Tool.addDependency(...)` and handler Service requirements.
+
+The type-safety story should cover the full chain:
+
+```text
+Schema
+  ↓
+Tool
+  ↓
+Toolkit
+  ↓
+handler Effect
+  ↓
+Service requirements
+  ↓
+Agent/session requirements
+```
+
+---
+
+## P2 — `ContextTransform.compose` overloads the meaning of `canonicalPrompt`
+
+Composition currently feeds one transform's output into the next transform by replacing the `canonicalPrompt` field in the supplied context.
+
+The value at that point is no longer canonical history; it is the current derived prompt.
+
+That naming becomes confusing once transforms for memory, compaction, RAG, permissions, etc. are composed.
+
+A clearer context would distinguish:
+
+```ts
+interface Context {
+  readonly canonicalPrompt: Prompt
+  readonly prompt: Prompt
+  // correlation...
+}
+```
+
+Composition updates `prompt`, while `canonicalPrompt` always refers to the original session snapshot.
+
+This preserves the conceptual distinction the architecture is built around.
+
+---
+
+## P2 — Public agent input is too narrow
+
+`prompt`, `steer`, and `followUp` currently accept strings only.
+
+Effect AI's prompt model can represent richer user input, and a general-purpose agent harness will eventually need to support:
+
+- images
+- files
+- multimodal input
+- structured frontend messages
+- A2A / AG-UI input projections
+- coding artifacts or attachments
+
+The harness should not expose arbitrary full Prompt mutation, because it must continue to own roles and history semantics.
+
+But a small typed `AgentInput` / user-message input abstraction would make the API future-proof without giving up ownership of canonical history.
+
+This is worth considering before v0.1 freezes the public surface.
+
+---
+
+## P2 — One typed example is invalid at runtime
+
+The typed example currently performs roughly:
+
+```ts
+const result = yield* AgentSession.prompt(session, "...")
+yield* AgentSession.steer(session, "...")
+```
+
+But `prompt()` intentionally resolves only once the submission has reached quiescence, at which point the session is idle.
+
+The subsequent `steer()` should therefore fail with `AgentIdleError`.
+
+The example typechecks but demonstrates a runtime-invalid usage pattern.
+
+It should instead fork the prompt, synchronize on work having begun, steer while the submission is active, then join the prompt fiber.
+
+Examples are part of the API contract because users copy them directly.
+
+---
+
+## P3 — Consider separating history from the observable runtime `SubscriptionRef`
+
+Canonical history currently lives inside the same `SubscriptionRef<SessionState>` as status, active ids, and turn counters.
+
+The read-only view makes this correct from an ownership perspective.
+
+However, every history commit is also a runtime-state update containing an ever-growing `Prompt`, which means state subscribers may receive heavy updates even if they care only about status/progress.
+
+A potentially cleaner internal split is:
+
+```text
+Ref<Prompt>                    canonical history
+SubscriptionRef<RuntimeState>  status / ids / turn
+```
+
+with `AgentSession.history()` remaining the explicit history accessor.
+
+This is not urgent, but it may become relevant for UI and long-running sessions.
+
+---
+
+## P3 — Clean up stale package namespaces
+
+Internal identifiers still use the old `@effect-harness/...` namespace while the public package is now `@doeixd/effect-agent`.
+
+Before consumers begin persisting branded ids or depending on runtime symbols, use one canonical namespace consistently.
+
+---
+
+# Durable / Workflow review
+
+The durable path is architecturally promising and should remain outside core.
+
+The central experiment has succeeded:
+
+- the same Agent definition runs under Workflow;
+- model calls can become Activities through LanguageModel Layer substitution;
+- tool handlers can become Activities without modifying the harness engine;
+- consumed steering/follow-up batches can be journaled through a different `InputChannel` implementation;
+- canonical history can be rebuilt from replayed completed work.
+
+That is a major validation of the architecture.
+
+However, the durable package should still be labeled experimental.
+
+## Durable semantic differences to keep explicit
+
+### Workflow idempotency currently acts like one submission per session id
+
+The durable workflow's idempotency key is based on the session id.
+
+A second submit for the same session therefore rejoins the existing execution instead of behaving like a fresh later `AgentSession.prompt()`.
+
+That means today's durable abstraction is closer to:
+
+```text
+one durable submission associated with a session id
+```
+
+than:
+
+```text
+a fully durable equivalent of a reusable long-lived AgentSession
+```
+
+That is okay, but it should remain explicit in docs and types.
+
+### Typed failures are weakened in the Workflow wrapper
+
+Some of the durable path currently uses `Effect.orDie`, converting typed agent failures into defects at the Workflow boundary.
+
+The core has a strong typed-error story; the durable interpreter should ideally preserve it with Workflow success/error Schemas rather than collapsing failures.
+
+### Durable `steer` / `followUp` currently bypass core admission semantics
+
+The durable convenience functions write directly to the backing channel store.
+
+They therefore do not currently enforce the same "session must be running and accepting input" semantics as core `AgentSession.steer` / `followUp`.
+
+This becomes especially relevant once the core quiescence/admission race is fixed.
+
+The durable interpreter should preserve the same externally observable admission contract rather than becoming a weaker sibling API.
+
+### Process-loss durability is not fully proven yet
+
+The SQL-backed Workflow journal demonstrates replay within a runner lifetime, but runner loss currently exposes shard-assignment/reassignment problems.
+
+Do not claim full process-restart durability until resumption from a fresh runner over the same persisted journal is proven end to end.
+
+### Parallel replay deserves continued validation
+
+The fresh concurrent path works, but durable replay of concurrent Activities has historically been exactly where Workflow engines expose subtle ordering/deadlock issues.
+
+Keep deterministic replay tests for parallel tool calls before declaring that configuration production-safe.
+
+---
+
+# Recommended priority order
+
+Before calling core v0.1 complete:
+
+1. **Fix quiescence vs. steer/follow-up admission race.**
+2. **Do not silently bypass `Tool.needsApproval`.**
+3. **Filter provider-executed tool calls from local execution.**
+4. **Correct encoded tool-call parameter typing.**
+5. **Fix FIFO ordering for 3+ follow-ups.**
+6. **Preserve toolkit resolver / tool requirement `E` and `R` channels.**
+7. **Clarify `ContextTransform.compose` canonical-vs-derived naming.**
+8. **Widen user input beyond plain strings.**
+9. **Fix the typed-agent steering example.**
+10. **Optionally separate canonical history from observable runtime state.**
+11. **Normalize internal package namespaces.**
+
+Then separately continue hardening:
+
+```text
+@doeixd/effect-agent/durable
+@doeixd/effect-agent/cluster
+```
+
+without expanding core unless concrete implementation pressure proves a new seam is necessary.
+
+---
+
+# Final assessment
+
+The important conclusion is that implementation pressure has **not invalidated the architecture**.
+
+The design has now survived:
+
+- real Effect AI integration;
+- typed tools and failures;
+- effectful loop and context policies;
+- deterministic tests;
+- steering and follow-ups;
+- parallel tool execution;
+- structured interruption;
+- subagents with separate model Layers;
+- Schema-defined observation;
+- Workflow reinterpretation;
+- Cluster experiments.
+
+The remaining defects are primarily concurrency-boundary and protocol-integration details.
+
+That is a good outcome.
+
+The most significant success is that stronger runtime behavior continues to emerge through ordinary Effect composition rather than through agent-framework-specific machinery. Durability did not require replacing the Agent type. Subagents did not require a subagent manager. Cancellation did not require cancellation tokens. Model selection did not require a model registry. Retries and timeouts remain handler Effects. Services and Layers remain the dependency mechanism.
+
+That is exactly what "Effect-native" should mean for this project.
+
+**Recommendation: continue with this codebase rather than redesigning it. Tighten the P0/P1 semantics above, keep the core small, and let higher-level capability packages grow around the kernel only when concrete use cases demand them.**
