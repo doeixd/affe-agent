@@ -1573,6 +1573,13 @@ express.
 * Resumption is not "call `execute` again" — that hangs on an interrupted
   execution. Use `Workflow.resume(executionId)`.
 
+### The durable engine is testable without SQL
+
+A follow-up spike established that `ClusterWorkflowEngine.layer` composes with
+`TestRunner.layer`, which has no dependencies of its own. The durable path can
+therefore be developed and tested in ordinary unit tests, with no database.
+`WORKFLOW_CLUSTER_PLAN.md` builds every phase on that.
+
 ### What remains unproven
 
 The headline claim — process dies mid-submission, restarts, and the persisted

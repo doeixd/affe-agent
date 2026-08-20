@@ -66,6 +66,10 @@ The reason is structural: `LanguageModel.make` takes a provider returning
 by swapping a Layer. The interception points a durable interpreter needs are
 already Layers, so `AgentExecution` stays unbuilt.
 
+`ClusterWorkflowEngine.layer` also composes with `TestRunner.layer` (no
+dependencies), so the durable path is unit-testable without SQL —
+`WORKFLOW_CLUSTER_PLAN.md` is the implementation plan built on that.
+
 Not proven, and flagged as the durable package's first job: crash-and-resume
 returning a persisted model result. That needs a persistent engine and
 `Workflow.resume`, not `WorkflowEngine.layerMemory`. Concurrent activities
