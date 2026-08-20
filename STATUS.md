@@ -347,6 +347,33 @@ now inferred. Its `sessionId` also defaults to one derived from the firing time:
 a submission's idempotency key is its session, so a scheduled agent that reused
 one session ran once and then silently did nothing forever.
 
+## Open question: admission at quiescence under durability
+
+Core promises that an accepted follow-up is processed: `AgentSubmission` closes
+an atomic gate and drains once more, so nothing it accepted is stranded. The
+durable path does not use that gate — it gates on a marker in the store, cleared
+when the workflow exits, which is well after the submission's own final drain.
+On paper that leaves a window where `followUp` returns success and the input is
+never drained by anyone.
+
+This is recorded as an open question rather than a fixed bug, because it was not
+pinned down. A test that wrapped the `Store` to offer input at the moment of a
+closing drain did show a follow-up accepted and then never reaching the model —
+but the same instrumentation behaved inconsistently on repeat runs (an injection
+condition that should have fired on several drains fired only once), so the
+observation could not be separated from an artifact of the test double.
+
+An attempted fix — closing the marker in the workflow body and then performing a
+journalled closing drain, the durable analogue of core's algorithm — did **not**
+change the reproduction, which is the main reason it was not shipped. Whatever
+strands the input is not the marker's timing alone. Reproducing this reliably is
+the prerequisite for fixing it; a semantic change to the workflow body that adds
+submission rounds is not worth making on a guess.
+
+Worth knowing for whoever picks it up: the durable channels are drained more
+often than the turn count suggests, and instrumenting `Store.takeAll` is not a
+reliable way to identify *which* drain is the closing one.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found
