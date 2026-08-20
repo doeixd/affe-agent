@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Layer, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
+import * as ContextTransform from "../src/ContextTransform.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as FakeModel from "./FakeModel.js"
@@ -52,7 +54,7 @@ describe("durable submissions", () => {
         )
       )
 
-      assert.strictEqual(text._tag, "Complete")
+      assert.isTrue(Exit.isSuccess(text))
     })
   )
 
@@ -101,22 +103,21 @@ describe("durable submissions", () => {
       // A context transform is a convenient place to suspend mid-submission:
       // it runs inside the workflow, before turn 2's model call.
       const suspendOnce = yield* Ref.make(true)
-      const gating = {
-        transform: (context: { canonicalPrompt: unknown }) =>
-          Effect.gen(function* () {
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
             const shouldSuspend = yield* Ref.getAndSet(suspendOnce, false)
             if (shouldSuspend) {
               const token = yield* DurableDeferred.token(Gate)
               yield* Deferred.succeed(gateReady, token)
               yield* DurableDeferred.await(Gate)
             }
-            return context.canonicalPrompt
-          }) as any
-      }
+          return context.canonicalPrompt
+        })
+      )
 
       const Support = Agent.make({
         toolkit: refundToolkit,
-        contextTransform: gating as any
+        contextTransform: gating
       })
 
       const durable = DurableAgent.workflow("Support", Support, {
@@ -165,27 +166,25 @@ describe("durable submissions", () => {
       ])
 
       const suspendOnce = yield* Ref.make(true)
-      const gating = {
-        transform: (context: { canonicalPrompt: unknown }) =>
-          Effect.gen(function* () {
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
             const shouldSuspend = yield* Ref.getAndSet(suspendOnce, false)
             if (shouldSuspend) {
               const token = yield* DurableDeferred.token(Gate2)
               yield* Deferred.succeed(gateReady, token)
               yield* DurableDeferred.await(Gate2)
             }
-            return context.canonicalPrompt
-          }) as any
-      }
+          return context.canonicalPrompt
+        })
+      )
 
       const Looping = Agent.make({
-        contextTransform: gating as any,
-        loop: {
-          decide: (state: any) =>
-            Effect.succeed(
-              state.turnIndex < 2 ? { _tag: "Continue" } : { _tag: "Stop" }
-            )
-        } as any
+        contextTransform: gating,
+        loop: AgentLoop.make((state) =>
+          Effect.succeed(
+            state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+          )
+        )
       })
 
       const durable = DurableAgent.workflow("Steered", Looping, { store })
@@ -235,19 +234,18 @@ describe("durable submissions", () => {
       ])
 
       const suspendOnce = yield* Ref.make(true)
-      const gating = {
-        transform: (context: { canonicalPrompt: unknown }) =>
-          Effect.gen(function* () {
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
             if (yield* Ref.getAndSet(suspendOnce, false)) {
               const token = yield* DurableDeferred.token(Gate3)
               yield* Deferred.succeed(gateReady, token)
               yield* DurableDeferred.await(Gate3)
             }
-            return context.canonicalPrompt
-          }) as any
-      }
+          return context.canonicalPrompt
+        })
+      )
 
-      const Suspending = Agent.make({ contextTransform: gating as any })
+      const Suspending = Agent.make({ contextTransform: gating })
       const durable = DurableAgent.workflow("Interrupted", Suspending, { store })
 
       const outcome = yield* Effect.gen(function* () {
@@ -274,10 +272,10 @@ describe("durable submissions", () => {
 
       // Interrupted is terminal: it is not Complete, and completing the gate
       // afterwards does not make it so.
-      const completed =
-        Option.isSome(outcome) && outcome.value._tag === "Complete"
       assert.isFalse(
-        completed && (outcome.value as any).exit?._tag === "Success",
+        Option.isSome(outcome) &&
+          outcome.value._tag === "Complete" &&
+          Exit.isSuccess(outcome.value.exit),
         "an interrupted submission must not complete successfully"
       )
     })

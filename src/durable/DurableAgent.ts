@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Schedule, Schema } from "effect"
+import { Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow"
@@ -83,6 +83,12 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
  * `discard` is required rather than incidental: a submission that suspends —
  * awaiting approval, or simply outliving the process — never produces the
  * result a plain `execute` waits for.
+ *
+ * The idempotency key is the **session**, not the input. Retrying a submit is
+ * therefore safe, but a second submit with *different* input for the same
+ * session rejoins the live execution rather than starting a new one — the new
+ * input is not processed. That upholds PLAN §11's one-submission-per-session
+ * rule; queue further work with `followUp` instead.
  */
 export const submit = <W extends ReturnType<typeof workflow>>(
   agent: W,
@@ -117,16 +123,26 @@ export const followUp = (
  *
  * A resumed execution continues in the background, so this polls rather than
  * blocking on a fiber that may not exist in this process.
+ *
+ * Note that a failed submission is still a *completed* workflow: the returned
+ * `Complete` carries an `exit` that may be a `Failure`. Check the exit —
+ * `_tag === "Complete"` alone does not mean the agent succeeded.
  */
 export const result = <W extends ReturnType<typeof workflow>>(
   agent: W,
   executionId: string,
   options?: { readonly interval?: Duration.Duration | undefined }
-) =>
+): Effect.Effect<
+  Exit.Exit<string, never>,
+  "pending",
+  WorkflowEngine.WorkflowEngine
+> =>
   Effect.retry(
     Effect.flatMap(agent.definition.poll(executionId), (polled) =>
       Option.isSome(polled) && polled.value._tag === "Complete"
-        ? Effect.succeed(polled.value)
+        ? Effect.succeed(
+            (polled.value as Workflow.Complete<string, never>).exit
+          )
         : Effect.fail("pending" as const)
     ),
     {

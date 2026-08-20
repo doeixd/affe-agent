@@ -29,6 +29,15 @@ export interface Store {
   readonly size: (key: string) => Effect.Effect<number>
 }
 
+/**
+ * An in-process store. Suitable for tests and single-node development.
+ *
+ * Note what is and is not durable here. Each *drain* is journalled as an
+ * activity, so replay is consistent — a resumed turn sees the batch it
+ * originally consumed. But input that was offered and not yet drained lives
+ * only in this map, so it does not survive a restart. A deployment that must
+ * not lose queued steering needs a shared, persistent `Store`.
+ */
 export const memoryStore: Effect.Effect<Store> = Effect.map(
   Ref.make(new Map<string, Array<string>>()),
   (ref): Store => ({

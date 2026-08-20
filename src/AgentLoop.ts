@@ -79,16 +79,21 @@ export const maxTurns = <Tools extends Record<string, Tool.Any> = any>(
  *
  * Composition is explicit rather than hidden inside `.pipe`, so a reader never
  * has to guess whether combination means conjunction or disjunction.
+ *
+ * At least one policy is required. An empty conjunction is vacuously true,
+ * which here would mean a run that never stops — a footgun worth making
+ * unrepresentable rather than documenting.
  */
 export const and = <
   E = never,
   R = never,
   Tools extends Record<string, Tool.Any> = any
 >(
-  ...loops: ReadonlyArray<AgentLoop<E, R, Tools>>
+  first: AgentLoop<E, R, Tools>,
+  ...rest: ReadonlyArray<AgentLoop<E, R, Tools>>
 ): AgentLoop<E, R, Tools> =>
   make((state) =>
-    Effect.reduce(loops, () => Continue as Decision, (acc, loop) =>
+    Effect.reduce([first, ...rest], () => Continue as Decision, (acc, loop) =>
       acc._tag === "Stop" ? Effect.succeed(acc) : loop.decide(state)
     )
   )
@@ -99,10 +104,11 @@ export const or = <
   R = never,
   Tools extends Record<string, Tool.Any> = any
 >(
-  ...loops: ReadonlyArray<AgentLoop<E, R, Tools>>
+  first: AgentLoop<E, R, Tools>,
+  ...rest: ReadonlyArray<AgentLoop<E, R, Tools>>
 ): AgentLoop<E, R, Tools> =>
   make((state) =>
-    Effect.reduce(loops, () => Stop as Decision, (acc, loop) =>
+    Effect.reduce([first, ...rest], () => Stop as Decision, (acc, loop) =>
       acc._tag === "Continue" ? Effect.succeed(acc) : loop.decide(state)
     )
   )

@@ -33,9 +33,15 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
     >()
 
-    // A tool call id is unique within a response but not across a submission;
-    // a counter disambiguates a model that reuses one.
-    const fallback = yield* Ref.make(0)
+    // A provider is only obliged to make tool call ids unique within a single
+    // response, so the id alone cannot identify an activity: a model that
+    // reuses one across turns would collide, and the later call would silently
+    // replay the earlier result instead of executing.
+    //
+    // The ordinal is what makes identity sound. Tool calls are consumed in a
+    // fixed order within a submission, so it is replay-stable, and the id is
+    // kept alongside it purely to keep traces readable.
+    const ordinal = yield* Ref.make(0)
 
     const handle: Toolkit.WithHandler<Tools>["handle"] = ((
       name: any,
@@ -43,14 +49,13 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       toolCallId?: string
     ) =>
       Effect.gen(function* () {
-        const id =
-          toolCallId ??
-          `seq-${yield* Ref.getAndUpdate(fallback, (n) => n + 1)}`
+        const index = yield* Ref.getAndUpdate(ordinal, (n) => n + 1)
+        const id = toolCallId ?? "anonymous"
 
         // The handler returns a stream so it can emit preliminary results; only
         // the final one is committed, and only that one is worth persisting.
         const results = yield* Activity.make({
-          name: `tool-${String(name)}-${id}`,
+          name: `tool-${index}-${String(name)}-${id}`,
           success: Schema.Unknown,
           execute: toolkit
             .handle(name, params, toolCallId)

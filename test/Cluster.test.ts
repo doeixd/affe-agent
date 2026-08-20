@@ -28,7 +28,10 @@ describe("agent entity", () => {
     // The surface a remote client sees, and the reason no core change was
     // needed: these map one-to-one onto AgentSession's module functions.
     assert.deepStrictEqual(
-      Array.from((AgentEntity.protocol as any).requests.keys()).sort(),
+      // Reaching into Effect's RpcGroup internals deliberately: there is no
+      // public way to enumerate an entity's operations, and the surface a
+      // remote client sees is worth pinning.
+      Array.from(AgentEntity.protocol.requests.keys()).sort(),
       ["followUp", "interrupt", "steer", "submit"]
     )
     assert.strictEqual(AgentEntity.type, "AgentSession")

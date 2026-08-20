@@ -359,10 +359,26 @@ export const history = (
 export const status = (session: AgentSession<any, any>): Effect.Effect<Status> =>
   SubscriptionRef.get(unwrap(session).state).pipe(Effect.map((s) => s.status))
 
-/** Harness runtime state, for a UI that needs to observe it continuously. */
-export const state = (
-  session: AgentSession<any, any>
-): SubscriptionRef.SubscriptionRef<SessionState> => unwrap(session).state
+/**
+ * A read-only view of harness runtime state, for a UI that observes it.
+ *
+ * Deliberately not the underlying `SubscriptionRef`. Handing that out would let
+ * a caller write to it, and canonical history lives there — which would break
+ * the invariant that the session is its sole owner (PLAN §45). Observation is
+ * a different capability from mutation, and only one of them is on offer.
+ */
+export interface StateView {
+  readonly get: Effect.Effect<SessionState>
+  readonly changes: Stream.Stream<SessionState>
+}
+
+export const state = (session: AgentSession<any, any>): StateView => {
+  const ref = unwrap(session).state
+  return {
+    get: SubscriptionRef.get(ref),
+    changes: SubscriptionRef.changes(ref)
+  }
+}
 
 /**
  * The live event stream.

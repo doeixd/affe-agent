@@ -1,5 +1,5 @@
-import { Effect, Queue, Schema, Stream } from "effect"
-import { Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import type { AgentDefinition } from "../src/Agent.js"
 import type { AgentEventEnvelope } from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -74,3 +74,28 @@ export const withSession = <A, E, Tools extends Record<string, Tool.Any>>(
 
 export const tags = (events: ReadonlyArray<AgentEventEnvelope>) =>
   events.map((e) => e.event._tag)
+
+/**
+ * Wraps a `LanguageModel` layer so each `generateText` is counted.
+ *
+ * Decorating a provider is a normal thing to do — the durable interpreter does
+ * exactly this — but `generateText` is heavily overloaded, so the cast is
+ * absorbed here once rather than repeated at every call site.
+ */
+export const countingModel = (
+  base: Layer.Layer<LanguageModel.LanguageModel>,
+  calls: Ref.Ref<number>
+): Layer.Layer<LanguageModel.LanguageModel> =>
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    Effect.gen(function* () {
+      const inner = yield* LanguageModel.LanguageModel
+      return {
+        ...inner,
+        generateText: ((options: never) =>
+          Ref.update(calls, (n) => n + 1).pipe(
+            Effect.andThen(inner.generateText(options))
+          )) as unknown as LanguageModel.Service["generateText"]
+      }
+    })
+  ).pipe(Layer.provide(base))

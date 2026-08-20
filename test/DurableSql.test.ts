@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Crypto, Deferred, Effect, Layer, Ref } from "effect"
+import { Crypto, Deferred, Effect, Exit, Layer, Ref } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
@@ -10,9 +10,12 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
+import * as ContextTransform from "../src/ContextTransform.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as FakeModel from "./FakeModel.js"
+import { countingModel } from "./helpers.js"
 
 /**
  * WORKFLOW_CLUSTER_PLAN Phase 5 — production wiring on SQL storage.
@@ -82,47 +85,33 @@ describe("durable submissions on SQL storage", () => {
       const turns = yield* Ref.make(0)
 
       // Suspend before turn 2, so turn 1's model result is already journalled.
-      const gating = {
-        transform: (context: { canonicalPrompt: unknown }) =>
-          Effect.gen(function* () {
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
             const turn = yield* Ref.updateAndGet(turns, (n) => n + 1)
             if (turn === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
               const token = yield* DurableDeferred.token(Gate)
               yield* Deferred.succeed(gateReady, token)
               yield* DurableDeferred.await(Gate)
             }
-            return context.canonicalPrompt
-          }) as any
-      }
+          return context.canonicalPrompt
+        })
+      )
 
       const store = yield* DurableChannels.memoryStore
       const Suspending = Agent.make({
-        contextTransform: gating as any,
-        loop: {
-          decide: (state: any) =>
-            Effect.succeed(
-              state.turnIndex < 2 ? { _tag: "Continue" } : { _tag: "Stop" }
-            )
-        } as any
+        contextTransform: gating,
+        loop: AgentLoop.make((state) =>
+          Effect.succeed(
+            state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+          )
+        )
       })
 
       const { layer: baseModel } = yield* FakeModel.layer([
         { text: "first" },
         { text: "second" }
       ])
-      const model = Layer.effect(
-        LanguageModel.LanguageModel,
-        Effect.gen(function* () {
-          const inner = yield* LanguageModel.LanguageModel
-          return {
-            ...inner,
-            generateText: ((options: any) =>
-              Ref.update(modelCalls, (n) => n + 1).pipe(
-                Effect.andThen(inner.generateText(options))
-              )) as any
-          }
-        })
-      ).pipe(Layer.provide(baseModel))
+      const model = countingModel(baseModel, modelCalls)
 
       const durable = DurableAgent.workflow("SqlBacked", Suspending, { store })
 
@@ -142,7 +131,7 @@ describe("durable submissions on SQL storage", () => {
         )
       )
 
-      assert.strictEqual(completed._tag, "Complete")
+      assert.isTrue(Exit.isSuccess(completed))
 
       // Turn 1's model call was journalled before the suspension and replayed
       // afterwards: two turns, two calls, not three.

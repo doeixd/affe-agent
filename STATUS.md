@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 75 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 90 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -53,6 +53,46 @@ examples/anthropic.ts  the DoD program on a real provider (typechecked only)
 | 10 Event envelopes and ordering | done |
 | 11 Tool failure policy spike | done — resolved, see below |
 | 12 API cleanup | done except event Schemas, see deviations |
+
+## Audit findings
+
+A review pass after the durable work found four defects and one regression.
+
+**A reused tool call id silently skipped a tool.** `DurableToolkit` derived
+activity identity from the provider's `toolCallId`, but a provider is only
+obliged to make that unique *within one response*. A model reusing an id across
+turns collided, and the later call replayed the earlier result — the tool never
+ran, and nothing surfaced. Identity is now the call's ordinal within the
+submission, which is replay-stable; the id is kept alongside it for readable
+traces. Reproduced before the fix.
+
+**`AgentSession.state` handed out a writable `SubscriptionRef`.** Canonical
+history lives in it, so a caller could have corrupted it — directly against
+PLAN §45's "sole owner" invariant. It now returns a read-only `StateView`
+(`get` and `changes`); observation and mutation are different capabilities and
+only one is on offer.
+
+**`AgentLoop.and()` with no arguments never stopped.** An empty conjunction is
+vacuously true, which here means a run that loops forever. Both `and` and `or`
+now require at least one policy, making it unrepresentable rather than
+documented.
+
+**A dispatch failure in the entity handler was swallowed.** The submit handler
+forks the execution and the caller already has its id, so a failure cannot be
+returned — it is now logged rather than discarded silently.
+
+**Casts regressed in test code**, against the rule in AGENTS.md: 15 had crept
+in with the durable tests. Down to one, absorbed inside a shared helper because
+`LanguageModel.generateText` is heavily overloaded and decorating a provider is
+a normal thing to do. Two of those casts pointed at a real API gap —
+`DurableAgent.result` now returns the workflow's `Exit` instead of a `Complete`
+whose failure had to be dug out untyped.
+
+Two behaviours turned out to be correct but silent, so they are pinned by tests
+rather than left to be discovered: a failed submission is still a *completed*
+workflow carrying a failed exit, and a second `submit` for the same session
+rejoins the live execution rather than starting a new one (the idempotency key
+is the session, which is what makes retrying safe).
 
 ## Durable and distributed execution
 

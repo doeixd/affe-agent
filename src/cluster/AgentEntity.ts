@@ -57,7 +57,17 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             yield* Effect.forkDetach(
               agent.definition
                 .execute({ sessionId, input: payload.input }, { discard: true })
-                .pipe(Effect.ignore)
+                .pipe(
+                  // The caller already has its execution id, so a dispatch
+                  // failure cannot be returned to it. Log rather than discard:
+                  // a silently dropped submission is the worst outcome here.
+                  Effect.catchCause((cause) =>
+                    Effect.logError("agent submission failed to dispatch", {
+                      sessionId,
+                      cause
+                    })
+                  )
+                )
             )
             return executionId
           }).pipe(Effect.orDie),
