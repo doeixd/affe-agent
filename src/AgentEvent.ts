@@ -24,13 +24,45 @@ export const Failure = Schema.Struct({
 })
 export type Failure = typeof Failure.Type
 
+/**
+ * Render an error's own fields, for when it has nothing better to say.
+ *
+ * `Schema.TaggedError` subclasses inherit `Error`'s empty `message` unless the
+ * author overrides it, so the obvious projection — read `.message` — throws
+ * away everything specific about the failure and leaves a bare tag. That is the
+ * common case, not an edge one: most tagged errors carry their detail in named
+ * fields.
+ */
+const fields = (error: object): string => {
+  const own = Object.entries(error).filter(
+    ([key, value]) =>
+      key !== "_tag" && key !== "message" && key !== "stack" && value !== undefined
+  )
+  if (own.length === 0) return ""
+  try {
+    return own
+      .map(([key, value]) =>
+        `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`
+      )
+      .join(", ")
+  } catch {
+    // A field held something uncloneable. A partial description still beats
+    // failing to describe the failure at all.
+    return own.map(([key]) => key).join(", ")
+  }
+}
+
 const describe = (error: unknown): { tag: string; message: string } => {
   if (typeof error === "object" && error !== null) {
     const tagged = error as { _tag?: unknown; message?: unknown }
     const tag = typeof tagged._tag === "string" ? tagged._tag : "Error"
-    const message =
-      typeof tagged.message === "string" ? tagged.message : String(error)
-    return { tag, message }
+    const stated =
+      typeof tagged.message === "string" && tagged.message.length > 0
+        ? tagged.message
+        : ""
+    if (stated.length > 0) return { tag, message: stated }
+    const described = fields(error)
+    return { tag, message: described.length > 0 ? described : String(error) }
   }
   return { tag: "Error", message: String(error) }
 }

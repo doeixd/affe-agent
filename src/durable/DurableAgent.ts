@@ -41,6 +41,46 @@ export interface Options {
  * The returned value is an ordinary `Workflow`, so its `execute`, `poll`,
  * `resume` and `interrupt` are available directly.
  */
+/**
+ * A submission that failed, projected onto something a journal can hold.
+ *
+ * A durable submission's failure has to survive being written to storage and
+ * read back in another process, and the agent's own error type cannot: it is
+ * `PromptError<Tools, E>`, parameterised by whatever the caller's tools and
+ * transforms fail with. There is no schema for an arbitrary `E`.
+ *
+ * So the workflow's declared error is this lossy-but-encodable projection. It
+ * is strictly better than the alternative it replaces — flattening every
+ * failure into a defect, which told a caller only that *something* went wrong.
+ * The full `Cause` is still available in-process, on `AgentSession.prompt`.
+ */
+export class DurableAgentFailure extends Schema.TaggedError<DurableAgentFailure>()(
+  "DurableAgentFailure",
+  {
+    /** The originating error's `_tag`, or a generic label. */
+    tag: Schema.String,
+    detail: Schema.String,
+    /** A defect is a bug; a non-defect is an anticipated failure. */
+    isDefect: Schema.Boolean
+  }
+) {
+  override get message() {
+    return `${this.isDefect ? "Defect" : "Failure"} in durable submission: ${
+      this.tag
+    }: ${this.detail}`
+  }
+}
+
+/** The wire-safe projection of a submission's cause. */
+const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure => {
+  const failure = AgentEvent.failureFromCause(cause)
+  return new DurableAgentFailure({
+    tag: failure.tag,
+    detail: failure.message,
+    isDefect: failure.isDefect
+  })
+}
+
 export const workflow = <Tools extends Record<string, Tool.Any>>(
   name: string,
   agent: AgentDefinition<Tools, any, any>,
@@ -51,14 +91,16 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
     // journal exactly as a text one does.
     payload: { sessionId: Schema.String, prompt: Prompt.Prompt },
     idempotencyKey: (payload) => `${name}:${payload.sessionId}`,
-    success: Schema.String
-    // NOTE: no `error` schema yet. Declaring one and mapping agent failures
-    // into it — the obvious way to stop `orDie` flattening typed failures into
-    // defects — currently ends in a `SchemaError` defect when a tool fails,
-    // and the encoding that rejects it has not been isolated. Shipping a
-    // half-working error channel would be worse than an honest defect, so the
-    // failure still crosses as a defect and the gap is recorded in
-    // WORKFLOW_CLUSTER_PLAN.
+    success: Schema.String,
+    // A submission's failure is declared, not flattened into a defect.
+    //
+    // It cannot be the agent's own error type: that is
+    // `PromptError<Tools, E>`, parameterised by whatever the caller's tools and
+    // transforms fail with, and there is no schema for an arbitrary `E`. So the
+    // journal holds the projection in `DurableAgentFailure` — tag, detail, and
+    // whether it was a defect — which is enough for a caller in another process
+    // to branch on, and far more than "something died" was.
+    error: DurableAgentFailure
   })
 
   const layer = definition.toLayer((payload) =>
@@ -99,7 +141,14 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         })
       ).pipe(
         Effect.provide(modelLayer),
-        Effect.orDie,
+        // Interruption is deliberately *not* caught here. Suspension is
+        // signalled by interrupting the fiber, so converting it into a failure
+        // would turn every parked submission into a permanently failed one.
+        Effect.catchCause((cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.failCause(cause)
+            : Effect.fail(durableFailure(cause))
+        ),
         Effect.flatMap((text) =>
           instance.suspended
             ? Workflow.suspend(instance)
@@ -182,6 +231,39 @@ class Reassigning {
     return this.options.defect
   }
 }
+
+/**
+ * The execution id for a session, derived without dispatching anything.
+ *
+ * A workflow's execution id is a hash of its idempotency key, and this
+ * package's key is `${name}:${sessionId}` — the prompt is deliberately not part
+ * of it, because PLAN §11 allows a session at most one live submission. So the
+ * id is a pure function of the session, and callers that hold only a session id
+ * (a cluster entity, an operator, an HTTP route) can address its submission
+ * without inventing a prompt to hash.
+ *
+ * The empty prompt below is never sent anywhere; it exists only because
+ * `executionId` takes the full payload.
+ */
+export const executionIdFor = <W extends ReturnType<typeof workflow>>(
+  agent: W,
+  sessionId: string
+): Effect.Effect<string> =>
+  agent.definition.executionId({
+    sessionId,
+    prompt: Prompt.make([])
+  })
+
+/**
+ * Retry an operation through shard reassignment.
+ *
+ * Exposed for adapters that route their own calls through the cluster — the
+ * entity layer, chiefly — so they inherit the same tolerance the durable API
+ * has rather than reinventing it.
+ */
+export const throughShardReassignment: <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+) => Effect.Effect<A, E, R> = throughReassignment
 
 /**
  * Start a submission without waiting for it.
@@ -295,7 +377,7 @@ export const result = <W extends ReturnType<typeof workflow>>(
   executionId: string,
   options?: { readonly interval?: Duration.Duration | undefined }
 ): Effect.Effect<
-  Exit.Exit<string, never>,
+  Exit.Exit<string, DurableAgentFailure>,
   "pending",
   WorkflowEngine.WorkflowEngine
 > =>
@@ -303,7 +385,8 @@ export const result = <W extends ReturnType<typeof workflow>>(
     Effect.flatMap(throughReassignment(agent.definition.poll(executionId)), (polled) =>
       Option.isSome(polled) && polled.value._tag === "Complete"
         ? Effect.succeed(
-            (polled.value as Workflow.Complete<string, never>).exit
+            (polled.value as Workflow.Complete<string, DurableAgentFailure>)
+              .exit
           )
         : Effect.fail("pending" as const)
     ),

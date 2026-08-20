@@ -337,6 +337,50 @@ synchronously while the mailbox is released immediately.
 This generalises: entity handlers are short, and anything long-running they
 start must be forked.
 
+## Resolved: the workflow boundary now has a typed error channel
+
+With activity failures encodable, the `orDie` at the workflow boundary could
+finally go. The workflow declares `error: DurableAgentFailure`, and the body
+maps a failed run's `Cause` into it rather than dying.
+
+The declared error deliberately is *not* the agent's own error type. That is
+`PromptError<Tools, E>`, parameterised by whatever the caller's tools and
+transforms fail with, and there is no schema for an arbitrary `E`. So the
+journal holds a projection — originating `tag`, a `detail` string, and whether
+it was a defect — which is enough for a caller in another process to branch on
+`_tag`, and far more than "something died" was. The full `Cause` is still
+available in-process on `AgentSession.prompt`.
+
+Two details that matter:
+
+* **Interruption is not caught.** Suspension is signalled by interrupting the
+  fiber, so converting interruption into a failure would turn every parked
+  submission into a permanently failed one. Only non-interrupt causes are
+  projected.
+* **A tagged error's `message` is usually empty.** `Schema.TaggedError`
+  subclasses inherit `Error`'s empty `message` unless the author overrides it,
+  so reading `.message` reduced most failures to a bare tag. `AgentEvent`'s
+  projection now falls back to rendering the error's own named fields, which is
+  where tagged errors actually keep their detail.
+
+## Resolved: the entity surface was lossy and easy to misuse
+
+Three things on `AgentEntity`, all pre-release breaking changes:
+
+* `steer` and `followUp` declare `AgentIdleError` instead of `orDie`-ing it. A
+  remote caller can now tell "this session already finished" from "the runner
+  fell over" — the two were indistinguishable before.
+* `interrupt` takes **no payload**. A workflow's execution id is a hash of its
+  idempotency key, and this package's key is the session, so the id is a pure
+  function of the entity id. Asking the caller for one only created a way to
+  interrupt the wrong execution. `DurableAgent.executionIdFor` exposes the same
+  derivation.
+* Payloads are `Prompt` rather than `string`, matching the core API's
+  multimodal surface.
+
+The `as unknown as` cast on the handler layer turned out to be unnecessary once
+the handlers stopped `orDie`-ing, and is gone.
+
 ## Resolved: activity failures were unencodable
 
 The `orDie` at the workflow boundary was a symptom, not the disease.

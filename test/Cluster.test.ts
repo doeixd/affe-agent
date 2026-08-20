@@ -94,11 +94,11 @@ describe("agent entity", () => {
       const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
       const client = yield* makeClient("session-alpha")
 
-      const executionId = yield* client.submit({ input: "hello" })
+      const executionId = yield* client.submit({ input: Prompt.make("hello") })
       assert.isString(executionId)
 
-      yield* client.steer({ input: "stay on topic" })
-      yield* client.followUp({ input: "and then this" })
+      yield* client.steer({ input: Prompt.make("stay on topic") })
+      yield* client.followUp({ input: Prompt.make("and then this") })
 
       // Routed input landed under this session's keys.
       assert.deepStrictEqual(
@@ -117,6 +117,62 @@ describe("agent entity", () => {
       ).pipe(Effect.provide(runtime))
 
       assert.strictEqual(result._tag, "Complete")
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
+
+  it.effect("derives a session's execution id without dispatching", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Derived", Agent.make({}), { store })
+
+      // The idempotency key is the session, so the prompt cannot affect the id.
+      // This is what lets the entity interrupt a submission it never started,
+      // and what makes `interrupt` safe to expose with no payload at all.
+      const fromSession = yield* DurableAgent.executionIdFor(durable, "s-1")
+      const fromPrompt = yield* durable.definition.executionId({
+        sessionId: "s-1",
+        prompt: Prompt.make("something entirely different")
+      })
+      assert.strictEqual(fromSession, fromPrompt)
+
+      // ...and it is still per-session, not one id for everything.
+      const other = yield* DurableAgent.executionIdFor(durable, "s-2")
+      assert.notStrictEqual(fromSession, other)
+    })
+  )
+
+  it.live("steering an idle session fails as a typed error, not a defect", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Idle", Agent.make({}), { store })
+
+      const handlers = entityLayer(durable, store).pipe(
+        Layer.provideMerge(
+          durable.layer.pipe(
+            Layer.provideMerge(ClusterWorkflowEngine.layer),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = yield* makeClient("never-submitted")
+
+      // Nothing was ever submitted for this session, so there is no admission
+      // marker. A remote caller must be able to tell that apart from a runner
+      // falling over — which is exactly what the declared error buys.
+      // `flip` succeeds with the error, so it is typed here without a cast --
+      // which is the whole point of declaring it on the RPC.
+      const error = yield* Effect.flip(
+        client.steer({ input: Prompt.make("too late") })
+      )
+      assert.strictEqual(error._tag, "AgentIdleError")
+      assert.strictEqual(error.operation, "steer")
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)

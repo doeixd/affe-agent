@@ -273,6 +273,35 @@ block on a workflow. The handler holds the session's mailbox, and starting a
 workflow routes back through the same runner, so the two deadlock. Handlers now
 derive the execution id and fork the execution.
 
+## Hardening pass on /durable and /cluster
+
+The workflow boundary has a typed error channel at last. It declares
+`DurableAgentFailure` and projects a failed run's `Cause` into it, so a caller
+in another process branches on a real `_tag` instead of receiving an opaque
+defect. It cannot be the agent's own `PromptError<Tools, E>` — there is no
+schema for an arbitrary `E` — so the projection carries tag, detail and whether
+it was a defect. Interruption is deliberately excluded: suspension *is*
+interruption, and projecting it would permanently fail every parked submission.
+
+Projecting a cause turned out to be lossier than expected. `Schema.TaggedError`
+subclasses inherit `Error`'s empty `message` unless the author overrides it, so
+most failures reduced to a bare tag with no detail. The projection now falls
+back to rendering the error's own named fields, which is where tagged errors
+keep their information.
+
+On the cluster side, three pre-release breaking changes to `AgentEntity`:
+`steer`/`followUp` declare `AgentIdleError` rather than dying on it, so a remote
+caller can distinguish an idle session from a downed runner; `interrupt` takes
+no payload, because the execution id is a pure function of the session and
+asking for one only allowed interrupting the wrong thing
+(`DurableAgent.executionIdFor` exposes the derivation); and payloads are
+`Prompt`, matching core's multimodal surface. The `as unknown as` cast on the
+handler layer was unnecessary once the handlers stopped `orDie`-ing.
+
+One type-safety hole worth remembering: `Prompt.Prompt` as an RPC payload
+accepts a bare string at the type level but rejects it when encoding, so a wrong
+call site compiles and fails at runtime. Call sites pass `Prompt.make(...)`.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

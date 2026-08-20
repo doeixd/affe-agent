@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
@@ -23,6 +23,7 @@ const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 const Gate = DurableDeferred.make("DurableTestGate", { success: Schema.String })
 const Gate2 = DurableDeferred.make("DurableTestGate2", { success: Schema.String })
 const Gate3 = DurableDeferred.make("DurableTestGate3", { success: Schema.String })
+const Gate4 = DurableDeferred.make("DurableTestGate4", { success: Schema.String })
 
 const Refund = Tool.make("refund", {
   parameters: Schema.Struct({ amount: Schema.String }),
@@ -219,6 +220,138 @@ describe("durable submissions", () => {
         FakeModel.userTexts(last).filter((t) => t === "stay on topic").length,
         1
       )
+    })
+  )
+
+
+  it.live("a suspended submission is not reported as complete", () =>
+    Effect.gen(function* () {
+      // The regression this guards is subtle and was live for a while.
+      // `Workflow.suspend` signals by setting a flag on the WorkflowInstance
+      // and interrupting the fiber -- and a session absorbs interruption by
+      // design, because a run that is cut short still has to end tidily. So
+      // control came back to the workflow body looking like an ordinary
+      // finish, and the body committed `Success("")`.
+      //
+      // A submission that is merely waiting would have been terminalised, and
+      // nothing downstream could tell the difference: `poll` said Complete,
+      // the admission marker was cleared, and resuming it was impossible.
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const store = yield* DurableChannels.memoryStore
+
+      const { layer: modelLayer } = yield* FakeModel.layer([
+        { text: "first" },
+        { text: "second" }
+      ])
+
+      const suspendOnce = yield* Ref.make(true)
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          if (yield* Ref.getAndSet(suspendOnce, false)) {
+            const token = yield* DurableDeferred.token(Gate4)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(Gate4)
+          }
+          return context.canonicalPrompt
+        })
+      )
+
+      const durable = DurableAgent.workflow(
+        "Suspended",
+        Agent.make({
+          contextTransform: gating,
+          loop: AgentLoop.make((state) =>
+            Effect.succeed(
+              state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+          )
+        }),
+        { store }
+      )
+
+      yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "s5", "go")
+        const token = yield* Deferred.await(gateReady)
+
+        // Let the suspension settle so we are observing a parked execution
+        // rather than racing the fiber on its way there.
+        yield* Effect.sleep(Duration.millis(300))
+
+        const parked = yield* durable.definition.poll(executionId)
+        assert.isFalse(
+          Option.isSome(parked) && parked.value._tag === "Complete",
+          "a suspended submission must not be reported as complete"
+        )
+
+        // And it is still open for business: steering a parked submission is
+        // the realistic case, so the admission marker must survive suspension.
+        yield* DurableAgent.steer(store, "s5", "while parked")
+
+        // Resuming still works, which is what "not terminal" has to mean.
+        yield* DurableDeferred.succeed(Gate4, { token, value: "go" })
+        const exit = yield* DurableAgent.result(durable, executionId)
+        assert.isTrue(Exit.isSuccess(exit))
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+    })
+  )
+
+
+  it.live("a failed submission crosses as a typed error, not a defect", () =>
+    Effect.gen(function* () {
+      // Before this, the workflow declared no error schema and the body ended
+      // in `orDie`, so every failure -- however carefully typed inside the
+      // agent -- reached a caller in another process as an opaque defect.
+      class RetrievalUnavailable extends Schema.TaggedError<RetrievalUnavailable>()(
+        "RetrievalUnavailable",
+        { detail: Schema.String }
+      ) {}
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "never" }])
+
+      const durable = DurableAgent.workflow(
+        "Failing",
+        Agent.make({
+          contextTransform: ContextTransform.make(() =>
+            Effect.fail(new RetrievalUnavailable({ detail: "index offline" }))
+          )
+        }),
+        { store }
+      )
+
+      const exit = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "s6", "go")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      // A *completed* workflow whose exit is a failure -- not a defect, and
+      // not a crash of the polling caller.
+      assert.isTrue(Exit.isFailure(exit))
+      // `findErrorOption` returns none for a defect, so this assertion fails
+      // outright if the failure ever regresses to being died on.
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+        : undefined
+      assert.isDefined(failure)
+      // The originating tag survived the journal, which is the whole point:
+      // a caller in another process can branch on *which* thing went wrong.
+      assert.strictEqual(failure!.tag, "RetrievalUnavailable")
+      assert.isFalse(failure!.isDefect)
+      assert.include(failure!.detail, "index offline")
     })
   )
 

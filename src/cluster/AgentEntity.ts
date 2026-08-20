@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc } from "effect/unstable/rpc"
+import { AgentIdleError } from "../Errors.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
 import type * as DurableChannels from "../durable/DurableChannels.js"
 
@@ -19,13 +20,29 @@ import type * as DurableChannels from "../durable/DurableChannels.js"
  * The harness itself gains nothing and knows nothing about this.
  */
 export const AgentEntity = Entity.make("AgentSession", [
+  // `Prompt` rather than `string`: steering a multimodal conversation with an
+  // image is the same operation as steering it with a sentence, and `Prompt`
+  // carries its own Schema, so it crosses the wire as cleanly as text did.
   Rpc.make("submit", {
-    payload: { input: Schema.String },
+    payload: { input: Prompt.Prompt },
     success: Schema.String
   }),
-  Rpc.make("steer", { payload: { input: Schema.String } }),
-  Rpc.make("followUp", { payload: { input: Schema.String } }),
-  Rpc.make("interrupt", { payload: { executionId: Schema.String } })
+  // Admission is a real answer, not a crash. A client that steers a session
+  // which has already finished should be able to tell that apart from a runner
+  // falling over, and `AgentIdleError` is a `Schema.TaggedError`, so it
+  // serialises across the cluster without further ceremony.
+  Rpc.make("steer", {
+    payload: { input: Prompt.Prompt },
+    error: AgentIdleError
+  }),
+  Rpc.make("followUp", {
+    payload: { input: Prompt.Prompt },
+    error: AgentIdleError
+  }),
+  // No payload. The execution id is a pure function of the session, and the
+  // entity id *is* the session, so asking the caller for one only created a
+  // way to interrupt the wrong thing.
+  Rpc.make("interrupt")
 ])
 
 /**
@@ -51,7 +68,7 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
         // gets it synchronously.
         submit: ({ payload }) =>
           Effect.gen(function* () {
-            const prompt = Prompt.make(payload.input)
+            const prompt = payload.input
             const executionId = yield* agent.definition.executionId({
               sessionId,
               prompt
@@ -60,8 +77,9 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             // after submitting is not told the session is idle.
             yield* store.offer(`${sessionId}:open`, "open")
             yield* Effect.forkDetach(
-              agent.definition
-                .execute({ sessionId, prompt }, { discard: true })
+              DurableAgent.throughShardReassignment(
+                agent.definition.execute({ sessionId, prompt }, { discard: true })
+              )
                 .pipe(
                   // The caller already has its execution id, so a dispatch
                   // failure cannot be returned to it. Log rather than discard:
@@ -76,21 +94,22 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             )
             return executionId
           }).pipe(Effect.orDie),
-        // Admission failures are reported as defects here: the entity's RPCs
-        // declare no error type, and inventing one is a protocol decision that
-        // belongs with the AG-UI/RPC surface rather than with this adapter.
+        // Admission failures cross as `AgentIdleError`, declared by the RPCs
+        // above, so a remote caller gets the same answer a local one would.
         steer: ({ payload }) =>
-          DurableAgent.steer(store, sessionId, payload.input).pipe(
-            Effect.orDie
-          ),
+          DurableAgent.steer(store, sessionId, payload.input),
         followUp: ({ payload }) =>
-          DurableAgent.followUp(store, sessionId, payload.input).pipe(
-            Effect.orDie
-          ),
-        interrupt: ({ payload }) =>
-          agent.definition.interrupt(payload.executionId)
+          DurableAgent.followUp(store, sessionId, payload.input),
+        interrupt: () =>
+          DurableAgent.executionIdFor(agent, sessionId).pipe(
+            Effect.flatMap((executionId) =>
+              DurableAgent.throughShardReassignment(
+                agent.definition.interrupt(executionId)
+              )
+            )
+          )
       }
     })
-  ) as unknown as ReturnType<typeof AgentEntity.toLayer>
+  )
 
 export type AgentEntity = typeof AgentEntity
