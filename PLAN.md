@@ -1215,9 +1215,41 @@ follow-up queue nonempty?
    └ no  → submission reaches quiescence
 ```
 
-FIFO ordering by default.
+FIFO ordering by default, and FIFO all the way through — including the batch a
+single drain returns. An implementation that takes the first item and puts the
+tail back on the queue reverses it: `A, B, C` becomes `A, C, B`. Buffer the
+batch instead of re-queueing it.
 
 A follow-up submitted while idle returns `AgentIdleError`.
+
+## 22.1 Closing a submission's input is a distinct step
+
+Quiescence has a window that is easy to miss. The submission drains an empty
+queue and concludes it is finished, but the session does not become idle until
+the `prompt` call returns — so `followUp` still succeeds in between, and that
+accepted input is then discarded when the session is released. The caller was
+told the work was queued, and it never runs.
+
+`status` cannot express this, because the submission finishes fractionally
+before the session is idle. Session state therefore carries an explicit
+`acceptingFollowUps` gate, and the close is a three-step sequence:
+
+```text
+drain -> empty?
+   |
+   +-- atomically clear acceptingFollowUps   (nothing more can be accepted)
+   |
+   +-- drain again                            (catch anything accepted first)
+   |
+   +-- non-empty? re-open the gate and keep going
+```
+
+The second drain is the part that makes it correct: after the gate closes,
+nothing new can arrive, so one more look is guaranteed to find everything that
+was accepted.
+
+> A follow-up that is accepted is always executed. Rejecting it is fine;
+> accepting and dropping it is not.
 
 ---
 
@@ -1575,7 +1607,7 @@ but only after the in-process state machine is stable.
 
 ## 30.1 The Workflow mapping, tested
 
-A spike (`spike/`, excluded from the package) checked the load-bearing question:
+A spike checked the load-bearing question:
 can the same agent definition be reinterpreted durably **without the harness
 knowing durability exists**? The answer shapes whether core needs an
 interception interface.
@@ -1611,7 +1643,7 @@ express.
 
 ### The durable engine is testable without SQL
 
-A follow-up spike established that `ClusterWorkflowEngine.layer` composes with
+A follow-up check established that `ClusterWorkflowEngine.layer` composes with
 `TestRunner.layer`, which has no dependencies of its own. The durable path can
 therefore be developed and tested in ordinary unit tests, with no database.
 `WORKFLOW_CLUSTER_PLAN.md` builds every phase on that.

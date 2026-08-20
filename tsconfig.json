@@ -12,5 +12,5 @@
     "types": ["node"],
     "plugins": [{ "name": "@effect/language-service" }]
   },
-  "include": ["src", "test", "examples", "spike"]
+  "include": ["src", "test", "examples"]
 }

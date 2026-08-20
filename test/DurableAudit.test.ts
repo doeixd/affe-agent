@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Ref, Schema } from "effect"
+import { Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
@@ -137,6 +137,62 @@ describe("durable edge cases", () => {
       assert.strictEqual(first, second, "same session means same execution")
       // And only one submission actually ran, so "input-b" was never processed.
       assert.strictEqual(yield* Ref.get(calls), 1)
+    })
+  )
+
+  it.live("concurrent tool activities do not deadlock", () =>
+    Effect.gen(function* () {
+      // PLAN §17 executes a turn's tool calls at unbounded concurrency, and
+      // effect#6014 reported concurrent `Activity.make` deadlocking. If that
+      // reproduced, durable tool execution would have to fall back to
+      // `Sequential`, so this guards the default rather than the plumbing.
+      const ran = yield* Ref.make<Array<string>>([])
+
+      const toolkit = yield* PingToolkit.pipe(
+        Effect.provide(
+          PingToolkit.toLayer({
+            ping: ({ n }) =>
+              Ref.update(ran, (all) => [...all, n]).pipe(Effect.as(n))
+          })
+        )
+      )
+
+      const store = yield* DurableChannels.memoryStore
+      const agent = Agent.make({ toolkit, loop: AgentLoop.bounded(2) })
+      const durable = DurableAgent.workflow("Parallel", agent, {
+        store,
+        toolkit
+      })
+
+      const outcome = yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, "par-1", "go")
+        return yield* DurableAgent.result(durable, id)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(
+              (yield* FakeModel.layer([
+                {
+                  toolCalls: [
+                    { id: "a", name: "ping", params: { n: "a" } },
+                    { id: "b", name: "ping", params: { n: "b" } },
+                    { id: "c", name: "ping", params: { n: "c" } }
+                  ]
+                },
+                { text: "done" }
+              ])).layer
+            )
+          )
+        ),
+        Effect.timeoutOption("10 seconds")
+      )
+
+      assert.isTrue(
+        Option.isSome(outcome),
+        "concurrent activities deadlocked — see effect#6014"
+      )
+      assert.deepStrictEqual((yield* Ref.get(ran)).sort(), ["a", "b", "c"])
     })
   )
 })

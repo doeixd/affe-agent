@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 97 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 96 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -74,6 +74,30 @@ than by anticipation (PLAN §42.2):
 
 `examples/typed-agent.ts` asserts at compile time that the sugar costs no
 inference: a handler parameter is still exactly its schema type.
+
+## Follow-up ordering and quiescence
+
+Two defects in follow-up handling, both reproduced before fixing.
+
+**Follow-ups drained together ran out of order.** The loop took the first item
+and re-queued the tail *in reverse*, on the theory that this preserved order —
+onto a FIFO it does the opposite, turning `A, B, C` into `A, C, B`. The comment
+above the code asserted the behaviour it was breaking. The batch is now
+buffered locally rather than re-queued.
+
+**A follow-up accepted at quiescence could be silently dropped.** The submission
+drains an empty queue and concludes it is done, but the session is not idle
+until `prompt` returns — so `followUp` still succeeded in that window, and the
+input was discarded on release. The caller was told it was queued.
+
+`status` cannot express this, since the submission finishes fractionally before
+the session goes idle, so state now carries an explicit `acceptingFollowUps`
+gate. Closing is atomic, followed by a second drain that is guaranteed to catch
+anything accepted just before the close, and the gate reopens if late work
+arrived. See PLAN §22.1.
+
+> A follow-up that is accepted is always executed. Rejecting it is fine;
+> accepting and dropping it is not.
 
 ## Audit findings
 
@@ -184,11 +208,10 @@ in-process value holding fibers and arbitrary defects. The full `Cause` stays in
 `prompt`'s typed error channel. Envelope round-trip and defect-vs-failure
 distinction are both tested.
 
-## Durable execution: spike result
+## Durable execution: how it works
 
-`spike/` tests whether the same agent definition can be reinterpreted durably
-without core knowing durability exists. **It can, with no core change** — see
-PLAN §30.1 and `spike/README.md`.
+The same agent definition is reinterpreted durably without core knowing
+durability exists — see PLAN §30.1.
 
 The reason is structural: `LanguageModel.make` takes a provider returning
 `Array<Response.PartEncoded>`, an already-encodable value, so wrapping it in an
@@ -200,11 +223,8 @@ already Layers, so `AgentExecution` stays unbuilt.
 dependencies), so the durable path is unit-testable without SQL —
 `WORKFLOW_CLUSTER_PLAN.md` is the implementation plan built on that.
 
-Not proven, and flagged as the durable package's first job: crash-and-resume
-returning a persisted model result. That needs a persistent engine and
-`Workflow.resume`, not `WorkflowEngine.layerMemory`. Concurrent activities
-complete on the fresh path, but effect#6014 was about replay, so durable
-parallel tool execution is unvalidated.
+Both were subsequently implemented and tested; see the durable section above for
+what is proven and what is not.
 
 ## Closing the remaining plan gaps
 

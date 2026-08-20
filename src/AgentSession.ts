@@ -106,6 +106,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       status: "idle",
       submissionCount: 0,
       activeSubmissionId: Option.none(),
+      acceptingFollowUps: false,
       activeRunId: Option.none(),
       turn: 0,
       history: Option.match(agent.instructions, {
@@ -197,7 +198,9 @@ const claim = (self: Session<any>): Effect.Effect<Claim> =>
         ...s,
         status: "running",
         submissionCount: count,
-        activeSubmissionId: Option.some(submissionId)
+        activeSubmissionId: Option.some(submissionId),
+        // Open for follow-ups until the submission closes its own input.
+        acceptingFollowUps: true
       }
     ]
   })
@@ -211,6 +214,7 @@ const release = (self: Session<any>): Effect.Effect<void> =>
       // A closed session stays closed; the scope has already gone.
       status: s.status === "closed" ? s.status : ("idle" as const),
       activeSubmissionId: Option.none(),
+      acceptingFollowUps: false,
       activeRunId: Option.none()
     }))
     yield* self.steering.drain
@@ -334,6 +338,18 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
 ) {
     const self = unwrap(session)
     const submissionId = yield* requireRunning(self, "followUp")
+    // The submission may have closed its input without the session being idle
+    // yet; accepting here would mean promising work that is about to be
+    // discarded.
+    const accepting = yield* SubscriptionRef.get(self.state).pipe(
+      Effect.map((s) => s.acceptingFollowUps)
+    )
+    if (!accepting) {
+      return yield* new AgentIdleError({
+        sessionId: self.id,
+        operation: "followUp"
+      })
+    }
     yield* self.followUps.offer(input)
     yield* EventBus.emit(self.bus, { submissionId }, { _tag: "FollowUpQueued" })
   })

@@ -11,7 +11,7 @@ import type { SubmissionId } from "./internal/ids.js"
 /** Correlation id for one externally observed unit of work. */
 export const Id = Ids.SubmissionId
 export type Id = Ids.SubmissionId
-import type { Session } from "./internal/state.js"
+import type { Session, SessionState } from "./internal/state.js"
 
 /**
  * The outcome of one submission.
@@ -50,6 +50,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     })
 
     let next: string | undefined = input
+    const pending: Array<string> = []
     let runs = 0
     let turns = 0
     let text = ""
@@ -97,11 +98,45 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       }
       response = Option.orElse(exit.value.response, () => response)
 
-      const queued = yield* session.followUps.drain
-      next = queued[0]
-      // Anything beyond the first goes back, preserving submission order.
-      for (const remaining of queued.slice(1).reverse()) {
-        yield* session.followUps.offer(remaining)
+      // Buffered locally rather than re-queued. Putting the tail back on a
+      // FIFO one item at a time reverses it, which turned A, B, C into
+      // A, C, B; keeping it here preserves the order it was queued in.
+      if (pending.length === 0) {
+        pending.push(...(yield* session.followUps.drain))
+      }
+
+      if (pending.length === 0) {
+        // Nothing left, so close this submission's input. Until this flips,
+        // `followUp` may still be accepted, and anything accepted after the
+        // drain above would be silently discarded on release.
+        const closed = yield* SubscriptionRef.modify(
+          session.state,
+          (state): [boolean, SessionState] =>
+            state.acceptingFollowUps
+              ? [true, { ...state, acceptingFollowUps: false }]
+              : [false, state]
+        )
+
+        if (closed) {
+          // One more drain, now that nothing further can be accepted: this
+          // catches anything that slipped in before the close.
+          pending.push(...(yield* session.followUps.drain))
+          if (pending.length > 0) {
+            // Late work arrived, so re-open and keep going.
+            yield* SubscriptionRef.update(session.state, (state) => ({
+              ...state,
+              acceptingFollowUps: true
+            }))
+          }
+        }
+      }
+
+      next = pending.shift()
+      if (next !== undefined) {
+        yield* SubscriptionRef.update(session.state, (state) => ({
+          ...state,
+          acceptingFollowUps: true
+        }))
       }
     }
 

@@ -26,7 +26,9 @@ Agent
 
 # 1. What the spikes established
 
-These are measured, not assumed. Each is a test in `spike/`.
+These were measured, not assumed. The exploratory spikes have since been
+replaced by the implementation and its tests; what they established is recorded
+here.
 
 **A submission already runs inside a Workflow with no core changes.** An agent
 built with plain `Agent.make` runs inside `Workflow.toLayer` calling plain
@@ -43,10 +45,11 @@ toolkit is constructed.
 dependencies. Every phase below is therefore unit-testable; nothing needs a
 database to develop against.
 
-**Concurrent activities complete on the fresh path.** Four concurrent
-`Activity.make` calls finish normally on `4.0.0-rc.111`, so
+**Concurrent activities complete.** Concurrent `Activity.make` calls finish
+normally on `4.0.0-rc.111`, so
 [effect#6014](https://github.com/Effect-TS/effect/issues/6014) does not
-reproduce there. It was a replay-path bug, and replay remains untested.
+reproduce. Guarded by a test in `test/DurableAudit.test.ts`, because it is what
+lets durable tool execution keep PLAN §17's unbounded-concurrency default.
 
 ## 1.1 Consequences that shape this plan
 
@@ -75,8 +78,8 @@ The mechanism that does work, and the one the engine is designed around, is
 **`DurableDeferred`**: awaiting it suspends the workflow, and completing it from
 outside — with only the token, from any process — wakes the execution. A
 resumed execution replays its completed activities rather than re-running them,
-which is the property everything here depends on. Proven in
-`spike/deferred.test.ts`.
+which is the property everything here depends on. Proven, and now
+covered by `test/Durable.test.ts`.
 
 Two corollaries. `Workflow.execute(payload, { discard: true })` is required to
 start work that will suspend, since a suspended execution never produces the

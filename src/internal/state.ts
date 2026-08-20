@@ -24,6 +24,16 @@ export interface SessionState {
    */
   readonly submissionCount: number
   readonly activeSubmissionId: Option.Option<SubmissionId>
+  /**
+   * Whether the active submission will still take follow-ups.
+   *
+   * Distinct from `status`, because the submission closes its own input a
+   * moment before the session becomes idle. Without that gap being explicit, a
+   * `followUp` can be accepted after the submission has already decided it is
+   * finished, and then discarded — the caller is told it was queued and it
+   * never runs.
+   */
+  readonly acceptingFollowUps: boolean
   readonly activeRunId: Option.Option<RunId>
   readonly turn: number
   /** Canonical conversation history; see `internal/history.ts`. */
