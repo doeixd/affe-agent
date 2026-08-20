@@ -1,9 +1,19 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Duration, Effect, Layer, Option, Schedule } from "effect"
+import {
+  ClusterWorkflowEngine,
+  Entity,
+  ShardingConfig,
+  TestRunner
+} from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
-import { AgentEntity } from "../src/cluster/AgentEntity.js"
+import {
+  AgentEntity,
+  layer as entityLayer
+} from "../src/cluster/AgentEntity.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
+import * as FakeModel from "./FakeModel.js"
 
 /**
  * WORKFLOW_CLUSTER_PLAN Phase 6 — the session as a cluster entity.
@@ -12,9 +22,6 @@ import * as DurableChannels from "../src/durable/DurableChannels.js"
  * session operations, and out-of-band input is keyed by the entity id, which is
  * the session id. That is the part of Phase 6 that belongs to this project.
  *
- * A full sharded round-trip is NOT covered — see the plan's Phase 6 notes. The
- * entity and its handlers are implemented; standing up `Entity.makeTestClient`
- * alongside `ClusterWorkflowEngine` in one process is unresolved.
  */
 describe("agent entity", () => {
   it("exposes the session operations as entity RPCs", () => {
@@ -47,5 +54,53 @@ describe("agent entity", () => {
       ])
       assert.deepStrictEqual(yield* store.takeAll("session-b:steering"), [])
     })
+  )
+
+  it.live("submits and steers through a sharded entity client", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Sharded", Agent.make({}), { store })
+
+      const runtime = durable.layer.pipe(
+        Layer.provideMerge(ClusterWorkflowEngine.layer),
+        Layer.provideMerge(modelLayer)
+      )
+      const handlers = entityLayer(durable, store).pipe(
+        Layer.provideMerge(runtime)
+      )
+
+      // A client reaches the session by id; sharding routes it to the owner.
+      const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = yield* makeClient("session-alpha")
+
+      const executionId = yield* client.submit({ input: "hello" })
+      assert.isString(executionId)
+
+      yield* client.steer({ input: "stay on topic" })
+      yield* client.followUp({ input: "and then this" })
+
+      // Routed input landed under this session's keys.
+      assert.deepStrictEqual(
+        yield* store.takeAll("session-alpha:followUps"),
+        ["and then this"]
+      )
+
+      // And the submission the entity started actually runs to completion.
+      const result = yield* Effect.retry(
+        Effect.flatMap(durable.definition.poll(executionId), (polled) =>
+          Option.isSome(polled) && polled.value._tag === "Complete"
+            ? Effect.succeed(polled.value)
+            : Effect.fail("pending" as const)
+        ),
+        { times: 400, schedule: Schedule.spaced(Duration.millis(10)) }
+      ).pipe(Effect.provide(runtime))
+
+      assert.strictEqual(result._tag, "Complete")
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
   )
 })

@@ -43,10 +43,24 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
       const sessionId = address.entityId
 
       return {
+        // Forked deliberately. An entity handler occupies the session's
+        // mailbox while it runs, and starting a workflow routes back through
+        // the same runner — waiting here deadlocks the two against each other.
+        // The execution id is derived without dispatching, so the caller still
+        // gets it synchronously.
         submit: ({ payload }) =>
-          DurableAgent.submit(agent, sessionId, payload.input).pipe(
-            Effect.orDie
-          ),
+          Effect.gen(function* () {
+            const executionId = yield* agent.definition.executionId({
+              sessionId,
+              input: payload.input
+            })
+            yield* Effect.forkDetach(
+              agent.definition
+                .execute({ sessionId, input: payload.input }, { discard: true })
+                .pipe(Effect.ignore)
+            )
+            return executionId
+          }).pipe(Effect.orDie),
         steer: ({ payload }) =>
           DurableAgent.steer(store, sessionId, payload.input),
         followUp: ({ payload }) =>

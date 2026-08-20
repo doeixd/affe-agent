@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Layer, Ref, Schema } from "effect"
+import { Deferred, Effect, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
@@ -20,6 +20,7 @@ const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 
 const Gate = DurableDeferred.make("DurableTestGate", { success: Schema.String })
 const Gate2 = DurableDeferred.make("DurableTestGate2", { success: Schema.String })
+const Gate3 = DurableDeferred.make("DurableTestGate3", { success: Schema.String })
 
 const Refund = Tool.make("refund", {
   parameters: Schema.Struct({ amount: Schema.String }),
@@ -218,6 +219,66 @@ describe("durable submissions", () => {
       assert.strictEqual(
         FakeModel.userTexts(last).filter((t) => t === "stay on topic").length,
         1
+      )
+    })
+  )
+
+  it.live("an interrupted submission reaches a terminal state and stays there", () =>
+    Effect.gen(function* () {
+      // Phase 4: interruption under durability must be terminal — an
+      // interrupted submission must never later complete.
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const store = yield* DurableChannels.memoryStore
+      const { layer: modelLayer } = yield* FakeModel.layer([
+        { text: "first" },
+        { text: "second" }
+      ])
+
+      const suspendOnce = yield* Ref.make(true)
+      const gating = {
+        transform: (context: { canonicalPrompt: unknown }) =>
+          Effect.gen(function* () {
+            if (yield* Ref.getAndSet(suspendOnce, false)) {
+              const token = yield* DurableDeferred.token(Gate3)
+              yield* Deferred.succeed(gateReady, token)
+              yield* DurableDeferred.await(Gate3)
+            }
+            return context.canonicalPrompt
+          }) as any
+      }
+
+      const Suspending = Agent.make({ contextTransform: gating as any })
+      const durable = DurableAgent.workflow("Interrupted", Suspending, { store })
+
+      const outcome = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, "s4", "go")
+        yield* Deferred.await(gateReady)
+
+        yield* durable.definition.interrupt(executionId)
+
+        // Waking the gate after interruption must not revive the submission.
+        yield* DurableDeferred.succeed(Gate3, {
+          token: yield* Deferred.await(gateReady),
+          value: "too late"
+        }).pipe(Effect.ignore)
+
+        return yield* durable.definition.poll(executionId)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      // Interrupted is terminal: it is not Complete, and completing the gate
+      // afterwards does not make it so.
+      const completed =
+        Option.isSome(outcome) && outcome.value._tag === "Complete"
+      assert.isFalse(
+        completed && (outcome.value as any).exit?._tag === "Success",
+        "an interrupted submission must not complete successfully"
       )
     })
   )

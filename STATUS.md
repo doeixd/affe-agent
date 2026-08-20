@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 72 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 74 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -81,8 +81,15 @@ a `DurableDeferred` suspends the workflow properly and completing it from
 outside — with only the token — wakes it. This also means approvals (plan Phase
 7) already work: the tests are, structurally, human-in-the-loop approvals.
 
-Phases 4–6 are partial; see the plan's §5.4 for exactly what is and is not
-verified.
+Interruption is terminal under durability, and the cluster entity round-trips a
+sharded submit/steer/follow-up. Phase 5 — production wiring on `SingleRunner`
+with SQL — is the one phase not started, so "survives an actual process restart"
+remains unproven: every test runs in one process against in-memory storage.
+
+Phase 6 turned up a design error worth remembering: an entity handler must not
+block on a workflow. The handler holds the session's mailbox, and starting a
+workflow routes back through the same runner, so the two deadlock. Handlers now
+derive the execution id and fork the execution.
 
 ## Breaking changes for the durable/distributed path
 

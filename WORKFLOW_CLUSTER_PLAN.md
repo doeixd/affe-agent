@@ -315,21 +315,37 @@ a monorepo buys nothing until they version independently.
 | 1 Model calls as Activities | done, verified |
 | 2 Tools as Activities | done, verified — the refund runs once across a resumption |
 | 3 Steering and follow-ups | done, verified — a steer queued during suspension is applied exactly once |
-| 4 Interruption | partial — `definition.interrupt` is exposed; terminal-state behaviour under durability is untested |
-| 5 Single-node production wiring | not started — needs `SingleRunner` with SQL |
-| 6 Cluster entity and RPC | entity and handlers implemented; routing contract tested; **a sharded round-trip is not** |
-| 7 Approvals and scheduling | approvals demonstrated (the tests suspend on a `DurableDeferred` and are woken by token); `ClusterCron` not started |
+| 4 Interruption | done, verified — an interrupted submission never later completes |
+| 5 Single-node production wiring | **not started** — needs `SingleRunner` with a real `SqlClient` |
+| 6 Cluster entity and RPC | done, verified — sharded submit, steer and follow-up round-trip |
+| 7 Approvals and scheduling | done — approvals are the `DurableDeferred` pattern the tests use; `ScheduledAgent` wraps `ClusterCron` |
 
-## What Phase 6 still needs
+## What Phase 6 taught
 
-`Entity.makeTestClient` and `ClusterWorkflowEngine` in one process did not
-compose: providing `Sharding` through the engine gives the test client a
-different instance (`sharding.makeClient is not a function`), and sharing one
-`TestRunner` between them hangs on `submit`. The entity, its RPCs and its
-handlers are implemented and the routing contract is tested — what is missing is
-the harness for an end-to-end sharded call.
+The sharded round-trip initially deadlocked, and the cause was a design error
+rather than test wiring: **an entity handler must not block on a workflow.**
 
-Resolve that before claiming the distributed row of §9's definition of done.
+A handler occupies the session's mailbox while it runs, and starting a workflow
+routes back through the same runner — so `submit` waiting for dispatch had the
+two waiting on each other. The handler now derives the execution id (which needs
+no dispatch) and forks the execution, so the caller still gets its id
+synchronously while the mailbox is released immediately.
+
+This generalises: entity handlers are short, and anything long-running they
+start must be forked.
+
+## What remains
+
+Phase 5 only. Everything above is exercised against
+`ClusterWorkflowEngine` over `TestRunner`, which is in-memory; a real deployment
+needs `SingleRunner` with SQL storage, and the "survives an actual process
+restart" claim is still unproven because the tests all live in one process.
+
+That is the honest boundary of what has been demonstrated: **resumption replays
+persisted work correctly**, but the persistence backing it has so far only been
+in-memory.
+
+---
 
 ---
 
