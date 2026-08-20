@@ -1,4 +1,4 @@
-import { Cause, Schema } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import { RunId, SessionId, SubmissionId } from "./internal/ids.js"
 
 export { RunId, SessionId, SubmissionId }
@@ -191,6 +191,49 @@ export const AgentEventEnvelope = Schema.Struct({
   event: AgentEvent
 })
 export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
+
+/**
+ * Exhaustively handle an event by tag.
+ *
+ * Every consumer of the stream — a UI, a logger, a persistence adapter — starts
+ * by switching on `_tag`, and a hand-written switch silently stops covering new
+ * events as the ADT grows. This makes that a type error instead.
+ *
+ * Handlers receive the event payload and the envelope, since correlation is
+ * usually needed alongside the event itself.
+ *
+ * ```ts
+ * Stream.runForEach(
+ *   AgentSession.events(session),
+ *   AgentEvent.match({
+ *     ToolCallStarted: (event) => Effect.log(`tool ${event.name}`),
+ *     orElse: () => Effect.void
+ *   })
+ * )
+ * ```
+ */
+export const match =
+  <A, E = never, R = never>(handlers: {
+    readonly [Tag in AgentEvent["_tag"]]?: (
+      event: Extract<AgentEvent, { readonly _tag: Tag }>,
+      envelope: AgentEventEnvelope
+    ) => Effect.Effect<A, E, R>
+  } & {
+    /** Runs for any event without its own handler. */
+    readonly orElse: (
+      event: AgentEvent,
+      envelope: AgentEventEnvelope
+    ) => Effect.Effect<A, E, R>
+  }) =>
+  (envelope: AgentEventEnvelope): Effect.Effect<A, E, R> => {
+    const handler = handlers[envelope.event._tag]
+    return handler === undefined
+      ? handlers.orElse(envelope.event, envelope)
+      : (handler as (
+          event: AgentEvent,
+          envelope: AgentEventEnvelope
+        ) => Effect.Effect<A, E, R>)(envelope.event, envelope)
+  }
 
 /** Narrow an envelope to a specific event tag. */
 export const is =

@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 90 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 97 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -53,6 +53,27 @@ examples/anthropic.ts  the DoD program on a real provider (typechecked only)
 | 10 Event envelopes and ordering | done |
 | 11 Tool failure policy spike | done — resolved, see below |
 | 12 API cleanup | done except event Schemas, see deviations |
+
+## Convenience API
+
+Four helpers, each justified by repeated friction in this repository rather
+than by anticipation (PLAN §42.2):
+
+* `Agent.toolkit(tools, handlers)` — one step, one instance. The two-step form
+  appeared 20 times and has a silent failure mode where handlers bind to an
+  unused toolkit and every call succeeds having done nothing.
+* `AgentLoop.bounded(n)` — `and(untilIdle(), maxTurns(n))`, which appeared six
+  times. Spelling it out invites omitting the bound.
+* `ContextTransform.appendSystem` / `prependSystem` — the dynamic-instruction
+  case. They add a discrete system message rather than folding into an adjacent
+  one, so `compose` stays order-predictable; the folding behaviour of
+  `Prompt.appendSystem` produced `["firstsecond", "first"]` in a test, which is
+  why the helper does not use it.
+* `AgentEvent.match` — exhaustive dispatch with narrowed payloads, replacing a
+  switch that silently stops covering new events.
+
+`examples/typed-agent.ts` asserts at compile time that the sugar costs no
+inference: a handler parameter is still exactly its schema type.
 
 ## Audit findings
 

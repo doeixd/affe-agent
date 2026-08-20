@@ -23,6 +23,19 @@ describe("public API", () => {
     ])
   })
 
+  it("keeps the convenience surface small and named for its use", () => {
+    // Sugar is allowed to exist only where it removes real, repeated friction:
+    // `Agent.toolkit` makes a silent footgun unrepresentable, `AgentLoop.bounded`
+    // is the loop nearly every agent wants, the system-message transforms are
+    // the canonical dynamic-instruction case, and `AgentEvent.match` replaces a
+    // hand-written switch that silently stops covering new events.
+    assert.deepStrictEqual(Object.keys(Harness.Agent).sort(), [
+      "make",
+      "toolkit"
+    ])
+    assert.isTrue(typeof Harness.AgentEvent.match === "function")
+  })
+
   it("exposes the operations §42 targets", () => {
     assert.deepStrictEqual(
       Object.keys(Harness.AgentSession).sort(),
@@ -43,15 +56,18 @@ describe("public API", () => {
       "Continue",
       "Stop",
       "and",
+      "bounded",
       "make",
       "maxTurns",
       "or",
       "untilIdle"
     ])
     assert.deepStrictEqual(Object.keys(Harness.ContextTransform).sort(), [
+      "appendSystem",
       "compose",
       "identity",
-      "make"
+      "make",
+      "prependSystem"
     ])
   })
 

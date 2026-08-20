@@ -44,7 +44,7 @@ npm install @doeixd/effect-agent effect
 
 ```ts
 import { Effect, Schema } from "effect"
-import { Tool, Toolkit } from "effect/unstable/ai"
+import { Tool } from "effect/unstable/ai"
 import { Agent, AgentLoop, AgentSession } from "@doeixd/effect-agent"
 
 const Search = Tool.make("search", {
@@ -52,20 +52,15 @@ const Search = Tool.make("search", {
   success: Schema.Struct({ hits: Schema.Array(Schema.String) })
 })
 
-const SearchToolkit = Toolkit.make(Search)
-
-const toolkit = SearchToolkit.pipe(
-  Effect.provide(
-    SearchToolkit.toLayer({
-      search: ({ query }) => Effect.succeed({ hits: [query] })
-    })
-  )
-)
+const toolkit = Agent.toolkit([Search], {
+  search: ({ query }) => Effect.succeed({ hits: [query] })
+})
 
 const Researcher = Agent.make({
   instructions: "Research carefully and cite evidence.",
   toolkit,
-  loop: AgentLoop.and(AgentLoop.untilIdle(), AgentLoop.maxTurns(20))
+  // Run until the model stops calling tools, but never past 20 turns.
+  loop: AgentLoop.bounded(20)
 })
 
 const program = Effect.scoped(
@@ -149,6 +144,20 @@ const withMemory = ContextTransform.make((context) =>
 Transforms and loops preserve their own errors and requirements, so a policy can
 depend on services the harness knows nothing about.
 
+### Dynamic instructions
+
+The most common transform is injecting something that changes per turn —
+workspace details, the date, permissions, recalled memory:
+
+```ts
+ContextTransform.appendSystem((context) =>
+  Effect.map(Workspace, (ws) => `Working in ${ws.name}, turn ${context.turnIndex}`)
+)
+```
+
+It is recomputed every turn and never enters canonical history, which is what
+makes that safe.
+
 ### Typed lifecycle events
 
 Every meaningful transition is an event on one stream, with correlation and a
@@ -156,11 +165,19 @@ gap-free per-session sequence:
 
 ```ts
 yield* Effect.forkScoped(
-  Stream.runForEach(AgentSession.events(session), (envelope) =>
-    Effect.log(`${envelope.sequence} ${envelope.event._tag}`)
+  Stream.runForEach(
+    AgentSession.events(session),
+    AgentEvent.match({
+      ToolCallStarted: (event) => Effect.log(`tool ${event.name}`),
+      RunCompleted: (event) => Effect.log(`${event.turns} turns`),
+      orElse: () => Effect.void
+    })
   )
 )
 ```
+
+`match` narrows each payload by tag, so a hand-written switch cannot quietly
+stop covering events as the ADT grows.
 
 ```
 SubmissionStarted → RunStarted → TurnStarted

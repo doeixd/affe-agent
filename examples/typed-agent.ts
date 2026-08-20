@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { Tool, Toolkit } from "effect/unstable/ai"
+import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -13,16 +13,11 @@ const Search = Tool.make("search", {
   failure: Schema.Literal("rate_limited")
 })
 
-const SearchToolkit = Toolkit.make(Search)
-
-const toolkit = SearchToolkit.pipe(
-  Effect.provide(
-    SearchToolkit.toLayer({
-      // `query` should infer from the parameters schema.
-      search: ({ query }) => Effect.succeed({ hits: [query] })
-    })
-  )
-)
+// One step, one instance: `Agent.toolkit` makes the two-instance mistake
+// unrepresentable. `query` and the result type still infer from the schemas.
+const toolkitEffect = Agent.toolkit([Search], {
+  search: ({ query }) => Effect.succeed({ hits: [query] })
+})
 
 // --- Agent -----------------------------------------------------------------
 
@@ -37,7 +32,7 @@ const stopOnEmptySearch = AgentLoop.make((state) =>
 
 const Researcher = Agent.make({
   instructions: "Research carefully.",
-  toolkit,
+  toolkit: toolkitEffect,
   contextTransform: ContextTransform.identity,
   loop: AgentLoop.and(stopOnEmptySearch, AgentLoop.maxTurns(10))
 })

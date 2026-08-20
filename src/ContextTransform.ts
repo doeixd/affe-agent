@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import type { Prompt } from "effect/unstable/ai"
+import { Prompt } from "effect/unstable/ai"
 import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
 
 /**
@@ -37,10 +37,50 @@ export const make = <E = never, R = never>(
   transform: (context: Context) => Effect.Effect<Prompt.Prompt, E, R>
 ): ContextTransform<E, R> => ({ transform })
 
+/**
+ * A discrete system message.
+ *
+ * `Prompt.appendSystem` folds text into an adjacent system message, which makes
+ * composition order hard to predict — two transforms each adding a line can end
+ * up concatenated into one. Adding a separate message keeps `compose`
+ * associative and each contribution legible in the prompt.
+ */
+const systemPrompt = (text: string): Prompt.Prompt =>
+  Prompt.fromMessages([Prompt.systemMessage({ content: text })])
+
 /** Passes canonical history through untouched. */
 export const identity: ContextTransform = make((context) =>
   Effect.succeed(context.canonicalPrompt)
 )
+
+/**
+ * Add a system message to the model-facing prompt only.
+ *
+ * Dynamic instructions are the most common transform there is — workspace
+ * details, the current date, permissions, retrieved memory — and they are all
+ * this shape. Canonical history is untouched, which is what makes them safe to
+ * recompute every turn.
+ *
+ * The message is built from the context, so it can vary per turn.
+ */
+export const appendSystem = <E = never, R = never>(
+  message: (context: Context) => Effect.Effect<string, E, R>
+): ContextTransform<E, R> =>
+  make((context) =>
+    Effect.map(message(context), (text) =>
+      Prompt.concat(context.canonicalPrompt, systemPrompt(text))
+    )
+  )
+
+/** As `appendSystem`, but placed before the existing messages. */
+export const prependSystem = <E = never, R = never>(
+  message: (context: Context) => Effect.Effect<string, E, R>
+): ContextTransform<E, R> =>
+  make((context) =>
+    Effect.map(message(context), (text) =>
+      Prompt.concat(systemPrompt(text), context.canonicalPrompt)
+    )
+  )
 
 /**
  * Left-to-right composition.

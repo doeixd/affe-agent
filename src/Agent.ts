@@ -1,5 +1,4 @@
-import { Option } from "effect"
-import type { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
@@ -68,6 +67,32 @@ export interface Config<
  * agent, so a policy or a transform can declare its own dependencies and the
  * session's type reflects them.
  */
+/**
+ * Build a toolkit and bind its handlers in one step.
+ *
+ * The two-step form is easy to get wrong in a way nothing catches:
+ *
+ * ```ts
+ * Toolkit.make(Search).pipe(Effect.provide(Toolkit.make(Search).toLayer(...)))
+ * ```
+ *
+ * That creates two unrelated toolkits and binds the handlers to the one that is
+ * not used, so every tool call resolves to nothing and *succeeds* — a green
+ * test that proves nothing. Naming the toolkit once is the fix, and this makes
+ * it the only thing you can do.
+ *
+ * Handler parameters and results are inferred from the tools' schemas.
+ */
+export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
+  tools: Tools,
+  handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<Tools>>
+): Effect.Effect<Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>> => {
+  const built = Toolkit.make(...tools)
+  return built.pipe(Effect.provide(built.toLayer(handlers))) as Effect.Effect<
+    Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>
+  >
+}
+
 export const make = <
   Tools extends Record<string, Tool.Any> = {},
   LE = never,

@@ -2236,6 +2236,36 @@ errors
 
 If implementation requires dozens more public functions, reconsider the abstraction boundary.
 
+## 42.2 Convenience, and the bar it has to clear
+
+§44's rule — no new exported concept until two independent features need it —
+applies to sugar as much as to abstractions. Four helpers cleared it, each
+because it removes friction that was demonstrably repeated in this repository
+rather than friction someone might hypothetically feel:
+
+**`Agent.toolkit(tools, handlers)`** builds and binds in one step. The two-step
+form appeared 20 times, and it has a silent failure mode: naming
+`Toolkit.make(T)` twice binds the handlers to an instance you are not using, so
+every tool call resolves to nothing and *succeeds*. This makes that
+unrepresentable rather than documented.
+
+**`AgentLoop.bounded(n)`** is `and(untilIdle(), maxTurns(n))`, which appeared
+six times including the definition of done. Spelling it out invites leaving the
+bound off, and an unbounded loop against a looping model is unbounded spend.
+
+**`ContextTransform.appendSystem` / `prependSystem`** cover the dynamic
+instruction case §6 lists first. They add a *discrete* system message rather
+than folding into an adjacent one, because folding makes `compose` order
+unpredictable — two transforms each adding a line can end up concatenated.
+
+**`AgentEvent.match`** replaces the switch every stream consumer writes. A
+hand-written switch silently stops covering events as the ADT grows; this makes
+that a type error.
+
+None of them adds a concept. Each is a shorter spelling of something the
+existing vocabulary already expresses, which is the only kind of sugar worth
+exporting.
+
 ## 42.1 Which of these are Schemas, and which are not yet
 
 Implementation split this list rather than satisfying it uniformly.

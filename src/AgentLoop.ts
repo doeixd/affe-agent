@@ -98,6 +98,19 @@ export const and = <
     )
   )
 
+/**
+ * The usual loop: run until the model stops asking for tools, but never more
+ * than `maxTurns`.
+ *
+ * `and(untilIdle(), maxTurns(n))` is what almost every agent wants, and writing
+ * it out invites leaving off the bound — which turns a looping model into an
+ * unbounded spend.
+ */
+export const bounded = <Tools extends Record<string, Tool.Any> = any>(
+  maxTurns_: number
+): AgentLoop<never, never, Tools> =>
+  and(untilIdle<Tools>(), maxTurns<Tools>(maxTurns_))
+
 /** Continue if any policy continues. */
 export const or = <
   E = never,
