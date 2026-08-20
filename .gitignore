@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+doeixd-effect-agent-*.tgz
+
+# Internal research and roadmap notes — not published.
+# Remove these lines to include them in the repo.
+ADDITIONAL.md
+flue.md

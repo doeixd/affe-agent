@@ -1,0 +1,108 @@
+import { Effect } from "effect"
+import type { LanguageModel, Response, Tool } from "effect/unstable/ai"
+import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
+
+/**
+ * Everything the continuation policy is allowed to see.
+ *
+ * The loop is policy, never engine: it decides whether another turn happens, it
+ * does not perform one.
+ *
+ * Follow-up queue state is deliberately absent. Follow-ups are submission
+ * orchestration — whether more work is scheduled after this run stops — not a
+ * reason for the current run to continue. A loop that consulted them would be
+ * making a decision that belongs to `AgentSubmission`.
+ */
+export interface State<Tools extends Record<string, Tool.Any> = any> {
+  readonly sessionId: SessionId
+  readonly submissionId: SubmissionId
+  readonly runId: RunId
+  /** 1-based index of the turn that just completed. */
+  readonly turnIndex: number
+  readonly response: LanguageModel.GenerateTextResponse<Tools>
+  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools>>
+}
+
+export type Decision = Continue | Stop
+
+export interface Continue {
+  readonly _tag: "Continue"
+}
+
+export interface Stop {
+  readonly _tag: "Stop"
+}
+
+export const Continue: Decision = { _tag: "Continue" }
+export const Stop: Decision = { _tag: "Stop" }
+
+/**
+ * `E` and `R` are preserved so a policy can depend on its own services — a
+ * token budget, a usage policy, feature flags — without the harness
+ * understanding those concepts.
+ */
+export interface AgentLoop<
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = any
+> {
+  readonly decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
+}
+
+export const make = <
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = any
+>(
+  decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
+): AgentLoop<E, R, Tools> => ({ decide })
+
+/**
+ * Continue while the last response requested tool calls.
+ *
+ * Once the model stops asking for tools it has nothing left to act on, so the
+ * run has reached its natural stopping condition.
+ */
+export const untilIdle = <
+  Tools extends Record<string, Tool.Any> = any
+>(): AgentLoop<never, never, Tools> =>
+  make((state) => Effect.succeed(state.toolCalls.length > 0 ? Continue : Stop))
+
+/** Stop once `max` turns have been executed, whatever the inner policy says. */
+export const maxTurns = <Tools extends Record<string, Tool.Any> = any>(
+  max: number
+): AgentLoop<never, never, Tools> =>
+  make((state) => Effect.succeed(state.turnIndex >= max ? Stop : Continue))
+
+/**
+ * Continue only while every policy continues.
+ *
+ * Composition is explicit rather than hidden inside `.pipe`, so a reader never
+ * has to guess whether combination means conjunction or disjunction.
+ */
+export const and = <
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = any
+>(
+  ...loops: ReadonlyArray<AgentLoop<E, R, Tools>>
+): AgentLoop<E, R, Tools> =>
+  make((state) =>
+    Effect.reduce(loops, () => Continue as Decision, (acc, loop) =>
+      acc._tag === "Stop" ? Effect.succeed(acc) : loop.decide(state)
+    )
+  )
+
+/** Continue if any policy continues. */
+export const or = <
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = any
+>(
+  ...loops: ReadonlyArray<AgentLoop<E, R, Tools>>
+): AgentLoop<E, R, Tools> =>
+  make((state) =>
+    Effect.reduce(loops, () => Stop as Decision, (acc, loop) =>
+      acc._tag === "Continue" ? Effect.succeed(acc) : loop.decide(state)
+    )
+  )

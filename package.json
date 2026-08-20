@@ -1,0 +1,69 @@
+{
+  "name": "@doeixd/effect-agent",
+  "version": "0.0.1",
+  "description": "An Effect-native agent execution kernel: sessions, runs, turns, steering, follow-ups and typed lifecycle events on top of Effect AI.",
+  "keywords": [
+    "effect",
+    "effect-ts",
+    "ai",
+    "agent",
+    "agents",
+    "llm",
+    "agent-runtime",
+    "tool-calling",
+    "streaming",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "doeixd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doeixd/effect-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/doeixd/effect-agent/issues"
+  },
+  "homepage": "https://github.com/doeixd/effect-agent#readme",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "effect-language-service diagnostics --project tsconfig.json",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "prepublishOnly": "npm run check && npm run build"
+  },
+  "peerDependencies": {
+    "effect": ">=4.0.0-rc.111 <5.0.0"
+  },
+  "devDependencies": {
+    "@effect/ai-anthropic": "^4.0.0-rc.111",
+    "@effect/language-service": "^0.87.2",
+    "@effect/vitest": "^4.0.0-rc.111",
+    "effect": "^4.0.0-rc.111",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.11"
+  }
+}
