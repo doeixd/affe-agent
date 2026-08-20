@@ -372,20 +372,36 @@ replayed rather than re-issued, and the journal is a real file.
 One thing is still not demonstrated, and it is the headline durability claim.
 Tearing down the runner that started a suspended execution, then resuming from a
 second independently built runner over the same database, records the execution
-as `Complete` carrying an **`EntityNotAssignedToRunner`** defect. The shard
-assignment is lost with the runner, so the execution is terminalised instead of
-being left resumable.
+as `Complete` carrying an **`EntityNotAssignedToRunner`** defect. This is now
+closed, and it turned out to be two bugs in this library rather than the
+deployment concern it first looked like.
 
-That is a deployment concern — shard reassignment on startup — rather than
-something the harness or the durable module can fix, and it is not something a
-test should stub. So the precise status is:
+**1. The workflow body ignored suspension.** `Workflow.suspend` signals by
+setting a flag on the `WorkflowInstance` and interrupting the fiber. A session
+absorbs interruption by design — a run that is cut short still ends tidily — so
+control returned to the workflow body normally and it committed
+`Success("")`. A lost runner therefore *finalised* the submission instead of
+leaving it resumable. The body now reads `instance.suspended` and re-suspends,
+and it no longer clears the session's open marker while suspended: a suspended
+submission is still accepting steering.
 
-> Resumption replays persisted work correctly, on real SQL storage, **within a
-> runner's lifetime**. Surviving the loss of that runner is unproven.
+**2. Client calls died on shard reassignment.** When a runner is lost its shards
+stay leased until `shardLockExpiration` (35s by default) elapses and are then
+reassigned. Calls routed through a shard during that window are rejected with
+`EntityNotAssignedToRunner`, `RunnerNotRegistered`, or `RunnerUnavailable` — as
+**defects**, so `result`'s retry (which only handled its own `"pending"`
+failure) never engaged. `submit`, `steer`, `followUp` and `result` now retry
+through reassignment and re-raise anything else untouched.
 
-Closing it means either a runner that reclaims orphaned shards on startup, or a
-multi-runner setup where another runner takes the shard over. Until then, do not
-claim process-restart durability in user-facing material.
+> Resumption replays persisted work correctly on real SQL storage, **including
+> across the loss of the runner that started it**. `test/DurableSql.test.ts`
+> covers it: runner A journals turn 1 and vanishes mid-suspension, runner B
+> takes the shards over after the lease expires and completes the submission,
+> having re-issued no model call for turn 1.
+
+One caveat for readers writing similar tests: a runner torn down *before* its
+suspension is journaled is not process loss — it is an interrupted live
+execution, and the engine correctly records that as a terminal failure.
 
 ---
 

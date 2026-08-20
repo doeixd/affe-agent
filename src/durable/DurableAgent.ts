@@ -73,6 +73,16 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       const channels = yield* DurableChannels.factory(options.store)
       const store = options.store
 
+      // Suspension is signalled by interrupting the running fiber and setting
+      // a flag on the instance. A session absorbs interruption by design — a
+      // run that is cut short still ends tidily — so by the time control gets
+      // back here, a suspended workflow looks exactly like a submission that
+      // simply produced no text. Reading the flag is the only way to tell the
+      // two apart, and returning normally in the suspended case is what makes
+      // a lost runner commit an empty success instead of leaving the execution
+      // resumable.
+      const instance = yield* WorkflowEngine.WorkflowInstance
+
       const durableAgent = {
         ...agent,
         toolkit: durableTools
@@ -90,12 +100,87 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       ).pipe(
         Effect.provide(modelLayer),
         Effect.orDie,
-        Effect.ensuring(store.takeAll(openKey(payload.sessionId)))
+        Effect.flatMap((text) =>
+          instance.suspended
+            ? Workflow.suspend(instance)
+            : Effect.succeed(text)
+        ),
+        // The marker says "this session is still accepting input", which a
+        // suspended submission very much is — it is waiting to be resumed.
+        // Clearing it on suspension would make `steer` and `followUp` reject
+        // work for a run that is about to continue.
+        Effect.onExit(() =>
+          instance.suspended
+            ? Effect.void
+            : Effect.asVoid(store.takeAll(openKey(payload.sessionId)))
+        )
       )
     })
   )
 
   return { definition, layer } as const
+}
+
+/**
+ * Cluster conditions that mean "ask again", not "this failed".
+ *
+ * When a runner dies, its shards stay leased until `shardLockExpiration`
+ * elapses, and are then reassigned. Every call routed through a shard —
+ * dispatching a submission, offering steering, polling a result — can land in
+ * that window and be rejected because no runner currently owns the shard.
+ *
+ * These arrive as *defects*, not typed errors, so nothing downstream can
+ * recover from them by accident: a caller polling for a result would die on a
+ * reassignment that is about to resolve on its own. Treating them as transient
+ * here is what makes a submission survive the loss of the process running it.
+ */
+const TRANSIENT = new Set([
+  "~effect/cluster/ClusterError/EntityNotAssignedToRunner",
+  "~effect/cluster/ClusterError/RunnerNotRegistered",
+  "~effect/cluster/ClusterError/RunnerUnavailable"
+])
+
+const isTransient = (defect: unknown): boolean =>
+  typeof defect === "object" &&
+  defect !== null &&
+  "name" in defect &&
+  typeof (defect as { name: unknown }).name === "string" &&
+  TRANSIENT.has((defect as { name: string }).name)
+
+/**
+ * Retry through shard reassignment.
+ *
+ * The window is bounded by the shard lock expiration — 35s by default — so the
+ * schedule must outlast it, or a caller gives up moments before the shard it
+ * was waiting for becomes available. A non-transient defect is re-raised
+ * untouched: this widens *when* an operation succeeds, never *what* it hides.
+ */
+const throughReassignment = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  Effect.catchDefect(effect, (defect) =>
+    isTransient(defect)
+      ? Effect.fail(new Reassigning({ defect }))
+      : Effect.die(defect)
+  ).pipe(
+    Effect.retry({
+      while: (error: E | Reassigning) => error instanceof Reassigning,
+      times: 600,
+      schedule: Schedule.spaced(Duration.millis(100))
+    }),
+    Effect.catchIf(
+      (error: E | Reassigning): error is Reassigning =>
+        error instanceof Reassigning,
+      (error) => Effect.die(error.defect)
+    )
+  ) as Effect.Effect<A, E, R>
+
+/** Internal: never escapes `throughReassignment`. */
+class Reassigning {
+  constructor(readonly options: { readonly defect: unknown }) {}
+  get defect() {
+    return this.options.defect
+  }
 }
 
 /**
@@ -127,8 +212,10 @@ export const submit = <W extends ReturnType<typeof workflow>>(
     // the submission by the time it returns, so steering must be admissible
     // from that moment. Marking it in the body instead leaves a window where a
     // caller holding an execution id is told the session is idle.
-    yield* store.offer(openKey(sessionId), "open")
-    yield* agent.definition.execute({ sessionId, prompt }, { discard: true })
+    yield* throughReassignment(store.offer(openKey(sessionId), "open"))
+    yield* throughReassignment(
+      agent.definition.execute({ sessionId, prompt }, { discard: true })
+    )
     return executionId
   })
 
@@ -147,7 +234,8 @@ export const steer = (
   input: Prompt.RawInput
 ): Effect.Effect<void, AgentIdleError> =>
   admit(store, sessionId, "steer").pipe(
-    Effect.andThen(DurableChannels.offer(store, sessionId, "steering", input))
+    Effect.andThen(DurableChannels.offer(store, sessionId, "steering", input)),
+    throughReassignment
   )
 
 /** Queue a follow-up, extending the submission rather than the current run. */
@@ -158,7 +246,8 @@ export const followUp = (
   input: Prompt.RawInput
 ): Effect.Effect<void, AgentIdleError> =>
   admit(store, sessionId, "followUp").pipe(
-    Effect.andThen(DurableChannels.offer(store, sessionId, "followUps", input))
+    Effect.andThen(DurableChannels.offer(store, sessionId, "followUps", input)),
+    throughReassignment
   )
 
 /**
@@ -211,7 +300,7 @@ export const result = <W extends ReturnType<typeof workflow>>(
   WorkflowEngine.WorkflowEngine
 > =>
   Effect.retry(
-    Effect.flatMap(agent.definition.poll(executionId), (polled) =>
+    Effect.flatMap(throughReassignment(agent.definition.poll(executionId)), (polled) =>
       Option.isSome(polled) && polled.value._tag === "Complete"
         ? Effect.succeed(
             (polled.value as Workflow.Complete<string, never>).exit

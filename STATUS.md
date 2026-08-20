@@ -255,14 +255,18 @@ sharded submit/steer/follow-up. Phase 5 runs on `SingleRunner` with a SQLite
 journal on disk: a submission suspends and resumes against real SQL storage,
 replaying turn 1 rather than re-issuing it.
 
-**One claim remains unproven, and it is the headline one.** Tearing down the
-runner that started a suspended execution and resuming from a second runner over
-the same database records the execution as `Complete` with an
-`EntityNotAssignedToRunner` defect — the shard assignment is lost with the
-runner. So resumption replays persisted work correctly *within a runner's
-lifetime*; surviving the loss of that runner needs shard reassignment on
-startup, which is a deployment concern. Do not claim process-restart durability
-in user-facing material until it is closed.
+**Process loss is now covered too**, and closing it found two real bugs. First,
+`Workflow.suspend` signals by setting a flag on the `WorkflowInstance` and
+interrupting the fiber — and a session absorbs interruption by design, so the
+workflow body returned normally and committed `Success("")`. Losing a runner
+*finalised* the submission instead of leaving it resumable. The body now checks
+`instance.suspended`, re-suspends, and keeps the session's open marker while
+suspended. Second, shards stay leased until `shardLockExpiration` (35s by
+default) elapses; calls routed through a shard mid-reassignment are rejected as
+**defects**, which `result`'s `"pending"` retry never saw. `submit`, `steer`,
+`followUp` and `result` now retry through reassignment and re-raise everything
+else. A test tears runner A down mid-suspension and resumes from runner B over
+the same database, asserting turn 1 is replayed rather than re-issued.
 
 Phase 6 turned up a design error worth remembering: an entity handler must not
 block on a workflow. The handler holds the session's mailbox, and starting a

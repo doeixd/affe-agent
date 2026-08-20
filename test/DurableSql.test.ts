@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Crypto, Deferred, Effect, Exit, Layer, Ref } from "effect"
+import { Crypto, Deferred, Duration, Effect, Exit, Layer, Ref } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
@@ -30,6 +30,7 @@ import { countingModel } from "./helpers.js"
  * What it does not prove is recorded at the end of this file, and in the plan.
  */
 const Gate = DurableDeferred.make("SqlGate", { success: Schema.String })
+const LossGate = DurableDeferred.make("LossGate", { success: Schema.String })
 
 /** Node's crypto, which `SingleRunner` needs for runner identity. */
 const CryptoLayer = Layer.succeed(
@@ -47,6 +48,35 @@ const CryptoLayer = Layer.succeed(
       )
   })
 )
+
+/**
+ * A runner over the given database.
+ *
+ * The shard lock TTL is the whole story for process loss. A runner holds its
+ * shards under a lock with a default 35s expiration, so a replacement started
+ * immediately after the first one disappears is correctly refused the shards —
+ * that is the lock doing its job, not a failure. A replacement that starts
+ * after the lock expires takes them over.
+ *
+ * Tests shorten the TTL rather than waiting 35 seconds; production should leave
+ * it alone, since a short expiration risks two runners believing they own the
+ * same shard during a network partition.
+ */
+const engineFor = (file: string, lockSeconds = 35) =>
+  ClusterWorkflowEngine.layer.pipe(
+    Layer.provide(
+      SingleRunner.layer({
+        runnerStorage: "sql",
+        shardingConfig: {
+          shardLockExpiration: Duration.seconds(lockSeconds),
+          shardLockRefreshInterval: Duration.millis(200)
+        }
+      }).pipe(
+        Layer.provide(SqliteClient.layer({ filename: file })),
+        Layer.provide(CryptoLayer)
+      )
+    )
+  )
 
 const tempDatabase = Effect.acquireRelease(
   Effect.sync(() =>
@@ -70,14 +100,7 @@ describe("durable submissions on SQL storage", () => {
     Effect.gen(function* () {
       const file = yield* tempDatabase
 
-      const Engine = ClusterWorkflowEngine.layer.pipe(
-        Layer.provide(
-          SingleRunner.layer({ runnerStorage: "sql" }).pipe(
-            Layer.provide(SqliteClient.layer({ filename: file })),
-            Layer.provide(CryptoLayer)
-          )
-        )
-      )
+      const Engine = engineFor(file)
 
       const modelCalls = yield* Ref.make(0)
       const gateReady = yield* Deferred.make<DurableDeferred.Token>()
@@ -148,17 +171,114 @@ describe("durable submissions on SQL storage", () => {
   )
 })
 
-/**
- * NOT covered here, and deliberately not faked.
- *
- * Tearing down the runner that started a suspended execution, then resuming
- * from a second independently built runner over the same SQLite file, records
- * the execution as `Complete` carrying an `EntityNotAssignedToRunner` defect:
- * the shard assignment is lost with the runner, so the execution is terminalised
- * rather than left resumable.
- *
- * A genuine process restart therefore needs shard reassignment on startup,
- * which is a deployment concern rather than something a test can stub. Until it
- * is demonstrated, "survives a process restart" stays unproven — see
- * WORKFLOW_CLUSTER_PLAN §5.4.
- */
+describe("process loss", () => {
+  it.live(
+    "a submission resumes in a replacement runner after the first is lost",
+    () =>
+      Effect.gen(function* () {
+        const file = yield* tempDatabase
+        const modelCalls = yield* Ref.make(0)
+        const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+        const suspendOnce = yield* Ref.make(true)
+        const turns = yield* Ref.make(0)
+
+        // Suspends before turn 2, so turn 1's model result is journalled to
+        // SQLite while the first runner is still alive.
+        const gating = ContextTransform.make((context) =>
+          Effect.gen(function* () {
+            const turn = yield* Ref.updateAndGet(turns, (n) => n + 1)
+            if (turn === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
+              const token = yield* DurableDeferred.token(LossGate)
+              yield* Deferred.succeed(gateReady, token)
+              yield* DurableDeferred.await(LossGate)
+            }
+            return context.prompt
+          })
+        )
+
+        const store = yield* DurableChannels.memoryStore
+        const agent = Agent.make({
+          contextTransform: gating,
+          // Forced to two turns: `bounded` would stop after turn 1 here,
+          // because the scripted model returns text and no tool calls.
+          loop: (state) =>
+            Effect.succeed(
+              state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+        })
+        const durable = DurableAgent.workflow("Lost", agent, { store })
+
+        const modelFor = () =>
+          Effect.map(
+            FakeModel.layer([{ text: "first" }, { text: "second" }]),
+            ({ layer }) => countingModel(layer, modelCalls)
+          )
+
+        // ---- Runner A: start, journal turn 1, then vanish ----------------
+        const executionId = yield* Effect.gen(function* () {
+          const model = yield* modelFor()
+          return yield* Effect.gen(function* () {
+            const id = yield* DurableAgent.submit(durable, store, "loss-1", "go")
+            yield* Deferred.await(gateReady)
+            // `gateReady` fires when the token is published, which is *before*
+            // the workflow has journaled its suspension. Tearing the runner
+            // down inside that window is not process loss — it interrupts a
+            // live execution, and the engine records that as a terminal
+            // failure. Let the suspension become durable first: that is the
+            // state a lost process actually leaves behind.
+            yield* Effect.sleep(Duration.millis(500))
+            return id
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 1)),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+        // Runner A is gone: its layers were released with the scope above.
+        // Its shard lock outlives it, so wait for the lease to expire before a
+        // replacement can claim the shards.
+        yield* Effect.sleep(Duration.seconds(2))
+
+        // ---- Runner B: a different runner over the same database ---------
+        const completed = yield* Effect.gen(function* () {
+          const model = yield* modelFor()
+          return yield* Effect.gen(function* () {
+            const token = yield* Deferred.await(gateReady)
+            yield* DurableDeferred.succeed(LossGate, {
+              token,
+              value: "resume"
+            })
+            return yield* DurableAgent.result(durable, executionId, {
+              interval: Duration.millis(50)
+            })
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 1)),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+        assert.isTrue(
+          Exit.isSuccess(completed),
+          `replacement runner did not finish the submission: ${JSON.stringify(completed)}`
+        )
+
+        // Turn 1 ran under runner A and was journalled; runner B replayed it
+        // and only had to make turn 2's call. Three would mean the journal was
+        // not consulted across the process boundary.
+        assert.strictEqual(
+          yield* Ref.get(modelCalls),
+          2,
+          "the replacement runner must not re-issue turn 1"
+        )
+      }).pipe(Effect.scoped) as Effect.Effect<void>,
+    30_000
+  )
+})
