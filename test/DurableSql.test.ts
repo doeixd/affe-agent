@@ -32,6 +32,7 @@ import { countingModel } from "./helpers.js"
 const Gate = DurableDeferred.make("SqlGate", { success: Schema.String })
 const LossGate = DurableDeferred.make("LossGate", { success: Schema.String })
 const ReplayGate = DurableDeferred.make("ReplayGate", { success: Schema.String })
+const FailGate = DurableDeferred.make("FailGate", { success: Schema.String })
 
 /** Node's crypto, which `SingleRunner` needs for runner identity. */
 const CryptoLayer = Layer.succeed(
@@ -361,7 +362,9 @@ describe("replayed tool results", () => {
 
         // ---- Runner B: replays the tool call from SQLite -----------------
         const prompts = yield* Effect.gen(function* () {
-          const { layer: model, recorder } = yield* FakeModel.layer(script)
+          const { layer: model, recorder } = yield* FakeModel.layer([
+            { text: "done" }
+          ])
           return yield* Effect.gen(function* () {
             const token = yield* Deferred.await(gateReady)
             yield* DurableDeferred.succeed(ReplayGate, {
@@ -399,6 +402,123 @@ describe("replayed tool results", () => {
         )
         assert.isAtLeast(results.length, 1, "no tool result reached the model")
         assert.strictEqual(results[0], stamped.toISOString())
+      }),
+    30_000
+  )
+
+  it.live(
+    "a failed tool call is journalled and replayed, not retried",
+    () =>
+      Effect.gen(function* () {
+        // The failure branch of the results schema, which nothing else covers.
+        // A failed handler result puts the tool's *failure* value in `result`,
+        // so it is encoded through `failureSchema` rather than `successSchema`
+        // -- and a run that resumes must return the persisted refusal instead
+        // of calling the tool a second time. Retrying a side effect is the one
+        // thing durability exists to prevent.
+        const file = yield* tempDatabase
+        const calls = yield* Ref.make(0)
+
+        const Refuse = Tool.make("refuse", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+          failure: Schema.String
+        })
+        const toolkit = yield* Agent.toolkit([Refuse], {
+          refuse: () =>
+            Ref.update(calls, (n) => n + 1).pipe(
+              Effect.andThen(Effect.fail("declined"))
+            )
+        })
+
+        const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+        const suspendOnce = yield* Ref.make(true)
+        const turns = yield* Ref.make(0)
+
+        const gating = ContextTransform.make((context) =>
+          Effect.gen(function* () {
+            const turn = yield* Ref.updateAndGet(turns, (n) => n + 1)
+            if (turn === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
+              const token = yield* DurableDeferred.token(FailGate)
+              yield* Deferred.succeed(gateReady, token)
+              yield* DurableDeferred.await(FailGate)
+            }
+            return context.prompt
+          })
+        )
+
+        const store = yield* DurableChannels.memoryStore
+        // The default policy returns the failure to the model, so the run
+        // continues rather than ending here.
+        const agent = Agent.make({
+          toolkit,
+          contextTransform: gating,
+          loop: (state) =>
+            Effect.succeed(
+              state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+        })
+        const durable = DurableAgent.workflow("Refused", agent, { store })
+
+        const script = [
+          { toolCalls: [{ id: "r1", name: "refuse", params: {} }] },
+          { text: "done" }
+        ]
+        // The replacement runner replays turn 1 from the journal, so the only
+        // real model call it makes is turn 2. A fresh FakeModel would hand back
+        // the *first* scripted turn and issue a second tool call -- which is a
+        // property of the fake, not of replay.
+        const resumedScript = [{ text: "done" }]
+
+        const executionId = yield* Effect.gen(function* () {
+          const { layer: model } = yield* FakeModel.layer(script)
+          return yield* Effect.gen(function* () {
+            const id = yield* DurableAgent.submit(durable, store, "refuse-1", "go")
+            yield* Deferred.await(gateReady)
+            yield* Effect.sleep(Duration.millis(500))
+            return id
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 1)),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+        assert.strictEqual(yield* Ref.get(calls), 1, "the tool ran once")
+
+        yield* Effect.sleep(Duration.seconds(2))
+
+        const exit = yield* Effect.gen(function* () {
+          const { layer: model } = yield* FakeModel.layer(resumedScript)
+          return yield* Effect.gen(function* () {
+            const token = yield* Deferred.await(gateReady)
+            yield* DurableDeferred.succeed(FailGate, { token, value: "resume" })
+            return yield* DurableAgent.result(durable, executionId, {
+              interval: Duration.millis(50)
+            })
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 1)),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+        assert.isTrue(
+          Exit.isSuccess(exit),
+          `the resumed run did not finish: ${JSON.stringify(exit)}`
+        )
+        // Still one. The refusal came back from the journal.
+        assert.strictEqual(
+          yield* Ref.get(calls),
+          1,
+          "the replacement runner re-ran a tool that had already failed"
+        )
       }),
     30_000
   )

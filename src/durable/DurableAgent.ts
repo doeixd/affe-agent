@@ -163,11 +163,21 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         })
       ).pipe(
         Effect.provide(modelLayer),
-        // Interruption is deliberately *not* caught here. Suspension is
-        // signalled by interrupting the fiber, so converting it into a failure
+        // Interruption is deliberately not converted into a failure.
+        // Suspension is signalled by interrupting the fiber, so projecting it
         // would turn every parked submission into a permanently failed one.
+        //
+        // The instance flags are consulted first because they are the precise
+        // signal; `hasInterruptsOnly` is the fallback for an interrupt this
+        // workflow did not ask for, such as its runner shutting down. A cause
+        // holding *both* a failure and an interrupt is projected rather than
+        // re-raised: re-raising it would record neither outcome, leaving the
+        // execution non-terminal with nothing left to resume it, and any
+        // caller polling for a result would simply hang.
         Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
+          instance.suspended ||
+            instance.interrupted ||
+            Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
             : Effect.fail(durableFailure(cause))
         ),
@@ -316,7 +326,7 @@ export const submit = <W extends ReturnType<typeof workflow>>(
     // the submission by the time it returns, so steering must be admissible
     // from that moment. Marking it in the body instead leaves a window where a
     // caller holding an execution id is told the session is idle.
-    yield* throughReassignment(store.offer(openKey(sessionId), "open"))
+    yield* open(store, sessionId)
     yield* throughReassignment(
       agent.definition.execute({ sessionId, prompt }, { discard: true })
     )
@@ -367,6 +377,26 @@ export const followUp = (
  * the same admission contract a local caller would.
  */
 const openKey = (sessionId: string) => `${sessionId}:open`
+
+/**
+ * Mark a session as accepting out-of-band input.
+ *
+ * Exported so an adapter that dispatches a submission its own way — the cluster
+ * entity forks, to avoid deadlocking against its own mailbox — opens admission
+ * through the same function the submission path uses. It previously rewrote the
+ * key as a string literal, which would have silently broken `steer` and
+ * `followUp` the moment the key changed: every call would report an idle
+ * session for a submission that was running perfectly well.
+ *
+ * Ordering matters. Admission must be open *before* the submission is
+ * dispatched, or a client that steers immediately after submitting is told the
+ * session is idle.
+ */
+export const open = (
+  store: DurableChannels.Store,
+  sessionId: string
+): Effect.Effect<void> =>
+  throughReassignment(store.offer(openKey(sessionId), "open"))
 
 const admit = (
   store: DurableChannels.Store,

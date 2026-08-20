@@ -75,7 +75,7 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             })
             // Admission opens before dispatch, so a client that steers straight
             // after submitting is not told the session is idle.
-            yield* store.offer(`${sessionId}:open`, "open")
+            yield* DurableAgent.open(store, sessionId)
             yield* Effect.forkDetach(
               DurableAgent.throughShardReassignment(
                 agent.definition.execute({ sessionId, prompt }, { discard: true })
