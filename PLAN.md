@@ -1537,6 +1537,77 @@ effect/unstable/persistence
 
 but only after the in-process state machine is stable.
 
+## 30.1 The Workflow mapping, tested
+
+A spike (`spike/`, excluded from the package) checked the load-bearing question:
+can the same agent definition be reinterpreted durably **without the harness
+knowing durability exists**? The answer shapes whether core needs an
+interception interface.
+
+**It can, and core needs no change.** An agent built with plain `Agent.make`
+runs inside `Workflow.toLayer` calling plain `AgentSession.prompt`, and the
+model call becomes an `Activity` purely by swapping the provided
+`LanguageModel` layer. The reason is structural rather than lucky:
+`LanguageModel.make` takes a provider returning `Array<Response.PartEncoded>`,
+which is already an encodable value, so the activity boundary lands exactly
+where persistence needs it. Tools work the same way — a durable package wraps
+the toolkit's handlers when constructing it.
+
+That is the answer to the `AgentExecution` question WORKFLOW.md raises: **the
+interception points a durable interpreter needs are already Layers**, and Layers
+are already the substitution mechanism. Do not add `AgentExecution` until a
+durable implementation demonstrates interception that the Layer boundary cannot
+express.
+
+### Friction the durable package must absorb
+
+* `LanguageModel.make` pins its provider's requirements to `IdGenerator`, so an
+  `Activity` (needing `WorkflowEngine | WorkflowInstance`) cannot be dropped
+  straight in. The workflow context has to be captured inside the running
+  workflow and provided to the activity, which means **the model layer must be
+  constructed inside the workflow body**. Encode this in the package's API so
+  users never hand-roll it.
+* A defect terminates a workflow permanently: re-executing the same idempotency
+  key returns the recorded failure. `Effect.die` therefore does not simulate a
+  crash, and a test written that way proves nothing.
+* Resumption is not "call `execute` again" — that hangs on an interrupted
+  execution. Use `Workflow.resume(executionId)`.
+
+### What remains unproven
+
+The headline claim — process dies mid-submission, restarts, and the persisted
+model result is returned rather than the model being called again — needs a
+persistent engine and the resume path, not `WorkflowEngine.layerMemory`. It is
+the first thing `@effect-harness/durable` should demonstrate.
+
+Concurrent `Activity.make` at unbounded concurrency (which §17 relies on for
+tool execution) completes normally on `4.0.0-rc.111`, so
+[effect#6014](https://github.com/Effect-TS/effect/issues/6014) does not
+reproduce — but only on the fresh-execution path, and that issue was about
+replay. Treat durable parallel tool execution as unvalidated until replay is
+tested.
+
+## 30.2 Agent semantics are independent of execution strength
+
+The principle this supports, and the reason the boundary is worth keeping:
+
+> The same agent definition should admit progressively stronger interpretations
+> without being rewritten.
+
+```text
+Agent
+ ├ embedded    Ref / Queue / Fiber          (v0.1)
+ ├ persistent  AgentStore
+ ├ distributed RPC / Cluster
+ └ durable     Workflow / Activity / DurableQueue / DurableDeferred
+```
+
+This is a constraint on core, not a feature of it: core must keep its execution
+boundaries explicit enough to be reinterpreted, and must not require any of the
+stronger runtimes. What must **not** be promised is that arbitrary harness
+programs become durable automatically — durable execution imposes replay
+constraints that ordinary fiber concurrency does not.
+
 ---
 
 # 31. AgentSession API Style

@@ -239,7 +239,7 @@ modifying it:
 | | |
 |---|---|
 | **Streaming** | `MessageDelta` is absent rather than half-implemented; partial-message commit semantics are undefined. |
-| **Durability** | Persistence and durable execution are separate concerns; the explicit commit boundaries exist to support them later. |
+| **Durability** | Persistence and durable execution are separate concerns. A [spike](./spike/) shows the same agent runs inside an Effect `Workflow` with model calls as `Activity`s and **no core changes** — durability arrives by swapping a Layer, not by adopting a different framework. |
 | **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session. Memory is a service plus a transform. Neither needs a first-class concept. |
 
 ## Examples

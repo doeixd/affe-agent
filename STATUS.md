@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 60 passing. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 62 passing (including the Workflow spike). `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -53,6 +53,24 @@ examples/anthropic.ts  the DoD program on a real provider (typechecked only)
 | 10 Event envelopes and ordering | done |
 | 11 Tool failure policy spike | done — resolved, see below |
 | 12 API cleanup | done except event Schemas, see deviations |
+
+## Durable execution: spike result
+
+`spike/` tests whether the same agent definition can be reinterpreted durably
+without core knowing durability exists. **It can, with no core change** — see
+PLAN §30.1 and `spike/README.md`.
+
+The reason is structural: `LanguageModel.make` takes a provider returning
+`Array<Response.PartEncoded>`, an already-encodable value, so wrapping it in an
+`Activity` puts the durable boundary exactly where persistence needs it, reached
+by swapping a Layer. The interception points a durable interpreter needs are
+already Layers, so `AgentExecution` stays unbuilt.
+
+Not proven, and flagged as the durable package's first job: crash-and-resume
+returning a persisted model result. That needs a persistent engine and
+`Workflow.resume`, not `WorkflowEngine.layerMemory`. Concurrent activities
+complete on the fresh path, but effect#6014 was about replay, so durable
+parallel tool execution is unvalidated.
 
 ## Closing the remaining plan gaps
 
