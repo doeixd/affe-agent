@@ -1,14 +1,7 @@
-import type {
-  Context,
-  Fiber,
-  Option,
-  Queue,
-  Ref,
-  Scope,
-  SubscriptionRef
-} from "effect"
+import type { Context, Fiber, Option, Ref, Scope, SubscriptionRef } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
+import type { InputChannel } from "../InputChannel.js"
 import type { EventBus } from "./eventBus.js"
 import type { IdSource, RunId, SessionId, SubmissionId } from "./ids.js"
 
@@ -50,8 +43,9 @@ export interface Session<
   readonly agent: AgentDefinition<Tools, E, R>
   readonly state: SubscriptionRef.SubscriptionRef<SessionState>
   readonly bus: EventBus
-  readonly steering: Queue.Queue<string>
-  readonly followUps: Queue.Queue<string>
+  /** Out-of-band input; substitutable so a durable runtime can record it. */
+  readonly steering: InputChannel
+  readonly followUps: InputChannel
   readonly activeFiber: Ref.Ref<Option.Option<Fiber.Fiber<any, any>>>
   readonly scope: Scope.Scope
   /**

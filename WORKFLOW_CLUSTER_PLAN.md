@@ -131,20 +131,35 @@ replayed. History would silently diverge from the journal.
 itself be an Activity.** The drained batch is persisted with the turn that
 consumed it, and replay returns the same batch.
 
+**Core already provides this seam.** `AgentSession.make` takes an optional
+`InputChannel.Factory`, defaulting to in-memory queues (PLAN §16.2). The durable
+interpreter supplies one whose `drain` is an Activity over a `DurableQueue`:
+
 ```ts
-// durable interpreter, conceptually
-const steering = yield* Activity.make({
-  name: `steering-${runId}-${turnIndex}`,
-  success: Schema.Array(Schema.String),
-  execute: DurableQueue.takeAll(steeringQueue)
-})
+const durableChannels: InputChannel.Factory = {
+  make: (sessionId, name) =>
+    Effect.map(DurableQueue.make(`${sessionId}:${name}`), (queue) => ({
+      offer: (input) => DurableQueue.offer(queue, input),
+      size: DurableQueue.size(queue),
+      drain: Activity.make({
+        name: `${name}-drain-${/* runId:turnIndex */ ""}`,
+        success: Schema.Array(Schema.String),
+        execute: DurableQueue.takeAll(queue)
+      })
+    }))
+}
 ```
 
-This is the one place where the Layer boundary may prove insufficient, because
-the drain happens inside `AgentRun`, not behind a service. **Phase 3 exists to
-find out.** If it is insufficient, the minimal core change is to make the queues
-themselves injectable — a far smaller concession than a general
-`AgentExecution` interface.
+One wrinkle the implementation must solve: the activity name needs the current
+run and turn to be stable across replays, and the channel does not receive them.
+Options are a `FiberRef` the engine sets per turn, or widening `drain` to take
+the correlation. **Prefer the second if it comes to it** — an explicit argument
+beats ambient state — but try the `FiberRef` first, since it needs no further
+core change.
+
+This was previously flagged as the one place the Layer boundary might prove
+insufficient. It was, and the seam now exists; what remains is verifying it
+carries the durable case, not discovering whether it can.
 
 ---
 
@@ -260,13 +275,10 @@ everything else. It requires no work in core.
 observational (PLAN §28). A remote subscriber needs an `Rpc` streaming endpoint
 projecting the same events.
 
-This is the point at which **`AgentEvent` must become Schema-defined**, which
-PLAN §42.1 defers behind a concrete blocker: v4 has no `Schema.Cause` codec and
-three events carry a `Cause`. That decision cannot be deferred further here, so
-it is Phase 6's first task. Recommendation: persist a structured failure
-projection (`{ _tag, message, defect: boolean }`) rather than attempting to
-encode `Cause` faithfully — the live cause stays available in-process, and the
-remote projection is explicitly lossy.
+**Already unblocked.** `AgentEvent` and `AgentEventEnvelope` are Schema-defined
+in core, with failures carried as `AgentEvent.Failure`
+(`{ tag, message, isDefect }`) rather than `Cause` — see PLAN §42.1. The RPC
+surface can encode them directly, and this is no longer Phase 6 work.
 
 ## 5.3 Scheduled agents
 
@@ -333,10 +345,10 @@ Tests:
 3. the drained batch on replay equals the batch originally consumed
 4. a follow-up queued during a crashed run still extends the submission
 
-**Explicit checkpoint.** If the drain cannot be intercepted without touching
-core, stop and report the exact interception point needed. The likely minimal
-change is injectable queues on the session; that decision belongs to PLAN, not
-to this package.
+**Explicit checkpoint.** The seam exists (`InputChannel`), so the question is
+no longer whether interception is possible but whether activity naming can be
+made stable — see §2.1. If it cannot without further core change, stop and
+report the exact requirement rather than working around it.
 
 ## Phase 4 — Interruption and terminal states
 
@@ -352,8 +364,8 @@ simulated one.
 
 ## Phase 6 — Cluster entity and RPC
 
-Schema-define `AgentEvent` (§5.2), then the entity, the RPC surface and the
-remote event stream. `Entity.makeTestClient` keeps this unit-testable.
+The entity, the RPC surface and the remote event stream. `AgentEvent` is already
+Schema-defined, so this phase starts at the entity. `Entity.makeTestClient` keeps this unit-testable.
 
 Tests:
 
@@ -373,6 +385,9 @@ Both are library-level compositions and neither adds a harness concept.
 **Replay determinism is the whole bet.** §2.1 lists the known nondeterminism;
 the unknown ones surface in Phase 1 test 3 and Phase 3 test 3. Order the work so
 they fail early rather than after the API is public.
+
+**Activity naming for queue drains** is the known-unsolved detail (§2.1), and
+it lands in Phase 3 rather than at the end.
 
 **Concurrent activity replay (effect#6014) is unverified.** It directly affects
 PLAN §17's unbounded-concurrency default. Phase 2 test 2 decides whether the

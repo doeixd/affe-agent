@@ -173,7 +173,8 @@ The harness owns tool execution (Effect AI's automatic resolution is disabled),
 which is what makes the tool lifecycle fully observable and lets you choose the
 concurrency strategy and the failure policy.
 
-The live stream is **observational**, not a durability guarantee.
+Events are Schema-defined, so a remote subscriber or a store can decode them.
+That does not make the live stream durable — it remains **observational**.
 
 ### Typed errors
 

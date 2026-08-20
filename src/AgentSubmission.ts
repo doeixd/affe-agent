@@ -1,5 +1,6 @@
-import { Cause, Effect, Exit, Option, Queue, SubscriptionRef } from "effect"
+import { Cause, Effect, Exit, Option, SubscriptionRef } from "effect"
 import type { AiError, LanguageModel, Tool } from "effect/unstable/ai"
+import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as AgentRun from "./AgentRun.js"
 import * as EventBus from "./internal/eventBus.js"
@@ -81,7 +82,10 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
           { submissionId, runId },
           Cause.hasInterruptsOnly(exit.cause)
             ? { _tag: "RunInterrupted" }
-            : { _tag: "RunFailed", cause: exit.cause }
+            : {
+                _tag: "RunFailed",
+                failure: AgentEvent.failureFromCause(exit.cause)
+              }
         )
         // A failed run ends its submission but never the session.
         return yield* Effect.failCause(exit.cause)
@@ -93,11 +97,11 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       }
       response = Option.orElse(exit.value.response, () => response)
 
-      const queued = yield* Queue.clear(session.followUps)
+      const queued = yield* session.followUps.drain
       next = queued[0]
       // Anything beyond the first goes back, preserving submission order.
       for (const remaining of queued.slice(1).reverse()) {
-        yield* Queue.offer(session.followUps, remaining)
+        yield* session.followUps.offer(remaining)
       }
     }
 

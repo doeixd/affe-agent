@@ -5,7 +5,6 @@ import {
   Exit,
   Fiber,
   Option,
-  Queue,
   Ref,
   Scope,
   Stream,
@@ -14,6 +13,8 @@ import {
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { AiError, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "./Agent.js"
+import * as InputChannel from "./InputChannel.js"
+import * as AgentEvent from "./AgentEvent.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError } from "./Errors.js"
@@ -65,8 +66,19 @@ const unwrap = <Tools extends Record<string, Tool.Any>, E>(
  * session owns, so lifetime is governed by ordinary structured concurrency
  * rather than a close protocol of the harness's own.
  */
+export interface MakeOptions {
+  /**
+   * Where steering and follow-up input is held. Defaults to in-memory queues.
+   *
+   * A stronger runtime substitutes this; see `InputChannel` for why it is the
+   * one seam that Layer substitution could not already provide.
+   */
+  readonly channels?: InputChannel.Factory | undefined
+}
+
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>
+  agent: AgentDefinition<Tools, E, R>,
+  options?: MakeOptions
 ): Effect.Effect<
   AgentSession<Tools, E>,
   never,
@@ -92,8 +104,9 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     })
 
     const bus = yield* EventBus.make(id)
-    const steering = yield* Queue.unbounded<string>()
-    const followUps = yield* Queue.unbounded<string>()
+    const channels = options?.channels ?? InputChannel.memory
+    const steering = yield* channels.make(id, "steering")
+    const followUps = yield* channels.make(id, "followUps")
     const activeFiber = yield* Ref.make<Option.Option<Fiber.Fiber<any, any>>>(
       Option.none()
     )
@@ -189,8 +202,8 @@ const release = (self: Session<any>): Effect.Effect<void> =>
       activeSubmissionId: Option.none(),
       activeRunId: Option.none()
     }))
-    yield* Queue.clear(self.steering)
-    yield* Queue.clear(self.followUps)
+    yield* self.steering.drain
+    yield* self.followUps.drain
   })
 
 /**
@@ -257,7 +270,10 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
       yield* EventBus.emit(
         self.bus,
         { submissionId },
-        { _tag: "SubmissionFailed", cause: exit.cause }
+        {
+          _tag: "SubmissionFailed",
+          failure: AgentEvent.failureFromCause(exit.cause)
+        }
       )
       return yield* Effect.failCause(exit.cause)
     }
@@ -292,7 +308,7 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
 ) {
     const self = unwrap(session)
     const submissionId = yield* requireRunning(self, "steer")
-    yield* Queue.offer(self.steering, input)
+    yield* self.steering.offer(input)
     yield* EventBus.emit(
       self.bus,
       { submissionId },
@@ -307,7 +323,7 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
 ) {
     const self = unwrap(session)
     const submissionId = yield* requireRunning(self, "followUp")
-    yield* Queue.offer(self.followUps, input)
+    yield* self.followUps.offer(input)
     yield* EventBus.emit(self.bus, { submissionId }, { _tag: "FollowUpQueued" })
   })
 

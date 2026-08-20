@@ -903,6 +903,42 @@ case is now a decode error inside the model call (§18.1).
 
 ---
 
+# 16.2 Out-of-band input is a substitutable channel
+
+Steering and follow-ups are the only values a run consumes that come from
+neither the model, the tools, nor canonical history. That makes them the only
+inputs a stronger runtime cannot reproduce for itself, and it is why they sit
+behind `InputChannel` rather than a bare `Queue`:
+
+```ts
+interface InputChannel {
+  readonly offer: (input: string) => Effect<void>
+  readonly drain: Effect<ReadonlyArray<string>>   // never blocks
+  readonly size: Effect<number>
+}
+```
+
+`AgentSession.make` takes an optional factory and defaults to in-memory queues,
+so ordinary use is unchanged.
+
+The reason is replay determinism, and it is worth stating precisely because it
+is not obvious. A durable interpreter replays model and tool results from its
+journal, so a turn re-derives the prompt it derived the first time. But a queue
+drain reads whatever happens to be pending at that instant: on replay the queue
+is empty, the turn derives a *different* prompt from the one whose model result
+is being replayed, and canonical history silently diverges from the journal.
+
+Making the channel substitutable lets a durable interpreter record the drained
+batch alongside the turn that consumed it.
+
+This is the **only** seam of its kind in the core. Model and tool interception
+need nothing, because `LanguageModel` is a service and toolkit handlers are
+constructed by the caller — both are already Layer substitution (§30.1). If a
+future interpreter needs interception the Layer boundary cannot express, that is
+the argument for an execution interface; this is not.
+
+---
+
 # 17. Tool Execution
 
 Use Effect AI's `Tool` and `Toolkit`.
@@ -2213,21 +2249,26 @@ Implementation split this list rather than satisfying it uniformly.
   errors, catchable by tag, while also being transportable across an RPC or HTTP
   boundary without a parallel set of wire types.
 
-**Plain types for now: statuses, decisions, and the event ADT.**
+**Events are Schemas too, and the `Cause` question is settled.**
 
-The blocker for events is concrete rather than stylistic. `RunFailed`,
-`SubmissionFailed` and `ToolCallFailed` each carry a `Cause`, and **v4 has no
-`Schema.Cause` codec** — only internal revivers. Schema-defining the event ADT
-therefore requires first deciding how a failure crosses a serialization
-boundary: a rendered summary, a structured defect projection, or omitting the
-cause from the persisted form.
+The blocker was concrete rather than stylistic: `RunFailed`, `SubmissionFailed`
+and `ToolCallFailed` each carried a `Cause`, and v4 has no `Schema.Cause` codec.
+That forced the question of how a failure crosses a serialization boundary.
 
-That is a persistence design decision, not a typing chore, and it should be made
-by the package that needs it (§29). The rest of each event's shape is already
-fixed, so the codecs can be added later without changing it.
+**Events now carry `AgentEvent.Failure`** — `{ tag, message, isDefect }` — and
+not a `Cause`. The constraint prompted the decision, but the decision stands on
+its own: events are the *serializable* record of what happened, and a `Cause` is
+an in-process value holding fibers and arbitrary defect payloads that no wire
+format should try to reproduce. `isDefect` preserves the distinction consumers
+actually act on (§19), and the full `Cause` remains where it can be used — the
+typed error channel of `prompt` (§33.1).
 
-Anything downstream that assumes `AgentEvent` is already Schema-defined — an
-AG-UI projection, an RPC surface — must resolve the `Cause` question first.
+`AgentEvent` and `AgentEventEnvelope` are `Schema.Union`/`Schema.Struct`, so an
+AG-UI projection, an RPC surface or a store can decode them without a parallel
+set of wire types. This does **not** make the live stream durable (§28).
+
+**Statuses and decisions remain plain types.** They are closed unions of string
+literals with no serialization consumer yet.
 
 ---
 

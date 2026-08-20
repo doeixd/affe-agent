@@ -1,4 +1,4 @@
-import { Effect, Queue } from "effect"
+import { Effect } from "effect"
 import { LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import type { AiError, Tool, Toolkit } from "effect/unstable/ai"
 import type { Correlation } from "./AgentEvent.js"
@@ -25,8 +25,7 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
   correlation: Correlation
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    // `clear` is the non-blocking drain; `takeAll` would wait for an item.
-    const inputs = yield* Queue.clear(session.steering)
+    const inputs = yield* session.steering.drain
     if (inputs.length === 0) return
     for (const input of inputs) {
       yield* History.commit(session.state, History.userMessage(input))

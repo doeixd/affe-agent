@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 62 passing (including the Workflow spike). `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 66 passing (including the Workflow and Cluster spikes). `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -53,6 +53,29 @@ examples/anthropic.ts  the DoD program on a real provider (typechecked only)
 | 10 Event envelopes and ordering | done |
 | 11 Tool failure policy spike | done — resolved, see below |
 | 12 API cleanup | done except event Schemas, see deviations |
+
+## Breaking changes for the durable/distributed path
+
+Two seams the earlier design lacked, both driven by concrete blockers found
+while planning `WORKFLOW_CLUSTER_PLAN.md` rather than by speculation.
+
+**`InputChannel` replaces the session's raw queues** (PLAN §16.2). Steering and
+follow-ups are the only inputs a run consumes that come from neither the model,
+the tools, nor canonical history — so they are the only ones a replaying
+interpreter cannot reproduce. A queue drain reads whatever is pending at that
+instant; on replay the queue is empty and the turn would derive a different
+prompt from the one whose model result is being replayed. `AgentSession.make`
+now takes an optional factory, defaulting to memory, so ordinary use is
+unchanged. A test substitutes a recording channel and asserts every drained
+batch is observable — which is exactly what a durable interpreter must capture.
+
+**`AgentEvent` is Schema-defined**, and the `Cause` question is settled (PLAN
+§42.1). Events carry `AgentEvent.Failure` — `{ tag, message, isDefect }` — not a
+`Cause`. The missing `Schema.Cause` codec forced the question, but the answer
+holds regardless: events are the serializable record, and a `Cause` is an
+in-process value holding fibers and arbitrary defects. The full `Cause` stays in
+`prompt`'s typed error channel. Envelope round-trip and defect-vs-failure
+distinction are both tested.
 
 ## Durable execution: spike result
 

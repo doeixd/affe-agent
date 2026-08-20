@@ -18,6 +18,7 @@ describe("public API", () => {
       "AgentSession",
       "AgentSubmission",
       "ContextTransform",
+      "InputChannel",
       "ToolExecution"
     ])
   })

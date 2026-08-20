@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Option, Stream } from "effect"
 import { Response } from "effect/unstable/ai"
 import type { Tool, Toolkit } from "effect/unstable/ai"
+import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as EventBus from "./internal/eventBus.js"
 
@@ -141,7 +142,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         _tag: "ToolCallFailed",
         id: call.id,
         name: call.name,
-        cause: exit.cause,
+        failure: AgentEvent.failureFromCause(exit.cause),
         returnedToModel
       })
 
@@ -170,7 +171,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
             _tag: "ToolCallFailed",
             id: call.id,
             name: call.name,
-            cause: Cause.fail(result.result),
+            failure: AgentEvent.failureFromCause(Cause.fail(result.result)),
             returnedToModel: true
           }
         : {
