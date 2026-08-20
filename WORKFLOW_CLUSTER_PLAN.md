@@ -67,8 +67,22 @@ simulation: the engine records a terminal failure and re-executing the same
 idempotency key returns it. Tests that simulate crashes with defects prove
 nothing.
 
-**Resumption is `Workflow.resume(executionId)`,** not calling `execute` again —
-which hangs on an interrupted execution.
+**Resumption is not `Workflow.resume` either.** Calling `execute` again hangs on
+an interrupted execution, and `Workflow.resume(executionId)` returns without
+re-dispatching the body under `TestRunner` — the execution stays `Suspended`.
+
+The mechanism that does work, and the one the engine is designed around, is
+**`DurableDeferred`**: awaiting it suspends the workflow, and completing it from
+outside — with only the token, from any process — wakes the execution. A
+resumed execution replays its completed activities rather than re-running them,
+which is the property everything here depends on. Proven in
+`spike/deferred.test.ts`.
+
+Two corollaries. `Workflow.execute(payload, { discard: true })` is required to
+start work that will suspend, since a suspended execution never produces the
+result a plain `execute` waits for. And tests must use `it.live`: a resumed
+execution continues on the real clock, so a `TestClock` never lets a poll loop
+advance.
 
 ---
 
@@ -285,6 +299,37 @@ surface can encode them directly, and this is no longer Phase 6 work.
 `Singleton.make` and `ClusterCron` give scheduled and recurring agents with no
 harness concept at all — no `AgentScheduler`, no `CronAgent`. A cron entry
 simply submits a durable agent submission.
+
+---
+
+# 5.4 Implementation status
+
+Shipped as subpath exports rather than separate npm packages —
+`@doeixd/effect-agent/durable` and `/cluster`. The architectural requirement is
+that core never depends on them, which subpaths satisfy; splitting the repo into
+a monorepo buys nothing until they version independently.
+
+| Phase | State |
+| --- | --- |
+| 0 Durable test harness | done — `DurableDeferred` is the pause point, not fiber interruption |
+| 1 Model calls as Activities | done, verified |
+| 2 Tools as Activities | done, verified — the refund runs once across a resumption |
+| 3 Steering and follow-ups | done, verified — a steer queued during suspension is applied exactly once |
+| 4 Interruption | partial — `definition.interrupt` is exposed; terminal-state behaviour under durability is untested |
+| 5 Single-node production wiring | not started — needs `SingleRunner` with SQL |
+| 6 Cluster entity and RPC | entity and handlers implemented; routing contract tested; **a sharded round-trip is not** |
+| 7 Approvals and scheduling | approvals demonstrated (the tests suspend on a `DurableDeferred` and are woken by token); `ClusterCron` not started |
+
+## What Phase 6 still needs
+
+`Entity.makeTestClient` and `ClusterWorkflowEngine` in one process did not
+compose: providing `Sharding` through the engine gives the test client a
+different instance (`sharding.makeClient is not a function`), and sharing one
+`TestRunner` between them hangs on `submit`. The entity, its RPCs and its
+handlers are implemented and the routing contract is tested — what is missing is
+the harness for an end-to-end sharded call.
+
+Resolve that before claiming the distributed row of §9's definition of done.
 
 ---
 

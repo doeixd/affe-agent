@@ -68,6 +68,14 @@ const unwrap = <Tools extends Record<string, Tool.Any>, E>(
  */
 export interface MakeOptions {
   /**
+   * Fixes the session's identity.
+   *
+   * Sessions are otherwise numbered per process, which a durable or
+   * distributed runtime cannot rely on: the same logical session must keep its
+   * id across a restart, and across nodes.
+   */
+  readonly sessionId?: string | undefined
+  /**
    * Where steering and follow-up input is held. Defaults to in-memory queues.
    *
    * A stronger runtime substitutes this; see `InputChannel` for why it is the
@@ -89,7 +97,10 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     // and a child session can run under an entirely different model layer.
     const env = yield* Effect.context<LanguageModel.LanguageModel | R>()
     const scope = yield* Effect.scope
-    const id = yield* Ids.nextSessionId
+    const id =
+      options?.sessionId === undefined
+        ? yield* Ids.nextSessionId
+        : Ids.sessionId(options.sessionId)
 
     const state = yield* SubscriptionRef.make<SessionState>({
       status: "idle",

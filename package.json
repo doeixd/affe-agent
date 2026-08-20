@@ -31,7 +31,15 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./durable": {
+      "types": "./dist/durable/index.d.ts",
+      "default": "./dist/durable/index.js"
+    },
+    "./package.json": "./package.json",
+    "./cluster": {
+      "types": "./dist/cluster/index.d.ts",
+      "default": "./dist/cluster/index.js"
+    }
   },
   "types": "./dist/index.d.ts",
   "main": "./dist/index.js",

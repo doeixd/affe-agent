@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 66 passing (including the Workflow and Cluster spikes). `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
+`npm test` — 72 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including both examples.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
@@ -53,6 +53,36 @@ examples/anthropic.ts  the DoD program on a real provider (typechecked only)
 | 10 Event envelopes and ordering | done |
 | 11 Tool failure policy spike | done — resolved, see below |
 | 12 API cleanup | done except event Schemas, see deviations |
+
+## Durable and distributed execution
+
+Implemented as subpath exports: `@doeixd/effect-agent/durable` and `/cluster`.
+Core does not depend on either.
+
+The central claim of `WORKFLOW_CLUSTER_PLAN.md` is verified: **the same agent
+definition runs durably, and a resumed submission replays completed work instead
+of repeating it.** `Agent.make({...})` is passed unchanged to
+`DurableAgent.workflow`; the model becomes an `Activity` by replacing a Layer,
+tools by wrapping handlers, and out-of-band input through `InputChannel`.
+
+Three tests carry the weight:
+
+* a submission runs durably with no change to the agent;
+* a resumed submission does not repeat a completed tool call — the refund goes
+  out once, and each model call executes once across the resumption;
+* a steer queued while the submission is suspended is applied exactly once.
+
+Canonical history is not persisted anywhere. It is rebuilt from replayed
+activity results, which is why the durable module needs no store of its own.
+
+**The pause point is `DurableDeferred`, not a crashed fiber.** Interrupting the
+fiber leaves an execution that `Workflow.resume` will not re-dispatch; awaiting
+a `DurableDeferred` suspends the workflow properly and completing it from
+outside — with only the token — wakes it. This also means approvals (plan Phase
+7) already work: the tests are, structurally, human-in-the-loop approvals.
+
+Phases 4–6 are partial; see the plan's §5.4 for exactly what is and is not
+verified.
 
 ## Breaking changes for the durable/distributed path
 

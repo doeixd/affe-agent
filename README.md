@@ -240,8 +240,31 @@ modifying it:
 | | |
 |---|---|
 | **Streaming** | `MessageDelta` is absent rather than half-implemented; partial-message commit semantics are undefined. |
-| **Durability** | Persistence and durable execution are separate concerns. A [spike](./spike/) shows the same agent runs inside an Effect `Workflow` with model calls as `Activity`s and **no core changes** — durability arrives by swapping a Layer, not by adopting a different framework. |
+| **Durability in core** | Core stays in-process. Durable execution ships separately as `@doeixd/effect-agent/durable`, where the *same* agent definition runs inside an Effect `Workflow`: model and tool calls become `Activity`s, so a resumed submission replays them instead of repeating them. A refund goes out once. |
 | **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session. Memory is a service plus a transform. Neither needs a first-class concept. |
+
+## Durable execution
+
+The same `Agent` value, interpreted durably — no redefinition, no separate
+framework:
+
+```ts
+import { DurableAgent } from "@doeixd/effect-agent/durable"
+
+const durable = DurableAgent.workflow("Support", Support, { store })
+
+const executionId = yield* DurableAgent.submit(durable, sessionId, "refund it")
+// the process may end here; the submission survives
+const result = yield* DurableAgent.result(durable, executionId)
+```
+
+Model calls and tool calls become `Activity`s, so a resumed submission returns
+persisted results rather than re-issuing them — the refund does not go out
+twice. Steering queued while a submission is suspended is applied exactly once.
+Canonical history is not stored: it is rebuilt from replayed activity results.
+
+`@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
+session id is the routing key and out-of-band input reaches the owning node.
 
 ## Examples
 
