@@ -45,13 +45,49 @@ export const RemoteResult = Schema.Struct({
 })
 export type RemoteResult = typeof RemoteResult.Type
 
-/** Raised when the transport itself fails, as distinct from the session. */
+/**
+ * Raised when the transport itself fails, as distinct from the session.
+ *
+ * The distinction is about *retrying*. A transport failure says nothing about
+ * the request — the same call may well succeed on a different connection — so
+ * retrying it is reasonable. That only holds if nothing else is wearing this
+ * tag.
+ */
 export class AgentTransportError extends Schema.TaggedError<AgentTransportError>()(
   "AgentTransportError",
   { sessionId: Schema.String, detail: Schema.String }
 ) {
   override get message() {
     return "Transport failure for session " + this.sessionId + ": " + this.detail
+  }
+}
+
+/**
+ * The agent itself failed: a tool, a context transform, the provider.
+ *
+ * Separate from `AgentTransportError` because conflating them is actively
+ * dangerous. These failures are properties of the request — a tool that refuses
+ * this input refuses it again — so a caller retrying on transport failure would
+ * retry them forever, and each attempt costs a model call. Reporting an agent
+ * failure as a transport failure turns a sensible retry policy into a loop.
+ *
+ * The originating error's `tag` is carried because it is the one thing a remote
+ * caller can act on. The typed error itself cannot cross: it may be a tool's
+ * declared failure, and the far side has no tool definitions to interpret it.
+ */
+export class AgentExecutionError extends Schema.TaggedError<AgentExecutionError>()(
+  "AgentExecutionError",
+  {
+    sessionId: Schema.String,
+    /** The originating error's `_tag`, or a generic label. */
+    tag: Schema.String,
+    detail: Schema.String
+  }
+) {
+  override get message() {
+    return (
+      "Session " + this.sessionId + " failed: " + this.tag + ": " + this.detail
+    )
   }
 }
 
@@ -66,12 +102,14 @@ export type RemoteError =
   | AgentBusyError
   | AgentIdleError
   | AgentClosedError
+  | AgentExecutionError
   | AgentTransportError
 
 const remoteTags = [
   "AgentBusyError",
   "AgentIdleError",
   "AgentClosedError",
+  "AgentExecutionError",
   "AgentTransportError"
 ]
 
@@ -81,17 +119,20 @@ const isRemote = (error: unknown): error is RemoteError =>
   typeof (error as { _tag?: unknown })._tag === "string" &&
   remoteTags.includes((error as { _tag: string })._tag)
 
-const describe = (error: unknown): string => {
+const describe = (
+  error: unknown
+): { readonly tag: string; readonly detail: string } => {
   if (typeof error === "object" && error !== null) {
     const described = error as { _tag?: unknown; message?: unknown }
-    const tag = typeof described._tag === "string" ? described._tag : "Error"
-    const message =
-      typeof described.message === "string" && described.message.length > 0
-        ? described.message
-        : JSON.stringify(error)
-    return tag + ": " + message
+    return {
+      tag: typeof described._tag === "string" ? described._tag : "Error",
+      detail:
+        typeof described.message === "string" && described.message.length > 0
+          ? described.message
+          : JSON.stringify(error)
+    }
   }
-  return String(error)
+  return { tag: "Error", detail: String(error) }
 }
 
 /**
@@ -100,10 +141,30 @@ const describe = (error: unknown): string => {
  * The same shape as the local handle — actions as methods, observations as
  * values — so moving between them is a change of import rather than of style.
  */
+/**
+ * Per-request options a transport can carry.
+ *
+ * Mirrors `AgentSession.PromptOptions`, minus anything that cannot cross. A
+ * seam that exposes the session's operations but not its *modes* is only half
+ * a seam: streaming is the reason `events` is on this interface at all, and
+ * without this there was no way for a remote caller to ask for it.
+ */
+export interface RemotePromptOptions {
+  /**
+   * Stream the model calls, so `MessageDelta` reaches `events`.
+   *
+   * Whether a consumer sees deltas depends on the transport actually
+   * forwarding the event stream; the in-process one does, by being the same
+   * stream.
+   */
+  readonly stream?: boolean | undefined
+}
+
 export interface RemoteSession {
   readonly id: string
   readonly prompt: (
-    input: Prompt.RawInput
+    input: Prompt.RawInput,
+    options?: RemotePromptOptions
   ) => Effect.Effect<RemoteResult, RemoteError>
   readonly steer: (input: Prompt.RawInput) => Effect.Effect<void, RemoteError>
   readonly followUp: (
@@ -143,21 +204,27 @@ export class AgentClient extends Context.Service<AgentClient, Service>()(
  *
  * The agent's own failures are not part of the protocol. A caller with no
  * access to the tool definitions cannot act on a tool's typed failure, so those
- * arrive described rather than typed — which is honest about what crossed the
- * boundary, instead of pretending a shape survived that did not.
+ * arrive as `AgentExecutionError` carrying the originating tag — honest about
+ * what crossed the boundary, instead of pretending a shape survived that did
+ * not.
+ *
+ * They are emphatically *not* reported as transport failures. An agent failure
+ * is a property of the request and will recur; a transport failure is not.
+ * Wearing the same tag would turn a caller's retry policy into a loop, with a
+ * model call on every attempt.
  */
 export const fromSession = (
   session: AgentSession.AgentSession<any, any>
 ): RemoteSession => ({
   id: session.id,
-  prompt: (input) =>
-    session.prompt(input).pipe(
+  prompt: (input, options) =>
+    session.prompt(input, { stream: options?.stream === true }).pipe(
       Effect.catchIf(
         (error): error is Exclude<typeof error, RemoteError> => !isRemote(error),
         (error) =>
-          new AgentTransportError({
+          new AgentExecutionError({
             sessionId: session.id,
-            detail: describe(error)
+            ...describe(error)
           })
       ),
       Effect.map((result) => ({

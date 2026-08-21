@@ -121,4 +121,43 @@ describe("tool safety semantics", () => {
       )
     })
   )
+
+  it.effect("the approval refusal is in prompt's declared error type", () =>
+    Effect.gen(function* () {
+      // `ToolExecution` raises this instead of running the handler, so it never
+      // appears in `Tool.HandlerError` -- and `PromptError` omitted it. Because
+      // `prompt` asserts its submission to `PromptError`, the public type
+      // claimed an approval-requiring agent could not fail with the exact error
+      // it throws.
+      //
+      // Catching it by tag is the assertion: this only compiles if the union
+      // contains it, and `catchTag` on an absent tag is a type error rather
+      // than a silent no-op.
+      const Guarded = Tool.make("guarded", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      }).setNeedsApproval(true)
+
+      const toolkit = Agent.toolkit([Guarded], {
+        guarded: () => Effect.succeed("should never run")
+      })
+
+      const outcome = yield* withSession(
+        [
+          { toolCalls: [{ id: "g1", name: "guarded", params: {} }] },
+          { text: "unreachable" }
+        ],
+        Agent.make({ toolkit }),
+        ({ session }) =>
+          session.prompt("go").pipe(
+            Effect.map(() => "completed" as const),
+            Effect.catchTag("ToolApprovalRequiredError", (error) =>
+              Effect.succeed(error.toolName)
+            )
+          )
+      )
+
+      assert.strictEqual(outcome.value, "guarded")
+    })
+  )
 })

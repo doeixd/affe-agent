@@ -4,7 +4,12 @@ import { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"
-import type { AgentBusyError, AgentClosedError, AgentIdleError } from "../src/Errors.js"
+import type {
+  AgentBusyError,
+  AgentClosedError,
+  AgentIdleError,
+  ToolApprovalRequiredError
+} from "../src/Errors.js"
 import { withSession } from "./helpers.js"
 
 /**
@@ -99,6 +104,10 @@ describe("session handle", () => {
               | AgentBusyError
               | AgentClosedError
               | import("effect/unstable/ai").AiError.AiError
+              // Raised by the harness rather than by a tool, so it is absent
+              // from `Tool.HandlerError` and easy to omit -- which is exactly
+              // what had happened.
+              | ToolApprovalRequiredError
               | string
             > = session.prompt("again")
             void promptErrors

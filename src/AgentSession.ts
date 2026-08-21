@@ -18,7 +18,12 @@ import * as InputChannel from "./InputChannel.js"
 import * as AgentEvent from "./AgentEvent.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
-import { AgentBusyError, AgentClosedError, AgentIdleError } from "./Errors.js"
+import {
+  AgentBusyError,
+  AgentClosedError,
+  AgentIdleError,
+  ToolApprovalRequiredError
+} from "./Errors.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
@@ -289,6 +294,15 @@ export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
   | AgentClosedError
   | AiError.AiError
   | Tool.HandlerError<Tools[keyof Tools]>
+  /**
+   * The harness refused a tool that requires approval.
+   *
+   * Easy to miss, because it is the one failure here that no *tool* produces:
+   * `ToolExecution` raises it instead of running the handler, so it does not
+   * appear in `Tool.HandlerError`. Leaving it out let `prompt` claim an
+   * approval-requiring agent could not fail with the exact error it throws.
+   */
+  | ToolApprovalRequiredError
   // Whatever the agent's own loop or context transform can fail with.
   | E
 

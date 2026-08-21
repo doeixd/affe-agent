@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import * as AgentEvent from "../src/AgentEvent.js"
 import type { AgentDefinition } from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -184,8 +185,13 @@ describe("AgentClient", () => {
               const session = yield* client.createSession()
 
               const described = yield* Effect.flip(session.prompt("go"))
-              assert.strictEqual(described._tag, "AgentTransportError")
-              if (described._tag === "AgentTransportError") {
+              // An *execution* failure, not a transport one. Conflating them
+              // is dangerous rather than merely imprecise: an agent failure is
+              // a property of the request and will recur, so a caller retrying
+              // on transport failure would retry it forever, paying for a
+              // model call each time.
+              assert.strictEqual(described._tag, "AgentExecutionError")
+              if (described._tag === "AgentExecutionError") {
                 // The tool's own reason survives, even though its type did not.
                 assert.include(described.detail, "declined")
               }
@@ -203,6 +209,84 @@ describe("AgentClient", () => {
       ).pipe(
         Effect.provide(AgentClient.layer(agent).pipe(Layer.provide(model)))
       )
+    })
+  )
+
+  it.effect("asks for streaming through the transport", () =>
+    Effect.gen(function* () {
+      // The seam exposes `events` so a consumer can render generation as it
+      // happens -- which is only reachable if a caller can *ask* for it. The
+      // remote surface had no way to, so the transport could not request the
+      // core behaviour it was built to expose.
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "streamed", chunks: ["str", "eamed"] }
+      ])
+
+      const deltas = yield* Effect.flatMap(
+        Effect.service(AgentClient.AgentClient),
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* client.createSession()
+              const seen = yield* Ref.make<Array<string>>([])
+              const watcher = yield* Effect.forkChild(
+                Stream.runForEach(session.events, (entry) =>
+                  // `is` narrows the envelope, so `delta` is reachable without
+                  // a cast.
+                  AgentEvent.is("MessageDelta")(entry)
+                    ? Ref.update(seen, (all) => [...all, entry.event.delta])
+                    : Effect.void
+                )
+              )
+              yield* Effect.yieldNow
+              yield* session.prompt("go", { stream: true })
+              yield* Fiber.interrupt(watcher)
+              return yield* Ref.get(seen)
+            })
+          )
+      ).pipe(
+        Effect.provide(
+          AgentClient.layer(Agent.make({})).pipe(Layer.provide(model))
+        )
+      )
+
+      assert.deepStrictEqual(deltas, ["str", "eamed"])
+    })
+  )
+
+  it.effect("does not stream unless asked", () =>
+    Effect.gen(function* () {
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "batched", chunks: ["bat", "ched"] }
+      ])
+
+      const deltas = yield* Effect.flatMap(
+        Effect.service(AgentClient.AgentClient),
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* client.createSession()
+              const seen = yield* Ref.make<Array<string>>([])
+              const watcher = yield* Effect.forkChild(
+                Stream.runForEach(session.events, (entry) =>
+                  AgentEvent.is("MessageDelta")(entry)
+                    ? Ref.update(seen, (all) => [...all, entry.event.delta])
+                    : Effect.void
+                )
+              )
+              yield* Effect.yieldNow
+              yield* session.prompt("go")
+              yield* Fiber.interrupt(watcher)
+              return yield* Ref.get(seen)
+            })
+          )
+      ).pipe(
+        Effect.provide(
+          AgentClient.layer(Agent.make({})).pipe(Layer.provide(model))
+        )
+      )
+
+      assert.deepStrictEqual(deltas, [])
     })
   )
 })
