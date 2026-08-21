@@ -437,4 +437,61 @@ describe("compaction", () => {
       )
     })
   )
+
+  it.effect("a restored session keeps the compaction work already done", () =>
+    Effect.gen(function* () {
+      // Snapshot and compaction have to agree about identity. A restored
+      // session has the same id and the same transcript, so its checkpoint
+      // still describes it and the summarising already paid for is not paid
+      // for again -- while a checkpoint that no longer fits is rejected by the
+      // same fingerprint doing both jobs.
+      const ranges = yield* Ref.make<Array<number>>([])
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: ({ messages }) =>
+          Ref.update(ranges, (all) => [...all, messages.content.length]).pipe(
+            Effect.as("summary")
+          )
+      })
+      const agent = Agent.make({
+        contextTransform: compaction,
+        loop: AgentLoop.bounded(1)
+      })
+
+      const { layer } = yield* TestLanguageModel.script(
+        Array.from({ length: 12 }, (_, i) => TestLanguageModel.text(`r${i}`))
+      )
+
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent, {
+            sessionId: "snapshotted"
+          })
+          for (let i = 0; i < 4; i++) {
+            yield* session.prompt(`m${i}`)
+          }
+          return yield* AgentSession.snapshot(session)
+        })
+      ).pipe(Effect.provide(layer))
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.restore(agent, snapshot)
+          yield* session.prompt("m4")
+        })
+      ).pipe(Effect.provide(layer))
+
+      // Measured both ways rather than reasoned about. With the checkpoint
+      // honoured the folded ranges are [3, 4]: the first session folds three
+      // messages, the restored one folds only the four accumulated since.
+      // With it rejected they are [3, 5, 7] -- more compactions, each folding
+      // from the beginning. An `isBelow(range, transcriptLength)` bound was
+      // written first and passed either way, because 7 is also below 8.
+      assert.deepStrictEqual(
+        yield* Ref.get(ranges),
+        [3, 4],
+        "the restored session redid work the checkpoint had already done"
+      )
+    })
+  )
 })
