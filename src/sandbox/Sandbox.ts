@@ -77,7 +77,6 @@ export const path = (
         })
       )
     }
-    if (segment === "" || segment === ".") continue
   }
   const clean = segments.filter((segment) => segment !== "" && segment !== ".")
   if (clean.length === 0) {
