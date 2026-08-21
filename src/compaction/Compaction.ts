@@ -64,6 +64,19 @@ export interface Policy {
  * Compact once a conversation exceeds `threshold` messages, keeping the last
  * `retain` verbatim.
  */
+/**
+ * How many sessions' checkpoints to remember.
+ *
+ * An `Agent` is a value, usually built once and shared, so a transform outlives
+ * every session that uses it. Without a bound, each session that ever compacts
+ * leaves a checkpoint behind forever.
+ *
+ * Evicting one is safe: a checkpoint is a cache of work already done, and
+ * losing it costs a re-summarisation, not correctness. That is what makes a
+ * bound the right answer here rather than a leak with a nicer name.
+ */
+const defaultMaxSessions = 1024
+
 export const whenLongerThan = (
   threshold: number,
   options?: { readonly retain?: number | undefined }
@@ -145,6 +158,13 @@ const substitute = (
 export const make = <E = never, R = never>(options: {
   readonly policy: Policy
   readonly summarise: Summarise<E, R>
+  /**
+   * How many sessions' checkpoints to keep. Defaults to 1024.
+   *
+   * The oldest is dropped past the limit, and that session simply summarises
+   * again next time it compacts.
+   */
+  readonly maxSessions?: number | undefined
 }): Effect.Effect<ContextTransform.ContextTransform<E, R>> =>
   Effect.map(
     Ref.make(new Map<string, Checkpoint>()),
@@ -152,9 +172,21 @@ export const make = <E = never, R = never>(options: {
       ContextTransform.make((context) =>
         Effect.gen(function* () {
           const messages = context.canonicalPrompt.content
-          const existing: Option.Option<Checkpoint> = Option.fromNullishOr(
-            (yield* Ref.get(checkpoints)).get(context.sessionId)
-          )
+          const stored = (yield* Ref.get(checkpoints)).get(context.sessionId)
+
+          // A checkpoint that claims to cover more messages than exist cannot
+          // describe this conversation, so it is discarded rather than used.
+          //
+          // Session ids are reused: a snapshot is restored, a durable
+          // submission replays, a server hands the same id to a new
+          // conversation after evicting the old one. The transform outlives all
+          // of that, and a stale checkpoint sliced past the end of history —
+          // producing a prompt of nothing but a summary of a conversation that
+          // no longer existed, with every actual message dropped, silently.
+          const existing: Option.Option<Checkpoint> =
+            stored === undefined || stored.coveredThrough > messages.length
+              ? Option.none()
+              : Option.some(stored)
           const covered = Option.match(existing, {
             onNone: () => 0,
             onSome: (checkpoint) => checkpoint.coveredThrough
@@ -202,10 +234,19 @@ export const make = <E = never, R = never>(options: {
 
           yield* Ref.update(checkpoints, (all) => {
             const next = new Map(all)
+            // Delete before set, so an updated checkpoint moves to the end and
+            // eviction drops genuinely stale sessions rather than busy ones.
+            next.delete(context.sessionId)
             next.set(context.sessionId, {
               coveredThrough: boundary,
               summary
             })
+            const limit = options.maxSessions ?? defaultMaxSessions
+            while (next.size > limit) {
+              const oldest = next.keys().next().value
+              if (oldest === undefined) break
+              next.delete(oldest)
+            }
             return next
           })
 

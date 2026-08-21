@@ -258,4 +258,111 @@ describe("compaction", () => {
       )
     })
   )
+
+  it.effect("discards a checkpoint that cannot describe the history", () =>
+    Effect.gen(function* () {
+      // Session ids get reused: a snapshot is restored, a durable submission
+      // replays, a server hands the same id to a new conversation after
+      // evicting the old one. The transform outlives all of that.
+      //
+      // A stale checkpoint claiming to cover more messages than exist sliced
+      // past the end of history, so the model received a summary of a
+      // conversation that no longer existed and *none* of the actual messages.
+      // Silently, and with the transcript itself perfectly intact.
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: () => Effect.succeed("OLD")
+      })
+      const agent = Agent.make({
+        contextTransform: compaction,
+        loop: AgentLoop.bounded(1)
+      })
+
+      const run = (turns: number) =>
+        Effect.gen(function* () {
+          const { layer, recorder } = yield* TestLanguageModel.script(
+            Array.from({ length: turns }, (_, i) =>
+              TestLanguageModel.text(`r${i}`)
+            )
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              // The same id, deliberately.
+              const session = yield* AgentSession.make(agent, {
+                sessionId: "reused"
+              })
+              for (let i = 0; i < turns; i++) {
+                yield* session.prompt(`m${i}`)
+              }
+            })
+          ).pipe(Effect.provide(layer))
+          return yield* recorder.prompts
+        })
+
+      // Long enough to leave a checkpoint behind.
+      yield* run(6)
+      // A new, short conversation under the same id.
+      const fresh = yield* run(2)
+
+      const userTexts = (prompt: Prompt.Prompt) =>
+        prompt.content.flatMap((message) =>
+          message.role === "user"
+            ? message.content.flatMap((part) =>
+                part.type === "text" ? [part.text] : []
+              )
+            : []
+        )
+
+      assert.deepStrictEqual(userTexts(fresh[0]!), ["m0"])
+      assert.deepStrictEqual(userTexts(fresh[1]!), ["m0", "m1"])
+    })
+  )
+
+  it.effect("bounds its checkpoint cache across sessions", () =>
+    Effect.gen(function* () {
+      // An `Agent` is a value, usually built once and shared, so a transform
+      // outlives every session that uses it: without a bound, each session that
+      // ever compacted left a checkpoint behind forever.
+      //
+      // Evicting one is safe -- it caches work already done, and losing it
+      // costs a re-summarisation. The bound is observed here by watching a
+      // session that is still growing: with a cache of one, a second session
+      // evicts its checkpoint and it has to summarise from scratch.
+      const calls = yield* Ref.make(0)
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: () =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(Effect.map(String)),
+        maxSessions: 1
+      })
+      const agent = Agent.make({
+        contextTransform: compaction,
+        loop: AgentLoop.bounded(1)
+      })
+
+      const { layer } = yield* TestLanguageModel.script(
+        Array.from({ length: 20 }, (_, i) => TestLanguageModel.text(`r${i}`))
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const alpha = yield* AgentSession.make(agent, { sessionId: "alpha" })
+          const beta = yield* AgentSession.make(agent, { sessionId: "beta" })
+
+          // Interleaved, so each evicts the other's checkpoint every time.
+          for (let i = 0; i < 5; i++) {
+            yield* alpha.prompt(`a${i}`)
+            yield* beta.prompt(`b${i}`)
+          }
+        })
+      ).pipe(Effect.provide(layer))
+
+      // Measured both ways rather than guessed: with the cache holding both
+      // sessions each extends its own checkpoint and summarises four times
+      // between them; with a cache of one they evict each other and have to
+      // re-summarise, giving six. An `isAtLeast(4)` bound would have passed
+      // either way and proved nothing.
+      assert.strictEqual(yield* Ref.get(calls), 6)
+    })
+  )
 })

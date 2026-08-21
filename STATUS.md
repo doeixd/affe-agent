@@ -654,6 +654,23 @@ failure must arrive described, since a caller with no tool definitions cannot
 act on it; a session-level failure must survive as itself, or a client cannot
 tell busy from broken. Both are covered now.
 
+**A stale compaction checkpoint dropped the entire conversation.** Session ids
+get reused — a snapshot is restored, a durable submission replays, a server
+hands the same id to a new conversation after evicting the old one — and the
+transform outlives all of it. A checkpoint claiming to cover more messages than
+exist sliced past the end of history, so the model received a summary of a
+conversation that no longer existed and *none* of the actual messages. Silently,
+with the transcript itself perfectly intact. Reachable through the MCP adapter,
+where an evicted session id is exactly what a client reuses. A checkpoint that
+cannot describe the current history is now discarded.
+
+**Compaction's checkpoint cache grew without bound.** An `Agent` is a value,
+usually built once and shared, so every session that ever compacted left a
+checkpoint behind forever. Evicting one is safe — it caches work already done,
+and losing it costs a re-summarisation — so the map is now bounded, oldest
+first, with the entry refreshed on write so busy sessions are not evicted ahead
+of idle ones.
+
 **A failed stream left its message open.** The docstring claimed every
 `MessageStarted` owes a terminal event, and interruption was handled while
 failure was not: a provider error produced `MessageStarted`, deltas, then
