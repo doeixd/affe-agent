@@ -1,4 +1,4 @@
-import { Effect, Layer, Ref, Schema, Scope } from "effect"
+import { Effect, Exit, Layer, Ref, Schema, Scope, Semaphore } from "effect"
 import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
 import { AgentClient } from "../client/AgentClient.js"
 import type * as Client from "../client/AgentClient.js"
@@ -41,43 +41,81 @@ export const AgentToolkit = Toolkit.make(AskAgent)
 /**
  * Handlers for the toolkit above, backed by a client.
  *
- * Sessions are held in the surrounding scope rather than per call, so a
- * `sessionId` reaching the same conversation actually means something. They
- * are released when that scope closes, which for a server is its lifetime.
+ * Named sessions outlive the call that opened them, so a `sessionId` reaching
+ * the same conversation actually means something. Each gets its own child
+ * scope, so it can be released individually rather than only when the server
+ * stops.
+ *
+ * `maxSessions` bounds the registry. Without it, every distinct id a client
+ * sends opens a session that lives for the server's lifetime — unbounded
+ * memory driven by input from outside. The oldest is closed when the limit is
+ * reached, which is the friendlier failure: a long-abandoned conversation is
+ * dropped rather than a new one refused.
  */
-export const handlers = Effect.gen(function* () {
-  const client = yield* Effect.service(AgentClient)
-  const scope = yield* Effect.scope
-  const sessions = yield* Ref.make(new Map<string, Client.RemoteSession>())
+export const handlers = (options?: {
+  readonly maxSessions?: number | undefined
+}) =>
+  Effect.gen(function* () {
+    const client = yield* Effect.service(AgentClient)
+    const parent = yield* Effect.scope
+    const limit = options?.maxSessions ?? 128
+    const sessions = yield* Ref.make(
+      new Map<string, { session: Client.RemoteSession; scope: Scope.Closeable }>()
+    )
 
-  const sessionFor = (sessionId: string | undefined) =>
-    Effect.gen(function* () {
-      if (sessionId === undefined) {
-        return yield* Scope.provide(client.createSession(), scope)
-      }
-      const existing = (yield* Ref.get(sessions)).get(sessionId)
-      if (existing !== undefined) return existing
-      const opened = yield* Scope.provide(
-        client.createSession({ sessionId }),
-        scope
-      )
-      yield* Ref.update(sessions, (all) => new Map(all).set(sessionId, opened))
-      return opened
+    // Creation is effectful, so reserving a slot cannot be one atomic `modify`.
+    // Serialising it is what stops two concurrent calls for the same id from
+    // each opening a session -- which would leak one and, worse, silently give
+    // the two calls different conversations.
+    const creating = yield* Semaphore.make(1)
+
+    const openNamed = (sessionId: string) =>
+      Effect.gen(function* () {
+        const existing = (yield* Ref.get(sessions)).get(sessionId)
+        if (existing !== undefined) return existing.session
+
+        const scope = yield* Scope.make()
+        const session = yield* Scope.provide(
+          client.createSession({ sessionId }),
+          scope
+        )
+
+        const evicted = yield* Ref.modify(sessions, (all) => {
+          const next = new Map(all)
+          next.set(sessionId, { session, scope })
+          if (next.size <= limit) return [undefined, next]
+          // Insertion order: the first key is the least recently opened.
+          const oldest = next.keys().next().value
+          const dropped = oldest === undefined ? undefined : next.get(oldest)
+          if (oldest !== undefined) next.delete(oldest)
+          return [dropped, next]
+        })
+        if (evicted !== undefined) {
+          yield* Scope.close(evicted.scope, Exit.void)
+        }
+        return session
+      })
+
+    const sessionFor = (sessionId: string | undefined) =>
+      sessionId === undefined
+        ? // Anonymous calls are one-shot, so the session belongs to the
+          // server's scope and is never registered: nothing can reach it again.
+          Scope.provide(client.createSession(), parent)
+        : creating.withPermits(1)(openNamed(sessionId))
+
+    return AgentToolkit.toLayer({
+      ask_agent: ({ prompt, sessionId }) =>
+        sessionFor(sessionId).pipe(
+          Effect.flatMap((session) => session.prompt(prompt)),
+          Effect.map((result) => result.text),
+          // A remote caller cannot act on the harness's error types, and MCP
+          // has no place to put them. The tool's declared failure carries the
+          // description instead, so the client sees a tool that failed for a
+          // stated reason rather than a transport that broke.
+          Effect.mapError((error: Client.RemoteError) => error.message)
+        )
     })
-
-  return AgentToolkit.toLayer({
-    ask_agent: ({ prompt, sessionId }) =>
-      sessionFor(sessionId).pipe(
-        Effect.flatMap((session) => session.prompt(prompt)),
-        Effect.map((result) => result.text),
-        // A remote caller cannot act on the harness's error types, and MCP has
-        // no place to put them. The tool's declared failure carries the
-        // description instead, so the client sees a tool that failed for a
-        // stated reason rather than a transport that broke.
-        Effect.mapError((error: Client.RemoteError) => error.message)
-      )
   })
-})
 
 /**
  * Register the agent as an MCP tool.
@@ -93,5 +131,5 @@ export const handlers = Effect.gen(function* () {
  */
 export const layer: Layer.Layer<never, never, McpServer.McpServer | AgentClient> =
   McpServer.toolkit(AgentToolkit).pipe(
-    Layer.provide(Layer.unwrap(handlers))
+    Layer.provide(Layer.unwrap(handlers()))
   )

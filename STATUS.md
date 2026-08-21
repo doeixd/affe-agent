@@ -626,6 +626,42 @@ turn 2's text whether or not the session was reused. What discriminates is the
 prompt the model was given. Both session tests now assert transcripts, and both
 were checked by breaking the session lookup in each direction.
 
+## Bug sweep over the new packages
+
+Three real bugs, all in code written this session.
+
+**Compaction summarised nothing, forever, at its own default.** The threshold
+was measured against everything past the checkpoint — a stretch that
+permanently includes the retained tail, so it never falls back below the line
+and compaction ran on nearly every turn. Worse, when `retain` was at least as
+large as that stretch, the fold boundary landed exactly on the checkpoint: the
+summary was computed from an *empty* range and overwrote the real one with a
+meaningless summary. `whenLongerThan(4)` with the default `retain` of 6 did
+this. The threshold now measures the *foldable* stretch — what lies between the
+checkpoint and the tail, which is what a new summary would actually absorb.
+
+**The MCP session registry raced and grew without bound.** Looking a session up
+and then creating it is check-then-act, so two calls arriving together for one
+id each opened a session: one leaked, and the two calls silently held different
+conversations. Creation is serialised now. Separately, every distinct id a
+client sent opened a session that lived for the server's lifetime — unbounded
+memory driven by input from outside. Each named session now has its own child
+scope so it can be closed individually, and the registry evicts the oldest past
+`maxSessions`.
+
+**Two error paths through the transport seam had no test.** A tool's typed
+failure must arrive described, since a caller with no tool definitions cannot
+act on it; a session-level failure must survive as itself, or a client cannot
+tell busy from broken. Both are covered now.
+
+One test was written and then found to prove nothing — `assert.isTrue(true)`
+standing in for a real check on eviction. It now asserts that the evicted
+conversation actually starts over, and fails when the bound is removed. Another
+test claimed to prove the creation lock and does not: forcing two fibres to
+interleave inside session creation is not something a test can arrange on
+demand, and the unserialised code passes it too. The comment says so rather
+than implying coverage that is not there.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

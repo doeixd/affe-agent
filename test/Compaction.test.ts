@@ -107,12 +107,12 @@ describe("compaction", () => {
 
       // Sixteen messages, a threshold of four beyond each checkpoint: a
       // handful of summaries, not one per turn.
-      // Sixteen messages accumulate over eight submissions. Counting only what
-      // is new since the last checkpoint gives three summaries; counting the
-      // whole history each time gives six. The bound has to discriminate
-      // between those, or it passes whether or not the checkpoint is used --
-      // an earlier version of this assertion did exactly that.
-      assert.strictEqual(yield* Ref.get(calls), 3)
+      // Sixteen messages accumulate over eight submissions. Counting the
+      // foldable stretch gives two summaries; counting the whole history each
+      // time gives six. The bound has to discriminate between those, or it
+      // passes whether or not the checkpoint is used -- an earlier version of
+      // this assertion did exactly that.
+      assert.strictEqual(yield* Ref.get(calls), 2)
     })
   )
 
@@ -153,6 +153,52 @@ describe("compaction", () => {
       // The first has nothing to build on; later ones do.
       assert.isTrue(Option.isNone(previous[0]!))
       assert.isTrue(Option.isSome(previous[1]!))
+    })
+  )
+
+  it.effect("never summarises an empty range at the default retain", () =>
+    Effect.gen(function* () {
+      // The bug this guards was reachable from the documented default.
+      // `whenLongerThan(4)` keeps 6 messages, so the foldable stretch was
+      // empty while total history was well past the threshold: compaction ran
+      // nearly every turn, summarising nothing and overwriting each real
+      // summary with a meaningless one.
+      const ranges = yield* Ref.make<Array<number>>([])
+
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(4),
+        summarise: ({ messages }) =>
+          Ref.update(ranges, (all) => [...all, messages.content.length]).pipe(
+            Effect.as("summary")
+          )
+      })
+
+      const { layer } = yield* TestLanguageModel.script(
+        Array.from({ length: 8 }, (_, i) => TestLanguageModel.text(`turn ${i}`))
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({
+              contextTransform: compaction,
+              loop: AgentLoop.bounded(1)
+            })
+          )
+          for (let i = 0; i < 8; i++) {
+            yield* session.prompt(`message ${i}`)
+          }
+        })
+      ).pipe(Effect.provide(layer))
+
+      const summarised = yield* Ref.get(ranges)
+      // Whatever it summarised, it was never nothing.
+      assert.isTrue(
+        summarised.every((count) => count > 0),
+        `summarised an empty range: ${JSON.stringify(summarised)}`
+      )
+      // And it did not fire on every turn.
+      assert.isBelow(summarised.length, 4)
     })
   )
 })

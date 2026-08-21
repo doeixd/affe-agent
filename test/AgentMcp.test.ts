@@ -29,7 +29,7 @@ const withAgent = <A, E>(
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const bound = yield* AgentMcp.AgentToolkit.pipe(
-          Effect.provide(Layer.unwrap(AgentMcp.handlers))
+          Effect.provide(Layer.unwrap(AgentMcp.handlers()))
         )
 
         // A tool handler returns a stream of results; the final one is the
@@ -106,5 +106,81 @@ describe("agent over MCP", () => {
           ])
         })
     )
+  )
+
+  it.effect("concurrent calls for one session id reach one session", () =>
+    withAgent(
+      [TestLanguageModel.text("a"), TestLanguageModel.text("b")],
+      (ask) =>
+        Effect.gen(function* () {
+          // Sharing is the claim, and the discriminator is precise: reaching
+          // one session means the second call meets the
+          // one-submission-per-session rule and is refused, whereas two
+          // separate sessions would both have succeeded.
+          //
+          // This does not prove the serialisation in `handlers` -- forcing two
+          // fibres to interleave inside session creation is not something a
+          // test can arrange on demand, and unserialised code passes this too.
+          // The lock is there for the window it closes, not for this test.
+          const outcomes = yield* Effect.all(
+            [
+              Effect.exit(ask({ prompt: "one", sessionId: "shared" })),
+              Effect.exit(ask({ prompt: "two", sessionId: "shared" }))
+            ],
+            { concurrency: "unbounded" }
+          )
+
+          const failures = outcomes.filter((outcome) => outcome._tag === "Failure")
+          assert.strictEqual(
+            failures.length,
+            1,
+            "concurrent calls did not reach the same session"
+          )
+        })
+    )
+  )
+
+  it.effect("bounds the session registry, dropping the oldest", () =>
+    Effect.gen(function* () {
+      // Every distinct id a client sends used to open a session that lived for
+      // the server's lifetime: unbounded memory driven by input from outside.
+      const { layer: model, recorder } = yield* TestLanguageModel.script(
+        Array.from({ length: 8 }, (_, i) => TestLanguageModel.text(`r${i}`))
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const bound = yield* AgentMcp.AgentToolkit.pipe(
+            Effect.provide(Layer.unwrap(AgentMcp.handlers({ maxSessions: 2 })))
+          )
+          const ask = (sessionId: string, prompt: string) =>
+            bound
+              .handle("ask_agent", { prompt, sessionId })
+              .pipe(Effect.flatMap(Stream.runCollect))
+
+          yield* ask("one", "first")
+          yield* ask("two", "second")
+          // A third opens past the limit, evicting the oldest.
+          yield* ask("three", "third")
+          // Asking under the evicted id again must start over. If the registry
+          // were unbounded, this would resume and carry "first" with it.
+          yield* ask("one", "again")
+        })
+      ).pipe(
+        Effect.provide(
+          AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(
+            Layer.provide(model)
+          )
+        )
+      )
+
+      const fourth = (yield* recorder.prompts)[3]
+      assert.isDefined(fourth)
+      assert.deepStrictEqual(
+        TestLanguageModel.userTexts(fourth),
+        ["again"],
+        "the evicted session was resumed instead of dropped"
+      )
+    })
   )
 })

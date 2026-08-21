@@ -4,6 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import type { AgentDefinition } from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as ToolExecution from "../src/ToolExecution.js"
 import { AgentClient } from "../src/client/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
@@ -15,6 +16,12 @@ import { TestLanguageModel } from "../src/testing/index.js"
 const Search = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.String
+})
+
+const Boom = Tool.make("boom", {
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+  failure: Schema.String
 })
 
 /** A client over a scripted model, wired the way an application would wire it. */
@@ -145,5 +152,57 @@ describe("AgentClient", () => {
           })
         )
     )
+  )
+
+  it.effect("maps failures the protocol cannot carry, and passes on the rest", () =>
+    Effect.gen(function* () {
+      // Two different shapes have to come out right here, and neither was
+      // covered before.
+      //
+      // A tool's typed failure is not part of the protocol -- a caller with no
+      // tool definitions cannot act on it -- so it arrives described, as a
+      // transport error. A session-level failure *is* part of the protocol and
+      // must survive as itself, or a client cannot tell "busy" from "broken".
+      const { layer: model } = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCall("boom", {}, { id: "b1" }),
+        { text: "unused", hang: true }
+      ])
+
+      const agent = Agent.make({
+        toolkit: Agent.toolkit([Boom], {
+          boom: () => Effect.fail("declined")
+        }),
+        toolFailurePolicy: ToolExecution.FailRun,
+        loop: AgentLoop.bounded(2)
+      })
+
+      yield* Effect.flatMap(
+        Effect.service(AgentClient.AgentClient),
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* client.createSession()
+
+              const described = yield* Effect.flip(session.prompt("go"))
+              assert.strictEqual(described._tag, "AgentTransportError")
+              if (described._tag === "AgentTransportError") {
+                // The tool's own reason survives, even though its type did not.
+                assert.include(described.detail, "declined")
+              }
+
+              // A second submission while the first is still running: this one
+              // is a protocol-level failure and keeps its identity.
+              const running = yield* Effect.forkChild(session.prompt("again"))
+              yield* Effect.yieldNow
+              yield* Effect.yieldNow
+              const busy = yield* Effect.flip(session.prompt("and again"))
+              assert.strictEqual(busy._tag, "AgentBusyError")
+              yield* Fiber.interrupt(running)
+            })
+          )
+      ).pipe(
+        Effect.provide(AgentClient.layer(agent).pipe(Layer.provide(model)))
+      )
+    })
   )
 })

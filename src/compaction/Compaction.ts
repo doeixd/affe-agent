@@ -42,8 +42,12 @@ export interface Checkpoint {
 /** Decides when the projection needs compacting, and how much to keep whole. */
 export interface Policy {
   /**
-   * How many messages must accumulate beyond the current checkpoint before
-   * compacting again.
+   * How many *foldable* messages must accumulate before compacting again.
+   *
+   * Foldable means between the last checkpoint and the retained tail — the
+   * messages a new summary would actually absorb. Deliberately not "messages
+   * beyond the checkpoint", which permanently includes the tail and therefore
+   * never falls back below the threshold.
    */
   readonly threshold: number
   /**
@@ -119,11 +123,29 @@ export const make = <E = never, R = never>(options: {
             onSome: (checkpoint) => checkpoint.coveredThrough
           })
 
-          // Only what has accumulated *since* the last checkpoint counts
-          // towards the threshold, or a long conversation would re-summarise
-          // on every turn once it crossed the line.
-          const uncovered = messages.length - covered
-          const shouldCompact = uncovered > options.policy.threshold
+          // Everything except the retained tail is foldable. Computed from
+          // canonical history, so it is the same on every turn that sees the
+          // same history — including a replay.
+          const boundary = Math.max(
+            covered,
+            messages.length - options.policy.retain
+          )
+
+          // The threshold measures the stretch that can actually be *folded*:
+          // what lies between the checkpoint and the retained tail.
+          //
+          // Measuring against total history re-summarises every turn once a
+          // conversation crosses the line. Measuring against everything past
+          // the checkpoint looks right and is not, because that stretch
+          // permanently includes the retained tail — it never falls back below
+          // the threshold, so it also compacts every turn. Worse, when `retain`
+          // is at least as large as it, the boundary lands on the checkpoint
+          // and there is nothing between them at all: the summary is computed
+          // from an empty range and overwrites a real one with a meaningless
+          // summary, forever. That happened at the default `retain` of 6 for
+          // any threshold below it.
+          const foldable = boundary - covered
+          const shouldCompact = foldable > options.policy.threshold
 
           if (!shouldCompact) {
             return Option.match(existing, {
@@ -136,10 +158,6 @@ export const make = <E = never, R = never>(options: {
             })
           }
 
-          // Everything except the retained tail is folded into the summary.
-          // The boundary is computed from canonical history, so it is the same
-          // on every turn that sees the same history — including a replay.
-          const boundary = Math.max(covered, messages.length - options.policy.retain)
           const summary = yield* options.summarise({
             messages: Prompt.fromMessages(messages.slice(covered, boundary)),
             previous: Option.map(existing, (checkpoint) => checkpoint.summary)
