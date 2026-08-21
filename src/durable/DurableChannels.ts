@@ -1,5 +1,6 @@
 import { Effect, Ref, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
+import { SqlClient } from "effect/unstable/sql"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import type * as InputChannel from "../InputChannel.js"
 
@@ -156,4 +157,102 @@ export const factory = (
           }
         })
     }
+  })
+
+/**
+ * A store backed by SQL, for deployments with more than one node.
+ *
+ * `memoryStore` is a map in one process. Under the cluster that is silently
+ * wrong rather than merely limited: `steer` is routed to whichever node the
+ * caller reached, and the submission it is aimed at is running on the node that
+ * owns the session's shard. The steering is written to one process's map and
+ * drained from another's, so it is accepted and never seen. Nothing fails; the
+ * input simply disappears.
+ *
+ * Any deployment already has a `SqlClient` — `ClusterWorkflowEngine` needs one
+ * for its journal — so this adds no dependency beyond what is present.
+ *
+ * `make` creates the table if it is absent, which suits development. A
+ * deployment that manages its own schema can create the table itself and use
+ * `sqlStore` directly.
+ */
+export const sqlStoreTable = "effect_agent_channel_input"
+
+const escapeIdentifier = (name: string): string => {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    // Table names reach `sql.literal`, which does not parameterise. Anything
+    // that is not a plain identifier is refused rather than quoted: a store
+    // whose table name came from somewhere untrusted is a bug worth failing on.
+    throw new Error(`Invalid table name: ${name}`)
+  }
+  return name
+}
+
+/**
+ * Build a SQL-backed store over an existing table.
+ *
+ * The table needs an auto-incrementing `id`, a `channel_key` text column, and a
+ * `value` text column. `id` is what preserves FIFO order, which callers depend
+ * on: follow-ups run in the order they were queued.
+ */
+export const sqlStore = (
+  options?: { readonly table?: string | undefined }
+): Effect.Effect<Store, never, SqlClient.SqlClient> =>
+  Effect.map(SqlClient.SqlClient, (sql) => {
+    const table = sql.literal(escapeIdentifier(options?.table ?? sqlStoreTable))
+    return {
+      offer: (key, input) =>
+        sql`INSERT INTO ${table} ${sql.insert({ channel_key: key, value: input })}`.pipe(
+          Effect.asVoid,
+          // A store failure is not a case a caller can act on: the alternative
+          // is a typed error on every `offer` in the library.
+          Effect.orDie
+        ),
+      takeAll: (key) =>
+        // One transaction, because a drain that read rows and then deleted them
+        // separately would lose anything offered in between — and losing
+        // accepted input is exactly what this module exists to prevent.
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const rows = yield* sql<{
+                readonly id: number
+                readonly value: string
+              }>`SELECT id, value FROM ${table} WHERE channel_key = ${key} ORDER BY id`
+              if (rows.length > 0) {
+                yield* sql`DELETE FROM ${table} WHERE ${sql.in(
+                  "id",
+                  rows.map((row) => row.id)
+                )}`
+              }
+              return rows.map((row) => row.value)
+            })
+          )
+          .pipe(Effect.orDie),
+      size: (key) =>
+        sql<{
+          readonly count: number
+        }>`SELECT COUNT(*) AS count FROM ${table} WHERE channel_key = ${key}`.pipe(
+          Effect.map((rows) => Number(rows[0]?.count ?? 0)),
+          Effect.orDie
+        )
+    }
+  })
+
+/** As `sqlStore`, but creates the table first if it is not there. */
+export const sqlStoreWithTable = (
+  options?: { readonly table?: string | undefined }
+): Effect.Effect<Store, never, SqlClient.SqlClient> =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const table = sql.literal(escapeIdentifier(options?.table ?? sqlStoreTable))
+    yield* sql`CREATE TABLE IF NOT EXISTS ${table} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_key TEXT NOT NULL,
+      value TEXT NOT NULL
+    )`.pipe(Effect.orDie)
+    yield* sql`CREATE INDEX IF NOT EXISTS ${sql.literal(
+      `${escapeIdentifier(options?.table ?? sqlStoreTable)}_key`
+    )} ON ${table} (channel_key, id)`.pipe(Effect.orDie)
+    return yield* sqlStore(options)
   })

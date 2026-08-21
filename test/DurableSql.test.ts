@@ -33,6 +33,9 @@ const Gate = DurableDeferred.make("SqlGate", { success: Schema.String })
 const LossGate = DurableDeferred.make("LossGate", { success: Schema.String })
 const ReplayGate = DurableDeferred.make("ReplayGate", { success: Schema.String })
 const FailGate = DurableDeferred.make("FailGate", { success: Schema.String })
+const SqlChannelGate = DurableDeferred.make("SqlChannelGate", {
+  success: Schema.String
+})
 
 /** Node's crypto, which `SingleRunner` needs for runner identity. */
 const CryptoLayer = Layer.succeed(
@@ -519,6 +522,106 @@ describe("replayed tool results", () => {
           1,
           "the replacement runner re-ran a tool that had already failed"
         )
+      }),
+    30_000
+  )
+})
+
+describe("sql-backed channels", () => {
+  it.live(
+    "steering held in SQL is applied to a running submission",
+    () =>
+      Effect.gen(function* () {
+        // The store the cluster actually needs. `memoryStore` is a map in one
+        // process, so under sharding a steer routed to one node is written
+        // there and drained on another -- accepted, then invisible. This runs
+        // the whole durable path with the shared store instead.
+        const file = yield* tempDatabase
+        const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+        const suspendOnce = yield* Ref.make(true)
+        const turns = yield* Ref.make(0)
+
+        const gating = ContextTransform.make((context) =>
+          Effect.gen(function* () {
+            // Suspends inside turn 1, so the steering offered while parked is
+            // picked up by turn 2's drain. Suspending in turn 2 would be too
+            // late: that turn's drain has already run, and there is no turn 3.
+            const turn = yield* Ref.updateAndGet(turns, (n) => n + 1)
+            if (turn === 1 && (yield* Ref.getAndSet(suspendOnce, false))) {
+              const token = yield* DurableDeferred.token(SqlChannelGate)
+              yield* Deferred.succeed(gateReady, token)
+              yield* DurableDeferred.await(SqlChannelGate)
+            }
+            return context.prompt
+          })
+        )
+
+        const { layer: modelLayer, recorder } = yield* FakeModel.layer([
+          { text: "first" },
+          { text: "second" }
+        ])
+
+        return yield* Effect.gen(function* () {
+          const store = yield* DurableChannels.sqlStoreWithTable()
+          const durable = DurableAgent.workflow(
+            "SqlChannels",
+            Agent.make({
+              contextTransform: gating,
+              loop: (state) =>
+                Effect.succeed(
+                  state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+                )
+            }),
+            { store }
+          )
+
+          return yield* Effect.gen(function* () {
+            const executionId = yield* DurableAgent.submit(
+              durable,
+              store,
+              "sql-chan-1",
+              "go"
+            )
+            const token = yield* Deferred.await(gateReady)
+
+            // Offered while the submission is parked, and read back out of
+            // SQLite by the turn that resumes.
+            yield* DurableAgent.steer(store, "sql-chan-1", "stay on topic")
+            yield* DurableDeferred.succeed(SqlChannelGate, {
+              token,
+              value: "resume"
+            })
+
+            const exit = yield* DurableAgent.result(durable, executionId, {
+              interval: Duration.millis(50)
+            })
+            assert.isTrue(
+              Exit.isSuccess(exit),
+              `submission did not finish: ${JSON.stringify(exit)}`
+            )
+
+            const prompts = yield* recorder.prompts
+            assert.isTrue(
+              prompts.some((prompt) =>
+                FakeModel.userTexts(prompt).includes("stay on topic")
+              ),
+              "steering held in SQL never reached the model"
+            )
+
+            // Drained, not left behind for a later submission to pick up.
+            assert.strictEqual(
+              yield* store.size("sql-chan-1:steering"),
+              0
+            )
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(engineFor(file, 35)),
+                Layer.provideMerge(modelLayer)
+              )
+            )
+          )
+        }).pipe(Effect.provide(SqliteClient.layer({ filename: file })))
       }),
     30_000
   )

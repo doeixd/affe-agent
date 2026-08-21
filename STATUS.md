@@ -387,6 +387,29 @@ Two things learned:
   open for business, so withdrawing there refuses steering aimed at a run that
   is about to resume.
 
+## A store a cluster can actually use
+
+The library shipped only `memoryStore`, and under the cluster that is silently
+wrong rather than merely limited. `steer` is routed to whichever node the caller
+reached; the submission it targets runs on the node owning the session's shard.
+The steering is written to one process's map and drained from another's, so it
+is accepted and never seen. Nothing fails — the input disappears.
+
+`DurableChannels.sqlStore` closes that, with no new dependency: `SqlClient` is
+in-tree at `effect/unstable/sql`, and any deployment already has one because
+`ClusterWorkflowEngine` needs it for the journal. `sqlStoreWithTable` creates the
+table for development; a deployment managing its own schema uses `sqlStore`.
+
+Two properties are load-bearing and tested against real SQLite rather than
+asserted. Ordering: rows are drained by autoincrement `id`, because callers
+depend on follow-ups running in the order they were queued — a reordering bug of
+exactly that kind turned A, B, C into A, C, B once already. Atomicity: a drain
+reads and deletes in one transaction, so concurrent drains cannot hand the same
+value to two callers or lose one offered in between.
+
+The table name reaches `sql.literal`, which does not parameterise, so anything
+that is not a plain identifier is refused rather than quoted.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found
