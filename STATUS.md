@@ -597,6 +597,28 @@ checked against.
 One note on Effect v4: service keys are `Context.Service<Self, Shape>()("key")`,
 not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
 
+## Three issues from a review pass
+
+**`PromptError` omitted `ToolApprovalRequiredError`.** `ToolExecution` raises it
+instead of running the handler, so it never appears in `Tool.HandlerError` — and
+because `prompt` asserts its submission to `PromptError`, the public type
+claimed an approval-requiring agent could not fail with the exact error it
+throws. The assertion was hiding the omission rather than causing it, which is
+what assertions do. The compile-time test that pins `prompt`'s exact error union
+caught the correction immediately, which is what *it* is for.
+
+**`/client` reported agent failures as transport failures.** Not merely
+imprecise: dangerous. An agent failure is a property of the request and will
+recur, so a caller retrying on transport failure would retry it forever, paying
+for a model call each attempt. `AgentExecutionError` now carries the originating
+tag and is distinct from `AgentTransportError`, whose whole meaning is that the
+same call may succeed on another connection.
+
+**`/client` could not ask for streaming.** The seam exposes `events` so a
+consumer can render generation as it happens, which is only reachable if a
+caller can request it — and the remote surface had no options parameter at all.
+It now mirrors `AgentSession.PromptOptions`, minus anything that cannot cross.
+
 ## Type-safe tools from an MCP server
 
 The question was whether an agent can have inferred tool types when the tools

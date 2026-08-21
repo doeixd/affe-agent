@@ -408,16 +408,25 @@ const session = yield* client.createSession({ sessionId: "researcher-1" })
 
 const result = yield* session.prompt("research this")
 yield* session.steer("focus on runtime semantics")
+yield* session.prompt("and this", { stream: true })
 yield* session.events.pipe(Stream.runForEach(render))
 ```
 
 The same five operations and the same event stream as a local session, in terms
-that can cross a process boundary. It is deliberately narrower: a caller on the
-far side has no access to the tool definitions, and a provider response is not a
-value a protocol can carry — so `RemoteResult` drops it rather than
-half-encoding it, and a tool's typed failure arrives described rather than
-typed. Failures that *are* part of the protocol stay typed, because every one of
-them is a `Schema.TaggedError`.
+that can cross a process boundary — including the request-level `stream`
+option, without which the seam could not ask for the behaviour `events` exists
+to expose.
+
+It is deliberately narrower: a caller on the far side has no access to the tool
+definitions, and a provider response is not a value a protocol can carry — so
+`RemoteResult` drops it rather than half-encoding it, and a tool's typed failure
+arrives as `AgentExecutionError` carrying the originating tag.
+
+That is deliberately *not* `AgentTransportError`. An agent failure is a property
+of the request and will recur, so wearing the transport tag would turn a
+caller's retry policy into a loop with a model call per attempt. Failures that
+*are* part of the protocol stay typed, because every one of them is a
+`Schema.TaggedError`.
 
 `AgentClient.layer(agent)` is the in-process implementation: useful on its own,
 and the reference other transports are checked against.
