@@ -195,4 +195,31 @@ describe("model streaming", () => {
       assert.isTrue(Exit.isFailure(exit))
     })
   )
+
+  it.effect("a failed stream closes the message it opened", () =>
+    Effect.gen(function* () {
+      // Every `MessageStarted` owes a terminal event. Interruption was handled
+      // and failure was not, so a provider error left a consumer rendering a
+      // message that never resolved while the run reported `RunFailed`
+      // somewhere else entirely.
+      const { layer } = yield* TestLanguageModel.script([
+        { text: "partial", chunks: ["par"], streamError: "upstream exploded" }
+      ])
+
+      const tags = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          const probe = yield* AgentProbe.make(session)
+          yield* Effect.ignore(session.prompt("go", { stream: true }))
+          return (yield* probe.events).map((entry) => entry.event._tag)
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.include(tags, "MessageStarted")
+      assert.include(tags, "MessageFailed")
+      // Failure and interruption stay distinct, the way they do for tools.
+      assert.notInclude(tags, "MessageInterrupted")
+      assert.notInclude(tags, "MessageStreamCompleted")
+    })
+  )
 })

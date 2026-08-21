@@ -192,8 +192,10 @@ const result = yield* session.prompt("explain this", { stream: true })
 ```
 
 Output arrives on the existing event stream as `MessageStarted`,
-`MessageDelta`, `MessageStreamCompleted`, with `MessageInterrupted` if a turn is
-cut short. Deltas are normalised to `{ kind: "text" | "reasoning", delta }`
+`MessageDelta`, `MessageStreamCompleted` — or `MessageInterrupted` if a turn is
+cut short, or `MessageFailed` if the provider errors. Every opened message gets
+exactly one terminal event, so a consumer is never left rendering one that
+cannot resolve. Deltas are normalised to `{ kind: "text" | "reasoning", delta }`
 rather than exposing the provider's stream protocol.
 
 **Streaming output is observational; canonical history remains atomic.** The

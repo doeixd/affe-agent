@@ -654,6 +654,15 @@ failure must arrive described, since a caller with no tool definitions cannot
 act on it; a session-level failure must survive as itself, or a client cannot
 tell busy from broken. Both are covered now.
 
+**A failed stream left its message open.** The docstring claimed every
+`MessageStarted` owes a terminal event, and interruption was handled while
+failure was not: a provider error produced `MessageStarted`, deltas, then
+`RunFailed` somewhere else entirely, with nothing closing the message. A
+consumer tracking messages would render one that never resolves. `MessageFailed`
+now exists alongside `MessageInterrupted`, for the same reason tools have both
+`ToolCallFailed` and `ToolCallInterrupted`: one is the run going away, the other
+is something going wrong, and a consumer usually shows them differently.
+
 **A provider failure changed channel depending on `stream: true`.** An error
 part arriving inside the stream was turned into a defect, while the identical
 condition on the batch path surfaces as a typed `AiError`. A caller should not

@@ -1,7 +1,8 @@
-import { Effect, Stream } from "effect"
+import { Cause, Effect, Stream } from "effect"
 import { LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
 import type { Tool, Toolkit } from "effect/unstable/ai"
+import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
@@ -155,8 +156,26 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
       ...Accumulator.finish(final)
     ])
   }).pipe(
-    Effect.onInterrupt(() =>
-      EventBus.emit(session.bus, correlation, { _tag: "MessageInterrupted" })
+    // Every opened message owes a terminal event, and there are two ways for
+    // one not to arrive. Interruption was handled; failure was not, so a
+    // provider error left a consumer rendering a message that never resolved
+    // while the run itself reported `RunFailed`.
+    //
+    // `onExit` rather than `onInterrupt` because the continuation does not run
+    // in either case.
+    Effect.onExit((exit) =>
+      exit._tag === "Success"
+        ? Effect.void
+        : EventBus.emit(
+            session.bus,
+            correlation,
+            Cause.hasInterruptsOnly(exit.cause)
+              ? { _tag: "MessageInterrupted" }
+              : {
+                  _tag: "MessageFailed",
+                  failure: AgentEvent.failureFromCause(exit.cause)
+                }
+          )
     )
   )
 

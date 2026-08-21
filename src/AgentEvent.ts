@@ -152,6 +152,21 @@ export const MessageStreamCompleted = Schema.TaggedStruct(
  */
 export const MessageInterrupted = Schema.TaggedStruct("MessageInterrupted", {})
 
+/**
+ * Generation failed part-way.
+ *
+ * The other way an opened message can end. Interruption and failure are
+ * separate events for the same reason `ToolCallInterrupted` and
+ * `ToolCallFailed` are: one is the run going away, the other is something
+ * going wrong, and a consumer generally wants to show them differently.
+ *
+ * As with interruption, canonical history contains no partial assistant
+ * message from this turn.
+ */
+export const MessageFailed = Schema.TaggedStruct("MessageFailed", {
+  failure: Failure
+})
+
 export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   id: Schema.String,
   name: Schema.String,
@@ -238,6 +253,7 @@ export const AgentEvent = Schema.Union([
   MessageDelta,
   MessageStreamCompleted,
   MessageInterrupted,
+  MessageFailed,
   ToolCallStarted,
   ToolCallProgress,
   ToolCallSucceeded,
