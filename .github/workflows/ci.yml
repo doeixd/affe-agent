@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Typecheck, the Effect language service, and the test suite. The language
+      # service catches Effect-specific mistakes tsc cannot see, so it is a gate
+      # rather than advice.
+      - run: npm run check
+
+      - run: npm run build
+
+      # The suite proves the source is sound and says nothing about whether the
+      # package is. Seven subpaths resolve through `exports`, and a wrong path
+      # or a missing build output is invisible to the tests and visible to the
+      # first person who installs it.
+      - run: npm run verify:package

@@ -35,27 +35,27 @@
       "types": "./dist/durable/index.d.ts",
       "default": "./dist/durable/index.js"
     },
-    "./package.json": "./package.json",
     "./cluster": {
       "types": "./dist/cluster/index.d.ts",
       "default": "./dist/cluster/index.js"
     },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
-      "import": "./dist/testing/index.js"
+      "default": "./dist/testing/index.js"
     },
     "./compaction": {
       "types": "./dist/compaction/index.d.ts",
-      "import": "./dist/compaction/index.js"
+      "default": "./dist/compaction/index.js"
     },
     "./client": {
       "types": "./dist/client/index.d.ts",
-      "import": "./dist/client/index.js"
+      "default": "./dist/client/index.js"
     },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
-      "import": "./dist/mcp/index.js"
-    }
+      "default": "./dist/mcp/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "types": "./dist/index.d.ts",
   "main": "./dist/index.js",
@@ -77,7 +77,8 @@
     "test": "vitest run",
     "lint": "effect-language-service diagnostics --project tsconfig.json",
     "check": "npm run typecheck && npm run lint && npm run test",
-    "prepublishOnly": "npm run check && npm run build"
+    "prepublishOnly": "npm run check && npm run build",
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.111 <5.0.0"

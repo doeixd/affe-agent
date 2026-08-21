@@ -1,6 +1,7 @@
 import { Effect, Exit, Layer, Ref, Schema, Scope, Semaphore } from "effect"
 import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
 import { AgentClient } from "../client/AgentClient.js"
+import { positiveInteger } from "../internal/positive.js"
 import type * as Client from "../client/AgentClient.js"
 
 /**
@@ -58,7 +59,10 @@ export const handlers = (options?: {
   Effect.gen(function* () {
     const client = yield* Effect.service(AgentClient)
     const parent = yield* Effect.scope
-    const limit = options?.maxSessions ?? 128
+    const limit = positiveInteger(
+      "AgentMcp.handlers maxSessions",
+      options?.maxSessions ?? 128
+    )
     const sessions = yield* Ref.make(
       new Map<string, { session: Client.RemoteSession; scope: Scope.Closeable }>()
     )

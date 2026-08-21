@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import type { LanguageModel, Response, Tool } from "effect/unstable/ai"
 import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
+import { positiveInteger } from "./internal/positive.js"
 
 /**
  * Everything the continuation policy is allowed to see.
@@ -86,10 +87,14 @@ export const untilIdle = <
   make((state) => Effect.succeed(state.toolCalls.length > 0 ? Continue : Stop))
 
 /** Stop once `max` turns have been executed, whatever the inner policy says. */
-export const maxTurns = <Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>>(
+export const maxTurns = <
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
   max: number
-): AgentLoop<never, never, Tools> =>
-  make((state) => Effect.succeed(state.turnIndex >= max ? Stop : Continue))
+): AgentLoop<never, never, Tools> => {
+  const bound = positiveInteger("AgentLoop.maxTurns", max)
+  return make((state) => Effect.succeed(state.turnIndex >= bound ? Stop : Continue))
+}
 
 /**
  * Continue only while every policy continues.
@@ -152,10 +157,16 @@ export const and = <const Loops extends Policies>(
  * it out invites leaving off the bound — which turns a looping model into an
  * unbounded spend.
  */
-export const bounded = <Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>>(
+export const bounded = <
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
   maxTurns_: number
 ): AgentLoop<never, never, Tools> =>
-  and(untilIdle<Tools>(), maxTurns<Tools>(maxTurns_))
+  and(untilIdle<Tools>(), maxTurns<Tools>(maxTurns_)) as AgentLoop<
+    never,
+    never,
+    Tools
+  >
 
 /** Continue if any policy continues. */
 export const or = <const Loops extends Policies>(

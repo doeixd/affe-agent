@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Ref, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Ref, Schema, Scope, Stream } from "effect"
+import * as AgentEvent from "../AgentEvent.js"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
@@ -81,7 +82,15 @@ export class AgentExecutionError extends Schema.TaggedError<AgentExecutionError>
     sessionId: Schema.String,
     /** The originating error's `_tag`, or a generic label. */
     tag: Schema.String,
-    detail: Schema.String
+    detail: Schema.String,
+    /**
+     * Whether the agent *died* rather than failing.
+     *
+     * A defect is a bug in the agent; a failure is an outcome it declared. A
+     * caller cannot recover from either remotely, but it can report them
+     * differently, and an operator very much wants to know which happened.
+     */
+    isDefect: Schema.Boolean
   }
 ) {
   override get message() {
@@ -113,26 +122,30 @@ const remoteTags = [
   "AgentTransportError"
 ]
 
+const isRemoteCause = (cause: Cause.Cause<unknown>): boolean => {
+  const error = Cause.findErrorOption(cause)
+  return error._tag === "Some" && isRemote(error.value)
+}
+
 const isRemote = (error: unknown): error is RemoteError =>
   typeof error === "object" &&
   error !== null &&
   typeof (error as { _tag?: unknown })._tag === "string" &&
   remoteTags.includes((error as { _tag: string })._tag)
 
+/**
+ * Projects a cause the same way `AgentEvent.Failure` does, so the wire and the
+ * event stream describe a failure identically.
+ */
 const describe = (
-  error: unknown
-): { readonly tag: string; readonly detail: string } => {
-  if (typeof error === "object" && error !== null) {
-    const described = error as { _tag?: unknown; message?: unknown }
-    return {
-      tag: typeof described._tag === "string" ? described._tag : "Error",
-      detail:
-        typeof described.message === "string" && described.message.length > 0
-          ? described.message
-          : JSON.stringify(error)
-    }
+  cause: Cause.Cause<unknown>
+): { readonly tag: string; readonly detail: string; readonly isDefect: boolean } => {
+  const failure = AgentEvent.failureFromCause(cause)
+  return {
+    tag: failure.tag,
+    detail: failure.message,
+    isDefect: failure.isDefect
   }
-  return { tag: "Error", detail: String(error) }
 }
 
 /**
@@ -219,13 +232,15 @@ export const fromSession = (
   id: session.id,
   prompt: (input, options) =>
     session.prompt(input, { stream: options?.stream === true }).pipe(
-      Effect.catchIf(
-        (error): error is Exclude<typeof error, RemoteError> => !isRemote(error),
-        (error) =>
-          new AgentExecutionError({
-            sessionId: session.id,
-            ...describe(error)
-          })
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause) && !isRemoteCause(cause),
+        (cause) =>
+          Effect.fail(
+            new AgentExecutionError({
+              sessionId: session.id,
+              ...describe(cause)
+            })
+          )
       ),
       Effect.map((result) => ({
         submissionId: result.submissionId,

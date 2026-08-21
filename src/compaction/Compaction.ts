@@ -1,6 +1,7 @@
 import { Effect, Option, Ref } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as ContextTransform from "../ContextTransform.js"
+import { positiveInteger } from "../internal/positive.js"
 
 /**
  * Keeping a long conversation inside a context window, without losing it.
@@ -91,7 +92,13 @@ const defaultMaxSessions = 1024
 export const whenLongerThan = (
   threshold: number,
   options?: { readonly retain?: number | undefined }
-): Policy => ({ threshold, retain: options?.retain ?? 6 })
+): Policy => ({
+  threshold: positiveInteger("Compaction.whenLongerThan threshold", threshold),
+  retain: positiveInteger(
+    "Compaction.whenLongerThan retain",
+    options?.retain ?? 6
+  )
+})
 
 /**
  * Summarises a stretch of conversation.
@@ -210,7 +217,12 @@ export const make = <E = never, R = never>(options: {
   readonly maxSessions?: number | undefined
 }): Effect.Effect<ContextTransform.ContextTransform<E, R>> =>
   Effect.map(
-    Ref.make(new Map<string, Checkpoint>()),
+    Effect.sync(() =>
+      positiveInteger(
+        "Compaction.make maxSessions",
+        options.maxSessions ?? defaultMaxSessions
+      )
+    ).pipe(Effect.andThen(Ref.make(new Map<string, Checkpoint>()))),
     (checkpoints): ContextTransform.ContextTransform<E, R> =>
       ContextTransform.make((context) =>
         Effect.gen(function* () {
