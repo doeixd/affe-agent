@@ -13,7 +13,7 @@ import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
  * reason for the current run to continue. A loop that consulted them would be
  * making a decision that belongs to `AgentSubmission`.
  */
-export interface State<Tools extends Record<string, Tool.Any> = any> {
+export interface State<Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>> {
   readonly sessionId: SessionId
   readonly submissionId: SubmissionId
   readonly runId: RunId
@@ -61,7 +61,7 @@ export const Stop: Decision = { _tag: "Stop" }
 export interface AgentLoop<
   E = never,
   R = never,
-  Tools extends Record<string, Tool.Any> = any
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 > {
   readonly decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
 }
@@ -69,7 +69,7 @@ export interface AgentLoop<
 export const make = <
   E = never,
   R = never,
-  Tools extends Record<string, Tool.Any> = any
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 >(
   decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
 ): AgentLoop<E, R, Tools> => ({ decide })
@@ -81,12 +81,12 @@ export const make = <
  * run has reached its natural stopping condition.
  */
 export const untilIdle = <
-  Tools extends Record<string, Tool.Any> = any
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 >(): AgentLoop<never, never, Tools> =>
   make((state) => Effect.succeed(state.toolCalls.length > 0 ? Continue : Stop))
 
 /** Stop once `max` turns have been executed, whatever the inner policy says. */
-export const maxTurns = <Tools extends Record<string, Tool.Any> = any>(
+export const maxTurns = <Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>>(
   max: number
 ): AgentLoop<never, never, Tools> =>
   make((state) => Effect.succeed(state.turnIndex >= max ? Stop : Continue))
@@ -101,19 +101,48 @@ export const maxTurns = <Tools extends Record<string, Tool.Any> = any>(
  * which here would mean a run that never stops — a footgun worth making
  * unrepresentable rather than documenting.
  */
-export const and = <
-  E = never,
-  R = never,
-  Tools extends Record<string, Tool.Any> = any
->(
-  first: AgentLoop<E, R, Tools>,
-  ...rest: ReadonlyArray<AgentLoop<E, R, Tools>>
-): AgentLoop<E, R, Tools> =>
+/**
+ * The pieces of a composed policy, extracted per element.
+ *
+ * Declaring `and` over a single `E` and `R` reads naturally and does not work:
+ * TypeScript infers them from the first argument and then rejects every
+ * argument that differs. Two policies failing in different ways — the case
+ * composition exists for — would not compile at all. Extracting per element
+ * and unioning is what makes heterogeneous composition possible, and the
+ * distribution happens because `Loop` is a naked type parameter here.
+ */
+type ErrorOf<Loop> = Loop extends AgentLoop<infer E, infer _R, infer _T>
+  ? E
+  : never
+type ServicesOf<Loop> = Loop extends AgentLoop<infer _E, infer R, infer _T>
+  ? R
+  : never
+type ToolsOf<Loop> = Loop extends AgentLoop<infer _E, infer _R, infer T>
+  ? T
+  : never
+
+/** At least one, so an empty composition stays unrepresentable. */
+type Policies = readonly [
+  AgentLoop<any, any, any>,
+  ...ReadonlyArray<AgentLoop<any, any, any>>
+]
+
+export const and = <const Loops extends Policies>(
+  ...loops: Loops
+): AgentLoop<
+  ErrorOf<Loops[number]>,
+  ServicesOf<Loops[number]>,
+  ToolsOf<Loops[number]>
+> =>
   make((state) =>
-    Effect.reduce([first, ...rest], () => Continue as Decision, (acc, loop) =>
+    Effect.reduce(loops, () => Continue as Decision, (acc, loop) =>
       acc._tag === "Stop" ? Effect.succeed(acc) : loop.decide(state)
     )
-  )
+  ) as AgentLoop<
+    ErrorOf<Loops[number]>,
+    ServicesOf<Loops[number]>,
+    ToolsOf<Loops[number]>
+  >
 
 /**
  * The usual loop: run until the model stops asking for tools, but never more
@@ -123,22 +152,25 @@ export const and = <
  * it out invites leaving off the bound — which turns a looping model into an
  * unbounded spend.
  */
-export const bounded = <Tools extends Record<string, Tool.Any> = any>(
+export const bounded = <Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>>(
   maxTurns_: number
 ): AgentLoop<never, never, Tools> =>
   and(untilIdle<Tools>(), maxTurns<Tools>(maxTurns_))
 
 /** Continue if any policy continues. */
-export const or = <
-  E = never,
-  R = never,
-  Tools extends Record<string, Tool.Any> = any
->(
-  first: AgentLoop<E, R, Tools>,
-  ...rest: ReadonlyArray<AgentLoop<E, R, Tools>>
-): AgentLoop<E, R, Tools> =>
+export const or = <const Loops extends Policies>(
+  ...loops: Loops
+): AgentLoop<
+  ErrorOf<Loops[number]>,
+  ServicesOf<Loops[number]>,
+  ToolsOf<Loops[number]>
+> =>
   make((state) =>
-    Effect.reduce([first, ...rest], () => Stop as Decision, (acc, loop) =>
+    Effect.reduce(loops, () => Stop as Decision, (acc, loop) =>
       acc._tag === "Continue" ? Effect.succeed(acc) : loop.decide(state)
     )
-  )
+  ) as AgentLoop<
+    ErrorOf<Loops[number]>,
+    ServicesOf<Loops[number]>,
+    ToolsOf<Loops[number]>
+  >

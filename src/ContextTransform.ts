@@ -107,11 +107,38 @@ export const prependSystem = <E = never, R = never>(
  * position in the chain — the one distinction this design cannot afford to
  * blur.
  */
-export const compose = <E = never, R = never>(
-  ...transforms: ReadonlyArray<ContextTransform<E, R>>
-): ContextTransform<E, R> =>
+/**
+ * The pieces of a composed transform, extracted per element.
+ *
+ * Declaring `compose` over a single `E` and `R` reads naturally and does not
+ * work: TypeScript infers them from the first argument and rejects every
+ * argument that differs. Two transforms failing in different ways, or needing
+ * different services — the case composition exists for — would not compile at
+ * all. Extraction distributes because `Transform` is a naked type parameter.
+ */
+type ErrorOf<Transform> = Transform extends ContextTransform<infer E, infer _R>
+  ? E
+  : never
+type ServicesOf<Transform> = Transform extends ContextTransform<
+  infer _E,
+  infer R
+>
+  ? R
+  : never
+
+export const compose = <
+  const Transforms extends ReadonlyArray<ContextTransform<any, any>>
+>(
+  ...transforms: Transforms
+): ContextTransform<
+  ErrorOf<Transforms[number]>,
+  ServicesOf<Transforms[number]>
+> =>
   make((context) =>
     Effect.reduce(transforms, () => context.prompt, (prompt, next) =>
       next.transform({ ...context, prompt })
     )
-  )
+  ) as ContextTransform<
+    ErrorOf<Transforms[number]>,
+    ServicesOf<Transforms[number]>
+  >

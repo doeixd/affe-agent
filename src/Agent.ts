@@ -71,7 +71,21 @@ export interface Config<
    * without a type argument.
    */
   readonly loop?:
-    | AgentLoop.AgentLoop<LE, LR, Tools>
+    /**
+     * `any` in the tool slot, deliberately, and this is the only place it
+     * appears in the loop surface.
+     *
+     * `AgentLoop.State` is invariant in `Tools` — it carries a
+     * `GenerateTextResponse<Tools, true>`, which Effect AI makes invariant — so
+     * a policy written for one tool record is not assignable to another. That
+     * would make `AgentLoop.bounded(20)` unusable with any agent that has
+     * tools, even though it never looks at them.
+     *
+     * Confining the escape here keeps the combinators honest about the tools
+     * they accept, and leaves the *function* form below fully precise: an
+     * inline policy still gets its `state` typed by this agent's toolkit.
+     */
+    | AgentLoop.AgentLoop<LE, LR, any>
     | ((
         state: AgentLoop.State<Tools>
       ) => Effect.Effect<AgentLoop.Decision, LE, LR>)
