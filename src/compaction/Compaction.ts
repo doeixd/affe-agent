@@ -106,6 +106,25 @@ export const whenLongerThan = (
  * An ordinary Effect, so it may call a model, a cheaper model, a heuristic, or
  * a cache — and may fail and require services in its own right. The harness
  * does not care which.
+ *
+ * That it is ordinary is what makes it work under `/durable` without this
+ * module knowing anything about workflows. A transform's requirements reach
+ * `AgentSession.make`, which the workflow body satisfies, so a durable
+ * deployment wraps its summariser in an `Activity` and the summary is
+ * journalled with everything else:
+ *
+ * ```ts
+ * summarise: ({ messages }) =>
+ *   Activity.make({
+ *     name: "summarise",
+ *     success: Schema.String,
+ *     execute: summariseWithModel(messages)
+ *   })
+ * ```
+ *
+ * Worth doing rather than optional. Checkpoints live in memory, so a process
+ * loss starts them empty and the next turn summarises again — which for a real
+ * summariser means paying for a model call that was already made.
  */
 export type Summarise<E = never, R = never> = (options: {
   /** The messages being summarised. */

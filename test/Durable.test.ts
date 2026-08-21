@@ -1,11 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Cause, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
-import { DurableDeferred } from "effect/unstable/workflow"
+import { Activity, DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
+import { Compaction } from "../src/compaction/index.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableElicitation from "../src/durable/DurableElicitation.js"
@@ -733,6 +734,82 @@ describe("elicitation under durability", () => {
 
       // Approved, so it actually ran -- once.
       assert.strictEqual(yield* Ref.get(ran), 1)
+    })
+  )
+})
+
+describe("compaction under durability", () => {
+  it.live("a summarisation can be journalled like any other activity", () =>
+    Effect.gen(function* () {
+      // Compaction knows nothing about workflows, and does not need to. Its
+      // `summarise` is an ordinary Effect, so a durable deployment wraps its
+      // own in an `Activity` and the summary is journalled with everything
+      // else. Without that, a process loss re-summarises -- which for a real
+      // summariser means paying for a model call again.
+      //
+      // What makes it possible is that the workflow context reaches a
+      // `ContextTransform` at all: the transform's requirements flow through
+      // the agent to `AgentSession.make`, which the workflow body satisfies.
+      // That is the property this pins.
+      const summarised = yield* Ref.make(0)
+
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: () =>
+          Activity.make({
+            name: "summarise",
+            success: Schema.String,
+            execute: Ref.updateAndGet(summarised, (n) => n + 1).pipe(
+              Effect.map((n) => `summary ${n}`)
+            )
+          })
+      })
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: model, recorder } = yield* FakeModel.layer(
+        Array.from({ length: 8 }, (_, i) => ({ text: `t${i}` }))
+      )
+
+      const durable = DurableAgent.workflow(
+        "Compacted",
+        Agent.make({
+          contextTransform: compaction,
+          loop: AgentLoop.make((state) =>
+            Effect.succeed(
+              state.turnIndex < 6 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+          )
+        }),
+        { store }
+      )
+
+      yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, store, "compact-1", "go")
+        const exit = yield* DurableAgent.result(durable, id, {
+          interval: Duration.millis(20)
+        })
+        assert.isTrue(
+          Exit.isSuccess(exit),
+          `the compacted submission failed: ${JSON.stringify(exit)}`
+        )
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      // It ran, and the model saw the compacted projection rather than the
+      // whole transcript.
+      assert.isAtLeast(yield* Ref.get(summarised), 1)
+      const prompts = yield* recorder.prompts
+      const last = prompts[prompts.length - 1]!
+      assert.isTrue(
+        last.content.some((message) => message.role === "system"),
+        "the compacted projection never reached the model"
+      )
     })
   )
 })
