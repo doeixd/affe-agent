@@ -8,6 +8,7 @@ import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
+import * as DurableElicitation from "../src/durable/DurableElicitation.js"
 import * as FakeModel from "./FakeModel.js"
 import { countingModel } from "./helpers.js"
 
@@ -659,6 +660,79 @@ describe("streaming under durability", () => {
       // Two turns, two model calls -- the suspension replayed turn 1's
       // journalled response rather than streaming it again.
       assert.strictEqual(yield* Ref.get(calls), 2)
+    })
+  )
+})
+
+describe("elicitation under durability", () => {
+  it.live("a submission suspends for approval and resumes when answered", () =>
+    Effect.gen(function* () {
+      // The claim the seam exists for. Locally an elicitation parks a fibre in
+      // memory, which is the wrong lifetime for an answer that arrives in
+      // minutes or days. Under durability it suspends the *workflow*, so the
+      // run stops consuming anything and resumes in whatever process is
+      // running when the answer comes.
+      const ran = yield* Ref.make(0)
+      const Dangerous = Tool.make("wipe", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      }).setNeedsApproval(true)
+
+      const toolkit = yield* Agent.toolkit([Dangerous], {
+        wipe: () => Ref.update(ran, (n) => n + 1).pipe(Effect.as("wiped"))
+      })
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: model } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "w1", name: "wipe", params: {} }] },
+        { text: "done" }
+      ])
+
+      const durable = DurableAgent.workflow(
+        "Approval",
+        Agent.make({ toolkit, loop: AgentLoop.bounded(4) }),
+        { store }
+      )
+
+      yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(
+          durable,
+          store,
+          "approve-1",
+          "go"
+        )
+
+        // Let it reach the tool and suspend. Nothing is running now: there is
+        // no fibre parked, which is the difference from the local elicitor.
+        yield* Effect.sleep(Duration.millis(300))
+        assert.strictEqual(yield* Ref.get(ran), 0)
+
+        // Answered from outside, with a token derived from the execution
+        // rather than held in memory -- the process that asked may be gone.
+        yield* DurableElicitation.respond({
+          workflow: durable.definition,
+          executionId,
+          response: { id: "elicit-1", granted: true }
+        })
+
+        const exit = yield* DurableAgent.result(durable, executionId, {
+          interval: Duration.millis(20)
+        })
+        assert.isTrue(
+          Exit.isSuccess(exit),
+          `the approved submission did not finish: ${JSON.stringify(exit)}`
+        )
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      // Approved, so it actually ran -- once.
+      assert.strictEqual(yield* Ref.get(ran), 1)
     })
   )
 })

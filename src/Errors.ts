@@ -74,6 +74,6 @@ export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRe
   }
 ) {
   override get message() {
-    return `Tool ${this.toolName} requires approval, which is not supported`
+    return `Tool ${this.toolName} requires approval, and it was not granted`
   }
 }

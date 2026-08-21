@@ -9,6 +9,7 @@ import * as AgentSession from "../AgentSession.js"
 import { AgentIdleError } from "../Errors.js"
 import * as Ids from "../internal/ids.js"
 import * as DurableChannels from "./DurableChannels.js"
+import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 
@@ -154,6 +155,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       const durableTools = yield* DurableToolkit.wrap(toolkit)
       const modelLayer = yield* DurableModel.wrap(durableTools)
       const channels = yield* DurableChannels.factory(options.store)
+      // Substituted, not defaulted: a paused run under durability suspends the
+      // workflow rather than parking a fibre, so a submission waiting on a
+      // human survives the process that asked.
+      const elicitation = yield* DurableElicitation.factory
       const store = options.store
 
       // Suspension is signalled by interrupting the running fiber and setting
@@ -175,6 +180,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         Effect.gen(function* () {
           const session = yield* AgentSession.make(durableAgent, {
             channels,
+            elicitation,
             sessionId: payload.sessionId
           })
           const result = yield* AgentSession.prompt(session, payload.prompt, {

@@ -611,6 +611,28 @@ not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
 
 ## Elicitation: execution that needs an answer from outside
 
+**Durable elicitation, which the docstrings had claimed and nothing
+implemented.** Both `Elicitation` and `AgentSession` said a durable interpreter
+substitutes a `DurableDeferred`-backed elicitor; `DurableAgent` did not mention
+elicitation at all, so an approval-requiring tool under `/durable` silently got
+the default and was refused. That is the third comment in this project found
+asserting a property it did not have.
+
+Now built. Awaiting a `DurableDeferred` *suspends the workflow*, so a submission
+waiting for approval stops consuming anything and resumes in whatever process is
+running when the answer arrives — which is the lifetime the feature actually
+needs, since an answer from a human comes in minutes or days. `respond` derives
+its token from the workflow and execution rather than holding it, because the
+process that asked is typically gone.
+
+Two consequences worth stating. `pending` returns nothing under durability: a
+suspended workflow is not running, so no process holds a list. And request ids
+are `elicit-N` per session in ask order, which is deterministic by design — that
+determinism is what lets a caller answer without having observed the request,
+since `ElicitationRequested` is emitted inside the workflow where nothing else
+can see it.
+
+
 `needsApproval` was detected and refused with no way to satisfy it — a dead end
 rather than a feature. `Elicitation` is the general form, of which tool approval
 is one instance: the same shape covers asking a user a question, requesting a

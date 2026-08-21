@@ -100,6 +100,7 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(durable).sort(), [
       "DurableAgent",
       "DurableChannels",
+      "DurableElicitation",
       "DurableModel",
       "DurableToolkit"
     ])
