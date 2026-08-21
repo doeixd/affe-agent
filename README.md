@@ -593,9 +593,39 @@ artifact, completed order. Disconnecting the SSE response stops observation but
 does not cancel the task; the official SDK generator continues under the server
 layer so its task store reaches the terminal state. Explicit `CancelTask` ends
 a live stream with a canceled status. The Agent Card therefore advertises
-streaming, while push notifications remain disabled. Input-required
-continuation, REST, and the Harness-to-remote-agent client direction remain
-planned rather than silently accepted.
+streaming, while push notifications remain disabled.
+
+A run that pauses for an answer — tool approval, or any `Elicitation`
+question — surfaces as the A2A `input-required` task state with the question
+rendered in the status message. A follow-up message carrying the same task id
+supplies the answer: the text is granted to the pending request and the task
+completes with the run's final answer. REST remains planned rather than
+silently accepted.
+
+### Talking to another agent's A2A endpoint
+
+The reverse direction is covered too. `AgentA2A.client` discovers the card,
+wraps the official client in Effect terms — typed errors instead of
+rejections, a `Stream` instead of an async generator — and `AgentA2A.typed`
+adds a schema-driven request/result exchange over text parts:
+
+```ts
+const agent = yield* AgentA2A.client({ url: "https://peer.example/a2a" })
+
+const exchange = AgentA2A.typed({
+  request: Schema.Struct({ question: Schema.String }),
+  result: Schema.Struct({ answer: Schema.String })
+})
+const reply = yield* exchange.exchange(agent, {
+  contextId: "",
+  request: { question: "What changed?" }
+})
+```
+
+Remote refusals ("no such task", "not cancelable") arrive as
+`AgentA2ARemoteError`, distinct from `AgentA2ATransportError`: one is an
+answer, the other means the same call may succeed on another connection.
+Conformance runs against a real official-SDK server in both directions.
 
 ## MCP
 
@@ -716,6 +746,52 @@ every session deterministically, but protocol-level cancellation against the
 Harness MCP server must remain disabled until the upstream transport preserves
 the original request identity.
 
+## Sandbox
+
+`@doeixd/effect-agent/sandbox` is a scoped filesystem-and-process capability
+that user-defined tools demand through the ordinary requirement channel. It
+exists to prove the composition the whole design bets on — nothing here
+changes the agent core, and no first-party coding tools are exported:
+
+```ts
+const ReadFile = Tool.make("read_file", {
+  parameters: Schema.Struct({ path: Schema.String }),
+  success: Schema.String,
+  failure: Schema.String,
+  dependencies: [Sandbox.Current]
+})
+
+const toolkit = Agent.toolkit([ReadFile], {
+  read_file: ({ path }) =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox.Current
+      return yield* Sandbox.readText(sandbox)(yield* Sandbox.path(path))
+    }).pipe(Effect.mapError((error) => error.message))
+})
+```
+
+`Sandbox.path` is where raw model output becomes a usable value: absolute
+paths, drive qualifiers and any `..` segment are refused with a typed error,
+so traversal is unrepresentable past that boundary. The workspace arrives as
+a layer — deterministic in-memory worlds for tests, a real directory for
+everything else — and swapping providers rewrites one line of wiring while the
+agent and every handler stay untouched:
+
+```ts
+Layer.provideMerge(
+  Sandbox.currentLayer(Sandbox.workspace("coding-agent")),
+  MemorySandbox.layer({ seed: { "src/add.test.ts": "..." } })
+)
+// or:
+LocalSandbox.layer()
+```
+
+The local provider creates a fresh temporary directory per acquisition and
+removes it when the acquiring scope closes; commands run without a shell,
+with exact executable/argument separation, time limits and bounded output.
+Its documentation states plainly what it is not: **a security boundary**. It
+runs with your program's full privileges.
+
 ## Snapshots
 
 A conversation is a value, so it can be stored and brought back:
@@ -803,6 +879,8 @@ context transforms and canonical history are directly testable.
 - [`examples/durable.ts`](./examples/durable.ts) — durable execution and the
   cluster client; the snippets above are lifted from it, so they are
   type-checked rather than prose
+- [`examples/sandbox.ts`](./examples/sandbox.ts) — user-defined coding tools
+  over the sandbox seam; provider swap is one line of layer wiring
 
 ## Development
 
