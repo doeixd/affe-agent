@@ -80,7 +80,8 @@ export interface AgentSession<
 
   /** Begin a submission. Resolves at quiescence. */
   readonly prompt: (
-    input: Prompt.RawInput
+    input: Prompt.RawInput,
+    options?: PromptOptions
   ) => Effect.Effect<Result<Tools>, PromptError<Tools, E>>
 
   /** Insert guidance into the active run, applied at the next turn boundary. */
@@ -226,7 +227,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     const handle: AgentSession<Tools, E> = {
       [SessionTypeId]: session,
       id,
-      prompt: (input) => prompt(handle, input),
+      prompt: (input, options) => prompt(handle, input, options),
       steer: (input) => steer(handle, input),
       followUp: (input) => followUp(handle, input),
       interrupt: () => interrupt(handle),
@@ -254,6 +255,24 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
  * busy session from a provider fault from a tool's own declared failure, which
  * is the point of Effect's error channel.
  */
+/**
+ * Per-request options for a submission.
+ *
+ * Deliberately request-level rather than part of the `Agent`. The same agent
+ * should be usable from an interactive UI and from a batch job, and which one
+ * it is depends on the caller, not the definition.
+ */
+export interface PromptOptions {
+  /**
+   * Stream the model calls, emitting `MessageDelta` events as output arrives.
+   *
+   * Observational only. Canonical history is still committed atomically at the
+   * end of each turn, after tools have run, so a submission's transcript does
+   * not depend on whether anyone was watching it.
+   */
+  readonly stream?: boolean | undefined
+}
+
 export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
   | AgentBusyError
   | AgentClosedError
@@ -325,7 +344,11 @@ const release = (self: Session<any>): Effect.Effect<void> =>
 export const prompt = Effect.fn("AgentSession.prompt")(function* <
   Tools extends Record<string, Tool.Any>,
   E
->(session: AgentSession<Tools, E>, input: Prompt.RawInput) {
+>(
+  session: AgentSession<Tools, E>,
+  input: Prompt.RawInput,
+  options: PromptOptions = {}
+) {
     const self = unwrap(session)
     const claimed = yield* claim(self)
 
@@ -343,7 +366,8 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     const submission = AgentSubmission.execute(
       self,
       submissionId,
-      Prompt.make(input)
+      Prompt.make(input),
+      options
     ).pipe(
       // The captured environment satisfies the model and any tool-handler
       // services; providing it leaves a submission with no requirements.

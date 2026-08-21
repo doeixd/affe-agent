@@ -469,6 +469,35 @@ the type now states what is true: a session built with a toolkit is not
 assignable to `AgentSession<{}>`. Three tests were relying on that false
 covariance and now name their tool type, which reads better anyway.
 
+## Model streaming (roadmap #1 item 3)
+
+`prompt(input, { stream: true })` streams the model calls, emitting
+`MessageStarted`, `MessageDelta`, `MessageStreamCompleted` and
+`MessageInterrupted`. Request-level rather than part of the `Agent`, because
+whether a run is interactive depends on the caller.
+
+The design keeps one shape flowing through the harness. A stream is folded back
+into the `GenerateTextResponse` a batch call would have returned, so everything
+downstream of the model call -- tool execution, the loop, the single atomic
+commit -- is byte-for-byte the same code. Streaming changes when output is
+observed, never what is recorded, and a test asserts that by running one script
+both ways and comparing the resulting history.
+
+Deltas are normalised to `{ kind, delta }`. Exposing the provider's stream
+protocol as the harness event model would make every consumer track chunk ids,
+start and end markers, and per-provider differences.
+
+Three cases in the accumulator are handled rather than assumed away: a chunk
+the provider never closed is flushed, a delta with no matching start is
+accepted, and an error reported *inside* the stream is surfaced instead of
+folded in -- committing a turn the provider just disowned would be wrong.
+
+`MessageInterrupted` is emitted from a finalizer, not after the fold, because
+on interruption the continuation never runs. Every opened message owes a
+terminal event or a consumer is left rendering one that never resolves. The
+matching history guarantee is tested directly: interrupt mid-stream, and
+canonical history holds only the user message.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

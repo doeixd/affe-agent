@@ -3,6 +3,7 @@ import type { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as AgentRun from "./AgentRun.js"
+import type * as AgentTurn from "./AgentTurn.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
@@ -45,7 +46,8 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
 >(
   session: Session<Tools, E, R>,
   submissionId: SubmissionId,
-  input: Prompt.Prompt
+  input: Prompt.Prompt,
+  options: AgentTurn.Options = {}
 ) {
     const correlation: Correlation = { submissionId }
     yield* Effect.annotateCurrentSpan({ submissionId })
@@ -73,7 +75,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       runs = runs + 1
 
       const exit = yield* Effect.exit(
-        AgentRun.execute(session, submissionId, runId)
+        AgentRun.execute(session, submissionId, runId, options)
       )
 
       yield* SubscriptionRef.update(session.state, (s) => ({

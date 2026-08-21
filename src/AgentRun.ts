@@ -29,7 +29,12 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
   R
->(session: Session<Tools, E, R>, submissionId: SubmissionId, runId: RunId) {
+>(
+  session: Session<Tools, E, R>,
+  submissionId: SubmissionId,
+  runId: RunId,
+  options: AgentTurn.Options = {}
+) {
     const correlation: Correlation = { submissionId, runId }
     yield* Effect.annotateCurrentSpan({ runId, submissionId })
 
@@ -55,7 +60,8 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         session,
         submissionId,
         runId,
-        turn
+        turn,
+        options
       )
       response = Option.some(result.response)
       if (result.text.length > 0) {

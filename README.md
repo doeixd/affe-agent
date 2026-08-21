@@ -28,8 +28,7 @@ That layer is all this library is.
 
 > **Status: v0.1, pre-release.** The semantics below are implemented and tested,
 > but the API may still move. It targets Effect v4, which is itself at release
-> candidate. Model streaming is not yet implemented in core — see
-> [Not included](#not-included). Durable and distributed execution ship as the
+> candidate. Durable and distributed execution ship as the
 > experimental subpath packages [`/durable`](#durable-execution) and
 > [`/cluster`](#across-a-cluster).
 
@@ -183,6 +182,26 @@ ContextTransform.appendSystem((context) =>
 It is recomputed every turn and never enters canonical history, which is what
 makes that safe.
 
+### Streaming
+
+Streaming is a property of the request, not of the agent — the same `Agent`
+serves an interactive UI and a batch job:
+
+```ts
+const result = yield* session.prompt("explain this", { stream: true })
+```
+
+Output arrives on the existing event stream as `MessageStarted`,
+`MessageDelta`, `MessageStreamCompleted`, with `MessageInterrupted` if a turn is
+cut short. Deltas are normalised to `{ kind: "text" | "reasoning", delta }`
+rather than exposing the provider's stream protocol.
+
+**Streaming output is observational; canonical history remains atomic.** The
+turn still commits once, after its tools have run, so a streamed submission and
+a batched one produce identical transcripts — and an interrupted stream commits
+no partial assistant message, which is a state no later model call could make
+sense of.
+
 ### Tool progress
 
 A tool handler may report intermediate results while it is still running, via
@@ -306,7 +325,6 @@ modifying it:
 
 | | |
 |---|---|
-| **Streaming** | `MessageDelta` is absent rather than half-implemented; partial-message commit semantics are undefined. |
 | **Durability in core** | Core stays in-process. Durable execution ships separately as `@doeixd/effect-agent/durable`, where the *same* agent definition runs inside an Effect `Workflow`: model and tool calls become `Activity`s, so a resumed submission replays them instead of repeating them. A refund goes out once. |
 | **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session. Memory is a service plus a transform. Neither needs a first-class concept. |
 

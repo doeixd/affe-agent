@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import type { AiError, Tool, Toolkit } from "effect/unstable/ai"
 import type { Correlation } from "./AgentEvent.js"
@@ -7,6 +7,7 @@ import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import type { RunId, SubmissionId } from "./internal/ids.js"
 import type { Session } from "./internal/state.js"
+import * as Accumulator from "./internal/streamAccumulator.js"
 
 export interface Result<Tools extends Record<string, Tool.Any>> {
   /**
@@ -65,6 +66,75 @@ const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
  * message requesting tools whose results never arrive — which is a state no
  * subsequent model call can make sense of.
  */
+/** Per-request execution options, chosen at `prompt` time. */
+export interface Options {
+  /**
+   * Stream the model call, emitting `MessageDelta` as output arrives.
+   *
+   * A request-level choice, deliberately not part of the `Agent`. The same
+   * agent should be usable from an interactive UI and from a batch job, and
+   * which one it is depends on the caller, not the definition.
+   */
+  readonly stream?: boolean | undefined
+}
+
+/**
+ * Run the model call as a stream, folding it back into the response the rest
+ * of the turn expects.
+ *
+ * Everything after this point is identical to the batch path — the same tool
+ * execution, the same single atomic commit. Streaming changes when output is
+ * *observed*, never what is recorded.
+ *
+ * `MessageInterrupted` is emitted from a finalizer rather than after the fold,
+ * because on interruption the continuation never runs. A consumer that had a
+ * message open needs it closed, and the turn's own interruption handling takes
+ * care of history: nothing partial is committed.
+ */
+const streamResponse = <Tools extends Record<string, Tool.Any>>(
+  session: Session<Tools, any, any>,
+  correlation: Correlation,
+  context: Prompt.Prompt,
+  handler: Toolkit.WithHandler<Tools>
+): Effect.Effect<LanguageModel.GenerateTextResponse<Tools, true>, any, any> =>
+  Effect.gen(function* () {
+    yield* EventBus.emit(session.bus, correlation, { _tag: "MessageStarted" })
+
+    const final = yield* Stream.runFoldEffect(
+      LanguageModel.streamText({
+        prompt: context,
+        toolkit: handler,
+        disableToolCallResolution: true
+      }),
+      () => Accumulator.empty<Tools>(),
+      (state, part: Response.StreamPart<Tools, true>) => {
+        const next = Accumulator.step(state, part)
+        if (next._tag === "Failed") {
+          return Effect.die(next.error)
+        }
+        return next.delta === undefined
+          ? Effect.succeed(next.state)
+          : EventBus.emit(session.bus, correlation, {
+              _tag: "MessageDelta",
+              kind: next.delta.kind,
+              delta: next.delta.delta
+            }).pipe(Effect.as(next.state))
+      }
+    )
+
+    yield* EventBus.emit(session.bus, correlation, {
+      _tag: "MessageStreamCompleted"
+    })
+
+    return new LanguageModel.GenerateTextResponse<Tools, true>([
+      ...Accumulator.finish(final)
+    ])
+  }).pipe(
+    Effect.onInterrupt(() =>
+      EventBus.emit(session.bus, correlation, { _tag: "MessageInterrupted" })
+    )
+  )
+
 export const execute = Effect.fn("AgentTurn.execute")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
@@ -73,7 +143,8 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
   session: Session<Tools, E, R>,
   submissionId: SubmissionId,
   runId: RunId,
-  turn: number
+  turn: number,
+  options: Options = {}
 ) {
     // Correlation is passed down rather than read back from state: the caller
     // already knows it, and state is shared mutable data that may have moved on.
@@ -98,13 +169,15 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
 
     yield* EventBus.emit(session.bus, correlation, { _tag: "TurnStarted" })
 
-    const response = yield* LanguageModel.generateText({
-      prompt: context,
-      toolkit: handler,
-      // The harness owns tool execution so that it can emit the lifecycle
-      // events, choose the concurrency, and commit results itself.
-      disableToolCallResolution: true
-    })
+    const response = options.stream === true
+      ? yield* streamResponse(session, correlation, context, handler)
+      : yield* LanguageModel.generateText({
+          prompt: context,
+          toolkit: handler,
+          // The harness owns tool execution so that it can emit the lifecycle
+          // events, choose the concurrency, and commit results itself.
+          disableToolCallResolution: true
+        })
 
     // Calls the provider already executed are resolved: their results are in
     // the response, and Effect AI's own resolver skips them too. Running them

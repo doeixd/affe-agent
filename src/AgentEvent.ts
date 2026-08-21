@@ -115,6 +115,43 @@ export const MessageCompleted = Schema.TaggedStruct("MessageCompleted", {
   text: Schema.String
 })
 
+/**
+ * The model has begun producing a message, and deltas will follow.
+ *
+ * Streaming output is **observational**. These four events report generation
+ * as it happens; canonical history is still committed atomically at the end of
+ * the turn, after tools have run. A consumer renders deltas, and the
+ * transcript is unaffected by whether it did.
+ */
+export const MessageStarted = Schema.TaggedStruct("MessageStarted", {})
+
+/**
+ * A chunk of model output.
+ *
+ * Normalised to one shape rather than exposing the provider's stream protocol:
+ * a consumer that renders text and reasoning should not have to track chunk
+ * ids, start and end markers, or the differences between providers.
+ */
+export const MessageDelta = Schema.TaggedStruct("MessageDelta", {
+  kind: Schema.Literals(["text", "reasoning"]),
+  delta: Schema.String
+})
+
+/** The model finished producing its message. Tools have not run yet. */
+export const MessageStreamCompleted = Schema.TaggedStruct(
+  "MessageStreamCompleted",
+  {}
+)
+
+/**
+ * Generation was interrupted part-way.
+ *
+ * Every `MessageStarted` owes a terminal event, or a consumer is left showing
+ * a message that never resolves. Canonical history contains no partial
+ * assistant message from this turn.
+ */
+export const MessageInterrupted = Schema.TaggedStruct("MessageInterrupted", {})
+
 export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   id: Schema.String,
   name: Schema.String,
@@ -197,6 +234,10 @@ export const AgentEvent = Schema.Union([
   TurnStarted,
   TurnCompleted,
   MessageCompleted,
+  MessageStarted,
+  MessageDelta,
+  MessageStreamCompleted,
+  MessageInterrupted,
   ToolCallStarted,
   ToolCallProgress,
   ToolCallSucceeded,

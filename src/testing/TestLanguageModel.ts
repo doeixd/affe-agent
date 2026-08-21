@@ -42,6 +42,15 @@ export interface Turn {
   readonly fail?: string
   /** Never completes, so the run can be interrupted mid-generation. */
   readonly hang?: boolean
+  /**
+   * How this turn's text arrives when the caller streams.
+   *
+   * Ignored by a batch call, which sees the same `text` either way — which is
+   * the point: a script asserts that streaming changes *when* output is
+   * observed, not what the turn produces. Defaults to the whole text in one
+   * chunk.
+   */
+  readonly chunks?: ReadonlyArray<string>
 }
 
 export interface Recorder {
@@ -50,7 +59,9 @@ export interface Recorder {
   readonly calls: Effect.Effect<number>
 }
 
-const finishPart = (): Response.PartEncoded => ({
+// Typed as the finish part itself, not the wide union: it belongs to both
+// the batch and stream part unions, and naming it lets both use it.
+const finishPart = (): Response.FinishPartEncoded => ({
   type: "finish",
   reason: "stop",
   // v4 groups token counts by direction rather than a flat record.
@@ -81,6 +92,38 @@ const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
 }
 
 /**
+ * The same turn, as a stream.
+ *
+ * Text is split into `chunks` if the script says so, and otherwise arrives
+ * whole. Either way the accumulated result is the turn's `text`, so a script
+ * can be run batched and streamed and the two compared.
+ */
+const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
+  const parts: Array<Response.StreamPartEncoded> = []
+  if (turn.text !== undefined) {
+    const id = "text-0"
+    parts.push({ type: "text-start", id })
+    for (const chunk of turn.chunks ?? [turn.text]) {
+      parts.push({ type: "text-delta", id, delta: chunk })
+    }
+    parts.push({ type: "text-end", id })
+  }
+  for (const call of turn.toolCalls ?? []) {
+    parts.push({
+      type: "tool-call",
+      id: call.id,
+      name: call.name,
+      params: call.params,
+      ...(call.providerExecuted === undefined
+        ? {}
+        : { providerExecuted: call.providerExecuted })
+    })
+  }
+  parts.push(finishPart())
+  return parts
+}
+
+/**
  * A LanguageModel that replays a fixed script.
  *
  * Determinism is the point: loop continuation, event ordering and steering
@@ -91,13 +134,20 @@ export const make = (turns: ReadonlyArray<Turn>) =>
     const seen = yield* Ref.make<Array<Prompt.Prompt>>([])
     const index = yield* Ref.make(0)
 
-    const next = (options: { readonly prompt: Prompt.Prompt }) =>
+    /**
+     * Advance the script and run this turn's hooks.
+     *
+     * Shared by both paths so a script means the same thing whichever is used:
+     * the cursor moves once, `during` runs at the same point, and `hang` and
+     * `fail` behave identically.
+     */
+    const nextTurn = (options: { readonly prompt: Prompt.Prompt }) =>
       Effect.gen(function* () {
         yield* Ref.update(seen, (all) => [...all, options.prompt])
         const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
         const turn = turns[i]
         if (turn === undefined) {
-          return [finishPart()]
+          return undefined
         }
         if (turn.started !== undefined) {
           yield* Deferred.succeed(turn.started, void 0)
@@ -111,17 +161,26 @@ export const make = (turns: ReadonlyArray<Turn>) =>
         if (turn.fail !== undefined) {
           return yield* Effect.die(new Error(turn.fail))
         }
-        return partsFor(turn)
+        return turn
       })
+
+    const next = (options: { readonly prompt: Prompt.Prompt }) =>
+      Effect.map(nextTurn(options), (turn) =>
+        turn === undefined ? [finishPart()] : partsFor(turn)
+      )
 
     const service = yield* LanguageModel.make({
       generateText: (options) => next(options),
-      // The harness does not stream in v0.1. A stub that pretended to would be
-      // silently wrong the moment streaming lands; this fails loudly.
-      streamText: () =>
-        Stream.fromEffect(
-          Effect.die(
-            new Error("TestLanguageModel does not implement streamText")
+      // The same script, delivered as a stream. A turn's `chunks` control how
+      // the text is broken up; everything else -- tool calls, the hooks, the
+      // finish part -- behaves exactly as it does for a batch call, so a test
+      // can run one script both ways and compare.
+      streamText: (options) =>
+        Stream.unwrap(
+          Effect.map(nextTurn(options), (turn) =>
+            turn === undefined
+              ? Stream.fromIterable<Response.StreamPartEncoded>([finishPart()])
+              : Stream.fromIterable(streamPartsFor(turn))
           )
         )
     })
