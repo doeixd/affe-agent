@@ -479,15 +479,143 @@ caller's retry policy into a loop with a model call per attempt. Failures that
 `AgentClient.layer(agent)` is the in-process implementation: useful on its own,
 and the reference other transports are checked against.
 
+## AG-UI
+
+`@doeixd/effect-agent/ag-ui` projects that same session contract onto the
+official AG-UI HTTP/SSE protocol:
+
+```ts
+import { AgentAgUi } from "@doeixd/effect-agent/ag-ui"
+import { AgentClient, AgentProtocol } from "@doeixd/effect-agent/client"
+
+const AgUiLive = AgentAgUi.serverLayer({
+  principal: { resolve: ({ headers }) => authenticate(headers) },
+  session: {
+    resolve: ({ principal, input }) =>
+      Effect.succeed(
+        AgentProtocol.SessionId.make(`${principal.id}:${input.threadId}`)
+      )
+  },
+  authorization,
+  maxSessions: 100,
+  maxRequestsPerSession: 32
+}).pipe(Layer.provide(AgentClient.layer(Researcher)))
+```
+
+Mounting the layer serves `POST /ag-ui`. It accepts the official
+`RunAgentInput` wire shape and emits official JSON SSE events; the conformance
+suite runs through `@ag-ui/client` 0.0.58 as well as plain `fetch`.
+
+The application resolves an untrusted AG-UI `threadId` together with an
+authenticated principal into a harness session id. Client-provided tools,
+context, state and forwarded properties are rejected until they have an
+unambiguous harness meaning. Text prompts, batch and streaming replies, tool
+lifecycle events, failures and interruption are supported. Harness
+elicitations become AG-UI interrupt outcomes; a later `resume` entry answers
+the suspended run through the existing session `respond` operation.
+
+Disconnecting the SSE observer does not cancel the host-owned prompt. Repeating
+the same `runId` joins or replays the idempotent operation; explicit protocol
+interruption remains the only cancellation request.
+
+Protocol values can be built without repeating discriminants or widening away
+their exact types:
+
+```ts
+const run = AgentAgUi.run({ threadId, runId })
+
+const output = AgentAgUi.events(
+  ...run.text.message({
+    id: messageId,
+    role: "assistant",
+    text: result.text
+  }),
+  run.success(result)
+)
+```
+
+`output` remains a readonly tuple of start/content/end/finished event types.
+`AgentAgUi.event(type, fields)` is the checked escape hatch; `text`, `tool`,
+`step`, and `run` expose one-to-one constructors, while `text.message`,
+`tool.call`, `run.success`, and `run.interrupt` are pure semantic macros. These
+functions only construct Schema-derived values—delivery remains a separate
+HTTP/SSE concern.
+
+## A2A v1
+
+`@doeixd/effect-agent/a2a` exposes a Harness agent through the official A2A v1
+JSON-RPC protocol:
+
+```ts
+import { AgentA2A } from "@doeixd/effect-agent/a2a"
+import { AgentClient, AgentProtocol } from "@doeixd/effect-agent/client"
+
+const A2ALive = AgentA2A.serverLayer({
+  card: {
+    name: "Researcher",
+    description: "Researches a question",
+    version: "1.0.0",
+    skills: [{
+      id: "research",
+      name: "Research",
+      description: "Research a text question",
+      tags: ["research"],
+      examples: ["How does structured concurrency help agents?"],
+      inputModes: ["text/plain"],
+      outputModes: ["text/plain"]
+    }]
+  },
+  principal: {
+    resolve: ({ headers }) => authenticate(headers),
+    subject: (principal) => principal.id
+  },
+  session: {
+    resolve: ({ principal, contextId }) =>
+      Effect.succeed(
+        AgentProtocol.SessionId.make(`${principal.id}:${contextId}`)
+      )
+  },
+  authorization,
+  maxSessions: 100,
+  maxRequestsPerSession: 32
+}).pipe(Layer.provide(AgentClient.layer(Researcher)))
+```
+
+Mounting the layer serves the v1 card at
+`/.well-known/agent-card.json` and native JSON-RPC at `/a2a`. The current slice
+supports blocking text `SendMessage` and owner-scoped `GetTask`; carrying the
+returned task's context id into another message continues the same Harness
+session. `CancelTask` interrupts an active Harness run, stores the canceled
+terminal state, and leaves that session usable.
+
+`SendStreamingMessage` emits native JSON-RPC SSE in exact task, working,
+artifact, completed order. Disconnecting the SSE response stops observation but
+does not cancel the task; the official SDK generator continues under the server
+layer so its task store reaches the terminal state. Explicit `CancelTask` ends
+a live stream with a canceled status. The Agent Card therefore advertises
+streaming, while push notifications remain disabled. Input-required
+continuation, REST, and the Harness-to-remote-agent client direction remain
+planned rather than silently accepted.
+
 ## MCP
 
 `@doeixd/effect-agent/mcp` exposes an agent to MCP clients as a tool:
 
 ```ts
 import { AgentMcp } from "@doeixd/effect-agent/mcp"
+import { McpProtocol, McpServer } from "effect/unstable/ai"
 
 AgentMcp.layer.pipe(
-  Layer.provide(McpServer.layerStdio({ name: "researcher", version: "1.0.0" })),
+  Layer.provide(McpServer.layerStdio({
+    name: "researcher",
+    version: "1.0.0",
+    protocols: [
+      McpProtocol.v2025_11_25,
+      McpProtocol.v2025_06_18,
+      McpProtocol.v2025_03_26,
+      McpProtocol.v2024_11_05
+    ]
+  })),
   Layer.provide(AgentClient.layer(Researcher))
 )
 ```
@@ -496,6 +624,12 @@ The handler talks to `AgentClient`, not to the harness, so MCP is a protocol
 adapter over the transport seam rather than a second way in. Passing a
 `sessionId` continues a conversation across calls; omitting it gives a one-shot
 session, which is the right default for an unrelated question.
+
+The pinned Effect server supports the legacy revisions shown above, latest
+first. Official SDK v1.30 and v2.0 clients exercise this server over real
+Streamable HTTP and child-process stdio transports; a v2 client in automatic
+mode falls back to `2025-11-25`. Named conversations are released when the
+server layer closes, while anonymous calls release their sessions immediately.
 
 ### Using a remote server's tools, with types
 
@@ -527,11 +661,60 @@ run's `FailurePolicy` applies and the model can react to a refusal instead of
 the run ending. For tools genuinely discovered at runtime, Effect AI's
 `Tool.dynamic` is the honest alternative, and the two compose.
 
-`McpToolkit.Connection` is an interface, because Effect ships `McpServer`,
-`McpProtocol` and `McpSchema` but no MCP *client* — that is a protocol
-implementation rather than an adapter, and it is not written here. Keeping the
-transport abstract settles the type story before the client arrives rather than
-retrofitting it afterwards.
+`McpToolkit.Connection` stays independent of either official TypeScript SDK
+generation. The default client uses the split v2 SDK and automatically
+negotiates modern discovery or falls back to the legacy initialize handshake:
+
+```ts
+import { McpClient, McpToolkit } from "@doeixd/effect-agent/mcp"
+
+const connection = yield* McpClient.streamableHttp({
+  url: new URL("http://localhost:3000/mcp"),
+  clientInfo: { name: "researcher", version: "1.0.0" }
+})
+
+const toolkit = yield* McpToolkit.bind(connection, [Search])
+```
+
+The connection is scoped: leaving the surrounding Effect scope closes the SDK
+client and its transport exactly once. `McpClient.stdio` provides the same
+contract for a spawned server process.
+
+Applications whose public types still use the monolithic SDK import the
+isolated compatibility adapter instead:
+
+```ts
+import { McpClientV1 } from "@doeixd/effect-agent/mcp/v1"
+
+const connection = yield* McpClientV1.streamableHttp({
+  url: new URL("http://localhost:3000/mcp"),
+  clientInfo: { name: "legacy-client", version: "1.0.0" }
+})
+```
+
+The v1 subpath supports `@modelcontextprotocol/sdk >=1.10.0 <2.0.0` and is an
+optional peer dependency. The repository compiles it against 1.10.0 and runs
+the conformance suite against the latest declared v1 dependency. The v1 and v2
+client classes intentionally cannot cross adapters; only normalized Harness
+values cross into `/mcp`. Real Streamable HTTP and child-process stdio tests
+cover all four v1/v2 client/server combinations and assert legacy fallback
+versus modern negotiation explicitly. The stdio suite also verifies modern
+request cancellation and scope-bound process cleanup. Malformed discovery and
+tool responses from either SDK generation become typed `McpTransportError`
+values. Rich image, resource-link and embedded-resource content is never
+discarded or leaked as an SDK-owned value: until the neutral adapter defines a
+stable representation for those blocks, calls fail explicitly with
+`McpUnsupportedContentError` naming the tool and content kinds.
+
+One server-side limitation belongs to the current Effect MCP transport rather
+than the Harness adapter. With `effect@4.0.0-rc.111`, legacy
+`notifications/cancelled` from official clients do not reach the numeric
+request fiber: the server converts the request id to a string before lookup.
+Streamable HTTP also assigns the cancellation POST a different transport client
+identity. Closing the server scope still interrupts in-flight work and releases
+every session deterministically, but protocol-level cancellation against the
+Harness MCP server must remain disabled until the upstream transport preserves
+the original request identity.
 
 ## Snapshots
 

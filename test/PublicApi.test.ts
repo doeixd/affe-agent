@@ -153,11 +153,97 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the client vocabulary and nothing beyond it", async () => {
     const client = await import("../src/client/index.js")
-    assert.deepStrictEqual(Object.keys(client).sort(), ["AgentClient"])
+    assert.deepStrictEqual(Object.keys(client).sort(), [
+      "AgentClient",
+      "AgentProtocol"
+    ])
   })
 
   it("exports the mcp vocabulary and nothing beyond it", async () => {
     const mcp = await import("../src/mcp/index.js")
-    assert.deepStrictEqual(Object.keys(mcp).sort(), ["AgentMcp", "McpToolkit"])
+    assert.deepStrictEqual(Object.keys(mcp).sort(), [
+      "AgentMcp",
+      "McpClient",
+      "McpToolkit"
+    ])
+    assert.deepStrictEqual(Object.keys(mcp.McpClient).sort(), [
+      "stdio",
+      "streamableHttp"
+    ])
+  })
+
+  it("isolates the two official MCP SDK generations by package path", async () => {
+    const v1 = await import("../src/mcp/v1/index.js")
+    const v2 = await import("../src/mcp/v2/index.js")
+    assert.deepStrictEqual(Object.keys(v1).sort(), ["McpClientV1"])
+    assert.deepStrictEqual(Object.keys(v1.McpClientV1).sort(), [
+      "fromSdkClient",
+      "stdio",
+      "streamableHttp"
+    ])
+    assert.deepStrictEqual(Object.keys(v2).sort(), ["McpClientV2"])
+    assert.deepStrictEqual(Object.keys(v2.McpClientV2).sort(), [
+      "fromSdkClient",
+      "stdio",
+      "streamableHttp"
+    ])
+  })
+
+  it("exports the rpc vocabulary and nothing beyond it", async () => {
+    const rpc = await import("../src/rpc/index.js")
+    assert.deepStrictEqual(Object.keys(rpc).sort(), ["AgentRpc"])
+    assert.deepStrictEqual(Object.keys(rpc.AgentRpc).sort(), [
+      "Client",
+      "Protocol",
+      "acquireSession",
+      "clientLayer",
+      "serverLayer"
+    ])
+  })
+
+  it("exports the http vocabulary and nothing beyond it", async () => {
+    const http = await import("../src/http/index.js")
+    assert.deepStrictEqual(Object.keys(http).sort(), ["AgentHttp"])
+    assert.deepStrictEqual(Object.keys(http.AgentHttp).sort(), [
+      "Api",
+      "Client",
+      "clientLayer",
+      "errorStatus",
+      "serverLayer"
+    ])
+  })
+
+  it("exports the AG-UI vocabulary and nothing beyond it", async () => {
+    const agUi = await import("../src/ag-ui/index.js")
+    assert.deepStrictEqual(Object.keys(agUi).sort(), ["AgentAgUi"])
+    assert.deepStrictEqual(Object.keys(agUi.AgentAgUi).sort(), [
+      "AgentAgUiInvalidInputError",
+      "AgentAgUiUnsupportedError",
+      "Error",
+      "Event",
+      "Message",
+      "ResumeEntry",
+      "RunAgentInput",
+      "custom",
+      "event",
+      "events",
+      "makeEventMapper",
+      "run",
+      "serverLayer",
+      "step",
+      "text",
+      "tool"
+    ])
+  })
+
+  it("exports the initial A2A v1 server vocabulary and nothing beyond it", async () => {
+    const a2a = await import("../src/a2a/index.js")
+    assert.deepStrictEqual(Object.keys(a2a).sort(), ["AgentA2A"])
+    assert.deepStrictEqual(Object.keys(a2a.AgentA2A).sort(), [
+      "AgentA2AInvalidInputError",
+      "AgentA2ATransportError",
+      "AgentA2AUnsupportedContentError",
+      "serverLayer"
+    ])
   })
 })

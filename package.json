@@ -51,9 +51,33 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
+    "./rpc": {
+      "types": "./dist/rpc/index.d.ts",
+      "default": "./dist/rpc/index.js"
+    },
+    "./http": {
+      "types": "./dist/http/index.d.ts",
+      "default": "./dist/http/index.js"
+    },
+    "./ag-ui": {
+      "types": "./dist/ag-ui/index.d.ts",
+      "default": "./dist/ag-ui/index.js"
+    },
+    "./a2a": {
+      "types": "./dist/a2a/index.d.ts",
+      "default": "./dist/a2a/index.js"
+    },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
+    },
+    "./mcp/v1": {
+      "types": "./dist/mcp/v1/index.d.ts",
+      "default": "./dist/mcp/v1/index.js"
+    },
+    "./mcp/v2": {
+      "types": "./dist/mcp/v2/index.d.ts",
+      "default": "./dist/mcp/v2/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -81,15 +105,33 @@
     "verify:package": "node scripts/verify-package.mjs"
   },
   "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",
     "effect": ">=4.0.0-rc.111 <5.0.0"
   },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "^1.0.1",
+    "@modelcontextprotocol/client": "^2.0.0"
+  },
   "devDependencies": {
+    "@ag-ui/client": "^0.0.58",
+    "@ag-ui/core": "^0.0.58",
     "@effect/ai-anthropic": "^4.0.0-rc.111",
     "@effect/language-service": "^0.87.2",
+    "@effect/platform-node": "^4.0.0-rc.111",
     "@effect/sql-sqlite-node": "^4.0.0-rc.111",
     "@effect/vitest": "^4.0.0-rc.111",
+    "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@types/node": "^20.19.43",
     "effect": "^4.0.0-rc.111",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "zod": "^4.4.3"
   }
 }

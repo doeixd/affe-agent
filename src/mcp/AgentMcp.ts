@@ -58,20 +58,42 @@ export const handlers = (options?: {
 }) =>
   Effect.gen(function* () {
     const client = yield* Effect.service(AgentClient)
-    const parent = yield* Effect.scope
     const limit = positiveInteger(
       "AgentMcp.handlers maxSessions",
       options?.maxSessions ?? 128
     )
-    const sessions = yield* Ref.make(
-      new Map<string, { session: Client.RemoteSession; scope: Scope.Closeable }>()
-    )
+    type SessionEntry = {
+      readonly session: Client.RemoteSession
+      readonly scope: Scope.Closeable
+    }
+    const sessions = yield* Ref.make<Map<string, SessionEntry>>(new Map())
 
     // Creation is effectful, so reserving a slot cannot be one atomic `modify`.
     // Serialising it is what stops two concurrent calls for the same id from
     // each opening a session -- which would leak one and, worse, silently give
     // the two calls different conversations.
     const creating = yield* Semaphore.make(1)
+
+    yield* Effect.addFinalizer(() =>
+      Ref.modify(
+        sessions,
+        (all): readonly [
+          ReadonlyArray<Scope.Closeable>,
+          Map<string, SessionEntry>
+        ] => [
+          [...all.values()].map((entry) => entry.scope),
+          new Map<string, SessionEntry>()
+        ]
+      ).pipe(
+        Effect.flatMap((scopes) =>
+          Effect.forEach(
+            scopes,
+            (scope) => Scope.close(scope, Exit.void),
+            { discard: true }
+          )
+        )
+      )
+    )
 
     const openNamed = (sessionId: string) =>
       Effect.gen(function* () {

@@ -1,0 +1,323 @@
+import { Effect, Option, Schema } from "effect"
+import { Prompt } from "effect/unstable/ai"
+import * as AgentEvent from "../AgentEvent.js"
+import * as Elicitation from "../Elicitation.js"
+import {
+  AgentBusyError,
+  AgentClosedError,
+  AgentIdleError
+} from "../Errors.js"
+import {
+  SessionId as SessionIdSchema,
+  SubmissionId as SubmissionIdSchema
+} from "../internal/ids.js"
+import * as AgentClient from "./AgentClient.js"
+
+/**
+ * The schema-owned contract shared by remote session transports.
+ *
+ * RPC, HTTP/SSE, AG-UI and A2A may encode these values differently, but they
+ * must not invent different meanings for a session operation. Public client
+ * helpers accept `Prompt.RawInput` and normalize it with `Prompt.make` before
+ * constructing one of these wire requests.
+ */
+
+export const SessionId = SessionIdSchema
+export type SessionId = typeof SessionId.Type
+
+export const SubmissionId = SubmissionIdSchema
+export type SubmissionId = typeof SubmissionId.Type
+
+/** Identifies one mutation so a retry cannot execute it twice. */
+export const RequestId = Schema.String.pipe(
+  Schema.brand("@doeixd/effect-agent/RequestId")
+)
+export type RequestId = typeof RequestId.Type
+
+/** Operations named in authorization and wire-level validation failures. */
+export const Operation = Schema.Literals([
+  "createSession",
+  "closeSession",
+  "getSession",
+  "prompt",
+  "steer",
+  "followUp",
+  "interrupt",
+  "respond",
+  "pending",
+  "history",
+  "status",
+  "events"
+])
+export type Operation = typeof Operation.Type
+
+/** Transport-neutral context evaluated before every protected operation. */
+export interface AuthorizationContext<Principal> {
+  readonly principal: Principal
+  readonly operation: Operation
+  readonly sessionId: Option.Option<SessionId>
+}
+
+export type AuthorizationError =
+  | AgentUnauthorizedError
+  | AgentForbiddenError
+
+export interface Authorization<Principal> {
+  readonly authorize: (
+    context: AuthorizationContext<Principal>
+  ) => Effect.Effect<void, AuthorizationError>
+}
+
+/** Options that have a stable representation across a process boundary. */
+export const RemotePromptOptions = Schema.Struct({
+  stream: Schema.optional(Schema.Boolean)
+})
+export type RemotePromptOptions = typeof RemotePromptOptions.Type
+
+/** Reuse the existing transport-safe submission projection. */
+export const RemoteResult = AgentClient.RemoteResult
+export type RemoteResult = typeof RemoteResult.Type
+
+export const SessionStatus = Schema.Literals(["idle", "running", "closed"])
+export type SessionStatus = typeof SessionStatus.Type
+
+export const Session = Schema.Struct({
+  sessionId: SessionId,
+  status: SessionStatus
+})
+export type Session = typeof Session.Type
+
+/** A session lookup failed without implying that the transport itself failed. */
+export class AgentSessionNotFoundError extends Schema.TaggedError<AgentSessionNotFoundError>()(
+  "AgentSessionNotFoundError",
+  { sessionId: SessionId }
+) {
+  override get message() {
+    return `Session ${this.sessionId} does not exist`
+  }
+}
+
+/** A create request named a session that is already open. */
+export class AgentSessionAlreadyExistsError extends Schema.TaggedError<AgentSessionAlreadyExistsError>()(
+  "AgentSessionAlreadyExistsError",
+  { sessionId: SessionId }
+) {
+  override get message() {
+    return `Session ${this.sessionId} already exists`
+  }
+}
+
+/** A request id was reused for a different mutation payload. */
+export class AgentRequestConflictError extends Schema.TaggedError<AgentRequestConflictError>()(
+  "AgentRequestConflictError",
+  { sessionId: Schema.Option(SessionId), requestId: RequestId }
+) {
+  override get message() {
+    return `Request ${this.requestId} was already used for a different mutation`
+  }
+}
+
+/** Every retained request for a session is still running. */
+export class AgentRequestCapacityExceededError extends Schema.TaggedError<AgentRequestCapacityExceededError>()(
+  "AgentRequestCapacityExceededError",
+  { sessionId: Schema.Option(SessionId), capacity: Schema.Natural }
+) {
+  override get message() {
+    return `All ${this.capacity} retained request slots are still in flight`
+  }
+}
+
+/** No authenticated principal was available for a protected operation. */
+export class AgentUnauthorizedError extends Schema.TaggedError<AgentUnauthorizedError>()(
+  "AgentUnauthorizedError",
+  { operation: Operation }
+) {
+  override get message() {
+    return `Authentication is required to ${this.operation}`
+  }
+}
+
+/** The authenticated principal may not perform the requested operation. */
+export class AgentForbiddenError extends Schema.TaggedError<AgentForbiddenError>()(
+  "AgentForbiddenError",
+  { operation: Operation, sessionId: Schema.Option(SessionId) }
+) {
+  override get message() {
+    return `The authenticated principal may not ${this.operation}`
+  }
+}
+
+/** The host cannot acquire another live session. */
+export class AgentCapacityExceededError extends Schema.TaggedError<AgentCapacityExceededError>()(
+  "AgentCapacityExceededError",
+  { capacity: Schema.Natural }
+) {
+  override get message() {
+    return `The session host has reached its capacity of ${this.capacity}`
+  }
+}
+
+/** A request was well-formed at the transport level but invalid for the API. */
+export class AgentInvalidRequestError extends Schema.TaggedError<AgentInvalidRequestError>()(
+  "AgentInvalidRequestError",
+  { operation: Operation, detail: Schema.String }
+) {
+  override get message() {
+    return `Invalid ${this.operation} request: ${this.detail}`
+  }
+}
+
+/** A typed protocol value could not cross its declared codec boundary. */
+export class AgentProtocolCodecError extends Schema.TaggedError<AgentProtocolCodecError>()(
+  "AgentProtocolCodecError",
+  {
+    operation: Operation,
+    phase: Schema.Literals(["request", "response"]),
+    detail: Schema.String
+  }
+) {
+  override get message() {
+    return `Could not encode the ${this.operation} ${this.phase}: ${this.detail}`
+  }
+}
+
+/** Every anticipated failure that a protocol adapter may encode. */
+export const RemoteError = Schema.Union([
+  AgentBusyError,
+  AgentIdleError,
+  AgentClosedError,
+  AgentClient.AgentExecutionError,
+  AgentClient.AgentTransportError,
+  AgentSessionNotFoundError,
+  AgentSessionAlreadyExistsError,
+  AgentRequestConflictError,
+  AgentRequestCapacityExceededError,
+  AgentUnauthorizedError,
+  AgentForbiddenError,
+  AgentCapacityExceededError,
+  AgentInvalidRequestError,
+  AgentProtocolCodecError
+])
+export type RemoteError = typeof RemoteError.Type
+
+export const CreateSessionRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: Schema.optional(SessionId)
+})
+export type CreateSessionRequest = typeof CreateSessionRequest.Type
+
+export const CreateSessionResponse = Schema.Struct({
+  requestId: RequestId,
+  session: Session
+})
+export type CreateSessionResponse = typeof CreateSessionResponse.Type
+
+export const CloseSessionRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId
+})
+export type CloseSessionRequest = typeof CloseSessionRequest.Type
+
+export const CloseSessionResponse = Schema.Struct({
+  requestId: RequestId,
+  closed: Schema.Boolean
+})
+export type CloseSessionResponse = typeof CloseSessionResponse.Type
+
+export const GetSessionRequest = Schema.Struct({ sessionId: SessionId })
+export type GetSessionRequest = typeof GetSessionRequest.Type
+
+export const GetSessionResponse = Session
+export type GetSessionResponse = typeof GetSessionResponse.Type
+
+export const PromptRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  input: Prompt.Prompt,
+  options: Schema.optional(RemotePromptOptions)
+})
+export type PromptRequest = typeof PromptRequest.Type
+
+export const PromptResponse = Schema.Struct({
+  requestId: RequestId,
+  result: RemoteResult
+})
+export type PromptResponse = typeof PromptResponse.Type
+
+export const SteerRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  input: Prompt.Prompt
+})
+export type SteerRequest = typeof SteerRequest.Type
+
+export const FollowUpRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  input: Prompt.Prompt
+})
+export type FollowUpRequest = typeof FollowUpRequest.Type
+
+export const InterruptRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId
+})
+export type InterruptRequest = typeof InterruptRequest.Type
+
+export const RespondRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  response: Elicitation.Response
+})
+export type RespondRequest = typeof RespondRequest.Type
+
+export const MutationResponse = Schema.Struct({
+  requestId: RequestId,
+  accepted: Schema.Boolean
+})
+export type MutationResponse = typeof MutationResponse.Type
+
+export const SteerResponse = MutationResponse
+export type SteerResponse = typeof SteerResponse.Type
+
+export const FollowUpResponse = MutationResponse
+export type FollowUpResponse = typeof FollowUpResponse.Type
+
+export const InterruptResponse = MutationResponse
+export type InterruptResponse = typeof InterruptResponse.Type
+
+export const RespondResponse = Schema.Struct({
+  requestId: RequestId,
+  matched: Schema.Boolean
+})
+export type RespondResponse = typeof RespondResponse.Type
+
+export const PendingRequest = Schema.Struct({ sessionId: SessionId })
+export type PendingRequest = typeof PendingRequest.Type
+
+export const PendingResponse = Schema.Struct({
+  requests: Schema.Array(Elicitation.Request)
+})
+export type PendingResponse = typeof PendingResponse.Type
+
+export const HistoryRequest = Schema.Struct({ sessionId: SessionId })
+export type HistoryRequest = typeof HistoryRequest.Type
+
+export const HistoryResponse = Schema.Struct({ history: Prompt.Prompt })
+export type HistoryResponse = typeof HistoryResponse.Type
+
+export const StatusRequest = Schema.Struct({ sessionId: SessionId })
+export type StatusRequest = typeof StatusRequest.Type
+
+export const StatusResponse = Schema.Struct({ status: SessionStatus })
+export type StatusResponse = typeof StatusResponse.Type
+
+export const EventsRequest = Schema.Struct({ sessionId: SessionId })
+export type EventsRequest = typeof EventsRequest.Type
+
+/** The existing event envelope is already schema-defined and session ordered. */
+export const AgentEventEnvelope = AgentEvent.AgentEventEnvelope
+export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
+
+export const EventsResponse = AgentEventEnvelope
+export type EventsResponse = typeof EventsResponse.Type

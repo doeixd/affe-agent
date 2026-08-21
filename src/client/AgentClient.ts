@@ -6,6 +6,7 @@ import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
 import type * as Elicitation from "../Elicitation.js"
+import { SubmissionId } from "../internal/ids.js"
 import {
   AgentBusyError,
   AgentClosedError,
@@ -39,7 +40,7 @@ import {
  * half-encoded: a caller who needs it is asking for a local session.
  */
 export const RemoteResult = Schema.Struct({
-  submissionId: Schema.String,
+  submissionId: SubmissionId,
   status: Schema.Literals(["completed", "interrupted"]),
   runs: Schema.Number,
   turns: Schema.Number,

@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 201 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 281 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
 imports every published entry point from the packed tarball.
 
@@ -39,6 +39,8 @@ src/
 ├ testing/             scripted model + lifecycle probe   (/testing)
 ├ compaction/          summarise the head, keep the tail  (/compaction)
 ├ client/              protocol-neutral session transport (/client)
+├ rpc/                 Effect RPC client + server rendering  (/rpc)
+├ http/                plain JSON routes + live SSE events   (/http)
 ├ durable/             the same agent inside a Workflow   (/durable)
 ├ cluster/             a session as a cluster Entity      (/cluster)
 └ mcp/                 expose an agent, and bind its tools (/mcp)
@@ -606,8 +608,152 @@ writing it once here is the difference between a seam and a convention. The
 in-process layer is both a real implementation and the reference the others are
 checked against.
 
+`AgentProtocol` now fixes the wire vocabulary before any one transport gets to
+choose it: branded session, submission and request ids; schemas for every
+session operation and response; the existing ordered event envelope; and a
+serializable error union that distinguishes lookup, conflict, authorization,
+capacity, execution, transport and codec failures. `RemoteResult.submissionId`
+was tightened from a plain string to its existing schema brand; the inference
+assertion was deliberately broken once to prove that widening is detected.
+
+The protocol server host stays internal even though RPC and HTTP are now two
+real consumers: it is shared adapter machinery, not a new end-user concept.
+It acquires every session in a child scope linked to the server
+scope, publishes it only after acquisition succeeds, closes it explicitly or at
+shutdown, and serializes create/close transitions. Its policy is explicit:
+capacity refuses a new session rather than evicting live work.
+
+Mutations are idempotent by request id. One request owns a `Deferred`; exact
+duplicates join it, completed duplicates replay it, and a reused id with a
+different operation or payload is a typed conflict. The mutation fiber belongs
+to the host scope rather than the first transport waiter, so disconnecting that
+waiter cannot cancel work another retry is joining. Records are bounded per
+session: completed entries are evicted FIFO, while a bucket containing only
+in-flight work refuses another mutation with a typed capacity error. Every
+operation passes through a caller-supplied authorization policy; allow-all is an
+explicit test/example choice rather than a hidden default.
+
 One note on Effect v4: service keys are `Context.Service<Self, Shape>()("key")`,
 not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
+
+## Effect RPC transport (issue #1)
+
+`@doeixd/effect-agent/rpc` is the first real rendering of `AgentProtocol`.
+`AgentRpc.Protocol` defines all twelve procedures directly from the canonical
+request, response and error Schemas; `events` is an Effect RPC stream, so event
+envelopes retain their per-session sequence order without a second wire model.
+
+`AgentRpc.serverLayer` builds one scoped internal session host and resolves an
+authenticated principal for every call from the RPC headers, operation and
+optional session id. Authorization remains the host's separate concern. The
+layer stops at Effect RPC handlers on purpose: applications choose
+`RpcServer.layer`, HTTP POST, WebSocket or another upstream protocol rather than
+the harness hiding serialization and transport configuration.
+
+`AgentRpc.clientLayer` exposes the exact schema-derived client, including
+`RpcClientError` only on the transport side. Domain errors decode as their
+original tagged classes. `AgentRpc.acquireSession` is the ownership helper: it
+installs a remote close finalizer whose request id is derived from the create
+request id, making finalizer retries deterministic and idempotent. A direct
+`getSession` attaches without taking ownership or installing a close finalizer.
+
+Conformance runs through `RpcTest`, a real Node HTTP server with NDJSON, and a
+real WebSocket connection. The tests cover every operation, error typing,
+authorization metadata, request retry after the first waiter is interrupted,
+ordered streaming, retry after a real HTTP disconnect, explicit socket shutdown
+and exact server span ancestry.
+The propagated client trace id is asserted at the host mutation, not inferred
+from a passing request.
+
+## HTTP and SSE transport (issue #1)
+
+`@doeixd/effect-agent/http` exposes the same twelve operations as ordinary
+JSON routes plus `GET /sessions/:id/events` as server-sent events. The path id
+is projected into the canonical request before the shared host sees it; bodies,
+responses and tagged failures use `AgentProtocol` rather than HTTP-specific
+copies. `AgentHttp.Api` supplies a schema-generated Effect client, while the
+same endpoints are verified with plain `fetch`.
+
+The status policy is public and exhaustive: validation/codec failures are 400,
+authentication 401, authorization 403, missing sessions 404, conflicts and
+invalid state transitions 409, execution failures 422, capacity 429, and
+transport failures 503. Expected errors have the canonical machine-readable
+body. Defects remain server defects and are not rendered with an internal stack
+by the adapter.
+
+SSE is deliberately live-only. A subscription receives events published after
+that observation begins; an `id` is the session-local sequence and `event` is
+the harness event tag. Reconnection does not imply replay or a durable cursor.
+A stream failure ends with an `error` SSE carrying the canonical remote-error
+body. The JSON codec is explicit here because domain `Option` values project to
+JSON only at the boundary.
+
+Observer lifetime is independent of session lifetime. Disconnecting a client
+interrupts only its event subscription, while an in-flight idempotent mutation
+continues in the host scope for a retry to join. Conversely, closing the HTTP
+layer signals every active SSE response before session teardown; this explicit
+signal is necessary because response streams execute in request scopes rather
+than the server layer's scope.
+
+Real-network tests cover all routes through the generated client, plain-fetch
+success and error bodies, concurrent controls during a prompt, an interrupted
+waiter followed by an idempotent retry, SSE parsing and disconnect cleanup, and
+whole-layer shutdown with an open subscription. The client response and stream
+inference assertions were deliberately broken once and restored.
+
+## AG-UI adapter (issue #1)
+
+`@doeixd/effect-agent/ag-ui` is a projection over the same internal session
+host, served as `POST /ag-ui`; it is not another execution runtime. The
+production adapter is SDK-independent and Schema-defined. Conformance is pinned
+to `@ag-ui/client` and `@ag-ui/core` 0.0.58 in development, so using the adapter
+does not add either package to an application's runtime dependency graph.
+
+The inbound codec accepts the official `RunAgentInput` wire type, including its
+omittable default state, tools, context and forwarded-properties fields. A
+compile-time assertion pins that assignability and was deliberately broken
+before restoration. Only text user prompts are currently meaningful. Nonempty
+client tools/context/state/forwarded properties and multimodal user input fail
+with typed AG-UI errors instead of being accepted and ignored.
+
+Thread ids are explicitly untrusted. The application first authenticates the
+request, then resolves principal + thread id to a branded protocol session id;
+the adapter never treats the client field as authorization. The resulting
+session uses the host's bounded ownership, per-operation authorization and
+idempotent request records.
+
+The stateful outbound mapper derives stable message and step ids from harness
+run/turn correlation. Native message deltas pass through once; a batch-only
+message synthesizes start/content/end, and the later canonical completion after
+a stream is suppressed. Tool arguments and results are JSON at the boundary,
+progress and harness run metadata are named custom events, and every open text
+or step frame closes before success, failure, interruption or human input.
+Every golden event is also parsed by the official core event schema.
+
+The adapter also owns its protocol construction sugar. `event(type, fields)`
+is the single generic constructor seam; named `text`, `tool`, `step` and `run`
+constructors remove magic discriminant strings, and semantic macros expand a
+batch message, tool call, success or interrupt into exact plain protocol
+values. `events(...)` and those macros preserve readonly tuples rather than
+widening immediately to `Event[]`. A callable `run({ threadId, runId })` binds
+correlation for a block but remains a pure value builder—construction and SSE
+delivery are deliberately separate. All types derive from the Schema union,
+and the one generic object-spread assertion is confined and documented at that
+adapter seam.
+
+Elicitation uses AG-UI's current interrupt/resume contract. The request stream
+finishes with a `RUN_FINISHED` interrupt outcome while the host-owned prompt
+remains suspended. A later request's `resume` entries call the existing
+`respond` operation; unmatched interrupt ids are rejected rather than leaving
+an SSE response open forever. The official client test covers the complete
+interrupt/resume cycle.
+
+Observer lifetime remains separate from operation lifetime. The adapter
+subscribes before starting the prompt and coordinates fresh lifecycle events
+against the cached-result fallback. Disconnecting the first HTTP observer and
+retrying the same run therefore executes one prompt and delivers one balanced
+official lifecycle to the retry. Real-network tests cover the official client,
+plain JSON errors, human resume and this disconnect/retry path without sleeps.
 
 ## Elicitation: execution that needs an answer from outside
 
@@ -700,9 +846,64 @@ compiling: the loop reads `call.params.query` as `string`, and assigning it to
 `number` is a compile error. Had `bind` returned a loosely-typed toolkit it
 would have been `any`, and `any` compiles.
 
-`Connection` is an interface. Effect ships no MCP client, so keeping the
-transport abstract settles the type story before the client arrives instead of
-retrofitting around it — and makes all of it testable against a fake.
+`Connection` remains an SDK-neutral interface. It is now implemented by
+separate official TypeScript SDK adapters at `/mcp/v1` and `/mcp/v2`, so the
+monolithic v1 and split-package v2 nominal client types never meet. `/mcp`
+re-exports the v2 Streamable HTTP and stdio constructors as the default; their
+client defaults to automatic modern/legacy protocol negotiation. Every owned
+client is scope-bound, tool pagination and list-change notifications normalize
+to Effect values, transport failures stay typed, and structured tool results
+fall back to legacy single-text content when talking to older peers.
+
+The v1 optional peer range begins at 1.10.0, the first release with the
+Streamable HTTP client used by this surface. CI compiles the adapter against
+that declaration floor while normal tests exercise the latest v1 release. A
+real in-memory peer test covers each same-generation adapter, and compile-time
+negative tests prove that v1 and v2 client objects cannot cross entry points.
+
+The complete Streamable HTTP and stdio matrices now run through real peers:
+v1/v1, v1/v2 legacy fallback, v2 automatic fallback to v1, and v2/v2 modern.
+The tests assert the negotiated era and exact revision, not only a successful
+tool call. HTTP additionally covers multi-page tool discovery, rich and legacy
+results, reported tool failures, modern `subscriptions/listen` list changes,
+Effect interruption reaching the server request signal, and subscription
+removal at scope close. The stdio fixtures are real child processes with clean
+protocol stdout; lifecycle records prove that modern cancellation reaches the
+server and the process serving calls exits when its Effect scope closes.
+
+Scripted hostile transports drive both official client generations with
+schema-invalid discovery and invocation results. Their SDK validation failures
+remain typed `McpTransportError` values at the Harness boundary, and a peer
+disconnect during a call settles the request instead of stranding it. A
+repeated pagination cursor is rejected rather than looping. Structured output
+remains authoritative: if present but incompatible with the locally declared
+success Schema, a valid-looking text fallback cannot mask the mismatch.
+
+Rich protocol content now has an explicit boundary policy. A single text block
+is the legacy fallback and structured content is the machine value; images,
+resource links, embedded resources, mixed blocks and empty content fail with
+`McpUnsupportedContentError`, which names the tool and observed content kinds.
+They are never silently dropped or exposed as nominal SDK values.
+
+The server direction now has real peer conformance too. Official SDK v1.30 and
+v2.0 clients call the actual `AgentMcp` tool over Streamable HTTP and stdio.
+Tests prove tool discovery, named-session continuity, anonymous-call isolation,
+declared failure, malformed parameters, v2 automatic fallback to the exact
+`2025-11-25` revision, child-process cleanup, and release of every named session
+when the server layer closes. That last assertion exposed a Harness bug: named
+session child scopes were kept in the registry but never closed by the handler
+layer. Its finalizer now atomically drains the registry and closes each scope.
+
+Effect `4.0.0-rc.111` exposes only the legacy `2024-11-05`, `2025-03-26`,
+`2025-06-18`, and `2025-11-25` server adapters, so the Harness server advertises
+those exact wire revisions rather than claiming SDK-major or modern-era
+support. The v2 client proves the intended automatic fallback. There is one
+upstream cancellation gap: Effect converts a legacy cancellation request id to
+a string before looking up the numeric RPC fiber; HTTP cancellation also arrives
+under a new request-scoped client id. Official-client protocol cancellation
+therefore cannot interrupt this server yet. Scope shutdown remains structured
+and deterministic, and the limitation is recorded rather than hidden by a
+timing-based test.
 
 A bug found immediately after, by testing the claim that a bound toolkit is
 "indistinguishable from a local one". It was not: `failureSchema` was never
@@ -714,7 +915,64 @@ model never got to react. `McpToolError` now carries what the server reported,
 decoded against the declared schema; a server reporting an error for a tool
 declared infallible is named as the mismatch it is rather than papered over.
 
-## MCP, and what was deliberately not built (roadmap #1 item 7)
+## A2A v1 adapter (roadmap #1 item 7, in progress)
+
+The first `@doeixd/effect-agent/a2a` vertical slice now serves a native A2A v1
+Agent Card and JSON-RPC endpoint using the official `@a2a-js/sdk` 1.0.1 server
+types and request handler. This is a protocol adapter over `AgentClient` and the
+same internal session host used by RPC, HTTP and AG-UI; it is not another agent
+runtime.
+
+The application authenticates the HTTP request and resolves principal + A2A
+context id to a branded Harness session id. A separate stable principal subject
+scopes the official task store, so one authenticated owner cannot load another
+owner's tasks. The official SDK owns v1 routing, task persistence and JSON
+encoding; Harness owns authorization, execution and scope lifetime.
+
+The current card advertises exactly the implemented surface: JSON-RPC with
+streaming enabled and push notifications disabled. Blocking `SendMessage`
+accepts text parts, emits the required submitted/working/completed task
+lifecycle, and returns a text artifact; `GetTask` reads that owner-scoped stored
+result. A second message carrying the first task's context id reuses the same
+Harness session. The conformance test performs discovery, both sends and lookup
+through the official v1 client against a real Node HTTP server, then asserts
+that the one session is released when the server scope closes.
+
+`SendStreamingMessage` is native v1 JSON-RPC SSE, not a separate wire model.
+The official handler produces JSON-RPC response envelopes and the HTTP adapter
+formats those with the SDK's SSE formatter. The exact observable sequence is
+Task submitted, working status, artifact update, completed status; task,
+context and artifact correlation are asserted at every step, followed by a
+stored-task lookup. A canceled stream instead ends with one canceled status and
+never exposes the executor's synthetic failure state.
+
+Consuming the official SDK generator is also what updates its task store, so
+the generator cannot belong to the HTTP observer. It is drained in a
+layer-owned fiber into a finite response queue. Disconnecting the client ends
+only that queue's observer while the task remains working; closing the layer
+interrupts the drain, executor and hosted session together. The first bridge
+used queue shutdown as completion and lost buffered terminal frames because
+shutdown discards them. Completion is now an explicit sentinel, so every
+queued protocol frame drains before the SSE body ends.
+
+`CancelTask` is now covered through that same official client. The test starts
+a prompt that blocks on a `Deferred`, waits for its actual start, asks the SDK
+to cancel the submitted task, and proves that the stored terminal state remains
+`CANCELED` while a later message reuses the session successfully. The first
+implementation exposed a real ordering bug: interrupting the prompt rejected
+the executor before the canceled status was published, so the official handler
+persisted `FAILED` and rejected cancellation. The adapter now uses a two-phase
+handshake: mark cancellation intent, resolve the Harness interrupt, publish the
+terminal status, then release the executor. An interrupt failure still fails
+the cancellation instead of claiming work stopped when it did not.
+
+This is intentionally not the completed phase. Input-required continuation,
+REST, a Harness-native typed client, and the reverse official-server peer test
+remain. None is advertised by the current Agent Card. The public layer
+inference assertion was deliberately broken once and restored; the test and
+adapter contain no caller-side casts.
+
+## MCP protocol adapters (roadmap #1 item 7)
 
 `/mcp` exposes an agent to MCP clients as a tool. The adapter is small, and
 that is the result rather than the goal: the handler talks to `AgentClient`, so
@@ -722,20 +980,10 @@ MCP is a protocol adapter over the transport seam rather than a second way into
 the harness. Sessions are held in the layer's scope, so a `sessionId` really
 continues a conversation and omitting one really is a one-shot.
 
-The other two directions in item 7 were **not** attempted, for the same reason:
-
-* **Consuming a remote MCP server's tools** needs an MCP *client*. Effect ships
-  `McpServer`, `McpProtocol` and `McpSchema` but no client, so this is writing a
-  protocol implementation, not an adapter.
-* **A2A** is a specification with no peer available here to check an
-  implementation against. The vocabulary maps cleanly — a Task is a submission,
-  a context is a session, cancel is interrupt, updates are the event stream —
-  and the two prerequisites the roadmap named are now in place, so it is ready
-  to be written by someone who can test it against a real implementation.
-
-Shipping either from the specification alone would produce plausible code with
-nothing establishing it is correct, which is the failure mode this project has
-repeatedly caught in itself.
+The A2A direction is now underway in the section above. Unlike the earlier
+specification-only state, its first slice is checked by the official SDK in a
+real client/server exchange. The unimplemented capabilities remain named rather
+than inferred from that one successful path.
 
 A testing note. The conversation-continuity test first asserted the *answer*
 returned by the tool — which proves nothing, because a scripted model returns

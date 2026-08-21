@@ -43,7 +43,10 @@ export interface Connection {
   readonly callTool: (
     name: string,
     params: unknown
-  ) => Effect.Effect<unknown, McpTransportError | McpToolError>
+  ) => Effect.Effect<
+    unknown,
+    McpTransportError | McpToolError | McpUnsupportedContentError
+  >
 }
 
 /** A tool as the server describes it. */
@@ -83,6 +86,31 @@ export class McpToolError extends Schema.TaggedError<McpToolError>()(
 ) {
   override get message() {
     return "MCP tool reported a failure"
+  }
+}
+
+/**
+ * The peer returned content this SDK-neutral adapter does not model yet.
+ *
+ * Rich protocol values must never be silently discarded or leak as nominal
+ * SDK values. Until Harness owns a stable cross-generation representation for
+ * them, callers receive this precise failure and can choose a lower-level SDK
+ * integration when they need those content blocks.
+ */
+export class McpUnsupportedContentError extends Schema.TaggedError<McpUnsupportedContentError>()(
+  "McpUnsupportedContentError",
+  {
+    toolName: Schema.String,
+    contentTypes: Schema.Array(Schema.String)
+  }
+) {
+  override get message() {
+    return (
+      `MCP tool ${this.toolName} returned unsupported content: ` +
+      (this.contentTypes.length === 0
+        ? "(empty)"
+        : this.contentTypes.join(", "))
+    )
   }
 }
 
@@ -191,6 +219,12 @@ export const bind = <const Tools extends ReadonlyArray<Tool.Any>>(
                           "MCP tool " + tool.name + ": " + error.detail
                       })
                     )
+                  : error._tag === "McpUnsupportedContentError"
+                    ? Effect.fail(
+                        new AiError.InvalidOutputError({
+                          description: error.message
+                        })
+                      )
                   : // A reported tool failure, decoded as the declared type so
                     // it reaches the agent as itself -- and so the run's
                     // `FailurePolicy` applies to it. Under the default,

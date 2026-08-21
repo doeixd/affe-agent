@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@modelcontextprotocol/sdk/*": [
+        "./node_modules/mcp-sdk-v1-floor/dist/esm/*"
+      ]
+    }
+  },
+  "include": [
+    "src/mcp/**/*.ts",
+    "test/McpClients.test.ts"
+  ]
+}

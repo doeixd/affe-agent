@@ -2,7 +2,7 @@
  * Import every published entry point from the packed artifact.
  *
  * `npm run check` proves the source is sound; it says nothing about whether the
- * *package* is. Seven subpaths now resolve through `exports`, and a wrong path,
+ * *package* is. Every public subpath resolves through `exports`, and a wrong path,
  * a missing build output or a mismatched condition is invisible to the test
  * suite and visible to the first person who installs it.
  *

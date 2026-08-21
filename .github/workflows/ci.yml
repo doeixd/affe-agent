@@ -13,12 +13,16 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - run: npm ci
@@ -31,7 +35,24 @@ jobs:
       - run: npm run build
 
       # The suite proves the source is sound and says nothing about whether the
-      # package is. Seven subpaths resolve through `exports`, and a wrong path
-      # or a missing build output is invisible to the tests and visible to the
-      # first person who installs it.
+      # package is. Every exported subpath must resolve from the tarball; a
+      # wrong path or missing build output is invisible to source tests and
+      # visible to the first person who installs it.
       - run: npm run verify:package
+
+  mcp-v1-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Keep latest-v1 runtime conformance in the normal suite while compiling
+      # the same adapter against the oldest v1 declarations we advertise.
+      - run: npm install --no-save --package-lock=false mcp-sdk-v1-floor@npm:@modelcontextprotocol/sdk@1.10.0
+      - run: npx tsc --noEmit -p tsconfig.mcp-v1-floor.json

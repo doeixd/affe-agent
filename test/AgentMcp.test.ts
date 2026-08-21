@@ -1,9 +1,9 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Stream } from "effect"
+import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { Prompt } from "effect/unstable/ai"
-import { AgentClient } from "../src/client/index.js"
+import { AgentClient, AgentProtocol } from "../src/client/index.js"
 import { AgentMcp } from "../src/mcp/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
@@ -187,6 +187,8 @@ describe("agent over MCP", () => {
 })
 
 describe("session lifetime", () => {
+  const submissionId = Schema.decodeSync(AgentProtocol.SubmissionId)("s")
+
   /** A client that counts how many sessions are opened and released. */
   const countingClient = (
     opened: Ref.Ref<number>,
@@ -203,7 +205,7 @@ describe("session lifetime", () => {
             id: options?.sessionId ?? "anon",
             prompt: () =>
               Effect.succeed({
-                submissionId: "s",
+                submissionId,
                 status: "completed" as const,
                 runs: 1,
                 turns: 1,
