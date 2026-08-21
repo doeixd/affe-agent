@@ -392,6 +392,99 @@ describe("durable submissions", () => {
     })
   )
 
+
+  it.live("a follow-up accepted at quiescence is not silently dropped", () =>
+    Effect.gen(function* () {
+      // Core promises that an accepted follow-up is processed. `AgentSubmission`
+      // drains, closes `acceptingFollowUps` atomically, then drains **once
+      // more** so nothing accepted before the close is stranded.
+      //
+      // The durable path does not consult that gate -- it cannot, because
+      // `followUp` is called from outside the process. It consults a marker in
+      // the store instead, and that marker is cleared only when the workflow
+      // exits, well after the submission's closing drain. Anything accepted in
+      // between is written to a queue nobody will read again.
+      //
+      // For a single-turn submission with no follow-ups, core drains the
+      // follow-up channel exactly twice: once at the top of the loop, once
+      // after closing the gate. Offering immediately after the second drain
+      // lands in the window exactly.
+      const inner = yield* DurableChannels.memoryStore
+      const drains = yield* Ref.make(0)
+      const accepted = yield* Ref.make(false)
+
+      const followUpsKey = "late-1:followUps"
+      const store: DurableChannels.Store = {
+        offer: inner.offer,
+        size: inner.size,
+        takeAll: (key) =>
+          key !== followUpsKey
+            ? inner.takeAll(key)
+            : inner.takeAll(key).pipe(
+                Effect.tap(() =>
+                  Effect.flatMap(
+                    Ref.updateAndGet(drains, (n) => n + 1),
+                    (n) =>
+                      n === 2
+                        ? DurableAgent.followUp(
+                            store,
+                            "late-1",
+                            "one more"
+                          ).pipe(
+                            Effect.andThen(Ref.set(accepted, true)),
+                            // If the durable gate matched core's, this is where
+                            // it would refuse -- which is a fine outcome too.
+                            Effect.catchTag("AgentIdleError", () => Effect.void)
+                          )
+                        : Effect.void
+                  )
+                )
+              )
+      }
+
+      // A third turn: processing the late follow-up is another run.
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([
+        { text: "first" },
+        { text: "second" },
+        { text: "third" }
+      ])
+      const durable = DurableAgent.workflow("Late", Agent.make({}), { store })
+
+      yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(
+          durable,
+          store,
+          "late-1",
+          "go"
+        )
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      // Either answer is defensible on its own: refusing the follow-up is
+      // honest, and accepting it obliges the run to process it. Accepting it
+      // and dropping it is the one outcome that is not.
+      if (yield* Ref.get(accepted)) {
+        const prompts = yield* recorder.prompts
+        assert.isTrue(
+          prompts.some((prompt) =>
+            FakeModel.userTexts(prompt).includes("one more")
+          ),
+          "followUp reported success but the input was never processed"
+        )
+      }
+
+      // And nothing accepted may be left sitting in the queue.
+      assert.deepStrictEqual(yield* inner.takeAll(followUpsKey), [])
+    })
+  )
+
   it.live("an interrupted submission reaches a terminal state and stays there", () =>
     Effect.gen(function* () {
       // Phase 4: interruption under durability must be terminal — an

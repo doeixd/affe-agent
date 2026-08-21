@@ -120,6 +120,10 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
 
     const bus = yield* EventBus.make(id)
     const channels = options?.channels ?? InputChannel.memory
+    const admit: (
+      sessionId: string,
+      admitting: boolean
+    ) => Effect.Effect<void> = channels.setAdmitting ?? (() => Effect.void)
     const steering = yield* channels.make(id, "steering")
     const followUps = yield* channels.make(id, "followUps")
     const activeFiber = yield* Ref.make<Option.Option<Fiber.Fiber<any, any>>>(
@@ -135,6 +139,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       bus,
       steering,
       followUps,
+      admit,
       activeFiber,
       scope,
       env,
@@ -221,6 +226,13 @@ const release = (self: Session<any>): Effect.Effect<void> =>
       acceptingFollowUps: false,
       activeRunId: Option.none()
     }))
+    // Admission is deliberately *not* withdrawn here. `AgentSubmission`
+    // publishes the close when its gate closes, which is what shuts the
+    // accepted-then-discarded window; release also runs when a run is merely
+    // interrupted, and under durability that includes a submission suspending.
+    // A parked submission is still open for business — it is waiting to be
+    // resumed — so withdrawing admission here would refuse steering aimed at a
+    // run that is about to continue.
     yield* self.steering.drain
     yield* self.followUps.drain
   })

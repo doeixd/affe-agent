@@ -376,7 +376,7 @@ export const followUp = (
  * submission starts and cleared however it ends, so an out-of-band sender sees
  * the same admission contract a local caller would.
  */
-const openKey = (sessionId: string) => `${sessionId}:open`
+const openKey = DurableChannels.openKey
 
 /**
  * Mark a session as accepting out-of-band input.

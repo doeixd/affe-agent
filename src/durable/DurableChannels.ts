@@ -67,6 +67,14 @@ export const memoryStore: Effect.Effect<Store> = Effect.map(
 const inputs = Schema.Array(Schema.String)
 
 /**
+ * Where a session publishes whether it is accepting out-of-band input.
+ *
+ * Defined here rather than in `DurableAgent` because the channel factory is
+ * what keeps it current: the session tells the factory when its gate moves.
+ */
+export const openKey = (sessionId: string): string => `${sessionId}:open`
+
+/**
  * Offer input from outside the workflow.
  *
  * Out-of-band senders must use this rather than writing to the store directly,
@@ -117,6 +125,13 @@ export const factory = (
     >()
 
     return {
+      // The published half of admission. The session drives this at the exact
+      // moment its own gate moves, so an out-of-process `followUp` sees the
+      // same answer an in-process one would.
+      setAdmitting: (sessionId, admitting) =>
+        admitting
+          ? store.offer(openKey(sessionId), "open")
+          : Effect.asVoid(store.takeAll(openKey(sessionId))),
       make: (sessionId, name) =>
         Effect.map(Ref.make(0), (drainIndex): InputChannel.InputChannel => {
           const key = `${sessionId}:${name}`

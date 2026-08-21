@@ -347,32 +347,45 @@ now inferred. Its `sessionId` also defaults to one derived from the firing time:
 a submission's idempotency key is its session, so a scheduled agent that reused
 one session ran once and then silently did nothing forever.
 
-## Open question: admission at quiescence under durability
+## Resolved: admission at quiescence under durability
 
-Core promises that an accepted follow-up is processed: `AgentSubmission` closes
-an atomic gate and drains once more, so nothing it accepted is stranded. The
-durable path does not use that gate — it gates on a marker in the store, cleared
-when the workflow exits, which is well after the submission's own final drain.
-On paper that leaves a window where `followUp` returns success and the input is
-never drained by anyone.
+Core promises that an accepted follow-up is processed: `AgentSubmission` drains,
+closes `acceptingFollowUps` atomically, then drains **once more** so nothing
+accepted before the close is stranded. The durable path could not use that gate
+— `followUp` is called from another process — so it read a marker in the store
+instead, and that marker was only cleared when the workflow exited. A `followUp`
+landing after the closing drain was accepted, written to the queue, and then
+discarded by `AgentSession.release`, whose job is to drop leftovers. The caller
+was told the work was accepted and it never ran.
 
-This is recorded as an open question rather than a fixed bug, because it was not
-pinned down. A test that wrapped the `Store` to offer input at the moment of a
-closing drain did show a follow-up accepted and then never reaching the model —
-but the same instrumentation behaved inconsistently on repeat runs (an injection
-condition that should have fired on several drains fired only once), so the
-observation could not be separated from an artifact of the test double.
+Pinning it down took instrumenting from core's side rather than the store's. An
+earlier attempt wrapped `Store.takeAll`, which counts *activity executions* and
+also sees the steering and marker keys, so the injection point could not be
+identified — the resulting evidence was unreliable enough to be discarded. The
+follow-up channel is drained exactly twice for a single-turn submission (once at
+the top of the loop, once after the gate closes), so offering immediately after
+the second drain hits the window every time.
 
-An attempted fix — closing the marker in the workflow body and then performing a
-journalled closing drain, the durable analogue of core's algorithm — did **not**
-change the reproduction, which is the main reason it was not shipped. Whatever
-strands the input is not the marker's timing alone. Reproducing this reliably is
-the prerequisite for fixing it; a semantic change to the workflow body that adds
-submission rounds is not worth making on a guess.
+The fix is a seam, not a special case. `InputChannel.Factory` gained an optional
+`setAdmitting`, which the session calls at the exact moment its gate moves; the
+durable factory implements it against the store marker. Ordering carries the
+whole guarantee: the close is published *before* the closing drain, so anything
+accepted while the marker was stale was necessarily offered earlier and the
+drain catches it, and anything later is refused. Publishing after the drain
+leaves precisely the gap it was meant to remove — that ordering was reverted
+once to confirm the test fails.
 
-Worth knowing for whoever picks it up: the durable channels are drained more
-often than the turn count suggests, and instrumenting `Store.takeAll` is not a
-reliable way to identify *which* drain is the closing one.
+Two things learned:
+
+* An earlier fix attempt put the closing drain in the *workflow body*. It could
+  never have worked: `AgentSession.release` runs first and deliberately drops
+  whatever is queued, so the body always saw an empty queue. The body is too
+  late to be the place where this is fixed.
+* `release` must **not** withdraw admission, even though it looks like the
+  natural place. It also runs when a run is merely interrupted, and under
+  durability that includes a submission suspending. A parked submission is still
+  open for business, so withdrawing there refuses steering aimed at a run that
+  is about to resume.
 
 ## Breaking changes for the durable/distributed path
 

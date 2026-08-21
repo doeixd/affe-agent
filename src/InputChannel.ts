@@ -48,6 +48,27 @@ export interface Factory {
     sessionId: string,
     name: string
   ) => Effect.Effect<InputChannel>
+  /**
+   * Told when the session starts and stops accepting out-of-band input.
+   *
+   * In-process callers do not need this: `steer` and `followUp` read the
+   * session's own state, so they see the gate close the instant it closes. A
+   * caller in *another process* cannot, and that is the whole problem — it has
+   * to consult something the session publishes.
+   *
+   * Whatever it publishes will lag the real gate unless the session says when
+   * to change it, which is what this hook is for. Without it, a durable
+   * `followUp` is accepted for as long as the published marker is stale: it
+   * returns success, writes to a queue, and `AgentSession.release` — whose job
+   * is to drop whatever is left over — discards it. The caller is told the work
+   * was accepted and it never runs.
+   *
+   * Optional, because an in-memory channel has nothing to publish.
+   */
+  readonly setAdmitting?: (
+    sessionId: string,
+    admitting: boolean
+  ) => Effect.Effect<void>
 }
 
 /** Backed by an unbounded in-memory queue. The default. */

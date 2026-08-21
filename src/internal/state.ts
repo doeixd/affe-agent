@@ -1,4 +1,4 @@
-import type { Context, Fiber, Option, Ref, Scope, SubscriptionRef } from "effect"
+import type { Context, Effect, Fiber, Option, Ref, Scope, SubscriptionRef } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { InputChannel } from "../InputChannel.js"
@@ -65,6 +65,11 @@ export interface Session<
   /** Out-of-band input; substitutable so a durable runtime can record it. */
   readonly steering: InputChannel
   readonly followUps: InputChannel
+  /**
+   * Publishes whether the session is accepting out-of-band input, for callers
+   * in another process. See `InputChannel.Factory.setAdmitting`.
+   */
+  readonly admit: (sessionId: string, admitting: boolean) => Effect.Effect<void>
   readonly activeFiber: Ref.Ref<Option.Option<Fiber.Fiber<any, any>>>
   readonly scope: Scope.Scope
   /**

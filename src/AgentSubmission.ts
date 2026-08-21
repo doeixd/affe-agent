@@ -122,6 +122,16 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
         )
 
         if (closed) {
+          // Publish the close before the drain below, not after.
+          //
+          // An out-of-process caller reads the published marker, so until this
+          // lands its `followUp` still succeeds. Doing it here means anything
+          // accepted while the marker was stale was necessarily offered before
+          // this point, and the drain that follows therefore catches it;
+          // anything after is refused outright. Publishing after the drain
+          // would leave precisely the gap this ordering removes.
+          yield* session.admit(session.id, false)
+
           // One more drain, now that nothing further can be accepted: this
           // catches anything that slipped in before the close.
           pending.push(...(yield* session.followUps.drain))
@@ -131,6 +141,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
               ...state,
               acceptingFollowUps: true
             }))
+            yield* session.admit(session.id, true)
           }
         }
       }
@@ -141,6 +152,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
           ...state,
           acceptingFollowUps: true
         }))
+        yield* session.admit(session.id, true)
       }
     }
 
