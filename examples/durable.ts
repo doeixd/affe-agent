@@ -10,7 +10,7 @@ import { Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, Entity } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
-import * as AgentClient from "../src/cluster/AgentClient.js"
+import * as EntityClient from "../src/cluster/EntityClient.js"
 import {
   AgentEntity,
   layer as entityLayer
@@ -75,11 +75,11 @@ export const runSharded = Effect.gen(function* () {
     )
   )
 
-  // `AgentClient` wraps the generated entity client: it takes `RawInput`, and
+  // `EntityClient` wraps the generated entity client: it takes `RawInput`, and
   // it keeps the cluster's transport failures out of the error channel, so
   // `steer` fails only with the one error a caller can act on.
   const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
-  const client = AgentClient.wrap(yield* makeRaw("session-1"))
+  const client = EntityClient.wrap(yield* makeRaw("session-1"))
 
   const executionId = yield* client.submit("refund order 42")
   yield* client.steer("be brief").pipe(

@@ -6,6 +6,11 @@ import { AgentEntity } from "./AgentEntity.js"
 /**
  * The session operations, as a caller wants to call them.
  *
+ * Named for what it is — a client for the session *entity* — rather than the
+ * general `AgentClient` the roadmap reserves for a protocol-neutral transport
+ * seam over in-process, RPC and HTTP. This one is specifically the cluster
+ * adapter, and should not squat on the broader name.
+ *
  * The generated entity client is a faithful rendering of the wire protocol,
  * which is not the same thing as a good API. It asks for a `Prompt` where every
  * other entry point in this library accepts `Prompt.RawInput`, and it carries
@@ -20,7 +25,7 @@ import { AgentEntity } from "./AgentEntity.js"
  * and is why this wrapper takes `RawInput` rather than merely re-exporting the
  * generated client.
  */
-export interface AgentClient {
+export interface EntityClient {
   /** Start a submission. Resolves to its execution id. */
   readonly submit: (input: Prompt.RawInput) => Effect.Effect<string>
   /** Queue steering, applied at the next turn boundary. */
@@ -42,7 +47,7 @@ export interface AgentClient {
  * client both satisfy it, despite differing in their error channels. `E` is
  * whatever infrastructure failures the transport adds.
  */
-export interface RawAgentClient<E> {
+export interface RawEntityClient<E> {
   readonly submit: (payload: {
     readonly input: Prompt.Prompt
   }) => Effect.Effect<string, E>
@@ -128,7 +133,7 @@ const admitting = <A, E, R>(
  * Exposed separately from `client` so a test client — which is built by a
  * different constructor — gets the same treatment as a sharded one.
  */
-export const wrap = <E>(raw: RawAgentClient<E>): AgentClient => ({
+export const wrap = <E>(raw: RawEntityClient<E>): EntityClient => ({
   submit: (input) =>
     infrastructural(raw.submit({ input: Prompt.make(input) })),
   steer: (input) => admitting(raw.steer({ input: Prompt.make(input) })),

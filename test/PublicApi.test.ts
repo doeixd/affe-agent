@@ -103,8 +103,8 @@ describe("durable and cluster surfaces", () => {
   it("exports the cluster vocabulary and nothing beyond it", async () => {
     const cluster = await import("../src/cluster/index.js")
     assert.deepStrictEqual(Object.keys(cluster).sort(), [
-      "AgentClient",
       "AgentEntity",
+      "EntityClient",
       "ScheduledAgent"
     ])
   })

@@ -12,7 +12,7 @@ import type { WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
-import * as AgentClient from "../src/cluster/AgentClient.js"
+import * as EntityClient from "../src/cluster/EntityClient.js"
 import {
   AgentEntity,
   layer as entityLayer
@@ -202,7 +202,7 @@ describe("agent client", () => {
       )
 
       const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
-      const client = AgentClient.wrap(yield* makeRaw("session-wrapped"))
+      const client = EntityClient.wrap(yield* makeRaw("session-wrapped"))
 
       // A bare string is what a caller reaches for. On the generated client
       // this compiles and then fails at encode time, because `Prompt.Prompt`'s
@@ -247,7 +247,7 @@ describe("agent client", () => {
       )
 
       const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
-      const client = AgentClient.wrap(yield* makeRaw("never-submitted"))
+      const client = EntityClient.wrap(yield* makeRaw("never-submitted"))
 
       // `steer` is typed as failing with `AgentIdleError` and nothing else:
       // the cluster's own transport failures are retried and then died on,

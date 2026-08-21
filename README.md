@@ -335,15 +335,15 @@ dropped.
 session id is the routing key and out-of-band input reaches the owning node.
 
 ```ts
-import { AgentClient } from "@doeixd/effect-agent/cluster"
+import { EntityClient } from "@doeixd/effect-agent/cluster"
 
-const client = AgentClient.wrap(yield* makeRawClient("session-1"))
+const client = EntityClient.wrap(yield* makeRawClient("session-1"))
 
 yield* client.submit("refund order 42")   // Effect<string, never>
 yield* client.steer("be brief")           // Effect<void, AgentIdleError>
 ```
 
-`AgentClient` wraps the generated entity client: it accepts the same
+`EntityClient` wraps the generated entity client: it accepts the same
 `Prompt.RawInput` the rest of the library does, retries through shard
 reassignment, and keeps the cluster's transport failures out of the error
 channel — so the only error left is the one a caller can act on.
