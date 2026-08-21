@@ -440,10 +440,38 @@ adapter over the transport seam rather than a second way in. Passing a
 `sessionId` continues a conversation across calls; omitting it gives a one-shot
 session, which is the right default for an unrelated question.
 
-Only this direction is implemented. Consuming a remote MCP server's tools would
-need an MCP *client*, and Effect ships `McpServer`, `McpProtocol` and
-`McpSchema` but no client — that is a protocol implementation rather than an
-adapter, and it is not written here.
+### Using a remote server's tools, with types
+
+An MCP server's tool list is a runtime value — `tools/list` returns JSON Schema
+while the program is already running — and inference is a compile-time
+operation. Nothing can infer a type from that.
+
+So the types come from a local declaration and the server is checked against it:
+
+```ts
+const Search = Tool.make("search", {
+  parameters: Schema.Struct({ query: Schema.String }),
+  success: Schema.Struct({ hits: Schema.Array(Schema.String) })
+})
+
+const toolkit = yield* McpToolkit.bind(connection, [Search])
+const agent = Agent.make({ toolkit })
+```
+
+`bind` verifies on connect that the server offers each declared tool, failing
+with `McpToolMissingError` that names both what is missing and what is on
+offer. From then on the agent has exact tool types, and the declared schema is
+the decoding contract in both directions: parameters are encoded through it on
+the way out, results decoded through it on the way back, so a server that
+answers the wrong shape fails at the boundary rather than handing `unknown` to
+the agent. For tools genuinely discovered at runtime, Effect AI's
+`Tool.dynamic` is the honest alternative, and the two compose.
+
+`McpToolkit.Connection` is an interface, because Effect ships `McpServer`,
+`McpProtocol` and `McpSchema` but no MCP *client* — that is a protocol
+implementation rather than an adapter, and it is not written here. Keeping the
+transport abstract settles the type story before the client arrives rather than
+retrofitting it afterwards.
 
 ## Snapshots
 

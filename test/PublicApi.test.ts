@@ -155,6 +155,6 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the mcp vocabulary and nothing beyond it", async () => {
     const mcp = await import("../src/mcp/index.js")
-    assert.deepStrictEqual(Object.keys(mcp).sort(), ["AgentMcp"])
+    assert.deepStrictEqual(Object.keys(mcp).sort(), ["AgentMcp", "McpToolkit"])
   })
 })

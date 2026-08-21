@@ -597,6 +597,36 @@ checked against.
 One note on Effect v4: service keys are `Context.Service<Self, Shape>()("key")`,
 not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
 
+## Type-safe tools from an MCP server
+
+The question was whether an agent can have inferred tool types when the tools
+come from MCP. Not from the server, no: `tools/list` is a runtime value and
+inference is a compile-time operation, so there is nothing to infer *from*.
+
+`McpToolkit.bind` takes the other route. Tools are declared locally, exactly as
+for a local toolkit, and the server is verified against the declaration on
+connect — failing with `McpToolMissingError` naming both the missing tools and
+the offered ones, because "search is missing" is half an answer when the real
+problem is being pointed at the wrong server. Verification is at bind time
+rather than first call: a deployment mismatch should not be discovered
+mid-conversation in production.
+
+What the declaration then buys is a contract rather than an annotation.
+Parameters are encoded through the declared schema on the way out and results
+decoded through it on the way back, so a server answering the wrong shape fails
+at the boundary with a typed error naming the tool. A transforming schema makes
+that observable — the handler is given a `Date`, the wire carries a string, the
+server's string comes back a `Date` — which is what the round-trip test asserts.
+
+The type claim is checked the way this project requires rather than by
+compiling: the loop reads `call.params.query` as `string`, and assigning it to
+`number` is a compile error. Had `bind` returned a loosely-typed toolkit it
+would have been `any`, and `any` compiles.
+
+`Connection` is an interface. Effect ships no MCP client, so keeping the
+transport abstract settles the type story before the client arrives instead of
+retrofitting around it — and makes all of it testable against a fake.
+
 ## MCP, and what was deliberately not built (roadmap #1 item 7)
 
 `/mcp` exposes an agent to MCP clients as a tool. The adapter is small, and
