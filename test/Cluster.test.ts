@@ -1,6 +1,15 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cron, Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import {
+  Cron,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Schema
+} from "effect"
+import { Prompt, Tool } from "effect/unstable/ai"
 import {
   ClusterWorkflowEngine,
   Entity,
@@ -10,6 +19,7 @@ import {
 import type { Sharding } from "effect/unstable/cluster"
 import type { WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
 import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
 import * as EntityClient from "../src/cluster/EntityClient.js"
@@ -48,7 +58,7 @@ describe("agent entity", () => {
       // public way to enumerate an entity's operations, and the surface a
       // remote client sees is worth pinning.
       Array.from(AgentEntity.protocol.requests.keys()).sort(),
-      ["followUp", "interrupt", "steer", "submit"]
+      ["followUp", "interrupt", "respond", "steer", "submit"]
     )
     assert.strictEqual(AgentEntity.type, "AgentSession")
   })
@@ -330,4 +340,24 @@ describe("scheduled agent", () => {
       assert.notStrictEqual(varying, first)
     })
   )
+})
+
+describe("approval across the cluster", () => {
+  it("the entity can answer a paused run", () => {
+    // The cluster is the deployment where a durable pause matters most -- a
+    // submission suspended for approval outlives the node that asked -- and
+    // the entity had no way to answer one. It could suspend a run and never
+    // resume it.
+    //
+    // Only the surface is asserted here. Completing a `DurableDeferred`
+    // routes through sharding, and `Entity.makeTestClient` supplies a stub
+    // that cannot: the call fails inside Effect's own engine rather than in
+    // this project. What the handler *does* -- derive the execution from the
+    // session id and answer it -- is proved end to end against a real engine
+    // in `Durable.test.ts`, which is the part that belongs to this project.
+    assert.include(
+      Array.from(AgentEntity.protocol.requests.keys()),
+      "respond"
+    )
+  })
 })

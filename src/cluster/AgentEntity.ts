@@ -3,7 +3,9 @@ import { Prompt } from "effect/unstable/ai"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc } from "effect/unstable/rpc"
 import { AgentIdleError } from "../Errors.js"
+import * as Elicitation from "../Elicitation.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
+import * as DurableElicitation from "../durable/DurableElicitation.js"
 import type * as DurableChannels from "../durable/DurableChannels.js"
 
 /**
@@ -42,7 +44,16 @@ export const AgentEntity = Entity.make("AgentSession", [
   // No payload. The execution id is a pure function of the session, and the
   // entity id *is* the session, so asking the caller for one only created a
   // way to interrupt the wrong thing.
-  Rpc.make("interrupt")
+  Rpc.make("interrupt"),
+  // Answering a paused run. Without this the cluster can suspend a submission
+  // for approval and offer no way to approve it, which is the deployment where
+  // a durable pause matters most.
+  //
+  // Returns nothing rather than whether the answer landed. `DurableDeferred`
+  // does not report that, and a boolean that is always the same value is a
+  // claim rather than an answer. A caller learns the truth from whether the
+  // run resumes.
+  Rpc.make("respond", { payload: { response: Elicitation.Response } })
 ])
 
 /**
@@ -100,6 +111,21 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
           DurableAgent.steer(store, sessionId, payload.input),
         followUp: ({ payload }) =>
           DurableAgent.followUp(store, sessionId, payload.input),
+        // Routed to the session's own execution, so a caller needs only the
+        // session id it already used to submit.
+        respond: ({ payload }) =>
+          DurableAgent.executionIdFor(agent, sessionId).pipe(
+            Effect.flatMap((executionId) =>
+              DurableAgent.throughShardReassignment(
+                DurableElicitation.respond({
+                  workflow: agent.definition,
+                  executionId,
+                  response: payload.response
+                })
+              )
+            ),
+            Effect.asVoid
+          ),
         interrupt: () =>
           DurableAgent.executionIdFor(agent, sessionId).pipe(
             Effect.flatMap((executionId) =>

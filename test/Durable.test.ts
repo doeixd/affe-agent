@@ -708,11 +708,16 @@ describe("elicitation under durability", () => {
         yield* Effect.sleep(Duration.millis(300))
         assert.strictEqual(yield* Ref.get(ran), 0)
 
-        // Answered from outside, with a token derived from the execution
-        // rather than held in memory -- the process that asked may be gone.
+        // Answered from outside with nothing but the session id -- the same
+        // derivation the cluster entity's `respond` performs, and the reason
+        // it needs no extra state. The token comes from the execution rather
+        // than from memory, because the process that asked may be gone.
+        const derived = yield* DurableAgent.executionIdFor(durable, "approve-1")
+        assert.strictEqual(derived, executionId)
+
         yield* DurableElicitation.respond({
           workflow: durable.definition,
-          executionId,
+          executionId: derived,
           response: { id: "elicit-1", granted: true }
         })
 

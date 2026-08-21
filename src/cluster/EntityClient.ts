@@ -1,5 +1,6 @@
 import { Duration, Effect, Schedule } from "effect"
 import { Prompt } from "effect/unstable/ai"
+import type * as Elicitation from "../Elicitation.js"
 import { AgentIdleError } from "../Errors.js"
 import { AgentEntity } from "./AgentEntity.js"
 
@@ -38,6 +39,15 @@ export interface EntityClient {
   ) => Effect.Effect<void, AgentIdleError>
   /** Interrupt the session's submission, if it has one. */
   readonly interrupt: Effect.Effect<void>
+  /**
+   * Answer a run paused for approval or other external input.
+   *
+   * Returns nothing: `DurableDeferred` does not report whether anything was
+   * waiting, and a caller learns the truth from whether the run resumes.
+   */
+  readonly respond: (
+    response: Elicitation.Response
+  ) => Effect.Effect<void>
 }
 
 /**
@@ -58,6 +68,9 @@ export interface RawEntityClient<E> {
     readonly input: Prompt.Prompt
   }) => Effect.Effect<void, AgentIdleError | E>
   readonly interrupt: (payload: void) => Effect.Effect<void, E>
+  readonly respond: (payload: {
+    readonly response: Elicitation.Response
+  }) => Effect.Effect<void, E>
 }
 
 /**
@@ -138,7 +151,8 @@ export const wrap = <E>(raw: RawEntityClient<E>): EntityClient => ({
     infrastructural(raw.submit({ input: Prompt.make(input) })),
   steer: (input) => admitting(raw.steer({ input: Prompt.make(input) })),
   followUp: (input) => admitting(raw.followUp({ input: Prompt.make(input) })),
-  interrupt: infrastructural(raw.interrupt())
+  interrupt: infrastructural(raw.interrupt()),
+  respond: (response) => infrastructural(raw.respond({ response }))
 })
 
 /**
