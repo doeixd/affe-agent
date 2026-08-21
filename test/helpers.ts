@@ -87,26 +87,10 @@ export const tags = (events: ReadonlyArray<AgentEventEnvelope>) =>
   events.map((e) => e.event._tag)
 
 /**
- * Wraps a `LanguageModel` layer so each `generateText` is counted.
+ * Re-exported from the published testing utilities.
  *
- * Decorating a provider is a normal thing to do — the durable interpreter does
- * exactly this — but `generateText` is heavily overloaded, so the cast is
- * absorbed here once rather than repeated at every call site.
+ * Counting model calls needs a cast, because `generateText` is heavily
+ * overloaded. It lives in the library so that a user's test never has to write
+ * one — and this alias keeps the suite pointed at the shipped implementation.
  */
-export const countingModel = (
-  base: Layer.Layer<LanguageModel.LanguageModel>,
-  calls: Ref.Ref<number>
-): Layer.Layer<LanguageModel.LanguageModel> =>
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    Effect.gen(function* () {
-      const inner = yield* LanguageModel.LanguageModel
-      return {
-        ...inner,
-        generateText: ((options: never) =>
-          Ref.update(calls, (n) => n + 1).pipe(
-            Effect.andThen(inner.generateText(options))
-          )) as unknown as LanguageModel.Service["generateText"]
-      }
-    })
-  ).pipe(Layer.provide(base))
+export { counting as countingModel } from "../src/testing/TestLanguageModel.js"

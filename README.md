@@ -368,6 +368,36 @@ yield* client.steer("be brief")           // Effect<void, AgentIdleError>
 reassignment, and keeps the cluster's transport failures out of the error
 channel — so the only error left is the one a caller can act on.
 
+## Testing
+
+The deterministic model and lifecycle probe the library tests itself with ship
+as `@doeixd/effect-agent/testing`:
+
+```ts
+import { AgentProbe, TestLanguageModel } from "@doeixd/effect-agent/testing"
+
+const { layer, recorder } = yield* TestLanguageModel.script([
+  TestLanguageModel.toolCall("search", { query: "effect" }),
+  TestLanguageModel.text("found it")
+])
+
+const session = yield* AgentSession.make(agent)
+const probe = yield* AgentProbe.make(session)
+
+yield* session.prompt("find effect")
+
+assert.include(yield* probe.tags, "ToolCallSucceeded")
+assert.deepStrictEqual(
+  TestLanguageModel.userTexts((yield* recorder.prompts)[0]!),
+  ["find effect"]
+)
+```
+
+A script can also block a call, fail one, or run an Effect *during* generation —
+which is how steering, interruption and concurrency become assertions rather
+than races. `recorder` exposes the model-facing prompt the harness derived, so
+context transforms and canonical history are directly testable.
+
 ## Examples
 
 - [`examples/typed-agent.ts`](./examples/typed-agent.ts) — a fully typed agent,

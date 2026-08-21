@@ -131,4 +131,12 @@ describe("durable and cluster surfaces", () => {
       assert.property(DurableChannels, name)
     }
   })
+
+  it("exports the testing vocabulary and nothing beyond it", async () => {
+    const testing = await import("../src/testing/index.js")
+    assert.deepStrictEqual(Object.keys(testing).sort(), [
+      "AgentProbe",
+      "TestLanguageModel"
+    ])
+  })
 })

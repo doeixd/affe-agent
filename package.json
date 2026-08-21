@@ -39,6 +39,10 @@
     "./cluster": {
       "types": "./dist/cluster/index.d.ts",
       "default": "./dist/cluster/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
     }
   },
   "types": "./dist/index.d.ts",
