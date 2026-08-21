@@ -410,6 +410,21 @@ value to two callers or lose one offered in between.
 The table name reaches `sql.literal`, which does not parameterise, so anything
 that is not a plain identifier is refused rather than quoted.
 
+## Multimodal submissions across the journal
+
+The workflow payload is a `Prompt`, and the claim throughout has been that
+`Prompt` carries its own Schema so a multimodal submission survives the journal
+exactly as a text one does. That was never exercised against real storage, which
+is where the last two bugs in this area came from.
+
+It holds, with one caveat worth knowing. A `Uint8Array` in a file part survives
+in *content* but not in *representation*: `Prompt` encodes it as base64, and
+decoding leaves it a base64 string rather than restoring the array. That is
+Effect AI's wire form rather than a choice this library makes, but it is a real
+difference between a fresh run and a resumed one — a tool that branches on
+`instanceof Uint8Array` takes the other arm after a durable round trip. Pinned
+by a test so it cannot change silently.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

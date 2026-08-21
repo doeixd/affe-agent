@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { Crypto, Deferred, Duration, Effect, Exit, Layer, Ref } from "effect"
-import { LanguageModel, Tool } from "effect/unstable/ai"
+import { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
 import { Schema } from "effect"
+import { Buffer } from "node:buffer"
 import * as NodeCrypto from "node:crypto"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
@@ -622,6 +623,111 @@ describe("sql-backed channels", () => {
             )
           )
         }).pipe(Effect.provide(SqliteClient.layer({ filename: file })))
+      }),
+    30_000
+  )
+})
+
+describe("multimodal submissions", () => {
+  it.live(
+    "a prompt carrying binary content survives the journal",
+    () =>
+      Effect.gen(function* () {
+        // The workflow payload is a `Prompt`, and the claim throughout is that
+        // `Prompt` carries its own Schema so a multimodal submission survives
+        // the journal exactly as a text one does. That claim had never been
+        // exercised against real storage -- and the last two bugs found here
+        // were both "encodes fine in memory, rejected by SQLite".
+        //
+        // `Uint8Array` is the interesting case: it is not a JSON value.
+        const file = yield* tempDatabase
+        const bytes = new Uint8Array([1, 2, 3, 4, 5])
+
+        const submission = Prompt.make([
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is in this file?" },
+              {
+                type: "file",
+                mediaType: "application/pdf",
+                fileName: "report.pdf",
+                data: bytes
+              }
+            ]
+          }
+        ])
+
+        const { layer: model, recorder } = yield* FakeModel.layer([
+          { text: "a report" }
+        ])
+        const store = yield* DurableChannels.memoryStore
+        const durable = DurableAgent.workflow(
+          "Multimodal",
+          Agent.make({}),
+          { store }
+        )
+
+        yield* Effect.gen(function* () {
+          const executionId = yield* DurableAgent.submit(
+            durable,
+            store,
+            "mm-1",
+            submission
+          )
+          const exit = yield* DurableAgent.result(durable, executionId, {
+            interval: Duration.millis(50)
+          })
+          assert.isTrue(
+            Exit.isSuccess(exit),
+            `submission did not finish: ${JSON.stringify(exit)}`
+          )
+        }).pipe(
+          Effect.provide(
+            durable.layer.pipe(
+              Layer.provideMerge(engineFor(file, 35)),
+              Layer.provideMerge(model)
+            )
+          )
+        )
+
+        // The file part reached the model with its bytes intact, alongside the
+        // text -- not dropped, and not turned into something else on the way
+        // through the payload schema.
+        const prompt = (yield* recorder.prompts)[0]
+        assert.isDefined(prompt)
+        const parts = prompt.content.flatMap((message) =>
+          message.role === "user" ? message.content : []
+        )
+        assert.deepStrictEqual(
+          parts.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+          ["what is in this file?"]
+        )
+        const files = parts.flatMap((part) =>
+          part.type === "file" ? [part] : []
+        )
+        assert.strictEqual(files.length, 1, "the file part was dropped")
+        assert.strictEqual(files[0]!.mediaType, "application/pdf")
+        // The content survives, but not the representation: `Prompt` encodes
+        // `Uint8Array` as base64, and decoding leaves it a base64 string
+        // rather than restoring the array. That is Effect AI's wire form, not
+        // something this library chooses, and it is worth pinning because it
+        // is a real difference between a fresh run and a resumed one: a tool
+        // that branches on `instanceof Uint8Array` sees the other arm after a
+        // durable round trip.
+        const data = files[0]!.data
+        // No cast anywhere: narrowing is the assertion.
+        assert.isTrue(
+          typeof data === "string",
+          "the file part's content did not survive"
+        )
+        if (typeof data === "string") {
+          assert.deepStrictEqual(
+            Array.from(Buffer.from(data, "base64")),
+            Array.from(bytes),
+            "the bytes did not survive the journal"
+          )
+        }
       }),
     30_000
   )
