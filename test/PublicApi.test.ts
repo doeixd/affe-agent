@@ -147,4 +147,9 @@ describe("durable and cluster surfaces", () => {
     const compaction = await import("../src/compaction/index.js")
     assert.deepStrictEqual(Object.keys(compaction).sort(), ["Compaction"])
   })
+
+  it("exports the client vocabulary and nothing beyond it", async () => {
+    const client = await import("../src/client/index.js")
+    assert.deepStrictEqual(Object.keys(client).sort(), ["AgentClient"])
+  })
 })

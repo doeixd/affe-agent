@@ -47,6 +47,10 @@
     "./compaction": {
       "types": "./dist/compaction/index.d.ts",
       "import": "./dist/compaction/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
     }
   },
   "types": "./dist/index.d.ts",

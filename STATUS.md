@@ -572,6 +572,31 @@ instructions rather than being prepended: a restored transcript already contains
 whatever system message the original session opened with, and prepending a
 second one would quietly change what the model sees on every subsequent turn.
 
+## The transport seam (roadmap #1 item 6)
+
+`@doeixd/effect-agent/client` gives adapters — RPC, HTTP/SSE, AG-UI, A2A — one
+notion of what a session is, instead of each inventing its own.
+
+The design work was deciding what *cannot* cross. `AgentSession` carries the
+agent's tool types, hands back a `GenerateTextResponse`, and fails with whatever
+the agent's tools and transforms fail with. A caller on the far side of a wire
+has none of that: no tool definitions to interpret a typed tool failure, and no
+format that carries a provider response. So `RemoteResult` drops the response
+rather than half-encoding it, and non-protocol failures arrive *described*
+rather than typed — honest about what crossed, instead of pretending a shape
+survived that did not.
+
+What stays typed is what a remote caller can act on: busy, idle, closed, and
+transport. Every one is a `Schema.TaggedError`, so the union survives the wire.
+
+`fromSession` is exported because an RPC *server* needs exactly this projection;
+writing it once here is the difference between a seam and a convention. The
+in-process layer is both a real implementation and the reference the others are
+checked against.
+
+One note on Effect v4: service keys are `Context.Service<Self, Shape>()("key")`,
+not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found
