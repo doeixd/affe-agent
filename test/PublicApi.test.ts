@@ -42,12 +42,15 @@ describe("public API", () => {
       Object.keys(Harness.AgentSession).sort(),
       [
         "Id",
+        "Snapshot",
         "events",
         "followUp",
         "history",
         "interrupt",
         "make",
         "prompt",
+        "restore",
+        "snapshot",
         "state",
         "status",
         "steer"

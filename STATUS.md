@@ -549,6 +549,29 @@ test asserted `summaries < 8`, which passes whether or not the checkpoint is
 used. Measuring both ways gave 3 with the checkpoint and 6 without, so the
 assertion is now exact. A bound that cannot discriminate is not a test.
 
+## Session snapshots (roadmap #1 item 8)
+
+`AgentSession.snapshot` / `restore`, with `Snapshot` as a Schema value. Enough
+for stored conversations, shutdown and restart, and deterministic fixtures,
+without committing to a WAL or an event-sourced model.
+
+The scope is the design. A snapshot holds the conversation and the session id
+and nothing else: a session also owns a scope, a fibre, an event bus, queued
+input and a captured environment, none of which are data and all of which belong
+to the process that created them. Identity is kept because durable and
+distributed correlation depend on it; a restored session has no history of
+*events*, because those described a run that is over.
+
+Snapshots are refused for a running session. A turn commits its assistant
+message and its tool results as one unit, so a snapshot taken between them would
+record a conversation that never existed. Waiting for quiescence is the caller's
+job, and `AgentBusyError` is how they find out they have not.
+
+`MakeOptions.history` is the mechanism, and it *replaces* the agent's
+instructions rather than being prepended: a restored transcript already contains
+whatever system message the original session opened with, and prepending a
+second one would quietly change what the model sees on every subsequent turn.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

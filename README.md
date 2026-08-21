@@ -393,6 +393,27 @@ yield* client.steer("be brief")           // Effect<void, AgentIdleError>
 reassignment, and keeps the cluster's transport failures out of the error
 channel — so the only error left is the one a caller can act on.
 
+## Snapshots
+
+A conversation is a value, so it can be stored and brought back:
+
+```ts
+const snapshot = yield* AgentSession.snapshot(session)   // idle sessions only
+// ...persist it, send it, keep it as a fixture
+
+const restored = yield* AgentSession.restore(agent, snapshot)
+```
+
+`AgentSession.Snapshot` is Schema-defined, so it crosses a process boundary the
+way anything else here does. It holds the conversation and the session id —
+identity survives, so logging and correlation still point at the same thing
+after a restart. Everything else is rebuilt: a new scope, a new event bus, empty
+input queues.
+
+Snapshots are refused for a running session, with `AgentBusyError`. A turn
+commits its assistant message and tool results as one unit, and a snapshot taken
+between those would record a conversation that never existed.
+
 ## Compaction
 
 A long conversation has to fit a context window without being lost.

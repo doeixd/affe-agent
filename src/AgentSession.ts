@@ -6,6 +6,7 @@ import {
   Fiber,
   Option,
   Ref,
+  Schema,
   Scope,
   Stream,
   SubscriptionRef
@@ -135,6 +136,15 @@ export interface MakeOptions {
    */
   readonly sessionId?: string | undefined
   /**
+   * Canonical history to start from, in place of the agent's instructions.
+   *
+   * Used by `restore`. Supplying it means the session begins mid-conversation
+   * rather than at the beginning, which is why it replaces the instructions
+   * rather than being appended to them: a restored transcript already contains
+   * whatever system message the original session opened with.
+   */
+  readonly history?: Prompt.Prompt | undefined
+  /**
    * Where steering and follow-up input is held. Defaults to in-memory queues.
    *
    * A stronger runtime substitutes this; see `InputChannel` for why it is the
@@ -171,10 +181,11 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     })
 
     const history = yield* Ref.make(
-      Option.match(agent.instructions, {
-        onNone: () => Prompt.empty,
-        onSome: History.systemMessage
-      })
+      options?.history ??
+        Option.match(agent.instructions, {
+          onNone: () => Prompt.empty,
+          onSome: History.systemMessage
+        })
     )
 
     const bus = yield* EventBus.make(id)
@@ -513,6 +524,77 @@ export const history = (
 
 export const status = (session: AgentSession<any, any>): Effect.Effect<Status> =>
   statusOf(unwrap(session))
+
+/**
+ * A session's conversation, as a value.
+ *
+ * Schema-defined, so it crosses a process boundary the same way anything else
+ * in this library does: written to a database, sent over RPC, kept as a
+ * fixture.
+ *
+ * Deliberately only the conversation. A session also holds a scope, a fibre, an
+ * event bus, queued input and a captured environment — none of which are data,
+ * and all of which belong to the process that created them. A snapshot is what
+ * survives; the rest is rebuilt by `restore`.
+ */
+export const Snapshot = Schema.Struct({
+  sessionId: Schema.String,
+  history: Prompt.Prompt
+})
+export type Snapshot = typeof Snapshot.Type
+
+/**
+ * Capture a session's conversation.
+ *
+ * Idle only. A running session's history is mid-flight — a turn may be about
+ * to commit an assistant message and its tool results as one unit — and a
+ * snapshot taken between those would record a conversation that never existed.
+ * Waiting for quiescence is the caller's job, and refusing is how they find
+ * out they have not.
+ */
+export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
+  session: AgentSession<any, any>
+) {
+    const self = unwrap(session)
+    const current = yield* SubscriptionRef.get(self.state)
+    if (current.status === "closed") {
+      return yield* new AgentClosedError({ sessionId: self.id })
+    }
+    if (current.status !== "idle") {
+      return yield* new AgentBusyError({ sessionId: self.id })
+    }
+    return {
+      sessionId: self.id,
+      history: yield* historyOf(self)
+    } satisfies Snapshot
+  })
+
+/**
+ * Rebuild a session from a snapshot.
+ *
+ * The session resumes its identity along with its conversation, so logging,
+ * tracing and durable correlation still point at the same thing after a
+ * restart.
+ *
+ * Everything else is new: a new scope, a new event bus, empty input queues.
+ * A restored session has no history of *events* — those described the original
+ * run, which is over. What it has is the transcript, which is what the next
+ * turn is derived from.
+ */
+export const restore = <Tools extends Record<string, Tool.Any>, E, R>(
+  agent: AgentDefinition<Tools, E, R>,
+  snapshot: Snapshot,
+  options?: Omit<MakeOptions, "sessionId" | "history">
+): Effect.Effect<
+  AgentSession<Tools, E>,
+  never,
+  Scope.Scope | LanguageModel.LanguageModel | R
+> =>
+  make(agent, {
+    ...options,
+    sessionId: snapshot.sessionId,
+    history: snapshot.history
+  })
 
 /**
  * A read-only view of harness runtime state, for a UI that observes it.
