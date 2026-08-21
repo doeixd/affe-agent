@@ -68,6 +68,30 @@ describe("stream accumulator", () => {
     )
   })
 
+  it("keeps the finish part last when a chunk was never closed", () => {
+    // A batch response always ends with finish, and a reconstructed one should
+    // be indistinguishable -- otherwise anything downstream that reasonably
+    // treats finish as terminal sees parts arrive after it. A provider saying
+    // it has finished closes whatever is still open.
+    const { parts } = run([
+      Response.makePart("text-start", { id: "t1" }),
+      Response.makePart("text-delta", { id: "t1", delta: "unterminated" }),
+      Response.makePart("finish", {
+        reason: "stop",
+        usage: {
+          inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 0, text: 0, reasoning: 0 }
+        }
+      })
+    ])
+
+    assert.deepStrictEqual(textOf(parts), ["unterminated"])
+    assert.deepStrictEqual(
+      (parts ?? []).map((part) => part.type),
+      ["text", "finish"]
+    )
+  })
+
   it("flushes a chunk the provider never closed", () => {
     // A stream that ends without `text-end` has still produced that text.
     // Dropping it would lose output the model actually generated.

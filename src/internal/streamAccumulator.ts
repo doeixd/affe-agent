@@ -127,12 +127,33 @@ export const step = <Tools extends Record<string, Tool.Any>>(
       return cont(state)
     case "error":
       return { _tag: "Failed", error: part.error }
+    case "finish":
+      // A provider saying it has finished closes anything still open, so the
+      // flushed chunks are appended *before* the finish part. A batch response
+      // always ends with finish, and a reconstructed one should be
+      // indistinguishable -- otherwise anything downstream that reasonably
+      // treats finish as terminal sees parts arrive after it.
+      return cont({
+        ...state,
+        parts: [...state.parts, ...flushOpen(state), part],
+        open: new Map()
+      })
     default:
       // Everything a batch response would have carried -- tool calls, files,
       // sources, metadata, finish -- passes through as it arrives.
       return cont({ ...state, parts: [...state.parts, part] })
   }
 }
+
+/** Chunks still open, as the parts they would have become. */
+const flushOpen = <Tools extends Record<string, Tool.Any>>(
+  state: State<Tools>
+): ReadonlyArray<Response.Part<Tools, true>> =>
+  Array.from(state.open.values()).map((chunk) =>
+    chunk.kind === "text"
+      ? Response.makePart("text", { text: chunk.text })
+      : Response.makePart("reasoning", { text: chunk.text })
+  )
 
 /**
  * Close the accumulation.
@@ -144,11 +165,8 @@ export const step = <Tools extends Record<string, Tool.Any>>(
 export const finish = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>
 ): ReadonlyArray<Response.Part<Tools, true>> => {
+  // The fallback for a stream that ended with no finish part at all; a stream
+  // that did finish has already flushed.
   if (state.open.size === 0) return state.parts
-  const flushed = Array.from(state.open.values()).map((chunk) =>
-    chunk.kind === "text"
-      ? Response.makePart("text", { text: chunk.text })
-      : Response.makePart("reasoning", { text: chunk.text })
-  )
-  return [...state.parts, ...flushed]
+  return [...state.parts, ...flushOpen(state)]
 }
