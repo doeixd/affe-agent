@@ -269,22 +269,57 @@ The same `Agent` value, interpreted durably — no redefinition, no separate
 framework:
 
 ```ts
-import { DurableAgent } from "@doeixd/effect-agent/durable"
+import { DurableAgent, DurableChannels } from "@doeixd/effect-agent/durable"
 
+// Where out-of-band input waits. `sqlStore` is the one to use in a real
+// deployment; `memoryStore` is a map in one process.
+const store = yield* DurableChannels.sqlStoreWithTable()
 const durable = DurableAgent.workflow("Support", Support, { store })
 
-const executionId = yield* DurableAgent.submit(durable, sessionId, "refund it")
+const executionId = yield* DurableAgent.submit(
+  durable,
+  store,
+  sessionId,
+  "refund it"
+)
 // the process may end here; the submission survives
-const result = yield* DurableAgent.result(durable, executionId)
+const exit = yield* DurableAgent.result(durable, executionId)
 ```
 
 Model calls and tool calls become `Activity`s, so a resumed submission returns
 persisted results rather than re-issuing them — the refund does not go out
-twice. Journals to SQLite via `SingleRunner`, or run in memory for tests. Steering queued while a submission is suspended is applied exactly once.
+twice, including when the runner that started it is lost and another takes its
+shards over. Journals to SQLite via `SingleRunner`, or runs in memory for tests.
 Canonical history is not stored: it is rebuilt from replayed activity results.
+
+`result` yields an `Exit`, because a failed submission is still a *completed*
+workflow. Its failure crosses as a typed `DurableAgentFailure` carrying the
+originating error's tag, not an opaque defect.
+
+Steering and follow-ups are queued through the same store, so they reach a
+submission running in another process, and they are drained exactly once. A
+`followUp` accepted before quiescence is guaranteed to run; once the submission
+closes, further input is refused with `AgentIdleError` rather than accepted and
+dropped.
+
+### Across a cluster
 
 `@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
 session id is the routing key and out-of-band input reaches the owning node.
+
+```ts
+import { AgentClient } from "@doeixd/effect-agent/cluster"
+
+const client = AgentClient.wrap(yield* makeRawClient("session-1"))
+
+yield* client.submit("refund order 42")   // Effect<string, never>
+yield* client.steer("be brief")           // Effect<void, AgentIdleError>
+```
+
+`AgentClient` wraps the generated entity client: it accepts the same
+`Prompt.RawInput` the rest of the library does, retries through shard
+reassignment, and keeps the cluster's transport failures out of the error
+channel — so the only error left is the one a caller can act on.
 
 ## Examples
 
@@ -292,6 +327,9 @@ session id is the routing key and out-of-band input reaches the owning node.
   with compile-time assertions that inference stays precise
 - [`examples/tracing.ts`](./examples/tracing.ts) — OTLP export
 - [`examples/anthropic.ts`](./examples/anthropic.ts) — a real provider
+- [`examples/durable.ts`](./examples/durable.ts) — durable execution and the
+  cluster client; the snippets above are lifted from it, so they are
+  type-checked rather than prose
 
 ## Development
 

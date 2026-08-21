@@ -86,3 +86,49 @@ describe("public API", () => {
     })
   )
 })
+
+describe("durable and cluster surfaces", () => {
+  it("exports the durable vocabulary and nothing beyond it", async () => {
+    const durable = await import("../src/durable/index.js")
+    // Guards against a helper leaking out by accident, and against one being
+    // dropped: both are breaking for a published package.
+    assert.deepStrictEqual(Object.keys(durable).sort(), [
+      "DurableAgent",
+      "DurableChannels",
+      "DurableModel",
+      "DurableToolkit"
+    ])
+  })
+
+  it("exports the cluster vocabulary and nothing beyond it", async () => {
+    const cluster = await import("../src/cluster/index.js")
+    assert.deepStrictEqual(Object.keys(cluster).sort(), [
+      "AgentClient",
+      "AgentEntity",
+      "ScheduledAgent"
+    ])
+  })
+
+  it("keeps the durable entry points a deployment needs", async () => {
+    const { DurableAgent, DurableChannels } = await import(
+      "../src/durable/index.js"
+    )
+    // Named individually because these are what the README documents; a rename
+    // is a breaking change and should read as one here.
+    for (const name of [
+      "workflow",
+      "submit",
+      "steer",
+      "followUp",
+      "result",
+      "executionIdFor",
+      "open",
+      "DurableAgentFailure"
+    ]) {
+      assert.property(DurableAgent, name)
+    }
+    for (const name of ["memoryStore", "sqlStore", "sqlStoreWithTable"]) {
+      assert.property(DurableChannels, name)
+    }
+  })
+})

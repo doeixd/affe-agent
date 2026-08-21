@@ -41,8 +41,13 @@ export interface Store {
  * Note what is and is not durable here. Each *drain* is journalled as an
  * activity, so replay is consistent — a resumed turn sees the batch it
  * originally consumed. But input that was offered and not yet drained lives
- * only in this map, so it does not survive a restart. A deployment that must
- * not lose queued steering needs a shared, persistent `Store`.
+ * only in this map, so it does not survive a restart.
+ *
+ * Under the cluster it is worse than that, and silently so: `steer` is routed
+ * to whichever node the caller reached, while the submission it targets runs on
+ * the node owning the session's shard. The input is written to one process's
+ * map and drained from another's, so it is accepted and never seen. Use
+ * `sqlStore` for anything beyond a single process.
  */
 export const memoryStore: Effect.Effect<Store> = Effect.map(
   Ref.make(new Map<string, Array<string>>()),
