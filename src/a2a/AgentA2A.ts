@@ -313,9 +313,10 @@ const responseArtifact = (taskId: string, text: string): Artifact => ({
 const statusMessage = (
   taskId: string,
   contextId: string,
-  text: string
+  text: string,
+  suffix: string
 ): Message => ({
-  messageId: `${taskId}:status`,
+  messageId: `${taskId}:${suffix}`,
   contextId,
   taskId,
   role: Role.ROLE_AGENT,
@@ -438,28 +439,66 @@ export const serverLayer = <Principal>(
               statusMessage(
                 entry.taskId,
                 entry.contextId,
-                `No run was waiting for an answer to "${target.id}".`
+                `No run was waiting for an answer to "${target.id}".`,
+                "unmatched"
               )
             )))
           )
           return
         }
+        // How the resumed run settled decides the task's terminal state:
+        // completion gets the answer artifact; a failed or interrupted run
+        // must not be reported as completed just because it stopped.
+        let settledWith = ""
         yield* eventsStream.pipe(
           Stream.filter((envelope) => terminalTags.has(envelope.event._tag)),
           Stream.take(1),
-          Stream.runDrain
+          Stream.runForEach((envelope) =>
+            Effect.sync(() => {
+              settledWith = envelope.event._tag
+            })
+          )
         )
-        const history = yield* host.history(entry.principal, {
-          sessionId: entry.sessionId
-        })
-        const completedAt = yield* timestamp
-        const text = lastAssistantText(history.history)
+        const settledAt = yield* timestamp
         yield* Ref.update(paused, (all) => {
           if (!all.has(entry.taskId)) return all
           const next = new Set(all)
           next.delete(entry.taskId)
           return next
         })
+        if (settledWith === "SubmissionFailed") {
+          yield* Effect.sync(() =>
+            eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
+              entry.taskId,
+              entry.contextId,
+              TaskState.TASK_STATE_FAILED,
+              settledAt,
+              statusMessage(
+                entry.taskId,
+                entry.contextId,
+                "The run failed after the answer was delivered.",
+                "failed"
+              )
+            )))
+          )
+          return
+        }
+        if (settledWith === "SubmissionInterrupted") {
+          yield* Effect.sync(() =>
+            eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
+              entry.taskId,
+              entry.contextId,
+              TaskState.TASK_STATE_CANCELED,
+              settledAt
+            )))
+          )
+          return
+        }
+        const history = yield* host.history(entry.principal, {
+          sessionId: entry.sessionId
+        })
+        const completedAt = settledAt
+        const text = lastAssistantText(history.history)
         yield* Effect.sync(() => {
           eventBus.publish(AgentEvent.artifactUpdate({
             taskId: entry.taskId,
@@ -596,7 +635,18 @@ export const serverLayer = <Principal>(
             }
             const settled: PromptOutcome = { _tag: "Prompt", exit: result }
             yield* Deferred.succeed(promptDone, settled)
-          }).pipe(Effect.ensuring(releaseEntry)),
+          }).pipe(
+            // However the paused run ends — cancel, session close, an answer
+            // delivered through another transport — its pause marker must not
+            // outlive it.
+            Effect.ensuring(releaseEntry),
+            Effect.ensuring(Ref.update(paused, (all) => {
+              if (!all.has(taskId)) return all
+              const next = new Set(all)
+              next.delete(taskId)
+              return next
+            }))
+          ),
           layerScope
         )
 
@@ -615,7 +665,8 @@ export const serverLayer = <Principal>(
               statusMessage(
                 taskId,
                 requestContext.contextId,
-                describeRequest(outcome)
+                describeRequest(outcome),
+                "input-required"
               )
             )))
           )

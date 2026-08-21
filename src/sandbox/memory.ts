@@ -41,13 +41,6 @@ export const layer = (options?: {
           return fresh
         })
 
-      const parentDirectories = (path: string): Array<string> => {
-        const segments = path.split("/").slice(0, -1)
-        return segments.map((_, index) =>
-          segments.slice(0, index + 1).join("/")
-        )
-      }
-
       const entryFor = (
         world: Map<string, Uint8Array>,
         path: string
@@ -85,17 +78,34 @@ export const layer = (options?: {
           ),
         write: (path, content) =>
           Effect.flatMap(worldFor(workspace), (world) =>
-            Effect.sync(() => {
-              world.set(
-                path,
-                typeof content === "string"
-                  ? new TextEncoder().encode(content)
-                  : content
-              )
-              for (const directory of parentDirectories(path)) {
-                // Directories are implicit; nothing to record.
-                void directory
+            Effect.suspend(() => {
+              // Match real-filesystem semantics rather than silently forking
+              // the namespace: a file cannot replace a directory, nor land
+              // inside one.
+              for (const key of world.keys()) {
+                if (key.startsWith(`${path}/`)) {
+                  return Effect.fail(new Sandbox.ProviderError({
+                    detail: `"${path}" is a directory and cannot be overwritten by a file`
+                  }))
+                }
               }
+              const segments = path.split("/")
+              for (let index = 1; index < segments.length; index++) {
+                const ancestor = segments.slice(0, index).join("/")
+                if (world.has(ancestor)) {
+                  return Effect.fail(new Sandbox.ProviderError({
+                    detail: `"${ancestor}" is a file; cannot create "${path}" inside it`
+                  }))
+                }
+              }
+              return Effect.sync(() => {
+                world.set(
+                  path,
+                  typeof content === "string"
+                    ? new TextEncoder().encode(content)
+                    : content
+                )
+              })
             })
           ),
         list: (path) =>
@@ -105,6 +115,11 @@ export const layer = (options?: {
                 const target = entryFor(world, path)
                 if (target === undefined) {
                   return yield* new Sandbox.FileMissingError({ path })
+                }
+                if (target.type === "file") {
+                  return yield* new Sandbox.ProviderError({
+                    detail: `"${path}" is a file, not a directory`
+                  })
                 }
               }
               const prefix = path === undefined ? "" : `${path}/`

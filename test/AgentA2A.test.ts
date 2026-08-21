@@ -90,6 +90,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     readonly blockFirstPrompt?: boolean
     readonly elicitFirstPrompt?: boolean
     readonly failFirstPrompt?: boolean
+    /** With elicitFirstPrompt: the resumed run fails after the answer. */
+    readonly failResumedRun?: boolean
   }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
@@ -186,6 +188,25 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   )
                   yield* Deferred.succeed(asked, void 0)
                   const response = yield* Deferred.await(answer)
+                  if (fixtureOptions?.failResumedRun === true) {
+                    yield* Queue.offer(
+                      eventQueue,
+                      emit({
+                        _tag: "SubmissionFailed",
+                        failure: {
+                          tag: "ResumedRunFailure",
+                          message: "the resumed run failed",
+                          isDefect: false
+                        }
+                      })
+                    )
+                    return yield* new AgentClient.AgentExecutionError({
+                      sessionId: id,
+                      tag: "ResumedRunFailure",
+                      detail: "the resumed run failed",
+                      isDefect: false
+                    })
+                  }
                   yield* Queue.offer(
                     eventQueue,
                     emit({ _tag: "SubmissionCompleted", runs: 1 })
@@ -854,6 +875,69 @@ describe("AgentA2A v1 server", () => {
       const opened = yield* Ref.get(fixture.opened)
       assert.strictEqual(opened.length, 1)
       assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("a resumed run that fails leaves the task failed, not completed", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({
+        elicitFirstPrompt: true,
+        failResumedRun: true
+      })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(
+              HttpServer.formatAddress(server.address)
+            )
+          )
+
+          const responses = client.sendMessageStream({
+            tenant: "",
+            message: userMessage("pause-fail-message", "", "ask"),
+            configuration: undefined,
+            metadata: undefined
+          })
+          const first = yield* promise(() => responses.next())
+          if (first.done || first.value.payload?.$case !== "task") {
+            assert.fail("expected a submitted task")
+          }
+          const taskId = first.value.payload.value.id
+          const contextId = first.value.payload.value.contextId
+          for (;;) {
+            const next = yield* promise(() => responses.next())
+            if (next.done) break
+            if (
+              next.value.payload?.$case === "statusUpdate" &&
+              next.value.payload.value.status?.state ===
+                TaskState.TASK_STATE_INPUT_REQUIRED
+            ) {
+              yield* promise(() => responses.return(undefined))
+              break
+            }
+          }
+
+          const continued = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: { ...userMessage("answer-2", contextId, "yes"), taskId },
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in continued)) {
+            assert.fail("expected the continuation to return a task")
+          }
+          // The run failed after the answer was delivered; reporting a
+          // completed task here would invent an artifact that never existed.
+          assert.strictEqual(
+            continued.status?.state,
+            TaskState.TASK_STATE_FAILED
+          )
+        }).pipe(Effect.provide(fixture.server))
+      )
     })
   )
 })

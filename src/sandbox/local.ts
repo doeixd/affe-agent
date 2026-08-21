@@ -177,12 +177,15 @@ export const layer = (options?: {
             const anchorReal = yield* Effect.promise(() =>
               fs.realpath(anchor).catch(() => null)
             )
+            if (anchorReal === null) {
+              // The anchor existed moments ago; it has since been removed.
+              return yield* new Sandbox.FileMissingError({ path: target })
+            }
             const rootReal = yield* Effect.promise(() =>
               fs.realpath(root).catch(() => root)
             )
             const inside = anchorReal === rootReal ||
-              (anchorReal !== null && anchorReal.startsWith(`${rootReal}${nodePath.sep}`)) ||
-              anchorReal === null
+              anchorReal.startsWith(`${rootReal}${nodePath.sep}`)
             if (!inside) {
               return yield* new Sandbox.PermissionDeniedError({
                 path: target,

@@ -128,6 +128,33 @@ describe("in-memory sandbox", () => {
     }).pipe(Effect.provide(provider), Effect.scoped)
   )
 
+  it.effect("refuses writes that would fork the namespace", () =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox.acquire(Sandbox.workspace("w"))
+      yield* sandbox.write(p("docs/a.txt"), bytes("x"))
+
+      // A file cannot replace an existing directory…
+      const overDirectory = yield* Effect.exit(sandbox.write(p("docs"), bytes("y")))
+      assert.isTrue(Exit.isFailure(overDirectory))
+
+      // …nor land inside an existing file…
+      const insideFile = yield* Effect.exit(
+        sandbox.write(p("docs/a.txt/deeper.txt"), bytes("z"))
+      )
+      assert.isTrue(Exit.isFailure(insideFile))
+
+      // …and a file cannot be listed as a directory.
+      const listed = yield* Effect.exit(sandbox.list(p("docs/a.txt")))
+      assert.isTrue(Exit.isFailure(listed))
+
+      // Nothing was written by the refused operations.
+      assert.deepStrictEqual((yield* sandbox.list()).map((e) => e.path), [
+        "docs",
+        "seeded.txt"
+      ])
+    }).pipe(Effect.provide(provider), Effect.scoped)
+  )
+
   it.effect("hands the exact command to a scripted executor", () =>
     Effect.gen(function* () {
       const seen: Array<Sandbox.Command> = []
