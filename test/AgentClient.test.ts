@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Duration, Effect, Fiber, Layer, Ref, Schedule, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
+import * as Elicitation from "../src/Elicitation.js"
 import type { AgentDefinition } from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -287,6 +288,69 @@ describe("AgentClient", () => {
       )
 
       assert.deepStrictEqual(deltas, [])
+    })
+  )
+
+  // `it.live`, because the poll below sleeps: under the test clock a
+  // `Schedule.spaced` never advances and the retry would spin until timeout.
+  it.live("unpauses a run waiting on an answer", () =>
+    Effect.gen(function* () {
+      // Without this a transport can *show* a paused run -- the request
+      // reaches `events` like any other -- and offer no way to unpause it,
+      // which is worse than not showing it at all.
+      const Dangerous = Tool.make("wipe", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      }).setNeedsApproval(true)
+
+      const { layer: model } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "w1", name: "wipe", params: {} }] },
+        TestLanguageModel.text("done")
+      ])
+
+      const agent = Agent.make({
+        toolkit: Agent.toolkit([Dangerous], {
+          wipe: () => Effect.succeed("wiped")
+        }),
+        loop: AgentLoop.bounded(4)
+      })
+
+      const text = yield* Effect.flatMap(
+        Effect.service(AgentClient.AgentClient),
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* client.createSession()
+              const running = yield* Effect.forkChild(session.prompt("go"))
+
+              // Poll the remote surface rather than reaching for the local
+              // session: a transport has nothing else.
+              const request = yield* Effect.retry(
+                Effect.flatMap(session.pending, (waiting) =>
+                  waiting.length > 0
+                    ? Effect.succeed(waiting[0]!)
+                    : Effect.fail("none" as const)
+                ),
+                { times: 200, schedule: Schedule.spaced(Duration.millis(5)) }
+              )
+
+              assert.strictEqual(request.kind, "tool-approval")
+              assert.isTrue(
+                yield* session.respond({ id: request.id, granted: true })
+              )
+              const result = yield* Fiber.join(running)
+              return result.text
+            })
+          )
+      ).pipe(
+        Effect.provide(
+          AgentClient.layer(agent, { elicitation: Elicitation.memory }).pipe(
+            Layer.provide(model)
+          )
+        )
+      )
+
+      assert.strictEqual(text, "done")
     })
   )
 })

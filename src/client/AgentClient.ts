@@ -5,6 +5,7 @@ import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
+import type * as Elicitation from "../Elicitation.js"
 import {
   AgentBusyError,
   AgentClosedError,
@@ -184,6 +185,23 @@ export interface RemoteSession {
     input: Prompt.RawInput
   ) => Effect.Effect<void, RemoteError>
   readonly interrupt: () => Effect.Effect<void, RemoteError>
+  /**
+   * Answer something the run is waiting for.
+   *
+   * The remote half of `Elicitation`. Without it a transport can *show* a
+   * paused run — `ElicitationRequested` reaches `events` like any other event —
+   * and offer no way to unpause it, which is worse than not showing it.
+   *
+   * `false` when nothing was waiting for that id.
+   */
+  readonly respond: (
+    response: Elicitation.Response
+  ) => Effect.Effect<boolean, RemoteError>
+  /** What the run is currently waiting to be told. */
+  readonly pending: Effect.Effect<
+    ReadonlyArray<Elicitation.Request>,
+    RemoteError
+  >
   readonly history: Effect.Effect<Prompt.Prompt, RemoteError>
   readonly status: Effect.Effect<AgentSession.Status, RemoteError>
   readonly events: Stream.Stream<AgentEventEnvelope, RemoteError>
@@ -253,6 +271,8 @@ export const fromSession = (
   steer: (input) => session.steer(input),
   followUp: (input) => session.followUp(input),
   interrupt: () => session.interrupt(),
+  respond: (response) => AgentSession.respond(session, response),
+  pending: AgentSession.pending(session),
   history: session.history,
   status: session.status,
   events: session.events
@@ -266,7 +286,15 @@ export const fromSession = (
  * reference every other implementation is checked against.
  */
 export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>
+  agent: AgentDefinition<Tools, E, R>,
+  /**
+   * How the sessions this transport creates are built — where out-of-band
+   * input waits, where a paused run waits for an answer.
+   *
+   * `sessionId` is excluded because the transport assigns it per session, not
+   * per client.
+   */
+  options?: Omit<AgentSession.MakeOptions, "sessionId" | "history">
 ): Layer.Layer<AgentClient, never, LanguageModel.LanguageModel | R> =>
   Layer.effect(
     AgentClient,
@@ -274,14 +302,14 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
       const open = yield* Ref.make(new Map<string, RemoteSession>())
       const env = yield* Effect.context<LanguageModel.LanguageModel | R>()
 
-      const createSession: Service["createSession"] = (options) =>
+      const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
-          const session = yield* AgentSession.make(
-            agent,
-            options?.sessionId === undefined
+          const session = yield* AgentSession.make(agent, {
+            ...options,
+            ...(sessionOptions?.sessionId === undefined
               ? {}
-              : { sessionId: options.sessionId }
-          ).pipe(Effect.provide(env))
+              : { sessionId: sessionOptions.sessionId })
+          }).pipe(Effect.provide(env))
 
           const remote = fromSession(session)
           yield* Ref.update(open, (all) => new Map(all).set(remote.id, remote))

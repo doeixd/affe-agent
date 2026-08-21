@@ -212,6 +212,8 @@ describe("session lifetime", () => {
             steer: () => Effect.void,
             followUp: () => Effect.void,
             interrupt: () => Effect.void,
+            respond: () => Effect.succeed(false),
+            pending: Effect.succeed([]),
             history: Effect.succeed(Prompt.make([])),
             status: Effect.succeed("idle" as const),
             events: Stream.empty
