@@ -365,4 +365,76 @@ describe("compaction", () => {
       assert.strictEqual(yield* Ref.get(calls), 6)
     })
   )
+
+  it.effect("refuses a checkpoint from a different conversation", () =>
+    Effect.gen(function* () {
+      // The case a length check cannot catch. An old conversation leaves a
+      // checkpoint covering ten messages; a new conversation under the same id
+      // grows past that, so the checkpoint *fits* -- and the new conversation
+      // is handed a summary of one it never had. Confidently wrong is worse
+      // than absent.
+      const summaries = yield* Ref.make<Array<string>>([])
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: ({ messages }) =>
+          Effect.gen(function* () {
+            const texts = messages.content.flatMap((message) =>
+              message.role === "user"
+                ? message.content.flatMap((part) =>
+                    part.type === "text" ? [part.text] : []
+                  )
+                : []
+            )
+            const summary = texts.join("|")
+            yield* Ref.update(summaries, (all) => [...all, summary])
+            return summary
+          })
+      })
+      const agent = Agent.make({
+        contextTransform: compaction,
+        loop: AgentLoop.bounded(1)
+      })
+
+      const run = (tag: string, turns: number) =>
+        Effect.gen(function* () {
+          const { layer, recorder } = yield* TestLanguageModel.script(
+            Array.from({ length: turns }, (_, i) =>
+              TestLanguageModel.text(`${tag}-r${i}`)
+            )
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              // The same id both times, deliberately.
+              const session = yield* AgentSession.make(agent, {
+                sessionId: "reused"
+              })
+              for (let i = 0; i < turns; i++) {
+                yield* session.prompt(`${tag}-m${i}`)
+              }
+            })
+          ).pipe(Effect.provide(layer))
+          return yield* recorder.prompts
+        })
+
+      // The lengths matter. A long first conversation leaves a checkpoint far
+      // ahead of anything the second reaches before compacting on its own, so
+      // the stale one is overwritten before it could ever fit. Three turns
+      // leaves a checkpoint covering three messages -- exactly where the second
+      // conversation is on *its* second turn, which is the window a length
+      // check cannot see.
+      yield* run("alpha", 3)
+      const second = yield* run("beta", 3)
+
+      const systems = second.flatMap((prompt) =>
+        prompt.content.flatMap((message) =>
+          message.role === "system" ? [message.content] : []
+        )
+      )
+      // Not one summary in the new conversation mentions the old one.
+      assert.isTrue(
+        systems.every((text) => !text.includes("alpha")),
+        `a summary of the old conversation leaked: ${JSON.stringify(systems)}`
+      )
+    })
+  )
 })

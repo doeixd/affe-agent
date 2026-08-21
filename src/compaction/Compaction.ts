@@ -37,6 +37,17 @@ import * as ContextTransform from "../ContextTransform.js"
 export interface Checkpoint {
   readonly coveredThrough: number
   readonly summary: string
+  /**
+   * Identifies the transcript prefix this summary describes.
+   *
+   * `coveredThrough` alone says a checkpoint *could* fit; it does not say it
+   * belongs. Session ids are reused — a server evicts a conversation and hands
+   * the same id to a new one — and a checkpoint covering ten messages looks
+   * perfectly valid against an unrelated conversation that has reached twelve.
+   * The new conversation then receives a summary of a conversation it never
+   * had, which is worse than no summary at all: it is confidently wrong.
+   */
+  readonly prefix: string
 }
 
 /** Decides when the projection needs compacting, and how much to keep whole. */
@@ -95,6 +106,38 @@ export type Summarise<E = never, R = never> = (options: {
   /** The previous summary, if this extends one. */
   readonly previous: Option.Option<string>
 }) => Effect.Effect<string, E, R>
+
+/**
+ * A cheap fingerprint of a transcript prefix.
+ *
+ * Not cryptographic, and it does not need to be. The question is only "is this
+ * the same prefix I summarised?", and the alternative being guarded against is
+ * an unrelated conversation, not a forged one. A 32-bit FNV-1a over a stable
+ * rendering answers that.
+ *
+ * Rendering is defensive: message content can hold decoded values a tool
+ * produced — a `Date`, a class instance — and a fingerprint that threw on one
+ * would fail the whole turn. Falling back to shape alone is weaker but still
+ * catches the case that matters.
+ */
+const fingerprint = (messages: ReadonlyArray<Prompt.Message>): string => {
+  let hash = 0x811c9dc5
+  const absorb = (text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i)
+      hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+  }
+  for (const message of messages) {
+    absorb(message.role)
+    try {
+      absorb(JSON.stringify(message.content))
+    } catch {
+      absorb(String(message.content?.length ?? 0))
+    }
+  }
+  return hash.toString(16)
+}
 
 const summaryMessage = (summary: string) =>
   Prompt.systemMessage({
@@ -174,17 +217,24 @@ export const make = <E = never, R = never>(options: {
           const messages = context.canonicalPrompt.content
           const stored = (yield* Ref.get(checkpoints)).get(context.sessionId)
 
-          // A checkpoint that claims to cover more messages than exist cannot
-          // describe this conversation, so it is discarded rather than used.
+          // A checkpoint is used only if it still describes *this* transcript.
           //
           // Session ids are reused: a snapshot is restored, a durable
           // submission replays, a server hands the same id to a new
           // conversation after evicting the old one. The transform outlives all
-          // of that, and a stale checkpoint sliced past the end of history —
-          // producing a prompt of nothing but a summary of a conversation that
-          // no longer existed, with every actual message dropped, silently.
+          // of that.
+          //
+          // Length is the necessary condition — a checkpoint claiming more
+          // messages than exist sliced past the end of history and produced a
+          // prompt of nothing but a summary, every actual message dropped. The
+          // fingerprint is the sufficient one: an unrelated conversation that
+          // happens to be longer would otherwise look like a perfect match and
+          // receive a summary it never earned.
           const existing: Option.Option<Checkpoint> =
-            stored === undefined || stored.coveredThrough > messages.length
+            stored === undefined ||
+              stored.coveredThrough > messages.length ||
+              stored.prefix !==
+                fingerprint(messages.slice(0, stored.coveredThrough))
               ? Option.none()
               : Option.some(stored)
           const covered = Option.match(existing, {
@@ -239,7 +289,8 @@ export const make = <E = never, R = never>(options: {
             next.delete(context.sessionId)
             next.set(context.sessionId, {
               coveredThrough: boundary,
-              summary
+              summary,
+              prefix: fingerprint(messages.slice(0, boundary))
             })
             const limit = options.maxSessions ?? defaultMaxSessions
             while (next.size > limit) {

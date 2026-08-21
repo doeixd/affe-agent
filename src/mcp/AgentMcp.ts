@@ -96,17 +96,33 @@ export const handlers = (options?: {
         return session
       })
 
-    const sessionFor = (sessionId: string | undefined) =>
+    /**
+     * Run one call against a session, with the right lifetime for each kind.
+     *
+     * An anonymous call gets a session scoped to the *call*, so it is released
+     * when the call returns. It was previously created in the server's scope:
+     * one-shot in reachability but not in lifetime, so every anonymous call
+     * left a session alive until the server shut down — and in `AgentClient`'s
+     * registry too, since that finalizer hangs off the same scope. Unbounded
+     * growth driven entirely by input from outside.
+     *
+     * A named call gets the registered session, which outlives the call on
+     * purpose: that is what makes `sessionId` mean anything.
+     */
+    const ask = (sessionId: string | undefined, prompt: string) =>
       sessionId === undefined
-        ? // Anonymous calls are one-shot, so the session belongs to the
-          // server's scope and is never registered: nothing can reach it again.
-          Scope.provide(client.createSession(), parent)
-        : creating.withPermits(1)(openNamed(sessionId))
+        ? Effect.scoped(
+            Effect.flatMap(client.createSession(), (session) =>
+              session.prompt(prompt)
+            )
+          )
+        : creating
+            .withPermits(1)(openNamed(sessionId))
+            .pipe(Effect.flatMap((session) => session.prompt(prompt)))
 
     return AgentToolkit.toLayer({
       ask_agent: ({ prompt, sessionId }) =>
-        sessionFor(sessionId).pipe(
-          Effect.flatMap((session) => session.prompt(prompt)),
+        ask(sessionId, prompt).pipe(
           Effect.map((result) => result.text),
           // A remote caller cannot act on the harness's error types, and MCP
           // has no place to put them. The tool's declared failure carries the

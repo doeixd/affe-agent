@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Ref, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import { Prompt } from "effect/unstable/ai"
 import { AgentClient } from "../src/client/index.js"
 import { AgentMcp } from "../src/mcp/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -182,5 +183,118 @@ describe("agent over MCP", () => {
         "the evicted session was resumed instead of dropped"
       )
     })
+  )
+})
+
+describe("session lifetime", () => {
+  /** A client that counts how many sessions are opened and released. */
+  const countingClient = (
+    opened: Ref.Ref<number>,
+    released: Ref.Ref<number>
+  ) =>
+    Layer.succeed(AgentClient.AgentClient, {
+      createSession: (options) =>
+        Effect.gen(function* () {
+          yield* Ref.update(opened, (n) => n + 1)
+          yield* Effect.addFinalizer(() =>
+            Ref.update(released, (n) => n + 1)
+          )
+          return {
+            id: options?.sessionId ?? "anon",
+            prompt: () =>
+              Effect.succeed({
+                submissionId: "s",
+                status: "completed" as const,
+                runs: 1,
+                turns: 1,
+                text: "ok"
+              }),
+            steer: () => Effect.void,
+            followUp: () => Effect.void,
+            interrupt: () => Effect.void,
+            history: Effect.succeed(Prompt.make([])),
+            status: Effect.succeed("idle" as const),
+            events: Stream.empty
+          }
+        }),
+      session: () =>
+        Effect.fail(
+          new AgentClient.AgentTransportError({
+            sessionId: "?",
+            detail: "not used"
+          })
+        )
+    })
+
+  const withCounts = <A, E>(
+    use: (
+      ask: (
+        sessionId: string | undefined
+      ) => Effect.Effect<unknown, unknown>,
+      counts: {
+        readonly opened: Ref.Ref<number>
+        readonly released: Ref.Ref<number>
+      }
+    ) => Effect.Effect<A, E>
+  ) =>
+    Effect.gen(function* () {
+      const opened = yield* Ref.make(0)
+      const released = yield* Ref.make(0)
+
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const bound = yield* AgentMcp.AgentToolkit
+          const ask = (sessionId: string | undefined) =>
+            bound
+              .handle("ask_agent", {
+                prompt: "hello",
+                ...(sessionId === undefined ? {} : { sessionId })
+              })
+              .pipe(Effect.flatMap(Stream.runCollect))
+          return yield* use(ask, { opened, released })
+        }).pipe(
+          // Provided around the *whole* block, so the handler layer's scope
+          // stays open across calls -- which is the shape a running server
+          // has. Providing it only to the toolkit construction closes that
+          // scope immediately, and a session parked in it is released at once:
+          // the leak becomes unobservable and the test proves nothing.
+          Effect.provide(Layer.unwrap(AgentMcp.handlers()))
+        )
+      ).pipe(Effect.provide(countingClient(opened, released)))
+    })
+
+  it.effect("an anonymous call releases its session when it returns", () =>
+    withCounts((ask, counts) =>
+      Effect.gen(function* () {
+        // "One-shot" has to mean lifetime, not just reachability. These
+        // sessions were created in the *server's* scope, so every anonymous
+        // call left one alive until the server shut down -- and in the
+        // client's registry too, since that finalizer hangs off the same
+        // scope. Unbounded growth driven entirely by input from outside.
+        yield* ask(undefined)
+        yield* ask(undefined)
+
+        assert.strictEqual(yield* Ref.get(counts.opened), 2)
+        assert.strictEqual(
+          yield* Ref.get(counts.released),
+          2,
+          "an anonymous session outlived the call that created it"
+        )
+      })
+    )
+  )
+
+  it.effect("a named call keeps its session alive between calls", () =>
+    withCounts((ask, counts) =>
+      Effect.gen(function* () {
+        // The other half: a named session outlives the call on purpose, which
+        // is what makes `sessionId` mean anything.
+        yield* ask("chat-1")
+        yield* ask("chat-1")
+
+        assert.strictEqual(yield* Ref.get(counts.opened), 1)
+        assert.strictEqual(yield* Ref.get(counts.released), 0)
+      })
+    )
   )
 })
