@@ -92,7 +92,15 @@ describe("schema-defined events", () => {
         runId: Option.some(runId("run-1")),
         turn: Option.some(2),
         sequence: 7,
-        event: { _tag: "ToolCallSucceeded", id: "t1", name: "echo", result: "x" }
+        // Both the decoded result and the JSON the model was given: the
+        // second is what a wire projection can rely on.
+        event: {
+          _tag: "ToolCallSucceeded",
+          id: "t1",
+          name: "echo",
+          result: "x",
+          encodedResult: "x"
+        }
       }
 
       // This is what a remote subscriber or a store needs, and what the

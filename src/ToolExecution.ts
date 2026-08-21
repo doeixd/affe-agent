@@ -190,7 +190,8 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
                       _tag: "ToolCallProgress",
                       id: call.id,
                       name: call.name,
-                      result: next.result
+                      result: next.result,
+                      encodedResult: next.encodedResult
                     }).pipe(
                       Effect.as({ ...collected, last: Option.some(next) })
                     )
@@ -276,7 +277,8 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
             _tag: "ToolCallSucceeded",
             id: call.id,
             name: call.name,
-            result: result.result
+            result: result.result,
+            encodedResult: result.encodedResult
           }
     )
 

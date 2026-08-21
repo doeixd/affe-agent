@@ -208,12 +208,33 @@ export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
 export const ToolCallProgress = Schema.TaggedStruct("ToolCallProgress", {
   id: Schema.String,
   name: Schema.String,
-  result: Schema.Unknown
+  /** Decoded, as `ToolCallSucceeded.result` is. */
+  result: Schema.Unknown,
+  /** JSON, as `ToolCallSucceeded.encodedResult` is. */
+  encodedResult: Schema.Unknown
 })
 export const ToolCallSucceeded = Schema.TaggedStruct("ToolCallSucceeded", {
   id: Schema.String,
   name: Schema.String,
-  result: Schema.Unknown
+  /**
+   * The handler's result, decoded.
+   *
+   * `Schema.Unknown` at the type level, and genuinely arbitrary at runtime: a
+   * tool whose success schema transforms produces a `Date`, a class instance, a
+   * branded value. Useful in-process, where the consumer knows the toolkit.
+   */
+  result: Schema.Unknown,
+  /**
+   * The same result, as it goes to the model.
+   *
+   * Being Schema-defined is not the same as having a stable wire
+   * representation, and `Unknown` holding a decoded value is exactly where the
+   * two come apart: encoding an envelope containing a `Date` produces whatever
+   * `JSON.stringify` decides, silently and irreversibly. Anything projecting
+   * events onto a wire wants this field, which is already JSON by construction
+   * because the model receives it.
+   */
+  encodedResult: Schema.Unknown
 })
 export const ToolCallFailed = Schema.TaggedStruct("ToolCallFailed", {
   id: Schema.String,
