@@ -139,4 +139,9 @@ describe("durable and cluster surfaces", () => {
       "TestLanguageModel"
     ])
   })
+
+  it("exports the compaction vocabulary and nothing beyond it", async () => {
+    const compaction = await import("../src/compaction/index.js")
+    assert.deepStrictEqual(Object.keys(compaction).sort(), ["Compaction"])
+  })
 })

@@ -393,6 +393,33 @@ yield* client.steer("be brief")           // Effect<void, AgentIdleError>
 reassignment, and keeps the cluster's transport failures out of the error
 channel — so the only error left is the one a caller can act on.
 
+## Compaction
+
+A long conversation has to fit a context window without being lost.
+`@doeixd/effect-agent/compaction` is a `ContextTransform` — it adds nothing to
+the kernel, which is the point:
+
+```ts
+import { Compaction } from "@doeixd/effect-agent/compaction"
+
+const agent = Agent.make({
+  contextTransform: yield* Compaction.make({
+    policy: Compaction.whenLongerThan(40, { retain: 10 }),
+    summarise: ({ messages, previous }) => summarise(messages, previous)
+  })
+})
+```
+
+Canonical history is never rewritten, truncated, or summarised in place. What
+changes is the projection: a summary of the head, the retained tail, and
+everything since. The tail stays verbatim because it is what the model is still
+reasoning over.
+
+Summaries are checkpointed, so a conversation past the threshold does not
+re-summarise every turn, and each new checkpoint is handed the previous summary
+so it folds rather than forgets. `summarise` is an ordinary Effect — a cheaper
+model, a heuristic, a cache — and may fail and require services of its own.
+
 ## Testing
 
 The deterministic model and lifecycle probe the library tests itself with ship

@@ -525,6 +525,30 @@ cannot see them; live remote streaming needs the delivery log, which does not
 exist. `DurableAgent.workflow` takes `stream` as a definition-level option, so
 replay makes the same choice the original run did.
 
+## Compaction (roadmap #1 item 5)
+
+The interesting thing about compaction is how little it needed. It is a
+`ContextTransform` and nothing else — no kernel change, no new seam, no
+cooperation from `AgentSession` — which is the strongest evidence so far that
+the canonical-history / derived-context split was the right shape.
+
+Canonical history is never rewritten, truncated or summarised in place. The
+projection becomes a summary of the head, the retained tail, and everything
+since. A destructive alternative would have been simpler and irreversible:
+nothing could later re-derive a longer window, audit what the model was told, or
+change the strategy mid-conversation.
+
+Two details carry the design. The threshold counts only what has accumulated
+*since* the last checkpoint, or a conversation past the line re-summarises every
+turn — the expensive thing compaction exists to avoid. And the retained tail is
+kept verbatim, because it is what the model is still reasoning over; summarising
+it would compact away the live part.
+
+Worth recording a testing mistake: the first version of the checkpoint-reuse
+test asserted `summaries < 8`, which passes whether or not the checkpoint is
+used. Measuring both ways gave 3 with the checkpoint and 6 without, so the
+assertion is now exact. A bound that cannot discriminate is not a test.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found
