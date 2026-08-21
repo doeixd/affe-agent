@@ -38,6 +38,33 @@ export class DurableModelFailure extends Schema.TaggedError<DurableModelFailure>
   }
 }
 
+/**
+ * A completed response, re-expressed as the stream parts that would have
+ * produced it.
+ *
+ * Text and reasoning arrive as one chunk each: the original chunking is a
+ * property of the provider's connection, not of the turn, and is exactly the
+ * thing the journal must not depend on. Everything else passes through as it
+ * is.
+ */
+const streamPartsFor = (
+  parts: ReadonlyArray<Response.PartEncoded>
+): Array<Response.StreamPartEncoded> => {
+  const out: Array<Response.StreamPartEncoded> = []
+  let chunk = 0
+  for (const part of parts) {
+    if (part.type === "text" || part.type === "reasoning") {
+      const id = `durable-${part.type}-${chunk++}`
+      out.push({ type: `${part.type}-start`, id })
+      out.push({ type: `${part.type}-delta`, id, delta: part.text })
+      out.push({ type: `${part.type}-end`, id })
+    } else {
+      out.push(part)
+    }
+  }
+  return out
+}
+
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>
 ): Effect.Effect<
@@ -69,9 +96,12 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       Schema.TaggedStruct("Failed", { failure: AgentEvent.Failure })
     ])
 
-    const service: LanguageModel.Service = {
-      ...underlying,
-      generateText: ((options: any) =>
+    /**
+     * One journalled model call. Named so `streamText` can reuse it directly:
+     * going through `service.generateText` would mean re-entering Effect AI's
+     * overloads, which erase the tool types the harness depends on.
+     */
+    const durableGenerate = (options: any) =>
         Effect.gen(function* () {
           const index = yield* Ref.getAndUpdate(callIndex, (n) => n + 1)
           // Like tool activities, this must not fail: an activity with no
@@ -115,15 +145,50 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           return new LanguageModel.GenerateTextResponse(
             result.parts as Array<Response.Part<any, any>>
           )
-        })) as unknown as LanguageModel.Service["generateText"],
+        })
+
+    const service: LanguageModel.Service = {
+      ...underlying,
+      generateText:
+        durableGenerate as unknown as LanguageModel.Service["generateText"],
       // Streaming is out of scope for v0.1 (PLAN §24). A stub that silently
       // bypassed durability would be worse than an explicit refusal.
-      streamText: (() =>
-        Stream.fromEffect(
-          Effect.die(
-            new Error("DurableModel does not support streaming; see PLAN §24")
+      // Streaming under durability, defined rather than refused.
+      //
+      // WORKFLOW_CLUSTER_PLAN separates three things that are easy to conflate:
+      // the workflow journal is *computation* durability, canonical history is
+      // *semantic* state, and reconnectable streaming output would be a
+      // delivery log. Journalling every token delta would put a delivery
+      // concern in the computation journal, and make a replayed turn's
+      // durability depend on how a provider happened to chunk its output.
+      //
+      // So the journal keeps what it already keeps: one entry per model call,
+      // holding the completed response. The stream is then produced from that
+      // response.
+      //
+      // The consequence is honest and worth stating plainly: under durable
+      // execution a `stream: true` submission still emits `MessageDelta`, but
+      // the deltas arrive when the model call completes rather than
+      // token-by-token. Live delivery needs the delivery log, which is not
+      // built. What is guaranteed is that a streamed durable submission
+      // commits exactly the history a batched one does, on the first run and
+      // on replay.
+      streamText: ((options: any) =>
+        Stream.unwrap(
+          Effect.map(
+            Effect.flatMap(
+              // The same activity the batch path uses, so a model call is
+              // journalled once however it was requested, and a submission
+              // that resumes replays it rather than re-issuing it.
+              durableGenerate(options),
+              (response) =>
+                Schema.encodeEffect(partsSchema)(
+                  response.content as ReadonlyArray<Response.Part<Tools, true>>
+                ).pipe(Effect.orDie)
+            ),
+            (encoded) => Stream.fromIterable(streamPartsFor(encoded))
           )
-        )) as LanguageModel.Service["streamText"]
+        )) as unknown as LanguageModel.Service["streamText"]
     }
 
     return Layer.succeed(LanguageModel.LanguageModel, service)

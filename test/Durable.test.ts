@@ -9,6 +9,7 @@ import * as ContextTransform from "../src/ContextTransform.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as FakeModel from "./FakeModel.js"
+import { countingModel } from "./helpers.js"
 
 const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 
@@ -24,6 +25,7 @@ const Gate = DurableDeferred.make("DurableTestGate", { success: Schema.String })
 const Gate2 = DurableDeferred.make("DurableTestGate2", { success: Schema.String })
 const Gate3 = DurableDeferred.make("DurableTestGate3", { success: Schema.String })
 const Gate4 = DurableDeferred.make("DurableTestGate4", { success: Schema.String })
+const StreamGate = DurableDeferred.make("StreamGate", { success: Schema.String })
 
 const Refund = Tool.make("refund", {
   parameters: Schema.Struct({ amount: Schema.String }),
@@ -541,6 +543,122 @@ describe("durable submissions", () => {
           Exit.isSuccess(outcome.value.exit),
         "an interrupted submission must not complete successfully"
       )
+    })
+  )
+})
+
+describe("streaming under durability", () => {
+  it.live("a streamed submission commits what a batched one does", () =>
+    Effect.gen(function* () {
+      // Adding streaming to core made `stream: true` under `/durable`
+      // reachable for the first time, and it died: DurableModel had no
+      // streamText. It now produces its stream from the response the batch
+      // path journals -- one activity per model call, whichever way the caller
+      // asked -- so the two paths cannot disagree about the transcript.
+      const script = [
+        { text: "streamed answer", chunks: ["streamed", " answer"] }
+      ]
+
+      const runWith = (stream: boolean) =>
+        Effect.gen(function* () {
+          const store = yield* DurableChannels.memoryStore
+          const { layer: model } = yield* FakeModel.layer(script)
+          const durable = DurableAgent.workflow(
+            `Streamed-${stream}`,
+            Agent.make({}),
+            { store, stream }
+          )
+
+          return yield* Effect.gen(function* () {
+            const id = yield* DurableAgent.submit(
+              durable,
+              store,
+              `s-${stream}`,
+              "go"
+            )
+            return yield* DurableAgent.result(durable, id)
+          }).pipe(
+            Effect.provide(
+              durable.layer.pipe(
+                Layer.provideMerge(Engine),
+                Layer.provideMerge(model)
+              )
+            )
+          )
+        })
+
+      const streamed = yield* runWith(true)
+      const batched = yield* runWith(false)
+
+      assert.isTrue(
+        Exit.isSuccess(streamed),
+        `streamed submission failed: ${JSON.stringify(streamed)}`
+      )
+      assert.isTrue(Exit.isSuccess(batched))
+      if (Exit.isSuccess(streamed) && Exit.isSuccess(batched)) {
+        assert.strictEqual(streamed.value, "streamed answer")
+        assert.strictEqual(streamed.value, batched.value)
+      }
+    })
+  )
+
+  it.live("a streamed submission still replays rather than re-issuing", () =>
+    Effect.gen(function* () {
+      // The property that matters more than the deltas: journalling is
+      // unchanged by streaming. A resumed run returns the persisted response
+      // instead of calling the model again.
+      const calls = yield* Ref.make(0)
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const suspendOnce = yield* Ref.make(true)
+
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          if (yield* Ref.getAndSet(suspendOnce, false)) {
+            const token = yield* DurableDeferred.token(StreamGate)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(StreamGate)
+          }
+          return context.canonicalPrompt
+        })
+      )
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: base } = yield* FakeModel.layer([
+        { text: "first", chunks: ["fir", "st"] },
+        { text: "second" }
+      ])
+      const model = countingModel(base, calls)
+
+      const durable = DurableAgent.workflow(
+        "StreamedResume",
+        Agent.make({
+          contextTransform: gating,
+          loop: AgentLoop.make((state) =>
+            Effect.succeed(
+              state.turnIndex < 2 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+          )
+        }),
+        { store, stream: true }
+      )
+
+      yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, store, "s-resume", "go")
+        const token = yield* Deferred.await(gateReady)
+        yield* DurableDeferred.succeed(StreamGate, { token, value: "go" })
+        yield* DurableAgent.result(durable, id)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      // Two turns, two model calls -- the suspension replayed turn 1's
+      // journalled response rather than streaming it again.
+      assert.strictEqual(yield* Ref.get(calls), 2)
     })
   )
 })

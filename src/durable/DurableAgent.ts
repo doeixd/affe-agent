@@ -37,6 +37,23 @@ export interface Options {
    * carries.
    */
   readonly toolkit?: Toolkit.WithHandler<any> | undefined
+  /**
+   * Stream the model calls of this workflow's submissions.
+   *
+   * Part of the workflow definition rather than the payload, so replay makes
+   * the same choice the original run did.
+   *
+   * Worth being precise about what this does and does not give you. The
+   * journal holds one entry per model call, containing the completed response
+   * — never the individual deltas, which would put a delivery concern in the
+   * computation journal and make replay depend on a provider's chunking. So
+   * `MessageDelta` is emitted, but whole, and it is emitted *inside* the
+   * workflow, where a consumer in another process cannot see it. Live
+   * streaming to a remote consumer needs a delivery log, which this library
+   * does not have. This is useful when something in the same process is
+   * watching the session's events.
+   */
+  readonly stream?: boolean | undefined
 }
 
 /**
@@ -158,7 +175,9 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             channels,
             sessionId: payload.sessionId
           })
-          const result = yield* AgentSession.prompt(session, payload.prompt)
+          const result = yield* AgentSession.prompt(session, payload.prompt, {
+            stream: options.stream === true
+          })
           return result.text
         })
       ).pipe(

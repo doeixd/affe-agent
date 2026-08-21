@@ -369,6 +369,13 @@ dropped.
 
 ### Across a cluster
 
+Streaming and durability compose, with a caveat worth knowing: the journal holds
+one entry per model call containing the completed response, never the individual
+deltas. A streamed durable submission commits exactly the history a batched one
+does, but its deltas arrive whole, and they are emitted inside the workflow —
+live streaming to a remote consumer would need a delivery log, which this
+library does not have.
+
 `@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
 session id is the routing key and out-of-band input reaches the owning node.
 

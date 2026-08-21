@@ -498,6 +498,33 @@ terminal event or a consumer is left rendering one that never resolves. The
 matching history guarantee is tested directly: interrupt mid-stream, and
 canonical history holds only the user message.
 
+## Streaming under durable execution
+
+Adding streaming to core made `prompt(input, { stream: true })` under
+`/durable` reachable for the first time — and it died, because `DurableModel`
+had no `streamText`. Defining that interaction was the last open item in the
+durable review.
+
+The separation the plan draws settles it. The workflow journal is *computation*
+durability; canonical history is *semantic* state; reconnectable streaming
+output would be a *delivery log*. Journalling every token delta would put a
+delivery concern in the computation journal and make a replayed turn depend on
+how a provider happened to chunk its output.
+
+So the journal keeps exactly what it kept before: one entry per model call,
+holding the completed response, produced by the same activity whichever way the
+caller asked. `DurableModel.streamText` then produces its stream from that
+response. A streamed durable submission therefore commits precisely the history
+a batched one does, on the first run and on replay, and a resumed run replays
+the journalled response rather than re-issuing it.
+
+Two limitations, stated rather than hidden. Deltas arrive **whole** — the
+original chunking is a property of the provider's connection, not of the turn.
+And they are emitted *inside* the workflow, where a consumer in another process
+cannot see them; live remote streaming needs the delivery log, which does not
+exist. `DurableAgent.workflow` takes `stream` as a definition-level option, so
+replay makes the same choice the original run did.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found
