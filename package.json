@@ -71,6 +71,10 @@
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
     },
+    "./sandbox": {
+      "types": "./dist/sandbox/index.d.ts",
+      "default": "./dist/sandbox/index.js"
+    },
     "./mcp/v1": {
       "types": "./dist/mcp/v1/index.d.ts",
       "default": "./dist/mcp/v1/index.js"
