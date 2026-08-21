@@ -4,6 +4,7 @@ import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as ContextTransform from "../src/ContextTransform.js"
 import { Compaction } from "../src/compaction/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
@@ -199,6 +200,62 @@ describe("compaction", () => {
       )
       // And it did not fire on every turn.
       assert.isBelow(summarised.length, 4)
+    })
+  )
+
+  it.effect("keeps what an earlier transform contributed", () =>
+    Effect.gen(function* () {
+      // Compaction reasons about canonical history, because its checkpoints
+      // are positions in the transcript. Rebuilding the prompt from canonical
+      // history alone discarded whatever a transform composed before it had
+      // added -- and silently: the conversation still looked right, and the
+      // injected instruction simply stopped appearing once the conversation
+      // grew long enough to compact. Dynamic instructions are the commonest
+      // transform there is, so this mattered.
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: () => Effect.succeed("SUMMARY")
+      })
+      const instructions = ContextTransform.appendSystem(() =>
+        Effect.succeed("DYNAMIC")
+      )
+
+      const { layer, recorder } = yield* TestLanguageModel.script(
+        Array.from({ length: 6 }, (_, i) => TestLanguageModel.text(`turn ${i}`))
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({
+              contextTransform: ContextTransform.compose(
+                instructions,
+                compaction
+              ),
+              loop: AgentLoop.bounded(1)
+            })
+          )
+          for (let i = 0; i < 6; i++) {
+            yield* session.prompt(`message ${i}`)
+          }
+        })
+      ).pipe(Effect.provide(layer))
+
+      const prompts = yield* recorder.prompts
+      const last = prompts[prompts.length - 1]!
+      const systems = summaryOf(last)
+
+      // Both survive: the summary that replaced the conversation, and the
+      // instruction the earlier transform appended after it.
+      assert.strictEqual(systems.length, 2)
+      assert.include(systems[0]!, "SUMMARY")
+      assert.strictEqual(systems[1], "DYNAMIC")
+
+      // Every turn kept the instruction, not just the uncompacted ones.
+      assert.isTrue(
+        prompts.every((prompt) => summaryOf(prompt).includes("DYNAMIC")),
+        "compaction dropped an earlier transform's contribution"
+      )
     })
   )
 })

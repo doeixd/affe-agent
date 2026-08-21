@@ -83,12 +83,49 @@ export type Summarise<E = never, R = never> = (options: {
   readonly previous: Option.Option<string>
 }) => Effect.Effect<string, E, R>
 
-const summaryMessage = (summary: string): Prompt.Prompt =>
-  Prompt.fromMessages([
-    Prompt.systemMessage({
-      content: `Summary of the earlier conversation:\n\n${summary}`
-    })
-  ])
+const summaryMessage = (summary: string) =>
+  Prompt.systemMessage({
+    content: `Summary of the earlier conversation:\n\n${summary}`
+  })
+
+/**
+ * Replace the conversation inside the derived prompt, keeping everything else.
+ *
+ * Compaction has to reason about *canonical* history: its checkpoints are
+ * positions in the transcript, and those only mean anything if they count the
+ * same messages every turn. But a transform composed before this one has
+ * already contributed to `prompt` — dynamic instructions, retrieved memory —
+ * and rebuilding from canonical history alone threw that away. Silently: the
+ * conversation still looked right, and the injected system message simply
+ * stopped appearing once the conversation grew long enough to compact.
+ *
+ * So the canonical messages are substituted in place, at the position of the
+ * first of them, and anything an earlier transform added stays where it was
+ * put. Identity comparison is what makes that work: `Prompt.concat` carries
+ * message objects through unchanged, so a message that is not in canonical
+ * history came from somewhere else.
+ */
+const substitute = (
+  prompt: Prompt.Prompt,
+  canonical: ReadonlyArray<Prompt.Message>,
+  replacement: ReadonlyArray<Prompt.Message>
+): Prompt.Prompt => {
+  const isCanonical = new Set<Prompt.Message>(canonical)
+  const out: Array<Prompt.Message> = []
+  let placed = false
+  for (const message of prompt.content) {
+    if (isCanonical.has(message)) {
+      if (!placed) {
+        out.push(...replacement)
+        placed = true
+      }
+      continue
+    }
+    out.push(message)
+  }
+  if (!placed) out.push(...replacement)
+  return Prompt.fromMessages(out)
+}
 
 /**
  * Build a compacting `ContextTransform`.
@@ -151,10 +188,10 @@ export const make = <E = never, R = never>(options: {
             return Option.match(existing, {
               onNone: () => context.prompt,
               onSome: (checkpoint) =>
-                Prompt.concat(
+                substitute(context.prompt, messages, [
                   summaryMessage(checkpoint.summary),
-                  Prompt.fromMessages(messages.slice(checkpoint.coveredThrough))
-                )
+                  ...messages.slice(checkpoint.coveredThrough)
+                ])
             })
           }
 
@@ -172,10 +209,10 @@ export const make = <E = never, R = never>(options: {
             return next
           })
 
-          return Prompt.concat(
+          return substitute(context.prompt, messages, [
             summaryMessage(summary),
-            Prompt.fromMessages(messages.slice(boundary))
-          )
+            ...messages.slice(boundary)
+          ])
         })
       )
   )
