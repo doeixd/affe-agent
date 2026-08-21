@@ -161,3 +161,38 @@ describe("tool safety semantics", () => {
     })
   )
 })
+
+/**
+ * A structural check that `PromptError` covers what the engine can raise.
+ *
+ * `prompt` asserts its submission to `PromptError`, and that assertion cannot
+ * simply be removed: `AgentSubmission.execute` currently derives `any` for its
+ * error channel, so dropping the assertion replaces a precise union with `any`
+ * — worse than the gap it once hid. Making the engine derive its own union
+ * end to end is a real change, not a deletion.
+ *
+ * What *can* be checked today is that the declared union covers the one place
+ * whose errors are explicitly annotated. `ToolApprovalRequiredError` slipped
+ * through precisely because nothing tied the two together; this ties them.
+ */
+type ExecutionErrors<Tools extends Record<string, Tool.Any>> = ReturnType<
+  typeof ToolExecution.execute<Tools>
+> extends Effect.Effect<unknown, infer E, unknown>
+  ? E
+  : never
+
+type Covers<Tools extends Record<string, Tool.Any>> =
+  ExecutionErrors<Tools> extends AgentSession.PromptError<Tools, never>
+    ? true
+    : false
+
+const Guarded = Tool.make("guardedCheck", {
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+  failure: Schema.Literal("declined")
+})
+
+// Fails to compile if `ToolExecution` grows an error `PromptError` omits.
+const _promptCoversExecution: Covers<{ readonly guardedCheck: typeof Guarded }> =
+  true
+void _promptCoversExecution

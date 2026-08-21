@@ -25,7 +25,7 @@ export interface AgentDefinition<
    * transform's, so a tool declaring `dependencies` makes those services
    * required at `AgentSession.make` rather than failing at the first call.
    */
-  readonly toolkit: ToolkitInput<Tools, R>
+  readonly toolkit: ToolkitInput<Tools, E, R>
   readonly loop: AgentLoop.AgentLoop<E, R, Tools>
   readonly contextTransform: ContextTransform.ContextTransform<E, R>
   readonly toolExecution: ToolExecution.Strategy
@@ -38,11 +38,18 @@ export interface AgentDefinition<
  * The Effect form is how capabilities vary with runtime state: it is ordinary
  * effectful computation, resolved per turn, rather than a dynamic-capability
  * DSL of the harness's own invention.
+ *
+ * It may fail, and that failure joins the agent's error type. Acquiring a
+ * capability is exactly the kind of thing that fails — connecting to a tenant's
+ * MCP server, reading a policy, fetching a credential — and forbidding it would
+ * push every such resolver into either dying or pre-resolving outside the
+ * agent, which defeats the point of resolving per turn.
  */
 export type ToolkitInput<
   Tools extends Record<string, Tool.Any>,
+  E = never,
   R = never
-> = Toolkit.WithHandler<Tools> | Effect.Effect<Toolkit.WithHandler<Tools>, never, R>
+> = Toolkit.WithHandler<Tools> | Effect.Effect<Toolkit.WithHandler<Tools>, E, R>
 
 export interface Config<
   Tools extends Record<string, Tool.Any> = {},
@@ -50,10 +57,11 @@ export interface Config<
   LR = never,
   TE = never,
   TR = never,
+  KE = never,
   KR = never
 > {
   readonly instructions?: string | undefined
-  readonly toolkit?: ToolkitInput<Tools, KR> | undefined
+  readonly toolkit?: ToolkitInput<Tools, KE, KR> | undefined
   /**
    * Defaults to `AgentLoop.untilIdle()`.
    *
@@ -132,10 +140,14 @@ export const make = <
   LR = never,
   TE = never,
   TR = never,
+  KE = never,
   KR = never
 >(
-  config: Config<Tools, LE, LR, TE, TR, KR> = {}
-): AgentDefinition<Tools, LE | TE, LR | TR | KR> => ({
+  config: Config<Tools, LE, LR, TE, TR, KE, KR> = {}
+  // The toolkit's resolution failure joins the agent's error type, alongside
+  // the loop's and the transform's. Acquiring a capability can fail; saying so
+  // is what lets a caller handle it.
+): AgentDefinition<Tools, LE | TE | KE, LR | TR | KR> => ({
   instructions: Option.fromUndefinedOr(config.instructions),
   // Always a toolkit, never `undefined`. An agent without tools gets an empty
   // one, so the engine has a single code path and the model call keeps its tool

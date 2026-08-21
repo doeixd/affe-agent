@@ -98,7 +98,9 @@ export class DurableAgentFailure extends Schema.TaggedError<DurableAgentFailure>
  */
 const resolveToolkit = (
   input: AgentDefinition<any, any, any>["toolkit"]
-): Effect.Effect<Toolkit.WithHandler<any>, never, any> =>
+  // The resolution may fail, and that failure is the agent's own: it joins the
+  // submission's error channel like any other.
+): Effect.Effect<Toolkit.WithHandler<any>, any, any> =>
   Effect.isEffect(input) ? input : Effect.succeed(input)
 
 /** The wire-safe projection of a submission's cause. */
