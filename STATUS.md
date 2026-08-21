@@ -597,6 +597,35 @@ checked against.
 One note on Effect v4: service keys are `Context.Service<Self, Shape>()("key")`,
 not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
 
+## MCP, and what was deliberately not built (roadmap #1 item 7)
+
+`/mcp` exposes an agent to MCP clients as a tool. The adapter is small, and
+that is the result rather than the goal: the handler talks to `AgentClient`, so
+MCP is a protocol adapter over the transport seam rather than a second way into
+the harness. Sessions are held in the layer's scope, so a `sessionId` really
+continues a conversation and omitting one really is a one-shot.
+
+The other two directions in item 7 were **not** attempted, for the same reason:
+
+* **Consuming a remote MCP server's tools** needs an MCP *client*. Effect ships
+  `McpServer`, `McpProtocol` and `McpSchema` but no client, so this is writing a
+  protocol implementation, not an adapter.
+* **A2A** is a specification with no peer available here to check an
+  implementation against. The vocabulary maps cleanly — a Task is a submission,
+  a context is a session, cancel is interrupt, updates are the event stream —
+  and the two prerequisites the roadmap named are now in place, so it is ready
+  to be written by someone who can test it against a real implementation.
+
+Shipping either from the specification alone would produce plausible code with
+nothing establishing it is correct, which is the failure mode this project has
+repeatedly caught in itself.
+
+A testing note. The conversation-continuity test first asserted the *answer*
+returned by the tool — which proves nothing, because a scripted model returns
+turn 2's text whether or not the session was reused. What discriminates is the
+prompt the model was given. Both session tests now assert transcripts, and both
+were checked by breaking the session lookup in each direction.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

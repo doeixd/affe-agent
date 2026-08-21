@@ -152,4 +152,9 @@ describe("durable and cluster surfaces", () => {
     const client = await import("../src/client/index.js")
     assert.deepStrictEqual(Object.keys(client).sort(), ["AgentClient"])
   })
+
+  it("exports the mcp vocabulary and nothing beyond it", async () => {
+    const mcp = await import("../src/mcp/index.js")
+    assert.deepStrictEqual(Object.keys(mcp).sort(), ["AgentMcp"])
+  })
 })

@@ -420,6 +420,29 @@ them is a `Schema.TaggedError`.
 `AgentClient.layer(agent)` is the in-process implementation: useful on its own,
 and the reference other transports are checked against.
 
+## MCP
+
+`@doeixd/effect-agent/mcp` exposes an agent to MCP clients as a tool:
+
+```ts
+import { AgentMcp } from "@doeixd/effect-agent/mcp"
+
+AgentMcp.layer.pipe(
+  Layer.provide(McpServer.layerStdio({ name: "researcher", version: "1.0.0" })),
+  Layer.provide(AgentClient.layer(Researcher))
+)
+```
+
+The handler talks to `AgentClient`, not to the harness, so MCP is a protocol
+adapter over the transport seam rather than a second way in. Passing a
+`sessionId` continues a conversation across calls; omitting it gives a one-shot
+session, which is the right default for an unrelated question.
+
+Only this direction is implemented. Consuming a remote MCP server's tools would
+need an MCP *client*, and Effect ships `McpServer`, `McpProtocol` and
+`McpSchema` but no client — that is a protocol implementation rather than an
+adapter, and it is not written here.
+
 ## Snapshots
 
 A conversation is a value, so it can be stored and brought back:
