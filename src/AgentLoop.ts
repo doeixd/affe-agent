@@ -1,4 +1,6 @@
 import { Effect } from "effect"
+import type { Pipeable } from "effect/Pipeable"
+import { pipeArguments } from "effect/Pipeable"
 import type { LanguageModel, Response, Tool } from "effect/unstable/ai"
 import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
 import { positiveInteger } from "./internal/positive.js"
@@ -63,7 +65,7 @@ export interface AgentLoop<
   E = never,
   R = never,
   Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
-> {
+> extends Pipeable {
   readonly decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
 }
 
@@ -73,7 +75,16 @@ export const make = <
   Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 >(
   decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
-): AgentLoop<E, R, Tools> => ({ decide })
+): AgentLoop<E, R, Tools> => ({
+  decide,
+  // Syntax only. `and` and `or` stay explicit function calls, because a policy
+  // combined by position would leave a reader guessing which one it was --
+  // and the difference between them is the difference between a run that stops
+  // and one that does not.
+  pipe() {
+    return pipeArguments(this, arguments)
+  }
+})
 
 /**
  * Continue while the last response requested tool calls.

@@ -3,27 +3,28 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 107 passing, including the durable and cluster phases. `npm run lint` — 0 Effect diagnostics. `npm run typecheck` — clean, including all examples.
+`npm test` — 201 passing. `npm run lint` — 0 Effect diagnostics.
+`npm run typecheck` — clean, including all examples. `npm run verify:package`
+imports every published entry point from the packed tarball.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never
-erased internally and then re-asserted at the boundary. Making the toolkit
-always present — an agent without tools gets `Toolkit.empty` — removed the
-conditional that had been defeating inference at the model call. That took the
-casts in `src/` from seven to two: constructing `AgentSession`'s phantom `Tools`
-field, and defaulting an absent toolkit. Both are structural and commented.
+erased internally and then re-asserted at the boundary.
 
 **User-side code needs no casts and no type annotations.**
-`examples/typed-agent.ts` is a full typed agent — tools, a custom loop, a
-context transform, prompt and steer — written with zero casts and zero
-annotated parameters, and carries compile-time assertions that inference stays
-precise rather than degrading to `any`. The tests and the fake model are
-cast-free too. The two remaining casts are inside `src/` and structural.
+`examples/typed-agent.ts` is a full typed agent written with zero casts and zero
+annotated parameters, carrying compile-time assertions that inference stays
+precise rather than degrading to `any` — because `any` compiles, so a passing
+build proves nothing on its own.
+
+The kernel vocabulary has not grown. Everything below the first block is built
+*from* it rather than into it, which is the property the whole design was
+betting on.
 
 ```
 src/
 ├ Agent.ts             reusable agent definition (carries no model)
-├ AgentSession.ts      public module-function API
+├ AgentSession.ts      the session handle, and its module functions
 ├ AgentSubmission.ts   prompt + follow-up chain (internal vocabulary)
 ├ AgentRun.ts          turns until the loop stops
 ├ AgentTurn.ts         one model call + its tools, committed atomically
@@ -31,9 +32,20 @@ src/
 ├ AgentEvent.ts        event ADT + correlation envelope
 ├ ContextTransform.ts  canonical history -> ephemeral model prompt
 ├ ToolExecution.ts     concurrency strategy + failure policy
-├ Errors.ts            AgentBusyError, AgentIdleError, AgentClosedError
-└ internal/            ids, eventBus, history, state
-examples/anthropic.ts  the DoD program on a real provider (typechecked only)
+├ InputChannel.ts      where out-of-band input waits (the one durable seam)
+├ Errors.ts            the typed failures
+└ internal/            ids, eventBus, history, state, stream accumulator
+│
+├ testing/             scripted model + lifecycle probe   (/testing)
+├ compaction/          summarise the head, keep the tail  (/compaction)
+├ client/              protocol-neutral session transport (/client)
+├ durable/             the same agent inside a Workflow   (/durable)
+├ cluster/             a session as a cluster Entity      (/cluster)
+└ mcp/                 expose an agent, and bind its tools (/mcp)
+
+scripts/verify-package.mjs   imports each entry point from the packed tarball
+.github/workflows/ci.yml     check, build, and that verification
+examples/                    typed agent, tracing, durable, a real provider
 ```
 
 ## Phase status

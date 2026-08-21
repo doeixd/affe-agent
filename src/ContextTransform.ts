@@ -1,4 +1,6 @@
 import { Effect } from "effect"
+import type { Pipeable } from "effect/Pipeable"
+import { pipeArguments } from "effect/Pipeable"
 import { Prompt } from "effect/unstable/ai"
 import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
 
@@ -44,13 +46,22 @@ export interface Context {
  * on its own services — memory recall, RAG retrieval, a workspace — without the
  * harness knowing what those are.
  */
-export interface ContextTransform<E = never, R = never> {
+export interface ContextTransform<E = never, R = never> extends Pipeable {
   readonly transform: (context: Context) => Effect.Effect<Prompt.Prompt, E, R>
 }
 
 export const make = <E = never, R = never>(
   transform: (context: Context) => Effect.Effect<Prompt.Prompt, E, R>
-): ContextTransform<E, R> => ({ transform })
+): ContextTransform<E, R> => ({
+  transform,
+  // `pipe` carries no semantics of its own -- it is syntax for passing this
+  // value through functions. That matters here: composing transforms means
+  // something specific, and it stays spelled out (`compose`) rather than being
+  // implied by the position of an argument.
+  pipe() {
+    return pipeArguments(this, arguments)
+  }
+})
 
 /**
  * A discrete system message.

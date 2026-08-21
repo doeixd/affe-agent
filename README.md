@@ -289,6 +289,25 @@ Agent.make({ toolkit, toolFailurePolicy: ToolExecution.FailRun })
 Defects always fail the run either way — a broken handler is not something the
 model can correct.
 
+### Composing declarative values
+
+`Agent`, `AgentLoop` and `ContextTransform` are values, so an external
+combinator can be applied to them without changing the library:
+
+```ts
+const bounded = AgentLoop.untilIdle().pipe(alsoStopAfter(20))
+```
+
+`.pipe` carries no agent semantics — it is syntax for passing a value through
+functions. Combining policies stays explicit (`AgentLoop.and`, `.or`,
+`ContextTransform.compose`), because a policy combined by argument position
+would leave a reader guessing which one it was, and the difference between
+`and` and `or` is the difference between a run that stops and one that does
+not.
+
+Composition is heterogeneous: composing transforms that fail differently, or
+need different services, gives the union of both.
+
 ## Design commitments
 
 These are enforced by tests, not just documented:
