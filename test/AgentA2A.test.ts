@@ -11,14 +11,18 @@ import {
   Deferred,
   Effect,
   Layer,
+  Option,
+  Queue,
   Ref,
   Stream
 } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
+import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentA2A } from "../src/a2a/index.js"
 import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import type * as Elicitation from "../src/Elicitation.js"
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
@@ -82,7 +86,11 @@ const taskText = (task: Task): string => {
 }
 
 const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
-  fixtureOptions?: { readonly blockFirstPrompt?: boolean }
+  fixtureOptions?: {
+    readonly blockFirstPrompt?: boolean
+    readonly elicitFirstPrompt?: boolean
+    readonly failFirstPrompt?: boolean
+  }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
   const released = yield* Ref.make<ReadonlyArray<string>>([])
@@ -92,6 +100,25 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     void,
     AgentClient.AgentExecutionError
   >()
+  const asked = yield* Deferred.make<void>()
+  const answer = yield* Deferred.make<Elicitation.Response>()
+  const waiting = yield* Ref.make(new Map<string, Elicitation.Request>())
+  const lastText = yield* Ref.make<string | undefined>(undefined)
+  const eventQueue = yield* Queue.unbounded<AgentProtocol.AgentEventEnvelope>()
+
+  const envelope = (sessionId: string) => {
+    let sequence = 0
+    return (event: AgentEvent.AgentEvent): AgentProtocol.AgentEventEnvelope => ({
+      sessionId: AgentProtocol.SessionId.make(sessionId),
+      submissionId: Option.some(
+        AgentProtocol.SubmissionId.make(`${sessionId}:submission`)
+      ),
+      runId: Option.none(),
+      turn: Option.none(),
+      sequence: ++sequence,
+      event
+    })
+  }
 
   const agentClient = Layer.succeed(
     AgentClient.AgentClient,
@@ -101,6 +128,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
           const id = options?.sessionId ??
             AgentProtocol.SessionId.make("a2a-generated")
           const promptCount = yield* Ref.make(0)
+          const emit = envelope(id)
           yield* Ref.update(opened, (all) => [...all, id])
           yield* Effect.addFinalizer(() =>
             Ref.update(released, (all) => [...all, id])
@@ -119,17 +147,67 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   calls,
                   (all) => [...all, `${id}:${count}:${text}`]
                 )
+                yield* Ref.set(lastText, `${id}:${count}:${text}`)
                 if (
                   fixtureOptions?.blockFirstPrompt === true && count === 1
                 ) {
                   yield* Deferred.succeed(promptStarted, void 0)
                   yield* Deferred.await(promptInterrupted)
                 }
+                if (
+                  fixtureOptions?.failFirstPrompt === true && count === 1
+                ) {
+                  return yield* new AgentClient.AgentExecutionError({
+                    sessionId: id,
+                    tag: "FixtureFailure",
+                    detail: "the run failed",
+                    isDefect: false
+                  })
+                }
+                if (
+                  fixtureOptions?.elicitFirstPrompt === true && count === 1
+                ) {
+                  const request: Elicitation.Request = {
+                    id: `${id}:elicit:1`,
+                    kind: "approval",
+                    detail: "may proceed?"
+                  }
+                  yield* Ref.update(waiting, (all) =>
+                    new Map(all).set(request.id, request)
+                  )
+                  yield* Queue.offer(
+                    eventQueue,
+                    emit({
+                      _tag: "ElicitationRequested",
+                      id: request.id,
+                      kind: request.kind,
+                      detail: request.detail
+                    })
+                  )
+                  yield* Deferred.succeed(asked, void 0)
+                  const response = yield* Deferred.await(answer)
+                  yield* Queue.offer(
+                    eventQueue,
+                    emit({ _tag: "SubmissionCompleted", runs: 1 })
+                  )
+                  const finalText =
+                    `${id}:${count}:${text}:${String(response.value)}`
+                  yield* Ref.set(lastText, finalText)
+                  return {
+                    submissionId: AgentProtocol.SubmissionId.make(
+                      `${id}:submission:${count}`
+                    ),
+                    status: "completed" as const,
+                    runs: 1,
+                    turns: count,
+                    text: finalText
+                  }
+                }
                 return {
                   submissionId: AgentProtocol.SubmissionId.make(
                     `${id}:submission:${count}`
                   ),
-                  status: "completed",
+                  status: "completed" as const,
                   runs: 1,
                   turns: count,
                   text: `${id}:${count}:${text}`
@@ -149,11 +227,31 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                     })
                   ).pipe(Effect.asVoid)
                 : Effect.void,
-            respond: () => Effect.succeed(false),
-            pending: Effect.succeed([]),
-            history: Effect.succeed(Prompt.empty),
-            status: Effect.succeed("idle"),
-            events: Stream.empty
+            respond: (response) =>
+              Effect.gen(function* () {
+                const found = yield* Ref.get(waiting)
+                if (!found.has(response.id)) return false
+                yield* Ref.update(waiting, (all) => {
+                  const next = new Map(all)
+                  next.delete(response.id)
+                  return next
+                })
+                yield* Deferred.succeed(answer, response)
+                return true
+              }),
+            pending: Effect.map(Ref.get(waiting), (all) =>
+              Array.from(all.values())
+            ),
+            history: Effect.map(Ref.get(lastText), (text) =>
+              text === undefined
+                ? Prompt.empty
+                : Prompt.make([{
+                  role: "assistant" as const,
+                  content: [{ type: "text" as const, text }]
+                }])
+            ),
+            status: Effect.succeed("idle" as const),
+            events: Stream.fromQueue(eventQueue)
           }
         }),
       session: (id) =>
@@ -219,7 +317,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     )
   )
 
-  return { server, opened, released, calls, promptStarted }
+  return { server, opened, released, calls, promptStarted, asked }
 })
 
 describe("AgentA2A v1 server", () => {
@@ -610,6 +708,146 @@ describe("AgentA2A v1 server", () => {
             stored.status?.state,
             TaskState.TASK_STATE_CANCELED
           )
+        }).pipe(Effect.provide(fixture.server))
+      )
+
+      const opened = yield* Ref.get(fixture.opened)
+      assert.strictEqual(opened.length, 1)
+      assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("pauses a run as input-required and completes it from a continuation message", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ elicitFirstPrompt: true })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(
+              HttpServer.formatAddress(server.address)
+            )
+          )
+          const responses = client.sendMessageStream({
+            tenant: "",
+            message: userMessage("pause-message", "", "ask"),
+            configuration: undefined,
+            metadata: undefined
+          })
+
+          const first = yield* promise(() => responses.next())
+          const second = yield* promise(() => responses.next())
+          if (first.done || first.value.payload?.$case !== "task") {
+            assert.fail("expected a submitted task")
+          }
+          if (second.done || second.value.payload?.$case !== "statusUpdate") {
+            assert.fail("expected a working status")
+          }
+          const taskId = first.value.payload.value.id
+          const contextId = first.value.payload.value.contextId
+          assert.strictEqual(
+            second.value.payload.value.status?.state,
+            TaskState.TASK_STATE_WORKING
+          )
+
+          const third = yield* promise(() => responses.next())
+          if (third.done || third.value.payload?.$case !== "statusUpdate") {
+            assert.fail("expected an input-required status")
+          }
+          assert.strictEqual(
+            third.value.payload.value.status?.state,
+            TaskState.TASK_STATE_INPUT_REQUIRED
+          )
+          const question =
+            third.value.payload.value.status?.message?.parts[0]?.content
+          if (question?.$case !== "text") {
+            assert.fail("expected the question rendered as text")
+          }
+          assert.include(question.value, "approval")
+          yield* promise(() => responses.return(undefined))
+
+          const stored = yield* promise(() =>
+            client.getTask({ tenant: "", id: taskId })
+          )
+          assert.strictEqual(
+            stored.status?.state,
+            TaskState.TASK_STATE_INPUT_REQUIRED
+          )
+
+          const continued = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: {
+                ...userMessage("answer-message", contextId, "yes"),
+                taskId
+              },
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in continued)) {
+            assert.fail("expected the continuation to return a task")
+          }
+          assert.strictEqual(continued.id, taskId)
+          assert.strictEqual(
+            continued.status?.state,
+            TaskState.TASK_STATE_COMPLETED
+          )
+          assert.include(taskText(continued), ":yes")
+
+          const storedCompleted = yield* promise(() =>
+            client.getTask({ tenant: "", id: taskId })
+          )
+          assert.strictEqual(
+            storedCompleted.status?.state,
+            TaskState.TASK_STATE_COMPLETED
+          )
+        }).pipe(Effect.provide(fixture.server))
+      )
+
+      const opened = yield* Ref.get(fixture.opened)
+      assert.strictEqual(opened.length, 1)
+      assert.deepStrictEqual(yield* Ref.get(fixture.calls), [
+        `${opened[0]}:1:ask`
+      ])
+      assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("reports a failed run as a failed task", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ failFirstPrompt: true })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(
+              HttpServer.formatAddress(server.address)
+            )
+          )
+
+          const failed = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: userMessage("fail-message", "", "break"),
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in failed)) {
+            assert.fail("expected SendMessage to return a task")
+          }
+          assert.strictEqual(
+            failed.status?.state,
+            TaskState.TASK_STATE_FAILED
+          )
+
+          const stored = yield* promise(() =>
+            client.getTask({ tenant: "", id: failed.id })
+          )
+          assert.strictEqual(stored.status?.state, TaskState.TASK_STATE_FAILED)
         }).pipe(Effect.provide(fixture.server))
       )
 

@@ -52,6 +52,7 @@ import {
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/internal/sessionHost.js"
+import { is as isEvent } from "../AgentEvent.js"
 
 /** A2A skill metadata advertised by the generated v1 Agent Card. */
 export interface Skill {
@@ -238,6 +239,7 @@ const agentCard = <Principal>(
 })
 
 interface ActiveTask<Principal> {
+  readonly taskId: string
   readonly principal: Principal
   readonly sessionId: AgentProtocol.SessionId
   readonly contextId: string
@@ -304,6 +306,70 @@ const responseArtifact = (taskId: string, text: string): Artifact => ({
   extensions: []
 })
 
+/** An agent message attached to a status update, rendering what the run needs. */
+const statusMessage = (
+  taskId: string,
+  contextId: string,
+  text: string
+): Message => ({
+  messageId: `${taskId}:status`,
+  contextId,
+  taskId,
+  role: Role.ROLE_AGENT,
+  parts: [textPart(text)],
+  metadata: undefined,
+  extensions: [],
+  referenceTaskIds: []
+})
+
+const describeRequest = (request: {
+  readonly kind: string
+  readonly detail: unknown
+}): string => {
+  const detail = typeof request.detail === "string"
+    ? request.detail
+    : request.detail === undefined || request.detail === null
+      ? undefined
+      : JSON.stringify(request.detail)
+  return detail === undefined
+    ? `The run is paused waiting for "${request.kind}".`
+    : `The run is paused waiting for "${request.kind}": ${detail}`
+}
+
+/** The run's final answer, read from canonical history once it reaches quiescence. */
+const lastAssistantText = (prompt: Prompt.Prompt): string => {
+  for (let index = prompt.content.length - 1; index >= 0; index--) {
+    const message = prompt.content[index]
+    if (message === undefined || message.role !== "assistant") continue
+    const content = message.content
+    if (typeof content === "string") return content
+    return content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n")
+  }
+  return ""
+}
+
+/** Submission-level events whose arrival means the paused run has settled. */
+const terminalTags = new Set([
+  "SubmissionCompleted",
+  "SubmissionFailed",
+  "SubmissionInterrupted"
+])
+
+interface ElicitationRequestedEvent {
+  readonly _tag: "ElicitationRequested"
+  readonly id: string
+  readonly kind: string
+  readonly detail: unknown
+}
+
+type PromptOutcome = {
+  readonly _tag: "Prompt"
+  readonly exit: Exit.Exit<AgentProtocol.PromptResponse, AgentProtocol.RemoteError>
+}
+
 const isAsyncIterable = (value: unknown): value is AsyncIterable<unknown> =>
   typeof value === "object" &&
   value !== null &&
@@ -333,10 +399,82 @@ export const serverLayer = <Principal>(
       const active = yield* Ref.make<Map<string, ActiveTask<Principal>>>(
         new Map()
       )
+      // Tasks whose run is paused waiting for an answer. The SDK keeps their
+      // event bus alive across INPUT_REQUIRED, so the adapter must not finish
+      // it when the first request returns.
+      const paused = yield* Ref.make(new Set<string>())
       const principals = new WeakMap<
         ServerCallContext,
         { readonly value: Principal }
       >()
+
+      const continuePaused = Effect.fn("AgentA2A.continuePaused")(function* (
+        entry: ActiveTask<Principal>,
+        target: { readonly id: string },
+        userMessage: Message,
+        eventBus: ExecutionEventBus
+      ) {
+        const answer = yield* inputText(userMessage)
+        // Subscribe before answering so the terminal event cannot slip past.
+        const eventsStream = yield* host.events(entry.principal, {
+          sessionId: entry.sessionId
+        })
+        const matched = yield* host.respond(entry.principal, {
+          requestId: AgentProtocol.RequestId.make(`a2a:${entry.taskId}:respond`),
+          sessionId: entry.sessionId,
+          response: { id: target.id, granted: true, value: answer }
+        })
+        if (!matched) {
+          const failedAt = yield* timestamp
+          yield* Effect.sync(() =>
+            eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
+              entry.taskId,
+              entry.contextId,
+              TaskState.TASK_STATE_FAILED,
+              failedAt,
+              statusMessage(
+                entry.taskId,
+                entry.contextId,
+                `No run was waiting for an answer to "${target.id}".`
+              )
+            )))
+          )
+          return
+        }
+        yield* eventsStream.pipe(
+          Stream.filter((envelope) => terminalTags.has(envelope.event._tag)),
+          Stream.take(1),
+          Stream.runDrain
+        )
+        const history = yield* host.history(entry.principal, {
+          sessionId: entry.sessionId
+        })
+        const completedAt = yield* timestamp
+        const text = lastAssistantText(history.history)
+        yield* Ref.update(paused, (all) => {
+          if (!all.has(entry.taskId)) return all
+          const next = new Set(all)
+          next.delete(entry.taskId)
+          return next
+        })
+        yield* Effect.sync(() => {
+          eventBus.publish(AgentEvent.artifactUpdate({
+            taskId: entry.taskId,
+            contextId: entry.contextId,
+            artifact: responseArtifact(entry.taskId, text),
+            append: false,
+            lastChunk: true,
+            metadata: undefined
+          }))
+          eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
+            entry.taskId,
+            entry.contextId,
+            TaskState.TASK_STATE_COMPLETED,
+            completedAt,
+            responseMessage(entry.taskId, entry.contextId, text)
+          )))
+        })
+      })
 
       const execute = Effect.fn("AgentA2A.execute")(function* (
         requestContext: RequestContext,
@@ -378,15 +516,23 @@ export const serverLayer = <Principal>(
         )
         const cancelRequested = yield* Deferred.make<void>()
         const cancelResolved = yield* Deferred.make<boolean>()
-        yield* Ref.update(active, (all) =>
-          new Map(all).set(taskId, {
-            principal,
-            sessionId,
-            contextId: requestContext.contextId,
-            cancelRequested,
-            cancelResolved
-          })
-        )
+        const entry: ActiveTask<Principal> = {
+          taskId,
+          principal,
+          sessionId,
+          contextId: requestContext.contextId,
+          cancelRequested,
+          cancelResolved
+        }
+        yield* Ref.update(active, (all) => new Map(all).set(taskId, entry))
+        // Only this invocation's entry: a continuation re-registering the same
+        // task id must not be unregistered by the earlier fibre settling.
+        const releaseEntry = Ref.update(active, (all) => {
+          if (all.get(taskId) !== entry) return all
+          const next = new Map(all)
+          next.delete(taskId)
+          return next
+        })
         yield* Effect.sync(() =>
           eventBus.publish(
             AgentEvent.statusUpdate(
@@ -400,56 +546,106 @@ export const serverLayer = <Principal>(
           )
         )
 
-        const runPrompt = Effect.gen(function* () {
-          const prompt = yield* inputText(requestContext.userMessage)
-          const result = yield* Effect.exit(host.prompt(principal, {
-            requestId: AgentProtocol.RequestId.make(`a2a:${taskId}:prompt`),
-            sessionId,
-            input: Prompt.make(prompt)
-          }))
+        // A paused run answers through a continuation message rather than
+        // starting anything new.
+        const waiting = yield* host.pending(principal, { sessionId })
+        const target = waiting.requests[0]
+        if (target !== undefined) {
+          yield* continuePaused(
+            entry,
+            target,
+            requestContext.userMessage,
+            eventBus
+          ).pipe(Effect.ensuring(releaseEntry))
+          return
+        }
 
-          if (yield* Deferred.isDone(cancelRequested)) {
-            const canceled = yield* Deferred.await(cancelResolved)
-            if (canceled) return
-          }
-          if (Exit.isFailure(result)) {
-            return yield* Effect.failCause(result.cause)
-          }
+        const prompt = yield* inputText(requestContext.userMessage)
 
-          const completedAt = yield* timestamp
-          const message = responseMessage(
-            taskId,
-            requestContext.contextId,
-            result.value.result.text
-          )
-          yield* Effect.sync(() => {
-            eventBus.publish(AgentEvent.artifactUpdate({
-              taskId,
-              contextId: requestContext.contextId,
-              artifact: responseArtifact(taskId, result.value.result.text),
-              append: false,
-              lastChunk: true,
-              metadata: undefined
+        // Subscribed before the prompt starts so the pause cannot slip past it.
+        const eventsStream = yield* host.events(principal, { sessionId })
+        const promptDone = yield* Deferred.make<PromptOutcome>()
+        const elicited = yield* Deferred.make<ElicitationRequestedEvent>()
+        yield* Effect.forkIn(
+          eventsStream.pipe(
+            Stream.filter(isEvent("ElicitationRequested")),
+            Stream.take(1),
+            Stream.runForEach((envelope) =>
+              Deferred.succeed(elicited, envelope.event)
+            )
+          ),
+          layerScope
+        )
+        // The prompt outlives this request when the run pauses: it is forked
+        // into the layer scope and only its exit is reported back here.
+        yield* Effect.forkIn(
+          Effect.gen(function* () {
+            const result = yield* Effect.exit(host.prompt(principal, {
+              requestId: AgentProtocol.RequestId.make(`a2a:${taskId}:prompt`),
+              sessionId,
+              input: Prompt.make(prompt)
             }))
+            // A cancellation must publish its terminal event before this
+            // request can wake and settle the bus, or the CANCELED update is
+            // published to a bus with no listeners left.
+            if (yield* Deferred.isDone(cancelRequested)) {
+              yield* Deferred.await(cancelResolved)
+            }
+            const settled: PromptOutcome = { _tag: "Prompt", exit: result }
+            yield* Deferred.succeed(promptDone, settled)
+          }).pipe(Effect.ensuring(releaseEntry)),
+          layerScope
+        )
+
+        const outcome = yield* Effect.race(
+          Deferred.await(promptDone),
+          Deferred.await(elicited)
+        )
+        if (outcome._tag === "ElicitationRequested") {
+          const pausedAt = yield* timestamp
+          yield* Effect.sync(() =>
             eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
               taskId,
               requestContext.contextId,
-              TaskState.TASK_STATE_COMPLETED,
-              completedAt,
-              message
+              TaskState.TASK_STATE_INPUT_REQUIRED,
+              pausedAt,
+              statusMessage(
+                taskId,
+                requestContext.contextId,
+                describeRequest(outcome)
+              )
             )))
-          })
-        })
-
-        yield* runPrompt.pipe(
-          Effect.ensuring(
-            Ref.update(active, (all) => {
-              const next = new Map(all)
-              next.delete(taskId)
-              return next
-            })
           )
-        )
+          yield* Ref.update(paused, (all) => new Set(all).add(taskId))
+          return
+        }
+        if (Exit.isFailure(outcome.exit)) {
+          // A cancellation interrupts the prompt; the cancel path owns the
+          // terminal event, so return quietly rather than failing a second time.
+          if (yield* Deferred.isDone(cancelRequested)) return
+          return yield* Effect.failCause(outcome.exit.cause)
+        }
+
+        const text = outcome.exit.value.result.text
+        const completedAt = yield* timestamp
+        const message = responseMessage(taskId, requestContext.contextId, text)
+        yield* Effect.sync(() => {
+          eventBus.publish(AgentEvent.artifactUpdate({
+            taskId,
+            contextId: requestContext.contextId,
+            artifact: responseArtifact(taskId, text),
+            append: false,
+            lastChunk: true,
+            metadata: undefined
+          }))
+          eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
+            taskId,
+            requestContext.contextId,
+            TaskState.TASK_STATE_COMPLETED,
+            completedAt,
+            message
+          )))
+        })
       })
 
       const cancel = Effect.fn("AgentA2A.cancel")(function* (
@@ -481,6 +677,12 @@ export const serverLayer = <Principal>(
           )))
         })
         yield* Deferred.succeed(running.cancelResolved, true)
+        yield* Ref.update(paused, (all) => {
+          if (!all.has(taskId)) return all
+          const next = new Set(all)
+          next.delete(taskId)
+          return next
+        })
         yield* Effect.sync(() => {
           eventBus.finished()
         })
@@ -490,7 +692,21 @@ export const serverLayer = <Principal>(
         execute: (requestContext, eventBus) =>
           runPromise(
             execute(requestContext, eventBus).pipe(
-              Effect.ensuring(Effect.sync(() => eventBus.finished()))
+              Effect.onExit((exit) =>
+                // Only a *successful* return settles the bus here. A failure
+                // is the SDK's to render: its handler publishes the FAILED
+                // task and settles the bus itself, and finishing first would
+                // discard that synthesis. An INPUT_REQUIRED task also keeps
+                // its bus alive so the continuation message and resubscribers
+                // can still attach.
+                Exit.isSuccess(exit)
+                  ? Effect.flatMap(Ref.get(paused), (all) =>
+                    all.has(requestContext.taskId)
+                      ? Effect.void
+                      : Effect.sync(() => eventBus.finished())
+                  )
+                  : Effect.void
+              )
             )
           ),
         cancelTask: (taskId, eventBus) =>
