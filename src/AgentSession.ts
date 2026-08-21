@@ -14,6 +14,7 @@ import {
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { AiError, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "./Agent.js"
+import * as Elicitation from "./Elicitation.js"
 import * as InputChannel from "./InputChannel.js"
 import * as AgentEvent from "./AgentEvent.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
@@ -150,6 +151,16 @@ export interface MakeOptions {
    */
   readonly history?: Prompt.Prompt | undefined
   /**
+   * Where a paused run waits for an answer from outside.
+   *
+   * Defaults to refusing every request, which keeps an approval-requiring tool
+   * behaving as it did before elicitation existed. Supply one to make such a
+   * tool *satisfiable* rather than merely refused — and a durable interpreter
+   * substitutes one backed by `DurableDeferred`, so a submission waiting on a
+   * human survives the process it started in.
+   */
+  readonly elicitation?: Elicitation.Factory | undefined
+  /**
    * Where steering and follow-up input is held. Defaults to in-memory queues.
    *
    * A stronger runtime substitutes this; see `InputChannel` for why it is the
@@ -199,6 +210,13 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       sessionId: string,
       admitting: boolean
     ) => Effect.Effect<void> = channels.setAdmitting ?? (() => Effect.void)
+    // Defaults to refusing, which is the behaviour that existed before
+    // elicitation did: an agent with an approval-requiring tool must not begin
+    // pausing forever because the feature arrived. A caller opts *in* to being
+    // asked.
+    const elicitation = yield* (options?.elicitation ?? Elicitation.denied).make(
+      id
+    )
     const steering = yield* channels.make(id, "steering")
     const followUps = yield* channels.make(id, "followUps")
     const activeFiber = yield* Ref.make<Option.Option<Fiber.Fiber<any, any>>>(
@@ -214,6 +232,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       bus,
       steering,
       followUps,
+      elicitation,
       admit,
       activeFiber,
       scope,
@@ -530,6 +549,28 @@ const stateOf = (self: Session<any, any, any>): StateView => ({
   get: SubscriptionRef.get(self.state),
   changes: SubscriptionRef.changes(self.state)
 })
+
+/**
+ * Answer a request the run is waiting on.
+ *
+ * Returns `false` when nothing was waiting for that id — a late answer to a
+ * run that has moved on. Worth reporting rather than swallowing: from the
+ * outside, "approved" and "approved too late" look identical otherwise.
+ */
+export const respond = Effect.fn("AgentSession.respond")(function* (
+  session: AgentSession<any, any>,
+  response: Elicitation.Response
+) {
+    const self = unwrap(session)
+    const answered = yield* self.elicitation.respond(response)
+    return answered
+  })
+
+/** What the run is currently waiting to be told. */
+export const pending = (
+  session: AgentSession<any, any>
+): Effect.Effect<ReadonlyArray<Elicitation.Request>> =>
+  unwrap(session).elicitation.pending
 
 /** Canonical conversation history. */
 export const history = (

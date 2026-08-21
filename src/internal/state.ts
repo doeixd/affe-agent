@@ -1,6 +1,7 @@
 import type { Context, Effect, Fiber, Option, Ref, Scope, SubscriptionRef } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
+import type { Elicitor } from "../Elicitation.js"
 import type { InputChannel } from "../InputChannel.js"
 import type { EventBus } from "./eventBus.js"
 import type { IdSource, RunId, SessionId, SubmissionId } from "./ids.js"
@@ -65,6 +66,8 @@ export interface Session<
   /** Out-of-band input; substitutable so a durable runtime can record it. */
   readonly steering: InputChannel
   readonly followUps: InputChannel
+  /** Where a paused run waits for an answer. See `Elicitation`. */
+  readonly elicitation: Elicitor
   /**
    * Publishes whether the session is accepting out-of-band input, for callers
    * in another process. See `InputChannel.Factory.setAdmitting`.

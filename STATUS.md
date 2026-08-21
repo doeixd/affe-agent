@@ -609,6 +609,27 @@ checked against.
 One note on Effect v4: service keys are `Context.Service<Self, Shape>()("key")`,
 not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
 
+## Elicitation: execution that needs an answer from outside
+
+`needsApproval` was detected and refused with no way to satisfy it — a dead end
+rather than a feature. `Elicitation` is the general form, of which tool approval
+is one instance: the same shape covers asking a user a question, requesting a
+review, obtaining a credential, waiting on an external signal.
+
+Deliberately not called *interrupt*. In Effect, and in `AgentSession.interrupt`,
+interruption means a fibre being torn down. A pause that resumes is a different
+thing, and giving them the same word would make both harder to reason about.
+
+Two decisions carry it. The default answers *no*, so an approval-requiring agent
+behaves exactly as it did before rather than beginning to wait forever for an
+answer nobody is positioned to give — a caller opts in to being asked. And
+`elicit` takes the announcement as an argument, running it *after* registering
+the request: announcing first looks equivalent and is not, because the only
+sensible way to answer is to react to the announcement, and a prompt consumer
+would then answer a request nothing was waiting for. The answer is reported
+unmatched and the run hangs, with the event stream showing a question asked and
+answered. That ordering was got wrong first and caught by the tests.
+
 ## Three issues from a review pass
 
 **`PromptError` omitted `ToolApprovalRequiredError`.** `ToolExecution` raises it

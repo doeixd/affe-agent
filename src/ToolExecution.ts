@@ -4,6 +4,7 @@ import type { Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import { ToolApprovalRequiredError } from "./Errors.js"
+import type * as Elicitation from "./Elicitation.js"
 import * as EventBus from "./internal/eventBus.js"
 
 /**
@@ -79,6 +80,10 @@ export interface Options {
   readonly correlation: Correlation
   readonly strategy: Strategy
   readonly failurePolicy: FailurePolicy
+  /** Where an approval-requiring tool asks. See `Elicitation`. */
+  readonly elicitation: Elicitation.Elicitor
+  /** Allocates the id an elicitation is answered by. */
+  readonly nextElicitationId: Effect.Effect<string>
 }
 
 const executeOne = Effect.fn("ToolExecution.tool")(function* <
@@ -109,18 +114,49 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     // tool outcome the model could correct by trying again.
     const tool = handler.tools[call.name as keyof Tools]
     if (tool?.needsApproval !== undefined && tool.needsApproval !== false) {
-      const error = new ToolApprovalRequiredError({
-        toolName: String(call.name),
-        toolCallId: call.id
-      })
+      // Asked, not merely refused. The default elicitor answers "no", which is
+      // the behaviour that existed before this: detecting the requirement and
+      // having no way to satisfy it. Supplying one makes approval a question
+      // with an answer, and the run *pauses* until it arrives rather than
+      // failing.
+      const id = yield* options.nextElicitationId
+      const request = {
+        id,
+        kind: "tool-approval",
+        detail: { toolName: String(call.name), toolCallId: call.id }
+      }
+      const answer = yield* options.elicitation.elicit(
+        request,
+        EventBus.emit(options.bus, options.correlation, {
+          _tag: "ElicitationRequested",
+          id,
+          kind: request.kind,
+          detail: request.detail
+        })
+      )
       yield* EventBus.emit(options.bus, options.correlation, {
-        _tag: "ToolCallFailed",
-        id: call.id,
-        name: call.name,
-        failure: AgentEvent.failureFromCause(Cause.fail(error)),
-        returnedToModel: false
+        _tag: "ElicitationResolved",
+        id,
+        kind: request.kind,
+        granted: answer.granted
       })
-      return yield* error
+
+      if (!answer.granted) {
+        // Still never returned to the model: it is the harness declining, not
+        // a tool outcome the model could correct by trying again.
+        const error = new ToolApprovalRequiredError({
+          toolName: String(call.name),
+          toolCallId: call.id
+        })
+        yield* EventBus.emit(options.bus, options.correlation, {
+          _tag: "ToolCallFailed",
+          id: call.id,
+          name: call.name,
+          failure: AgentEvent.failureFromCause(Cause.fail(error)),
+          returnedToModel: false
+        })
+        return yield* error
+      }
     }
 
     // A handler returns a stream so it can emit preliminary results before its

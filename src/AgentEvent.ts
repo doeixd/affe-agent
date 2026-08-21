@@ -167,6 +167,25 @@ export const MessageFailed = Schema.TaggedStruct("MessageFailed", {
   failure: Failure
 })
 
+/**
+ * The run has paused, needing an answer from outside.
+ *
+ * A pause, not a failure: the run resumes when answered. Every request owes a
+ * matching `ElicitationResolved`, or a consumer is left showing a question
+ * that never closes.
+ */
+export const ElicitationRequested = Schema.TaggedStruct(
+  "ElicitationRequested",
+  { id: Schema.String, kind: Schema.String, detail: Schema.Unknown }
+)
+
+/** The answer arrived, and the run continued. */
+export const ElicitationResolved = Schema.TaggedStruct("ElicitationResolved", {
+  id: Schema.String,
+  kind: Schema.String,
+  granted: Schema.Boolean
+})
+
 export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   id: Schema.String,
   name: Schema.String,
@@ -254,6 +273,8 @@ export const AgentEvent = Schema.Union([
   MessageStreamCompleted,
   MessageInterrupted,
   MessageFailed,
+  ElicitationRequested,
+  ElicitationResolved,
   ToolCallStarted,
   ToolCallProgress,
   ToolCallSucceeded,

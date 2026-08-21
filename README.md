@@ -204,6 +204,35 @@ a batched one produce identical transcripts — and an interrupted stream commit
 no partial assistant message, which is a state no later model call could make
 sense of.
 
+### Pausing for a human
+
+A run can need something a model cannot supply — approval, a credential, an
+answer, a review. `Elicitation` is that, generally; tool approval is one
+instance of it:
+
+```ts
+const session = yield* AgentSession.make(agent, {
+  elicitation: Elicitation.memory
+})
+
+// elsewhere, reacting to the event stream
+yield* AgentSession.respond(session, { id, granted: true })
+```
+
+The run **pauses**; it has not failed. That is why it is not called an
+interrupt: in Effect, and in `AgentSession.interrupt`, interruption means a
+fibre being torn down, and a pause that resumes is a different thing.
+
+`ElicitationRequested` and `ElicitationResolved` bracket the wait, and
+`AgentSession.pending` reports what is outstanding. Answering something nothing
+is waiting for returns `false` rather than being swallowed — from outside,
+"approved" and "approved too late" are otherwise indistinguishable.
+
+The default answers *no*, which is the behaviour that existed before: a tool
+declaring `needsApproval` is refused unless a caller opts in to being asked. And
+because it is a seam, a durable interpreter can back it with `DurableDeferred`,
+so a submission waiting on a human survives the process it started in.
+
 ### Tool progress
 
 A tool handler may report intermediate results while it is still running, via

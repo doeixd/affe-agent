@@ -31,14 +31,22 @@ export const runId = (value: string): RunId => value as RunId
  */
 export interface IdSource {
   readonly nextRun: Effect.Effect<RunId>
+  readonly nextElicitation: Effect.Effect<string>
 }
 
 export const makeIdSource = Effect.gen(function* () {
   const runs = yield* Ref.make(0)
+  const elicitations = yield* Ref.make(0)
 
   return {
     nextRun: Ref.updateAndGet(runs, (n) => n + 1).pipe(
       Effect.map((n) => runId(`run-${n}`))
+    ),
+    // Session-local and sequential, so a replayed submission asks under the
+    // same id it asked under the first time -- which is what lets an answer
+    // given before a restart still match afterwards.
+    nextElicitation: Ref.updateAndGet(elicitations, (n) => n + 1).pipe(
+      Effect.map((n) => `elicit-${n}`)
     )
   } satisfies IdSource
 })
