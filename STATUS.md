@@ -425,6 +425,26 @@ difference between a fresh run and a resumed one — a tool that branches on
 `instanceof Uint8Array` takes the other arm after a durable round trip. Pinned
 by a test so it cannot change silently.
 
+## Tool progress events
+
+`Toolkit.handle` returns a `Stream`, and a handler reports intermediate results
+through `context.preliminary`. `ToolExecution` collected that stream with
+`Stream.runCollect` and used only its last element, so the intermediate results
+were computed and thrown away: a long-running tool was invisible for exactly as
+long as it was interesting.
+
+It now folds the stream, emitting `ToolCallProgress` as each preliminary result
+arrives. Only the final result is committed, so canonical history is unchanged —
+progress is observational.
+
+One design detail is worth keeping, because the first version got it wrong and
+looked right. Emitting the *previous* result when the next one displaces it
+gives identical output for a tool that streams steadily, and needs no trust in
+the `preliminary` flag. But it withholds the last report until the handler
+finishes, so a tool that reports progress and then waits — for a build, a remote
+call, an approval — has its most useful report delayed until the moment it stops
+mattering. The test for it deadlocked, which is the honest form of that bug.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

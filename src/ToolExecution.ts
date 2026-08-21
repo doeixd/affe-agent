@@ -125,11 +125,49 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
 
     // A handler returns a stream so it can emit preliminary results before its
     // final one. Only the final result is committed.
+    //
+    // Folded rather than collected. `Stream.runCollect` buffers everything and
+    // yields nothing until the handler finishes, which makes a long-running
+    // tool invisible for exactly as long as it is interesting.
+    //
+    // Progress is emitted the moment a preliminary result arrives, not when
+    // the next one displaces it. Deferring by one item looks equivalent and is
+    // not: a handler that reports progress and then waits — for a build, a
+    // remote call, an approval — would have that last report withheld until it
+    // finished, which is precisely when it stops being useful.
+    //
+    // `preliminary` is Effect AI's own signal for this, set by
+    // `context.preliminary`. The final result is the last non-preliminary one;
+    // if a handler emits nothing but preliminary results, the last of them is
+    // still committed rather than the call being treated as producing nothing.
     const exit = yield* Effect.exit(
       handler
         .handle(call.name, call.params, call.id)
         .pipe(
-          Effect.flatMap(Stream.runCollect),
+          Effect.flatMap((stream) =>
+            Stream.runFoldEffect(
+              stream,
+              () => emptyCollected<Tools>(),
+              (collected, next) =>
+                next.preliminary
+                  ? EventBus.emit(options.bus, options.correlation, {
+                      _tag: "ToolCallProgress",
+                      id: call.id,
+                      name: call.name,
+                      result: next.result
+                    }).pipe(
+                      Effect.as({ ...collected, last: Option.some(next) })
+                    )
+                  : Effect.succeed({
+                      final: Option.some(next),
+                      last: Option.some(next)
+                    })
+            ).pipe(
+              Effect.map((collected) =>
+                Option.orElse(collected.final, () => collected.last)
+              )
+            )
+          ),
           // A finalizer, not an uninterruptible block: once the fiber is
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.
@@ -141,7 +179,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
             })
           )
         ) as Effect.Effect<
-        ReadonlyArray<Tool.HandlerResult<Tools[keyof Tools]>>,
+        Option.Option<Tool.HandlerResult<Tools[keyof Tools]>>,
         Tool.HandlerError<Tools[keyof Tools]>,
         Tool.HandlerServices<Tools[keyof Tools]>
       >
@@ -178,8 +216,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       return failureResultPart(call, failure.value)
     }
 
-    const emitted = exit.value
-    const result = emitted[emitted.length - 1]
+    const result = Option.getOrUndefined(exit.value)
     if (result === undefined) {
       return yield* Effect.die(
         new Error(`Tool ${call.name} produced no result`)
@@ -217,6 +254,16 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       preliminary: false
     }) as Response.AnyPart
   })
+
+/** What a handler's stream folds into: its final result, and its last. */
+interface Collected<Tools extends Record<string, Tool.Any>> {
+  readonly final: Option.Option<Tool.HandlerResult<Tools[keyof Tools]>>
+  readonly last: Option.Option<Tool.HandlerResult<Tools[keyof Tools]>>
+}
+
+const emptyCollected = <
+  Tools extends Record<string, Tool.Any>
+>(): Collected<Tools> => ({ final: Option.none(), last: Option.none() })
 
 /**
  * Execute every tool call of one model response.

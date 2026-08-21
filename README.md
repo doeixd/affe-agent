@@ -28,8 +28,10 @@ That layer is all this library is.
 
 > **Status: v0.1, pre-release.** The semantics below are implemented and tested,
 > but the API may still move. It targets Effect v4, which is itself at release
-> candidate. Streaming and durability are deliberately not implemented — see
-> [Not included](#not-included).
+> candidate. Model streaming is not yet implemented in core — see
+> [Not included](#not-included). Durable and distributed execution ship as the
+> experimental subpath packages [`/durable`](#durable-execution) and
+> [`/cluster`](#across-a-cluster).
 
 ## Install
 
@@ -160,6 +162,31 @@ ContextTransform.appendSystem((context) =>
 
 It is recomputed every turn and never enters canonical history, which is what
 makes that safe.
+
+### Tool progress
+
+A tool handler may report intermediate results while it is still running, via
+Effect AI's `context.preliminary`:
+
+```ts
+const toolkit = yield* Agent.toolkit([Build], {
+  build: (_params, context) =>
+    context.preliminary("compiling").pipe(
+      Effect.andThen(context.preliminary("linking")),
+      Effect.as("built")
+    )
+})
+```
+
+Each one is emitted as a `ToolCallProgress` event as it happens, not when the
+tool finishes — a long-running shell, browser or remote call is visible while it
+is still interesting.
+
+Progress is **observational**. Only the tool's final result is committed to
+canonical history, so a consumer may render progress freely without it becoming
+part of the conversation. For tools running in parallel, progress arrives in
+real completion order while canonical results are still committed in model call
+order.
 
 ### Typed lifecycle events
 

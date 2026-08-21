@@ -120,6 +120,25 @@ export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   name: Schema.String,
   params: Schema.Unknown
 })
+/**
+ * A preliminary result from a tool that is still running.
+ *
+ * `Toolkit.handle` returns a `Stream`, and a handler may emit intermediate
+ * results before its final one — progress from a shell command, a browser step,
+ * a long remote call. Those were previously collected and discarded, so a
+ * long-running tool was invisible until it finished.
+ *
+ * Progress is **observational**. Only the tool's final result is committed to
+ * canonical history, so a consumer may render these freely without them
+ * becoming part of the conversation. For tools running in parallel, progress
+ * arrives in real completion order while canonical results are still committed
+ * in model call order.
+ */
+export const ToolCallProgress = Schema.TaggedStruct("ToolCallProgress", {
+  id: Schema.String,
+  name: Schema.String,
+  result: Schema.Unknown
+})
 export const ToolCallSucceeded = Schema.TaggedStruct("ToolCallSucceeded", {
   id: Schema.String,
   name: Schema.String,
@@ -179,6 +198,7 @@ export const AgentEvent = Schema.Union([
   TurnCompleted,
   MessageCompleted,
   ToolCallStarted,
+  ToolCallProgress,
   ToolCallSucceeded,
   ToolCallFailed,
   ToolCallInterrupted,
