@@ -21,6 +21,17 @@ export const Echo = Tool.make("echo", {
 
 export const EchoToolkit = Toolkit.make(Echo)
 
+/**
+ * The tool record an `echoToolkit` session carries.
+ *
+ * Spelled out because `AgentSession` is invariant in `Tools`: a session built
+ * from this toolkit is not assignable to `AgentSession<{}>`. That is honest —
+ * a submission's `Result` holds a `GenerateTextResponse<Tools, true>`, which
+ * Effect AI makes invariant — and naming the type is better than widening to
+ * `any` to paper over it.
+ */
+export type EchoTools = { readonly echo: typeof Echo }
+
 export const echoToolkit = EchoToolkit.pipe(
   Effect.provide(
     EchoToolkit.toLayer({ echo: ({ value }) => Effect.succeed(value) })

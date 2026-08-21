@@ -36,22 +36,80 @@ export type Result<Tools extends Record<string, Tool.Any> = {}> =
 
 
 const SessionTypeId: unique symbol = Symbol.for("@doeixd/effect-agent/AgentSession")
-declare const ToolsVariance: unique symbol
 
 /**
  * The long-lived stateful instance of an agent, and the boundary through which
  * an application interacts with the harness.
  *
- * Opaque: everything it holds is reached through the functions in this module.
- * `Tools` is carried purely at the type level, so a session keeps the tool
- * types its agent was defined with.
+ * A small method-bearing handle: what the session can *do*, never how it does
+ * it. Everything mutable — the agent, the scope, the active fiber, the input
+ * channels, the state ref, the captured environment — stays behind
+ * `SessionTypeId` and is reachable only through this module.
+ *
+ * The methods are bound to the module functions of the same name, so there is
+ * one implementation and two ways to reach it:
+ *
+ * ```ts
+ * yield* session.prompt("go")              // ergonomic
+ * yield* AgentSession.prompt(session, "go") // composable
+ * ```
+ *
+ * The handle is inert. `session.prompt(input)` builds an `Effect` and does
+ * nothing else; no work starts until it is run.
+ *
+ * `Tools` and `E` are carried by the method signatures rather than a phantom
+ * field, which is what lets this be constructed without a cast.
+ *
+ * Deliberately no `out` variance annotations. The phantom field previously
+ * declared `Tools` covariant, but it is not: a submission's `Result` carries a
+ * `GenerateTextResponse<Tools, true>`, which Effect AI makes invariant in
+ * `Tools`. Declaring covariance over a phantom asserted something the type
+ * never had; stating nothing lets the compiler infer what is actually true.
  */
 export interface AgentSession<
-  out Tools extends Record<string, Tool.Any> = {},
-  out E = never
+  Tools extends Record<string, Tool.Any> = {},
+  E = never
 > {
   readonly [SessionTypeId]: Session<any, any, any>
-  readonly [ToolsVariance]: () => readonly [Tools, E]
+
+  /**
+   * Immutable identity, safe to expose: logging, tracing, UI routing,
+   * persistence, RPC correlation, durable execution.
+   */
+  readonly id: Ids.SessionId
+
+  /** Begin a submission. Resolves at quiescence. */
+  readonly prompt: (
+    input: Prompt.RawInput
+  ) => Effect.Effect<Result<Tools>, PromptError<Tools, E>>
+
+  /** Insert guidance into the active run, applied at the next turn boundary. */
+  readonly steer: (
+    input: Prompt.RawInput
+  ) => Effect.Effect<void, AgentIdleError | AgentClosedError>
+
+  /** Queue work to run after the active run reaches its stopping condition. */
+  readonly followUp: (
+    input: Prompt.RawInput
+  ) => Effect.Effect<void, AgentIdleError | AgentClosedError>
+
+  /** Interrupt the active submission. */
+  readonly interrupt: () => Effect.Effect<
+    void,
+    AgentIdleError | AgentClosedError
+  >
+
+  /** Canonical conversation history, read when the Effect is run. */
+  readonly history: Effect.Effect<Prompt.Prompt>
+
+  /** The session's current status, read when the Effect is run. */
+  readonly status: Effect.Effect<Status>
+
+  /** The live event stream. Observational; not a durability guarantee. */
+  readonly events: Stream.Stream<AgentEventEnvelope>
+
+  /** A read-only view of runtime state, for a UI that observes it. */
+  readonly state: StateView
 }
 
 const unwrap = <Tools extends Record<string, Tool.Any>, E>(
@@ -157,9 +215,30 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     )
     yield* EventBus.emit(bus, {}, { _tag: "SessionStarted" })
 
-    // `AgentSession` carries `Tools` in a phantom field that has no runtime
-    // counterpart, so constructing one is always an assertion.
-    return { [SessionTypeId]: session } as unknown as AgentSession<Tools, E>
+    // No cast. The handle's members are exactly what the interface declares,
+    // so the compiler can check the construction rather than being told to
+    // trust it — which is the point of carrying `Tools` in the method
+    // signatures instead of a phantom field.
+    //
+    // The action methods delegate to this module's own functions, so there is
+    // one implementation and one set of spans. They are safe to reference
+    // before `handle` is initialised because they are only *called* later.
+    const handle: AgentSession<Tools, E> = {
+      [SessionTypeId]: session,
+      id,
+      prompt: (input) => prompt(handle, input),
+      steer: (input) => steer(handle, input),
+      followUp: (input) => followUp(handle, input),
+      interrupt: () => interrupt(handle),
+      // Observations are values, not methods: nothing is being asked of the
+      // session, so there is nothing to call. They are still lazy — an
+      // `Effect` describes the read rather than performing it.
+      history: historyOf(session),
+      status: statusOf(session),
+      events: eventsOf(session),
+      state: stateOf(session)
+    }
+    return handle
   })
 
 /**
@@ -382,14 +461,34 @@ export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
     }
   })
 
+/**
+ * The observations, defined over the internal session.
+ *
+ * Both the module functions below and the handle's fields delegate here, so
+ * there is one implementation of each and no chance of the two drifting.
+ */
+const historyOf = (self: Session<any, any, any>): Effect.Effect<Prompt.Prompt> =>
+  History.snapshot(self.history)
+
+const statusOf = (self: Session<any, any, any>): Effect.Effect<Status> =>
+  SubscriptionRef.get(self.state).pipe(Effect.map((s) => s.status))
+
+const eventsOf = (
+  self: Session<any, any, any>
+): Stream.Stream<AgentEventEnvelope> => EventBus.events(self.bus)
+
+const stateOf = (self: Session<any, any, any>): StateView => ({
+  get: SubscriptionRef.get(self.state),
+  changes: SubscriptionRef.changes(self.state)
+})
+
 /** Canonical conversation history. */
 export const history = (
   session: AgentSession<any, any>
-): Effect.Effect<Prompt.Prompt> =>
-  History.snapshot(unwrap(session).history)
+): Effect.Effect<Prompt.Prompt> => historyOf(unwrap(session))
 
 export const status = (session: AgentSession<any, any>): Effect.Effect<Status> =>
-  SubscriptionRef.get(unwrap(session).state).pipe(Effect.map((s) => s.status))
+  statusOf(unwrap(session))
 
 /**
  * A read-only view of harness runtime state, for a UI that observes it.
@@ -404,13 +503,8 @@ export interface StateView {
   readonly changes: Stream.Stream<SessionState>
 }
 
-export const state = (session: AgentSession<any, any>): StateView => {
-  const ref = unwrap(session).state
-  return {
-    get: SubscriptionRef.get(ref),
-    changes: SubscriptionRef.changes(ref)
-  }
-}
+export const state = (session: AgentSession<any, any>): StateView =>
+  stateOf(unwrap(session))
 
 /**
  * The live event stream.
@@ -420,4 +514,4 @@ export const state = (session: AgentSession<any, any>): StateView => {
  */
 export const events = (
   session: AgentSession<any, any>
-): Stream.Stream<AgentEventEnvelope> => EventBus.events(unwrap(session).bus)
+): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))

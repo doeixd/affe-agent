@@ -24,6 +24,7 @@ import {
   tags,
   withSession
 } from "./helpers.js"
+import type { EchoTools } from "./helpers.js"
 
 const callEcho = (id: string, value = "x") => ({
   id,
@@ -539,7 +540,7 @@ describe("run lifecycle and events", () => {
 describe("steering", () => {
   it.effect("steering during generation lands on the next turn", () =>
     Effect.gen(function* () {
-      const sessionRef = yield* Deferred.make<AgentSession.AgentSession>()
+      const sessionRef = yield* Deferred.make<AgentSession.AgentSession<EchoTools>>()
 
       const { recorder } = yield* withSession(
         [
@@ -571,7 +572,7 @@ describe("steering", () => {
 
   it.effect("steering during tool execution lands on the next turn", () =>
     Effect.gen(function* () {
-      const sessionRef = yield* Deferred.make<AgentSession.AgentSession>()
+      const sessionRef = yield* Deferred.make<AgentSession.AgentSession<EchoTools>>()
 
       const steeringToolkit = EchoToolkit.pipe(
         Effect.provide(
@@ -605,7 +606,7 @@ describe("steering", () => {
 
   it.effect("multiple steers apply once, in order, at one boundary", () =>
     Effect.gen(function* () {
-      const sessionRef = yield* Deferred.make<AgentSession.AgentSession>()
+      const sessionRef = yield* Deferred.make<AgentSession.AgentSession<EchoTools>>()
       const { events, recorder } = yield* withSession(
         [
           {
@@ -963,7 +964,7 @@ describe("session claim and release", () => {
 describe("definition of done", () => {
   it.effect("the v0.1 target program works end to end", () =>
     Effect.gen(function* () {
-      const sessionRef = yield* Deferred.make<AgentSession.AgentSession>()
+      const sessionRef = yield* Deferred.make<AgentSession.AgentSession<EchoTools>>()
 
       const Researcher = Agent.make({
         instructions: "Research carefully.",

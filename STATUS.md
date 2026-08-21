@@ -445,6 +445,30 @@ finishes, so a tool that reports progress and then waits — for a build, a remo
 call, an approval — has its most useful report delayed until the moment it stops
 mattering. The test for it deadlocked, which is the honest form of that bug.
 
+## AgentSession as a method-bearing handle (issue #2)
+
+`AgentSession.make` now returns a small typed handle: `prompt`, `steer`,
+`followUp`, `interrupt` as methods, `history`, `status`, `events` and `state` as
+values, plus a public `id`. The module functions stay and are the single
+implementation — the methods delegate to them, so there is one set of semantics
+and one set of spans. The handle is inert: building `session.prompt(input)`
+starts nothing.
+
+The change paid for itself immediately by removing the last `as unknown as` in
+`AgentSession.ts`. Construction was previously an assertion because `Tools` and
+`E` lived in a phantom field with no runtime counterpart; carrying them in the
+method signatures means the compiler can check the construction instead of being
+told to trust it.
+
+It also exposed a claim that had been false the whole time. The phantom declared
+`out Tools` — covariance — but a submission's `Result` holds a
+`GenerateTextResponse<Tools, true>`, which Effect AI makes **invariant** in
+`Tools`. With real members the compiler checks the annotation against the
+structure and rejects it. The annotation is gone rather than worked around, so
+the type now states what is true: a session built with a toolkit is not
+assignable to `AgentSession<{}>`. Three tests were relying on that false
+covariance and now name their tool type, which reads better anyway.
+
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found

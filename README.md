@@ -68,11 +68,31 @@ const Researcher = Agent.make({
 const program = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* AgentSession.make(Researcher)
-    const result = yield* AgentSession.prompt(session, "Research Effect AI.")
+    const result = yield* session.prompt("Research Effect AI.")
     return result.text
   })
 )
 ```
+
+`AgentSession.make` returns a small typed handle. Actions are methods;
+observations are values you run when you want them:
+
+```ts
+yield* session.prompt("Research Effect AI.")
+yield* session.steer("Focus on runtime semantics.")
+yield* session.followUp("Then summarise it.")
+yield* session.interrupt()
+
+const history = yield* session.history
+const status = yield* session.status
+yield* session.events.pipe(Stream.runForEach(render))
+```
+
+The handle is inert — `session.prompt(input)` builds an `Effect` and starts
+nothing. Every operation is also available as a module function
+(`AgentSession.prompt(session, input)`), which is the same implementation and
+the form to reach for when composing. Everything mutable stays opaque: the
+handle exposes what a session can *do*, plus its `id`.
 
 An `Agent` names no model. Provide one where you run the program:
 
