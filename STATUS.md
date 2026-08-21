@@ -654,6 +654,14 @@ failure must arrive described, since a caller with no tool definitions cannot
 act on it; a session-level failure must survive as itself, or a client cannot
 tell busy from broken. Both are covered now.
 
+**A provider failure changed channel depending on `stream: true`.** An error
+part arriving inside the stream was turned into a defect, while the identical
+condition on the batch path surfaces as a typed `AiError`. A caller should not
+have to handle a provider failure differently because it asked to stream, so
+the streaming path now fails with `AiError.InternalProviderError` carrying the
+reported detail. `TestLanguageModel` gained a `streamError` turn option to
+script the case, since a batch call has no equivalent.
+
 One test was written and then found to prove nothing — `assert.isTrue(true)`
 standing in for a real check on eviction. It now asserts that the evicted
 conversation actually starts over, and fails when the bound is removed. Another

@@ -1,6 +1,7 @@
 import { Effect, Stream } from "effect"
 import { LanguageModel, Prompt, Response } from "effect/unstable/ai"
-import type { AiError, Tool, Toolkit } from "effect/unstable/ai"
+import { AiError } from "effect/unstable/ai"
+import type { Tool, Toolkit } from "effect/unstable/ai"
 import type { Correlation } from "./AgentEvent.js"
 import * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
@@ -78,6 +79,22 @@ export interface Options {
   readonly stream?: boolean | undefined
 }
 
+/** An error part carries an unconstrained payload; render it for the message. */
+const describeStreamError = (error: unknown): string => {
+  if (typeof error === "object" && error !== null) {
+    const described = error as { message?: unknown }
+    if (typeof described.message === "string" && described.message.length > 0) {
+      return described.message
+    }
+    try {
+      return JSON.stringify(error)
+    } catch {
+      return String(error)
+    }
+  }
+  return String(error)
+}
+
 /**
  * Run the model call as a stream, folding it back into the response the rest
  * of the turn expects.
@@ -110,7 +127,15 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
       (state, part: Response.StreamPart<Tools, true>) => {
         const next = Accumulator.step(state, part)
         if (next._tag === "Failed") {
-          return Effect.die(next.error)
+          // A typed failure, not a defect. The same condition on the batch
+          // path -- the provider reporting that it could not complete the
+          // call -- arrives as an `AiError`, and a caller should not have to
+          // handle it differently depending on whether it asked to stream.
+          return Effect.fail(
+            new AiError.InternalProviderError({
+              description: describeStreamError(next.error)
+            })
+          )
         }
         return next.delta === undefined
           ? Effect.succeed(next.state)

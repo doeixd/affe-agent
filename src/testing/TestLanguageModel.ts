@@ -51,6 +51,14 @@ export interface Turn {
    * chunk.
    */
   readonly chunks?: ReadonlyArray<string>
+  /**
+   * Report a failure *inside* the stream rather than by failing it.
+   *
+   * A real provider can do this, and it is a distinct case: the stream is
+   * well-formed and carries an error part. Streaming-only, since a batch call
+   * has no equivalent.
+   */
+  readonly streamError?: string
 }
 
 export interface Recorder {
@@ -118,6 +126,10 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
         ? {}
         : { providerExecuted: call.providerExecuted })
     })
+  }
+  if (turn.streamError !== undefined) {
+    parts.push({ type: "error", error: new Error(turn.streamError) })
+    return parts
   }
   parts.push(finishPart())
   return parts

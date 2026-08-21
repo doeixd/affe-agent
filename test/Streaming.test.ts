@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Ref, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
@@ -162,6 +162,37 @@ describe("model streaming", () => {
         history.content.map((message) => message.role),
         ["user"]
       )
+    })
+  )
+
+  it.effect("a failure reported inside the stream is typed, not a defect", () =>
+    Effect.gen(function* () {
+      // A provider can fail *in* the stream rather than by failing it. The
+      // batch path surfaces the same condition as an `AiError`, so the
+      // streaming path must too: a caller should not have to handle a provider
+      // failure differently depending on whether it asked to stream.
+      const { layer } = yield* TestLanguageModel.script([
+        { text: "partial", chunks: ["par"], streamError: "upstream exploded" }
+      ])
+
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          return yield* Effect.exit(session.prompt("go", { stream: true }))
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.isTrue(Exit.isFailure(exit))
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+        : undefined
+      // `findErrorOption` returns none for a defect, so this fails outright if
+      // the failure regresses to being died on.
+      assert.isDefined(failure)
+      assert.include(JSON.stringify(failure), "upstream exploded")
+
+      // And nothing partial was committed.
+      assert.isTrue(Exit.isFailure(exit))
     })
   )
 })
