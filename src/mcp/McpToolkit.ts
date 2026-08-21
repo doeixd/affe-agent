@@ -43,7 +43,7 @@ export interface Connection {
   readonly callTool: (
     name: string,
     params: unknown
-  ) => Effect.Effect<unknown, McpTransportError>
+  ) => Effect.Effect<unknown, McpTransportError | McpToolError>
 }
 
 /** A tool as the server describes it. */
@@ -61,6 +61,28 @@ export class McpTransportError extends Schema.TaggedError<McpTransportError>()(
 ) {
   override get message() {
     return "MCP transport failure: " + this.detail
+  }
+}
+
+/**
+ * The tool ran and reported a failure, as MCP's `isError` result does.
+ *
+ * Distinct from a transport failure, and the distinction is load-bearing: a
+ * tool that refuses is an ordinary outcome the model can react to, while a
+ * broken connection is not. Collapsing the two escalates every server-side
+ * refusal into a failed run, and the model never gets the chance to try
+ * something else.
+ *
+ * `error` is whatever the server reported. It is decoded against the tool's
+ * declared `failure` schema, so a declared failure type reaches the agent as
+ * itself.
+ */
+export class McpToolError extends Schema.TaggedError<McpToolError>()(
+  "McpToolError",
+  { error: Schema.Unknown }
+) {
+  override get message() {
+    return "MCP tool reported a failure"
   }
 }
 
@@ -160,17 +182,44 @@ export const bind = <const Tools extends ReadonlyArray<Tool.Any>>(
               )
             )
 
-            const result = yield* connection
-              .callTool(tool.name, encoded)
-              .pipe(
-                Effect.mapError(
-                  (error) =>
-                    new AiError.InternalProviderError({
-                      description:
-                        "MCP tool " + tool.name + ": " + error.detail
-                    })
-                )
+            const result = yield* connection.callTool(tool.name, encoded).pipe(
+              Effect.catch((error) =>
+                error._tag === "McpTransportError"
+                  ? Effect.fail(
+                      new AiError.InternalProviderError({
+                        description:
+                          "MCP tool " + tool.name + ": " + error.detail
+                      })
+                    )
+                  : // A reported tool failure, decoded as the declared type so
+                    // it reaches the agent as itself -- and so the run's
+                    // `FailurePolicy` applies to it. Under the default,
+                    // `ReturnToModel`, that means the model sees the refusal
+                    // and can try something else, which is the whole point of
+                    // a tool being allowed to fail.
+                    Schema.decodeUnknownEffect(tool.failureSchema)(
+                      error.error
+                    ).pipe(
+                      Effect.matchEffect({
+                        // A server reporting an error for a tool declared
+                        // infallible is a genuine mismatch, and saying so is
+                        // more useful than inventing a failure value.
+                        onFailure: () =>
+                          Effect.fail(
+                            new AiError.InvalidOutputError({
+                              description:
+                                "MCP tool " +
+                                tool.name +
+                                ": reported a failure that did not match the " +
+                                "declared failure schema: " +
+                                describe(error.error)
+                            })
+                          ),
+                        onSuccess: (failure) => Effect.fail(failure)
+                      })
+                    )
               )
+            )
 
             return yield* Schema.decodeUnknownEffect(tool.successSchema)(
               result

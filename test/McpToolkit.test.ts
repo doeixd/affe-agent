@@ -28,10 +28,17 @@ const Schedule = Tool.make("schedule", {
   success: Schema.DateFromString
 })
 
+const Refuse = Tool.make("refuse", {
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+  failure: Schema.Struct({ reason: Schema.String })
+})
+
 /** A connection standing in for a client Effect does not ship yet. */
 const fakeConnection = (options: {
   readonly offers: ReadonlyArray<string>
   readonly respond?: (name: string, params: unknown) => unknown
+  readonly toolError?: unknown
   readonly calls?: Ref.Ref<Array<{ name: string; params: unknown }>>
 }): McpToolkit.Connection => ({
   listTools: Effect.succeed(
@@ -41,6 +48,9 @@ const fakeConnection = (options: {
     Effect.gen(function* () {
       if (options.calls !== undefined) {
         yield* Ref.update(options.calls, (all) => [...all, { name, params }])
+      }
+      if (options.toolError !== undefined) {
+        return yield* new McpToolkit.McpToolError({ error: options.toolError })
       }
       return options.respond === undefined
         ? { hits: ["a", "b"] }
@@ -183,6 +193,67 @@ describe("McpToolkit.bind", () => {
 
       assert.include(String(error), "search")
       assert.include(String(error), "declared schema")
+    })
+  )
+
+  it.effect("a reported tool failure reaches the model, not the run", () =>
+    Effect.gen(function* () {
+      // MCP servers report tool errors, and a tool that refuses is an ordinary
+      // outcome the model can react to -- not a broken connection. Collapsing
+      // the two escalated every server-side refusal into a failed run, so the
+      // default `ReturnToModel` policy never engaged and the declared
+      // `failure` schema was unreachable.
+      const toolkit = yield* McpToolkit.bind(
+        fakeConnection({
+          offers: ["refuse"],
+          toolError: { reason: "rate limited" }
+        }),
+        [Refuse]
+      )
+
+      const { events, text } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ toolkit, loop: AgentLoop.bounded(3) })
+          )
+          const probe = yield* AgentProbe.make(session)
+          const result = yield* session.prompt("try it")
+          return { events: yield* probe.events, text: result.text }
+        })
+      ).pipe(
+        Effect.provide(
+          (yield* TestLanguageModel.script([
+            TestLanguageModel.toolCall("refuse", {}, { id: "r1" }),
+            TestLanguageModel.text("I will try something else")
+          ])).layer
+        )
+      )
+
+      // The run survived and the model carried on.
+      assert.strictEqual(text, "I will try something else")
+
+      const failed = events.filter(AgentEvent.is("ToolCallFailed"))
+      assert.strictEqual(failed.length, 1)
+      // Handed back to the model rather than ending the run.
+      assert.isTrue(failed[0]!.event.returnedToModel)
+      // And it is the declared failure, not a transport error.
+      assert.include(JSON.stringify(failed[0]!.event.failure), "rate limited")
+    })
+  )
+
+  it.effect("a failure the tool never declared is named as a mismatch", () =>
+    Effect.gen(function* () {
+      // A server reporting an error for a tool declared infallible is a real
+      // mismatch. Saying so is more useful than inventing a failure value.
+      const toolkit = yield* McpToolkit.bind(
+        fakeConnection({ offers: ["search"], toolError: { reason: "nope" } }),
+        [Search]
+      )
+
+      const error = yield* Effect.flip(
+        Effect.flatMap(toolkit.handle("search", { query: "x" }), Stream.runCollect)
+      )
+      assert.include(String(error), "declared failure schema")
     })
   )
 })

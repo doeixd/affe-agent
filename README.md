@@ -464,7 +464,10 @@ offer. From then on the agent has exact tool types, and the declared schema is
 the decoding contract in both directions: parameters are encoded through it on
 the way out, results decoded through it on the way back, so a server that
 answers the wrong shape fails at the boundary rather than handing `unknown` to
-the agent. For tools genuinely discovered at runtime, Effect AI's
+the agent. A tool that *reports* a failure — MCP's `isError` — is decoded
+against the declared `failure` schema and reaches the agent as itself, so the
+run's `FailurePolicy` applies and the model can react to a refusal instead of
+the run ending. For tools genuinely discovered at runtime, Effect AI's
 `Tool.dynamic` is the honest alternative, and the two compose.
 
 `McpToolkit.Connection` is an interface, because Effect ships `McpServer`,

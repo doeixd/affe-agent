@@ -627,6 +627,16 @@ would have been `any`, and `any` compiles.
 transport abstract settles the type story before the client arrives instead of
 retrofitting around it — and makes all of it testable against a fake.
 
+A bug found immediately after, by testing the claim that a bound toolkit is
+"indistinguishable from a local one". It was not: `failureSchema` was never
+referenced and `callTool` had no channel for a tool-level failure, so a tool
+declared with `failure:` could not fail in its declared way. The consequence was
+larger than the omission — every server-side refusal escalated to an `AiError`
+and ended the run, so the default `ReturnToModel` policy never engaged and the
+model never got to react. `McpToolError` now carries what the server reported,
+decoded against the declared schema; a server reporting an error for a tool
+declared infallible is named as the mismatch it is rather than papered over.
+
 ## MCP, and what was deliberately not built (roadmap #1 item 7)
 
 `/mcp` exposes an agent to MCP clients as a tool. The adapter is small, and
