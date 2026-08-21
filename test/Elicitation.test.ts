@@ -186,4 +186,107 @@ describe("elicitation", () => {
       ).pipe(Effect.provide(layer))
     })
   )
+
+  it.effect("interrupting a paused run releases the question", () =>
+    Effect.gen(function* () {
+      // A paused run holds a fibre waiting on a `Deferred`. Interrupting the
+      // caller has to unwind that: a session left reporting a question nobody
+      // is waiting for, or stuck `running`, would be unusable afterwards and
+      // the symptom would appear far from the cause.
+      const toolkit = yield* Agent.toolkit([Dangerous], {
+        deleteEverything: () => Effect.succeed("deleted")
+      })
+      // Three turns, because the interrupted submission still consumed one:
+      // it reached the model, got the tool call, and paused there.
+      const { layer } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "d1", name: "deleteEverything", params: {} }] },
+        TestLanguageModel.text("recovered"),
+        TestLanguageModel.text("unused")
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ toolkit, loop: AgentLoop.bounded(4) }),
+            { elicitation: Elicitation.memory }
+          )
+          const probe = yield* AgentProbe.make(session)
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          yield* probe.awaitEvent("ElicitationRequested")
+
+          assert.strictEqual(
+            (yield* AgentSession.pending(session)).length,
+            1,
+            "the question was not registered while paused"
+          )
+
+          yield* Fiber.interrupt(running)
+          yield* Effect.yieldNow
+          yield* Effect.yieldNow
+
+          // Nothing outstanding, and the session is usable again.
+          assert.deepStrictEqual(yield* AgentSession.pending(session), [])
+          assert.strictEqual(yield* session.status, "idle")
+          const again = yield* session.prompt("again")
+          assert.strictEqual(again.text, "recovered")
+        })
+      ).pipe(Effect.provide(layer))
+    })
+  )
+
+  it.effect("a paused run can still be steered and extended", () =>
+    Effect.gen(function* () {
+      // The realistic shape of a review: whoever is deciding whether to
+      // approve is also the person best placed to redirect. A paused run is
+      // still *running*, so both are admissible -- and both have to land in
+      // the right place, steering at the next turn boundary and the follow-up
+      // as a further run.
+      const toolkit = yield* Agent.toolkit([Dangerous], {
+        deleteEverything: () => Effect.succeed("deleted")
+      })
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "d1", name: "deleteEverything", params: {} }] },
+        TestLanguageModel.text("after tool"),
+        TestLanguageModel.text("after follow-up")
+      ])
+
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ toolkit, loop: AgentLoop.bounded(6) }),
+            { elicitation: Elicitation.memory }
+          )
+          const probe = yield* AgentProbe.make(session)
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          const asked = yield* probe.awaitEvent("ElicitationRequested")
+          const id = AgentEvent.is("ElicitationRequested")(asked)
+            ? asked.event.id
+            : ""
+
+          yield* session.steer("stay focused")
+          yield* session.followUp("then this")
+          yield* AgentSession.respond(session, { id, granted: true })
+          return yield* Fiber.join(running)
+        })
+      ).pipe(Effect.provide(layer))
+
+      // The follow-up became a second run, as it would have without the pause.
+      assert.strictEqual(result.runs, 2)
+      assert.strictEqual(result.text, "after follow-up")
+
+      const prompts = yield* recorder.prompts
+      // Turn 1 was already under way when the steer arrived, so it did not see
+      // it; turn 2 did. The follow-up arrives after that.
+      assert.deepStrictEqual(TestLanguageModel.userTexts(prompts[0]!), ["go"])
+      assert.deepStrictEqual(TestLanguageModel.userTexts(prompts[1]!), [
+        "go",
+        "stay focused"
+      ])
+      assert.deepStrictEqual(TestLanguageModel.userTexts(prompts[2]!), [
+        "go",
+        "stay focused",
+        "then this"
+      ])
+    })
+  )
 })
