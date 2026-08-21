@@ -12,10 +12,13 @@ import {
   type Artifact,
   type Message,
   type Part,
+  type SendMessageResult,
+  type StreamResponse,
   type Task,
   type TaskStatusUpdateEvent
 } from "@a2a-js/sdk"
-import { TaskNotCancelableError } from "@a2a-js/sdk/errors"
+import { A2AError, TaskNotCancelableError } from "@a2a-js/sdk/errors"
+import { ClientFactory } from "@a2a-js/sdk/client"
 import {
   AgentEvent,
   DefaultExecutionEventBusManager,
@@ -855,3 +858,175 @@ export const serverLayer = <Principal>(
       ], { discard: true })
     })
   )
+
+/**
+ * A protocol-level failure reported by the remote agent.
+ *
+ * Distinct from `AgentA2ATransportError` for the same reason transport and
+ * execution failures are distinguished everywhere else in this library: a
+ * remote refusal ("no such task", "not cancelable") is an answer, while a
+ * transport failure says nothing about the request.
+ */
+export class AgentA2ARemoteError extends Schema.TaggedError<AgentA2ARemoteError>()(
+  "AgentA2ARemoteError",
+  { code: Schema.String, detail: Schema.String }
+) {
+  override get message() {
+    return `A2A remote failure (${this.code}): ${this.detail}`
+  }
+}
+
+export type RemoteAgentError = AgentA2ATransportError | AgentA2ARemoteError
+
+const toRemoteError = (cause: unknown): RemoteAgentError => {
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    (("reason" in cause) || cause instanceof A2AError)
+  ) {
+    const reason = (cause as { reason?: unknown }).reason
+    return new AgentA2ARemoteError({
+      code: reason === undefined ? cause.constructor.name : String(reason),
+      detail: cause instanceof Error ? cause.message : String(cause)
+    })
+  }
+  return new AgentA2ATransportError({ detail: String(cause) })
+}
+
+/**
+ * An agent reached through the A2A v1 protocol.
+ *
+ * The official client does the protocol work; this wrapper puts it in Effect
+ * terms — typed errors instead of rejections, a `Stream` instead of an async
+ * generator — so a caller composes it like any other harness value. The
+ * JSON-RPC transport holds no resources of its own, so there is nothing to
+ * scope.
+ */
+export interface RemoteAgent {
+  /** The card discovered at construction time. */
+  readonly card: Effect.Effect<AgentCard, RemoteAgentError>
+  readonly send: (
+    message: Message
+  ) => Effect.Effect<SendMessageResult, RemoteAgentError>
+  readonly stream: (
+    message: Message
+  ) => Stream.Stream<StreamResponse, RemoteAgentError>
+  readonly task: (
+    id: string,
+    options?: { readonly historyLength?: number | undefined }
+  ) => Effect.Effect<Task, RemoteAgentError>
+  readonly cancel: (id: string) => Effect.Effect<Task, RemoteAgentError>
+}
+
+export interface ClientOptions {
+  /** Base URL of the remote agent; the card is read from the v1 well-known path. */
+  readonly url: string
+  readonly cardPath?: string | undefined
+  /** Tenant used on every request; most single-agent deployments use "". */
+  readonly tenant?: string | undefined
+}
+
+export const client = (
+  options: ClientOptions
+): Effect.Effect<RemoteAgent, AgentA2ATransportError> =>
+  Effect.gen(function* () {
+    const tenant = options.tenant ?? ""
+    const inner = yield* Effect.tryPromise({
+      try: () => new ClientFactory().createFromUrl(options.url, options.cardPath),
+      catch: (cause) => new AgentA2ATransportError({ detail: String(cause) })
+    })
+    const call = <A>(attempt: () => Promise<A>) =>
+      Effect.tryPromise({ try: attempt, catch: toRemoteError })
+    return {
+      card: call(() => inner.getAgentCard()),
+      send: (message) =>
+        call(() => inner.sendMessage({
+          tenant,
+          message,
+          configuration: undefined,
+          metadata: undefined
+        })),
+      stream: (message) =>
+        Stream.fromAsyncIterable(
+          inner.sendMessageStream({
+            tenant,
+            message,
+            configuration: undefined,
+            metadata: undefined
+          }),
+          toRemoteError
+        ),
+      task: (id, taskOptions) =>
+        call(() => inner.getTask({
+          tenant,
+          id,
+          historyLength: taskOptions?.historyLength
+        })),
+      cancel: (id) => call(() => inner.cancelTask({ tenant, id, metadata: undefined }))
+    }
+  })
+
+/**
+ * Schema-driven request/result exchange between two agents.
+ *
+ * The request value is encoded through its schema, carried as one JSON text
+ * part, and the first artifact's text is decoded back through the result
+ * schema — so both sides keep precise types across a wire that only speaks
+ * text parts.
+ */
+export interface TypedExchange<Request, Result> {
+  readonly exchange: (
+    agent: RemoteAgent,
+    options: {
+      readonly contextId: string
+      readonly request: Request
+    }
+  ) => Effect.Effect<
+    Result,
+    | RemoteAgentError
+    | AgentA2AUnsupportedContentError
+    | AgentA2ARemoteError
+    | Schema.SchemaError
+  >
+}
+
+export const typed = <Request, Result>(schemas: {
+  readonly request: Schema.Codec<Request, unknown>
+  readonly result: Schema.Codec<Result, unknown>
+}): TypedExchange<Request, Result> => ({
+  exchange: (agent, options) =>
+    Effect.gen(function* () {
+      const encoded = yield* Schema.encodeEffect(schemas.request)(options.request)
+      const sent = yield* agent.send({
+        messageId: crypto.randomUUID(),
+        contextId: options.contextId,
+        taskId: "",
+        role: Role.ROLE_USER,
+        parts: [textPart(JSON.stringify(encoded))],
+        metadata: undefined,
+        extensions: [],
+        referenceTaskIds: []
+      })
+      if (!("artifacts" in sent) || !Array.isArray(sent.artifacts)) {
+        return yield* new AgentA2ARemoteError({
+          code: "NO_RESULT",
+          detail: "the agent replied with a bare message instead of a task"
+        })
+      }
+      const content = sent.artifacts[0]?.parts[0]?.content
+      if (content?.$case !== "text") {
+        return yield* new AgentA2AUnsupportedContentError({
+          kinds: [content?.$case ?? "empty"]
+        })
+      }
+      const parsed = yield* Effect.try({
+        try: () => JSON.parse(content.value) as unknown,
+        catch: (cause) =>
+          new AgentA2ARemoteError({
+            code: "BAD_RESULT",
+            detail: `the result artifact was not JSON: ${String(cause)}`
+          })
+      })
+      return yield* Schema.decodeUnknownEffect(schemas.result)(parsed)
+    })
+})
