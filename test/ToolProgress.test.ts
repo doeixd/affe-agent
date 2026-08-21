@@ -118,3 +118,92 @@ describe("tool progress", () => {
     })
   )
 })
+
+describe("parallel tool ordering", () => {
+  const Slow = Tool.make("slow", {
+    parameters: Schema.Struct({}),
+    success: Schema.String
+  })
+  const Fast = Tool.make("fast", {
+    parameters: Schema.Struct({}),
+    success: Schema.String
+  })
+
+  it.effect("commits in model call order while events follow completion", () =>
+    Effect.gen(function* () {
+      // The invariant that matters: tools run concurrently, and whatever order
+      // they finish in, the transcript sent back to the model matches the
+      // order the model asked in. Getting that wrong corrupts the
+      // conversation.
+      //
+      // `slow` is requested first and cannot finish until `fast` has, so the
+      // two tools genuinely overlap and completion order is the reverse of
+      // call order.
+      const finished = yield* Deferred.make<void>()
+
+      const toolkit = yield* Agent.toolkit([Slow, Fast], {
+        slow: (_params, context) =>
+          context.preliminary("slow-progress").pipe(
+            // Waits for `fast` to have completed, so completion order is the
+            // reverse of call order every run, not just usually.
+            Effect.andThen(Deferred.await(finished)),
+            Effect.as("slow-done")
+          ),
+        fast: (_params, context) =>
+          context.preliminary("fast-progress").pipe(
+            Effect.andThen(Deferred.succeed(finished, undefined)),
+            Effect.as("fast-done")
+          )
+      })
+
+      const { events, session } = yield* withSession(
+        [
+          {
+            toolCalls: [
+              { id: "s1", name: "slow", params: {} },
+              { id: "f1", name: "fast", params: {} }
+            ]
+          },
+          { text: "done" }
+        ],
+        Agent.make({ toolkit }),
+        ({ session }) => AgentSession.prompt(session, "go")
+      )
+
+      // Both terminal events are present. Their *order* is deliberately not
+      // asserted: the issue makes completion order permissive, not guaranteed,
+      // and the handoff between two concurrent fibers is genuinely racy — an
+      // earlier version of this test pinned an order and was pinning its own
+      // scheduling luck.
+      assert.deepStrictEqual(
+        events
+          .filter(AgentEvent.is("ToolCallSucceeded"))
+          .map((entry) => entry.event.name)
+          .sort(),
+        ["fast", "slow"]
+      )
+
+      // Progress arrived from both while they were still running.
+      assert.deepStrictEqual(
+        events
+          .filter(AgentEvent.is("ToolCallProgress"))
+          .map((entry) => entry.event.result)
+          .sort(),
+        ["fast-progress", "slow-progress"]
+      )
+
+      // Canonical history: still the order the model asked in.
+      const history = yield* AgentSession.history(session)
+      assert.deepStrictEqual(
+        history.content.flatMap((message) =>
+          message.role === "tool"
+            ? message.content.flatMap((part) =>
+                part.type === "tool-result" ? [part.name] : []
+              )
+            : []
+        ),
+        ["slow", "fast"]
+      )
+    })
+  )
+})
