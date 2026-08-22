@@ -45,6 +45,8 @@ const fixture = (options?: {
   readonly holdEvents?: boolean
   /** The session's event stream fails after its first event. */
   readonly failEvents?: boolean
+  /** `session(id)` addresses any id, the way a durable client does. */
+  readonly adoptable?: boolean
 }) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
@@ -58,6 +60,7 @@ const fixture = (options?: {
     const record = (operation: string) =>
       Ref.update(calls, (all) => [...all, operation])
 
+    const adopted = yield* Ref.make<ReadonlyArray<string>>([])
     const agentClient = Layer.succeed(AgentClient.AgentClient, {
       createSession: (sessionOptions) =>
         Effect.gen(function* () {
@@ -131,9 +134,32 @@ const fixture = (options?: {
           }
         }),
       session: (id) =>
-        Effect.fail(
-          new AgentClient.AgentSessionNotFoundError({ sessionId: id })
-        )
+        options?.adoptable === true
+          ? Effect.as(
+              Ref.update(adopted, (all) => [...all, id]),
+              {
+                id,
+                prompt: () =>
+                  Effect.succeed({
+                    submissionId,
+                    status: "completed" as const,
+                    runs: 1,
+                    turns: 1,
+                    text: `adopted ${id}`
+                  }),
+                steer: () => Effect.void,
+                followUp: () => Effect.void,
+                interrupt: () => Effect.void,
+                respond: () => Effect.succeed(false),
+                pending: Effect.succeed([]),
+                history: Effect.succeed(Prompt.make("adopted")),
+                status: Effect.succeed("idle" as const),
+                events: Stream.empty
+              } satisfies AgentClient.RemoteSession
+            )
+          : Effect.fail(
+              new AgentClient.AgentSessionNotFoundError({ sessionId: id })
+            )
     })
 
     const routes = AgentHttp.serverLayer({
@@ -176,6 +202,7 @@ const fixture = (options?: {
       server,
       routes,
       calls,
+      adopted,
       released,
       promptCalls,
       promptStarted,
@@ -438,6 +465,63 @@ describe("AgentHttp", () => {
           if (failure._tag === "AgentTransportError") {
             assert.include(failure.detail, "delivery log")
           }
+        }).pipe(Effect.provide(Layer.merge(FetchHttpClient.layer, test.server)))
+      )
+    })
+  )
+
+  it.effect("adopts sessions the client can address, once, and within capacity", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ adoptable: true })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          const client = yield* HttpApiClient.make(AgentHttp.Api, {
+            baseUrl: HttpServer.formatAddress(httpServer.address)
+          })
+          const id = sessionId("elsewhere")
+
+          // Never created here. Several requests arrive for it at once: the
+          // client is asked once, and every request is served the same
+          // handle.
+          const statuses = yield* Effect.all(
+            Array.from({ length: 5 }, () =>
+              client.sessions.status({ params: { id }, headers })
+            ),
+            { concurrency: "unbounded" }
+          )
+          assert.deepStrictEqual(statuses.map((s) => s.status), Array(5).fill("idle"))
+          assert.deepStrictEqual(yield* Ref.get(test.adopted), ["elsewhere"])
+
+          // Adopted sessions are ordinary afterwards: prompt, then close.
+          const prompted = yield* client.sessions.prompt({
+            params: { id },
+            headers,
+            payload: { requestId: requestId("adopted-prompt"), input: Prompt.make("hi") }
+          })
+          assert.strictEqual(prompted.result.text, "adopted elsewhere")
+          const closed = yield* client.sessions.closeSession({
+            params: { id },
+            headers,
+            payload: { requestId: requestId("adopted-close") }
+          })
+          assert.isTrue(closed.closed)
+          // Closed here, it is asked for again -- the registry forgot it, and
+          // the client is the authority on whether it still exists.
+          yield* client.sessions.status({ params: { id }, headers })
+          assert.deepStrictEqual(yield* Ref.get(test.adopted), ["elsewhere", "elsewhere"])
+
+          // Adoption respects the host's capacity exactly as creation does.
+          // maxSessions is 4: one adopted above, three more fit, the fifth
+          // is refused.
+          for (const extra of ["a", "b", "c"]) {
+            yield* client.sessions.status({ params: { id: sessionId(extra) }, headers })
+          }
+          const refused = yield* Effect.flip(
+            client.sessions.status({ params: { id: sessionId("one-too-many") }, headers })
+          )
+          assert.strictEqual(refused._tag, "AgentCapacityExceededError")
         }).pipe(Effect.provide(Layer.merge(FetchHttpClient.layer, test.server)))
       )
     })

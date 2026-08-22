@@ -370,6 +370,105 @@ describe("local sandbox", () => {
     20_000
   )
 
+  it.effect("output bounds are exact, counted in bytes, and stderr counts too", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        // Exactly at the bound: allowed. One byte over: refused. The bound is
+        // on bytes, so a multi-byte character that crosses it is over.
+        const exact = yield* sandbox.exec(
+          node("process.stdout.write('x'.repeat(100))"),
+          { maxOutputBytes: 100 }
+        )
+        assert.strictEqual(exact.stdout.length, 100)
+        const over = yield* Effect.exit(
+          sandbox.exec(node("process.stdout.write('x'.repeat(101))"), { maxOutputBytes: 100 })
+        )
+        assert.isTrue(Exit.isFailure(over))
+        const multibyte = yield* Effect.exit(
+          // 99 ASCII bytes plus a 3-byte character: 102 bytes, 100 chars.
+          sandbox.exec(node("process.stdout.write('x'.repeat(99) + '€')"), {
+            maxOutputBytes: 100
+          })
+        )
+        assert.isTrue(Exit.isFailure(multibyte), "the bound is bytes, not characters")
+        const stderrToo = yield* Effect.exit(
+          sandbox.exec(
+            node("process.stdout.write('x'.repeat(60)); process.stderr.write('y'.repeat(60))"),
+            { maxOutputBytes: 100 }
+          )
+        )
+        assert.isTrue(Exit.isFailure(stderrToo), "stderr counts toward the bound")
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    }),
+    20_000
+  )
+
+  it.effect("arguments reach the process exactly, with no shell in between", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        const args = ["with space", "\"quoted\"", "$HOME", "a;b&&c|d", "unicode é€", ""]
+        const result = yield* sandbox.exec(
+          Sandbox.command(process.execPath, [
+            "-e",
+            "console.log(JSON.stringify(process.argv.slice(1)))",
+            ...args
+          ])
+        )
+        assert.strictEqual(result.exitCode, 0)
+        assert.deepStrictEqual(JSON.parse(result.stdout), args)
+        // Exit codes and stderr pass through untouched.
+        const failing = yield* sandbox.exec(
+          node("process.stderr.write('bad'); process.exit(7)")
+        )
+        assert.strictEqual(failing.exitCode, 7)
+        assert.strictEqual(failing.stderr, "bad")
+        assert.strictEqual(failing.stdout, "")
+        // A command that cannot be launched is a launch error, not a result.
+        const missing = yield* Effect.exit(
+          sandbox.exec(Sandbox.command("definitely-not-a-real-executable-xyz", []))
+        )
+        assert.isTrue(Exit.isFailure(missing))
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    }),
+    20_000
+  )
+
+  it.effect("files: nested writes create parents, directories are not files, and paths normalise", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        yield* sandbox.write(p("a/b/c.txt"), bytes("deep"))
+        assert.strictEqual(
+          new TextDecoder().decode(yield* sandbox.read(p("./a/b/c.txt"))),
+          "deep"
+        )
+        // Reading a directory is a provider error, not bytes.
+        const dir = yield* Effect.exit(sandbox.read(p("a/b")))
+        assert.isTrue(Exit.isFailure(dir))
+        // Writing over a directory is refused.
+        const overDir = yield* Effect.exit(sandbox.write(p("a"), bytes("x")))
+        assert.isTrue(Exit.isFailure(overDir))
+        // Writing under a file is refused.
+        const underFile = yield* Effect.exit(sandbox.write(p("a/b/c.txt/d.txt"), bytes("x")))
+        assert.isTrue(Exit.isFailure(underFile))
+        // A missing file is the typed missing error, and so is stat.
+        const missing = yield* Effect.exit(sandbox.stat(p("a/nope")))
+        const error = Cause.findErrorOption(missing._tag === "Failure" ? missing.cause : Cause.empty)
+        assert.isTrue(error._tag === "Some" && error.value instanceof Sandbox.FileMissingError)
+        // An empty file round-trips as empty.
+        yield* sandbox.write(p("empty"), new Uint8Array())
+        assert.strictEqual((yield* sandbox.read(p("empty"))).byteLength, 0)
+        const listed = (yield* sandbox.list(p("a"))).map((e) => e.path)
+        assert.deepStrictEqual(listed, ["a/b"])
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    })
+  )
+
   it.effect("refuses reads that resolve outside the workspace", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture()

@@ -763,6 +763,64 @@ describe("DurableAgentClient (durability specifics)", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("interrupting one session leaves another session on the same client untouched", () =>
+    Effect.gen(function* () {
+      const enteredA = yield* Deferred.make<void>()
+      const enteredB = yield* Deferred.make<void>()
+      const releaseB = yield* Deferred.make<void>()
+      // One runtime, one script: session A's call hangs until interrupted,
+      // session B's waits on a latch and then answers.
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(2) }), [
+        { text: "a", hang: true, started: enteredA },
+        { text: "b", started: enteredB, during: Deferred.await(releaseB) }
+      ])
+      const [a, b] = yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const sa = yield* Effect.scoped(client.createSession({ sessionId: "iso-a" }))
+          const sb = yield* Effect.scoped(client.createSession({ sessionId: "iso-b" }))
+          const ra = yield* Effect.forkDetach(sa.prompt("go"))
+          yield* Deferred.await(enteredA)
+          const rb = yield* Effect.forkDetach(sb.prompt("go"))
+          yield* Deferred.await(enteredB)
+          yield* sa.interrupt()
+          const resultA = yield* Fiber.join(ra)
+          yield* Deferred.succeed(releaseB, void 0)
+          const resultB = yield* Fiber.join(rb)
+          return [resultA, resultB] as const
+        })
+      )
+      assert.strictEqual(a.status, "interrupted")
+      assert.strictEqual(b.status, "completed")
+      assert.strictEqual(b.text, "b")
+      // Distinct submission identities, both sessions idle afterwards.
+      assert.notStrictEqual(a.submissionId, b.submissionId)
+      const statuses = yield* using(f.another, (c) =>
+        Effect.all([
+          Effect.flatMap(c.session("iso-a"), (s) => s.status),
+          Effect.flatMap(c.session("iso-b"), (s) => s.status)
+        ])
+      )
+      assert.deepStrictEqual(statuses, ["idle", "idle"])
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("respond with an unknown id is false and changes nothing", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(Agent.make({}), [{ text: "ok" }])
+      yield* using(f.client, (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "noone" })
+            assert.isFalse(yield* session.respond({ id: "elicit-99", granted: true }))
+            assert.deepStrictEqual(yield* f.sessionStore.recordedAnswers("noone"), [])
+            assert.strictEqual(yield* session.status, "idle")
+            assert.strictEqual((yield* session.prompt("go")).text, "ok")
+          })
+        )
+      )
+    }).pipe(Effect.scoped)
+  )
+
   it.live("a stale answer from a previous submission cannot approve the next one", () =>
     Effect.gen(function* () {
       const wiped = yield* Ref.make(0)

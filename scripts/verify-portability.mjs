@@ -25,7 +25,10 @@ import * as path from "node:path"
 import { builtinModules } from "node:module"
 
 const root = process.cwd()
-const sourceRoot = path.join(root, "src")
+// An explicit source root lets the check itself be tested against fixtures.
+const sourceRoot = process.argv[2] === undefined
+  ? path.join(root, "src")
+  : path.resolve(process.argv[2])
 
 /** Host implementations, by path relative to `src/`. Keep this list short. */
 const HOST_MODULES = new Set(["sandbox/local.ts"])

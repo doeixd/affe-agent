@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, Option, Ref, Scope, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Scope, Stream } from "effect"
+import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -7,7 +8,8 @@ import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as InputChannel from "../src/InputChannel.js"
 import * as FakeModel from "./FakeModel.js"
-import { EchoToolkit, echoToolkit, withSession } from "./helpers.js"
+import { EchoToolkit, echoToolkit, tags, withSession } from "./helpers.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 
 const callEcho = (id: string, value = "x") => ({
   id,
@@ -363,6 +365,49 @@ describe("closing a session with work in flight", () => {
         `SessionClosed must come last: ${tags}`
       )
       assert.strictEqual(tags[tags.length - 1], "SessionClosed")
+    })
+  )
+})
+
+describe("interruption during a tool call", () => {
+  it.effect("a tool cut off mid-flight reports ToolCallInterrupted and commits nothing", () =>
+    Effect.gen(function* () {
+      const inTool = yield* Deferred.make<void>()
+      const Slow = Tool.make("slow", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      })
+      const agent = Agent.make({
+        toolkit: Agent.toolkit([Slow], {
+          slow: () => Deferred.succeed(inTool, void 0).pipe(Effect.andThen(Effect.never))
+        }),
+        loop: AgentLoop.bounded(2)
+      })
+      const { value, events, session } = yield* withSession(
+        [TestLanguageModel.toolCall("slow", {}, { id: "s1" }), TestLanguageModel.text("no")],
+        agent,
+        ({ session }) =>
+          Effect.gen(function* () {
+            const running = yield* Effect.forkChild(AgentSession.prompt(session, "go"))
+            yield* Deferred.await(inTool)
+            yield* AgentSession.interrupt(session)
+            const result = yield* Fiber.join(running)
+            // Reusable at once: interruption ends the submission, not the session.
+            assert.strictEqual(yield* AgentSession.status(session), "idle")
+            return result
+          })
+      )
+      assert.strictEqual(value.status, "interrupted")
+      const seen = tags(events)
+      assert.include(seen, "ToolCallStarted")
+      assert.include(seen, "ToolCallInterrupted")
+      assert.notInclude(seen, "ToolCallSucceeded")
+      // The uninterruptible commit guards *completed* tools only: a tool
+      // that never finished commits nothing, so the turn is absent.
+      assert.deepStrictEqual(
+        (yield* AgentSession.history(session)).content.map((m) => m.role),
+        ["user"]
+      )
     })
   )
 })
