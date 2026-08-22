@@ -90,6 +90,17 @@ export const Outcome = Schema.Union([
   Schema.TaggedStruct("Failed", {
     submissionId: Schema.String,
     failure: DurableAgent.DurableAgentFailure
+  }),
+  /**
+   * The infrastructure under the agent failed -- a store that could not be
+   * reached -- not the agent. The session is freed all the same, because a
+   * body defect is terminal for the engine (without `SuspendOnFailure`
+   * there is no retry), and a claim left behind would wedge the session for
+   * good. The client reports this as the retryable transport failure it is.
+   */
+  Schema.TaggedStruct("Infrastructure", {
+    submissionId: Schema.String,
+    detail: Schema.String
   })
 ])
 export type Outcome = typeof Outcome.Type
@@ -121,24 +132,27 @@ const finishProjection = (
     const context = yield* Effect.context<
       WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
     >()
-    // Admission closes *before* the session goes idle, and the stale
-    // interrupt intent goes with it. The marker is per session, so clearing
-    // it after `finish` would race the next submission: a client that claims
-    // the idle session and opens admission for submission N+1 in that gap
-    // would have it wiped by submission N's exit, and steering aimed at
-    // running work would be refused as idle. Nothing can be claimed while
-    // this submission still holds the session, so this ordering is safe.
-    yield* Effect.all([
-      store.takeAll(DurableChannels.openKey(payload.sessionId)),
-      store.takeAll(interruptSignalName(payload.sessionId, payload.submissionId))
-    ])
+    // Admission closes *before* the session goes idle, and the interrupt
+    // intent is cleared with it -- both inside the activity, so they happen
+    // exactly once. The marker is per session: clearing it after `finish`
+    // would race the next submission, and clearing it outside the journal
+    // would let a *replay* of this body (crash after the activity, before
+    // the workflow result was recorded) wipe the marker submission N+1 had
+    // already opened, refusing steering aimed at running work as idle.
+    // Nothing can be claimed while this submission still holds the session,
+    // so inside the activity the ordering is safe.
     yield* Activity.make({
       name: `session-projection/${payload.sessionId}/${payload.submissionId}/finish`,
       success: Schema.Boolean,
-      execute: sessionStore.finish(
-        payload.sessionId,
-        payload.submissionId,
-        history
+      execute: Effect.all([
+        store.takeAll(DurableChannels.openKey(payload.sessionId)),
+        store.takeAll(
+          interruptSignalName(payload.sessionId, payload.submissionId)
+        )
+      ]).pipe(
+        Effect.andThen(
+          sessionStore.finish(payload.sessionId, payload.submissionId, history)
+        )
       )
     }).pipe(Effect.provide(context))
   })
@@ -303,6 +317,36 @@ const recordingSink = (
   }
 }
 
+/**
+ * Whether a cause is the infrastructure under the agent failing rather than
+ * the agent. The stores convert their SQL and persistence failures into
+ * defects, so the check walks the defects by tag and name.
+ */
+const isInfrastructure = (cause: Cause.Cause<unknown>): boolean =>
+  cause.reasons.some((reason) => {
+    if (!Cause.isDieReason(reason)) return false
+    const defect: unknown = reason.defect
+    if (typeof defect !== "object" || defect === null) return false
+    const tagged = defect as { readonly _tag?: unknown; readonly name?: unknown }
+    const tag = typeof tagged._tag === "string" ? tagged._tag : ""
+    const name = typeof tagged.name === "string" ? tagged.name : ""
+    return (
+      tag === "SqlError" ||
+      name.includes("SqlError") ||
+      tag === "PersistenceError" ||
+      name.includes("PersistenceError")
+    )
+  })
+
+const infrastructureOutcome = (
+  submissionId: string,
+  cause: Cause.Cause<unknown>
+): Outcome => ({
+  _tag: "Infrastructure",
+  submissionId,
+  detail: AgentEvent.failureFromCause(cause).message
+})
+
 /** Map a prompt result onto the wire-safe outcome. */
 const succeededOutcome = (
   submissionId: string,
@@ -385,10 +429,17 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         payload.submissionId
       )
       const requested = yield* Deferred.make<void>()
+      // Peeked, never consumed here. The intent is cleared only by the
+      // terminal projection, which is journalled. Consuming it on sight
+      // would make the interruption non-durable: a crash between taking the
+      // signal and recording the interrupted outcome replays into a body
+      // that finds no intent, re-issues the model call, and completes --
+      // the user's interrupt silently lost. Signalling the deferred twice
+      // is harmless.
       const checkInterrupt = Effect.flatMap(
-        options.store.takeAll(interruptKey),
-        (found) =>
-          found.length > 0 ? Deferred.succeed(requested, void 0) : Effect.void
+        options.store.size(interruptKey),
+        (pending) =>
+          pending > 0 ? Deferred.succeed(requested, void 0) : Effect.void
       ).pipe(Effect.asVoid)
       const elicitation = yield* projectedElicitation(
         options.sessionStore,
@@ -537,7 +588,15 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             ? Effect.failCause(cause)
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
                 finishProjection(options.sessionStore, options.store, payload, history).pipe(
-                  Effect.as(failedOutcome(payload.submissionId, cause))
+                  Effect.as(
+                    // A store that could not be reached is not the agent
+                    // failing: it crosses as infrastructure, so the client
+                    // does not report an agent failure the agent never
+                    // produced, for a fault the next attempt may not see.
+                    isInfrastructure(cause)
+                      ? infrastructureOutcome(payload.submissionId, cause)
+                      : failedOutcome(payload.submissionId, cause)
+                  )
                 )
               )
         ),

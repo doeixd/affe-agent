@@ -819,6 +819,52 @@ describe("DurableAgentClient (durability specifics)", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("a store failing under the agent is reported as transport, and the session is freed", () =>
+    Effect.gen(function* () {
+      // The channels store dies once, the way the SQL stores do on a busy
+      // database, during the first submission's steering drain. That is not
+      // the agent failing: the caller sees a transport failure it can retry,
+      // and the session is idle for the retry rather than wedged behind a
+      // claim on an execution the engine has already closed.
+      const base = yield* DurableChannels.memoryStore
+      const failOnce = yield* Ref.make(true)
+      const flaky: DurableChannels.Store = {
+        ...base,
+        takeAll: (key) =>
+          key.endsWith(":steering")
+            ? Effect.flatMap(Ref.getAndSet(failOnce, false), (fail) =>
+                fail
+                  ? Effect.die({ _tag: "SqlError", message: "database is locked" })
+                  : base.takeAll(key)
+              )
+            : base.takeAll(key)
+      }
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      // The failed submission never reaches the model, so one turn serves
+      // the retry.
+      const { layer: model } = yield* FakeModel.script([{ text: "answer" }])
+      const layer = DurableAgentClient.layer("Flaky", Agent.make({}), {
+        store: flaky,
+        sessionStore
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+
+      yield* using(layer, (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "flaky" })
+            const failed = yield* Effect.flip(session.prompt("one"))
+            assert.strictEqual(failed._tag, "AgentTransportError")
+            if (failed._tag === "AgentTransportError") {
+              assert.include(failed.detail, "locked")
+            }
+            assert.strictEqual(yield* session.status, "idle")
+            assert.strictEqual((yield* session.prompt("two")).text, "answer")
+          })
+        )
+      )
+    }).pipe(Effect.scoped)
+  )
+
   it.live("events are delivered through the log with durable ids and a session-wide offset", () =>
     Effect.gen(function* () {
       const f = yield* fixture(

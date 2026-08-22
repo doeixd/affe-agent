@@ -325,6 +325,12 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
                 : "workflow execution failed without a typed failure"
           })
         }
+        if (exit.value._tag === "Infrastructure") {
+          return yield* new AgentClient.AgentTransportError({
+            sessionId,
+            detail: exit.value.detail
+          })
+        }
         if (exit.value._tag === "Failed") {
           // An agent failure is a property of the request and will recur, so
           // it wears the execution tag — retrying on transport would loop.

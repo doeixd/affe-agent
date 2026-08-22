@@ -132,12 +132,32 @@ const infrastructural = <A, E, R>(
 ): Effect.Effect<A, never, R> =>
   Effect.catch(retryTransient(effect), (error: E) => Effect.die(error))
 
-/** As above, but `AgentIdleError` is a real answer and passes through. */
+/**
+ * As above, but `AgentIdleError` is a real answer and passes through.
+ *
+ * `AlreadyProcessingMessage` is *not* retried here. It means the runner is
+ * already handling this very envelope -- the input is being offered -- and a
+ * retry sends a fresh envelope, so the same steer or follow-up would be
+ * offered and applied twice. For an operation that is not idempotent the
+ * honest answer is that it was accepted: the first delivery is in progress.
+ */
 const admitting = <A, E, R>(
   effect: Effect.Effect<A, AgentIdleError | E, R>
-): Effect.Effect<A, AgentIdleError, R> =>
-  Effect.catch(retryTransient(effect), (error: AgentIdleError | E) =>
-    isIdle(error) ? Effect.fail(error) : Effect.die(error)
+): Effect.Effect<void, AgentIdleError, R> =>
+  Effect.retry(effect, {
+    while: (error) =>
+      isTransient(error) && tagOf(error) !== "AlreadyProcessingMessage",
+    times: 600,
+    schedule: Schedule.spaced(Duration.millis(100))
+  }).pipe(
+    Effect.asVoid,
+    Effect.catch((error: AgentIdleError | E) =>
+      isIdle(error)
+        ? Effect.fail(error)
+        : tagOf(error) === "AlreadyProcessingMessage"
+          ? Effect.void
+          : Effect.die(error)
+    )
   )
 
 /**

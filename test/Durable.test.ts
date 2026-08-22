@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import { Compaction } from "../src/compaction/index.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
@@ -60,6 +61,136 @@ describe("durable submissions", () => {
       )
 
       assert.isTrue(Exit.isSuccess(text))
+    })
+  )
+
+  it.live("a second submit on a completed session reopens nothing", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Once", Agent.make({}), { store })
+
+      yield* Effect.gen(function* () {
+        const first = yield* DurableAgent.submit(durable, store, "once", "hello")
+        yield* DurableAgent.result(durable, first)
+
+        // The key is the session: the engine hands back the finished
+        // execution. What must not happen is admission reopening for it --
+        // steering accepted into channels nothing will ever drain.
+        const second = yield* DurableAgent.submit(durable, store, "once", "again")
+        assert.strictEqual(second, first)
+        assert.strictEqual(
+          yield* store.size(DurableChannels.openKey("once")),
+          0
+        )
+        const refused = yield* Effect.flip(
+          DurableAgent.steer(store, "once", "late")
+        )
+        assert.strictEqual(refused._tag, "AgentIdleError")
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+    })
+  )
+
+  it.live("a subagent run by a tool does not shift the parent's model journal on replay", () =>
+    Effect.gen(function* () {
+      // One scripted model shared by parent and child, as a child inheriting
+      // the environment's model would. Turn 1: the parent delegates; the tool
+      // runs a child session whose model call happens *inside* the tool
+      // activity. Then the parent suspends, resumes, and makes turn 2's call.
+      // On replay the tool activity returns its journal without running the
+      // child, so the child must never have consumed a `model-N` name of the
+      // parent's -- or turn 2 is handed the child's recorded answer. It does
+      // not: a handler's context is fixed when its toolkit layer is built,
+      // before the durable wrapper exists, so the child calls the provider
+      // directly and its call is covered by the tool activity's journal.
+      const modelCalls = yield* Ref.make(0)
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const SubGate = DurableDeferred.make("SubagentGate", { success: Schema.String })
+      const Delegate = Tool.make("delegate", {
+        parameters: Schema.Struct({ question: Schema.String }),
+        success: Schema.String
+      })
+      const DelegateToolkit = Toolkit.make(Delegate)
+      // The handler picks the model up from the context it is *called* in
+      // -- the session's, where the durable wrapper is in place -- which is
+      // what makes the child's call a nested durable one.
+      const delegating = DelegateToolkit.pipe(
+        Effect.provide(
+          DelegateToolkit.toLayer({
+            delegate: ({ question }) =>
+              Effect.gen(function* () {
+                const ambient = yield* Effect.context<never>()
+                const model = Context.getOption(ambient, LanguageModel.LanguageModel)
+                if (Option.isNone(model)) {
+                  return yield* Effect.die(new Error("no ambient model"))
+                }
+                return yield* Effect.scoped(
+                  Effect.gen(function* () {
+                    const child = yield* AgentSession.make(Agent.make({}))
+                    return (yield* AgentSession.prompt(child, question)).text
+                  })
+                ).pipe(
+                  Effect.provideService(LanguageModel.LanguageModel, model.value),
+                  Effect.orDie
+                )
+              })
+          })
+        )
+      )
+      const { layer: baseModel } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "d1", name: "delegate", params: { question: "q" } }] },
+        { text: "child answer" },
+        { text: "parent answer" }
+      ])
+      const model = countingModel(baseModel, modelCalls)
+
+      const suspendOnce = yield* Ref.make(true)
+      const turns = yield* Ref.make(0)
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          // Only the parent's turns count; the child has no transform.
+          const turn = yield* Ref.updateAndGet(turns, (n) => n + 1)
+          if (turn === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
+            const token = yield* DurableDeferred.token(SubGate)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(SubGate)
+          }
+          return context.canonicalPrompt
+        })
+      )
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow(
+        "Delegating",
+        Agent.make({ toolkit: delegating, contextTransform: gating }),
+        { store }
+      )
+
+      const exit = yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, store, "sub-1", "ask")
+        const token = yield* Deferred.await(gateReady)
+        yield* DurableDeferred.succeed(SubGate, { token, value: "go" })
+        return yield* DurableAgent.result(durable, id)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+      assert.isTrue(Exit.isSuccess(exit), JSON.stringify(exit))
+      if (Exit.isSuccess(exit)) {
+        assert.strictEqual(exit.value, "parent answer")
+      }
+      // Parent turn 1, child, parent turn 2 -- and nothing re-issued.
+      assert.strictEqual(yield* Ref.get(modelCalls), 3)
     })
   )
 

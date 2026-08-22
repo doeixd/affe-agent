@@ -335,7 +335,10 @@ export const throughShardReassignment: <A, E, R>(
  * therefore safe, but a second submit with *different* input for the same
  * session rejoins the live execution rather than starting a new one — the new
  * input is not processed. That upholds PLAN §11's one-submission-per-session
- * rule; queue further work with `followUp` instead.
+ * rule; queue further work with `followUp` instead. A submit against a
+ * session whose execution has already *completed* returns that execution's
+ * id without reopening admission: a conversation that continues across
+ * submissions is what `DurableAgentClient` provides.
  */
 export const submit = <W extends ReturnType<typeof workflow>>(
   agent: W,
@@ -349,6 +352,18 @@ export const submit = <W extends ReturnType<typeof workflow>>(
       sessionId,
       prompt
     })
+    // The key is the session, so the engine answers a second submit with the
+    // execution it already has -- including a *finished* one. Opening
+    // admission for that would accept steering and follow-ups into channels
+    // nothing will ever drain, and `result` would hand back the earlier
+    // submission's text as if it were this one's. A completed execution is
+    // therefore recognised and returned as it is, with nothing opened.
+    const existing = yield* throughReassignment(
+      agent.definition.poll(executionId)
+    )
+    if (Option.isSome(existing) && existing.value._tag === "Complete") {
+      return executionId
+    }
     // Opened here rather than inside the workflow body: `submit` has accepted
     // the submission by the time it returns, so steering must be admissible
     // from that moment. Marking it in the body instead leaves a window where a

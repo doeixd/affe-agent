@@ -86,6 +86,14 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             })
             // Admission opens before dispatch, so a client that steers straight
             // after submitting is not told the session is idle.
+            //
+            // A second submit for a session whose execution already completed
+            // is not recognised here: polling the engine from inside the
+            // entity routes through this runner, like execution does. The
+            // key is the session, so the engine returns the finished
+            // execution and the marker stays open until the next one. Use
+            // `DurableAgentClient` for a conversation that continues across
+            // submissions.
             yield* DurableAgent.open(store, sessionId)
             yield* Effect.forkDetach(
               DurableAgent.throughShardReassignment(

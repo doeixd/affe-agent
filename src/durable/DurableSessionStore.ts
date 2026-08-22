@@ -619,9 +619,23 @@ export const sqlStore = (
                   stream: submission.stream
                 }
                 const claimJson = yield* encodeClaim(claim)
-                // The transaction serialises writers; the predicate restates
-                // the invariant in the statement itself.
+                // The predicate restates the invariant in the statement, and
+                // the row is read back to learn whether *this* claim landed.
+                // SQLite serialises writers, but a database with row-level
+                // concurrency (Postgres under READ COMMITTED) lets two
+                // claimers read `claim IS NULL`, blocks the second on the
+                // first's lock, and then matches zero rows for it. Returning
+                // `Claimed` regardless would hand both the same submission.
                 yield* sql`UPDATE ${sessions} SET status = 'running', submission_count = ${record.submissionCount + 1}, claim = ${claimJson} WHERE session_id = ${sessionId} AND claim IS NULL`
+                const after = yield* readRecord(sessionId)
+                const landed = Option.isSome(after) &&
+                  Option.isSome(after.value.claim) &&
+                  after.value.claim.value.submissionId === claim.submissionId
+                if (!landed) {
+                  return Option.isSome(after) && Option.isSome(after.value.claim)
+                    ? ({ _tag: "Busy", claim: after.value.claim.value } as const)
+                    : ({ _tag: "Missing" } as const)
+                }
                 // Nothing is outstanding on an idle session: see `finish`.
                 yield* sql`DELETE FROM ${requests} WHERE session_id = ${sessionId}`
                 return {
