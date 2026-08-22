@@ -277,16 +277,17 @@ export const make = <E = never, R = never>(options: {
           // canonical history, so it is the same on every turn that sees the
           // same history — including a replay.
           //
-          // Aligned to a user turn. `retain` counts messages, and a raw count
-          // can land the boundary on a tool result whose call was just folded
-          // into the summary — or on an assistant message mid-exchange. The
-          // projection then carries a `tool_result` with no `tool_use`, which
-          // providers reject, so every turn fails until the window happens to
-          // move. The tail therefore starts at the nearest user message at or
-          // before the raw boundary: `retain` is a minimum, never a cut
-          // through an exchange. If no user turn lies between the checkpoint
-          // and the raw boundary, nothing is foldable yet.
-          const boundary = alignToUserTurn(
+          // Never opening on a tool result. `retain` counts messages, and a
+          // raw count can land the boundary on a tool message whose call was
+          // just folded into the summary; the projection then carries a
+          // `tool_result` with no `tool_use`, which providers reject, so every
+          // turn fails until the window happens to move. The boundary backs
+          // up to the assistant message that issued those calls, keeping the
+          // exchange whole. It is deliberately not aligned to a *user* turn:
+          // a long agentic run is one user message followed by many
+          // assistant/tool exchanges, and a user-aligned boundary could never
+          // fold any of it.
+          const boundary = alignOffToolResults(
             messages,
             covered,
             Math.max(covered, messages.length - options.policy.retain)
@@ -352,16 +353,17 @@ export const make = <E = never, R = never>(options: {
   )
 
 /**
- * The nearest index at or before `raw` (and not before `floor`) that begins
- * a user turn, so a retained tail never opens mid-exchange.
+ * The nearest index at or before `raw` (and not before `floor`) that is not
+ * a tool result, so a retained tail never opens on the answer to a call the
+ * summary has swallowed.
  */
-const alignToUserTurn = (
+const alignOffToolResults = (
   messages: ReadonlyArray<Prompt.Message>,
   floor: number,
   raw: number
 ): number => {
   let index = raw
-  while (index > floor && messages[index]?.role !== "user") {
+  while (index > floor && messages[index]?.role === "tool") {
     index = index - 1
   }
   return index

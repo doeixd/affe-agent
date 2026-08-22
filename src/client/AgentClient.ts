@@ -66,6 +66,23 @@ export class AgentTransportError extends Schema.TaggedError<AgentTransportError>
 }
 
 /**
+ * A session lookup failed without implying that the transport itself failed.
+ *
+ * Kept apart from `AgentTransportError` for the same reason that one is kept
+ * apart from `AgentExecutionError`: a missing session is a property of the
+ * request, and a caller retrying on transport failures would otherwise retry
+ * `session("unknown")` forever.
+ */
+export class AgentSessionNotFoundError extends Schema.TaggedError<AgentSessionNotFoundError>()(
+  "AgentSessionNotFoundError",
+  { sessionId: Schema.String }
+) {
+  override get message() {
+    return `Session ${this.sessionId} does not exist`
+  }
+}
+
+/**
  * The agent itself failed: a tool, a context transform, the provider.
  *
  * Separate from `AgentTransportError` because conflating them is actively
@@ -113,6 +130,7 @@ export type RemoteError =
   | AgentBusyError
   | AgentIdleError
   | AgentClosedError
+  | AgentSessionNotFoundError
   | AgentExecutionError
   | AgentTransportError
 
@@ -120,6 +138,7 @@ const remoteTags = [
   "AgentBusyError",
   "AgentIdleError",
   "AgentClosedError",
+  "AgentSessionNotFoundError",
   "AgentExecutionError",
   "AgentTransportError"
 ]
@@ -344,12 +363,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
           Effect.flatMap(Ref.get(open), (all) => {
             const found = all.get(sessionId)
             return found === undefined
-              ? Effect.fail(
-                  new AgentTransportError({
-                    sessionId,
-                    detail: "no such session"
-                  })
-                )
+              ? Effect.fail(new AgentSessionNotFoundError({ sessionId }))
               : Effect.succeed(found)
           })
       }

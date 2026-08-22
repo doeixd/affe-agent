@@ -129,10 +129,7 @@ const freshSessionId = Effect.sync(
 )
 
 const noSuchSession = (sessionId: string) =>
-  new AgentClient.AgentTransportError({
-    sessionId,
-    detail: "no such session"
-  })
+  new AgentClient.AgentSessionNotFoundError({ sessionId })
 
 /**
  * Provide the ordinary `AgentClient` service over a durable agent.

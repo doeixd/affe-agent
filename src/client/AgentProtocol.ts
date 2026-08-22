@@ -87,15 +87,15 @@ export const Session = Schema.Struct({
 })
 export type Session = typeof Session.Type
 
-/** A session lookup failed without implying that the transport itself failed. */
-export class AgentSessionNotFoundError extends Schema.TaggedError<AgentSessionNotFoundError>()(
-  "AgentSessionNotFoundError",
-  { sessionId: SessionId }
-) {
-  override get message() {
-    return `Session ${this.sessionId} does not exist`
-  }
-}
+/**
+ * A session lookup failed without implying that the transport itself failed.
+ *
+ * The client service's own error, re-exported: the protocol and the service
+ * must agree on what a missing session is called, or a transport would turn
+ * the service's typed answer into something the service cannot name.
+ */
+export const AgentSessionNotFoundError = AgentClient.AgentSessionNotFoundError
+export type AgentSessionNotFoundError = AgentClient.AgentSessionNotFoundError
 
 /** A create request named a session that is already open. */
 export class AgentSessionAlreadyExistsError extends Schema.TaggedError<AgentSessionAlreadyExistsError>()(

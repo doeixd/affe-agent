@@ -57,17 +57,17 @@ describe("AgentClient (local specifics)", () => {
         )
     )
   )
-
-  it.effect("reports a session that is not open as a transport failure", () =>
+  it.effect("reports a session that is not open as not found, not as a transport failure", () =>
     Effect.flatMap(
       TestLanguageModel.script([]),
       ({ layer: model }) =>
         Effect.flatMap(Effect.service(AgentClient.AgentClient), (client) =>
           Effect.gen(function* () {
-            // Typed, not a defect: a caller can tell this apart from a session
-            // that exists and is busy.
+            // Typed, and not wearing the transport tag: a caller retrying
+            // transport failures must not retry a lookup that can never
+            // succeed, and can tell this apart from a session that is busy.
             const error = yield* Effect.flip(client.session("never-opened"))
-            assert.strictEqual(error._tag, "AgentTransportError")
+            assert.strictEqual(error._tag, "AgentSessionNotFoundError")
           })
         ).pipe(
           Effect.provide(

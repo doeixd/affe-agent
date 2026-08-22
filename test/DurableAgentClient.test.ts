@@ -225,7 +225,7 @@ describe("DurableAgentClient (durability specifics)", () => {
       const missing = yield* using(f.another, (client) =>
         Effect.flip(client.session("nobody"))
       )
-      assert.strictEqual(missing._tag, "AgentTransportError")
+      assert.strictEqual(missing._tag, "AgentSessionNotFoundError")
     }).pipe(Effect.scoped)
   )
 

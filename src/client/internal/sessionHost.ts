@@ -334,6 +334,16 @@ export const make = <Principal>(
                   markCompleted(bucket, requestId, reservation.deferred)
                 )
               )
+            ).pipe(
+              // The owner runs in the host's scope. If the host shuts down
+              // with the mutation in flight, the owner is interrupted before
+              // it can complete the deferred, and every joiner waiting on it
+              // -- a request whose transport does not interrupt its handler
+              // on its own -- would wait forever. Interrupting the deferred
+              // wakes them with the interruption the host's closing is.
+              Effect.onInterrupt(() =>
+                Effect.asVoid(Deferred.interrupt(reservation.deferred))
+              )
             )
             yield* Effect.forkIn(complete, parentScope)
           }
@@ -433,9 +443,20 @@ export const make = <Principal>(
           const next = new Map(all)
           next.delete(request.sessionId)
           yield* Ref.set(sessions, next)
-          yield* Scope.close(found.scope, Exit.void)
-          return { requestId: request.requestId, closed: true }
+          return found
         })
+      ).pipe(
+        // Closed outside the registry gate. Closing interrupts the session's
+        // run and waits for its finalizers -- tool cleanup, a provider stream
+        // tearing down -- and holding the gate through that would stall every
+        // other create and close on the host. The map no longer holds the
+        // entry, so this close is the only one.
+        Effect.flatMap((found) =>
+          Effect.as(Scope.close(found.scope, Exit.void), {
+            requestId: request.requestId,
+            closed: true
+          })
+        )
       )
     })
 

@@ -77,11 +77,12 @@ describe("compaction", () => {
   it.effect("never opens the retained tail on a tool result", () =>
     Effect.gen(function* () {
       // Every submission is four messages: user, assistant (tool call), tool,
-      // assistant. With `retain: 2` the raw boundary lands on the tool
-      // result — a projection a provider rejects — so the tail must open at
-      // the user turn before it instead.
+      // assistant. With `retain: 1`, the second turn of a submission sees a
+      // raw boundary on the tool result — a projection a provider rejects —
+      // so the tail must open on the assistant message that issued the call
+      // instead.
       const compaction = yield* Compaction.make({
-        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        policy: Compaction.whenLongerThan(1, { retain: 1 }),
         summarise: ({ messages }) =>
           Effect.succeed(`covered ${messages.content.length} messages`)
       })
@@ -118,10 +119,10 @@ describe("compaction", () => {
       const prompts = yield* recorder.prompts
       for (const prompt of prompts) {
         const roles = prompt.content.map((m) => m.role)
-        // After any summary, the first message is a user turn, and every
-        // tool message follows an assistant message.
+        // After any summary, every tool message still follows the assistant
+        // message that asked for it.
         const tail = roles.filter((role) => role !== "system")
-        assert.strictEqual(tail[0], "user", roles.join(","))
+        assert.notStrictEqual(tail[0], "tool", roles.join(","))
         roles.forEach((role, i) => {
           if (role === "tool") assert.strictEqual(roles[i - 1], "assistant", roles.join(","))
         })
@@ -415,11 +416,11 @@ describe("compaction", () => {
       ).pipe(Effect.provide(layer))
 
       // Measured both ways rather than guessed: with the cache holding both
-      // sessions each extends its own checkpoint and summarises twice
+      // sessions each extends its own checkpoint and summarises four times
       // between them; with a cache of one they evict each other and have to
-      // re-summarise, giving four. An `isAtLeast(2)` bound would have passed
+      // re-summarise, giving six. An `isAtLeast(4)` bound would have passed
       // either way and proved nothing.
-      assert.strictEqual(yield* Ref.get(calls), 4)
+      assert.strictEqual(yield* Ref.get(calls), 6)
     })
   )
 
@@ -540,15 +541,14 @@ describe("compaction", () => {
       ).pipe(Effect.provide(layer))
 
       // Measured both ways rather than reasoned about. With the checkpoint
-      // honoured the folded ranges are [4, 4]: the first session folds four
-      // messages (boundaries open on a user turn), the restored one folds
-      // only the four accumulated since. With it rejected the restored
-      // session folds from the beginning again -- [4, 8]. An
-      // `isBelow(range, transcriptLength)` bound was written first and
-      // passed either way.
+      // honoured the folded ranges are [3, 4]: the first session folds three
+      // messages, the restored one folds only the four accumulated since.
+      // With it rejected the restored session folds from the beginning
+      // again. An `isBelow(range, transcriptLength)` bound was written first
+      // and passed either way.
       assert.deepStrictEqual(
         yield* Ref.get(ranges),
-        [4, 4],
+        [3, 4],
         "the restored session redid work the checkpoint had already done"
       )
     })
