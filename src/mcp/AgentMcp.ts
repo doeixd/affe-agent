@@ -2,7 +2,7 @@ import { Effect, Exit, Layer, Ref, Schema, Scope, Semaphore } from "effect"
 import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
 import { AgentClient } from "../client/AgentClient.js"
 import { positiveInteger } from "../internal/positive.js"
-import type * as Client from "../client/AgentClient.js"
+import * as Client from "../client/AgentClient.js"
 
 /**
  * An agent, exposed to MCP clients as a tool.
@@ -65,6 +65,8 @@ export const handlers = (options?: {
     type SessionEntry = {
       readonly session: Client.RemoteSession
       readonly scope: Scope.Closeable
+      /** Calls currently running against this session. */
+      readonly inFlight: number
     }
     const sessions = yield* Ref.make<Map<string, SessionEntry>>(new Map())
 
@@ -106,21 +108,60 @@ export const handlers = (options?: {
           scope
         )
 
-        const evicted = yield* Ref.modify(sessions, (all) => {
-          const next = new Map(all)
-          next.set(sessionId, { session, scope })
-          if (next.size <= limit) return [undefined, next]
-          // Insertion order: the first key is the least recently opened.
-          const oldest = next.keys().next().value
-          const dropped = oldest === undefined ? undefined : next.get(oldest)
-          if (oldest !== undefined) next.delete(oldest)
-          return [dropped, next]
-        })
-        if (evicted !== undefined) {
-          yield* Scope.close(evicted.scope, Exit.void)
+        // Eviction never closes a session with a call in flight: that call's
+        // prompt would be interrupted out from under its caller, and the
+        // handle handed back below may already be closed. The oldest *idle*
+        // session goes; if every session is busy, the bound holds by refusing
+        // the newcomer rather than by sabotaging someone else's call.
+        const outcome = yield* Ref.modify(
+          sessions,
+          (all): [
+            { readonly _tag: "Admitted"; readonly evicted: SessionEntry | undefined }
+            | { readonly _tag: "Full" },
+            Map<string, SessionEntry>
+          ] => {
+            if (all.size < limit) {
+              return [
+                { _tag: "Admitted", evicted: undefined },
+                new Map(all).set(sessionId, { session, scope, inFlight: 0 })
+              ]
+            }
+            // Insertion order: the first idle key is the least recently opened.
+            const oldest = [...all.entries()].find(([, entry]) => entry.inFlight === 0)
+            if (oldest === undefined) return [{ _tag: "Full" }, all]
+            const next = new Map(all)
+            next.delete(oldest[0])
+            next.set(sessionId, { session, scope, inFlight: 0 })
+            return [{ _tag: "Admitted", evicted: oldest[1] }, next]
+          }
+        )
+        if (outcome._tag === "Full") {
+          yield* Scope.close(scope, Exit.void)
+          return yield* new Client.AgentTransportError({
+            sessionId,
+            detail: `session capacity of ${limit} reached and every session is busy`
+          })
+        }
+        if (outcome.evicted !== undefined) {
+          yield* Scope.close(outcome.evicted.scope, Exit.void)
         }
         return session
       })
+
+    /** Hold a named session against eviction for the duration of `use`. */
+    const holding = <A, E>(
+      sessionId: string,
+      use: Effect.Effect<A, E>
+    ): Effect.Effect<A, E> => {
+      const adjust = (delta: number) =>
+        Ref.update(sessions, (all) => {
+          const entry = all.get(sessionId)
+          return entry === undefined
+            ? all
+            : new Map(all).set(sessionId, { ...entry, inFlight: entry.inFlight + delta })
+        })
+      return Effect.acquireUseRelease(adjust(1), () => use, () => adjust(-1))
+    }
 
     /**
      * Run one call against a session, with the right lifetime for each kind.
@@ -144,7 +185,11 @@ export const handlers = (options?: {
           )
         : creating
             .withPermits(1)(openNamed(sessionId))
-            .pipe(Effect.flatMap((session) => session.prompt(prompt)))
+            .pipe(
+              Effect.flatMap((session) =>
+                holding(sessionId, session.prompt(prompt))
+              )
+            )
 
     return AgentToolkit.toLayer({
       ask_agent: ({ prompt, sessionId }) =>

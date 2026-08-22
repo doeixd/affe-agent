@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { Prompt } from "effect/unstable/ai"
@@ -181,6 +181,54 @@ describe("agent over MCP", () => {
         TestLanguageModel.userTexts(fourth),
         ["again"],
         "the evicted session was resumed instead of dropped"
+      )
+    })
+  )
+})
+
+describe("eviction and in-flight calls", () => {
+  it.effect("never evicts a session with a call in flight", () =>
+    Effect.gen(function* () {
+      // Session "one" is mid-prompt when "two" arrives past the limit of 1.
+      // Evicting "one" would close its scope under the running call, which
+      // then fails for its caller with an interruption. The bound holds by
+      // refusing "two" instead, and "one" finishes.
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "one done", started: entered, during: Deferred.await(release) },
+        TestLanguageModel.text("two done")
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const bound = yield* AgentMcp.AgentToolkit.pipe(
+            Effect.provide(Layer.unwrap(AgentMcp.handlers({ maxSessions: 1 })))
+          )
+          const ask = (sessionId: string, prompt: string) =>
+            bound
+              .handle("ask_agent", { prompt, sessionId })
+              .pipe(
+                Effect.flatMap(Stream.runCollect),
+                Effect.map((results) => String(results[results.length - 1]?.result))
+              )
+
+          const first = yield* Effect.forkChild(ask("one", "first"))
+          yield* Deferred.await(entered)
+          const refused = yield* Effect.flip(ask("two", "second"))
+          assert.include(String(refused), "capacity")
+
+          yield* Deferred.succeed(release, void 0)
+          assert.strictEqual(yield* Fiber.join(first), "one done")
+          // Idle now: the newcomer evicts it and runs.
+          assert.strictEqual(yield* ask("two", "second"), "two done")
+        })
+      ).pipe(
+        Effect.provide(
+          AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(
+            Layer.provide(model)
+          )
+        )
       )
     })
   )

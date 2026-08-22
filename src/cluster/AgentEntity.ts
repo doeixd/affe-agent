@@ -6,7 +6,7 @@ import { AgentIdleError } from "../Errors.js"
 import * as Elicitation from "../Elicitation.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
 import * as DurableElicitation from "../durable/DurableElicitation.js"
-import type * as DurableChannels from "../durable/DurableChannels.js"
+import * as DurableChannels from "../durable/DurableChannels.js"
 
 /**
  * A session, addressed as a cluster entity.
@@ -96,10 +96,19 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
                   // failure cannot be returned to it. Log rather than discard:
                   // a silently dropped submission is the worst outcome here.
                   Effect.catchCause((cause) =>
+                    // And admission closes again: an open marker with no
+                    // execution behind it would accept steering and
+                    // follow-ups into channels nothing will ever drain.
                     Effect.logError("agent submission failed to dispatch", {
                       sessionId,
                       cause
-                    })
+                    }).pipe(
+                      Effect.andThen(
+                        Effect.asVoid(
+                          store.takeAll(DurableChannels.openKey(sessionId))
+                        )
+                      )
+                    )
                   )
                 )
             )

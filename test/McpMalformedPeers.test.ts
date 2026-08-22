@@ -29,6 +29,8 @@ type PeerMode =
   | "resource-link"
   | "embedded-resource"
   | "disconnect-call"
+  | "multi-text"
+  | "rich-error"
 
 const tool = {
   name: "echo",
@@ -172,6 +174,30 @@ class V2MalformedTransport implements V2Transport {
           jsonrpc: "2.0",
           id: message.id,
           result: {
+            content: [{
+              type: "image",
+              data: "aW1hZ2U=",
+              mimeType: "image/png"
+            }]
+          }
+        })
+      } else if (this.mode === "multi-text") {
+        this.onmessage?.({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            content: [
+              { type: "text", text: "first" },
+              { type: "text", text: "second" }
+            ]
+          }
+        })
+      } else if (this.mode === "rich-error") {
+        this.onmessage?.({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            isError: true,
             content: [{
               type: "image",
               data: "aW1hZ2U=",
@@ -359,6 +385,36 @@ describe("malformed MCP peers", () => {
           yield* connection.callTool("echo", { value: "hello" }),
           { value: "structured" }
         )
+      })
+    )
+  )
+
+  it.effect("joins several text parts into one text result", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Servers routinely answer in more than one text block; that is the
+        // most ordinary result there is, not unsupported content.
+        const { connection } = yield* v2Connection("multi-text")
+        assert.strictEqual(
+          yield* connection.callTool("echo", { value: "hello" }),
+          "first\nsecond"
+        )
+      })
+    )
+  )
+
+  it.effect("a reported failure with unreadable content is still a tool failure", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The server said the call failed. That it also attached an image
+        // does not turn the refusal into a content problem the model never
+        // sees: it reaches the agent as McpToolError, where the run's
+        // failure policy applies.
+        const { connection } = yield* v2Connection("rich-error")
+        const error = yield* Effect.flip(
+          connection.callTool("echo", { value: "hello" })
+        )
+        assert.strictEqual(error._tag, "McpToolError")
       })
     )
   )

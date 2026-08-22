@@ -15,27 +15,36 @@ const contentTypes = (content: unknown): ReadonlyArray<string> =>
       )
     : ["invalid"]
 
+/**
+ * The text of a result whose content is text.
+ *
+ * Several text parts are one text, joined by newlines — servers commonly
+ * answer in more than one block, and refusing them as unsupported content
+ * was a false negative on the most ordinary result there is. A single part
+ * is the same rule with one element. Anything that is not text, or an empty
+ * result, is genuinely unsupported.
+ */
 const contentValue = (
   name: string,
   content: unknown
 ): Effect.Effect<unknown, McpToolkit.McpUnsupportedContentError> => {
-  if (!Array.isArray(content) || content.length !== 1) {
-    return Effect.fail(
-      new McpToolkit.McpUnsupportedContentError({
-        toolName: name,
-        contentTypes: contentTypes(content)
-      })
+  if (
+    Array.isArray(content) &&
+    content.length > 0 &&
+    content.every((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string"
+    )
+  ) {
+    return Effect.succeed(
+      content.map((part) => (part as { readonly text: string }).text).join("\n")
     )
   }
-  const only = content[0]
-  return isRecord(only) && only.type === "text" && typeof only.text === "string"
-    ? Effect.succeed(only.text)
-    : Effect.fail(
-        new McpToolkit.McpUnsupportedContentError({
-          toolName: name,
-          contentTypes: contentTypes(content)
-        })
-      )
+  return Effect.fail(
+    new McpToolkit.McpUnsupportedContentError({
+      toolName: name,
+      contentTypes: contentTypes(content)
+    })
+  )
 }
 
 const validateSupplementaryContent = (
@@ -93,6 +102,17 @@ export const fromPort = (port: ClientPort.ClientPort): McpClient.Connection => (
             Effect.as(structured)
           )
       }
+    ).pipe(
+      // A failure the server reported stays a tool failure whatever shape
+      // its content takes: an error result with content this client cannot
+      // read is still the tool refusing, and must reach the agent as
+      // `McpToolError` -- where the run's failure policy applies -- rather
+      // than as unsupported content the model never sees.
+      Effect.catch((unsupported) =>
+        result.isError
+          ? Effect.succeed<unknown>(contentTypes(result.content).join(","))
+          : Effect.fail(unsupported)
+      )
     )
     if (result.isError) {
       return yield* new McpToolkit.McpToolError({ error: value })
