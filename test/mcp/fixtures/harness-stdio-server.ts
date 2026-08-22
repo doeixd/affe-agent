@@ -78,10 +78,7 @@ const client = Layer.effect(
         }),
       session: (id) =>
         Effect.fail(
-          new AgentClient.AgentTransportError({
-            sessionId: id,
-            detail: "fixture sessions are owned by AgentMcp"
-          })
+          new AgentClient.AgentSessionNotFoundError({ sessionId: id })
         )
     })
   })

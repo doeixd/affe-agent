@@ -305,10 +305,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
         }),
       session: (id) =>
         Effect.fail(
-          new AgentClient.AgentTransportError({
-            sessionId: id,
-            detail: "fixture sessions are owned by AgentA2A"
-          })
+          new AgentClient.AgentSessionNotFoundError({ sessionId: id })
         )
     })
   )

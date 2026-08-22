@@ -196,9 +196,16 @@ export const command = (
 ): Command => ({ executable, args })
 
 export interface CommandResult {
+  /** The process exit code, or -1 when it was ended by a signal. */
   readonly exitCode: number
   readonly stdout: string
   readonly stderr: string
+  /**
+   * The signal that ended the process, when one did -- the OOM killer, a
+   * kill from outside the sandbox. Absent for a process that exited on its
+   * own. A `-1` exit code alone cannot say which happened.
+   */
+  readonly signal?: string | undefined
 }
 
 export interface ExecOptions {

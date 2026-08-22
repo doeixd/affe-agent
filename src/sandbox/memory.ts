@@ -26,19 +26,27 @@ export const layer = (options?: {
         new Map<string, Map<string, Uint8Array>>()
       )
 
+      const seeded = () => {
+        const fresh = new Map<string, Uint8Array>()
+        for (const [key, value] of Object.entries(options?.seed ?? {})) {
+          fresh.set(
+            key.replaceAll("\\", "/"),
+            typeof value === "string" ? new TextEncoder().encode(value) : value
+          )
+        }
+        return fresh
+      }
+
+      // One atomic step: two fibres acquiring the same workspace for the
+      // first time must share one world. Read-then-update let the later one
+      // replace the earlier, and anything written through the first handle
+      // in between landed in a map nobody held any more.
       const worldFor = (workspace: Sandbox.Workspace) =>
-        Effect.gen(function* () {
-          const existing = (yield* Ref.get(worlds)).get(workspace)
-          if (existing !== undefined) return existing
-          const fresh = new Map<string, Uint8Array>()
-          for (const [key, value] of Object.entries(options?.seed ?? {})) {
-            fresh.set(
-              key.replaceAll("\\", "/"),
-              typeof value === "string" ? new TextEncoder().encode(value) : value
-            )
-          }
-          yield* Ref.update(worlds, (all) => new Map(all).set(workspace, fresh))
-          return fresh
+        Ref.modify(worlds, (all) => {
+          const existing = all.get(workspace)
+          if (existing !== undefined) return [existing, all]
+          const fresh = seeded()
+          return [fresh, new Map(all).set(workspace, fresh)]
         })
 
       const entryFor = (

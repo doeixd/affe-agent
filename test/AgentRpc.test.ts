@@ -144,10 +144,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
         }),
       session: (id) =>
         Effect.fail(
-          new AgentClient.AgentTransportError({
-            sessionId: id,
-            detail: "fixture sessions are host-owned"
-          })
+          new AgentClient.AgentSessionNotFoundError({ sessionId: id })
         )
     })
 

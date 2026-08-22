@@ -533,10 +533,7 @@ const serverFixture = (fixtureOptions?: {
       }),
     session: (id) =>
       Effect.fail(
-        new AgentClient.AgentTransportError({
-          sessionId: id,
-          detail: "fixture sessions are host-owned"
-        })
+        new AgentClient.AgentSessionNotFoundError({ sessionId: id })
       )
   })
 

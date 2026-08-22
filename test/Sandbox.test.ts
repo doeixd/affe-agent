@@ -402,6 +402,71 @@ describe("local sandbox", () => {
     })
   )
 
+  it.live("a descendant holding the pipes cannot keep a finished command open", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        // The command starts a grandchild that inherits stdout and outlives
+        // it, then exits itself. Waiting for the streams to close would wait
+        // on the grandchild; the command is over when the child is. (The
+        // grandchild is given a short life of its own: on POSIX the sandbox
+        // ends the process group, but Windows cannot reach an orphan through
+        // its dead parent, and the fixture's cleanup needs the directory
+        // back.)
+        const began = Date.now()
+        const result = yield* sandbox.exec(
+          node(
+            "const { spawn } = require('child_process'); spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: 'inherit', detached: true }).unref(); console.log('parent done')"
+          ),
+          { timeout: "5 seconds" }
+        )
+        assert.strictEqual(result.exitCode, 0)
+        assert.include(result.stdout, "parent done")
+        assert.isBelow(Date.now() - began, 1200, "waited on the grandchild")
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    })
+  )
+
+  it.effect("reports a process ended by a signal as such", () =>
+    Effect.gen(function* () {
+      // Windows has no signals: a self-kill there is an ordinary exit code.
+      if (process.platform === "win32") return
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        const result = yield* sandbox.exec(
+          node("process.kill(process.pid, 'SIGKILL')")
+        )
+        // Not an exit code a tool chose: the signal is named.
+        assert.strictEqual(result.exitCode, -1)
+        assert.strictEqual(result.signal, "SIGKILL")
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    })
+  )
+
+  it.effect("a workspaceRoot that does not exist is refused at acquire, not per operation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      const missing = LocalSandbox.layer({
+        workspaceRoot: path.join(fixture.base, "nowhere")
+      })
+      const failed = yield* Effect.exit(
+        Sandbox.acquire(Sandbox.workspace("local")).pipe(
+          Effect.provide(missing),
+          Effect.scoped
+        )
+      )
+      if (!Exit.isFailure(failed)) {
+        assert.fail("acquiring a missing root must fail")
+      }
+      const error = Cause.findErrorOption(failed.cause)
+      assert.isTrue(
+        error._tag === "Some" && error.value instanceof Sandbox.ProviderError
+      )
+    })
+  )
+
   it.effect("refuses to write through a dangling symlink that points outside", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture()

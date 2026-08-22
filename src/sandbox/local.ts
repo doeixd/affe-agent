@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { realpathSync } from "node:fs"
 import * as fs from "node:fs/promises"
 import { tmpdir } from "node:os"
 import * as nodePath from "node:path"
@@ -49,11 +50,37 @@ export const layer = (options?: {
                   detail: `could not create the sandbox directory: ${String(cause)}`
                 })
             }),
-            (dir) => Effect.ignore(Effect.promise(() =>
-              fs.rm(dir, { recursive: true, force: true })
-            ))
+            (dir) =>
+              // Windows releases a just-exited child's handles asynchronously,
+              // so the first attempt can meet EBUSY; `rm` retries for exactly
+              // that. A failure after that is logged rather than swallowed --
+              // a silently accumulating temp directory is a leak nobody sees.
+              Effect.promise(() =>
+                fs.rm(dir, {
+                  recursive: true,
+                  force: true,
+                  maxRetries: 5,
+                  retryDelay: 100
+                })
+              ).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("sandbox directory was not removed", {
+                    dir,
+                    cause
+                  })
+                )
+              )
           )
-          : Effect.succeed(existingRoot)
+          : // A root handed in is checked once: a missing one would otherwise
+            // surface as a permission refusal on every operation, since its
+            // `realpath` falls back to the raw string.
+            Effect.try({
+              try: () => realpathSync.native(existingRoot),
+              catch: (cause) =>
+                new Sandbox.ProviderError({
+                  detail: `workspaceRoot is not usable: ${String(cause)}`
+                })
+            })
 
       const toFileError = (
         cause: unknown,
@@ -88,7 +115,13 @@ export const layer = (options?: {
                 cwd: root,
                 shell: false,
                 windowsHide: true,
-                stdio: ["ignore", "pipe", "pipe"]
+                stdio: ["ignore", "pipe", "pipe"],
+                // Its own process group on POSIX, so that ending the command
+                // ends everything it started. Killing only the direct child
+                // leaves a grandchild holding the stdio pipes -- `npm`, a
+                // shell with a background job -- and the command never
+                // closes. Windows has no groups; `taskkill /T` walks the tree.
+                detached: process.platform !== "win32"
               })
             } catch (cause) {
               resume(Effect.fail(new Sandbox.CommandLaunchError({
@@ -99,8 +132,14 @@ export const layer = (options?: {
             }
 
             let settled = false
-            let stdout = Buffer.alloc(0)
-            let stderr = Buffer.alloc(0)
+            let total = 0
+            const stdout: Array<Buffer> = []
+            const stderr: Array<Buffer> = []
+            let terminal: Effect.Effect<never, Sandbox.ExecError> | undefined
+            const timers: Array<ReturnType<typeof setTimeout>> = []
+            const later = (ms: number, run: () => void) => {
+              timers.push(setTimeout(run, ms))
+            }
 
             const finish = (result: Effect.Effect<
               Sandbox.CommandResult,
@@ -108,41 +147,67 @@ export const layer = (options?: {
             >) => {
               if (settled) return
               settled = true
-              clearTimeout(timer)
+              for (const timer of timers) clearTimeout(timer)
+              child.stdout?.destroy()
+              child.stderr?.destroy()
               resume(result)
             }
 
+            const killTree = (signal: "SIGTERM" | "SIGKILL") => {
+              if (child.pid === undefined) return
+              if (process.platform === "win32") {
+                // No graceful signal exists on Windows; both phases end the
+                // whole tree. `taskkill` failing (already gone) is fine.
+                try {
+                  spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+                    stdio: "ignore",
+                    windowsHide: true
+                  }).on("error", () => {})
+                } catch {
+                  child.kill()
+                }
+                return
+              }
+              try {
+                process.kill(-child.pid, signal)
+              } catch {
+                child.kill(signal)
+              }
+            }
+
             // A bound that is enforced, not merely reported: the failure is
-            // delivered only once the child has actually gone. Settling on
-            // the kill signal alone would hand control back while the process
-            // still runs — still writing, still holding its working
-            // directory — and "bounded" would describe the wait, not the
-            // work. A child that ignores SIGTERM is killed outright after a
-            // grace period.
-            let terminal: Effect.Effect<never, Sandbox.ExecError> | undefined
-            let escalation: ReturnType<typeof setTimeout> | undefined
+            // delivered once the process is gone -- or, failing that, once a
+            // hard deadline has passed. Settling on the signal alone would
+            // hand control back while the process still ran; waiting on
+            // `close` alone could wait forever on a descendant that kept the
+            // pipes open after the child died. So: SIGTERM, SIGKILL to the
+            // tree after a grace period, and a deadline after which the
+            // result is delivered regardless, with the streams torn down.
             const terminate = (failure: Sandbox.ExecError) => {
               if (terminal !== undefined || settled) return
               terminal = Effect.fail(failure)
-              child.kill("SIGTERM")
-              escalation = setTimeout(() => child.kill("SIGKILL"), 1000)
+              // Nothing more is kept: a process ignoring its signal while
+              // flooding stdout must not turn the output bound into a memory
+              // bound that is not one.
+              child.stdout?.destroy()
+              child.stderr?.destroy()
+              killTree("SIGTERM")
+              later(1000, () => killTree("SIGKILL"))
+              later(2500, () => finish(terminal!))
             }
 
-            const timer = setTimeout(() => {
+            later(timeoutMs, () => {
               terminate(new Sandbox.TimeoutError({
                 executable: input.executable,
                 timeoutMillis: timeoutMs
               }))
-            }, timeoutMs)
+            })
 
             const append = (chunk: Buffer, isStdout: boolean) => {
-              const next = Buffer.concat([isStdout ? stdout : stderr, chunk])
-              if (isStdout) stdout = next
-              else stderr = next
-              if (
-                stdout.byteLength + stderr.byteLength > maxOutputBytes &&
-                !settled
-              ) {
+              if (terminal !== undefined || settled) return
+              ;(isStdout ? stdout : stderr).push(chunk)
+              total += chunk.byteLength
+              if (total > maxOutputBytes) {
                 terminate(new Sandbox.OutputLimitError({
                   executable: input.executable,
                   maxOutputBytes
@@ -157,24 +222,42 @@ export const layer = (options?: {
                 executable: input.executable,
                 detail: String(cause)
               }))))
-            child.on("close", (code) => {
-              if (escalation !== undefined) clearTimeout(escalation)
-              finish(
-                terminal ??
-                  Effect.succeed({
-                    exitCode: code ?? -1,
-                    stdout: stdout.toString("utf8"),
-                    stderr: stderr.toString("utf8")
-                  })
-              )
-            })
 
-            // Interruption of the calling fibre — a caller's timeout, the run
-            // being interrupted mid-tool, the scope closing — must not strand
-            // the child. Without this the process ran to completion on its
-            // own, the timers stayed armed, and "bounded" held only for the
-            // path nobody interrupted. The child is told to stop and the
-            // interrupt completes once it has actually closed, the same
+            const result = (
+              code: number | null,
+              signal: NodeJS.Signals | null
+            ): Effect.Effect<Sandbox.CommandResult, Sandbox.ExecError> =>
+              terminal ??
+                Effect.succeed({
+                  exitCode: code ?? -1,
+                  stdout: Buffer.concat(stdout).toString("utf8"),
+                  stderr: Buffer.concat(stderr).toString("utf8"),
+                  // A process ended by a signal the sandbox did not send -- the
+                  // OOM killer, a kill from elsewhere -- is reported as such,
+                  // not as an exit code a tool might have chosen.
+                  ...(signal === null ? {} : { signal })
+                })
+            // `exit` is the process being gone. `close` -- the streams ending
+            // too -- normally follows within a tick; a descendant keeping the
+            // pipes open is given a short grace, then the result is delivered
+            // with whatever was read.
+            child.on("exit", (code, signal) => {
+              later(250, () => {
+                // Something the command started is still holding its pipes
+                // after the command itself is gone. It belongs to nobody now
+                // and would outlive the sandbox -- and keep this process's
+                // own stdio alive with it. The command is over; so is its
+                // tree.
+                killTree("SIGKILL")
+                finish(result(code, signal))
+              })
+            })
+            child.on("close", (code, signal) => finish(result(code, signal)))
+
+            // Interruption of the calling fibre -- a caller's timeout, the run
+            // being interrupted mid-tool, the scope closing -- must not strand
+            // the child. The tree is ended and the interrupt completes once
+            // the process is gone or the deadline has passed, the same
             // guarantee the timeout path gives.
             return Effect.callback<void>((done) => {
               if (settled) {
@@ -182,12 +265,21 @@ export const layer = (options?: {
                 return
               }
               settled = true
-              clearTimeout(timer)
-              if (escalation !== undefined) clearTimeout(escalation)
-              child.once("close", () => done(Effect.void))
-              child.kill("SIGTERM")
-              const force = setTimeout(() => child.kill("SIGKILL"), 1000)
-              child.once("close", () => clearTimeout(force))
+              for (const timer of timers) clearTimeout(timer)
+              child.stdout?.destroy()
+              child.stderr?.destroy()
+              let finished = false
+              const complete = () => {
+                if (finished) return
+                finished = true
+                clearTimeout(force)
+                clearTimeout(deadline)
+                done(Effect.void)
+              }
+              child.once("exit", complete)
+              killTree("SIGTERM")
+              const force = setTimeout(() => killTree("SIGKILL"), 1000)
+              const deadline = setTimeout(complete, 2500)
             })
           })
 
@@ -220,9 +312,17 @@ export const layer = (options?: {
               if (parent === anchor) break
               anchor = parent
             }
-            const anchorReal = yield* Effect.promise(() =>
-              fs.realpath(anchor).catch(() => null)
-            )
+            // `realpath.native` on both sides: the JS implementation does not
+            // canonicalise case or 8.3 short names on Windows, and a
+            // workspace under `PATRIC~1` compared against a link target
+            // spelled `Patrick` was refused as an escape it was not.
+            const anchorReal = yield* Effect.sync(() => {
+              try {
+                return realpathSync.native(anchor)
+              } catch {
+                return null
+              }
+            })
             if (anchorReal === null) {
               // Either the anchor was removed since the walk, or it is a
               // dangling link. Neither is a path this workspace can vouch
@@ -232,9 +332,13 @@ export const layer = (options?: {
                 operation
               })
             }
-            const rootReal = yield* Effect.promise(() =>
-              fs.realpath(root).catch(() => root)
-            )
+            const rootReal = yield* Effect.sync(() => {
+              try {
+                return realpathSync.native(root)
+              } catch {
+                return root
+              }
+            })
             const inside = anchorReal === rootReal ||
               anchorReal.startsWith(`${rootReal}${nodePath.sep}`)
             if (!inside) {
@@ -301,12 +405,18 @@ export const layer = (options?: {
                         })
                         continue
                       }
-                      const info = await fs.stat(
-                        nodePath.join(resolved, dirent.name)
-                      ).then(
-                        (value) => value.size,
-                        () => null
-                      )
+                      // A symlink is listed by name and nothing more. Sizing
+                      // it with `stat` would follow the link and report the
+                      // target's metadata -- for a link pointing outside the
+                      // workspace, the size of a file `read` will refuse.
+                      const info = dirent.isSymbolicLink()
+                        ? null
+                        : await fs.stat(
+                          nodePath.join(resolved, dirent.name)
+                        ).then(
+                          (value) => value.size,
+                          () => null
+                        )
                       entries.push({
                         path: relative as Sandbox.SandboxPath,
                         type: "file",

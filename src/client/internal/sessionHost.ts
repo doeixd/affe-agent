@@ -224,15 +224,48 @@ export const make = <Principal>(
       })
     })
 
+    /**
+     * Find a session, adopting one the client knows about but this host does
+     * not.
+     *
+     * The registry holds what *this process* opened. That is the whole story
+     * for the in-process client, whose sessions live here and nowhere else.
+     * It is not for a durable client, whose sessions live in shared state and
+     * are exactly the ones another process -- or this one after a restart --
+     * is expected to reach by id. Answering "not found" from the map alone
+     * made every transport deny the durable client's central promise.
+     *
+     * So a miss asks the client. A session it can address is adopted into
+     * the registry under its own scope, after which it is served like any
+     * other; a session it cannot is the not-found it always was.
+     */
     const findSession = Effect.fn("AgentSessionHost.findSession")(function* (
       sessionId: AgentProtocol.SessionId
     ) {
       yield* Effect.annotateCurrentSpan({ sessionId })
       const found = (yield* Ref.get(sessions)).get(sessionId)
-      if (found === undefined) {
-        return yield* new AgentProtocol.AgentSessionNotFoundError({ sessionId })
-      }
-      return found
+      if (found !== undefined) return found
+      return yield* registryGate.withPermits(1)(
+        Effect.gen(function* () {
+          // Re-checked under the gate: another request may have adopted it.
+          const raced = (yield* Ref.get(sessions)).get(sessionId)
+          if (raced !== undefined) return raced
+          const addressable = yield* client.session(sessionId).pipe(
+            Effect.catchTag("AgentSessionNotFoundError", () =>
+              Effect.fail(new AgentProtocol.AgentSessionNotFoundError({ sessionId }))
+            )
+          )
+          if ((yield* Ref.get(sessions)).size >= maxSessions) {
+            return yield* new AgentProtocol.AgentCapacityExceededError({
+              capacity: maxSessions
+            })
+          }
+          const childScope = yield* Scope.fork(parentScope)
+          const hosted: HostedSession = { session: addressable, scope: childScope }
+          yield* Ref.update(sessions, (all) => new Map(all).set(sessionId, hosted))
+          return hosted
+        })
+      )
     })
 
     const markCompleted = (
