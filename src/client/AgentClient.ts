@@ -211,13 +211,25 @@ export interface RemoteSession {
 /** Opens and finds sessions. */
 export interface Service {
   /**
-   * Open a session. Scoped, so its lifetime is the caller's scope — the same
-   * rule a local session follows.
+   * Open a session.
+   *
+   * The returned handle is scoped: closing the scope releases whatever the
+   * handle itself owns. Whether the underlying *logical* session also ends is
+   * the implementation's business. The in-process implementation ends it —
+   * a local session's lifetime is its scope — while a durable one does not:
+   * its sessions outlive every client handle and are reacquired later with
+   * `session(id)`, from any process.
    */
   readonly createSession: (options?: {
     readonly sessionId?: string | undefined
   }) => Effect.Effect<RemoteSession, RemoteError, Scope.Scope>
-  /** Reach a session that is already open. */
+  /**
+   * Reach a session that already exists.
+   *
+   * For the in-process implementation that means one this client opened and
+   * still holds; for a durable one it means one recorded in shared state,
+   * whichever process created it and whether or not that process survives.
+   */
   readonly session: (
     sessionId: string
   ) => Effect.Effect<RemoteSession, RemoteError>

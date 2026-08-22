@@ -22,14 +22,32 @@ export interface EventBus {
    * matching sequence order is the stronger guarantee and costs one permit.
    */
   readonly order: Semaphore.Semaphore
+  /**
+   * An observer invoked synchronously under the same permit, after publish.
+   *
+   * This is the earned seam for consumers who cannot afford the race every
+   * `Stream` subscriber carries — a recorder that must not miss the envelope
+   * between subscribing and the first emission. Absent by default; absent
+   * means zero behaviour change.
+   */
+  readonly sink: ((envelope: AgentEventEnvelope) => Effect.Effect<void>) | undefined
 }
 
-export const make = (sessionId: SessionId) =>
+export const make = (
+  sessionId: SessionId,
+  sink?: ((envelope: AgentEventEnvelope) => Effect.Effect<void>) | undefined
+) =>
   Effect.gen(function* () {
     const pubsub = yield* PubSub.unbounded<AgentEventEnvelope>()
     const sequence = yield* Ref.make(0)
     const order = yield* Semaphore.make(1)
-    return { sessionId, pubsub, sequence, order } satisfies EventBus
+    return {
+      sessionId,
+      pubsub,
+      sequence,
+      order,
+      sink
+    } satisfies EventBus
   })
 
 /**
@@ -45,16 +63,21 @@ export const emit = (
   event: AgentEvent
 ): Effect.Effect<void> =>
   Ref.updateAndGet(bus.sequence, (n) => n + 1).pipe(
-    Effect.flatMap((sequence) =>
-      PubSub.publish(bus.pubsub, {
+    Effect.flatMap((sequence) => {
+      const envelope: AgentEventEnvelope = {
         sessionId: bus.sessionId,
         submissionId: Option.fromUndefinedOr(correlation.submissionId),
         runId: Option.fromUndefinedOr(correlation.runId),
         turn: Option.fromUndefinedOr(correlation.turn),
         sequence,
         event
-      })
-    ),
+      }
+      return PubSub.publish(bus.pubsub, envelope).pipe(
+        // Under the same permit, so a sink observes envelopes in sequence
+        // order exactly as the PubSub delivers them.
+        Effect.andThen(bus.sink !== undefined ? bus.sink(envelope) : Effect.void)
+      )
+    }),
     Semaphore.withPermit(bus.order),
     Effect.asVoid
   )

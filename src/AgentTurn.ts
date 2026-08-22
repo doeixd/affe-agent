@@ -28,22 +28,28 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
  *
  * This is the only place steering is observed. A steer changes future
  * reasoning; it never changes the semantics of an already-started turn.
+ *
+ * Under the input gate, which `steer`'s offer-and-announce also holds: the
+ * drained batch therefore cannot contain an input whose `SteeringQueued` has
+ * not been published yet.
  */
 export const applySteering = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools>,
   correlation: Correlation
 ): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const inputs = yield* session.steering.drain
-    if (inputs.length === 0) return
-    for (const input of inputs) {
-      yield* History.commit(session.history, input)
-    }
-    yield* EventBus.emit(session.bus, correlation, {
-      _tag: "SteeringApplied",
-      count: inputs.length
+  session.inputGate.withPermits(1)(
+    Effect.gen(function* () {
+      const inputs = yield* session.steering.drain
+      if (inputs.length === 0) return
+      for (const input of inputs) {
+        yield* History.commit(session.history, input)
+      }
+      yield* EventBus.emit(session.bus, correlation, {
+        _tag: "SteeringApplied",
+        count: inputs.length
+      })
     })
-  })
+  )
 
 /**
  * Resolve the agent's toolkit for this turn.

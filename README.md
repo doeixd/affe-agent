@@ -422,9 +422,83 @@ dropped.
 Streaming and durability compose, with a caveat worth knowing: the journal holds
 one entry per model call containing the completed response, never the individual
 deltas. A streamed durable submission commits exactly the history a batched one
-does, but its deltas arrive whole, and they are emitted inside the workflow —
-live streaming to a remote consumer would need a delivery log, which this
-library does not have.
+does, but its deltas arrive whole. Remote consumers observe them through the
+`DeliveryLog` the durable client records into (below), not through the journal.
+
+### The durable client
+
+`DurableAgentClient` provides the ordinary `AgentClient` service over a durable
+interpreter, so a program written against the client seam runs unchanged in
+either execution mode — and every transport built on `AgentClient` (RPC, HTTP,
+MCP, A2A) reaches durable agents without knowing durability exists.
+
+```ts
+import { AgentClient } from "@doeixd/effect-agent/client"
+import {
+  DeliveryLog,
+  DurableAgentClient,
+  DurableChannels,
+  DurableSessionStore
+} from "@doeixd/effect-agent/durable"
+
+// The program speaks only `AgentClient`.
+const program = Effect.gen(function* () {
+  const client = yield* AgentClient.AgentClient
+  const session = yield* client.createSession({ sessionId: "customer-123" })
+  return yield* session.prompt("Investigate this refund")
+})
+
+// Local: the agent runs in this process.
+program.pipe(Effect.provide(AgentClient.layer(Support)))
+
+// Durable: the same program, the same agent, over a workflow engine.
+const DurableSupport = DurableAgentClient.layer("Support", Support, {
+  store: yield* DurableChannels.sqlStoreWithTable(),
+  sessionStore: yield* DurableSessionStore.sqlStoreWithTables(),
+  delivery: yield* DeliveryLog.sqlLogWithTable()
+}).pipe(Layer.provide(ClusterWorkflowEngine.layer))
+
+program.pipe(Effect.provide(DurableSupport))
+```
+
+Three identities are kept apart underneath: the **session** (the conversation),
+the **submission** (one prompt and its follow-up chain), and the **execution**
+(one workflow run, keyed `${name}:${sessionId}:${submissionId}`). Sequential
+prompts run in fresh executions while canonical history crosses between them
+through the `DurableSessionStore`, which is also where status, the active
+claim, and pending elicitation requests are projected — so `history`, `status`,
+`pending` and `respond` answer from any process, including one that never saw
+the prompt.
+
+What that buys, concretely:
+
+- **Handles are disposable.** Closing a `createSession` scope ends the handle;
+  the durable session and any running submission continue. `session(id)`
+  reacquires it from shared state — a session created by a process that has
+  since died is still there.
+- **At most one submission per session.** `claim` is one atomic store
+  transition, so two concurrent `prompt`s from two processes yield exactly one
+  acceptance and one `AgentBusyError`.
+- **Accepted work is owed an outcome.** The claim persists the request before
+  dispatch, and an answer is persisted before it wakes the workflow; a process
+  lost in between leaves a record that the next `session(id)` reconciles.
+- **Only completed turns survive.** `interrupt` routes through the session's
+  own interruption inside the workflow, so committed turns stay committed and
+  the session returns to `idle`; a failed submission keeps its history exactly
+  as a local one would.
+- **Events come from a `DeliveryLog`**, separate from the workflow journal:
+  keyed by semantic coordinates so a replay lands each event once (a disagreeing
+  replay is reported as a conflict, never hidden), numbered by a session-wide
+  offset so a client resumes with `read({ after })`. Tool results cross in
+  their encoded form (`AgentEvent.toWire`). No per-token activities exist.
+
+Three clients can address one session — a web request starts it, a Slack bot
+answers its approval question, a CLI queues a follow-up — and none of them hold
+a fiber. See [`examples/durable-client.ts`](./examples/durable-client.ts).
+
+The local and durable implementations pass the same conformance suite
+(`test/AgentClientContract.ts`); the durable one is additionally proven across a
+real runner loss on SQLite (`test/DurableAgentClientSql.test.ts`).
 
 `@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
 session id is the routing key and out-of-band input reaches the owning node.
@@ -879,6 +953,9 @@ context transforms and canonical history are directly testable.
 - [`examples/durable.ts`](./examples/durable.ts) — durable execution and the
   cluster client; the snippets above are lifted from it, so they are
   type-checked rather than prose
+- [`examples/durable-client.ts`](./examples/durable-client.ts) — one program
+  over `AgentClient`, run locally and durably by swapping a Layer; three
+  clients addressing one durable session
 - [`examples/sandbox.ts`](./examples/sandbox.ts) — user-defined coding tools
   over the sandbox seam; provider swap is one line of layer wiring
 

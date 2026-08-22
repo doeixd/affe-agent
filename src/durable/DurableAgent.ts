@@ -97,7 +97,7 @@ export class DurableAgentFailure extends Schema.TaggedError<DurableAgentFailure>
  * A toolkit may be given directly or as an Effect producing one; the harness
  * resolves it per turn, and so must this.
  */
-const resolveToolkit = (
+export const resolveToolkit = (
   input: AgentDefinition<any, any, any>["toolkit"]
   // The resolution may fail, and that failure is the agent's own: it joins the
   // submission's error channel like any other.
@@ -105,7 +105,7 @@ const resolveToolkit = (
   Effect.isEffect(input) ? input : Effect.succeed(input)
 
 /** The wire-safe projection of a submission's cause. */
-const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure => {
+export const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure => {
   const failure = AgentEvent.failureFromCause(cause)
   return new DurableAgentFailure({
     tag: failure.tag,
@@ -360,7 +360,6 @@ export const submit = <W extends ReturnType<typeof workflow>>(
     return executionId
   })
 
-/** Queue steering for a running submission. It is applied at a turn boundary. */
 /**
  * Queue steering for a running submission.
  *
@@ -374,20 +373,37 @@ export const steer = (
   sessionId: string,
   input: Prompt.RawInput
 ): Effect.Effect<void, AgentIdleError> =>
-  admit(store, sessionId, "steer").pipe(
-    Effect.andThen(DurableChannels.offer(store, sessionId, "steering", input)),
+  DurableChannels.offerIfAdmitting(store, sessionId, "steering", input).pipe(
+    Effect.flatMap((admitted) =>
+      admitted
+        ? Effect.void
+        : Effect.fail(
+            new AgentIdleError({
+              sessionId: Ids.sessionId(sessionId),
+              operation: "steer"
+            })
+          )
+    ),
     throughReassignment
   )
 
-/** Queue a follow-up, extending the submission rather than the current run. */
 /** Queue a follow-up, extending the submission rather than the current run. */
 export const followUp = (
   store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
 ): Effect.Effect<void, AgentIdleError> =>
-  admit(store, sessionId, "followUp").pipe(
-    Effect.andThen(DurableChannels.offer(store, sessionId, "followUps", input)),
+  DurableChannels.offerIfAdmitting(store, sessionId, "followUps", input).pipe(
+    Effect.flatMap((admitted) =>
+      admitted
+        ? Effect.void
+        : Effect.fail(
+            new AgentIdleError({
+              sessionId: Ids.sessionId(sessionId),
+              operation: "followUp"
+            })
+          )
+    ),
     throughReassignment
   )
 
@@ -424,22 +440,6 @@ export const open = (
   sessionId: string
 ): Effect.Effect<void> =>
   throughReassignment(store.offer(openKey(sessionId), "open"))
-
-const admit = (
-  store: DurableChannels.Store,
-  sessionId: string,
-  operation: "steer" | "followUp"
-): Effect.Effect<void, AgentIdleError> =>
-  Effect.flatMap(store.size(openKey(sessionId)), (open) =>
-    open > 0
-      ? Effect.void
-      : Effect.fail(
-          new AgentIdleError({
-            sessionId: Ids.sessionId(sessionId),
-            operation
-          })
-        )
-  )
 
 /**
  * Await a terminal result.

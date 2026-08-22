@@ -107,8 +107,14 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       // Buffered locally rather than re-queued. Putting the tail back on a
       // FIFO one item at a time reverses it, which turned A, B, C into
       // A, C, B; keeping it here preserves the order it was queued in.
+      //
+      // Under the input gate: `followUp` offers and announces `FollowUpQueued`
+      // under the same permit, so this batch cannot contain an input whose
+      // acceptance has not been announced yet.
       if (pending.length === 0) {
-        pending.push(...(yield* session.followUps.drain))
+        pending.push(
+          ...(yield* session.inputGate.withPermits(1)(session.followUps.drain))
+        )
       }
 
       if (pending.length === 0) {
@@ -136,7 +142,15 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
 
           // One more drain, now that nothing further can be accepted: this
           // catches anything that slipped in before the close.
-          pending.push(...(yield* session.followUps.drain))
+          //
+          // Under `inputGate`, so it is exclusive with `followUp`'s own
+          // check-and-offer. A follow-up that read an open gate and has not yet
+          // offered holds the permit; this drain waits for it, so its item is
+          // still caught. One that starts later finds a closed gate and is
+          // refused instead of being accepted and dropped on release.
+          pending.push(
+            ...(yield* session.inputGate.withPermits(1)(session.followUps.drain))
+          )
           if (pending.length > 0) {
             // Late work arrived, so re-open and keep going.
             yield* SubscriptionRef.update(session.state, (state) => ({

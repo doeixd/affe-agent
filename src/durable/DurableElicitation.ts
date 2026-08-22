@@ -31,8 +31,12 @@ import * as Elicitation from "../Elicitation.js"
  * answer the first outstanding request without having watched it being asked.
  * A deployment that wants richer context should record the events from within
  * the workflow, the same way it would to show streaming output.
+ *
+ * Exported because the client-facing interpreter must name the *same*
+ * deferred this module awaits — an answer completes the deferred by name, and
+ * two spellings of that name would strand every answer in flight.
  */
-const deferredFor = (id: string) =>
+export const deferredFor = (id: string) =>
   DurableDeferred.make(`effect-agent/elicitation/${id}`, {
     success: Elicitation.Response
   })

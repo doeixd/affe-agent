@@ -33,6 +33,24 @@ export interface Store {
   readonly offer: (key: string, input: string) => Effect.Effect<void>
   readonly takeAll: (key: string) => Effect.Effect<ReadonlyArray<string>>
   readonly size: (key: string) => Effect.Effect<number>
+  /**
+   * Offer input, but only if the gate key currently holds something.
+   *
+   * This is the durable counterpart of core's `Session.inputGate`. Admission
+   * checked and the input written as two operations is exactly the race core
+   * fixed: a sender that read an open marker could have its write land after
+   * the submission's closing drain had already looked — accepted by the
+   * caller, discarded on release. The check and the insert must be one step
+   * the store cannot split, which is why this lives on `Store` rather than
+   * being composed from `size` and `offer` here.
+   *
+   * Returns whether the input was admitted.
+   */
+  readonly offerIfOpen: (
+    key: string,
+    input: string,
+    gateKey: string
+  ) => Effect.Effect<boolean>
 }
 
 /**
@@ -66,7 +84,17 @@ export const memoryStore: Effect.Effect<Store> = Effect.map(
         next.set(key, [])
         return [pending, next]
       }),
-    size: (key) => Ref.get(ref).pipe(Effect.map((m) => (m.get(key) ?? []).length))
+    size: (key) => Ref.get(ref).pipe(Effect.map((m) => (m.get(key) ?? []).length)),
+    // Both keys live in one map behind one `Ref`, so the check and the insert
+    // are a single `modify`: no other writer can observe or interleave with
+    // the gap between them.
+    offerIfOpen: (key, input, gateKey) =>
+      Ref.modify(ref, (map) => {
+        if ((map.get(gateKey) ?? []).length === 0) return [false, map]
+        const next = new Map(map)
+        next.set(key, [...(next.get(key) ?? []), input])
+        return [true, next]
+      })
   })
 )
 
@@ -97,6 +125,25 @@ export const offer = (
     store.offer(`${sessionId}:${name}`, encoded)
   )
 
+/**
+ * Offer out-of-band input, admitted atomically against the session's marker.
+ *
+ * The whole admission contract lives in this one step: the marker is checked
+ * and the input written as a single store operation, so a submission that is
+ * closing its input either sees the write in its closing drain or the sender
+ * is refused outright. There is no third outcome — which is what separates
+ * this from reading `openKey` and then calling `offer`.
+ */
+export const offerIfAdmitting = (
+  store: Store,
+  sessionId: string,
+  name: "steering" | "followUps",
+  input: Prompt.RawInput
+): Effect.Effect<boolean> =>
+  Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
+    store.offerIfOpen(`${sessionId}:${name}`, encoded, openKey(sessionId))
+  )
+
 /** Prompts cross the store as JSON; an unencodable prompt is a bug, not a case. */
 const encodePrompt = (prompt: Prompt.Prompt): Effect.Effect<string> =>
   Schema.encodeEffect(Prompt.Prompt)(prompt).pipe(
@@ -119,7 +166,8 @@ const decodePrompt = (encoded: string): Effect.Effect<Prompt.Prompt> =>
  * drains happen in a fixed order within a submission: one per turn boundary.
  */
 export const factory = (
-  store: Store
+  store: Store,
+  options?: { readonly prefix?: string | undefined }
 ): Effect.Effect<
   InputChannel.Factory,
   never,
@@ -150,7 +198,7 @@ export const factory = (
             drain: Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(drainIndex, (n) => n + 1)
               const encoded = yield* Activity.make({
-                name: `${name}-drain-${index}`,
+                name: `${options?.prefix ?? ""}${name}-drain-${index}`,
                 success: inputs,
                 execute: store.takeAll(key)
               }).pipe(Effect.provide(workflowContext))
@@ -240,7 +288,25 @@ export const sqlStore = (
         }>`SELECT COUNT(*) AS count FROM ${table} WHERE channel_key = ${key}`.pipe(
           Effect.map((rows) => Number(rows[0]?.count ?? 0)),
           Effect.orDie
-        )
+        ),
+      offerIfOpen: (key, input, gateKey) =>
+        // One transaction, for the same reason `takeAll` is: the check and the
+        // insert must not be separable, or a marker cleared between them
+        // accepts input the closing drain will never see.
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const open = yield* sql<{ readonly id: number }>`
+                SELECT id FROM ${table} WHERE channel_key = ${gateKey} LIMIT 1
+              `
+              if (open.length === 0) return false
+              yield* sql`INSERT INTO ${table} ${sql.insert(
+                { channel_key: key, value: input }
+              )}`
+              return true
+            })
+          )
+          .pipe(Effect.orDie)
     }
   })
 

@@ -66,7 +66,8 @@ const streamPartsFor = (
 }
 
 export const wrap = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.WithHandler<Tools>
+  toolkit: Toolkit.WithHandler<Tools>,
+  options?: { readonly prefix?: string | undefined }
 ): Effect.Effect<
   Layer.Layer<LanguageModel.LanguageModel>,
   never,
@@ -82,6 +83,10 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     const workflowContext = yield* Effect.context<
       WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
     >()
+
+    // Captured before the service closures below, whose own `options`
+    // parameter would otherwise shadow this one.
+    const prefix = options?.prefix ?? ""
 
     // Activity names must be stable across replays. A submission's model calls
     // are consumed in a fixed order, so their ordinal is exactly that.
@@ -109,7 +114,10 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           // records an unencodable `SchemaError` instead of the provider error.
           // The outcome is carried as a value and re-raised here.
           const outcome = yield* Activity.make({
-            name: `model-${index}`,
+            // The prefix scopes the name to one submission when the caller
+            // runs several executions against the same workflow definition —
+            // without it, a second execution's `model-0` meets the first's.
+            name: `${prefix}model-${index}`,
             success: outcomeSchema,
             execute: (
               underlying.generateText(options) as unknown as Effect.Effect<

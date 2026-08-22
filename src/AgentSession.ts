@@ -8,6 +8,7 @@ import {
   Ref,
   Schema,
   Scope,
+  Semaphore,
   Stream,
   SubscriptionRef
 } from "effect"
@@ -167,6 +168,19 @@ export interface MakeOptions {
    * one seam that Layer substitution could not already provide.
    */
   readonly channels?: InputChannel.Factory | undefined
+  /**
+   * Observes every envelope this session emits, synchronously, in sequence
+   * order — before `prompt` can report the outcome those events describe.
+   *
+   * This is not a second way to do what `events` does. A `Stream` subscriber
+   * attaches asynchronously and can miss anything emitted before its
+   * subscription lands, which is exactly the delivery guarantee an interpreter
+   * recording events for remote clients needs and cannot get by observing.
+   * Absent by default; the local runtime never supplies one.
+   */
+  readonly eventSink?:
+    | ((envelope: AgentEventEnvelope) => Effect.Effect<void>)
+    | undefined
 }
 
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(
@@ -204,7 +218,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         })
     )
 
-    const bus = yield* EventBus.make(id)
+    const bus = yield* EventBus.make(id, options?.eventSink)
     const channels = options?.channels ?? InputChannel.memory
     const admit: (
       sessionId: string,
@@ -219,6 +233,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     )
     const steering = yield* channels.make(id, "steering")
     const followUps = yield* channels.make(id, "followUps")
+    const inputGate = yield* Semaphore.make(1)
     const activeFiber = yield* Ref.make<Option.Option<Fiber.Fiber<any, any>>>(
       Option.none()
     )
@@ -232,6 +247,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       bus,
       steering,
       followUps,
+      inputGate,
       elicitation,
       admit,
       activeFiber,
@@ -486,11 +502,19 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
 ) {
     const self = unwrap(session)
     const submissionId = yield* requireRunning(self, "steer")
-    yield* self.steering.offer(Prompt.make(input))
-    yield* EventBus.emit(
-      self.bus,
-      { submissionId },
-      { _tag: "SteeringQueued" }
+    // Offer and announcement are one step under the input gate, which the
+    // turn-boundary drain holds too — so a drain can never observe the input
+    // before its acceptance was announced, and `SteeringQueued < SteeringApplied`
+    // (PLAN §27) holds by construction rather than by scheduling luck.
+    yield* self.inputGate.withPermits(1)(
+      Effect.gen(function* () {
+        yield* self.steering.offer(Prompt.make(input))
+        yield* EventBus.emit(
+          self.bus,
+          { submissionId },
+          { _tag: "SteeringQueued" }
+        )
+      })
     )
   })
 
@@ -504,18 +528,40 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
     // The submission may have closed its input without the session being idle
     // yet; accepting here would mean promising work that is about to be
     // discarded.
-    const accepting = yield* SubscriptionRef.get(self.state).pipe(
-      Effect.map((s) => s.acceptingFollowUps)
-    )
-    if (!accepting) {
-      return yield* new AgentIdleError({
-        sessionId: self.id,
-        operation: "followUp"
+    //
+    // The gate check, the offer and the announcement are one step, under the
+    // same permit the submission's closing drain holds. Reading
+    // `acceptingFollowUps` and then offering separately would leave a window:
+    // the close could land between them and its final drain would already have
+    // looked — the follow-up would be accepted here and discarded on release.
+    // Under the permit, anything offered while the gate read open is still in
+    // the queue when that drain runs, and anything after it reads a closed gate
+    // and is refused.
+    //
+    // `FollowUpQueued` is published inside the permit for the same reason: a
+    // drain runs under it too, so it can never observe the input before its
+    // acceptance was announced. PLAN §27's ordering — Queued < Applied — holds
+    // by construction rather than by scheduling luck.
+    yield* self.inputGate.withPermits(1)(
+      Effect.gen(function* () {
+        const accepting = (yield* SubscriptionRef.get(self.state))
+          .acceptingFollowUps
+        if (!accepting) {
+          return yield* new AgentIdleError({
+            sessionId: self.id,
+            operation: "followUp"
+          })
+        }
+        yield* self.followUps.offer(Prompt.make(input))
+        yield* EventBus.emit(
+          self.bus,
+          { submissionId },
+          { _tag: "FollowUpQueued" }
+        )
       })
-    }
-    yield* self.followUps.offer(Prompt.make(input))
-    yield* EventBus.emit(self.bus, { submissionId }, { _tag: "FollowUpQueued" })
+    )
   })
+
 
 /** Interrupt the active submission. */
 export const interrupt = Effect.fn("AgentSession.interrupt")(function* (

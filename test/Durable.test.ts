@@ -421,6 +421,7 @@ describe("durable submissions", () => {
       const store: DurableChannels.Store = {
         offer: inner.offer,
         size: inner.size,
+        offerIfOpen: inner.offerIfOpen,
         takeAll: (key) =>
           key !== followUpsKey
             ? inner.takeAll(key)

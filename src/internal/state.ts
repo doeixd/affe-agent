@@ -1,4 +1,4 @@
-import type { Context, Effect, Fiber, Option, Ref, Scope, SubscriptionRef } from "effect"
+import type { Context, Effect, Fiber, Option, Ref, Scope, Semaphore, SubscriptionRef } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { Elicitor } from "../Elicitation.js"
@@ -73,6 +73,20 @@ export interface Session<
    * in another process. See `InputChannel.Factory.setAdmitting`.
    */
   readonly admit: (sessionId: string, admitting: boolean) => Effect.Effect<void>
+  /**
+   * Serialises admission against a submission's closing drain.
+   *
+   * `followUp` checks `acceptingFollowUps` and offers to the queue as two
+   * steps; the submission closes that gate and performs its last drain as two
+   * more. Without a shared lock, a follow-up that read an open gate could
+   * offer *after* the closing drain had already looked — accepted by the
+   * caller, then discarded by `AgentSession.release`. Holding this permit
+   * across check-and-offer in `AgentSession.followUp`, and across the closing
+   * drain in `AgentSubmission.execute`, makes those pairs mutually exclusive:
+   * anything offered while the gate read open is drained before the close
+   * concludes, and anything offered after is refused outright.
+   */
+  readonly inputGate: Semaphore.Semaphore
   readonly activeFiber: Ref.Ref<Option.Option<Fiber.Fiber<any, any>>>
   readonly scope: Scope.Scope
   /**

@@ -395,3 +395,30 @@ export const is =
     readonly event: Extract<AgentEvent, { readonly _tag: Tag }>
   } =>
     envelope.event._tag === tag
+
+/**
+ * Project an envelope onto values safe for a wire representation.
+ *
+ * `ToolCallSucceeded.result` and `ToolCallProgress.result` are decoded values:
+ * a `Date`, a class instance, a branded value — useful in-process, and
+ * irreversibly mangled by `JSON.stringify`. Their `encodedResult` twins are
+ * JSON by construction, because the model receives them. Anything recording
+ * or transmitting events — a delivery log, an SSE adapter — wants `result` to
+ * *be* the encoded form, and this is the one place that substitution is made,
+ * so no adapter re-derives it.
+ *
+ * Every other event already carries only Schema-encodable data.
+ */
+export const toWire = (envelope: AgentEventEnvelope): AgentEventEnvelope => {
+  const event = envelope.event
+  switch (event._tag) {
+    case "ToolCallSucceeded":
+    case "ToolCallProgress":
+      return {
+        ...envelope,
+        event: { ...event, result: event.encodedResult }
+      }
+    default:
+      return envelope
+  }
+}

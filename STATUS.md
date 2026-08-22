@@ -401,6 +401,75 @@ Two things learned:
   open for business, so withdrawing there refuses steering aimed at a run that
   is about to resume.
 
+## The gate had a hole on the in-process side too
+
+The durable fix published the close before the closing drain, which is sound
+for a caller who checks the marker and writes as one operation — but the
+in-process `followUp` never offered atomically. It read
+`acceptingFollowUps`, and offered to the queue as a second step. The
+submission could close its gate and run its final drain in between: the
+read said *open*, the offer landed after the drain had already looked, and
+`release` discarded it. The caller was told `FollowUpQueued`; the work never
+ran. Same disease the gate was built for, surviving on the other side of the
+publish ordering.
+
+The fix is a per-session semaphore (`Session.inputGate`) held across
+check-and-offer in `AgentSession.followUp` and across the closing drain in
+`AgentSubmission.execute`. The two pairs are now mutually exclusive:
+anything offered while the gate read open is still in the queue when the
+closing drain runs, and anything offered later reads a closed gate and is
+refused outright. Steering is deliberately left outside the gate: steering
+arriving during the final turn is already never applied, so dropping one at
+quiescence is consistent semantics rather than a broken promise.
+
+Reproduced deterministically by parking the channel's `offer` mid-call —
+after the gate check, before the insertion — and releasing it only once the
+first empty drain had been seen (`test/FollowUpOrder.test.ts`). With the
+ungated closing drain the test fails; with the permit, the late item is
+caught and executed.
+
+## Announcements moved under the gate too
+
+Extending the permit to every drain closed a second gap for free. The
+acceptance events — `FollowUpQueued`, `SteeringQueued` — were published after
+the offer returned, outside any exclusion, so a drain could consume the input
+and commit `FollowUpApplied` before `Queued` ever reached the stream: PLAN
+§27's ordering held by scheduling luck. Offer and announcement now share the
+gate with the mid-run drain, the steering drain at the turn boundary
+(`AgentTurn.applySteering`) and the closing drain, so nothing can observe an
+input whose acceptance has not been announced.
+
+One consequence is worth stating: a channel whose `offer` parks now holds up
+the next drain. That is deliberate — an offer that has been admitted must be
+announced before anything can act on it, and in-memory offers never park
+anyway. It also makes the original defect unschedulable rather than merely
+unlikely: reproducing it requires the parked offer to slip past a drain that
+is waiting on the very permit the parked offer holds. The falsification pass
+reflected exactly that — breaking the fix (moving the announcement back
+outside) no longer produced a failing run in ten attempts, because the
+interleaving that made it observable is gone. The tests pin what remains
+externally decidable: accepted work executes, refusals store nothing, and
+`Queued` precedes `Applied` under concurrent offers.
+
+## The durable side had the same hole, wider
+
+`DurableAgent.steer` and `followUp` checked the marker and wrote the input as
+two store round-trips (`admit`, then `offer`) — the same check-then-act, over
+a network. A sender that read an open marker could have its write land after
+the submission's closing drain had already looked: accepted, never drained.
+The ordering argument for publishing the close before the drain assumed
+check-and-write was one operation, and nothing made it one.
+
+Admission is now a single store operation. `Store.offerIfOpen(key, input,
+gateKey)` checks the gate and inserts inseparably — one `Ref.modify` in
+`memoryStore`, one transaction in `sqlStore` — and `DurableAgent.steer` /
+`followUp` refuse with `AgentIdleError` when it returns false. It is required
+on the interface rather than composed from `size` and `offer` here, because
+composition is precisely what reintroduces the gap. Pinned by contract tests
+against both stores and real SQLite (`test/DurableAdmission.test.ts`),
+alongside the end-to-end case: input offered after quiescence is refused
+*typed*, and nothing lands in a queue nobody will drain.
+
 ## A store a cluster can actually use
 
 The library shipped only `memoryStore`, and under the cluster that is silently
@@ -1455,3 +1524,120 @@ Toolkit.make(T).toLayer(handlers)))` builds two unrelated toolkits, so the
 handlers attach to the one that is not used. Calls then resolve to nothing and
 succeed — no error anywhere. The `toolkitOf` test helper exists so this cannot
 recur.
+
+## Durable client (issue #5)
+
+The architecture from the issue: execution strength and transport are
+independent Layer choices. `DurableAgentClient.layer(name, agent, options)`
+provides the ordinary `AgentClient` service over a durable interpreter, so
+every transport built on `AgentClient` reaches durable agents without knowing
+durability exists. `examples/durable-client.ts` runs one program under both
+layers.
+
+Three identities are kept apart: session (the conversation), submission (one
+prompt + follow-ups), execution (one workflow run). The pieces:
+
+* `DurableSessionStore` — the durable logical-session projection: status,
+  canonical history between submissions, the claimed request itself, and the
+  elicitation projection (pending requests, recorded answers). `claim` is one
+  atomic transition (`Ref.modify` in memory, one transaction on SQL), so two
+  concurrent prompts produce exactly one `Claimed` and one `Busy`. The claim
+  records the prompt and streaming choice, because a crash between "claimed"
+  and "dispatched" must be reconcilable rather than leaving the session
+  permanently busy. Memory and SQLite implementations pass one contract.
+* `DurableSubmission` — a per-submission workflow keyed
+  `${name}:${sessionId}:${submissionId}`, so sequential prompts run in fresh
+  executions while history crosses through the store. Agent failures cross as
+  data on the success channel (`Outcome.Succeeded | Failed`); infrastructure
+  alone uses the error channel. History is committed by a replay-safe activity
+  inside the workflow — the workflow owes the projection, not the process
+  awaiting the result.
+* `DeliveryLog` — client observation, kept out of the workflow journal. Keyed
+  by semantic coordinates (submission, run ordinal, turn, tag, tool-call or
+  request id, ordinal) rather than the in-process sequence, which is not
+  replay-stable under parallel tools; numbered by a session-wide offset the
+  log assigns. A duplicate key with the same payload is a replay; with a
+  different payload it is reported as `Conflict`, never `INSERT OR IGNORE`d.
+  Recording goes through an `eventSink` on `AgentSession.make` — the earned
+  seam the issue's Phase 8 B allows, taken because a `Stream` subscriber
+  attaches asynchronously and cannot promise the first envelope. The sink is
+  generic; the local runtime never supplies one.
+* Reconciliation on reacquisition. `session(id)` and `createSession` finish
+  what a lost process left owed: a claim with no execution behind it is
+  dispatched (idempotently — the execution id is a pure function of the
+  claim), and answers recorded but not delivered are delivered.
+* Interruption is a store-recorded intent, polled inside the workflow and
+  delivered through a *local* Deferred to `AgentSession.interrupt` — the local
+  path, so committed turns stay committed and the session returns idle.
+  Awaiting a `DurableDeferred` for this was tried first and is wrong in an
+  interesting way: the engine suspends on any pending durable await, even in a
+  child fibre, parking every merely-interruptible submission.
+
+Findings worth keeping:
+
+**A suspension looks exactly like success.** `DurableDeferred.await` parks a
+workflow by interrupting its fiber; the session absorbs interruption by
+design, so `prompt` returns *normally*, with an interrupted result. The first
+draft committed the terminal projection on that path before consulting
+`instance.suspended` — the session went idle with no claim while the
+execution was merely parked, and `respond` found nothing to deliver to. The
+flag is now consulted before any terminal commit, and the event sink drops
+the `RunInterrupted` / `SubmissionInterrupted` a suspension emits, which
+describe the process, not the submission.
+
+**Activity names need an execution scope.** `model-0` and `steering-drain-0`
+assumed one live execution per definition. The client runs several against
+the same engine, and their journals must not share an activity namespace;
+model and drain activities now take a submission-scoped prefix.
+
+**A test hung and the engine was innocent.** Two `yieldNow`s separated
+dispatch from interrupt — enough locally, nowhere near enough when dispatch
+crosses an engine and a workflow body. The interrupt landed before the first
+turn, the script cursor never moved, and the *next* submission consumed the
+hanging turn. The repo's own rule was the fix: synchronise on the model
+call's `started` deferred, not on yields.
+
+**Two "processes" in one test need one engine.** `TestRunner` keeps its
+journal in memory, so two engine instances are two clusters that cannot see
+each other's executions — and the engine silently ignores a second
+registration of a workflow it already has, while a registration's handler
+context dies with the layer scope that made it. The memory suite therefore
+builds one runtime per test and makes additional clients thin `AgentClient`
+layers over the same stores and engine; genuine process loss — runner A dies
+with a submission parked for approval, runner B over the same SQLite file
+answers it and carries the conversation on — is `DurableAgentClientSql.test.ts`.
+
+Phase 0 extracted `test/AgentClientContract.ts`, the shared conformance suite
+both interpreters are judged by, now on the live clock because the cluster
+engine's timers do not advance under the test clock. Local and durable-memory
+pass all of it; the durable suites add the busy race, failure preserving
+history, interrupt-and-reuse, the dispatch and answer crash boundaries, HITL
+across clients, event delivery with durable ids, and replay under parallel
+tools with zero conflicts.
+
+**Elicitation ids are per execution, the projection was per session.** Request
+ids are `elicit-1`, `elicit-2`… from a fresh counter in every execution. A
+process dying between delivering an answer and taking it left `elicit-1 =
+granted` recorded under the session, and the next submission's `elicit-1`
+would have been approved by reconciliation before anyone was asked. Both
+`claim` and `finish` now clear the session's elicitation projection in the
+same transition — an idle session has nothing outstanding by definition — and
+`addPendingRequest` is idempotent over an already-answered id, so a replayed
+ask finds its answer rather than waiting again. Pinned in both store
+contracts and end to end, and falsified once: without the clearing, the
+stale answer approves the second submission.
+
+**Claim and dispatch are one uninterruptible step.** A caller cancelled
+between the two — an aborted HTTP request, a timed-out fibre — would have
+left a claimed session with no execution behind it until something happened
+to reacquire it. Once the claim is taken the caller owes the dispatch; only a
+dead process may leave that to reconciliation. A stale interrupt intent is
+drained when its submission exits, so the channels store does not accumulate
+signals nothing will read.
+
+Known limits, stated rather than hidden: `DeliveryLog.live` fans out within
+one process (cross-node live delivery is a transport concern over
+`read({ after })`); a replayed streamed submission re-offers `MessageDelta`s
+whose chunking the journal does not preserve, which the log reports as a
+conflict and the recorder logs at warning level; the interrupt signal is
+polled every 25ms while a submission runs.

@@ -98,10 +98,14 @@ describe("durable and cluster surfaces", () => {
     // Guards against a helper leaking out by accident, and against one being
     // dropped: both are breaking for a published package.
     assert.deepStrictEqual(Object.keys(durable).sort(), [
+      "DeliveryLog",
       "DurableAgent",
+      "DurableAgentClient",
       "DurableChannels",
       "DurableElicitation",
       "DurableModel",
+      "DurableSessionStore",
+      "DurableSubmission",
       "DurableToolkit"
     ])
   })
@@ -236,14 +240,17 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
-  it("exports the initial A2A v1 server vocabulary and nothing beyond it", async () => {
+  it("exports the A2A v1 server and client vocabulary and nothing beyond it", async () => {
     const a2a = await import("../src/a2a/index.js")
     assert.deepStrictEqual(Object.keys(a2a).sort(), ["AgentA2A"])
     assert.deepStrictEqual(Object.keys(a2a.AgentA2A).sort(), [
       "AgentA2AInvalidInputError",
+      "AgentA2ARemoteError",
       "AgentA2ATransportError",
       "AgentA2AUnsupportedContentError",
-      "serverLayer"
+      "client",
+      "serverLayer",
+      "typed"
     ])
   })
 })

@@ -1,0 +1,794 @@
+import { Effect, Option, Ref, Schema } from "effect"
+import { Prompt } from "effect/unstable/ai"
+import { SqlClient } from "effect/unstable/sql"
+import * as Elicitation from "../Elicitation.js"
+
+/**
+ * The durable logical session, as distinct from any one workflow execution.
+ *
+ * The existing durable API keys a submission by session, which is enough for
+ * one live submission but not for the session contract `AgentClient` speaks:
+ * a *logical* session outlives every execution that runs inside it. A client
+ * handle can disappear, the process that started a prompt can die, and the
+ * conversation must still be there — with its canonical history — when some
+ * later process reacquires it by id.
+ *
+ * This store is the durable counterpart of the local session's runtime state.
+ * It deliberately does not copy every local field: it persists only what an
+ * external process must know to address the session correctly.
+ *
+ *   - status  — is there work a caller could steer or follow up on;
+ *   - history — the canonical transcript between submissions;
+ *   - the claimed request — what a running submission was asked, so a crash
+ *     between "claimed" and "dispatched" can be reconciled instead of leaving
+ *     the session permanently busy (see `Claim`).
+ *
+ * Workflow durability, canonical history and client event delivery remain
+ * separate concerns; this store is only the projection the last two stand on.
+ */
+
+/** What a session record says about admission. */
+export const SessionStatus = Schema.Literals(["idle", "running"])
+export type SessionStatus = typeof SessionStatus.Type
+
+/**
+ * A claimed submission, persisted at claim time.
+ *
+ * The important crash boundary is:
+ *
+ *   claim session -> process dies -> dispatch workflow
+ *
+ * If the claim recorded only `status = "running"`, the session would be
+ * permanently busy with no workflow behind it. So the claim stores the request
+ * itself — prompt and streaming choice — plus an optional execution id once
+ * dispatch has happened. Reacquiring the session can then reconcile a claim
+ * whose dispatch never landed by deriving the same execution id and
+ * dispatching again, idempotently.
+ *
+ * The general rule: **persist intent before relying on a process to carry it
+ * forward.**
+ */
+export const Claim = Schema.Struct({
+  submissionId: Schema.String,
+  /** JSON-encoded `Prompt`, the same wire form the channels use. */
+  prompt: Schema.String,
+  /** Part of the payload, so replay makes the same choice the original did. */
+  stream: Schema.Boolean,
+  /** Present once the workflow has been dispatched. */
+  executionId: Schema.optional(Schema.String)
+})
+export type Claim = typeof Claim.Type
+
+/** One durable logical session. */
+export const SessionRecord = Schema.Struct({
+  sessionId: Schema.String,
+  status: SessionStatus,
+  /** How many submissions this session has accepted, ever. */
+  submissionCount: Schema.Number,
+  /**
+   * The active claim while `running`; absent otherwise.
+   *
+   * Stored inline rather than under a second key so the claim and the status
+   * cannot disagree — they are one record, written in one step.
+   */
+  claim: Schema.OptionFromUndefinedOr(Claim),
+  /** Canonical history as of the last finished submission. JSON-encoded. */
+  history: Schema.String
+})
+export type SessionRecord = typeof SessionRecord.Type
+
+/**
+ * The outcome of asking an idle session for work.
+ *
+ * A tagged value rather than a typed error because the *caller* decides what
+ * each means — the client adapter maps them onto protocol errors, a
+ * reconciliation pass retries them differently, and neither should need the
+ * store to know their vocabulary.
+ */
+export type ClaimOutcome =
+  | {
+      readonly _tag: "Claimed"
+      readonly claim: Claim
+      /** Canonical history as of the claim, JSON-encoded: what the submission starts from. */
+      readonly history: string
+    }
+  | { readonly _tag: "Busy"; readonly claim: Claim }
+  | { readonly _tag: "Missing" }
+
+/**
+ * The durable session registry.
+ *
+ * Every transition is atomic. `claim` is the load-bearing one: moving an idle
+ * session to `running` and allocating its submission id must be one operation.
+ * Reading the status and then writing it back would recreate exactly the
+ * check-then-act race `AgentSession.claim` already fixed locally — two
+ * concurrent prompts would both see `idle`, and one input would be silently
+ * dropped or silently coalesced.
+ */
+export interface DurableSessionStore {
+  /** Read one session, if it exists. */
+  readonly get: (
+    sessionId: string
+  ) => Effect.Effect<Option.Option<SessionRecord>>
+
+  /**
+   * Read one session, creating it if absent.
+   *
+   * Creation initialises canonical history the way a local session does: the
+   * caller passes the system message derived from the agent's instructions, so
+   * the first prompt's model call sees what a local first prompt would have.
+   */
+  readonly getOrCreate: (
+    sessionId: string,
+    initialHistory: Prompt.Prompt
+  ) => Effect.Effect<SessionRecord>
+
+  /**
+   * Ask an existing idle session to accept a submission.
+   *
+   * Atomically: records the request, allocates the submission id, clears
+   * any elicitation projection a previous submission left behind, and moves
+   * the session to `running` in one step. Returns `Busy` — carrying the
+   * incumbent claim — if work is already active, and `Missing` if no such
+   * session exists.
+   */
+  readonly claim: (
+    sessionId: string,
+    submission: {
+      readonly prompt: Prompt.Prompt
+      readonly stream: boolean
+    }
+  ) => Effect.Effect<ClaimOutcome>
+
+  /**
+   * Record which workflow execution is carrying the claim.
+   *
+   * Written after dispatch so reconciliation can tell "the process died before
+   * dispatching" from "the workflow is running somewhere".
+   */
+  readonly attachExecution: (
+    sessionId: string,
+    submissionId: string,
+    executionId: string
+  ) => Effect.Effect<void>
+
+  /**
+   * Complete a submission however it ends — succeeded, failed, interrupted.
+   *
+   * The terminal transition is one atomic step: history is advanced to what
+   * committed during the run, and the session returns to `idle`. There is no
+   * separate failure form because a failed submission commits exactly like a
+   * completed one — only fully finished turns are in the history either way.
+   *
+   * The elicitation projection is cleared in the same step. Request ids are
+   * session-local ordinals that restart with every execution, so a request
+   * or recorded answer left behind by one submission — a crash between
+   * delivering an answer and taking it — would be mistaken for the next
+   * submission's. Nothing of a finished submission's projection survives it.
+   *
+   * `false` when the session's active claim does not match, which means this
+   * outcome landed after another one already did.
+   */
+  readonly finish: (
+    sessionId: string,
+    submissionId: string,
+    history: Prompt.Prompt
+  ) => Effect.Effect<boolean>
+
+  // -- Elicitation projection -------------------------------------------------
+  //
+  // A suspended workflow holds no memory, so `DurableElicitation.pending`
+  // cannot enumerate anything: requests must be projected into shared state
+  // *before* the workflow suspends on its deferred, and removed afterwards.
+
+  /** Record a request the run is about to start waiting on. */
+  readonly addPendingRequest: (
+    sessionId: string,
+    request: Elicitation.Request
+  ) => Effect.Effect<void>
+
+  /** Everything the session is currently waiting to be told. */
+  readonly pendingRequests: (
+    sessionId: string
+  ) => Effect.Effect<ReadonlyArray<Elicitation.Request>>
+
+  /**
+   * Deliver an answer, atomically moving the request from waiting to answered.
+   *
+   * Persisting the answer *before* waking the workflow is what makes the crash
+   * between the two recoverable: the answer exists even if the process that
+   * wrote it dies before completing the deferred. `false` when nothing was
+   * waiting for that id — the same contract `Elicitation.respond` keeps.
+   */
+  readonly answerRequest: (
+    sessionId: string,
+    response: Elicitation.Response
+  ) => Effect.Effect<boolean>
+
+  /**
+   * Take a recorded answer, removing it in the same step.
+   *
+   * Reconciliation delivers answers idempotently: if the original delivery
+   * crashed after recording but before waking the workflow, a later attempt
+   * finds the answer here and completes the deferred without asking anyone.
+   */
+  readonly takeAnswer: (
+    sessionId: string,
+    requestId: string
+  ) => Effect.Effect<Option.Option<Elicitation.Response>>
+
+  /**
+   * Answers recorded but not yet taken.
+   *
+   * What a reconciliation pass enumerates: each is an answer the API accepted
+   * whose delivery to the workflow may never have happened.
+   */
+  readonly recordedAnswers: (
+    sessionId: string
+  ) => Effect.Effect<ReadonlyArray<Elicitation.Response>>
+
+  /** Forget a request whose answer the run has consumed. */
+  readonly removeRequest: (
+    sessionId: string,
+    requestId: string
+  ) => Effect.Effect<void>
+}
+
+// -- Encoded prompts -------------------------------------------------------------
+
+/** Prompts cross storage as JSON; an unencodable prompt is a bug, not a case. */
+export const encodeHistory = (
+  prompt: Prompt.Prompt
+): Effect.Effect<string> =>
+  Schema.encodeEffect(Prompt.Prompt)(prompt).pipe(
+    Effect.map((encoded) => JSON.stringify(encoded)),
+    Effect.orDie
+  )
+
+export const decodeHistory = (encoded: string): Effect.Effect<Prompt.Prompt> =>
+  Effect.try(() => JSON.parse(encoded) as unknown).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Prompt.Prompt)),
+    Effect.orDie
+  )
+
+// -- Memory implementation ---------------------------------------------------------
+
+interface MemoryState {
+  readonly sessions: Map<string, SessionRecord>
+  readonly pending: Map<string, Map<string, Elicitation.Request>>
+  readonly answered: Map<string, Map<string, Elicitation.Response>>
+}
+
+const emptyState: MemoryState = {
+  sessions: new Map(),
+  pending: new Map(),
+  answered: new Map()
+}
+
+const setSession = (
+  all: MemoryState,
+  updated: SessionRecord
+): MemoryState => ({
+  ...all,
+  sessions: new Map(all.sessions).set(updated.sessionId, updated)
+})
+
+/**
+ * An in-process store over `Ref.modify`.
+ *
+ * Atomicity comes free: every transition is one `Ref.modify`, so concurrent
+ * claims serialise on the reference rather than on discipline. What is *not*
+ * durable here is the usual single-process caveat — the map dies with the
+ * process, which suits tests and single-node development and is silently wrong
+ * under a cluster. A SQL implementation backs the same interface with
+ * transactions instead.
+ */
+export const memoryStore: Effect.Effect<DurableSessionStore> =
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState)
+
+    return {
+      get: (sessionId) =>
+        Effect.map(
+          Ref.get(state),
+          (all) => Option.fromNullishOr(all.sessions.get(sessionId))
+        ),
+
+      getOrCreate: (sessionId, initialHistory) =>
+        // Encoding happens *before* the transition: `Ref.modify` must stay a
+        // pure step, and encoding is deterministic, so doing it first changes
+        // nothing about atomicity.
+        Effect.flatMap(encodeHistory(initialHistory), (encoded) =>
+          Ref.modify(state, (all): [SessionRecord, MemoryState] => {
+            const found = all.sessions.get(sessionId)
+            if (found !== undefined) return [found, all]
+            const created: SessionRecord = {
+              sessionId,
+              status: "idle",
+              submissionCount: 0,
+              claim: Option.none(),
+              history: encoded
+            }
+            return [created, setSession(all, created)]
+          })
+        ),
+
+      claim: (sessionId, submission) =>
+        Effect.flatMap(encodeHistory(submission.prompt), (encoded) =>
+          Ref.modify(state, (all): [ClaimOutcome, MemoryState] => {
+            const found = all.sessions.get(sessionId)
+            if (found === undefined) return [{ _tag: "Missing" }, all]
+            if (Option.isSome(found.claim)) {
+              return [{ _tag: "Busy", claim: found.claim.value }, all]
+            }
+            // The id derives from the session-local ordinal, which makes it
+            // stable across processes — a later reconciliation pass names the
+            // same submission without having observed the original claim.
+            const claim: Claim = {
+              submissionId: `${sessionId}:submission-${found.submissionCount + 1}`,
+              prompt: encoded,
+              stream: submission.stream
+            }
+            const updated: SessionRecord = {
+              ...found,
+              status: "running",
+              submissionCount: found.submissionCount + 1,
+              claim: Option.some(claim)
+            }
+            // An idle session has nothing outstanding; whatever the
+            // projection still holds under this session is a previous
+            // submission's leftovers, and its ids are about to be reused.
+            const pending = new Map(all.pending)
+            pending.delete(sessionId)
+            const answered = new Map(all.answered)
+            answered.delete(sessionId)
+            return [
+              { _tag: "Claimed", claim, history: found.history },
+              { ...setSession(all, updated), pending, answered }
+            ]
+          })
+        ),
+
+      attachExecution: (sessionId, submissionId, executionId) =>
+        Ref.update(state, (all) => {
+          const found = all.sessions.get(sessionId)
+          if (
+            found === undefined ||
+            Option.isNone(found.claim) ||
+            found.claim.value.submissionId !== submissionId
+          ) {
+            return all
+          }
+          const updated: SessionRecord = {
+            ...found,
+            claim: Option.some({ ...found.claim.value, executionId })
+          }
+          return setSession(all, updated)
+        }),
+
+      finish: (sessionId, submissionId, history) =>
+        Effect.flatMap(encodeHistory(history), (encoded) =>
+          Ref.modify(state, (all): [boolean, MemoryState] => {
+            const found = all.sessions.get(sessionId)
+            if (
+              found === undefined ||
+              Option.isNone(found.claim) ||
+              found.claim.value.submissionId !== submissionId
+            ) {
+              return [false, all]
+            }
+            const updated: SessionRecord = {
+              ...found,
+              status: "idle",
+              claim: Option.none(),
+              history: encoded
+            }
+            const pending = new Map(all.pending)
+            pending.delete(sessionId)
+            const answered = new Map(all.answered)
+            answered.delete(sessionId)
+            return [true, { ...setSession(all, updated), pending, answered }]
+          })
+        ),
+
+      addPendingRequest: (sessionId, request) =>
+        Ref.update(state, (all) => {
+          // Idempotent: a replayed run asks under the same id, and one that
+          // was already answered keeps its answer rather than waiting again.
+          if (all.answered.get(sessionId)?.has(request.id)) return all
+          return {
+            ...all,
+            pending: new Map(all.pending).set(
+              sessionId,
+              new Map(all.pending.get(sessionId)).set(request.id, request)
+            )
+          }
+        }),
+
+      pendingRequests: (sessionId) =>
+        Effect.map(
+          Ref.get(state),
+          (all) => Array.from((all.pending.get(sessionId) ?? new Map()).values())
+        ),
+
+      answerRequest: (sessionId, response) =>
+        Ref.modify(state, (all): [boolean, MemoryState] => {
+          const waiting = all.pending.get(sessionId) ?? new Map()
+          if (!waiting.has(response.id)) return [false, all]
+          // Waiting -> answered in the same transition, so an answer is never
+          // in neither place (the caller was told `true`) nor both (a retry
+          // would deliver it twice to the run).
+          const remaining = new Map(waiting)
+          remaining.delete(response.id)
+          const nextAnswered = new Map(all.answered).set(
+            sessionId,
+            new Map(all.answered.get(sessionId)).set(response.id, response)
+          )
+          return [
+            true,
+            {
+              ...all,
+              pending: new Map(all.pending).set(sessionId, remaining),
+              answered: nextAnswered
+            }
+          ]
+        }),
+
+      takeAnswer: (sessionId, requestId) =>
+        Ref.modify(state, (all): [Option.Option<Elicitation.Response>, MemoryState] => {
+          const answered = all.answered.get(sessionId)
+          const found = Option.fromNullishOr(answered?.get(requestId))
+          if (Option.isNone(found) || answered === undefined) {
+            return [Option.none(), all]
+          }
+          const remaining = new Map(answered)
+          remaining.delete(requestId)
+          return [
+            found,
+            { ...all, answered: new Map(all.answered).set(sessionId, remaining) }
+          ]
+        }),
+
+      recordedAnswers: (sessionId) =>
+        Effect.map(
+          Ref.get(state),
+          (all) => Array.from((all.answered.get(sessionId) ?? new Map()).values())
+        ),
+
+      removeRequest: (sessionId, requestId) =>
+        Ref.update(state, (all) => {
+          const waiting = all.pending.get(sessionId)
+          if (waiting === undefined || !waiting.has(requestId)) return all
+          const remaining = new Map(waiting)
+          remaining.delete(requestId)
+          return {
+            ...all,
+            pending: new Map(all.pending).set(sessionId, remaining)
+          }
+        })
+    }
+  })
+
+// -- SQL implementation --------------------------------------------------------------
+
+export const sqlSessionTable = "effect_agent_session"
+export const sqlElicitationTable = "effect_agent_elicitation"
+
+const escapeIdentifier = (name: string): string => {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    // Table names reach `sql.literal`, which does not parameterise.
+    throw new Error(`Invalid table name: ${name}`)
+  }
+  return name
+}
+
+interface SessionRow {
+  readonly session_id: string
+  readonly status: string
+  readonly submission_count: number
+  readonly claim: string | null
+  readonly history: string
+}
+
+const encodeJson =
+  <S extends Schema.Codec<any, any, never, never>>(schema: S) =>
+  (value: S["Type"]): Effect.Effect<string> =>
+    Schema.encodeEffect(schema)(value).pipe(
+      Effect.map((encoded) => JSON.stringify(encoded)),
+      Effect.orDie
+    )
+
+const decodeJson =
+  <S extends Schema.Codec<any, any, never, never>>(schema: S) =>
+  (encoded: string): Effect.Effect<S["Type"]> =>
+    Effect.try(() => JSON.parse(encoded) as unknown).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+      Effect.orDie
+    )
+
+const encodeClaim = encodeJson(Claim)
+const decodeClaim = decodeJson(Claim)
+const encodeRequest = encodeJson(Elicitation.Request)
+const decodeRequest = decodeJson(Elicitation.Request)
+const encodeResponse = encodeJson(Elicitation.Response)
+const decodeResponse = decodeJson(Elicitation.Response)
+
+const rowToRecord = (row: SessionRow): Effect.Effect<SessionRecord> =>
+  Effect.map(
+    row.claim === null
+      ? Effect.succeed(Option.none<Claim>())
+      : Effect.map(decodeClaim(row.claim), Option.some),
+    (claim): SessionRecord => ({
+      sessionId: row.session_id,
+      status: row.status === "running" ? "running" : "idle",
+      submissionCount: Number(row.submission_count),
+      claim,
+      history: row.history
+    })
+  )
+
+/**
+ * A session store backed by SQL, for deployments with more than one node.
+ *
+ * Every transition that guards an invariant is one transaction — `claim`,
+ * `finish`, `answerRequest`, `takeAnswer` — so two processes racing for the
+ * same idle session serialise on the database rather than on discipline.
+ * Sessions live in one table with the claim inline (one row, one write: the
+ * status and the claim cannot disagree); elicitation requests and recorded
+ * answers share a second table, distinguished by `state`.
+ *
+ * Any deployment already has a `SqlClient`, because `ClusterWorkflowEngine`
+ * needs one for its journal. `sqlStoreWithTables` creates the tables; a
+ * deployment managing its own schema uses `sqlStore` over existing ones.
+ */
+export const sqlStore = (
+  options?: {
+    readonly sessionTable?: string | undefined
+    readonly elicitationTable?: string | undefined
+  }
+): Effect.Effect<DurableSessionStore, never, SqlClient.SqlClient> =>
+  Effect.map(SqlClient.SqlClient, (sql) => {
+    const sessions = sql.literal(
+      escapeIdentifier(options?.sessionTable ?? sqlSessionTable)
+    )
+    const requests = sql.literal(
+      escapeIdentifier(options?.elicitationTable ?? sqlElicitationTable)
+    )
+
+    const readRow = (sessionId: string) =>
+      sql<SessionRow>`SELECT * FROM ${sessions} WHERE session_id = ${sessionId}`.pipe(
+        Effect.map((rows) => Option.fromNullishOr(rows[0]))
+      )
+
+    const readRecord = (sessionId: string) =>
+      readRow(sessionId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(Option.none<SessionRecord>()),
+            onSome: (row) => Effect.map(rowToRecord(row), Option.some)
+          })
+        )
+      )
+
+    return {
+      get: (sessionId) => readRecord(sessionId).pipe(Effect.orDie),
+
+      getOrCreate: (sessionId, initialHistory) =>
+        Effect.flatMap(encodeHistory(initialHistory), (encoded) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                const found = yield* readRecord(sessionId)
+                if (Option.isSome(found)) return found.value
+                yield* sql`INSERT INTO ${sessions} ${sql.insert({
+                  session_id: sessionId,
+                  status: "idle",
+                  submission_count: 0,
+                  claim: null,
+                  history: encoded
+                })}`
+                const created: SessionRecord = {
+                  sessionId,
+                  status: "idle",
+                  submissionCount: 0,
+                  claim: Option.none(),
+                  history: encoded
+                }
+                return created
+              })
+            )
+            .pipe(Effect.orDie)
+        ),
+
+      claim: (sessionId, submission) =>
+        Effect.flatMap(encodeHistory(submission.prompt), (encoded) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                const found = yield* readRecord(sessionId)
+                if (Option.isNone(found)) {
+                  return { _tag: "Missing" } as const
+                }
+                const record = found.value
+                if (Option.isSome(record.claim)) {
+                  return { _tag: "Busy", claim: record.claim.value } as const
+                }
+                const claim: Claim = {
+                  submissionId: `${sessionId}:submission-${record.submissionCount + 1}`,
+                  prompt: encoded,
+                  stream: submission.stream
+                }
+                const claimJson = yield* encodeClaim(claim)
+                // The transaction serialises writers; the predicate restates
+                // the invariant in the statement itself.
+                yield* sql`UPDATE ${sessions} SET status = 'running', submission_count = ${record.submissionCount + 1}, claim = ${claimJson} WHERE session_id = ${sessionId} AND claim IS NULL`
+                // Nothing is outstanding on an idle session: see `finish`.
+                yield* sql`DELETE FROM ${requests} WHERE session_id = ${sessionId}`
+                return {
+                  _tag: "Claimed",
+                  claim,
+                  history: record.history
+                } as const
+              })
+            )
+            .pipe(Effect.orDie)
+        ),
+
+      attachExecution: (sessionId, submissionId, executionId) =>
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const found = yield* readRecord(sessionId)
+              if (
+                Option.isNone(found) ||
+                Option.isNone(found.value.claim) ||
+                found.value.claim.value.submissionId !== submissionId
+              ) {
+                return
+              }
+              const claimJson = yield* encodeClaim({
+                ...found.value.claim.value,
+                executionId
+              })
+              yield* sql`UPDATE ${sessions} SET claim = ${claimJson} WHERE session_id = ${sessionId}`
+            })
+          )
+          .pipe(Effect.orDie),
+
+      finish: (sessionId, submissionId, history) =>
+        Effect.flatMap(encodeHistory(history), (encoded) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                const found = yield* readRecord(sessionId)
+                if (
+                  Option.isNone(found) ||
+                  Option.isNone(found.value.claim) ||
+                  found.value.claim.value.submissionId !== submissionId
+                ) {
+                  return false
+                }
+                yield* sql`UPDATE ${sessions} SET status = 'idle', claim = NULL, history = ${encoded} WHERE session_id = ${sessionId}`
+                yield* sql`DELETE FROM ${requests} WHERE session_id = ${sessionId}`
+                return true
+              })
+            )
+            .pipe(Effect.orDie)
+        ),
+
+      addPendingRequest: (sessionId, request) =>
+        Effect.flatMap(encodeRequest(request), (encoded) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                // Idempotent: a replayed run asks under the same id, and an
+                // already-answered one keeps its answer. Anything else under
+                // this id is stale and is replaced.
+                const existing = yield* sql<{
+                  readonly state: string
+                }>`SELECT state FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${request.id}`
+                if (existing.length > 0) return
+                yield* sql`INSERT INTO ${requests} ${sql.insert({
+                  session_id: sessionId,
+                  request_id: request.id,
+                  state: "pending",
+                  payload: encoded
+                })}`
+              })
+            )
+            .pipe(Effect.orDie)
+        ),
+
+      pendingRequests: (sessionId) =>
+        sql<{
+          readonly payload: string
+        }>`SELECT payload FROM ${requests} WHERE session_id = ${sessionId} AND state = 'pending' ORDER BY id`.pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, (row) => decodeRequest(row.payload))
+          ),
+          Effect.orDie
+        ),
+
+      answerRequest: (sessionId, response) =>
+        Effect.flatMap(encodeResponse(response), (encoded) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                const waiting = yield* sql<{
+                  readonly id: number
+                }>`SELECT id FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${response.id} AND state = 'pending'`
+                if (waiting.length === 0) return false
+                yield* sql`UPDATE ${requests} SET state = 'answered', payload = ${encoded} WHERE id = ${waiting[0]!.id}`
+                return true
+              })
+            )
+            .pipe(Effect.orDie)
+        ),
+
+      takeAnswer: (sessionId, requestId) =>
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const answered = yield* sql<{
+                readonly id: number
+                readonly payload: string
+              }>`SELECT id, payload FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${requestId} AND state = 'answered'`
+              if (answered.length === 0) {
+                return Option.none<Elicitation.Response>()
+              }
+              yield* sql`DELETE FROM ${requests} WHERE id = ${answered[0]!.id}`
+              return Option.some(yield* decodeResponse(answered[0]!.payload))
+            })
+          )
+          .pipe(Effect.orDie),
+
+      recordedAnswers: (sessionId) =>
+        sql<{
+          readonly payload: string
+        }>`SELECT payload FROM ${requests} WHERE session_id = ${sessionId} AND state = 'answered' ORDER BY id`.pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, (row) => decodeResponse(row.payload))
+          ),
+          Effect.orDie
+        ),
+
+      removeRequest: (sessionId, requestId) =>
+        sql`DELETE FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${requestId} AND state = 'pending'`.pipe(
+          Effect.asVoid,
+          Effect.orDie
+        )
+    }
+  })
+
+/** As `sqlStore`, but creates the tables first if they are not there. */
+export const sqlStoreWithTables = (
+  options?: {
+    readonly sessionTable?: string | undefined
+    readonly elicitationTable?: string | undefined
+  }
+): Effect.Effect<DurableSessionStore, never, SqlClient.SqlClient> =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const sessions = sql.literal(
+      escapeIdentifier(options?.sessionTable ?? sqlSessionTable)
+    )
+    const requests = sql.literal(
+      escapeIdentifier(options?.elicitationTable ?? sqlElicitationTable)
+    )
+    yield* sql`CREATE TABLE IF NOT EXISTS ${sessions} (
+      session_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      submission_count INTEGER NOT NULL,
+      claim TEXT,
+      history TEXT NOT NULL
+    )`.pipe(Effect.orDie)
+    yield* sql`CREATE TABLE IF NOT EXISTS ${requests} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      UNIQUE (session_id, request_id)
+    )`.pipe(Effect.orDie)
+    return yield* sqlStore(options)
+  })
