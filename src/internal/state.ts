@@ -96,4 +96,6 @@ export interface Session<
    */
   readonly env: Context.Context<any>
   readonly ids: IdSource
+  /** How the n-th submission is named. See `AgentSession.MakeOptions.submissionIds`. */
+  readonly submissionName: (count: number) => string
 }

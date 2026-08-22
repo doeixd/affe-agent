@@ -3,6 +3,7 @@ import { Response } from "effect/unstable/ai"
 import type { Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
+import type { SubmissionId } from "./internal/ids.js"
 import { ToolApprovalRequiredError, ToolPermissionDeniedError } from "./Errors.js"
 import type * as Elicitation from "./Elicitation.js"
 import * as Permission from "./Permission.js"
@@ -95,8 +96,8 @@ export interface Options<R = never> {
   readonly permission: Permission.Policy<R>
   /** Where an `Ask` is asked. See `Elicitation`. */
   readonly elicitation: Elicitation.Elicitor
-  /** Allocates the id an elicitation is answered by. */
-  readonly nextElicitationId: Effect.Effect<string>
+  /** Allocates the id an elicitation is answered by, namespaced by submission. */
+  readonly nextElicitationId: (submissionId: SubmissionId) => Effect.Effect<string>
   readonly sessionId: string
   /** The conversation the model saw, for `needsApproval` and the policy. */
   readonly messages: ReadonlyArray<Prompt.Message>
@@ -239,7 +240,13 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       // Asked, not refused: the run *pauses* until an answer arrives. The
       // default elicitor answers "no", so an agent with no way to ask still
       // fails closed.
-      const id = yield* options.nextElicitationId
+      // A tool call only ever runs inside a submission, so the correlation
+      // carries one; a call without it is a harness bug, not a case.
+      const submissionId = options.correlation.submissionId
+      if (submissionId === undefined) {
+        return yield* Effect.die(new Error("tool call outside a submission"))
+      }
+      const id = yield* options.nextElicitationId(submissionId)
       const detail: Permission.ApprovalDetail = {
         toolName: String(call.name),
         toolCallId: call.id,

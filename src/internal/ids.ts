@@ -31,23 +31,37 @@ export const runId = (value: string): RunId => value as RunId
  */
 export interface IdSource {
   readonly nextRun: Effect.Effect<RunId>
-  readonly nextElicitation: Effect.Effect<string>
+  /**
+   * The next elicitation id for a submission: `${submissionId}:elicit-${n}`.
+   *
+   * Namespaced by submission, not merely session-local. A session-local
+   * counter restarted per execution under the durable client, so every
+   * submission's first question was `elicit-1` -- and a caller holding the
+   * id of submission 1's question could answer submission 2's with it. The
+   * counter is per submission, so a replayed submission asks under the same
+   * ids it asked under the first time, which is what lets an answer given
+   * before a restart still match afterwards.
+   */
+  readonly nextElicitation: (submissionId: SubmissionId) => Effect.Effect<string>
 }
+
+/** The id of a submission's n-th question, for a caller that must answer without having watched it asked. */
+export const elicitationId = (submissionId: string, n: number): string =>
+  `${submissionId}:elicit-${n}`
 
 export const makeIdSource = Effect.gen(function* () {
   const runs = yield* Ref.make(0)
-  const elicitations = yield* Ref.make(0)
+  const elicitations = yield* Ref.make(new Map<string, number>())
 
   return {
     nextRun: Ref.updateAndGet(runs, (n) => n + 1).pipe(
       Effect.map((n) => runId(`run-${n}`))
     ),
-    // Session-local and sequential, so a replayed submission asks under the
-    // same id it asked under the first time -- which is what lets an answer
-    // given before a restart still match afterwards.
-    nextElicitation: Ref.updateAndGet(elicitations, (n) => n + 1).pipe(
-      Effect.map((n) => `elicit-${n}`)
-    )
+    nextElicitation: (submissionId) =>
+      Ref.modify(elicitations, (counts) => {
+        const n = (counts.get(submissionId) ?? 0) + 1
+        return [elicitationId(submissionId, n), new Map(counts).set(submissionId, n)]
+      })
   } satisfies IdSource
 })
 

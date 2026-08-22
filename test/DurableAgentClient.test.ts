@@ -902,13 +902,17 @@ describe("DurableAgentClient (durability specifics)", () => {
           })
           assert.isTrue(yield* f.sessionStore.answerRequest("stale", { id, granted: true }))
 
-          // The next submission asks under that id again. It must wait for
-          // its own answer, not inherit the stale one.
+          // The next submission asks under its *own* id -- namespaced by
+          // submission, so the stale answer cannot even address it -- and
+          // the store has cleared the leftover at claim regardless. It must
+          // wait for its own answer, not inherit the stale one.
           const second = yield* Effect.forkChild(
             client.session("stale").pipe(Effect.flatMap((s) => s.prompt("again")))
           )
           const secondId = yield* approve(session)
-          assert.strictEqual(secondId, id)
+          assert.notStrictEqual(secondId, id)
+          assert.isTrue(secondId.endsWith(":elicit-1"))
+          assert.isTrue(id.endsWith(":elicit-1"))
           assert.strictEqual((yield* Fiber.join(second)).text, "two")
           assert.strictEqual(yield* Ref.get(wiped), 2)
         })

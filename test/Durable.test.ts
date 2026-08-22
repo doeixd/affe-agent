@@ -4,6 +4,7 @@ import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
+import * as Ids from "../src/internal/ids.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
@@ -850,7 +851,8 @@ describe("elicitation under durability", () => {
         yield* DurableElicitation.respond({
           workflow: durable.definition,
           executionId: derived,
-          response: { id: "elicit-1", granted: true }
+          // One execution per session here, so its one submission is `submission-1`.
+          response: { id: Ids.elicitationId("submission-1", 1), granted: true }
         })
 
         const exit = yield* DurableAgent.result(durable, executionId, {

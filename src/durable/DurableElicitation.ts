@@ -26,9 +26,12 @@ import * as Elicitation from "../Elicitation.js"
  *
  * That determinism is also how a caller *learns* the id. A suspended workflow
  * emits its `ElicitationRequested` inside the run, where no other process can
- * see it, so there is nothing to observe from outside. The ids are `elicit-1`,
- * `elicit-2`, … per session, in the order the run asked — which is enough to
- * answer the first outstanding request without having watched it being asked.
+ * see it, so there is nothing to observe from outside. The ids are
+ * `${submissionId}:elicit-1`, `${submissionId}:elicit-2`, … in the order the
+ * run asked (`Ids.elicitationId`) — which is enough to answer the first
+ * outstanding request without having watched it being asked, given the
+ * submission id the caller already holds. Namespacing by submission is what
+ * stops an id held from one submission from answering a question in the next.
  * A deployment that wants richer context should record the events from within
  * the workflow, the same way it would to show streaming output.
  *

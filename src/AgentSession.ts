@@ -153,6 +153,16 @@ export interface MakeOptions {
    */
   readonly history?: Prompt.Prompt | undefined
   /**
+   * How submissions are named. Defaults to `submission-${n}`.
+   *
+   * Elicitation ids are namespaced by the submission id, so the name is
+   * what makes a question's id unique across submissions. The durable
+   * workflow names its one in-workflow submission after the *durable*
+   * submission, which is what makes a question asked in one durable
+   * submission unanswerable with an id from another.
+   */
+  readonly submissionIds?: ((count: number) => string) | undefined
+  /**
    * Where a paused run waits for an answer from outside.
    *
    * Defaults to refusing every request, which keeps an approval-requiring tool
@@ -239,6 +249,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       Option.none()
     )
     const ids = yield* Ids.makeIdSource
+    const submissionName = options?.submissionIds ?? ((count: number) => `submission-${count}`)
 
     const session: Session<Tools, E, R> = {
       id,
@@ -254,7 +265,8 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       activeFiber,
       scope,
       env,
-      ids
+      ids,
+      submissionName
     }
 
     // Closing ends the active submission *before* announcing the close.
@@ -374,7 +386,7 @@ const claim = (self: Session<any>): Effect.Effect<Claim> =>
     if (s.status === "closed") return [{ _tag: "Closed" }, s]
     if (s.status === "running") return [{ _tag: "Busy" }, s]
     const count = s.submissionCount + 1
-    const submissionId = Ids.submissionId(`submission-${count}`)
+    const submissionId = Ids.submissionId(self.submissionName(count))
     return [
       { _tag: "Claimed", submissionId },
       {

@@ -190,10 +190,17 @@ describe("Permission over the durable client", () => {
       // The stale answer is refused: nothing is waiting for it.
       assert.isFalse(yield* session.respond({ id: pending[0]!.id, granted: true, value: { remember: true } }))
       // And the next identical call asks again -- no grant leaked out of the
-      // interrupted question.
+      // interrupted question -- under an id namespaced by *its* submission.
       const second = yield* Effect.forkChild(session.prompt("again"))
       const again = yield* until(session.pending, (p) => p.length > 0)
       assert.strictEqual(decodeDetail(again[0]!.detail).toolCallId, "c2")
+      assert.notStrictEqual(again[0]!.id, pending[0]!.id)
+      // The hole this closes: a caller holding submission 1's id cannot
+      // answer submission 2's question with it. The old id is refused, the
+      // new question is still pending, and the handler has not run.
+      assert.isFalse(yield* session.respond({ id: pending[0]!.id, granted: true }))
+      assert.deepStrictEqual((yield* session.pending).map((r) => r.id), [again[0]!.id])
+      assert.deepStrictEqual(yield* Ref.get(ran), [])
       yield* session.respond({ id: again[0]!.id, granted: true })
       assert.strictEqual((yield* Fiber.join(second)).text, "done")
       assert.deepStrictEqual(yield* Ref.get(ran), ["ls"])

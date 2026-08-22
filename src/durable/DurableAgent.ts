@@ -11,6 +11,7 @@ import * as Ids from "../internal/ids.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
+import * as DurablePermission from "./DurablePermission.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 
 /**
@@ -171,9 +172,12 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       // resumable.
       const instance = yield* WorkflowEngine.WorkflowInstance
 
+      // Decisions are journalled like tool calls: see `DurablePermission`.
+      const durablePermission = yield* DurablePermission.wrap(agent.permission)
       const durableAgent = {
         ...agent,
-        toolkit: durableTools
+        toolkit: durableTools,
+        permission: durablePermission
       } as AgentDefinition<Tools, any, any>
 
       return yield* Effect.scoped(

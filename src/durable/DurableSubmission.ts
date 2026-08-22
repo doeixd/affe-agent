@@ -535,6 +535,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             elicitation,
             sessionId: payload.sessionId,
             history: payload.initialHistory,
+            // One in-workflow session per durable submission, so its one
+            // submission *is* the durable one: events, elicitation ids and
+            // activity names all carry the id a client already holds.
+            submissionIds: () => payload.submissionId,
             eventSink
           })
 
