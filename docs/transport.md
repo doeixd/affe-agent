@@ -363,13 +363,17 @@ Three implementations:
 | | `append` | `live` | across processes |
 |---|---|---|---|
 | `DeliveryLog.memoryLog` | in memory | PubSub | no |
-| `DeliveryLog.sqlLogWithTable()` | SQL row, `BEGIN IMMEDIATE` | PubSub (this process) | `read` yes; `live` no |
+| `DeliveryLog.sqlLogWithTable()` | SQL row, `BEGIN IMMEDIATE` | poll from the tail, PubSub-woken | yes, both |
 | `DurableStreamsDeliveryLog.make({ baseUrl })` | one record on the session's durable stream | the protocol's own tail | yes, both |
 
-The SQL log is correct across processes for `read` (the table is shared) but
-its `live` sees only this process's appends; a node reconnected elsewhere
-catches up with `read({ after })` and then tails locally. The Durable
-Streams log is the one whose `live` is a real cross-process tail.
+The SQL log's `live` is honest across processes: it starts from the
+session's current tail and polls the table for rows after the last it
+delivered, so a node reconnected elsewhere tails appends another node
+made. The in-process `PubSub` is a low-latency wake signal, not the source
+of truth -- correctness rests on the poll, so nothing is missed if the
+signal does not arrive. `pollInterval` (default 250ms) bounds a
+cross-process subscriber's delay. The Durable Streams log's `live` is the
+protocol's own tail, with no polling.
 
 ---
 

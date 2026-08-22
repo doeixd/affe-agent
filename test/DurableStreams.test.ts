@@ -12,7 +12,7 @@ import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import { DurableStreams, DurableStreamsDeliveryLog } from "../src/durable-streams/index.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
-import { contract, envelope } from "./DeliveryLogContract.js"
+import { contract, crossProcessLive, envelope } from "./DeliveryLogContract.js"
 
 /**
  * Durable Streams (issue #10), against the official in-process test server.
@@ -270,6 +270,18 @@ const streamsLog = Effect.gen(function* () {
 })
 
 contract("durable-streams", streamsLog, { settle: "200 millis" })
+
+crossProcessLive(
+  "durable-streams",
+  Effect.gen(function* () {
+    const { url } = yield* server
+    const base = `${url}/xproc`
+    const one = yield* DurableStreamsDeliveryLog.make({ baseUrl: base })
+    const two = yield* DurableStreamsDeliveryLog.make({ baseUrl: base })
+    return [one, two] as const
+  }),
+  { settle: "250 millis" }
+)
 
 describe("DurableStreamsDeliveryLog across processes", () => {
   it.live("two logs over one stream agree on sequences, duplicates and conflicts", () =>

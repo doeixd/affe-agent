@@ -108,7 +108,7 @@ const process_ = (
     const stores = yield* Effect.all({
       store: DurableChannels.sqlStoreWithTable(),
       sessionStore: DurableSessionStore.sqlStoreWithTables(),
-      delivery: DeliveryLog.sqlLogWithTable()
+      delivery: DeliveryLog.sqlLogWithTable({ pollInterval: Duration.millis(30) })
     }).pipe(Effect.provide(sql))
     const { layer: model, recorder } = yield* FakeModel.script(turns)
 
@@ -316,6 +316,54 @@ describe("durable client behind the HTTP transport, on SQLite", () => {
           assert.strictEqual(tags.filter((t) => t === "SubmissionCompleted").length, 2)
           assert.strictEqual(tags.filter((t) => t === "ToolCallSucceeded").length, 1)
           assert.notInclude(tags, "SubmissionInterrupted")
+        }).pipe(Effect.scoped)
+      }).pipe(Effect.scoped, Effect.provide(FetchHttpClient.layer)),
+    40_000
+  )
+
+  it.live(
+    "a node tailing events over SSE sees a submission another node runs, live",
+    () =>
+      Effect.gen(function* () {
+        const file = yield* tempDatabase
+        const id = AgentProtocol.SessionId.make("cross-node")
+        const agent = Agent.make({ loop: AgentLoop.bounded(2) })
+
+        yield* Effect.gen(function* () {
+          // Two nodes: separate runtimes and separate SQL delivery logs over
+          // one database, as two processes behind a load balancer.
+          const a = yield* process_(file, agent, [TestLanguageModel.text("done")])
+          const b = yield* process_(file, agent, [])
+          yield* a.api.sessions.createSession({
+            headers,
+            payload: { requestId: requestId("create"), sessionId: id }
+          })
+
+          // Node B tails the session over SSE *before* node A prompts, and
+          // its delivery log has never seen the session. Its live stream is
+          // the SQL log's cross-process tail, not a same-process PubSub.
+          const events = yield* b.api.sessions.events({ params: { id }, headers })
+          const observed = yield* Effect.forkChild(
+            Stream.runCollect(
+              events.pipe(Stream.takeUntil((e) => e.event._tag === "SubmissionCompleted"))
+            )
+          )
+          yield* Effect.sleep(Duration.millis(150))
+
+          const result = yield* a.api.sessions.prompt({
+            params: { id },
+            headers,
+            payload: { requestId: requestId("prompt"), input: Prompt.make("go") }
+          })
+          assert.strictEqual(result.result.text, "done")
+
+          const seen = yield* Fiber.join(observed)
+          const tags = seen.map((e) => e.event._tag)
+          assert.strictEqual(tags[0], "SubmissionStarted")
+          assert.strictEqual(tags[tags.length - 1], "SubmissionCompleted")
+          assert.isTrue(seen.every((e) => e.sessionId === id))
+          // Contiguous offsets, from a node that ran none of the work.
+          assert.deepStrictEqual(seen.map((e) => e.sequence), seen.map((_, i) => i + 1))
         }).pipe(Effect.scoped)
       }).pipe(Effect.scoped, Effect.provide(FetchHttpClient.layer)),
     40_000

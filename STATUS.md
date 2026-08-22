@@ -2108,3 +2108,26 @@ path, so nothing is recorded twice; the keyed delivery log additionally
 ignores a replay's lump for chunks it recorded live (pinned under SQL process
 loss). `TestLanguageModel.counting` now counts both entry points -- it
 counted only `generateText`, which reported a streamed turn as no call.
+
+## #12 items 3 and 4
+
+**Item 3 -- TurnContext.** `ToolExecution.Options` (ten flat fields assembled
+by hand in `AgentTurn`) is now one grouped `TurnContext { session, agent,
+correlation, messages }`. `execute` and `decide` take it; the session and
+agent parts are constant for the session, the turn adds correlation and
+messages. Pure refactor, no behaviour change; the `ToolSafety` coverage pin
+(which type-references `execute`) still ties the error union to `PromptError`.
+
+**Item 4 -- honest SQL `live`.** `DeliveryLog.sqlLogWithTable` `live` starts
+from the session's tail and polls the table after the last offset delivered,
+so a subscriber on another instance sees another instance's appends. The
+in-process `PubSub` is only a wake signal (an immediate poll on a local
+append); correctness rests on the poll, so nothing is missed if the signal
+does not arrive, and nothing is duplicated because the cursor only moves
+forward. `pollInterval` option (default 250ms) bounds cross-process delay.
+The shared `DeliveryLogContract` gained `crossProcessLive` (two instances
+over one store), run for SQLite and Durable Streams, memory explicitly
+exempt (its store is per-instance); falsified against the old PubSub-only
+`live`. `DurableHttpIntegration` adds a two-node SSE test: node B tails a
+session over `/events` before node A prompts and sees the whole submission
+live, contiguously numbered, having run none of it.

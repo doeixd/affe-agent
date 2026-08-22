@@ -1,10 +1,10 @@
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Effect, Layer } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
-import { contract } from "./DeliveryLogContract.js"
+import { contract, crossProcessLive } from "./DeliveryLogContract.js"
 
 /**
  * The delivery log is what a client observes, and the two things it must get
@@ -34,3 +34,20 @@ const sqlLog = Effect.gen(function* () {
 
 contract("memory", DeliveryLog.memoryLog)
 contract("sqlite", sqlLog)
+
+// Two SQL logs over one database file, as two processes would be. The poll
+// interval is shortened so a cross-process append surfaces quickly.
+crossProcessLive(
+  "sqlite",
+  Effect.gen(function* () {
+    const file = yield* tempDatabase
+    const one = yield* DeliveryLog.sqlLogWithTable({ pollInterval: Duration.millis(30) }).pipe(
+      Effect.provide(yield* Layer.build(SqliteClient.layer({ filename: file })))
+    )
+    const two = yield* DeliveryLog.sqlLogWithTable({ pollInterval: Duration.millis(30) }).pipe(
+      Effect.provide(yield* Layer.build(SqliteClient.layer({ filename: file })))
+    )
+    return [one, two] as const
+  }),
+  { settle: "150 millis" }
+)

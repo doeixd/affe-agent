@@ -1,4 +1,4 @@
-import { Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
+import { Duration, Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as AgentEvent from "../AgentEvent.js"
 
@@ -231,12 +231,16 @@ const escapeIdentifier = (name: string): string => {
  * and sits above this log — `read({ after })` is the cursor it resumes from.
  */
 export const sqlLog = (
-  options?: { readonly table?: string | undefined }
+  options?: {
+    readonly table?: string | undefined
+    readonly pollInterval?: Duration.Duration | undefined
+  }
 ): Effect.Effect<DeliveryLog, never, SqlClient.SqlClient> =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const table = sql.literal(escapeIdentifier(options?.table ?? sqlLogTable))
     const busFor = yield* makeBuses
+    const pollInterval = options?.pollInterval ?? Duration.millis(250)
 
     return {
       append: (sessionId, key, envelope) =>
@@ -277,7 +281,38 @@ export const sqlLog = (
         }),
 
       live: (sessionId) =>
-        Stream.unwrap(Effect.map(busFor(sessionId), Stream.fromPubSub)),
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const bus = yield* busFor(sessionId)
+            const start = yield* sql<{ readonly max: number | null }>`SELECT MAX(sequence) AS max FROM ${table} WHERE session_id = ${sessionId}`.pipe(
+              Effect.orDie,
+              Effect.map((rows) => Number(rows[0]?.max ?? 0))
+            )
+            // Neither wake signal carries data: every delivery comes from the
+            // poll, so nothing is duplicated and nothing depends on the local
+            // publish arriving. The publish just makes the next poll immediate.
+            const wake = Stream.merge(
+              Stream.fromPubSub(bus).pipe(Stream.map(() => undefined)),
+              Stream.tick(pollInterval)
+            )
+            return wake.pipe(
+              Stream.mapAccumEffect(
+                () => start,
+                (cursor: number) =>
+                  sql<{ readonly payload: string }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${cursor} ORDER BY sequence`.pipe(
+                    Effect.orDie,
+                    Effect.flatMap((rows) =>
+                      Effect.forEach(rows, (row) => decodeEnvelope(row.payload))
+                    ),
+                    Effect.map((events): readonly [number, ReadonlyArray<AgentEvent.AgentEventEnvelope>] => [
+                      events.length > 0 ? events[events.length - 1]!.sequence : cursor,
+                      events
+                    ])
+                  )
+              )
+            )
+          })
+        ),
 
       read: (sessionId, options) =>
         sql<{
@@ -293,7 +328,10 @@ export const sqlLog = (
 
 /** As `sqlLog`, but creates the table first if it is not there. */
 export const sqlLogWithTable = (
-  options?: { readonly table?: string | undefined }
+  options?: {
+    readonly table?: string | undefined
+    readonly pollInterval?: Duration.Duration | undefined
+  }
 ): Effect.Effect<DeliveryLog, never, SqlClient.SqlClient> =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient

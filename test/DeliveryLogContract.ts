@@ -148,3 +148,45 @@ export const contract = (
     )
   })
 
+
+/**
+ * The property only a cross-process log has: a live subscription on one
+ * instance sees an append another instance made over the same storage.
+ * `twoLogs` yields two independent logs sharing one backing store. The
+ * memory log is exempt -- its store is per-instance -- and does not run this.
+ */
+export const crossProcessLive = (
+  name: string,
+  twoLogs: Effect.Effect<
+    readonly [DeliveryLog.DeliveryLog, DeliveryLog.DeliveryLog],
+    never,
+    Scope.Scope
+  >,
+  options: { readonly settle: Duration.Input }
+) =>
+  describe(`DeliveryLog (${name}) cross-process live`, () => {
+    it.live("a subscriber on one instance sees an append from another", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const [writer, reader] = yield* twoLogs
+          // The reader has never touched the session; it learns the tail from
+          // storage and tails from there.
+          yield* writer.append("s", "k1", envelope(1, { _tag: "SubmissionStarted" }))
+          const collected = yield* Effect.forkChild(
+            Stream.runCollect(Stream.take(reader.live("s"), 2))
+          )
+          yield* Effect.sleep(options.settle)
+          yield* writer.append("s", "k2", envelope(2, { _tag: "RunStarted" }))
+          yield* writer.append("s", "k3", envelope(3, { _tag: "TurnStarted" }))
+          const seen = yield* Fiber.join(collected)
+          // Contiguous session offsets, from the other instance, deduped:
+          // a re-append of k2 does not surface a second time.
+          yield* writer.append("s", "k2", envelope(2, { _tag: "RunStarted" }))
+          assert.deepStrictEqual(
+            seen.map((e) => [e.sequence, e.event._tag]),
+            [[2, "RunStarted"], [3, "TurnStarted"]]
+          )
+        })
+      )
+    )
+  })
