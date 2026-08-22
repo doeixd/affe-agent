@@ -616,6 +616,62 @@ describe("DurableAgentClient (durability specifics)", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("interrupting a submission parked on an approval ends it without running the tool", () =>
+    Effect.gen(function* () {
+      const wiped = yield* Ref.make(0)
+      const f = yield* fixture(
+        Agent.make({
+          toolkit: Agent.toolkit([Wipe], {
+            wipe: () => Ref.update(wiped, (n) => n + 1).pipe(Effect.as("wiped"))
+          }),
+          loop: AgentLoop.bounded(4)
+        }),
+        // The resumed execution replays turn 1 from the journal and is
+        // interrupted before any further call, so the next script entry
+        // belongs to the next prompt.
+        [
+          { toolCalls: [{ id: "w1", name: "wipe", params: {} }] },
+          { text: "after" }
+        ]
+      )
+
+      const running = yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const session = yield* Effect.scoped(
+            client.createSession({ sessionId: "parked" })
+          )
+          return yield* Effect.forkDetach(session.prompt("go"))
+        })
+      )
+      yield* using(f.another, (client) =>
+        Effect.gen(function* () {
+          const session = yield* client.session("parked")
+          yield* until(session.pending, (p) => p.length > 0)
+          // Nothing is executing: the workflow is suspended. Interrupt must
+          // still take effect now, not when someone happens to answer.
+          yield* session.interrupt()
+        })
+      )
+      const result = yield* Fiber.join(running)
+      assert.strictEqual(result.status, "interrupted")
+      assert.strictEqual(yield* Ref.get(wiped), 0)
+
+      yield* using(f.another, (client) =>
+        Effect.gen(function* () {
+          const session = yield* client.session("parked")
+          assert.strictEqual(yield* session.status, "idle")
+          assert.deepStrictEqual(yield* session.pending, [])
+          assert.deepStrictEqual(roles(yield* session.history), ["user"])
+          assert.strictEqual((yield* session.prompt("again")).text, "after")
+          // One real model call for turn 1, one for the next prompt; the
+          // resumption replayed rather than re-issued, and the denial that
+          // woke the run never reached the model.
+          assert.strictEqual(yield* f.recorder.calls, 2)
+        })
+      )
+    }).pipe(Effect.scoped)
+  )
+
   it.live("an answer recorded by a process that then died is delivered on reacquisition", () =>
     Effect.gen(function* () {
       const f = yield* fixture(

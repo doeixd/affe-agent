@@ -317,10 +317,15 @@ describe("local sandbox", () => {
           )
         )
         assert.isTrue(Exit.isFailure(lingering))
-        const sizeNow = (yield* sandbox.stat(p("alive.txt"))).size
+        // Under load the child may be killed before it ever wrote: a file
+        // that stays absent is as stable as one that stays the same size.
+        const size = Effect.map(
+          Effect.option(sandbox.stat(p("alive.txt"))),
+          Option.map((s) => s.size)
+        )
+        const sizeNow = yield* size
         yield* Effect.promise(() => new Promise((r) => setTimeout(r, 300)))
-        const sizeLater = (yield* sandbox.stat(p("alive.txt"))).size
-        assert.deepStrictEqual(sizeLater, sizeNow)
+        assert.deepStrictEqual(yield* size, sizeNow)
 
         const flooded = yield* Effect.exit(
           sandbox.exec(

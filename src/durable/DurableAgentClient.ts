@@ -363,11 +363,30 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
             operation: "interrupt"
           })
         }
+        const claim = found.value.claim.value
         yield* DurableSubmission.interrupt(
           options.store,
           sessionId,
-          found.value.claim.value.submissionId
+          claim.submissionId
         ).pipe(DurableAgent.throughShardReassignment)
+        // A submission parked on a question has nothing running to notice
+        // the intent. Waking it is answering it: each outstanding request is
+        // refused — the most conservative answer there is — and the resumed
+        // run finds the intent before it can act on the refusal, so the
+        // outcome is an interruption rather than a run that carried on.
+        const waiting = yield* options.sessionStore.pendingRequests(sessionId)
+        yield* Effect.forEach(waiting, (request) =>
+          Effect.flatMap(
+            options.sessionStore.answerRequest(sessionId, {
+              id: request.id,
+              granted: false
+            }),
+            (accepted) =>
+              accepted
+                ? deliverAnswer(sessionId, claim, { id: request.id, granted: false })
+                : Effect.void
+          )
+        )
       }).pipe(Effect.provide(env)),
 
     respond: (response) =>

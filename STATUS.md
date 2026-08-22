@@ -1659,6 +1659,22 @@ now requires it in the type. `DurableAgent.workflow` has the same erasure and
 is left as is for now — changing it is a typed break of an older API and
 belongs in its own change.
 
+**Interrupting a parked submission did nothing until someone answered.** A
+workflow suspended on an approval runs no fibre, so the recorded intent had
+nothing to notice it — `interrupt()` returned and the session stayed
+running indefinitely. Waking the run is the only way to deliver the
+interruption, and the only honest way to wake it is to answer: `interrupt`
+now records the intent and refuses every outstanding request; the resumed
+elicitation consults the intent before handing any answer back and, finding
+it, withholds the answer forever while the session's own interruption ends
+the run. Two subtleties earned their lines: the poller must not act during
+replay before this execution has re-committed the user message (it is gated
+on the transcript having grown), or the interrupted outcome commits an empty
+history; and the poller and the resumed elicitation race for the signal, so
+the elicitation checks the interrupter's deferred as well as the store.
+Pinned: interrupted result, tool never ran, `["user"]` committed, session
+reusable, and exactly two real model calls across the whole episode.
+
 Known limits, stated rather than hidden: `DeliveryLog.live` fans out within
 one process (cross-node live delivery is a transport concern over
 `read({ after })`); a replayed streamed submission re-offers `MessageDelta`s

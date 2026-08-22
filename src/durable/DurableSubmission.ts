@@ -154,7 +154,17 @@ const finishProjection = (
  */
 export const projectedElicitation = (
   sessionStore: DurableSessionStore.DurableSessionStore,
-  sessionId: string
+  sessionId: string,
+  /**
+   * Runs after an answer arrives and before it is handed to the run.
+   *
+   * This is where a resumed workflow learns what happened while it was
+   * parked — specifically, that someone asked for it to be interrupted.
+   * Checking here rather than trusting the poller makes the outcome
+   * deterministic: the interrupt is delivered before the run can act on the
+   * answer, instead of racing the next model call by a poll interval.
+   */
+  onResume: Effect.Effect<void> = Effect.void
 ): Effect.Effect<
   Elicitation.Factory,
   never,
@@ -179,6 +189,7 @@ export const projectedElicitation = (
               const response = yield* DurableDeferred.await(
                 DurableElicitation.deferredFor(request.id)
               ).pipe(Effect.provide(context))
+              yield* onResume
               // Consumed. Whoever delivered the answer already recorded it in
               // the store; removing the request is what makes the run look
               // unpaused to every other observer.
@@ -364,11 +375,38 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       const channels = yield* DurableChannels.factory(options.store, {
         prefix: scopePrefix
       })
+      const instance = yield* WorkflowEngine.WorkflowInstance
+
+      // The interrupt intent this submission watches for. Declared here,
+      // ahead of the session, because the elicitation needs to consult it on
+      // resumption and the session needs to be interrupted through it.
+      const interruptKey = interruptSignalName(
+        payload.sessionId,
+        payload.submissionId
+      )
+      const requested = yield* Deferred.make<void>()
+      const checkInterrupt = Effect.flatMap(
+        options.store.takeAll(interruptKey),
+        (found) =>
+          found.length > 0 ? Deferred.succeed(requested, void 0) : Effect.void
+      ).pipe(Effect.asVoid)
       const elicitation = yield* projectedElicitation(
         options.sessionStore,
-        payload.sessionId
+        payload.sessionId,
+        // On resumption, an intent found here must win over the answer that
+        // woke the run: signal the interrupter and then never hand the
+        // answer back. The run cannot proceed — not to the tool, not to the
+        // next model call — and `AgentSession.interrupt` ends it exactly as
+        // it would have mid-flight. Waking the run was only ever a way to
+        // deliver the interruption.
+        // Either this check or the poller may take the signal first; what
+        // matters is that the answer is withheld in both cases.
+        Effect.flatMap(checkInterrupt, () =>
+          Effect.flatMap(Deferred.isDone(requested), (interrupting) =>
+            interrupting ? Effect.never : Effect.void
+          )
+        )
       )
-      const instance = yield* WorkflowEngine.WorkflowInstance
 
       const durableAgent = {
         ...agent,
@@ -413,20 +451,30 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
           // session goes idle and stays usable. The key names the submission,
           // so a stale intent cannot interrupt a later one, and a crash after
           // recording but before delivery replays into the same interrupt.
-          const requested = yield* Deferred.make<void>()
           const scope = yield* Effect.scope
-          const interruptKey = interruptSignalName(
-            payload.sessionId,
-            payload.submissionId
+          // The poller acts only once this execution has committed its
+          // input. A resumed execution replays from the top, and an intent
+          // recorded while it was parked must not land on the replay before
+          // the user message is back in the transcript — the interrupted
+          // outcome would then commit an empty history, losing a message
+          // the original execution had already accepted.
+          const committed = Effect.map(
+            session.history,
+            (history) =>
+              history.content.length > payload.initialHistory.content.length
           )
           yield* Effect.repeat(
-            Effect.flatMap(options.store.takeAll(interruptKey), (found) =>
-              found.length > 0
-                ? Deferred.succeed(requested, void 0)
-                : Effect.void
+            Effect.flatMap(committed, (ready) =>
+              ready ? checkInterrupt : Effect.void
             ),
             Schedule.spaced(Duration.millis(25))
           ).pipe(Effect.ignore, Effect.forkIn(scope))
+          // The interrupt is delivered through the session's own path. When
+          // the signal was found on resumption (inside an elicitation), this
+          // fibre interrupts the run before the answer can be acted on: the
+          // elicitor hands the answer back only after `checkInterrupt`, and
+          // `AgentSession.interrupt` cancels the run fibre that is waiting
+          // on it.
           yield* Deferred.await(requested).pipe(
             Effect.flatMap(() =>
               // A signal for work that already stopped is stale, not an error.
