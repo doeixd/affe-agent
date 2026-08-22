@@ -112,12 +112,27 @@ export const layer = (options?: {
               resume(result)
             }
 
-            const timer = setTimeout(() => {
+            // A bound that is enforced, not merely reported: the failure is
+            // delivered only once the child has actually gone. Settling on
+            // the kill signal alone would hand control back while the process
+            // still runs — still writing, still holding its working
+            // directory — and "bounded" would describe the wait, not the
+            // work. A child that ignores SIGTERM is killed outright after a
+            // grace period.
+            let terminal: Effect.Effect<never, Sandbox.ExecError> | undefined
+            let escalation: ReturnType<typeof setTimeout> | undefined
+            const terminate = (failure: Sandbox.ExecError) => {
+              if (terminal !== undefined || settled) return
+              terminal = Effect.fail(failure)
               child.kill("SIGTERM")
-              finish(Effect.fail(new Sandbox.TimeoutError({
+              escalation = setTimeout(() => child.kill("SIGKILL"), 1000)
+            }
+
+            const timer = setTimeout(() => {
+              terminate(new Sandbox.TimeoutError({
                 executable: input.executable,
                 timeoutMillis: timeoutMs
-              })))
+              }))
             }, timeoutMs)
 
             const append = (chunk: Buffer, isStdout: boolean) => {
@@ -128,11 +143,10 @@ export const layer = (options?: {
                 stdout.byteLength + stderr.byteLength > maxOutputBytes &&
                 !settled
               ) {
-                child.kill("SIGTERM")
-                finish(Effect.fail(new Sandbox.OutputLimitError({
+                terminate(new Sandbox.OutputLimitError({
                   executable: input.executable,
                   maxOutputBytes
-                })))
+                }))
               }
             }
             child.stdout?.on("data", (chunk: Buffer) => append(chunk, true))
@@ -143,12 +157,17 @@ export const layer = (options?: {
                 executable: input.executable,
                 detail: String(cause)
               }))))
-            child.on("close", (code) =>
-              finish(Effect.succeed({
-                exitCode: code ?? -1,
-                stdout: stdout.toString("utf8"),
-                stderr: stderr.toString("utf8")
-              })))
+            child.on("close", (code) => {
+              if (escalation !== undefined) clearTimeout(escalation)
+              finish(
+                terminal ??
+                  Effect.succeed({
+                    exitCode: code ?? -1,
+                    stdout: stdout.toString("utf8"),
+                    stderr: stderr.toString("utf8")
+                  })
+              )
+            })
           })
 
       const makeSandbox = (

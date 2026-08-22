@@ -1,6 +1,6 @@
 import { Cause, Duration, Effect, Exit, Layer, Option, Schedule, Stream } from "effect"
 import type { Context } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { WorkflowEngine } from "effect/unstable/workflow"
 import type { AgentDefinition } from "../Agent.js"
@@ -116,6 +116,18 @@ export interface Options {
   readonly pollInterval?: Duration.Duration | undefined
 }
 
+/**
+ * A session id no other process could have produced.
+ *
+ * The local client numbers sessions from a process-local counter, which is
+ * exactly wrong here: two processes sharing a store would both create
+ * `session-1` and silently share one conversation. Durable ids come from the
+ * platform's random source instead.
+ */
+const freshSessionId = Effect.sync(
+  () => `session-${globalThis.crypto.randomUUID()}`
+)
+
 const noSuchSession = (sessionId: string) =>
   new AgentClient.AgentTransportError({
     sessionId,
@@ -132,12 +144,22 @@ const noSuchSession = (sessionId: string) =>
  * The layer also registers the submission workflow's handler, which has to be
  * present in the *runtime* environment or dispatching finds no implementation
  * and every submission would poll forever.
+ *
+ * `LanguageModel` is a declared requirement even though the agent definition's
+ * erased requirements would let it pass silently: the workflow body resolves
+ * the model from the context this layer was built in, and a deployment that
+ * forgot to provide one should learn that from the compiler, not from a
+ * defect on the first prompt.
  */
 export const layer = <Tools extends Record<string, Tool.Any>>(
   name: string,
   agent: AgentDefinition<Tools, any, any>,
   options: Options
-): Layer.Layer<AgentClient.AgentClient, never, WorkflowEngine.WorkflowEngine> => {
+): Layer.Layer<
+  AgentClient.AgentClient,
+  never,
+  WorkflowEngine.WorkflowEngine | LanguageModel.LanguageModel
+> => {
   const submission = DurableSubmission.workflow(name, agent, options)
   const pollInterval = options.pollInterval ?? Duration.millis(10)
 
@@ -401,7 +423,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
       ) =>
         Effect.gen(function* () {
           const sessionId =
-            sessionOptions?.sessionId ?? (yield* Ids.nextSessionId)
+            sessionOptions?.sessionId ?? (yield* freshSessionId)
           const record = yield* options.sessionStore.getOrCreate(
             sessionId,
             initialHistory(agent)

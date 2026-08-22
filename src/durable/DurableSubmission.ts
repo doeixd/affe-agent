@@ -94,6 +94,10 @@ export const Outcome = Schema.Union([
 ])
 export type Outcome = typeof Outcome.Type
 
+/** The channels-store key holding this submission's interrupt intent. */
+const interruptSignalName = (sessionId: string, submissionId: string): string =>
+  `${sessionId}:interrupt/${submissionId}`
+
 /**
  * Commit the session projection as an activity.
  *
@@ -105,6 +109,7 @@ export type Outcome = typeof Outcome.Type
  */
 const finishProjection = (
   sessionStore: DurableSessionStore.DurableSessionStore,
+  store: DurableChannels.Store,
   payload: Payload,
   history: Prompt.Prompt
 ): Effect.Effect<
@@ -116,6 +121,17 @@ const finishProjection = (
     const context = yield* Effect.context<
       WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
     >()
+    // Admission closes *before* the session goes idle, and the stale
+    // interrupt intent goes with it. The marker is per session, so clearing
+    // it after `finish` would race the next submission: a client that claims
+    // the idle session and opens admission for submission N+1 in that gap
+    // would have it wiped by submission N's exit, and steering aimed at
+    // running work would be refused as idle. Nothing can be claimed while
+    // this submission still holds the session, so this ordering is safe.
+    yield* Effect.all([
+      store.takeAll(DurableChannels.openKey(payload.sessionId)),
+      store.takeAll(interruptSignalName(payload.sessionId, payload.submissionId))
+    ])
     yield* Activity.make({
       name: `session-projection/${payload.sessionId}/${payload.submissionId}/finish`,
       success: Schema.Boolean,
@@ -174,10 +190,6 @@ export const projectedElicitation = (
         })
     }
   })
-
-/** The channels-store key holding this submission's interrupt intent. */
-const interruptSignalName = (sessionId: string, submissionId: string): string =>
-  `${sessionId}:interrupt/${submissionId}`
 
 /**
  * Interrupt a running submission from outside the workflow.
@@ -458,7 +470,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
           instance.suspended
             ? Effect.succeed(succeededOutcome(payload.submissionId, result))
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
-                finishProjection(options.sessionStore, payload, history).pipe(
+                finishProjection(options.sessionStore, options.store, payload, history).pipe(
                   Effect.as(succeededOutcome(payload.submissionId, result))
                 )
               )
@@ -476,32 +488,18 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
-                finishProjection(options.sessionStore, payload, history).pipe(
+                finishProjection(options.sessionStore, options.store, payload, history).pipe(
                   Effect.as(failedOutcome(payload.submissionId, cause))
                 )
               )
         ),
+        // Admission stays open while suspended or resumable — a parked
+        // submission is still accepting steering — and was closed by
+        // `finishProjection` on every terminal path.
         Effect.flatMap((outcome) =>
           instance.suspended
             ? Workflow.suspend(instance)
             : Effect.succeed(outcome)
-        ),
-        // Admission stays open while suspended — a parked submission is still
-        // accepting steering — and closes however else the submission ends.
-        // An interrupt intent that arrived too late to matter is drained with
-        // it: the key names this submission, so it could never reach another,
-        // but nothing else would ever remove it.
-        Effect.onExit(() =>
-          instance.suspended
-            ? Effect.void
-            : Effect.asVoid(
-                Effect.all([
-                  options.store.takeAll(DurableChannels.openKey(payload.sessionId)),
-                  options.store.takeAll(
-                    interruptSignalName(payload.sessionId, payload.submissionId)
-                  )
-                ])
-              )
         )
       )
     })

@@ -211,6 +211,16 @@ describe("DurableAgentClient (durability specifics)", () => {
       )
       assert.strictEqual(status, "idle")
 
+      // Ids allocated without a name cannot collide across processes: the
+      // local counter's `session-1` would be the same conversation twice.
+      const allocated = yield* Effect.forEach([f.client, f.another], (layer) =>
+        using(layer, (client) =>
+          Effect.scoped(Effect.map(client.createSession(), (s) => s.id))
+        )
+      )
+      assert.notStrictEqual(allocated[0], allocated[1])
+      assert.notMatch(allocated[0]!, /^session-\d+$/)
+
       // And one that was never created is honestly absent, not conjured.
       const missing = yield* using(f.another, (client) =>
         Effect.flip(client.session("nobody"))
@@ -647,6 +657,53 @@ describe("DurableAgentClient (durability specifics)", () => {
       const result = yield* Fiber.join(running)
       assert.strictEqual(result.text, "done")
       assert.deepStrictEqual(yield* f.sessionStore.recordedAnswers("late"), [])
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("admission is closed before the session goes idle, never after", () =>
+    Effect.gen(function* () {
+      // The marker is per session. If a submission cleared it *after* its
+      // terminal projection, the next submission — claimed and opened in
+      // that gap by another client — would have its admission wiped and
+      // refuse steering while running. Observed at the store: at the moment
+      // `finish` is called, the marker must already be gone.
+      const store = yield* DurableChannels.memoryStore
+      const base = yield* DurableSessionStore.memoryStore
+      const observed = yield* Ref.make<Array<number>>([])
+      const sessionStore: DurableSessionStore.DurableSessionStore = {
+        ...base,
+        finish: (sessionId, submissionId, history) =>
+          Effect.flatMap(store.size(DurableChannels.openKey(sessionId)), (open) =>
+            Ref.update(observed, (all) => [...all, open]).pipe(
+              Effect.andThen(base.finish(sessionId, submissionId, history))
+            )
+          )
+      }
+      const agent = Agent.make({
+        toolkit: Agent.toolkit([Boom], { boom: () => Effect.fail("declined") }),
+        toolFailurePolicy: ToolExecution.FailRun,
+        loop: AgentLoop.bounded(4)
+      })
+      const { layer: model } = yield* FakeModel.script([
+        { text: "ok" },
+        TestLanguageModel.toolCall("boom", {}, { id: "b1" })
+      ])
+      const layer = DurableAgentClient.layer("Ordered", agent, {
+        store,
+        sessionStore
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+
+      yield* using(layer, (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "order" })
+            yield* session.prompt("one")
+            yield* Effect.flip(session.prompt("two"))
+          })
+        )
+      )
+      // Success and failure paths alike: closed first, then idle.
+      assert.deepStrictEqual(yield* Ref.get(observed), [0, 0])
     }).pipe(Effect.scoped)
   )
 

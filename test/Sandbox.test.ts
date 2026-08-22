@@ -212,12 +212,12 @@ describe("local sandbox", () => {
     yield* Effect.promise(() => fs.mkdir(managed))
     yield* Effect.addFinalizer(() =>
       Effect.promise(() =>
-        fs.rm(base, { recursive: true, force: true })
+        fs.rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
       )
     )
     yield* Effect.addFinalizer(() =>
       Effect.promise(() =>
-        fs.rm(external, { recursive: true, force: true })
+        fs.rm(external, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
       )
     )
     return {
@@ -302,6 +302,25 @@ describe("local sandbox", () => {
         assert.isTrue(
           timeout._tag === "Some" && timeout.value instanceof Sandbox.TimeoutError
         )
+
+        // The bound is on the work, not the wait: a timed-out exec returns
+        // only once the child is gone. This child keeps growing a file for as
+        // long as it lives; once control is back the file must have stopped
+        // growing. (A SIGTERM handler would be the tidier witness, but on
+        // Windows the signal is a hard kill and no handler runs.)
+        const lingering = yield* Effect.exit(
+          sandbox.exec(
+            node(
+              "const fs = require('fs'); setInterval(() => fs.appendFileSync('alive.txt', 'x'), 20)"
+            ),
+            { timeout: "300 millis" }
+          )
+        )
+        assert.isTrue(Exit.isFailure(lingering))
+        const sizeNow = (yield* sandbox.stat(p("alive.txt"))).size
+        yield* Effect.promise(() => new Promise((r) => setTimeout(r, 300)))
+        const sizeLater = (yield* sandbox.stat(p("alive.txt"))).size
+        assert.deepStrictEqual(sizeLater, sizeNow)
 
         const flooded = yield* Effect.exit(
           sandbox.exec(
@@ -471,7 +490,7 @@ describe("sandbox composition", () => {
         fs.mkdtemp(path.join(os.tmpdir(), "sandbox-compose-"))
       )
       yield* Effect.addFinalizer(() =>
-        Effect.promise(() => fs.rm(base, { recursive: true, force: true }))
+        Effect.promise(() => fs.rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
       )
       yield* Effect.promise(() =>
         fs.mkdir(path.join(base, "notes"))

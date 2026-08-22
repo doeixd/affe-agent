@@ -1635,9 +1635,45 @@ dead process may leave that to reconciliation. A stale interrupt intent is
 drained when its submission exits, so the channels store does not accumulate
 signals nothing will read.
 
+**The admission marker is per session; clearing it on exit raced the next
+submission.** `finishProjection` set the session idle, and only then did the
+workflow's `onExit` clear the `open` marker — so a client that claimed and
+dispatched submission N+1 in that gap had its admission wiped by submission
+N's exit, and steering aimed at running work was refused as idle. The
+failure path was the real exposure: on success the session's own closing
+drain had already cleared the marker, on failure nothing had. Admission (and
+the stale interrupt intent) now closes *inside* `finishProjection`, before
+the session goes idle; pinned by a store wrapper asserting the marker is
+already gone when `finish` is called, on both paths, and falsified once
+(`[0, 1]` without the fix).
+
+**Durable session ids cannot come from a process-local counter.** The local
+client's `session-1, session-2…` would make two processes sharing a store
+share one conversation. `createSession()` without an id now draws from the
+platform's random source.
+
+**The client layer declares `LanguageModel`.** The agent definition's erased
+requirements let the workflow layer claim `never` while its body resolves
+the model from the registration context at runtime; `DurableAgentClient.layer`
+now requires it in the type. `DurableAgent.workflow` has the same erasure and
+is left as is for now — changing it is a typed break of an older API and
+belongs in its own change.
+
 Known limits, stated rather than hidden: `DeliveryLog.live` fans out within
 one process (cross-node live delivery is a transport concern over
 `read({ after })`); a replayed streamed submission re-offers `MessageDelta`s
 whose chunking the journal does not preserve, which the log reports as a
 conflict and the recorder logs at warning level; the interrupt signal is
 polled every 25ms while a submission runs.
+
+## A bounded exec returned before its process was gone
+
+`sandbox/local` settled a timed-out or output-limited exec the moment it sent
+`SIGTERM`. Control came back while the child was still running — still
+writing, still holding its working directory — which is how the sandbox
+test's teardown met `EBUSY` on Windows. The failure is now delivered only
+from the child's `close` event, with `SIGKILL` after a one-second grace
+period for a child that ignores `SIGTERM`. The test grows a file from the
+child and checks it has stopped growing once the exec returns; on Windows
+the signal is a hard kill, so that probe is a guard rather than a proof —
+the proof was the teardown race, which no longer reproduces.
