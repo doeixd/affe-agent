@@ -82,5 +82,15 @@ export const emit = (
     Effect.asVoid
   )
 
+/**
+ * The live feed, ending with the session.
+ *
+ * `SessionClosed` is the last thing a session says, so the stream ends once
+ * it has been delivered. A feed that stayed open past it left every remote
+ * observer -- an SSE response, an RPC stream -- hanging on a session that no
+ * longer existed, until the connection itself was torn down.
+ */
 export const events = (bus: EventBus): Stream.Stream<AgentEventEnvelope> =>
-  Stream.fromPubSub(bus.pubsub)
+  Stream.fromPubSub(bus.pubsub).pipe(
+    Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed")
+  )

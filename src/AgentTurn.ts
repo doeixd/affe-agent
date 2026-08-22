@@ -122,7 +122,12 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
   handler: Toolkit.WithHandler<Tools>
 ): Effect.Effect<LanguageModel.GenerateTextResponse<Tools, true>, any, any> =>
   Effect.gen(function* () {
-    yield* EventBus.emit(session.bus, correlation, { _tag: "MessageStarted" })
+    // Uninterruptible, so the open always precedes the close the finalizer
+    // below owes: an interrupt landing while this emit waited on the bus
+    // permit produced a `MessageInterrupted` for a message never started.
+    yield* Effect.uninterruptible(
+      EventBus.emit(session.bus, correlation, { _tag: "MessageStarted" })
+    )
 
     const final = yield* Stream.runFoldEffect(
       LanguageModel.streamText({

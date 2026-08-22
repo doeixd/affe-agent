@@ -19,6 +19,7 @@ import {
 import * as Elicitation from "../Elicitation.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as AgentClient from "../client/AgentClient.js"
+import * as AgentEvent from "../AgentEvent.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/internal/sessionHost.js"
 
@@ -377,7 +378,30 @@ const eventResponse = (
   >
 ): HttpServerResponse.HttpServerResponse => {
   const body = events.pipe(
-    Stream.mapEffect(encodeEvent),
+    // The wire projection: tool results go out in their encoded form, so a
+    // decoded `Date` or class instance cannot make an envelope unencodable.
+    // Should one still fail to encode, that event is logged and skipped --
+    // one bad frame must not end an otherwise healthy session's stream,
+    // which is what a failure frame would do.
+    Stream.map(AgentEvent.toWire),
+    Stream.mapEffect((envelope) =>
+      encodeEvent(envelope).pipe(
+        Effect.map(Option.some),
+        Effect.catchTag("AgentProtocolCodecError", (error) =>
+          Effect.as(
+            Effect.logWarning("event could not be encoded for SSE; skipped", {
+              sessionId: envelope.sessionId,
+              sequence: envelope.sequence,
+              tag: envelope.event._tag,
+              detail: error.detail
+            }),
+            Option.none<string>()
+          )
+        )
+      )
+    ),
+    Stream.filter(Option.isSome),
+    Stream.map((frame) => frame.value),
     Stream.catch((error) => Stream.fromEffect(encodeStreamError(error))),
     Stream.encodeText
   )

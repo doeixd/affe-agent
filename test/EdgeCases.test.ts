@@ -348,7 +348,9 @@ describe("closing a session with work in flight", () => {
           yield* Deferred.await(entered)
           yield* Fiber.interrupt(caller)
           yield* Scope.close(inner, Exit.void)
-          yield* Fiber.interrupt(observer)
+          // The feed ends with the session: joining, not interrupting, is
+          // the assertion that a remote observer is not left hanging.
+          yield* Fiber.join(observer)
           return yield* Ref.get(seen)
         }).pipe(Effect.provide(layer))
       )
@@ -360,6 +362,7 @@ describe("closing a session with work in flight", () => {
         interrupted < closed,
         `SessionClosed must come last: ${tags}`
       )
+      assert.strictEqual(tags[tags.length - 1], "SessionClosed")
     })
   )
 })
