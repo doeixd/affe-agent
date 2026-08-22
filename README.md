@@ -578,6 +578,9 @@ channel — so the only error left is the one a caller can act on.
 
 ## Talking to a session across a boundary
 
+> The full reference for transports, wire encoding, SSE framing, live vs.
+> durable delivery and Durable Streams is [docs/transport.md](./docs/transport.md).
+
 `@doeixd/effect-agent/client` is the seam adapters implement — RPC, HTTP/SSE,
 AG-UI, A2A — so each does not invent its own notion of what a session is:
 
