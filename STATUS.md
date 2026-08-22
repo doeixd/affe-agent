@@ -2047,8 +2047,17 @@ against the official `@durable-streams/server` test server, in process.
 `DurableStreams.make({ url, schema })`: the typed wrapper. Reads consume the
 client's async iterator inside `Stream.callback`; each record carries
 `session.offset` after its delivery. Facts learned from the client and
-pinned in tests: offsets are reported per delivered *batch* (a checkpoint
-is the position after the batch a record arrived in); an identical
+pinned in tests: offsets are reported per delivered *batch*, so `Record.offset`
+is the batch end on a batch's last record and the batch start on the others
+-- resuming after any record loses nothing, a mid-batch checkpoint
+re-delivers its batch (the review caught the earlier version, which put the
+batch end on every record and would have *skipped* the rest of a batch on a
+mid-batch resume); the callback queue is unbounded so a slow reader drops
+nothing (`DurableStreamsBackpressure.test.ts`); a catch-up read must use
+`json()` (`subscribeJson` never settles for `live: false`) and a live read
+`subscribeJson` (one batch per append), with the end on `closed` deferred a
+turn because a stream closed before the read began has its first batch
+replayed after `closed` settles; an identical
 re-create is accepted by the test server (so `create` tolerates it and
 `ensure` additionally tolerates `CONFLICT_EXISTS`); ending a read early on
 `streamClosed` drops the rest of the batch that carried the flag (the

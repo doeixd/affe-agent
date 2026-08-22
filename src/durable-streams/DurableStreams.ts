@@ -35,7 +35,20 @@ export type Offset = typeof Offset.Type
 /** The position before any record. */
 export const start: Offset = Offset.make("-1")
 
-/** A decoded value and the position after it. */
+/**
+ * A decoded value and a position it is safe to resume after.
+ *
+ * The client delivers records in batches and reports positions per batch,
+ * not per record. So `offset` is the position after the batch on the
+ * batch's *last* record, and the position *before* the batch on the others:
+ * resuming after any record loses nothing, and resuming after a record
+ * that was not last in its batch re-delivers that batch. At-least-once for
+ * a checkpoint taken mid-batch, exact for one taken at a batch boundary --
+ * which a completed read, and every record of a one-record batch (a live
+ * tail delivers one batch per append), always is. A consumer that needs
+ * exactness across a mid-batch checkpoint keys its records, as the delivery
+ * log does.
+ */
 export interface Record<A> {
   readonly value: A
   readonly offset: Offset
@@ -192,50 +205,77 @@ export const make = <A, I>(
 
   const decodeExit = Schema.decodeUnknownExit(json)
 
+  // The callback queue is unbounded on purpose: batches are offered without
+  // awaiting, and a bounded queue would *drop* records past its capacity
+  // for a consumer slower than the network. A durable log's reader
+  // buffering in memory is acceptable; losing records is not.
   const read: Typed<A, I>["read"] = (readOptions) =>
     Stream.callback<Record<A>, DurableStreamError | Schema.SchemaError>((queue) =>
       Effect.gen(function* () {
         const controller = new AbortController()
         const live = readOptions?.live ?? true
-        const after = readOptions?.after
+        const after = readOptions?.after ?? start
         const session = yield* promise(() =>
           openStream({
             ...clientOptions(options),
             live,
             signal: controller.signal,
-            ...(after === undefined || after === start ? {} : { offset: after as ClientOffset })
+            ...(after === start ? {} : { offset: after as ClientOffset })
           })
         )
-        // Consumed through the client's async iterator, which is the one
-        // surface that both delivers the catch-up body and keeps tailing.
-        // `session.offset` advances after each delivered item, so every
-        // record carries the exact position after itself.
-        const consume = Effect.promise(async () => {
-          try {
-            for await (const item of session.jsonStream()) {
-              const exit = decodeExit(item)
-              if (Exit.isFailure(exit)) {
-                // What arrived is not silently skipped: the read fails with
-                // the decode error, and the position stays before it.
-                Queue.failCauseUnsafe(queue, exit.cause)
-                return
-              }
-              Queue.offerUnsafe(queue, { value: exit.value, offset: Offset.make(session.offset) })
+        let batchStart: Offset = after
+        /** Decode a batch and offer it under the offset contract on `Record`. */
+        const offer = (items: ReadonlyArray<unknown>, batchEnd: Offset): boolean => {
+          const records: Array<Record<A>> = []
+          for (const item of items) {
+            const exit = decodeExit(item)
+            if (Exit.isFailure(exit)) {
+              // What arrived is not silently skipped: the read fails with
+              // the decode error. What decoded before it in the batch is
+              // delivered first, so a reader can still find the position.
+              Queue.offerAllUnsafe(queue, records)
+              Queue.failCauseUnsafe(queue, exit.cause)
+              return false
             }
-            // The iterator ends on its own: at up-to-date for a catch-up
-            // read, at EOF for a live one. Ending earlier on `streamClosed`
-            // dropped the rest of the batch that carried the flag.
-            Queue.endUnsafe(queue)
-          } catch (cause) {
-            if (controller.signal.aborted) {
-              Queue.endUnsafe(queue)
-            } else {
-              Queue.failCauseUnsafe(queue, Cause.fail(fail(cause)))
-            }
+            records.push({ value: exit.value, offset: batchStart })
           }
+          if (records.length > 0) {
+            records[records.length - 1] = { ...records[records.length - 1]!, offset: batchEnd }
+          }
+          Queue.offerAllUnsafe(queue, records)
+          batchStart = batchEnd
+          return true
+        }
+        if (!live) {
+          // A catch-up read is one response: the client has it whole.
+          const items = yield* promise(() => session.json())
+          offer(items, Offset.make(session.offset))
+          Queue.endUnsafe(queue)
+          return
+        }
+        // A live read is batches as they arrive: the catch-up body first,
+        // then one per append, then EOF.
+        const unsubscribe = session.subscribeJson((batch) => {
+          if (!offer(batch.items, Offset.make(batch.offset))) return
+          if (batch.streamClosed) Queue.endUnsafe(queue)
         })
-        yield* Effect.forkScoped(consume)
-        yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()))
+        // `closed` can already be settled when the stream was closed before
+        // this read began; the buffered first batch is still delivered to
+        // the subscriber afterwards, so ending here yields a turn first.
+        // The batch carrying `streamClosed` ends the queue itself in the
+        // usual case; this is the backstop.
+        void session.closed.then(
+          () => setTimeout(() => Queue.endUnsafe(queue), 0),
+          (cause) => {
+            if (!controller.signal.aborted) Queue.failCauseUnsafe(queue, Cause.fail(fail(cause)))
+          }
+        )
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            unsubscribe()
+            controller.abort()
+          })
+        )
       })
     )
 

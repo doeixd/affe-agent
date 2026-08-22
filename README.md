@@ -687,7 +687,10 @@ protocol through its official client, as two things:
   and an idempotent `producer`. `read({ after, live })` is an ordinary Effect
   `Stream` of `{ value, offset }`: catch-up, then tail, resumable from any
   offset; a record that does not decode fails the read rather than being
-  skipped. `fold` replays typed deltas into state, from the start or from a
+  skipped. A record's `offset` is always safe to resume after: exact at a
+  batch boundary (every live-tailed record, every completed read), and
+  re-delivering the batch for a checkpoint taken mid-batch -- at-least-once,
+  never loss. `fold` replays typed deltas into state, from the start or from a
   snapshot's offset. There is no second stream datatype: a durable stream is
   somewhere a `Stream` comes from.
 - **`DurableStreamsDeliveryLog`** -- the durable client's `DeliveryLog` on one

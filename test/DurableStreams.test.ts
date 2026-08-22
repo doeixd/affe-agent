@@ -78,6 +78,44 @@ describe("DurableStreams typed protocol wrapper", () => {
     15_000
   )
 
+  it.live("a record's offset is always safe to resume after: mid-batch re-delivers, a boundary is exact", () =>
+    Effect.gen(function* () {
+      const { url } = yield* server
+      const stream = DurableStreams.make({ url: `${url}/streams/offsets`, schema: Counter })
+      yield* stream.ensure
+      for (const n of [1, 2, 3]) yield* stream.append({ n })
+      // One catch-up read delivers one batch: the first two records carry
+      // the batch's start, the last its end.
+      const batch = yield* Stream.runCollect(stream.read({ live: false }))
+      assert.deepStrictEqual(batch.map((r) => r.value.n), [1, 2, 3])
+      assert.strictEqual(batch[0]!.offset, DurableStreams.start)
+      assert.strictEqual(batch[1]!.offset, DurableStreams.start)
+      assert.strictEqual(batch[2]!.offset, (yield* stream.head).offset)
+      // Checkpointing after record 2 and resuming loses nothing: the batch
+      // comes again. Checkpointing after record 3 resumes exactly.
+      const fromMid = yield* Stream.runCollect(stream.read({ after: batch[1]!.offset, live: false }))
+      assert.deepStrictEqual(fromMid.map((r) => r.value.n), [1, 2, 3])
+      const fromEnd = yield* Stream.runCollect(stream.read({ after: batch[2]!.offset, live: false }))
+      assert.deepStrictEqual(fromEnd, [])
+      // A live tail delivers one batch per append, so every tailed record
+      // is a boundary and resuming after any of them is exact.
+      const tailed = yield* Effect.forkChild(
+        Stream.runCollect(Stream.take(stream.read({ after: batch[2]!.offset }), 2))
+      )
+      yield* Effect.sleep("150 millis")
+      yield* stream.append({ n: 4 })
+      yield* stream.append({ n: 5 })
+      const two = yield* Fiber.join(tailed)
+      assert.deepStrictEqual(two.map((r) => r.value.n), [4, 5])
+      assert.isTrue(two[0]!.offset < two[1]!.offset)
+      assert.deepStrictEqual(
+        (yield* Stream.runCollect(stream.read({ after: two[0]!.offset, live: false }))).map((r) => r.value.n),
+        [5]
+      )
+    }).pipe(Effect.scoped),
+    15_000
+  )
+
   it.live("close is durable EOF: a live reader ends, appends are refused, head says closed", () =>
     Effect.gen(function* () {
       const { url } = yield* server
