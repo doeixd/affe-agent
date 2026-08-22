@@ -282,36 +282,72 @@ const eventKey = (
  * for lifecycle events it would be a recorder bug, and the tests pin that it
  * does not occur.
  */
+/** The submission-level terminal events. */
+const TERMINAL = new Set([
+  "SubmissionCompleted",
+  "SubmissionFailed",
+  "SubmissionInterrupted"
+])
+
+interface Recorder {
+  readonly sink: (envelope: AgentEventEnvelope) => Effect.Effect<void>
+  /**
+   * Deliver the terminal event held back by the sink.
+   *
+   * Called after the session projection has been committed. A terminal
+   * event is a promise to the reader that the session is settled: that
+   * `history` holds the transcript the event describes and `status` is
+   * idle. The session emits it *before* the workflow commits either, so
+   * delivering it on emission let a client -- the A2A continuation reads
+   * history on seeing `SubmissionCompleted` -- observe the transcript from
+   * before the submission. Holding it until after the commit restores the
+   * promise.
+   */
+  readonly flushTerminal: Effect.Effect<void>
+}
+
 const recordingSink = (
   delivery: DeliveryLog.DeliveryLog,
   instance: WorkflowEngine.WorkflowInstance["Service"],
   sessionId: string,
-  submissionId: string
-): ((envelope: AgentEventEnvelope) => Effect.Effect<void>) => {
+  submissionId: string,
+  held: Ref.Ref<Option.Option<{ readonly key: string; readonly envelope: AgentEventEnvelope }>>
+): Recorder => {
   // Mutated only from within the bus's permit, which serialises the sink.
   const counts = new Map<string, number>()
-  return (envelope) => {
-    // Session-level events belong to the in-workflow session, which is an
-    // implementation detail: the logical session a client addresses is not
-    // started and closed once per submission.
-    if (Option.isNone(envelope.submissionId)) return Effect.void
-    // A suspending workflow interrupts its fiber, and the session reports
-    // that as `RunInterrupted` / `SubmissionInterrupted`. Those describe the
-    // process, not the submission, which is parked and will resume; a
-    // client must not be told it ended.
-    if (instance.suspended || instance.interrupted) return Effect.void
-    const key = eventKey(submissionId, counts, envelope)
-    const projected: AgentEventEnvelope = {
-      ...envelope,
-      submissionId: Option.map(envelope.submissionId, () =>
-        Ids.submissionId(submissionId)
-      )
-    }
-    return Effect.flatMap(delivery.append(sessionId, key, projected), (outcome) =>
+  const record = (key: string, projected: AgentEventEnvelope) =>
+    Effect.flatMap(delivery.append(sessionId, key, projected), (outcome) =>
       outcome._tag === "Conflict"
         ? Effect.logWarning(
             `DeliveryLog: conflicting payload for event ${key}; keeping the first`
           )
+        : Effect.void
+    )
+  return {
+    sink: (envelope) => {
+      // Session-level events belong to the in-workflow session, which is an
+      // implementation detail: the logical session a client addresses is
+      // not started and closed once per submission.
+      if (Option.isNone(envelope.submissionId)) return Effect.void
+      // A suspending workflow interrupts its fiber, and the session reports
+      // that as `RunInterrupted` / `SubmissionInterrupted`. Those describe
+      // the process, not the submission, which is parked and will resume; a
+      // client must not be told it ended.
+      if (instance.suspended || instance.interrupted) return Effect.void
+      const key = eventKey(submissionId, counts, envelope)
+      const projected: AgentEventEnvelope = {
+        ...envelope,
+        submissionId: Option.map(envelope.submissionId, () =>
+          Ids.submissionId(submissionId)
+        )
+      }
+      return TERMINAL.has(envelope.event._tag)
+        ? Ref.set(held, Option.some({ key, envelope: projected }))
+        : record(key, projected)
+    },
+    flushTerminal: Effect.flatMap(Ref.getAndSet(held, Option.none()), (pending) =>
+      Option.isSome(pending)
+        ? record(pending.value.key, pending.value.envelope)
         : Effect.void
     )
   }
@@ -469,15 +505,22 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       // whichever terminal branch runs.
       const historyAtEnd = yield* Ref.make<Prompt.Prompt>(payload.initialHistory)
 
-      const eventSink =
+      const held = yield* Ref.make<
+        Option.Option<{ readonly key: string; readonly envelope: AgentEventEnvelope }>
+      >(Option.none())
+      const recorder =
         options.delivery === undefined
           ? undefined
           : recordingSink(
               options.delivery,
               instance,
               payload.sessionId,
-              payload.submissionId
+              payload.submissionId,
+              held
             )
+      const eventSink = recorder?.sink
+      // The terminal event goes out only once the projection has committed.
+      const flushTerminal = recorder?.flushTerminal ?? Effect.void
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -570,6 +613,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             ? Effect.succeed(succeededOutcome(payload.submissionId, result))
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
                 finishProjection(options.sessionStore, options.store, payload, history).pipe(
+                  Effect.andThen(flushTerminal),
                   Effect.as(succeededOutcome(payload.submissionId, result))
                 )
               )
@@ -588,6 +632,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             ? Effect.failCause(cause)
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
                 finishProjection(options.sessionStore, options.store, payload, history).pipe(
+                  Effect.andThen(flushTerminal),
                   Effect.as(
                     // A store that could not be reached is not the agent
                     // failing: it crosses as infrastructure, so the client

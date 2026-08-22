@@ -1944,3 +1944,22 @@ the same failure-policy behaviour; `run` is the session prompt; the
 combinators are `make`'s fields; `update*` combines; `withTools` extends a
 per-turn toolkit. Bundles are ordinary functions -- generic in the agent's
 channels, because `AgentDefinition<any, ...>` would erase the record.
+
+## Durable: terminal events are delivered after the projection commits
+
+Found by the A2A-over-durable integration suite (`test/DurableA2AIntegration.test.ts`):
+the A2A continuation reads `history` on seeing `SubmissionCompleted`, and got
+the transcript from *before* the submission. The in-workflow session emits the
+terminal event before the workflow commits history and status, and the
+delivery log recorded it on emission. `recordingSink` now holds the one
+submission-level terminal event (`SubmissionCompleted` / `Failed` /
+`Interrupted`) and `flushTerminal` appends it after `finishProjection`, so a
+reader that acts on a terminal event sees a settled session. Pinned at the
+client level by "the terminal event is delivered only once history and status
+are committed" in `test/DurableAgentClient.test.ts` (fails against the old
+code with history `[]`).
+
+The durable client does not publish `SteeringQueued` / `FollowUpQueued`:
+steering and follow-ups go straight into the durable channels, and acceptance
+is the successful return of `steer` / `followUp`. `*Applied` events are
+observed as usual (`test/DurableHttpConcurrency.test.ts`).

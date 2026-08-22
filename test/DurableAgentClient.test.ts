@@ -8,7 +8,8 @@ import {
   Option,
   Ref,
   Schedule,
-  Schema
+  Schema,
+  Stream
 } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
@@ -801,6 +802,44 @@ describe("DurableAgentClient (durability specifics)", () => {
         ])
       )
       assert.deepStrictEqual(statuses, ["idle", "idle"])
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("the terminal event is delivered only once history and status are committed", () =>
+    Effect.gen(function* () {
+      // A reader that acts on SubmissionCompleted -- the A2A continuation
+      // reads history on it -- must see the settled session, not the one
+      // from before the submission.
+      const f = yield* fixture(Agent.make({}), [{ text: "settled" }])
+      const observed = yield* Deferred.make<{
+        readonly roles: ReadonlyArray<string>
+        readonly status: string
+      }>()
+      yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const session = yield* Effect.scoped(client.createSession({ sessionId: "order" }))
+          const watcher = yield* Effect.forkChild(
+            Stream.runForEach(session.events, (envelope) =>
+              envelope.event._tag === "SubmissionCompleted"
+                ? Effect.flatMap(
+                    Effect.all({ history: session.history, status: session.status }),
+                    ({ history, status }) =>
+                      Deferred.succeed(observed, {
+                        roles: history.content.map((m) => m.role),
+                        status
+                      })
+                  )
+                : Effect.void
+            )
+          )
+          yield* Effect.yieldNow
+          yield* session.prompt("go")
+          const seen = yield* Deferred.await(observed)
+          yield* Fiber.interrupt(watcher)
+          assert.deepStrictEqual(seen.roles, ["user", "assistant"])
+          assert.strictEqual(seen.status, "idle")
+        })
+      )
     }).pipe(Effect.scoped)
   )
 
