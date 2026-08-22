@@ -21,7 +21,7 @@ import { AgentClosedError } from "../Errors.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
-import * as AgentSessionHost from "../client/internal/sessionHost.js"
+import * as AgentSessionHost from "../client/AgentSessionHost.js"
 
 /** AG-UI message input accepted by the adapter. */
 export const Message = Schema.Struct({
@@ -797,18 +797,6 @@ export const makeEventMapper = Effect.fn("AgentAgUi.makeEventMapper")(
   }
 )
 
-/** Metadata available to trusted authentication and session routing. */
-export interface PrincipalContext {
-  readonly input: RunAgentInput
-  readonly headers: Headers.Headers
-}
-
-export interface PrincipalResolver<Principal> {
-  readonly resolve: (
-    context: PrincipalContext
-  ) => Effect.Effect<Principal, AgentProtocol.AgentUnauthorizedError>
-}
-
 export interface SessionContext<Principal> {
   readonly principal: Principal
   readonly input: RunAgentInput
@@ -828,11 +816,10 @@ export interface SessionResolver<Principal> {
 }
 
 export interface ServerOptions<Principal> {
-  readonly authorization: AgentProtocol.Authorization<Principal>
-  readonly principal: PrincipalResolver<Principal>
+  /** The host this adapter serves. See `AgentSessionHost`. */
+  readonly host: AgentSessionHost.Tag<Principal>
+  /** How a thread becomes a session; sees the authenticated principal and the input. */
   readonly session: SessionResolver<Principal>
-  readonly maxSessions: number
-  readonly maxRequestsPerSession: number
 }
 
 const isEmptyRecord = (value: unknown): boolean =>
@@ -969,10 +956,10 @@ const streamResponse = (
 /** Register the official AG-UI HTTP/SSE endpoint at `POST /ag-ui`. */
 export const serverLayer = <Principal>(
   options: ServerOptions<Principal>
-): Layer.Layer<never, never, HttpRouter.HttpRouter | AgentClient.AgentClient> =>
+): Layer.Layer<never, never, HttpRouter.HttpRouter | AgentSessionHost.Service<Principal>> =>
   HttpRouter.use((router) =>
     Effect.gen(function* () {
-      const host = yield* AgentSessionHost.make(options)
+      const host = yield* options.host
       const shutdown = yield* Deferred.make<void>()
       yield* Effect.addFinalizer(() => Deferred.succeed(shutdown, void 0))
 
@@ -981,8 +968,11 @@ export const serverLayer = <Principal>(
       ) {
         const input = yield* decodeInput(request)
         yield* validateCapabilities(input)
-        const principal = yield* options.principal.resolve({
-          input,
+        // Authenticated by the host from the headers, before the session is
+        // known; the host authorizes each operation against the principal.
+        const principal = yield* host.resolve({
+          operation: "prompt",
+          sessionId: Option.none(),
           headers: request.headers
         })
         const sessionId = yield* options.session.resolve({

@@ -205,7 +205,13 @@ describe("durable and cluster surfaces", () => {
     const client = await import("../src/client/index.js")
     assert.deepStrictEqual(Object.keys(client).sort(), [
       "AgentClient",
-      "AgentProtocol"
+      "AgentProtocol",
+      "AgentSessionHost"
+    ])
+    assert.deepStrictEqual(Object.keys(client.AgentSessionHost).sort(), [
+      "Tag",
+      "allowAll",
+      "layer"
     ])
   })
 

@@ -10,13 +10,15 @@ import { createServer } from "node:http"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentA2A } from "../src/a2a/index.js"
-import { AgentProtocol } from "../src/client/index.js"
+import { AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
+
+const Host = AgentSessionHost.Tag<{ readonly subject: string }>("test/DurableA2AIntegration/host")
 
 /**
  * The A2A server over the durable client, driven by the official SDK client.
@@ -83,17 +85,23 @@ const fixture = (
           outputModes: ["text/plain"]
         }]
       },
-      authorization: { authorize: () => Effect.void },
-      principal: {
-        resolve: ({ headers }) => Effect.succeed({ subject: headers.authorization ?? "anon" }),
-        subject: (principal) => principal.subject
-      },
+      host: Host,
+      principal: { subject: (principal) => principal.subject },
       session: {
         resolve: ({ contextId }) => Effect.succeed(AgentProtocol.SessionId.make(`a2a:${contextId}`))
-      },
-      maxSessions: 8,
-      maxRequestsPerSession: 32
-    }).pipe(Layer.provide(Layer.succeedContext(runtime)))
+      }
+    }).pipe(
+      Layer.provide(
+        AgentSessionHost.layer(Host, {
+          authorization: { authorize: () => Effect.void },
+          principal: {
+            resolve: ({ headers }) => Effect.succeed({ subject: headers.authorization ?? "anon" })
+          },
+          maxSessions: 8,
+          maxRequestsPerSession: 32
+        }).pipe(Layer.provide(Layer.succeedContext(runtime)))
+      )
+    )
     const server = HttpRouter.serve(routes, { disableLogger: true, disableListenLog: true }).pipe(
       Layer.provideMerge(
         NodeHttpServer.layer(createServer, { port: 0, disablePreemptiveShutdown: true })

@@ -21,27 +21,19 @@ import { AgentBusyError, AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
-import * as AgentSessionHost from "../client/internal/sessionHost.js"
+import * as AgentSessionHost from "../client/AgentSessionHost.js"
 
-/** Metadata available while authenticating one HTTP request. */
-export interface PrincipalContext {
-  readonly operation: AgentProtocol.Operation
-  readonly sessionId: Option.Option<AgentProtocol.SessionId>
-  readonly headers: Headers.Headers
-}
-
-/** Resolve an authenticated principal without coupling the host to HTTP. */
-export interface PrincipalResolver<Principal> {
-  readonly resolve: (
-    context: PrincipalContext
-  ) => Effect.Effect<Principal, AgentProtocol.AgentUnauthorizedError>
-}
+/** Re-exported so an HTTP deployment reads its auth types from one place. */
+export type PrincipalContext = AgentSessionHost.PrincipalContext
+export type PrincipalResolver<Principal> = AgentSessionHost.PrincipalResolver<Principal>
 
 export interface ServerOptions<Principal> {
-  readonly authorization: AgentProtocol.Authorization<Principal>
-  readonly maxSessions: number
-  readonly maxRequestsPerSession: number
-  readonly principal: PrincipalResolver<Principal>
+  /**
+   * The host this adapter serves: registry, capacity, authentication and
+   * authorization live there, shared with every other adapter given the
+   * same tag. See `AgentSessionHost`.
+   */
+  readonly host: AgentSessionHost.Tag<Principal>
 }
 
 const SessionPath = Schema.Struct({ id: AgentProtocol.SessionId })
@@ -439,33 +431,21 @@ const eventResponse = (
  */
 export const serverLayer = <Principal>(
   options: ServerOptions<Principal>
-): Layer.Layer<never, never, HttpRouter.HttpRouter | AgentClient.AgentClient> =>
+): Layer.Layer<never, never, HttpRouter.HttpRouter | AgentSessionHost.Service<Principal>> =>
   HttpRouter.use((router) =>
     Effect.gen(function* () {
-      const host = yield* AgentSessionHost.make(options)
+      const host = yield* options.host
       const shutdown = yield* Deferred.make<void>()
       // HTTP response streams run in request scopes rather than the layer's
       // scope. Signal them explicitly so closing this layer cannot leave an
       // SSE response holding shutdown open.
       yield* Effect.addFinalizer(() => Deferred.succeed(shutdown, void 0))
 
-      const principal = Effect.fn("AgentHttp.principal")(function* (
+      const principal = (
         request: HttpServerRequest.HttpServerRequest,
         operation: AgentProtocol.Operation,
         sessionId: Option.Option<AgentProtocol.SessionId>
-      ) {
-        yield* Effect.annotateCurrentSpan({
-          "agent.operation": operation,
-          ...(Option.isSome(sessionId)
-            ? { "agent.session.id": sessionId.value }
-            : {})
-        })
-        return yield* options.principal.resolve({
-          operation,
-          sessionId,
-          headers: request.headers
-        })
-      })
+      ) => host.resolve({ operation, sessionId, headers: request.headers })
 
       const createSession = Effect.fn("AgentHttp.createSession")(function* (
         request: HttpServerRequest.HttpServerRequest

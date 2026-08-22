@@ -15,8 +15,11 @@ import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import { AgentHttp } from "../src/http/index.js"
+import { BearerHost, bearerHost } from "./helpers.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
+
+const Host = BearerHost("test/DurableHttpConcurrency/host")
 
 /**
  * Two HTTP servers over one durable runtime stand in for two web nodes in
@@ -38,17 +41,10 @@ const Search = Tool.make("search", {
 
 const server = (client: Layer.Layer<AgentClient.AgentClient>) =>
   HttpRouter.serve(
-    AgentHttp.serverLayer({
-      authorization: { authorize: () => Effect.void },
-      principal: {
-        resolve: ({ headers: h, operation }) =>
-          h.authorization === undefined
-            ? Effect.fail(new AgentProtocol.AgentUnauthorizedError({ operation }))
-            : Effect.succeed(h.authorization)
-      },
-      maxSessions: 32,
-      maxRequestsPerSession: 64
-    }).pipe(Layer.provide(client)),
+    AgentHttp.serverLayer({ host: Host }).pipe(
+      Layer.provide(bearerHost(Host, { maxSessions: 32, maxRequestsPerSession: 64 })),
+      Layer.provide(client)
+    ),
     { disableLogger: true, disableListenLog: true }
   ).pipe(
     Layer.provideMerge(

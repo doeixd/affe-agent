@@ -18,9 +18,12 @@ import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import { AgentHttp } from "../src/http/index.js"
 import { OpenAiAgent } from "../src/openai/index.js"
+import { BearerHost, bearerHost } from "./helpers.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 import { completion, errorBody, post } from "./OpenAiHelpers.js"
+
+const Host = BearerHost("test/PermissionIntegration/host")
 
 /**
  * Permission across the boundaries a real deployment has: the durable
@@ -216,19 +219,13 @@ describe("Permission over the durable client", () => {
 const http = (agent: Agent.AgentDefinition<any, any, any>, turns: ReadonlyArray<TestLanguageModel.Turn>) =>
   Effect.gen(function* () {
     const { layer: model, recorder } = yield* FakeModel.script(turns)
-    const routes = AgentHttp.serverLayer({
-      authorization: { authorize: () => Effect.void },
-      principal: {
-        resolve: ({ headers: h, operation }) =>
-          h.authorization === undefined
-            ? Effect.fail(new AgentProtocol.AgentUnauthorizedError({ operation }))
-            : Effect.succeed(h.authorization)
-      },
-      maxSessions: 8,
-      maxRequestsPerSession: 64
-    }).pipe(
-      Layer.provide(AgentClient.layer(agent, { elicitation: Elicitation.memory })),
-      Layer.provide(model)
+    const routes = AgentHttp.serverLayer({ host: Host }).pipe(
+      Layer.provide(
+        bearerHost(Host, { maxSessions: 8, maxRequestsPerSession: 64 }).pipe(
+          Layer.provide(AgentClient.layer(agent, { elicitation: Elicitation.memory })),
+          Layer.provide(model)
+        )
+      )
     )
     const runtime = yield* Layer.build(
       HttpRouter.serve(routes, { disableLogger: true, disableListenLog: true }).pipe(

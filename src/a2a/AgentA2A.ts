@@ -55,7 +55,7 @@ import {
 } from "effect/unstable/http"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
-import * as AgentSessionHost from "../client/internal/sessionHost.js"
+import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import { is as isEvent } from "../AgentEvent.js"
 
 /** A2A skill metadata advertised by the generated v1 Agent Card. */
@@ -77,15 +77,13 @@ export interface Card {
   readonly skills: ReadonlyArray<Skill>
 }
 
-export interface PrincipalContext {
-  readonly headers: Headers.Headers
-}
-
-export interface PrincipalResolver<Principal> {
-  readonly resolve: (
-    context: PrincipalContext
-  ) => Effect.Effect<Principal, AgentProtocol.AgentUnauthorizedError>
-  /** Stable authenticated owner key used to isolate official task storage. */
+/**
+ * What the official task store is isolated by: a stable key for the
+ * authenticated owner. Authentication itself is the host's
+ * (`AgentSessionHost`); this is the one thing A2A needs of the principal
+ * that the host does not.
+ */
+export interface SubjectResolver<Principal> {
   readonly subject: (principal: Principal) => string
 }
 
@@ -107,11 +105,10 @@ export interface SessionResolver<Principal> {
 
 export interface ServerOptions<Principal> {
   readonly card: Card
-  readonly authorization: AgentProtocol.Authorization<Principal>
-  readonly principal: PrincipalResolver<Principal>
+  /** The host this adapter serves. See `AgentSessionHost`. */
+  readonly host: AgentSessionHost.Tag<Principal>
+  readonly principal: SubjectResolver<Principal>
   readonly session: SessionResolver<Principal>
-  readonly maxSessions: number
-  readonly maxRequestsPerSession: number
   /** JSON-RPC endpoint. The Agent Card is always served at the v1 well-known path. */
   readonly path?: `/${string}` | undefined
   /** Public endpoint URL for reverse-proxy deployments; otherwise derived per request. */
@@ -388,7 +385,7 @@ const isAsyncIterable = (value: unknown): value is AsyncIterable<unknown> =>
  */
 export const serverLayer = <Principal>(
   options: ServerOptions<Principal>
-): Layer.Layer<never, never, HttpRouter.HttpRouter | AgentClient.AgentClient> =>
+): Layer.Layer<never, never, HttpRouter.HttpRouter | AgentSessionHost.Service<Principal>> =>
   HttpRouter.use((router) =>
     Effect.gen(function* () {
       const path = options.path ?? "/a2a"
@@ -398,7 +395,7 @@ export const serverLayer = <Principal>(
         )
       }
 
-      const host = yield* AgentSessionHost.make(options)
+      const host = yield* options.host
       const layerScope = yield* Effect.scope
       const runPromise = yield* FiberSet.makeRuntimePromise()
       const active = yield* Ref.make<Map<string, ActiveTask<Principal>>>(
@@ -849,7 +846,11 @@ export const serverLayer = <Principal>(
             new AgentA2AInvalidInputError({ detail: error.message })
           )
         )
-        const principal = yield* options.principal.resolve({
+        // Authenticated by the host before the task's session is known; the
+        // host authorizes each session operation against the principal.
+        const principal = yield* host.resolve({
+          operation: "prompt",
+          sessionId: Option.none(),
           headers: request.headers
         })
         const url = yield* requestUrl(request, path, options.publicUrl)
@@ -881,13 +882,26 @@ export const serverLayer = <Principal>(
               typeof body.id === "number" || body.id === null
             ? body.id
             : null
-          const drain = Stream.fromAsyncIterable(
-            response,
-            (cause) => new AgentA2ATransportError({ detail: String(cause) })
-          ).pipe(
-            Stream.runForEach((event) =>
-              Queue.offer(output, Option.some(formatSSEEvent(event)))
-            ),
+          // Consumed by hand rather than through `Stream.fromAsyncIterable`,
+          // whose teardown *awaits* `iterator.return()`. On a parked task the
+          // generator is blocked in a pending `iterator.next()` that a shared
+          // host (whose session outlives this adapter) never lets resolve
+          // here, so awaiting `return()` would deadlock the adapter's own
+          // teardown. Interruption instead stops pulling and calls `return()`
+          // fire-and-forget, so closing the layer scope completes at once;
+          // the host session keeps running, unobserved through A2A.
+          const iterator = response[Symbol.asyncIterator]()
+          const pump = Effect.gen(function* () {
+            while (true) {
+              const next = yield* Effect.tryPromise({
+                try: () => iterator.next(),
+                catch: (cause) =>
+                  new AgentA2ATransportError({ detail: String(cause) })
+              })
+              if (next.done === true) break
+              yield* Queue.offer(output, Option.some(formatSSEEvent(next.value)))
+            }
+          }).pipe(
             Effect.catchTag("AgentA2ATransportError", (error) =>
               Queue.offer(
                 output,
@@ -900,9 +914,14 @@ export const serverLayer = <Principal>(
             ),
             // Queue shutdown discards buffered frames. An explicit sentinel
             // lets the HTTP writer drain every protocol event first.
-            Effect.ensuring(Queue.offer(output, Option.none()))
+            Effect.ensuring(Queue.offer(output, Option.none())),
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                void iterator.return?.()
+              })
+            )
           )
-          yield* Effect.forkIn(drain, layerScope)
+          yield* Effect.forkIn(pump, layerScope)
           return HttpServerResponse.stream(
             Stream.fromQueue(output).pipe(
               Stream.takeWhile(Option.isSome),

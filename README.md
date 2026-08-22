@@ -635,20 +635,27 @@ official AG-UI HTTP/SSE protocol:
 
 ```ts
 import { AgentAgUi } from "@doeixd/effect-agent/ag-ui"
-import { AgentClient, AgentProtocol } from "@doeixd/effect-agent/client"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "@doeixd/effect-agent/client"
+
+// The host -- registry, capacity, authentication, authorization -- is one
+// service the adapters share. Make a tag for the principal type once:
+const Host = AgentSessionHost.Tag<User>("app/host")
+const HostLive = AgentSessionHost.layer(Host, {
+  principal: { resolve: ({ headers }) => authenticate(headers) },
+  authorization,
+  maxSessions: 100,
+  maxRequestsPerSession: 32
+}).pipe(Layer.provide(AgentClient.layer(Researcher)))
 
 const AgUiLive = AgentAgUi.serverLayer({
-  principal: { resolve: ({ headers }) => authenticate(headers) },
+  host: Host,
   session: {
     resolve: ({ principal, input }) =>
       Effect.succeed(
         AgentProtocol.SessionId.make(`${principal.id}:${input.threadId}`)
       )
-  },
-  authorization,
-  maxSessions: 100,
-  maxRequestsPerSession: 32
-}).pipe(Layer.provide(AgentClient.layer(Researcher)))
+  }
+}).pipe(Layer.provide(HostLive))
 ```
 
 Mounting the layer serves `POST /ag-ui`. It accepts the official
@@ -901,20 +908,17 @@ const A2ALive = AgentA2A.serverLayer({
       outputModes: ["text/plain"]
     }]
   },
-  principal: {
-    resolve: ({ headers }) => authenticate(headers),
-    subject: (principal) => principal.id
-  },
+  host: Host,
+  // A2A needs one thing the host does not: a stable owner key for the
+  // official task store.
+  principal: { subject: (principal: User) => principal.id },
   session: {
     resolve: ({ principal, contextId }) =>
       Effect.succeed(
         AgentProtocol.SessionId.make(`${principal.id}:${contextId}`)
       )
   },
-  authorization,
-  maxSessions: 100,
-  maxRequestsPerSession: 32
-}).pipe(Layer.provide(AgentClient.layer(Researcher)))
+}).pipe(Layer.provide(HostLive))
 ```
 
 Mounting the layer serves the v1 card at

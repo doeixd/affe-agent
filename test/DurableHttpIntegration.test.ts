@@ -19,8 +19,11 @@ import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import { AgentHttp } from "../src/http/index.js"
+import { BearerHost, bearerHost } from "./helpers.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
+
+const Host = BearerHost("test/DurableHttpIntegration/host")
 
 /**
  * The whole stack, end to end: a generated HTTP client talks to an HTTP
@@ -120,17 +123,10 @@ const process_ = (
     )
     const client = Layer.succeedContext(clientRuntime)
 
-    const routes = AgentHttp.serverLayer({
-      authorization: { authorize: () => Effect.void },
-      principal: {
-        resolve: ({ headers: requestHeaders, operation }) =>
-          requestHeaders.authorization === undefined
-            ? Effect.fail(new AgentProtocol.AgentUnauthorizedError({ operation }))
-            : Effect.succeed(requestHeaders.authorization)
-      },
-      maxSessions: 8,
-      maxRequestsPerSession: 64
-    }).pipe(Layer.provide(client))
+    const routes = AgentHttp.serverLayer({ host: Host }).pipe(
+      Layer.provide(bearerHost(Host, { maxSessions: 8, maxRequestsPerSession: 64 })),
+      Layer.provide(client)
+    )
 
     const server = HttpRouter.serve(routes, {
       disableLogger: true,

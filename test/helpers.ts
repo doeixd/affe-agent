@@ -1,3 +1,4 @@
+import { AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import type { AgentDefinition } from "../src/Agent.js"
@@ -94,3 +95,24 @@ export const tags = (events: ReadonlyArray<AgentEventEnvelope>) =>
  * one — and this alias keeps the suite pointed at the shipped implementation.
  */
 export { counting as countingModel } from "../src/testing/TestLanguageModel.js"
+
+/**
+ * The host most transport suites want: any bearer token is the principal,
+ * everything authorized, modest capacity. One tag per suite so two suites'
+ * hosts never share a runtime identity.
+ */
+export const BearerHost = (id: string) => AgentSessionHost.Tag<string>(id)
+export const bearerHost = (
+  tag: AgentSessionHost.Tag<string>,
+  limits: { readonly maxSessions: number; readonly maxRequestsPerSession: number }
+) =>
+  AgentSessionHost.layer(tag, {
+    authorization: { authorize: () => Effect.void },
+    principal: {
+      resolve: ({ headers, operation }) =>
+        headers.authorization === undefined
+          ? Effect.fail(new AgentProtocol.AgentUnauthorizedError({ operation }))
+          : Effect.succeed(headers.authorization)
+    },
+    ...limits
+  })

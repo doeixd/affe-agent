@@ -28,7 +28,7 @@ import {
 } from "effect/unstable/rpc"
 import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
-import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentRpc } from "../src/rpc/index.js"
 
 type Equal<A, B> =
@@ -148,7 +148,8 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
         )
     })
 
-    const server = AgentRpc.serverLayer({
+    const Host = AgentSessionHost.Tag<string>("test/AgentRpc/host")
+    const host = AgentSessionHost.layer(Host, {
       authorization: {
         authorize: ({ operation }) => record(`authorize:${operation}`)
       },
@@ -172,6 +173,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
       maxSessions: 4,
       maxRequestsPerSession: 16
     }).pipe(Layer.provide(layer))
+    const server = AgentRpc.serverLayer({ host: Host }).pipe(Layer.provide(host))
 
     return {
       server,

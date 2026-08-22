@@ -21,7 +21,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentA2A } from "../src/a2a/index.js"
-import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import type * as Elicitation from "../src/Elicitation.js"
 
 type Equal<A, B> =
@@ -310,7 +310,18 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     })
   )
 
+  const Host = AgentSessionHost.Tag<{ readonly subject: string }>("test/AgentA2A/host")
+  const host = AgentSessionHost.layer(Host, {
+    authorization: { authorize: () => Effect.void },
+    principal: {
+      resolve: ({ headers }) =>
+        Effect.succeed({ subject: headers.authorization ?? "anonymous" })
+    },
+    maxSessions: 4,
+    maxRequestsPerSession: 16
+  }).pipe(Layer.provide(agentClient))
   const routes = AgentA2A.serverLayer({
+    host: Host,
     card: {
       name: "Effect Harness A2A conformance",
       description: "A text-only test agent",
@@ -325,14 +336,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
         outputModes: ["text/plain"]
       }]
     },
-    authorization: {
-      authorize: () => Effect.void
-    },
-    principal: {
-      resolve: ({ headers }) =>
-        Effect.succeed({ subject: headers.authorization ?? "anonymous" }),
-      subject: (principal) => principal.subject
-    },
+    principal: { subject: (principal) => principal.subject },
     session: {
       resolve: ({ principal, contextId }) =>
         Effect.succeed(
@@ -340,10 +344,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
             `a2a:${principal.subject}:${contextId}`
           )
         )
-    },
-    maxSessions: 4,
-    maxRequestsPerSession: 16
-  }).pipe(Layer.provide(agentClient))
+    }
+  }).pipe(Layer.provide(host))
 
   type _LayerSuccess = Assert<Equal<Layer.Success<typeof routes>, never>>
   type _LayerError = Assert<Equal<Layer.Error<typeof routes>, never>>

@@ -8,7 +8,7 @@ import {
 } from "effect/unstable/rpc"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
-import * as AgentSessionHost from "../client/internal/sessionHost.js"
+import * as AgentSessionHost from "../client/AgentSessionHost.js"
 
 /**
  * The Effect RPC rendering of the canonical remote-session protocol.
@@ -101,29 +101,16 @@ export const clientLayer: Layer.Layer<
   RpcClient.Protocol
 > = Layer.effect(Client, RpcClient.make(Protocol))
 
-/** Metadata available while resolving the principal for one RPC call. */
-export interface PrincipalContext {
-  readonly operation: AgentProtocol.Operation
-  readonly sessionId: Option.Option<AgentProtocol.SessionId>
-  readonly headers: Headers.Headers
-}
-
-/** Authentication is request-specific; authorization remains host-specific. */
-export interface PrincipalResolver<Principal> {
-  readonly resolve: (
-    context: PrincipalContext
-  ) => Effect.Effect<Principal, AgentProtocol.AgentUnauthorizedError>
-}
-
+/** Re-exported so an RPC deployment reads its auth types from one place. */
+export type PrincipalContext = AgentSessionHost.PrincipalContext
+export type PrincipalResolver<Principal> = AgentSessionHost.PrincipalResolver<Principal>
 export type AuthorizationContext<Principal> =
   AgentProtocol.AuthorizationContext<Principal>
 export type AuthorizationError = AgentProtocol.AuthorizationError
 
 export interface ServerOptions<Principal> {
-  readonly authorization: AgentProtocol.Authorization<Principal>
-  readonly maxSessions: number
-  readonly maxRequestsPerSession: number
-  readonly principal: PrincipalResolver<Principal>
+  /** The host this adapter serves. See `AgentSessionHost`. */
+  readonly host: AgentSessionHost.Tag<Principal>
 }
 
 const sessionIdOf = (
@@ -145,29 +132,17 @@ export const serverLayer = <Principal>(
 ): Layer.Layer<
   Rpc.ToHandler<RpcGroup.Rpcs<typeof Protocol>>,
   never,
-  AgentClient.AgentClient
+  AgentSessionHost.Service<Principal>
 > =>
   Protocol.toLayer(
     Effect.gen(function* () {
-      const host = yield* AgentSessionHost.make(options)
+      const host = yield* options.host
 
-      const principal = Effect.fn("AgentRpc.principal")(function* (
+      const principal = (
         operation: AgentProtocol.Operation,
         sessionId: Option.Option<AgentProtocol.SessionId>,
         headers: Headers.Headers
-      ) {
-        yield* Effect.annotateCurrentSpan({
-          "agent.operation": operation,
-          ...(Option.isSome(sessionId)
-            ? { "agent.session.id": sessionId.value }
-            : {})
-        })
-        return yield* options.principal.resolve({
-          operation,
-          sessionId,
-          headers
-        })
-      })
+      ) => host.resolve({ operation, sessionId, headers })
 
       return {
         createSession: (request, context) =>

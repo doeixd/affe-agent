@@ -22,7 +22,7 @@ import { HttpApiClient } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError } from "../src/Errors.js"
-import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentHttp } from "../src/http/index.js"
 
 type Equal<A, B> =
@@ -162,7 +162,8 @@ const fixture = (options?: {
             )
     })
 
-    const routes = AgentHttp.serverLayer({
+    const Host = AgentSessionHost.Tag<string>("test/AgentHttp/host")
+    const host = AgentSessionHost.layer(Host, {
       authorization: {
         authorize: ({ operation, principal, sessionId: currentSessionId }) =>
           principal === "Bearer forbidden"
@@ -185,6 +186,7 @@ const fixture = (options?: {
       maxSessions: 4,
       maxRequestsPerSession: 16
     }).pipe(Layer.provide(agentClient))
+    const routes = AgentHttp.serverLayer({ host: Host }).pipe(Layer.provide(host))
 
     const server = HttpRouter.serve(routes, {
       disableLogger: true,

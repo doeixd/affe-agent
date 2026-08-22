@@ -2149,3 +2149,22 @@ the definition), and the pipe form is the recommended authoring path.
 examples/authoring.ts shows withPermission in the primary pipe example.
 The optional PR-fold was not done: routing config.permission through
 withPermission internally risked the inference pin for no user-visible gain.
+
+## #12 item 2 -- one session host (done)
+
+AgentSessionHost is a shared Context.Service: an application makes a tag for
+its principal type (AgentSessionHost.Tag<User>(id)), builds it once with
+layer(tag, options) over an AgentClient, and each adapter serverLayer takes
+{ host: tag }. HTTP, RPC, AG-UI and A2A all converted. Two adapters over one
+host share one registry, one capacity, one auth path (test/SharedHost.test.ts:
+a session created via HTTP fills the single slot AG-UI would use, and is
+reachable via AG-UI).
+
+The A2A teardown deadlock (why item 2 was reverted before) is fixed at its
+real cause: Stream.fromAsyncIterable registers a scope finalizer that AWAITS
+iterator.return(), which never resolves for a parked task whose generator is
+blocked in a pending iterator.next() -- and with a shared host the owner is
+not interrupted at adapter teardown to unblock it. The A2A streaming drain now
+consumes the SDK generator by hand and, on interruption, calls iterator.return()
+fire-and-forget rather than awaiting it, so adapter teardown completes at once
+while the host session keeps running.

@@ -17,7 +17,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentAgUi } from "../src/ag-ui/index.js"
-import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 
 type Assert<T extends true> = T
 type Equal<A, B> =
@@ -591,25 +591,25 @@ const serverFixture = (fixtureOptions?: {
       )
   })
 
-  const routes = AgentAgUi.serverLayer({
-    authorization: {
-      authorize: () => Effect.void
-    },
+  const Host = AgentSessionHost.Tag<string>("test/AgentAgUi/host")
+  const host = AgentSessionHost.layer(Host, {
+    authorization: { authorize: () => Effect.void },
     principal: {
-      resolve: ({ headers }) =>
+      resolve: ({ headers, operation }) =>
         headers.authorization === undefined
-          ? Effect.fail(
-              new AgentProtocol.AgentUnauthorizedError({ operation: "prompt" })
-            )
+          ? Effect.fail(new AgentProtocol.AgentUnauthorizedError({ operation }))
           : Effect.succeed(headers.authorization)
-    },
-    session: {
-      resolve: ({ input }) =>
-        Effect.succeed(AgentProtocol.SessionId.make(`ag-ui:${input.threadId}`))
     },
     maxSessions: 4,
     maxRequestsPerSession: 16
   }).pipe(Layer.provide(agentClient))
+  const routes = AgentAgUi.serverLayer({
+    host: Host,
+    session: {
+      resolve: ({ input }) =>
+        Effect.succeed(AgentProtocol.SessionId.make(`ag-ui:${input.threadId}`))
+    }
+  }).pipe(Layer.provide(host))
 
   const server = HttpRouter.serve(routes, {
     disableLogger: true,

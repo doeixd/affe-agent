@@ -144,7 +144,7 @@ import { AgentRpc } from "@doeixd/effect-agent/rpc"
 AgentRpc.Protocol     // RpcGroup: createSession, closeSession, getSession, prompt,
                       //           steer, followUp, interrupt, respond, pending,
                       //           history, status, events (stream: true)
-AgentRpc.serverLayer({ authorization, principal, maxSessions, maxRequestsPerSession })
+AgentRpc.serverLayer({ host })   // host: AgentSessionHost.Tag<Principal>
 AgentRpc.clientLayer  // Layer<AgentRpc.Client, never, RpcClient.Protocol>
 ```
 
@@ -234,13 +234,24 @@ through the durable client, not through SSE.
 
 ### Principals and hosts
 
-HTTP and RPC share the session host, which enforces `maxSessions` and
-`maxRequestsPerSession`, resolves a principal per request
-(`principal.resolve({ operation, sessionId, headers })`), authorizes it
-(`authorization.authorize`), and keeps the request-id table. A host in front
-of the durable client can **adopt** a session it did not create
-(`session(id)` falls through to the client), which is what lets two HTTP
-nodes front one cluster.
+Every adapter serves an **`AgentSessionHost`** -- one service, not one per
+adapter. The application makes a tag for its principal type
+(`AgentSessionHost.Tag<User>("app/host")`), builds it once
+(`AgentSessionHost.layer(tag, { principal, authorization, maxSessions,
+maxRequestsPerSession })` over an `AgentClient`), and provides it to each
+adapter's `serverLayer({ host: tag, ... })`. So HTTP and AG-UI in front of
+one client share **one** registry, **one** capacity limit, and **one**
+authentication path: a session created through HTTP is reachable through
+AG-UI, and it counts once against `maxSessions`. The host enforces the
+capacity bounds, resolves a principal per request
+(`principal.resolve({ operation, sessionId, headers })`), authorizes it,
+and keeps the request-id table. A host in front of the durable client can
+**adopt** a session it did not create (`session(id)` falls through to the
+client), which is what lets two nodes front one cluster.
+
+`AgentA2A` takes the same host tag plus a `principal.subject` -- the one
+thing it needs beyond authentication, a stable owner key to isolate the
+official task store.
 
 ---
 
