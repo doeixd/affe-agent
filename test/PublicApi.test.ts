@@ -29,10 +29,26 @@ describe("public API", () => {
     // `Agent.toolkit` makes a silent footgun unrepresentable, `AgentLoop.bounded`
     // is the loop nearly every agent wants, the system-message transforms are
     // the canonical dynamic-instruction case, and `AgentEvent.match` replaces a
-    // hand-written switch that silently stops covering new events.
+    // hand-written switch that silently stops covering new events. The
+    // authoring combinators (issue #11) are pure functions over the one
+    // `AgentDefinition` representation: each `withX` replaces, each
+    // `updateX` combines, `tool` pairs a tool with its handler, and `run`
+    // is the scoped one-shot prompt.
     assert.deepStrictEqual(Object.keys(Harness.Agent).sort(), [
       "make",
-      "toolkit"
+      "run",
+      "tool",
+      "toolkit",
+      "updateContextTransform",
+      "updateLoop",
+      "withContextTransform",
+      "withInstructions",
+      "withLoop",
+      "withTool",
+      "withToolExecution",
+      "withToolFailurePolicy",
+      "withToolkit",
+      "withTools"
     ])
     assert.isTrue(typeof Harness.AgentEvent.match === "function")
   })
@@ -72,6 +88,7 @@ describe("public API", () => {
       "appendSystem",
       "compose",
       "identity",
+      "instructions",
       "make",
       "prependSystem"
     ])

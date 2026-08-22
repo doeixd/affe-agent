@@ -15,15 +15,23 @@ The library absorbs type friction so callers never see it. Where the engine's
 erased internals meet the generic public API, the assertion belongs *inside*
 `src/`, confined to one place and commented with why it is sound.
 
-Two casts exist in `src/` today. Both are structural, and both are documented at
-the site:
+The casts that exist in `src/` are structural, and each is documented at the
+site:
 
 * constructing the phantom `Tools` field on `AgentSession`, which has no runtime
   counterpart;
 * defaulting an absent toolkit to `Toolkit.empty`, where the safety follows from
-  an inference fact the compiler cannot restate.
+  an inference fact the compiler cannot restate;
+* assembling an `AgentDefinition` in `Agent.ts`'s one internal `definition`
+  function, where the loop's invariant `Tools` slot keeps the compiler from
+  relating a field typed for one agent to the next agent's parameters even
+  when the value is exactly right -- every combinator states its precise result
+  type, and the erasure is confined to that one place;
+* merging two handled toolkits by delegation (`mergeHandled`), because Effect
+  AI composes toolkits before handlers are bound and a `WithHandler` is a
+  closed value.
 
-Adding a third needs a reason of that kind.
+Adding another needs a reason of that kind.
 
 ### Compiling is not proof
 

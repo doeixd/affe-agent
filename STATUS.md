@@ -1907,3 +1907,40 @@ message, a tool exchange and a terminal frame followed by late events;
 projection's error channel is exactly `AgentProtocolCodecError` and its
 requirements `never`, with the assertion broken once to confirm it holds.
 No `Flow`, `Pipeline` or `Channel` was added, and none is needed.
+
+## Authoring sugar that lowers to the same agent (issue #11)
+
+Two spellings, one value. `Agent.make({...})` and
+`Agent.make().pipe(Agent.withInstructions(..), Agent.withTool(..), ...)` build
+the same `AgentDefinition`: every combinator is a pure function from one
+agent value to another, assembled by the one internal `definition` function
+that also attaches `pipe`. `withX` replaces; `updateLoop` and
+`updateContextTransform` combine with what is there, so no `withX` has two
+meanings. The agent pipe carries behaviour only -- no model, durability,
+storage or transport combinators.
+
+`Agent.tool(tool, handler)` is an inert pair; `withTool`, `withTools` and
+`make({ tools })` all lower it into the toolkit `Agent.toolkit` builds, so a
+bound tool runs exactly as a bulk-bound one. Adding tools to an agent that
+already has some merges at the `handle` level by delegation
+(`mergeHandled`), solved once because Effect AI composes toolkits before
+handlers are bound and a `WithHandler` is closed; an Effect-valued toolkit
+stays an Effect resolved per turn, with the new tools merged into whatever
+it resolves to. Duplicate names are rejected at construction when both
+sides are known and as a defect at resolution otherwise.
+`ContextTransform.instructions(effect)` is `appendSystem` over an Effect that
+ignores the context. `Agent.run(agent, input)` is literally the scoped
+session prompt.
+
+Pinned at the type level: handler parameters inferred from the schema with
+no annotation; tool names accumulate as a literal union, never `string`;
+each entry is the exact tool; a tool's declared dependencies become the
+agent's requirements and `run`'s; a tool's declared failure is catchable
+from `run`; loop errors and transform requirements accumulate through the
+combinators; object and pipe styles expose the same record -- with one
+assertion broken once to confirm enforcement. Pinned at runtime: bound
+tools and a bulk toolkit give the same events, history, turns and runs, and
+the same failure-policy behaviour; `run` is the session prompt; the
+combinators are `make`'s fields; `update*` combines; `withTools` extends a
+per-turn toolkit. Bundles are ordinary functions -- generic in the agent's
+channels, because `AgentDefinition<any, ...>` would erase the record.

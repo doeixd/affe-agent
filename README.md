@@ -337,6 +337,65 @@ not.
 Composition is heterogeneous: composing transforms that fail differently, or
 need different services, gives the union of both.
 
+### Authoring an agent, two ways
+
+The object form and the pipeable form build the same `AgentDefinition`; pick
+whichever reads better. Each `withX` replaces; each `updateX` combines with
+what is there, and says so.
+
+```ts
+const Search = Agent.tool(
+  Tool.make("search", {
+    parameters: Schema.Struct({ query: Schema.String }),
+    success: Schema.String
+  }),
+  ({ query }) => search(query)         // `query: string`, inferred
+)
+
+const Researcher = Agent.make().pipe(
+  Agent.withInstructions("Cite sources."),
+  Agent.withTool(Search),
+  Agent.withTool(ReadFile, ({ path }) => fs.readFileString(path)),
+  Agent.withContextTransform(ContextTransform.instructions(today)),
+  Agent.withLoop(AgentLoop.bounded(20))
+)
+
+// The same agent, object style:
+const Researcher2 = Agent.make({
+  instructions: "Cite sources.",
+  tools: [Search, Agent.tool(ReadFile, ({ path }) => fs.readFileString(path))],
+  contextTransform: ContextTransform.instructions(today),
+  loop: AgentLoop.bounded(20)
+})
+
+const result = yield* Agent.run(Researcher, "What changed in Effect 4?")
+```
+
+`Agent.tool` pairs an Effect AI `Tool` with its handler and nothing more: it
+lowers into the same toolkit `Agent.toolkit([...], handlers)` builds, so a
+bound tool decodes, asks for approval, fails and reports exactly as one bound
+in bulk. Tool names accumulate as a literal union (`"search" | "read_file"`),
+a tool's declared `dependencies` join the agent's requirements, and a
+handler's own timeouts, retries and spans go on the handler's Effect, where
+they already compose. `Agent.run(agent, input)` is the scoped
+`AgentSession.make` + `prompt` it replaces — same result, errors,
+requirements and interruption; reach for `AgentSession` when the
+conversation continues.
+
+Bundles are ordinary functions over agents, generic in the agent's channels:
+
+```ts
+const CodingTools = <Tools extends Record<string, Tool.Any>, E, R>(
+  agent: Agent.AgentDefinition<Tools, E, R>
+) => agent.pipe(Agent.withTools(ReadFile, WriteFile, Bash))
+
+const Coder = Agent.make().pipe(Agent.withInstructions(prompt), CodingTools)
+```
+
+The agent pipe carries agent behaviour only — instructions, tools,
+transforms, loop, tool execution and failure policy. Models, durability,
+storage, transports and sandboxes remain Layers on the Effect side.
+
 ## Design commitments
 
 These are enforced by tests, not just documented:
@@ -950,6 +1009,8 @@ context transforms and canonical history are directly testable.
 
 - [`examples/typed-agent.ts`](./examples/typed-agent.ts) — a fully typed agent,
   with compile-time assertions that inference stays precise
+- [`examples/authoring.ts`](./examples/authoring.ts) — the pipeable and
+  object authoring styles, bound tools, a bundle and `Agent.run`
 - [`examples/tracing.ts`](./examples/tracing.ts) — OTLP export
 - [`examples/anthropic.ts`](./examples/anthropic.ts) — a real provider
 - [`examples/durable.ts`](./examples/durable.ts) — durable execution and the

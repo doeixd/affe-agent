@@ -98,6 +98,18 @@ export const appendSystem = <E = never, R = never>(
     )
   )
 
+/**
+ * Instructions computed per turn, appended as a system message.
+ *
+ * `appendSystem` over an Effect that does not need the context: the shape
+ * for credentials, the date, a feature flag -- anything read from the
+ * environment rather than derived from the prompt. It is a transform, and
+ * so it runs every turn; instructions that never change belong on the agent.
+ */
+export const instructions = <E = never, R = never>(
+  message: Effect.Effect<string, E, R>
+): ContextTransform<E, R> => appendSystem(() => message)
+
 /** As `appendSystem`, but placed before the existing messages. */
 export const prependSystem = <E = never, R = never>(
   message: (context: Context) => Effect.Effect<string, E, R>
