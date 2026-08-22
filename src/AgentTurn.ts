@@ -249,12 +249,17 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       })
     }
 
-    // One commit, after all work for the turn has succeeded.
+    // One commit, after all work for the turn has succeeded — and an
+    // uninterruptible one. Once the tools have run, their side effects are
+    // real; an interrupt landing between their completion and this commit
+    // would drop the assistant message and the results of calls the event
+    // stream has already reported as succeeded. The commit does not block,
+    // so holding interruption off for it costs nothing.
     const committed = Prompt.concat(
       History.fromResponseParts(response.content),
       History.fromResponseParts(toolResults)
     )
-    yield* History.commit(session.history, committed)
+    yield* Effect.uninterruptible(History.commit(session.history, committed))
 
     const text = response.text
     if (text.length > 0) {

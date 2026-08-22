@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
@@ -327,6 +327,26 @@ describe("local sandbox", () => {
         yield* Effect.promise(() => new Promise((r) => setTimeout(r, 300)))
         assert.deepStrictEqual(yield* size, sizeNow)
 
+        // The caller going away — a timeout on the effect itself rather than
+        // the sandbox's bound — must take the child with it. Until it did,
+        // the process ran on unowned, still writing.
+        const abandoned = yield* Effect.forkChild(
+          sandbox.exec(
+            node(
+              "const fs = require('fs'); setInterval(() => fs.appendFileSync('orphan.txt', 'x'), 20)"
+            )
+          )
+        )
+        yield* Effect.promise(() => new Promise((r) => setTimeout(r, 300)))
+        yield* Fiber.interrupt(abandoned)
+        const orphanSize = Effect.map(
+          Effect.option(sandbox.stat(p("orphan.txt"))),
+          Option.map((s) => s.size)
+        )
+        const orphanNow = yield* orphanSize
+        yield* Effect.promise(() => new Promise((r) => setTimeout(r, 300)))
+        assert.deepStrictEqual(yield* orphanSize, orphanNow)
+
         const flooded = yield* Effect.exit(
           sandbox.exec(
             node("process.stdout.write('x'.repeat(5 * 1024 * 1024))"),
@@ -379,6 +399,46 @@ describe("local sandbox", () => {
             error.value instanceof Sandbox.PermissionDeniedError
         )
       }).pipe(Effect.provide(managedLayer), Effect.scoped)
+    })
+  )
+
+  it.effect("refuses to write through a dangling symlink that points outside", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      const outside = path.join(fixture.external, "planted.txt")
+      // The target does not exist yet — which is the whole trick: a check
+      // that follows the link sees "missing", walks up to the workspace, and
+      // lets the write create the target on the far side.
+      const linkInside = path.join(fixture.managed, "dangling.txt")
+      const linked = yield* Effect.exit(Effect.promise(() =>
+        fs.symlink(outside, linkInside, "file")
+      ))
+      if (Exit.isFailure(linked)) {
+        return
+      }
+
+      const managedLayer = LocalSandbox.layer({
+        workspaceRoot: fixture.managed
+      })
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        const escaped = yield* Effect.exit(
+          sandbox.write(p("dangling.txt"), bytes("planted"))
+        )
+        if (!Exit.isFailure(escaped)) {
+          assert.fail("writing through an escaping dangling symlink must fail")
+        }
+        const error = Cause.findErrorOption(escaped.cause)
+        assert.isTrue(
+          error._tag === "Some" &&
+            error.value instanceof Sandbox.PermissionDeniedError
+        )
+      }).pipe(Effect.provide(managedLayer), Effect.scoped)
+
+      const planted = yield* Effect.promise(() =>
+        fs.stat(outside).then(() => true, () => false)
+      )
+      assert.isFalse(planted, "nothing may be created outside the workspace")
     })
   )
 

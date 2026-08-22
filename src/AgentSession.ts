@@ -256,11 +256,24 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       ids
     }
 
+    // Closing ends the active submission *before* announcing the close.
+    // The scope closing interrupts the forked submission anyway, but on its
+    // own schedule: its `SubmissionInterrupted` would land after
+    // `SessionClosed`, and a consumer that treats the close as the end of
+    // the stream would never see the submission's terminal event. Awaiting
+    // the fiber here puts the terminal events where they belong.
     yield* Effect.addFinalizer(() =>
-      SubscriptionRef.update(state, (s) => ({
-        ...s,
-        status: "closed" as const
-      })).pipe(
+      Effect.flatMap(Ref.get(activeFiber), (active) =>
+        Option.isSome(active)
+          ? Effect.asVoid(Fiber.interrupt(active.value))
+          : Effect.void
+      ).pipe(
+        Effect.andThen(
+          SubscriptionRef.update(state, (s) => ({
+            ...s,
+            status: "closed" as const
+          }))
+        ),
         Effect.andThen(EventBus.emit(bus, {}, { _tag: "SessionClosed" })),
         Effect.ignore
       )
@@ -410,48 +423,83 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
   options: PromptOptions = {}
 ) {
     const self = unwrap(session)
-    const claimed = yield* claim(self)
 
-    if (claimed._tag === "Closed") {
+    // Claim, fork and register as one uninterruptible step, and the release
+    // finalizer installed in the same step. Each gap here was a real hole:
+    // a caller interrupted between claim and fork (a `timeout`, a lost race)
+    // left the session `running` with nothing to release it; one interrupted
+    // between fork and registration left a submission no finalizer owned;
+    // and `interrupt` arriving between claim and registration passed
+    // `requireRunning`, found no fiber, and reported success while the
+    // submission went on to complete. Nothing in this step blocks, so
+    // holding interruption off for it costs nothing.
+    const started = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const claimed = yield* claim(self)
+        if (claimed._tag !== "Claimed") return claimed
+        const submissionId = claimed.submissionId
+
+        // The submission runs in a fiber owned by the session scope, so
+        // `interrupt` is ordinary fiber interruption rather than a bespoke
+        // cancellation protocol.
+        const submission = AgentSubmission.execute(
+          self,
+          submissionId,
+          Prompt.make(input),
+          options
+        ).pipe(
+          // The captured environment satisfies the model and any tool-handler
+          // services; providing it leaves a submission with no requirements.
+          Effect.provide(self.env)
+        ) as Effect.Effect<Omit<Result<Tools>, "status">, PromptError<Tools, E>>
+        // The submission's own terminal events are emitted by the submission
+        // fibre, not by whoever awaits it. A caller that times out or loses a
+        // race is not there to emit them, and a closing session must be able
+        // to wait for them before announcing `SessionClosed`.
+        const fiber = yield* submission.pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit)
+              ? EventBus.emit(
+                  self.bus,
+                  { submissionId },
+                  Cause.hasInterruptsOnly(exit.cause)
+                    ? { _tag: "SubmissionInterrupted" }
+                    : {
+                        _tag: "SubmissionFailed",
+                        failure: AgentEvent.failureFromCause(exit.cause)
+                      }
+                )
+              : Effect.void
+          ),
+          Effect.forkIn(self.scope)
+        )
+        yield* Ref.set(self.activeFiber, Option.some(fiber))
+
+        // The finalizer runs however this ends, including when the *caller*
+        // is interrupted by a timeout or a lost race. Without it the
+        // submission would outlive its caller and the session would stay
+        // `running` for good.
+        const exit = yield* restore(Fiber.await(fiber)).pipe(
+          Effect.ensuring(
+            Fiber.interrupt(fiber).pipe(Effect.andThen(release(self)))
+          )
+        )
+        return { _tag: "Done" as const, submissionId, exit }
+      })
+    )
+
+    if (started._tag === "Closed") {
       return yield* new AgentClosedError({ sessionId: self.id })
     }
-    if (claimed._tag === "Busy") {
+    if (started._tag === "Busy") {
       return yield* new AgentBusyError({ sessionId: self.id })
     }
-    const submissionId = claimed.submissionId
-
-    // The submission runs in a fiber owned by the session scope, so
-    // `interrupt` is ordinary fiber interruption rather than a bespoke
-    // cancellation protocol.
-    const submission = AgentSubmission.execute(
-      self,
-      submissionId,
-      Prompt.make(input),
-      options
-    ).pipe(
-      // The captured environment satisfies the model and any tool-handler
-      // services; providing it leaves a submission with no requirements.
-      Effect.provide(self.env)
-    ) as Effect.Effect<Omit<Result<Tools>, "status">, PromptError<Tools, E>>
-    const fiber = yield* submission.pipe(Effect.forkIn(self.scope))
-    yield* Ref.set(self.activeFiber, Option.some(fiber))
-
-    // The finalizer runs however this ends, including when the *caller* is
-    // interrupted by a timeout or a lost race. Without it the submission would
-    // outlive its caller and the session would stay `running` for good.
-    const exit = yield* Fiber.await(fiber).pipe(
-      Effect.ensuring(Fiber.interrupt(fiber).pipe(Effect.andThen(release(self))))
-    )
+    const { submissionId, exit } = started
 
     if (Exit.isFailure(exit)) {
       // Interruption is a terminal state, not a caller-level failure: the
       // caller learns about it from the result rather than being interrupted.
       if (Cause.hasInterruptsOnly(exit.cause)) {
-        yield* EventBus.emit(
-          self.bus,
-          { submissionId },
-          { _tag: "SubmissionInterrupted" }
-        )
         return {
           submissionId,
           status: "interrupted",
@@ -461,14 +509,6 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
           response: Option.none()
         } satisfies Result<Tools>
       }
-      yield* EventBus.emit(
-        self.bus,
-        { submissionId },
-        {
-          _tag: "SubmissionFailed",
-          failure: AgentEvent.failureFromCause(exit.cause)
-        }
-      )
       return yield* Effect.failCause(exit.cause)
     }
 

@@ -14,6 +14,14 @@ import { activityName, nextOccurrence } from "../internal/toolActivity.js"
  *
  * Wrapping the handler means a resumed execution returns the persisted result
  * for any call that already completed.
+ *
+ * One consequence is worth knowing: the activity journals the handler's
+ * *whole* result stream, so a tool's preliminary results reach the harness —
+ * and `ToolCallProgress` reaches `events` — only once the call has finished,
+ * in a batch. Progress is observational and nothing in canonical history
+ * changes, but a durable tool is not live in the way a local one is. Live
+ * progress under durability would have to be written straight to a delivery
+ * log from inside the activity, where the handler actually runs once.
  */
 
 /**

@@ -168,6 +168,27 @@ export const layer = (options?: {
                   })
               )
             })
+
+            // Interruption of the calling fibre — a caller's timeout, the run
+            // being interrupted mid-tool, the scope closing — must not strand
+            // the child. Without this the process ran to completion on its
+            // own, the timers stayed armed, and "bounded" held only for the
+            // path nobody interrupted. The child is told to stop and the
+            // interrupt completes once it has actually closed, the same
+            // guarantee the timeout path gives.
+            return Effect.callback<void>((done) => {
+              if (settled) {
+                done(Effect.void)
+                return
+              }
+              settled = true
+              clearTimeout(timer)
+              if (escalation !== undefined) clearTimeout(escalation)
+              child.once("close", () => done(Effect.void))
+              child.kill("SIGTERM")
+              const force = setTimeout(() => child.kill("SIGKILL"), 1000)
+              child.once("close", () => clearTimeout(force))
+            })
           })
 
       const makeSandbox = (
@@ -183,10 +204,16 @@ export const layer = (options?: {
         ): Effect.Effect<string, Sandbox.FileError> =>
           Effect.gen(function* () {
             const resolved = nodePath.resolve(root, target)
+            // `lstat`, not `stat`: the walk must stop at a symlink itself,
+            // including a dangling one. `stat` follows the link, and a link
+            // whose target does not exist yet looks like a missing path —
+            // the walk would step past it to its parent, the check would
+            // pass, and the write would then follow the link out of the
+            // workspace and create the target.
             let anchor = resolved
             for (;;) {
               const exists = yield* Effect.promise(() =>
-                fs.stat(anchor).then(() => true, () => false)
+                fs.lstat(anchor).then(() => true, () => false)
               )
               if (exists) break
               const parent = nodePath.dirname(anchor)
@@ -197,8 +224,13 @@ export const layer = (options?: {
               fs.realpath(anchor).catch(() => null)
             )
             if (anchorReal === null) {
-              // The anchor existed moments ago; it has since been removed.
-              return yield* new Sandbox.FileMissingError({ path: target })
+              // Either the anchor was removed since the walk, or it is a
+              // dangling link. Neither is a path this workspace can vouch
+              // for, and a dangling link is exactly the escape above.
+              return yield* new Sandbox.PermissionDeniedError({
+                path: target,
+                operation
+              })
             }
             const rootReal = yield* Effect.promise(() =>
               fs.realpath(root).catch(() => root)
@@ -211,7 +243,12 @@ export const layer = (options?: {
                 operation
               })
             }
-            return resolved
+            // The operation runs on the path that was checked — the real
+            // anchor plus whatever does not exist yet — not on the original
+            // spelling, so a link swapped in under the checked prefix after
+            // this point is not followed by the check's authority.
+            const remainder = nodePath.relative(anchor, resolved)
+            return remainder === "" ? anchorReal : nodePath.join(anchorReal, remainder)
           })
 
         return {

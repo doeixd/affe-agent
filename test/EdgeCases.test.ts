@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, Option, Ref, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Ref, Scope, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -314,6 +314,52 @@ describe("edge cases", () => {
       const seen = yield* Ref.get(observed)
       assert.isAbove(seen.length, 0)
       assert.isTrue(seen.every((entry) => /^(idle|running|closed):\d+$/.test(entry)))
+    })
+  )
+})
+
+describe("closing a session with work in flight", () => {
+  it.effect("the submission's terminal event precedes SessionClosed", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const { layer } = yield* FakeModel.layer([
+        { text: "unused", hang: true, started: entered }
+      ])
+      const seen = yield* Ref.make<Array<string>>([])
+
+      const tags = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const inner = yield* Scope.make()
+          const session = yield* AgentSession.make(Agent.make({})).pipe(
+            Scope.provide(inner)
+          )
+          // The observer outlives the session: it is in this scope, the
+          // session in `inner`.
+          const observer = yield* Effect.forkScoped(
+            Stream.runForEach(AgentSession.events(session), (event) =>
+              Ref.update(seen, (all) => [...all, event.event._tag])
+            )
+          )
+          yield* Effect.yieldNow
+          // The caller goes away first — a timed-out request, a lost race —
+          // so nobody is around to report the outcome but the submission
+          // fibre itself.
+          const caller = yield* Effect.forkDetach(AgentSession.prompt(session, "go"))
+          yield* Deferred.await(entered)
+          yield* Fiber.interrupt(caller)
+          yield* Scope.close(inner, Exit.void)
+          yield* Fiber.interrupt(observer)
+          return yield* Ref.get(seen)
+        }).pipe(Effect.provide(layer))
+      )
+
+      const interrupted = tags.indexOf("SubmissionInterrupted")
+      const closed = tags.indexOf("SessionClosed")
+      assert.isTrue(interrupted >= 0, `no SubmissionInterrupted in ${tags}`)
+      assert.isTrue(
+        interrupted < closed,
+        `SessionClosed must come last: ${tags}`
+      )
     })
   )
 })
