@@ -132,6 +132,61 @@ const Wipe = Tool.make("wipe", {
 
 describe("DurableAgentClient on SQL storage", () => {
   it.live(
+    "after process loss a replayed turn's text arrives as one delta, a new turn's streams live, and the model is called once per turn",
+    () =>
+      Effect.gen(function* () {
+        const file = yield* tempDatabase
+        const agent = Agent.make({
+          toolkit: Agent.toolkit([Wipe], { wipe: () => Effect.succeed("wiped") }),
+          loop: AgentLoop.bounded(4)
+        })
+
+        // ---- Process A: stream turn 1 live, park on approval, vanish -------
+        const { requestId, live } = yield* Effect.gen(function* () {
+          const a = yield* process_(file, agent, [
+            { text: "thinking", chunks: ["thin", "king"], toolCalls: [{ id: "w1", name: "wipe", params: {} }] }
+          ])
+          const session = yield* Effect.scoped(a.client.createSession({ sessionId: "replay-stream" }))
+          yield* Effect.forkDetach(session.prompt("wipe it", { stream: true }))
+          const waiting = yield* until(session.pending, (p) => p.length > 0)
+          yield* Effect.sleep(Duration.millis(500))
+          const recorded = yield* a.delivery.read("replay-stream")
+          return {
+            requestId: waiting[0]!.id,
+            live: recorded.flatMap((e) => (e.event._tag === "MessageDelta" ? [e.event.delta] : []))
+          }
+        }).pipe(Effect.scoped)
+        // Turn 1 streamed live, chunk by chunk, into the shared log.
+        assert.deepStrictEqual(live, ["thin", "king"])
+
+        yield* Effect.sleep(Duration.seconds(2))
+
+        // ---- Process B: replay turn 1 from the journal, stream turn 2 live -
+        yield* Effect.gen(function* () {
+          const b = yield* process_(file, agent, [
+            { text: "all done", chunks: ["all ", "done"] }
+          ])
+          const session = yield* b.client.session("replay-stream")
+          assert.isTrue(yield* session.respond({ id: requestId, granted: true }))
+          yield* until(session.status, (status) => status === "idle")
+          // B's model answered turn 2 only: turn 1 came from the journal.
+          assert.strictEqual(yield* b.recorder.calls, 1)
+          const recorded = yield* b.delivery.read("replay-stream")
+          const deltas = recorded.flatMap((e) => (e.event._tag === "MessageDelta" ? [e.event.delta] : []))
+          // Turn 1's live chunks were recorded by A under their keys; B's
+          // replay re-offered turn 1 as one lump, which the keyed log did
+          // not duplicate; turn 2 streamed live from B.
+          assert.deepStrictEqual(deltas, ["thin", "king", "all ", "done"])
+          assert.strictEqual(
+            (yield* session.history).content.filter((m) => m.role === "assistant").length,
+            2
+          )
+        }).pipe(Effect.scoped)
+      }).pipe(Effect.scoped),
+    30_000
+  )
+
+  it.live(
     "a session parked for approval in a lost runner is answered and finished from another",
     () =>
       Effect.gen(function* () {

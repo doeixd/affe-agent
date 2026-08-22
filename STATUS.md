@@ -2002,7 +2002,8 @@ Decisions:
 - Streaming: subscribe to `events` before prompting, prompt forked as a child
   of the response scope (a disconnecting consumer takes its request with it);
   a refused prompt ends the stream as an error frame. The durable backend
-  streams at the granularity its model wrapper records (one delta per turn).
+  streamed at the provider's granularity since #12 item 1 (previously one
+  delta per turn).
 - Not here, by design: steer / followUp / interrupt / respond / history /
   status / replay. The native client is the full-fidelity transport.
 
@@ -2085,3 +2086,25 @@ Deferred: forking (not in the client), closing finite submission streams
 through the `DeliveryLog` interface (the typed module exposes `close`), and
 extracting a generic materialization vocabulary -- one backend does not
 justify it yet, which is what the issue asked.
+
+## #12 consolidation, items 5 and 1
+
+**Item 5 -- elicitation ids namespaced by submission.** `Ids.nextElicitation`
+takes the submission id and keeps a per-submission counter:
+`${submissionId}:elicit-${n}`. `AgentSession.MakeOptions.submissionIds`
+names submissions; the durable workflow names its one in-workflow submission
+after the durable submission, so ids differ across durable submissions and
+a cached id cannot answer the next question (pinned, falsified). Also found
+on the way: `DurableAgent` never received `DurablePermission.wrap` when #9
+landed.
+
+**Item 1 -- honest durable streaming.** `DurableModel.streamText` is a
+`Stream.callback` whose body runs the journalled activity; on a first run
+the activity folds the provider's live stream with the shared accumulator
+and taps each part into the queue as it arrives, so the harness emits
+`MessageDelta` per chunk exactly as locally; on a replay the journal answers
+and the completed response is replayed as one part per text. One emission
+path, so nothing is recorded twice; the keyed delivery log additionally
+ignores a replay's lump for chunks it recorded live (pinned under SQL process
+loss). `TestLanguageModel.counting` now counts both entry points -- it
+counted only `generateText`, which reported a streamed turn as no call.

@@ -79,11 +79,16 @@ describe("OpenAiAgent over the durable client", () => {
       assert.isTrue(stream.done)
       assert.strictEqual(stream.text, "durable two")
       assert.deepStrictEqual(stream.finish, ["stop"])
-      // Streamed from the delivery log. The durable model records a turn
-      // as one journalled activity, so its text arrives as one delta: the
-      // granularity is the backend's, the shape is the protocol's.
+      // Streamed from the delivery log, live: the provider's chunks reach
+      // the log from inside the journalled activity as they arrive, so the
+      // durable backend streams at the same granularity as the local one.
+      // Role, "durable", " two", finish.
       assert.strictEqual(stream.chunks[0]?.choices[0]?.delta.role, "assistant")
-      assert.isTrue(stream.chunks.length >= 3, `only ${stream.chunks.length} chunks`)
+      assert.strictEqual(stream.chunks.length, 4, `${stream.chunks.length} chunks`)
+      assert.deepStrictEqual(
+        stream.chunks.slice(1, 3).map((c) => c.choices[0]?.delta.content),
+        ["durable", " two"]
+      )
       assert.strictEqual(yield* f.recorder.calls, 2)
     }).pipe(Effect.scoped),
     30_000

@@ -86,35 +86,6 @@ export interface Options {
   readonly stream?: boolean | undefined
 }
 
-/** An error part carries an unconstrained payload; render it for the message. */
-const describeStreamError = (error: unknown): string => {
-  if (typeof error === "object" && error !== null) {
-    const described = error as { message?: unknown }
-    if (typeof described.message === "string" && described.message.length > 0) {
-      return described.message
-    }
-    try {
-      return JSON.stringify(error)
-    } catch {
-      return String(error)
-    }
-  }
-  return String(error)
-}
-
-/**
- * Run the model call as a stream, folding it back into the response the rest
- * of the turn expects.
- *
- * Everything after this point is identical to the batch path — the same tool
- * execution, the same single atomic commit. Streaming changes when output is
- * *observed*, never what is recorded.
- *
- * `MessageInterrupted` is emitted from a finalizer rather than after the fold,
- * because on interruption the continuation never runs. A consumer that had a
- * message open needs it closed, and the turn's own interruption handling takes
- * care of history: nothing partial is committed.
- */
 const streamResponse = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools, any, any>,
   correlation: Correlation,
@@ -145,7 +116,7 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
           // handle it differently depending on whether it asked to stream.
           return Effect.fail(
             new AiError.InternalProviderError({
-              description: describeStreamError(next.error)
+              description: Accumulator.describeStreamError(next.error)
             })
           )
         }

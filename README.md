@@ -491,6 +491,17 @@ interpreter, so a program written against the client seam runs unchanged in
 either execution mode — and every transport built on `AgentClient` (RPC, HTTP,
 MCP, A2A) reaches durable agents without knowing durability exists.
 
+Streaming under durability is live. A `stream: true` prompt reaches the
+provider's stream from inside the journalled model activity, and each chunk
+is emitted as a `MessageDelta` -- and recorded by the delivery log -- as it
+arrives, at the same granularity as the in-process client. The journal still
+holds one completed response per model call, never the chunks: on a replay
+after process loss the journalled response is re-expressed as one delta per
+text part (the original chunking belonged to a connection that no longer
+exists), and the keyed delivery log does not duplicate chunks it already
+recorded live. A streamed submission commits exactly the history a batched
+one does, first run or replay.
+
 ```ts
 import { AgentClient } from "@doeixd/effect-agent/client"
 import {

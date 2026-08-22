@@ -283,12 +283,19 @@ export const counting = (
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
       const inner = yield* LanguageModel.LanguageModel
+      // Both entry points count: a streamed call reaches the provider
+      // through `streamText`, and a wrapper that counted only the batch
+      // path would report a streamed turn as no call at all.
       return {
         ...inner,
         generateText: ((options: never) =>
           Ref.update(calls, (n) => n + 1).pipe(
             Effect.andThen(inner.generateText(options))
-          )) as unknown as LanguageModel.Service["generateText"]
+          )) as unknown as LanguageModel.Service["generateText"],
+        streamText: ((options: never) =>
+          Stream.unwrap(
+            Ref.update(calls, (n) => n + 1).pipe(Effect.as(inner.streamText(options)))
+          )) as unknown as LanguageModel.Service["streamText"]
       }
     })
   ).pipe(Layer.provide(base))

@@ -184,6 +184,38 @@ const auditedLog = (underlying: DeliveryLog.DeliveryLog) =>
 
 
 describe("DurableAgentClient (durability specifics)", () => {
+  it.live("a streamed submission delivers the provider's chunks live, and commits the same history", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(2) }), [
+        { text: "one two three", chunks: ["one ", "two ", "three"] }
+      ])
+      const deltas = yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const session = yield* Effect.scoped(client.createSession({ sessionId: "live" }))
+          const observed = yield* Effect.forkChild(
+            Stream.runCollect(
+              session.events.pipe(Stream.takeUntil((e) => e.event._tag === "SubmissionCompleted"))
+            )
+          )
+          yield* Effect.sleep(Duration.millis(50))
+          const result = yield* session.prompt("go", { stream: true })
+          assert.strictEqual(result.text, "one two three")
+          const events = yield* Fiber.join(observed)
+          assert.deepStrictEqual(
+            TestLanguageModel.userTexts(yield* session.history),
+            ["go"]
+          )
+          return events.flatMap((e) =>
+            e.event._tag === "MessageDelta" ? [e.event.delta] : []
+          )
+        })
+      )
+      // One delta per provider chunk, in order -- not one lump per turn.
+      assert.deepStrictEqual(deltas, ["one ", "two ", "three"])
+      assert.strictEqual(yield* f.recorder.calls, 1)
+    }).pipe(Effect.scoped)
+  )
+
   it.live("reacquires a session another client instance created", () =>
     Effect.gen(function* () {
       const f = yield* fixture(Agent.make({ instructions: "Remember things." }), [
