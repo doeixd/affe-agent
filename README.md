@@ -676,6 +676,58 @@ const output = AgentAgUi.events(
 functions only construct Schema-derived values—delivery remains a separate
 HTTP/SSE concern.
 
+## OpenAI-compatible chat completions
+
+`@doeixd/effect-agent/openai` serves `POST /v1/chat/completions` over any
+`AgentClient`, so an OpenAI SDK -- or anything that speaks to one -- can talk
+to an agent without knowing the harness exists. It is an *inference* surface,
+not the full session protocol: prompt, response, streaming. Steering,
+follow-ups, interrupts, elicitation answers, history and status stay on the
+native HTTP / RPC client, and several surfaces may front one session.
+
+```ts
+import { OpenAiAgent } from "@doeixd/effect-agent/openai"
+import { AgentClient } from "@doeixd/effect-agent/client"
+
+const OpenAiLive = OpenAiAgent.serverLayer({ model: "research-agent" }).pipe(
+  Layer.provide(AgentClient.layer(agent))
+)
+// The same layer over a durable client, unchanged:
+//   OpenAiAgent.serverLayer({ model: "research-agent" }).pipe(
+//     Layer.provide(DurableAgentClient.layer("research", agent, stores))
+//   )
+```
+
+Two conversation semantics, kept apart:
+
+- **Strict mode** (the default, what an OpenAI SDK expects): `messages` is the
+  whole conversation. Each request runs as a fresh session whose one prompt is
+  those messages; the history stays with the caller.
+- **Stateful extension**: an `x-agent-session-id` header (configurable)
+  addresses one persistent session, created on first use. Its history is
+  authoritative, so only the *delta* is submitted -- the user messages after
+  the last assistant message; system and developer messages are the agent's
+  to supply and are dropped. A request with no delta is a 400.
+
+Tools stay inside the harness: the agent runs its own tools and the caller
+receives the assistant's text, streamed as content deltas (role first, finish
+chunk, `[DONE]`). Reasoning is not forwarded. A failed run is a 422 whose
+`code` is the originating error's tag; a transport failure is a 503; a busy
+or closed session is a 409; an unknown `model` is a 404 -- a retry policy
+can tell them apart.
+
+An `idempotency-key` header (configurable) makes a retried request return the
+first one's result: the same key and the same request join in-flight or
+completed work, a different request under the same key is a 400. In strict
+mode the key also names the session, so a durable backend refuses a retry
+that lands on *another* process while the work is still running (409) and
+replays the answer from the session's history once it is done -- without the
+two processes sharing an idempotency store. The default store is
+process-local memory; supply `idempotency.store` to share one.
+
+Authentication is not agent semantics: compose HTTP middleware around the
+router. The layer is host-independent and lives on Effect's `HttpRouter`.
+
 ## A2A v1
 
 `@doeixd/effect-agent/a2a` exposes a Harness agent through the official A2A v1

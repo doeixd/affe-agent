@@ -63,6 +63,10 @@
       "types": "./dist/ag-ui/index.d.ts",
       "default": "./dist/ag-ui/index.js"
     },
+    "./openai": {
+      "types": "./dist/openai/index.d.ts",
+      "default": "./dist/openai/index.js"
+    },
     "./a2a": {
       "types": "./dist/a2a/index.d.ts",
       "default": "./dist/a2a/index.js"

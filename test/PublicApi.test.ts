@@ -261,6 +261,33 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  it("exports the OpenAI-compatible surface: the server, the pure projection, the wire schemas", async () => {
+    const openai = await import("../src/openai/index.js")
+    assert.deepStrictEqual(Object.keys(openai).sort(), [
+      "OpenAiAgent",
+      "OpenAiProjection",
+      "OpenAiSchema"
+    ])
+    assert.deepStrictEqual(Object.keys(openai.OpenAiAgent).sort(), [
+      "OpenAiError",
+      "fromRemoteError",
+      "lastAssistantText",
+      "memoryIdempotency",
+      "serverLayer",
+      "statefulDelta",
+      "strictPrompt"
+    ])
+    assert.deepStrictEqual(Object.keys(openai.OpenAiProjection).sort(), [
+      "MESSAGE_SEPARATOR",
+      "chunk",
+      "error",
+      "initialState",
+      "project",
+      "response",
+      "transition"
+    ])
+  })
+
   it("exports the A2A v1 server and client vocabulary and nothing beyond it", async () => {
     const a2a = await import("../src/a2a/index.js")
     assert.deepStrictEqual(Object.keys(a2a).sort(), ["AgentA2A"])

@@ -1963,3 +1963,45 @@ The durable client does not publish `SteeringQueued` / `FollowUpQueued`:
 steering and follow-ups go straight into the durable channels, and acceptance
 is the successful return of `steer` / `followUp`. `*Applied` events are
 observed as usual (`test/DurableHttpConcurrency.test.ts`).
+
+## OpenAI-compatible chat completions (issue #8)
+
+`@doeixd/effect-agent/openai`: `OpenAiAgent.serverLayer({ model })` registers
+`POST /v1/chat/completions` on the Effect router over any `AgentClient`.
+The adapter depends on the client interface only; `test/OpenAiDurable.test.ts`
+runs the identical layer over the durable client from two HTTP nodes.
+
+Shape, following #6: `OpenAiProjection` is a pure `transition` from protocol
+state and one agent event to chunks, lifted with `Stream.mapAccum`; typed
+constructors (`chunk.role/text/finish`, `response.success`, `error`) build
+the wire values; `OpenAiSchema` holds the wire schemas (Effect's
+`@effect/ai-openai-compat` is a client and has no server-side shapes).
+
+Decisions:
+- Strict mode: fresh session per request, `messages` as the prompt. Stateful
+  extension via `x-agent-session-id`: only the user messages after the last
+  assistant message are submitted; system/developer messages dropped; empty
+  delta is a 400 (`empty_delta`). Stateful sessions are created in the layer's
+  scope so an in-process session outlives its first request; creation is
+  serialised so two first requests cannot each create one.
+- Tools stay inside the harness; the caller sees text only. Texts of
+  successive messages within one submission are joined with a blank line.
+  Reasoning deltas are not forwarded.
+- Error mapping: 400 invalid / codec, 401, 403, 404 unknown session or
+  `model_not_found`, 409 busy/idle/closed/conflict, 429 capacity, 422
+  execution failure (`code` = originating tag), 503 transport. In a stream a
+  failure is an `{"error": ...}` frame followed by `[DONE]`; an interruption
+  is reported (`code: "interrupted"`), never passed off as `finish_reason:
+  "stop"`.
+- Idempotency: `idempotency-key` → memory store by default (`IdempotencyStore`
+  to plug a shared one); same key + same `{model, messages}` joins, mismatch
+  is a 400; a failed attempt releases the key. In strict mode the key names
+  the session (`openai:${key}`) so a durable backend refuses a concurrent
+  retry from another process as busy and replays a completed one from the
+  session's last assistant message, with no shared store.
+- Streaming: subscribe to `events` before prompting, prompt forked as a child
+  of the response scope (a disconnecting consumer takes its request with it);
+  a refused prompt ends the stream as an error frame. The durable backend
+  streams at the granularity its model wrapper records (one delta per turn).
+- Not here, by design: steer / followUp / interrupt / respond / history /
+  status / replay. The native client is the full-fidelity transport.
