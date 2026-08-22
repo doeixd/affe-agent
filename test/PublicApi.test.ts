@@ -289,6 +289,21 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  it("exports the Durable Streams backend: the typed protocol wrapper and the delivery log", async () => {
+    const streams = await import("../src/durable-streams/index.js")
+    assert.deepStrictEqual(Object.keys(streams).sort(), ["DurableStreams", "DurableStreamsDeliveryLog"])
+    assert.deepStrictEqual(Object.keys(streams.DurableStreams).sort(), [
+      "DurableStreamError",
+      "ErrorCode",
+      "Offset",
+      "fold",
+      "last",
+      "make",
+      "start"
+    ])
+    assert.deepStrictEqual(Object.keys(streams.DurableStreamsDeliveryLog).sort(), ["make", "streamFor"])
+  })
+
   it("exports the OpenAI-compatible surface: the server, the pure projection, the wire schemas", async () => {
     const openai = await import("../src/openai/index.js")
     assert.deepStrictEqual(Object.keys(openai).sort(), [

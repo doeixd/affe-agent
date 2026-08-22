@@ -676,6 +676,47 @@ const output = AgentAgUi.events(
 functions only construct Schema-derived values—delivery remains a separate
 HTTP/SSE concern.
 
+## Durable Streams
+
+`@doeixd/effect-agent/durable-streams` integrates the official
+[Durable Streams](https://github.com/durable-streams/durable-streams)
+protocol through its official client, as two things:
+
+- **`DurableStreams`** -- a schema-typed stream at a URL. `make({ url, schema })`
+  gives `create` / `ensure` / `head` / `append` / `read` / `close` / `delete`
+  and an idempotent `producer`. `read({ after, live })` is an ordinary Effect
+  `Stream` of `{ value, offset }`: catch-up, then tail, resumable from any
+  offset; a record that does not decode fails the read rather than being
+  skipped. `fold` replays typed deltas into state, from the start or from a
+  snapshot's offset. There is no second stream datatype: a durable stream is
+  somewhere a `Stream` comes from.
+- **`DurableStreamsDeliveryLog`** -- the durable client's `DeliveryLog` on one
+  stream per session. The log's two numbers are kept apart from the protocol's
+  offsets: the **key** is an event's identity under replay (a key's first
+  occurrence is the event; later ones are skipped by every reader, a
+  disagreeing one is a `Conflict`), and the **sequence** is the record's
+  position among first occurrences, counted from the stream by every reader
+  in every process -- so no writer assigns it and no two can disagree.
+  `live` is the protocol's own tail, which is what the memory and SQL logs
+  cannot offer across processes.
+
+```ts
+import { DurableAgentClient } from "@doeixd/effect-agent/durable"
+import { DurableStreamsDeliveryLog } from "@doeixd/effect-agent/durable-streams"
+
+const delivery = yield* DurableStreamsDeliveryLog.make({ baseUrl: "https://streams.example/sessions" })
+const Client = DurableAgentClient.layer("agent", agent, { store, sessionStore, delivery })
+// Any process: session.events tails live; DeliveryLog.read({ after }) catches up.
+```
+
+What stays separate, on purpose: the workflow journal (computation
+durability), the canonical transcript (semantic state), and this log (what a
+client observes -- token deltas and tool progress included, none of it
+canonical). Offsets are batch positions the client reports, never semantic
+state. Session streams are never closed by the log; `close` is for finite
+streams. Forking is not in the client at this version and is deferred rather
+than emulated. Auth composes at the HTTP boundary (`headers`, `fetch`).
+
 ## Permissions
 
 Between "the model asked for a tool call" and "the handler runs" there is one

@@ -2037,3 +2037,42 @@ were falsified the same way in `test/Permission.test.ts`.
 Out of scope by design: config loaders, glob DSLs, RBAC, persistent grant
 stores, approval UIs -- a `Policy` is a plain value and those are layers an
 application supplies.
+
+## Durable Streams (issue #10)
+
+`@doeixd/effect-agent/durable-streams`, a portable entry (the official
+client is `fetch`-only; `fetch` and `headers` are injectable). Verified
+against the official `@durable-streams/server` test server, in process.
+
+`DurableStreams.make({ url, schema })`: the typed wrapper. Reads consume the
+client's async iterator inside `Stream.callback`; each record carries
+`session.offset` after its delivery. Facts learned from the client and
+pinned in tests: offsets are reported per delivered *batch* (a checkpoint
+is the position after the batch a record arrived in); an identical
+re-create is accepted by the test server (so `create` tolerates it and
+`ensure` additionally tolerates `CONFLICT_EXISTS`); ending a read early on
+`streamClosed` drops the rest of the batch that carried the flag (the
+iterator must be allowed to end itself -- found by the EOF test); closing
+immediately behind an append while a tail is mid-connection can deliver
+the close before the record to that tail (the client's synthetic closed
+response carries no data), so a writer should close after its appends are
+acknowledged and observed.
+
+`DurableStreamsDeliveryLog.make({ baseUrl })`: one stream per session,
+records `{ key, envelope }`. Sequence = position among first-occurrence
+keys, counted from the stream; a per-process index caches the stream and
+is resynced under a per-session lock before and after every append, so a
+stale cache still reports the stream's own numbering. `live` tails the
+protocol from the synced offset with a private copy of the index. Runs the
+shared `DeliveryLogContract` (extracted to `test/DeliveryLogContract.ts`)
+plus cross-process tests: two logs agree on sequences / duplicates /
+conflicts; a raw duplicate record is skipped by all and numbered by none;
+independent consumer positions; and the durable client with a consumer that
+disconnects mid-run, the agent finishing with nobody connected, and a cold
+process resuming from the saved offset with contiguous numbering and
+deltas/tool events present but absent from history.
+
+Deferred: forking (not in the client), closing finite submission streams
+through the `DeliveryLog` interface (the typed module exposes `close`), and
+extracting a generic materialization vocabulary -- one backend does not
+justify it yet, which is what the issue asked.

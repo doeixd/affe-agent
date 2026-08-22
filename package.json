@@ -63,6 +63,10 @@
       "types": "./dist/ag-ui/index.d.ts",
       "default": "./dist/ag-ui/index.js"
     },
+    "./durable-streams": {
+      "types": "./dist/durable-streams/index.d.ts",
+      "default": "./dist/durable-streams/index.js"
+    },
     "./openai": {
       "types": "./dist/openai/index.d.ts",
       "default": "./dist/openai/index.js"
@@ -128,11 +132,13 @@
   },
   "dependencies": {
     "@a2a-js/sdk": "^1.0.1",
+    "@durable-streams/client": "^0.2.6",
     "@modelcontextprotocol/client": "^2.0.0"
   },
   "devDependencies": {
     "@ag-ui/client": "^0.0.58",
     "@ag-ui/core": "^0.0.58",
+    "@durable-streams/server": "^0.3.8",
     "@effect/ai-anthropic": "^4.0.0-rc.111",
     "@effect/language-service": "^0.87.2",
     "@effect/platform-node": "^4.0.0-rc.111",
