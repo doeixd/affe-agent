@@ -77,9 +77,21 @@ const renderError = (error: unknown): string =>
       ? error
       : JSON.stringify(error)
 
-export interface Options<R = never> {
+/**
+ * The session pieces a turn's tool calls need. Constant for the life of a
+ * session; the turn adds only its `correlation` and `messages`.
+ */
+export interface SessionContext {
+  readonly id: string
   readonly bus: EventBus.EventBus
-  readonly correlation: Correlation
+  /** Where an `Ask` is asked. See `Elicitation`. */
+  readonly elicitation: Elicitation.Elicitor
+  /** Allocates the id an elicitation is answered by, namespaced by submission. */
+  readonly nextElicitationId: (submissionId: SubmissionId) => Effect.Effect<string>
+}
+
+/** The agent policies a turn's tool calls read. Constant for the life of a session. */
+export interface AgentContext<R = never> {
   readonly strategy: Strategy
   readonly failurePolicy: FailurePolicy
   /**
@@ -94,11 +106,21 @@ export interface Options<R = never> {
   readonly denialPolicy: FailurePolicy
   /** Whether the agent may attempt each call. See `Permission`. */
   readonly permission: Permission.Policy<R>
-  /** Where an `Ask` is asked. See `Elicitation`. */
-  readonly elicitation: Elicitation.Elicitor
-  /** Allocates the id an elicitation is answered by, namespaced by submission. */
-  readonly nextElicitationId: (submissionId: SubmissionId) => Effect.Effect<string>
-  readonly sessionId: string
+}
+
+/**
+ * Everything one turn's tool execution needs, in one grouped value.
+ *
+ * The session and the agent parts are constant for the session; `correlation`
+ * and `messages` are the turn's. Grouping them -- rather than a flat bag the
+ * caller reassembles -- means the assembly lives in one place, and anything
+ * that must run a tool call with the harness's semantics (a turn, a future
+ * submission handle, a policy dry-run) takes this one value.
+ */
+export interface TurnContext<R = never> {
+  readonly session: SessionContext
+  readonly agent: AgentContext<R>
+  readonly correlation: Correlation
   /** The conversation the model saw, for `needsApproval` and the policy. */
   readonly messages: ReadonlyArray<Prompt.Message>
 }
@@ -186,13 +208,14 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
 >(
   handler: Toolkit.WithHandler<Tools>,
   call: Response.ToolCallParts<Tools, true>,
-  options: Options<R>
+  context: TurnContext<R>
 ) {
+    const { agent, correlation, messages, session } = context
     yield* Effect.annotateCurrentSpan({
       tool: call.name,
       toolCallId: call.id
     })
-    yield* EventBus.emit(options.bus, options.correlation, {
+    yield* EventBus.emit(session.bus, correlation, {
       _tag: "ToolCallStarted",
       id: call.id,
       name: call.name,
@@ -207,14 +230,18 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     if (tool === undefined) {
       return yield* Effect.die(new Error(`Tool ${String(call.name)} is not in the toolkit`))
     }
-    const { decision, request } = yield* decide(tool, call, options)
+    const { decision, request } = yield* decide(tool, call, {
+      sessionId: session.id,
+      messages,
+      permission: agent.permission
+    })
 
     // A refusal, from the policy or from the person asked. The call never
     // runs; `denialPolicy` decides whether the model hears about it.
     const refuse = (error: ToolApprovalRequiredError | ToolPermissionDeniedError) =>
       Effect.gen(function* () {
-        const returnedToModel = options.denialPolicy._tag === "ReturnToModel"
-        yield* EventBus.emit(options.bus, options.correlation, {
+        const returnedToModel = agent.denialPolicy._tag === "ReturnToModel"
+        yield* EventBus.emit(session.bus, correlation, {
           _tag: "ToolCallFailed",
           id: call.id,
           name: call.name,
@@ -242,11 +269,11 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       // fails closed.
       // A tool call only ever runs inside a submission, so the correlation
       // carries one; a call without it is a harness bug, not a case.
-      const submissionId = options.correlation.submissionId
+      const submissionId = correlation.submissionId
       if (submissionId === undefined) {
         return yield* Effect.die(new Error("tool call outside a submission"))
       }
-      const id = yield* options.nextElicitationId(submissionId)
+      const id = yield* session.nextElicitationId(submissionId)
       const detail: Permission.ApprovalDetail = {
         toolName: String(call.name),
         toolCallId: call.id,
@@ -259,16 +286,16 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         kind: "tool-approval",
         detail: Schema.encodeSync(approvalDetailJson)(detail)
       }
-      const answer = yield* options.elicitation.elicit(
+      const answer = yield* session.elicitation.elicit(
         elicitationRequest,
-        EventBus.emit(options.bus, options.correlation, {
+        EventBus.emit(session.bus, correlation, {
           _tag: "ElicitationRequested",
           id,
           kind: elicitationRequest.kind,
           detail: elicitationRequest.detail
         })
       )
-      yield* EventBus.emit(options.bus, options.correlation, {
+      yield* EventBus.emit(session.bus, correlation, {
         _tag: "ElicitationResolved",
         id,
         kind: elicitationRequest.kind,
@@ -290,9 +317,9 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       if (
         Option.isSome(remember) &&
         remember.value.remember &&
-        options.permission.remember !== undefined
+        agent.permission.remember !== undefined
       ) {
-        yield* options.permission.remember(request)
+        yield* agent.permission.remember(request)
       }
     }
 
@@ -323,7 +350,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
               () => emptyCollected<Tools>(),
               (collected, next) =>
                 next.preliminary
-                  ? EventBus.emit(options.bus, options.correlation, {
+                  ? EventBus.emit(session.bus, correlation, {
                       _tag: "ToolCallProgress",
                       id: call.id,
                       name: call.name,
@@ -346,7 +373,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.
           Effect.onInterrupt(() =>
-            EventBus.emit(options.bus, options.correlation, {
+            EventBus.emit(session.bus, correlation, {
               _tag: "ToolCallInterrupted",
               id: call.id,
               name: call.name
@@ -373,9 +400,9 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       // Defects always fail the run. A defect means the handler is broken, not
       // that the model asked for something the tool could refuse.
       const returnedToModel =
-        !isDefect && options.failurePolicy._tag === "ReturnToModel"
+        !isDefect && agent.failurePolicy._tag === "ReturnToModel"
 
-      yield* EventBus.emit(options.bus, options.correlation, {
+      yield* EventBus.emit(session.bus, correlation, {
         _tag: "ToolCallFailed",
         id: call.id,
         name: call.name,
@@ -400,8 +427,8 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     // A handler may also report failure as a value rather than an error. That
     // is already the model's problem, so it is committed either way.
     yield* EventBus.emit(
-      options.bus,
-      options.correlation,
+      session.bus,
+      correlation,
       result.isFailure
         ? {
             _tag: "ToolCallFailed",
@@ -450,7 +477,7 @@ const emptyCollected = <
 export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
-  options: Options<R>
+  context: TurnContext<R>
 ): Effect.Effect<
   ReadonlyArray<Response.AnyPart>,
   | Tool.HandlerError<Tools[keyof Tools]>
@@ -459,6 +486,6 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   Tool.HandlerServices<Tools[keyof Tools]> | R
 > =>
   Effect.all(
-    calls.map((call) => executeOne(handler, call, options)),
-    concurrencyOption(options.strategy)
+    calls.map((call) => executeOne(handler, call, context)),
+    concurrencyOption(context.agent.strategy)
   )

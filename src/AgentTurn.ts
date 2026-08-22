@@ -216,15 +216,19 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     let toolResults: ReadonlyArray<Response.AnyPart> = []
     if (toolCalls.length > 0) {
       toolResults = yield* ToolExecution.execute(handler, toolCalls, {
-        bus: session.bus,
+        session: {
+          id: session.id,
+          bus: session.bus,
+          elicitation: session.elicitation,
+          nextElicitationId: session.ids.nextElicitation
+        },
+        agent: {
+          strategy: session.agent.toolExecution,
+          failurePolicy: session.agent.toolFailurePolicy,
+          denialPolicy: session.agent.toolDenialPolicy,
+          permission: session.agent.permission
+        },
         correlation,
-        strategy: session.agent.toolExecution,
-        failurePolicy: session.agent.toolFailurePolicy,
-        denialPolicy: session.agent.toolDenialPolicy,
-        permission: session.agent.permission,
-        elicitation: session.elicitation,
-        nextElicitationId: session.ids.nextElicitation,
-        sessionId: session.id,
         // What the model saw, plus what it said: the conversation up to
         // the call, as Effect AI's own resolver would hand `needsApproval`.
         messages: [...context.content, ...History.fromResponseParts(response.content).content]
