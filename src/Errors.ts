@@ -55,16 +55,10 @@ export class AgentClosedError extends Schema.TaggedError<AgentClosedError>()(
 }
 
 /**
- * Raised when a tool requires approval, which v0.1 does not implement.
+ * A tool call that needed approval and did not get it.
  *
- * Effect AI lets a tool declare `needsApproval`, and its own resolver honours
- * that. The harness resolves tools itself (PLAN §16), so it would otherwise
- * bypass the check silently — a tool marked as needing approval would simply
- * run. Failing loudly is the only safe reading of a safety annotation the
- * runtime cannot yet satisfy.
- *
- * Approval belongs to a later interrupts capability; until then this is how the
- * harness refuses to weaken a tool's declared semantics.
+ * The question was asked -- through `Elicitation` -- and the answer was no.
+ * See `Permission` for how the question comes to be asked.
  */
 export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRequiredError>()(
   "ToolApprovalRequiredError",
@@ -75,5 +69,31 @@ export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRe
 ) {
   override get message() {
     return `Tool ${this.toolName} requires approval, and it was not granted`
+  }
+}
+
+/**
+ * A tool call the permission policy refused.
+ *
+ * Distinct from `ToolApprovalRequiredError`, which is a question that was
+ * asked and answered "no". A denial was never a question: the policy -- or
+ * the tool's own projection -- said this action on this resource is not
+ * permitted here. `reason` is the policy's word, when it gave one.
+ */
+export class ToolPermissionDeniedError extends Schema.TaggedError<ToolPermissionDeniedError>()(
+  "ToolPermissionDeniedError",
+  {
+    toolName: Schema.String,
+    toolCallId: Schema.String,
+    action: Schema.String,
+    resource: Schema.String,
+    reason: Schema.optional(Schema.String)
+  }
+) {
+  override get message() {
+    return (
+      `Tool ${this.toolName} was denied: ${this.action} on ${this.resource}` +
+      (this.reason === undefined ? "" : ` (${this.reason})`)
+    )
   }
 }

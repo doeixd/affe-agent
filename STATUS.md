@@ -2005,3 +2005,35 @@ Decisions:
   streams at the granularity its model wrapper records (one delta per turn).
 - Not here, by design: steer / followUp / interrupt / respond / history /
   status / replay. The native client is the full-fidelity transport.
+
+## Permissions (issue #9)
+
+`Permission` in core: `Decision` (Allow | Ask | Deny, with reasons),
+`Request` (session, call, tool + params, action, resource, the evaluated
+intrinsic requirement, the conversation), `Policy` (`evaluate` infallible;
+optional `remember`), `Projection` as an Effect AI tool annotation
+(`Permission.annotate`, typed on `Tool.Parameters<T>`; default
+`tool`/name), interpreters `allowAll` / `askAll` / `denyAll` / `rules`
+(every matching rule counts, combined conservatively -- order is never
+load-bearing; every given matcher must match; explicit `otherwise`) /
+`all` (conservative merge) / `remembered` (in-memory grants).
+
+Enforcement in `ToolExecution.decide`: evaluate `needsApproval` (the bug the
+issue names -- a function used to mean `true`), project action/resource,
+consult the policy, combine with the intrinsic floor. `Deny` raises
+`ToolPermissionDeniedError` (action, resource, reason); `Ask` elicits with
+`ApprovalDetail`; `toolDenialPolicy` (`FailRun` default, `ReturnToModel`)
+decides whether a refusal is a run failure or a failed tool result the
+model reads. A granted answer with `{ remember: true }` calls the policy's
+`remember`; a refused one never does. `PromptError` gained
+`ToolPermissionDeniedError`; `ToolSafety`'s coverage pin caught the omission.
+
+`DurablePermission.wrap` journals each decision as an activity keyed like
+tool calls. Falsified: without it, a runner replaying under a stricter
+policy denied a parked `git push` that the first runner had been asked about
+(`test/DurablePermission.test.ts`). The floor and the refused-grant guard
+were falsified the same way in `test/Permission.test.ts`.
+
+Out of scope by design: config loaders, glob DSLs, RBAC, persistent grant
+stores, approval UIs -- a `Policy` is a plain value and those are layers an
+application supplies.

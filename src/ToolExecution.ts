@@ -1,10 +1,11 @@
-import { Cause, Effect, Exit, Option, Stream } from "effect"
+import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
 import { Response } from "effect/unstable/ai"
-import type { Tool, Toolkit } from "effect/unstable/ai"
+import type { Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
-import { ToolApprovalRequiredError } from "./Errors.js"
+import { ToolApprovalRequiredError, ToolPermissionDeniedError } from "./Errors.js"
 import type * as Elicitation from "./Elicitation.js"
+import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 
 /**
@@ -75,23 +76,116 @@ const renderError = (error: unknown): string =>
       ? error
       : JSON.stringify(error)
 
-export interface Options {
+export interface Options<R = never> {
   readonly bus: EventBus.EventBus
   readonly correlation: Correlation
   readonly strategy: Strategy
   readonly failurePolicy: FailurePolicy
-  /** Where an approval-requiring tool asks. See `Elicitation`. */
+  /**
+   * What happens to a call the policy denied, or whose approval was refused.
+   *
+   * `FailRun` (the default): the run fails with `ToolPermissionDeniedError`
+   * or `ToolApprovalRequiredError` -- the harness declined, and nothing is
+   * said to the model. `ReturnToModel`: the refusal is committed as a failed
+   * tool result so the model can take another route. The call never runs
+   * under either; the choice is only who is told.
+   */
+  readonly denialPolicy: FailurePolicy
+  /** Whether the agent may attempt each call. See `Permission`. */
+  readonly permission: Permission.Policy<R>
+  /** Where an `Ask` is asked. See `Elicitation`. */
   readonly elicitation: Elicitation.Elicitor
   /** Allocates the id an elicitation is answered by. */
   readonly nextElicitationId: Effect.Effect<string>
+  readonly sessionId: string
+  /** The conversation the model saw, for `needsApproval` and the policy. */
+  readonly messages: ReadonlyArray<Prompt.Message>
 }
 
+/**
+ * The tool's own requirement, evaluated.
+ *
+ * Effect AI's `needsApproval` is a boolean or a function of the parameters
+ * and the conversation. The harness used to treat any function as `true`;
+ * that was safe and wrong, and a tool that asks only for production deploys
+ * was asked about every deploy.
+ */
+export const intrinsicApproval = (
+  tool: Tool.Any,
+  params: unknown,
+  context: Tool.NeedsApprovalContext
+): Effect.Effect<boolean> => {
+  const requirement = tool.needsApproval
+  if (requirement === undefined || typeof requirement === "boolean") {
+    return Effect.succeed(requirement === true)
+  }
+  return Effect.suspend(() => {
+    const answer = requirement(params, context)
+    return typeof answer === "boolean" ? Effect.succeed(answer) : answer
+  })
+}
+
+const approvalDetailJson = Schema.toCodecJson(Permission.ApprovalDetail)
+const approvalValueJson = Schema.toCodecJson(Permission.ApprovalValue)
+
+/**
+ * Decide one call: the tool's floor, the tool's projection, the policy.
+ *
+ * Returned as the decision *and* the request it was made for, because an
+ * `Ask` carries the action and resource to whoever answers and a remembered
+ * grant is keyed by them.
+ */
+export const decide = Effect.fn("ToolExecution.decide")(function* <R>(
+  tool: Tool.Any,
+  call: { readonly id: string; readonly name: string; readonly params: unknown },
+  options: {
+    readonly sessionId: string
+    readonly messages: ReadonlyArray<Prompt.Message>
+    readonly permission: Permission.Policy<R>
+  }
+) {
+  const intrinsic = yield* intrinsicApproval(tool, call.params, {
+    toolCallId: call.id,
+    messages: options.messages
+  })
+  const projection = Permission.projectionOf(tool)
+  // A projection that throws is the tool author's bug: die, rather than
+  // evaluate a policy against a resource nobody computed.
+  const resource = yield* Effect.sync(() => {
+    try {
+      return projection.resource(call.params)
+    } catch (cause) {
+      throw new Error(`permission projection for tool ${call.name} threw`, { cause })
+    }
+  })
+  if (typeof resource !== "string") {
+    return yield* Effect.die(
+      new Error(`permission projection for tool ${call.name} returned a non-string resource`)
+    )
+  }
+  const request: Permission.Request = {
+    sessionId: options.sessionId,
+    toolCallId: call.id,
+    tool: { name: call.name, params: call.params },
+    action: projection.action,
+    resource,
+    intrinsicApproval: intrinsic,
+    messages: options.messages
+  }
+  const policy = yield* options.permission.evaluate(request)
+  // The floor: the tool's own requirement is at least an `Ask`, whatever
+  // the policy said. Nothing here can lower it.
+  const decision = Permission.combine(intrinsic ? Permission.ask() : Permission.allow, policy)
+  return { decision, request }
+})
+
 const executeOne = Effect.fn("ToolExecution.tool")(function* <
-  Tools extends Record<string, Tool.Any>
+  Tools extends Record<string, Tool.Any>,
+  R
 >(
   handler: Toolkit.WithHandler<Tools>,
   call: Response.ToolCallParts<Tools, true>,
-  options: Options
+  options: Options<R>
 ) {
     yield* Effect.annotateCurrentSpan({
       tool: call.name,
@@ -104,58 +198,94 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       params: call.params
     })
 
-    // Effect AI's own resolver honours `needsApproval`; because the harness
-    // resolves tools itself, it has to honour it too. A dynamic requirement is
-    // treated as requiring approval — deciding otherwise would mean evaluating
-    // it and then acting on the answer, which is the feature that does not
-    // exist yet.
-    //
-    // This is never returned to the model: it is the harness refusing, not a
-    // tool outcome the model could correct by trying again.
-    const tool = handler.tools[call.name as keyof Tools]
-    if (tool?.needsApproval !== undefined && tool.needsApproval !== false) {
-      // Asked, not merely refused. The default elicitor answers "no", which is
-      // the behaviour that existed before this: detecting the requirement and
-      // having no way to satisfy it. Supplying one makes approval a question
-      // with an answer, and the run *pauses* until it arrives rather than
-      // failing.
-      const id = yield* options.nextElicitationId
-      const request = {
-        id,
-        kind: "tool-approval",
-        detail: { toolName: String(call.name), toolCallId: call.id }
-      }
-      const answer = yield* options.elicitation.elicit(
-        request,
-        EventBus.emit(options.bus, options.correlation, {
-          _tag: "ElicitationRequested",
-          id,
-          kind: request.kind,
-          detail: request.detail
-        })
-      )
-      yield* EventBus.emit(options.bus, options.correlation, {
-        _tag: "ElicitationResolved",
-        id,
-        kind: request.kind,
-        granted: answer.granted
-      })
+    // Permission first, and only then the handler. `decide` folds the tool's
+    // own `needsApproval` and the application's policy into one of three
+    // answers. The tool not being in the toolkit is a bug upstream: the
+    // harness only dispatches calls it matched.
+    const tool = handler.tools[call.name as keyof Tools] as Tool.Any | undefined
+    if (tool === undefined) {
+      return yield* Effect.die(new Error(`Tool ${String(call.name)} is not in the toolkit`))
+    }
+    const { decision, request } = yield* decide(tool, call, options)
 
-      if (!answer.granted) {
-        // Still never returned to the model: it is the harness declining, not
-        // a tool outcome the model could correct by trying again.
-        const error = new ToolApprovalRequiredError({
-          toolName: String(call.name),
-          toolCallId: call.id
-        })
+    // A refusal, from the policy or from the person asked. The call never
+    // runs; `denialPolicy` decides whether the model hears about it.
+    const refuse = (error: ToolApprovalRequiredError | ToolPermissionDeniedError) =>
+      Effect.gen(function* () {
+        const returnedToModel = options.denialPolicy._tag === "ReturnToModel"
         yield* EventBus.emit(options.bus, options.correlation, {
           _tag: "ToolCallFailed",
           id: call.id,
           name: call.name,
           failure: AgentEvent.failureFromCause(Cause.fail(error)),
-          returnedToModel: false
+          returnedToModel
         })
-        return yield* error
+        return returnedToModel ? failureResultPart(call, error) : yield* error
+      })
+
+    if (decision._tag === "Deny") {
+      return yield* refuse(
+        new ToolPermissionDeniedError({
+          toolName: String(call.name),
+          toolCallId: call.id,
+          action: request.action,
+          resource: request.resource,
+          ...(decision.reason === undefined ? {} : { reason: decision.reason })
+        })
+      )
+    }
+
+    if (decision._tag === "Ask") {
+      // Asked, not refused: the run *pauses* until an answer arrives. The
+      // default elicitor answers "no", so an agent with no way to ask still
+      // fails closed.
+      const id = yield* options.nextElicitationId
+      const detail: Permission.ApprovalDetail = {
+        toolName: String(call.name),
+        toolCallId: call.id,
+        action: request.action,
+        resource: request.resource,
+        ...(decision.reason === undefined ? {} : { reason: decision.reason })
+      }
+      const elicitationRequest = {
+        id,
+        kind: "tool-approval",
+        detail: Schema.encodeSync(approvalDetailJson)(detail)
+      }
+      const answer = yield* options.elicitation.elicit(
+        elicitationRequest,
+        EventBus.emit(options.bus, options.correlation, {
+          _tag: "ElicitationRequested",
+          id,
+          kind: elicitationRequest.kind,
+          detail: elicitationRequest.detail
+        })
+      )
+      yield* EventBus.emit(options.bus, options.correlation, {
+        _tag: "ElicitationResolved",
+        id,
+        kind: elicitationRequest.kind,
+        granted: answer.granted
+      })
+
+      if (!answer.granted) {
+        return yield* refuse(
+          new ToolApprovalRequiredError({
+            toolName: String(call.name),
+            toolCallId: call.id
+          })
+        )
+      }
+      // "Allow always" is two things: this answer, and a grant the policy
+      // keeps. The answer is in hand; the grant is the policy's, if it keeps
+      // any. A malformed value is an answer for this call only.
+      const remember = Schema.decodeUnknownOption(approvalValueJson)(answer.value)
+      if (
+        Option.isSome(remember) &&
+        remember.value.remember &&
+        options.permission.remember !== undefined
+      ) {
+        yield* options.permission.remember(request)
       }
     }
 
@@ -310,14 +440,16 @@ const emptyCollected = <
  * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
  * at all, so siblings always run to completion.
  */
-export const execute = <Tools extends Record<string, Tool.Any>>(
+export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
-  options: Options
+  options: Options<R>
 ): Effect.Effect<
   ReadonlyArray<Response.AnyPart>,
-  Tool.HandlerError<Tools[keyof Tools]> | ToolApprovalRequiredError,
-  Tool.HandlerServices<Tools[keyof Tools]>
+  | Tool.HandlerError<Tools[keyof Tools]>
+  | ToolApprovalRequiredError
+  | ToolPermissionDeniedError,
+  Tool.HandlerServices<Tools[keyof Tools]> | R
 > =>
   Effect.all(
     calls.map((call) => executeOne(handler, call, options)),

@@ -29,7 +29,12 @@ site:
   type, and the erasure is confined to that one place;
 * merging two handled toolkits by delegation (`mergeHandled`), because Effect
   AI composes toolkits before handlers are bound and a `WithHandler` is a
-  closed value.
+  closed value;
+* returning the caller's exact tool type from `Permission.annotate`, because
+  Effect AI's `Tool.annotate` widens to the structural `Tool<Name, Config, R>`
+  and the annotation changes nothing about the type -- the projection is
+  typed against `Tool.Parameters<T>` before the erasure, so a wrong resource
+  function still fails to compile.
 
 Adding another needs a reason of that kind.
 

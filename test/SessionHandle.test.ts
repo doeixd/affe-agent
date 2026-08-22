@@ -8,7 +8,8 @@ import type {
   AgentBusyError,
   AgentClosedError,
   AgentIdleError,
-  ToolApprovalRequiredError
+  ToolApprovalRequiredError,
+  ToolPermissionDeniedError
 } from "../src/Errors.js"
 import { withSession } from "./helpers.js"
 
@@ -108,6 +109,7 @@ describe("session handle", () => {
               // from `Tool.HandlerError` and easy to omit -- which is exactly
               // what had happened.
               | ToolApprovalRequiredError
+              | ToolPermissionDeniedError
               | string
             > = session.prompt("again")
             void promptErrors

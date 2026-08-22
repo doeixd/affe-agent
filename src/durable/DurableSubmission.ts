@@ -19,6 +19,7 @@ import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
+import * as DurablePermission from "./DurablePermission.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
 
@@ -495,9 +496,14 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         )
       )
 
+      // Decisions are journalled like tool calls: see `DurablePermission`.
+      const durablePermission = yield* DurablePermission.wrap(agent.permission, {
+        prefix: scopePrefix
+      })
       const durableAgent = {
         ...agent,
-        toolkit: durableTools
+        toolkit: durableTools,
+        permission: durablePermission
       } as AgentDefinition<Tools, any, any>
 
       // History as of the moment the prompt settled, whatever way it settled.

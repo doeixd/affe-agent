@@ -7,6 +7,7 @@ import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
 import * as AgentSession from "./AgentSession.js"
 import * as ContextTransform from "./ContextTransform.js"
+import * as Permission from "./Permission.js"
 import * as ToolExecution from "./ToolExecution.js"
 
 /**
@@ -33,6 +34,15 @@ export interface AgentDefinition<
   readonly contextTransform: ContextTransform.ContextTransform<E, R>
   readonly toolExecution: ToolExecution.Strategy
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
+  /**
+   * Whether the agent may attempt each tool call. See `Permission`.
+   *
+   * `R` carries the policy's requirements too: a policy that consults a
+   * service makes it required at `AgentSession.make`.
+   */
+  readonly permission: Permission.Policy<R>
+  /** What a denied or refused call does to the run. See `ToolExecution.Options`. */
+  readonly toolDenialPolicy: ToolExecution.FailurePolicy
 }
 
 /**
@@ -62,7 +72,8 @@ export interface Config<
   TR = never,
   KE = never,
   KR = never,
-  Bound extends ReadonlyArray<BoundTool<Tool.Any>> = []
+  Bound extends ReadonlyArray<BoundTool<Tool.Any>> = [],
+  PR = never
 > {
   readonly instructions?: string | undefined
   readonly toolkit?: ToolkitInput<Tools, KE, KR> | undefined
@@ -118,6 +129,18 @@ export interface Config<
    * Defects still fail the run regardless.
    */
   readonly toolFailurePolicy?: ToolExecution.FailurePolicy | undefined
+  /**
+   * Defaults to `Permission.allowAll`: without a policy, the only thing
+   * between the model and a tool is the tool's own `needsApproval`, which
+   * is honoured regardless.
+   */
+  readonly permission?: Permission.Policy<PR> | undefined
+  /**
+   * Defaults to `ToolExecution.FailRun`: a denied or refused call ends the
+   * run, and the model is told nothing. `ReturnToModel` commits the refusal
+   * as a failed tool result instead, so the model can take another route.
+   */
+  readonly toolDenialPolicy?: ToolExecution.FailurePolicy | undefined
 }
 
 /**
@@ -183,6 +206,8 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R>(fields: {
   readonly contextTransform: ContextTransform.ContextTransform<any, any>
   readonly toolExecution: ToolExecution.Strategy
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
+  readonly permission: Permission.Policy<any>
+  readonly toolDenialPolicy: ToolExecution.FailurePolicy
 }): AgentDefinition<Tools, E, R> =>
   ({
     instructions: fields.instructions,
@@ -191,6 +216,8 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R>(fields: {
     contextTransform: fields.contextTransform,
     toolExecution: fields.toolExecution,
     toolFailurePolicy: fields.toolFailurePolicy,
+    permission: fields.permission,
+    toolDenialPolicy: fields.toolDenialPolicy,
     pipe() {
       return pipeArguments(this, arguments)
     }
@@ -204,14 +231,19 @@ export const make = <
   TR = never,
   KE = never,
   KR = never,
-  const Bound extends ReadonlyArray<BoundTool<Tool.Any>> = []
+  const Bound extends ReadonlyArray<BoundTool<Tool.Any>> = [],
+  PR = never
 >(
-  config?: Config<Tools, LE, LR, TE, TR, KE, KR, Bound>
+  config?: Config<Tools, LE, LR, TE, TR, KE, KR, Bound, PR>
   // The toolkit's resolution failure joins the agent's error type, alongside
   // the loop's and the transform's. Acquiring a capability can fail; saying so
   // is what lets a caller handle it. Bound tools contribute their record and
   // their handlers' requirements exactly as `withTools` would.
-): AgentDefinition<Tools & ToolsOf<Bound>, LE | TE | KE, LR | TR | KR | ServicesOf<Bound>> => {
+): AgentDefinition<
+  Tools & ToolsOf<Bound>,
+  LE | TE | KE,
+  LR | TR | KR | ServicesOf<Bound> | PR
+> => {
   if (config?.toolkit !== undefined && config?.tools !== undefined) {
     throw new Error("Agent.make: supply either `toolkit` or `tools`, not both")
   }
@@ -244,7 +276,9 @@ export const make = <
           ? ContextTransform.make(config.contextTransform)
           : config.contextTransform,
     toolExecution: config?.toolExecution ?? ToolExecution.Parallel,
-    toolFailurePolicy: config?.toolFailurePolicy ?? ToolExecution.ReturnToModel
+    toolFailurePolicy: config?.toolFailurePolicy ?? ToolExecution.ReturnToModel,
+    permission: config?.permission ?? Permission.allowAll,
+    toolDenialPolicy: config?.toolDenialPolicy ?? ToolExecution.FailRun
   })
 }
 
@@ -541,6 +575,28 @@ export const withToolFailurePolicy =
     agent: AgentDefinition<Tools, E, R>
   ): AgentDefinition<Tools, E, R> =>
     definition({ ...agent, toolFailurePolicy: policy })
+
+/**
+ * Replace the permission policy.
+ *
+ * Replace, not merge: an agent has one policy, and composing several is
+ * `Permission.all`, stated at the call site where the merge can be read.
+ * The policy's requirements join the agent's.
+ */
+export const withPermission =
+  <PR>(policy: Permission.Policy<PR>) =>
+  <Tools extends Record<string, Tool.Any>, E, R>(
+    agent: AgentDefinition<Tools, E, R>
+  ): AgentDefinition<Tools, E, R | PR> =>
+    definition({ ...agent, permission: policy })
+
+/** Replace what a denied or refused call does to the run. */
+export const withToolDenialPolicy =
+  (policy: ToolExecution.FailurePolicy) =>
+  <Tools extends Record<string, Tool.Any>, E, R>(
+    agent: AgentDefinition<Tools, E, R>
+  ): AgentDefinition<Tools, E, R> =>
+    definition({ ...agent, toolDenialPolicy: policy })
 
 // ---------------------------------------------------------------------------
 // One-shot

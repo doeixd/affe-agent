@@ -24,7 +24,8 @@ import {
   AgentBusyError,
   AgentClosedError,
   AgentIdleError,
-  ToolApprovalRequiredError
+  ToolApprovalRequiredError,
+  ToolPermissionDeniedError
 } from "./Errors.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
@@ -351,6 +352,8 @@ export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
    * approval-requiring agent could not fail with the exact error it throws.
    */
   | ToolApprovalRequiredError
+  /** The permission policy denied a tool call. Same provenance. */
+  | ToolPermissionDeniedError
   // Whatever the agent's own loop or context transform can fail with.
   | E
 

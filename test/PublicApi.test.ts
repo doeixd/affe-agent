@@ -19,8 +19,10 @@ describe("public API", () => {
       "AgentSubmission",
       "ContextTransform",
       "InputChannel",
+      "Permission",
       "ToolApprovalRequiredError",
-      "ToolExecution"
+      "ToolExecution",
+      "ToolPermissionDeniedError"
     ])
   })
 
@@ -44,13 +46,38 @@ describe("public API", () => {
       "withContextTransform",
       "withInstructions",
       "withLoop",
+      "withPermission",
       "withTool",
+      "withToolDenialPolicy",
       "withToolExecution",
       "withToolFailurePolicy",
       "withToolkit",
       "withTools"
     ])
     assert.isTrue(typeof Harness.AgentEvent.match === "function")
+    // The permission vocabulary (#9): decisions, requests, projections, the
+    // policy seam and a few trivial interpreters. No DSL, no UI, no store.
+    assert.deepStrictEqual(Object.keys(Harness.Permission).sort(), [
+      "ApprovalDetail",
+      "ApprovalValue",
+      "Decision",
+      "ProjectionKey",
+      "all",
+      "allow",
+      "allowAll",
+      "annotate",
+      "ask",
+      "askAll",
+      "combine",
+      "defaultProjection",
+      "deny",
+      "denyAll",
+      "grantKey",
+      "make",
+      "projectionOf",
+      "remembered",
+      "rules"
+    ])
   })
 
   it("exposes the operations §42 targets", () => {
@@ -121,6 +148,7 @@ describe("durable and cluster surfaces", () => {
       "DurableChannels",
       "DurableElicitation",
       "DurableModel",
+      "DurablePermission",
       "DurableSessionStore",
       "DurableSubmission",
       "DurableToolkit"
