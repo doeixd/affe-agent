@@ -318,7 +318,13 @@ const recordingSink = (
   const counts = new Map<string, number>()
   const record = (key: string, projected: AgentEventEnvelope) =>
     Effect.flatMap(delivery.append(sessionId, key, projected), (outcome) =>
-      outcome._tag === "Conflict"
+      // A conflict on a `MessageDelta` is expected, not a bug: the first run
+      // streams the provider's chunks live and a replay re-expresses the
+      // journalled text as one chunk, so the payloads differ under the same
+      // key. The log keeps the first (the live chunks) either way; only a
+      // conflict on some *other* event is a recorder disagreeing with itself
+      // about a lifecycle fact, which is worth a warning.
+      outcome._tag === "Conflict" && projected.event._tag !== "MessageDelta"
         ? Effect.logWarning(
             `DeliveryLog: conflicting payload for event ${key}; keeping the first`
           )
