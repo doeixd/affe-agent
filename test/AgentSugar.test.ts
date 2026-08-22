@@ -311,6 +311,30 @@ describe("Agent sugar lowers to the primitives", () => {
     })
   )
 
+  it.effect("a tool named like an Object.prototype member is not a false duplicate", () =>
+    Effect.gen(function* () {
+      // `"constructor" in {}` is true; the checks must look at own names.
+      const Constructor = Tool.make("constructor", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      })
+      const constructorTool = Agent.tool(Constructor, () => Effect.succeed("built"))
+      const agent = Agent.make({ tools: [constructorTool] }).pipe(
+        Agent.withTool(readFile),
+        Agent.withLoop(AgentLoop.bounded(4))
+      )
+      const turns = [
+        TestLanguageModel.toolCall("constructor", {}, { id: "c1" }),
+        TestLanguageModel.text("done")
+      ]
+      const ran = yield* withSession(turns, agent, ({ session }) =>
+        AgentSession.prompt(session, "go")
+      )
+      assert.strictEqual(ran.value.text, "done")
+      assert.include(tags(ran.events), "ToolCallSucceeded")
+    })
+  )
+
   it("rejects a duplicate tool name at construction", () => {
     assert.throws(
       () => Agent.make({ tools: [bash, bash] }),

@@ -1,4 +1,4 @@
-import { Effect, Option, Scope } from "effect"
+import { Effect, Option } from "effect"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
 import { Toolkit } from "effect/unstable/ai"
@@ -168,14 +168,14 @@ export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
  * functions, which is what makes `Agent.make().pipe(Agent.withTool(...))` and
  * reusable bundles (`agent => agent.pipe(...)`) possible without a builder
  * or a registry.
+ *
+ * The fields are accepted with their channels erased and the result asserted,
+ * in this one internal place: every combinator states its own precise result
+ * type, and the loop's `Tools` slot is invariant (see `Config.loop`), so the
+ * compiler cannot relate a field typed for one agent to the next agent's
+ * parameters even when the value is exactly right. A spread of a definition
+ * keeps `pipe` as an own property, so derived values pipe too.
  */
-//
-// The fields are accepted with their channels erased and the result asserted,
-// in this one internal place: every combinator states its own precise result
-// type, and the loop's `Tools` slot is invariant (see `Config.loop`), so the
-// compiler cannot relate a field typed for one agent to the next agent's
-// parameters even when the value is exactly right. A spread of a definition
-// keeps `pipe` as an own property, so derived values pipe too.
 const definition = <Tools extends Record<string, Tool.Any>, E, R>(fields: {
   readonly instructions: Option.Option<string>
   readonly toolkit: ToolkitInput<any, any, any>
@@ -206,26 +206,17 @@ export const make = <
   KR = never,
   const Bound extends ReadonlyArray<BoundTool<Tool.Any>> = []
 >(
-  config: Config<Tools, LE, LR, TE, TR, KE, KR, Bound> = {} as Config<
-    Tools,
-    LE,
-    LR,
-    TE,
-    TR,
-    KE,
-    KR,
-    Bound
-  >
+  config?: Config<Tools, LE, LR, TE, TR, KE, KR, Bound>
   // The toolkit's resolution failure joins the agent's error type, alongside
   // the loop's and the transform's. Acquiring a capability can fail; saying so
   // is what lets a caller handle it. Bound tools contribute their record and
   // their handlers' requirements exactly as `withTools` would.
 ): AgentDefinition<Tools & ToolsOf<Bound>, LE | TE | KE, LR | TR | KR | ServicesOf<Bound>> => {
-  if (config.toolkit !== undefined && config.tools !== undefined) {
+  if (config?.toolkit !== undefined && config?.tools !== undefined) {
     throw new Error("Agent.make: supply either `toolkit` or `tools`, not both")
   }
   return definition({
-    instructions: Option.fromUndefinedOr(config.instructions),
+    instructions: Option.fromUndefinedOr(config?.instructions),
     // Always a toolkit, never `undefined`. An agent without tools gets an
     // empty one, so the engine has a single code path and the model call
     // keeps its tool types instead of collapsing across a branch.
@@ -236,24 +227,24 @@ export const make = <
     // cannot restate here. The `tools` branch is the same lowering
     // `withTools` performs, typed by `Config` rather than re-derived.
     toolkit:
-      config.toolkit ??
-        (config.tools === undefined
+      config?.toolkit ??
+        (config?.tools === undefined
           ? (Toolkit.empty as unknown as ToolkitInput<Tools>)
-          : (boundToolkit(config.tools) as unknown as ToolkitInput<Tools>)),
+          : boundToolkit(config.tools)),
     loop:
-      config.loop === undefined
+      config?.loop === undefined
         ? AgentLoop.untilIdle()
         : typeof config.loop === "function"
           ? AgentLoop.make(config.loop)
           : config.loop,
     contextTransform:
-      config.contextTransform === undefined
+      config?.contextTransform === undefined
         ? ContextTransform.identity
         : typeof config.contextTransform === "function"
           ? ContextTransform.make(config.contextTransform)
           : config.contextTransform,
-    toolExecution: config.toolExecution ?? ToolExecution.Parallel,
-    toolFailurePolicy: config.toolFailurePolicy ?? ToolExecution.ReturnToModel
+    toolExecution: config?.toolExecution ?? ToolExecution.Parallel,
+    toolFailurePolicy: config?.toolFailurePolicy ?? ToolExecution.ReturnToModel
   })
 }
 
@@ -312,13 +303,18 @@ const boundToolkit = <const Bound extends ReadonlyArray<BoundTool<Tool.Any>>>(
 ): Effect.Effect<Toolkit.WithHandler<ToolsOf<Bound>>, never, ServicesOf<Bound>> => {
   const handlers: Record<string, unknown> = {}
   for (const { tool, handler } of bound) {
-    if (tool.name in handlers) {
+    // `Object.hasOwn`, not `in`: a tool named `constructor` or `toString`
+    // is a legitimate tool, not a duplicate of Object.prototype's.
+    if (Object.hasOwn(handlers, tool.name)) {
       // Deterministic and early: two handlers under one name would make the
       // toolkit's dispatch ambiguous, which nothing downstream could detect.
       throw new Error(`Agent: duplicate tool name "${tool.name}"`)
     }
     handlers[tool.name] = handler
   }
+  // The handlers record was built from exactly these tools by name, which is
+  // what `HandlersFrom<ToolsByName<...>>` describes; the compiler cannot see
+  // that through the loop above, so the relationship is asserted here, once.
   return toolkit(
     bound.map((entry) => entry.tool),
     handlers as Toolkit.HandlersFrom<Toolkit.ToolsByName<ReadonlyArray<Tool.Any>>>
@@ -345,13 +341,18 @@ const mergeHandled = <
   right: Toolkit.WithHandler<B>
 ): Toolkit.WithHandler<A & B> => {
   for (const name of Object.keys(right.tools)) {
-    if (name in left.tools) {
+    if (Object.hasOwn(left.tools, name)) {
       throw new Error(`Agent: duplicate tool name "${name}"`)
     }
   }
   const tools = { ...left.tools, ...right.tools } as A & B
+  // Dispatch by own name only (`Object.hasOwn`): `"toString" in right.tools`
+  // would be true of any object and route a tool of that name wrongly. The
+  // `any` on the two `handle` calls is this module's documented structural
+  // cast: each side's `handle` is typed for its own record, and the merged
+  // signature is exactly their union by name.
   const handle = ((name: string, params: unknown, toolCallId?: string) =>
-    name in right.tools
+    Object.hasOwn(right.tools, name)
       ? (right.handle as any)(name, params, toolCallId)
       : (left.handle as any)(name, params, toolCallId)) as Toolkit.WithHandler<
     A & B
@@ -438,10 +439,19 @@ export const withTool: {
   ): <Tools extends Record<string, Tool.Any>, E, R>(
     agent: AgentDefinition<Tools, E, R>
   ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>>
-} = <T extends Tool.Any>(first: BoundTool<T> | T, handler?: Handler<T>) =>
-  withTools(
-    handler === undefined ? (first as BoundTool<T>) : tool(first as T, handler)
-  )
+} = <T extends Tool.Any>(first: BoundTool<T> | T, handler?: Handler<T>) => {
+  if (isBound(first)) return withTools(first)
+  if (handler === undefined) {
+    // Unreachable through the overloads; stated rather than asserted away.
+    throw new Error(`Agent.withTool: tool "${first.name}" needs a handler`)
+  }
+  return withTools(tool(first, handler))
+}
+
+/** A bound tool carries its tool and handler; a bare tool carries a name. */
+const isBound = <T extends Tool.Any>(
+  value: BoundTool<T> | T
+): value is BoundTool<T> => "tool" in value && "handler" in value
 
 /** Replace the context transform. A bare function is accepted. */
 export const withContextTransform =
@@ -480,7 +490,14 @@ export const updateContextTransform =
       contextTransform: update(agent.contextTransform)
     })
 
-/** Replace the loop policy. A bare function is accepted. */
+/**
+ * Replace the loop policy. A bare function is accepted.
+ *
+ * In pipe position the agent's tools are not yet known to the combinator,
+ * so an inline policy sees `state` over `any` tools. A policy that inspects
+ * `state.toolCalls` by name should name its tools (`AgentLoop.make<Tools>`)
+ * or use the object form, where the toolkit on the same object types it.
+ */
 export const withLoop =
   <LE = never, LR = never, LTools extends Record<string, Tool.Any> = any>(
     loop:
@@ -551,7 +568,4 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R>(
       AgentSession.prompt(session, input, options)
     )
   )
-
-// Referenced for the return type of `run`; keeps the import honest.
-export type { Scope }
 
