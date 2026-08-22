@@ -51,16 +51,22 @@ export const elicitationId = (submissionId: string, n: number): string =>
 
 export const makeIdSource = Effect.gen(function* () {
   const runs = yield* Ref.make(0)
-  const elicitations = yield* Ref.make(new Map<string, number>())
+  // Only the current submission's counter is ever needed: a session claims one
+  // submission at a time, and a submission that has settled never asks another
+  // question. Keeping one entry rather than a map keyed by every submission
+  // bounds a long-lived session's memory to O(1); the counter resets when a
+  // new submission starts. Durable replay reuses the same submission id in a
+  // fresh source, so it starts at 1 each time exactly as the first run did.
+  const elicitations = yield* Ref.make({ submissionId: "", n: 0 })
 
   return {
     nextRun: Ref.updateAndGet(runs, (n) => n + 1).pipe(
       Effect.map((n) => runId(`run-${n}`))
     ),
     nextElicitation: (submissionId) =>
-      Ref.modify(elicitations, (counts) => {
-        const n = (counts.get(submissionId) ?? 0) + 1
-        return [elicitationId(submissionId, n), new Map(counts).set(submissionId, n)]
+      Ref.modify(elicitations, (state) => {
+        const n = state.submissionId === submissionId ? state.n + 1 : 1
+        return [elicitationId(submissionId, n), { submissionId, n }]
       })
   } satisfies IdSource
 })
