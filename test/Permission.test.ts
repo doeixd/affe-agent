@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Fiber, Ref, Schema, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Fiber, Ref, Schedule, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
@@ -606,6 +606,252 @@ describe("Permission enforcement", () => {
       ).pipe(Effect.provide(f.layer))
       assert.strictEqual(result.text, "done")
       assert.deepStrictEqual(yield* Ref.get(f.ran), ["pwd"])
+    })
+  )
+
+  it.effect("a policy that dies takes the run with it; the handler never runs", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture([call("c1", "ls"), TestLanguageModel.text("never")], {
+        permission: Permission.make(() => Effect.die(new Error("policy store unreachable")))
+      })
+      const { exit, events } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(f.agent)
+          const probe = yield* AgentProbe.make(session)
+          const exit = yield* Effect.exit(session.prompt("go"))
+          return { exit, events: yield* probe.events }
+        })
+      ).pipe(Effect.provide(f.layer))
+      assert.isTrue(exit._tag === "Failure" && Cause.hasDies(exit.cause))
+      assert.deepStrictEqual(yield* Ref.get(f.ran), [])
+      const tags = events.map((e) => e.event._tag)
+      assert.include(tags, "ToolCallStarted")
+      assert.notInclude(tags, "ToolCallSucceeded")
+      assert.notInclude(tags, "ElicitationRequested")
+    })
+  )
+
+  it.effect("a needsApproval that dies or throws is a defect, never an implicit allow", () =>
+    Effect.gen(function* () {
+      const Broken = Bash.setNeedsApproval(() => Effect.die(new Error("cannot tell")))
+      const f = yield* fixture([call("c1", "ls"), TestLanguageModel.text("never")], {
+        tool: Broken,
+        permission: Permission.allowAll
+      })
+      const exit = yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(f.agent), (s) => Effect.exit(s.prompt("go")))
+      ).pipe(Effect.provide(f.layer))
+      assert.isTrue(exit._tag === "Failure")
+      assert.deepStrictEqual(yield* Ref.get(f.ran), [])
+      const Throwing = Bash.setNeedsApproval(() => {
+        throw new Error("boom")
+      })
+      const g = yield* fixture([call("c1", "ls"), TestLanguageModel.text("never")], { tool: Throwing })
+      const thrown = yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(g.agent), (s) => Effect.exit(s.prompt("go")))
+      ).pipe(Effect.provide(g.layer))
+      assert.isTrue(thrown._tag === "Failure")
+      assert.deepStrictEqual(yield* Ref.get(g.ran), [])
+    })
+  )
+
+  it.effect("the policy sees the conversation: the user's text and the assistant's call", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<Permission.Request | undefined>(undefined)
+      const f = yield* fixture([call("c1", "ls"), TestLanguageModel.text("done")], {
+        permission: Permission.make((request) =>
+          Ref.set(seen, request).pipe(Effect.as(Permission.allow))
+        )
+      })
+      yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(f.agent), (s) => s.prompt("list the files"))
+      ).pipe(Effect.provide(f.layer))
+      const request = yield* Ref.get(seen)
+      assert.isDefined(request)
+      assert.strictEqual(request!.tool.name, "bash")
+      assert.deepStrictEqual(request!.tool.params, { command: "ls" })
+      assert.isTrue(request!.sessionId.length > 0)
+      assert.deepStrictEqual(request!.messages.map((m) => m.role), ["user", "assistant"])
+      const last = request!.messages[request!.messages.length - 1]!
+      assert.isTrue(
+        last.role === "assistant" && last.content.some((p) => p.type === "tool-call" && p.id === "c1")
+      )
+    })
+  )
+
+  it.effect("an Ask keeps the event order and correlation of an ordinary call", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture([call("c1", "ls"), TestLanguageModel.text("done")], {
+        permission: Permission.askAll
+      })
+      const events = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(f.agent, { elicitation: Elicitation.memory })
+          const probe = yield* AgentProbe.make(session)
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          const asked = yield* nextAsk(session)
+          yield* AgentSession.respond(session, { id: asked.id, granted: true })
+          yield* Fiber.join(running)
+          return yield* probe.events
+        })
+      ).pipe(Effect.provide(f.layer))
+      const interesting = ["ToolCallStarted", "ElicitationRequested", "ElicitationResolved", "ToolCallSucceeded"]
+      const keyed = events.filter((e) => interesting.includes(e.event._tag))
+      assert.deepStrictEqual(keyed.map((e) => e.event._tag), interesting)
+      // All four belong to the same submission, run and turn.
+      const keys = new Set(keyed.map((e) => JSON.stringify([e.submissionId, e.runId, e.turn])))
+      assert.strictEqual(keys.size, 1)
+    })
+  )
+
+  it.live("under FailRun a denied call fails the turn and no sibling's result is committed", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>()
+      const Slow = Permission.annotate(
+        Tool.make("bash", {
+          parameters: Schema.Struct({ command: Schema.String }),
+          success: Schema.String
+        }),
+        { action: "shell", resource: ({ command }) => command }
+      )
+      const toolkit = yield* Agent.toolkit([Slow], {
+        bash: () => Deferred.await(release).pipe(Effect.as("ok"))
+      })
+      const { layer } = yield* TestLanguageModel.script([
+        {
+          toolCalls: [
+            { id: "a", name: "bash", params: { command: "slow" } },
+            { id: "b", name: "bash", params: { command: "forbidden" } }
+          ]
+        },
+        TestLanguageModel.text("never")
+      ])
+      const agent = Agent.make({
+        toolkit,
+        loop: AgentLoop.bounded(4),
+        toolExecution: ToolExecution.Parallel,
+        permission: Permission.rules([{ resource: "forbidden", decision: Permission.deny() }], {
+          otherwise: Permission.allow
+        })
+      })
+      const { error, history, tags } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          const probe = yield* AgentProbe.make(session)
+          const error = yield* Effect.flip(session.prompt("go"))
+          yield* Deferred.succeed(release, void 0)
+          return {
+            error,
+            history: yield* session.history,
+            tags: (yield* probe.events).map((e) => e.event._tag)
+          }
+        })
+      ).pipe(Effect.provide(layer))
+      assert.strictEqual(error._tag, "ToolPermissionDeniedError")
+      // The sibling was interrupted, not committed: history has the user
+      // turn only, and the stream says so.
+      assert.deepStrictEqual(history.content.map((m) => m.role), ["user"])
+      assert.include(tags, "ToolCallInterrupted")
+      assert.notInclude(tags, "ToolCallSucceeded")
+    })
+  )
+
+  it.live("two identical asks in one parallel turn are both asked; a grant on one does not retract the other", () =>
+    Effect.gen(function* () {
+      const policy = yield* Permission.remembered(Permission.askAll)
+      const f = yield* fixture(
+        [
+          {
+            toolCalls: [
+              { id: "a", name: "bash", params: { command: "same" } },
+              { id: "b", name: "bash", params: { command: "same" } }
+            ]
+          },
+          call("c", "same"),
+          TestLanguageModel.text("done")
+        ],
+        { permission: policy }
+      )
+      const asked = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(f.agent, { elicitation: Elicitation.memory })
+          const probe = yield* AgentProbe.make(session)
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          // Both questions are pending before either is answered.
+          const pending = yield* Effect.repeat(AgentSession.pending(session), {
+            until: (p) => p.length === 2,
+            schedule: Schedule.spaced("5 millis")
+          })
+          for (const request of pending) {
+            yield* AgentSession.respond(session, { id: request.id, granted: true, value: { remember: true } })
+          }
+          yield* Fiber.join(running)
+          return (yield* probe.events).filter(AgentEvent.is("ElicitationRequested")).length
+        })
+      ).pipe(Effect.provide(f.layer))
+      // Two asks in the first turn; the third call, next turn, is remembered.
+      assert.strictEqual(asked, 2)
+      assert.deepStrictEqual(yield* Ref.get(f.ran), ["same", "same", "same"])
+    })
+  )
+
+  it.effect("a refused Ask under ReturnToModel tells the model and the run continues", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture([call("c1", "git push"), TestLanguageModel.text("ok, not pushing")], {
+        permission: Permission.askAll,
+        toolDenialPolicy: ToolExecution.ReturnToModel
+      })
+      const { text, history } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(f.agent, { elicitation: Elicitation.memory })
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          const asked = yield* nextAsk(session)
+          yield* AgentSession.respond(session, { id: asked.id, granted: false })
+          const result = yield* Fiber.join(running)
+          return { text: result.text, history: yield* session.history }
+        })
+      ).pipe(Effect.provide(f.layer))
+      assert.strictEqual(text, "ok, not pushing")
+      assert.deepStrictEqual(yield* Ref.get(f.ran), [])
+      const toolResult = history.content.flatMap((m) => (m.role === "tool" ? m.content : []))[0]
+      assert.isTrue(toolResult !== undefined && toolResult.type === "tool-result" && toolResult.isFailure)
+      assert.include(JSON.stringify(toolResult), "requires approval")
+    })
+  )
+
+  it.effect("Decision and the approval shapes round-trip through JSON", () => {
+    const codec = Schema.toCodecJson(Permission.Decision)
+    for (const decision of [Permission.allow, Permission.ask(), Permission.ask("r"), Permission.deny(), Permission.deny("why")]) {
+      const encoded = Schema.encodeSync(codec)(decision)
+      assert.deepStrictEqual(Schema.decodeUnknownSync(codec)(JSON.parse(JSON.stringify(encoded))), decision)
+    }
+    const detail = Schema.toCodecJson(Permission.ApprovalDetail)
+    const d: Permission.ApprovalDetail = { toolName: "t", toolCallId: "c", action: "a", resource: "r" }
+    assert.deepStrictEqual(Schema.decodeUnknownSync(detail)(Schema.encodeSync(detail)(d)), d)
+    return Effect.void
+  })
+
+  it.effect("the bound-tools authoring path carries the policy, and withTools keeps it", () =>
+    Effect.gen(function* () {
+      const ran = yield* Ref.make<Array<string>>([])
+      const { layer } = yield* TestLanguageModel.script([call("c1", "ls"), TestLanguageModel.text("never")])
+      const agent = Agent.make({
+        tools: [Agent.tool(Bash, ({ command }) => Ref.update(ran, (all) => [...all, command]).pipe(Effect.as("ok")))],
+        loop: AgentLoop.bounded(4),
+        permission: Permission.denyAll
+      }).pipe(
+        Agent.withTools(
+          Agent.tool(
+            Tool.make("other", { parameters: Schema.Struct({}), success: Schema.String }),
+            () => Effect.succeed("other")
+          )
+        )
+      )
+      const error = yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(agent), (s) => Effect.flip(s.prompt("go")))
+      ).pipe(Effect.provide(layer))
+      assert.strictEqual(error._tag, "ToolPermissionDeniedError")
+      assert.deepStrictEqual(yield* Ref.get(ran), [])
     })
   )
 })
