@@ -485,18 +485,21 @@ const startedEvent = (options: MapperOptions): RunStartedEvent =>
  */
 export const encodePayload = (
   event: AgentEvent.AgentEvent
-): Effect.Effect<string | undefined, AgentProtocol.AgentProtocolCodecError> =>
+): Effect.Effect<Option.Option<string>, AgentProtocol.AgentProtocolCodecError> =>
   event._tag === "ToolCallStarted"
-    ? json(event.params)
+    ? Effect.map(json(event.params), Option.some)
     : event._tag === "ToolCallSucceeded" || event._tag === "ToolCallProgress"
-      ? json(event.encodedResult)
+      ? Effect.map(json(event.encodedResult), Option.some)
       : event._tag === "ToolCallFailed"
-        ? json({ error: event.failure, returnedToModel: event.returnedToModel })
+        ? Effect.map(
+            json({ error: event.failure, returnedToModel: event.returnedToModel }),
+            Option.some
+          )
         : event._tag === "ToolCallInterrupted"
-          ? json({ interrupted: true })
+          ? Effect.map(json({ interrupted: true }), Option.some)
           : event._tag === "ElicitationRequested" && typeof event.detail !== "string"
-            ? json(event.detail)
-            : Effect.void
+            ? Effect.map(json(event.detail), Option.some)
+            : Effect.succeed(Option.none<string>())
 
 /**
  * One harness event in, zero or more AG-UI events out, with the next state.
@@ -513,9 +516,10 @@ export const transition = (
   options: MapperOptions,
   current: ProjectionState,
   envelope: AgentEvent.AgentEventEnvelope,
-  encoded: string | undefined
+  payload: Option.Option<string>
 ): readonly [ProjectionState, ReadonlyArray<Event>] => {
   const event = envelope.event
+  const encoded = Option.getOrUndefined(payload)
     if (current.terminal) return [current, []]
     const openMessages = new Set(current.openMessages)
     const openSteps = new Set(current.openSteps)

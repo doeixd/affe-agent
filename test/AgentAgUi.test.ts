@@ -280,8 +280,8 @@ describe("AgentAgUi event projection", () => {
       // And `transition` is pure: the same state and input give the same
       // output, and it never mutates what it was given.
       const initial = AgentAgUi.initialState(options)
-      const once = AgentAgUi.transition(options, initial, envelopes[0]!, undefined)
-      const twice = AgentAgUi.transition(options, initial, envelopes[0]!, undefined)
+      const once = AgentAgUi.transition(options, initial, envelopes[0]!, Option.none())
+      const twice = AgentAgUi.transition(options, initial, envelopes[0]!, Option.none())
       assert.deepStrictEqual(once, twice)
       assert.deepStrictEqual(initial, AgentAgUi.initialState(options))
     })
