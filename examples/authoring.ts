@@ -10,6 +10,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
+import * as Permission from "../src/Permission.js"
 
 const SearchTool = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
@@ -27,11 +28,20 @@ const today = Effect.sync(() => `Today is ${new Date().toDateString()}.`)
 // `query` is inferred from the schema.
 export const Search = Agent.tool(SearchTool, ({ query }) => search(query))
 
+// The pipe form is the primary one: each `withX` is a combinator that unions
+// its own errors and requirements onto the definition, so a new cross-cutting
+// concern (here a permission policy) is one more step in the pipe rather than
+// another type parameter on `make`.
 export const Researcher = Agent.make().pipe(
   Agent.withInstructions("Cite sources."),
   Agent.withTool(Search),
   Agent.withTool(ReadFile, ({ path }) => Effect.succeed(`contents of ${path}`)),
   Agent.withContextTransform(ContextTransform.instructions(today)),
+  Agent.withPermission(
+    Permission.rules([{ tool: "read_file", decision: Permission.ask("reads a file") }], {
+      otherwise: Permission.allow
+    })
+  ),
   Agent.withLoop(AgentLoop.bounded(20))
 )
 

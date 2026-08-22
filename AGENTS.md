@@ -38,6 +38,18 @@ site:
 
 Adding another needs a reason of that kind.
 
+### `Agent.make` does not grow new type parameters
+
+`Agent.make` already carries nine (`Tools`, the loop's and transform's and
+toolkit's `E`/`R`, `Bound`, `PR`); each cross-cutting concern that added one
+brought the signature closer to unreadable. A new cross-cutting concern is a
+**combinator**, not a tenth parameter: `withX` unions its own `E`/`R` onto the
+definition, and the recommended authoring path is
+`Agent.make({ toolkit, loop }).pipe(withPermission(p), withContextTransform(t))`
+where the requirements accumulate through the pipe. `Config` stops growing for
+the same reason. The object form of `make` stays for the common one-shot case;
+it is not where new capability goes.
+
 ### Compiling is not proof
 
 `any` compiles. When you change a public signature, assert that inference stayed

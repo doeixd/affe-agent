@@ -2140,3 +2140,12 @@ exception allow overrides a base deny (the workspace carve-out) and an
 exception deny overrides a base allow; the intrinsic needsApproval floor
 still applies on top, and remember passes through to the base. rules stays
 conservative. README example, PublicApi pin.
+
+## #12 item 7
+
+Policy recorded in AGENTS.md: Agent.make does not grow new type parameters;
+a new cross-cutting concern is a combinator (withX unions its own E/R onto
+the definition), and the pipe form is the recommended authoring path.
+examples/authoring.ts shows withPermission in the primary pipe example.
+The optional PR-fold was not done: routing config.permission through
+withPermission internally risked the inference pin for no user-visible gain.
