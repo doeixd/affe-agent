@@ -1693,3 +1693,77 @@ period for a child that ignores `SIGTERM`. The test grows a file from the
 child and checks it has stopped growing once the exec returns; on Windows
 the signal is a hard kill, so that probe is a guard rather than a proof —
 the proof was the teardown race, which no longer reproduces.
+
+## A review sweep across the packages
+
+With the durable client done, the rest of the tree got the same treatment:
+read for the failure a comment promises away, write the test, break the fix
+once. What turned up, by package:
+
+**Core.** `prompt` claimed, forked and registered as three interruptible
+steps: a caller interrupted in between left the session `running` with
+nothing to release it, and `interrupt` landing there passed `requireRunning`
+and reported success against a fibre not yet registered. One uninterruptible
+step now, with the release finalizer installed inside it. The submission's
+terminal events were emitted by whoever awaited it, so a caller that timed
+out left none — and a closing session's `SessionClosed` could precede them.
+The submission fibre emits them itself, and the close finalizer awaits it.
+The post-tool commit is uninterruptible: completed side effects cannot vanish
+from history between the tool finishing and the commit landing.
+
+**Sandbox.** `resolveWithin` walked up with `stat`, which follows links, so a
+*dangling* symlink to an outside path looked like a missing file, the check
+passed on the workspace, and the write created the target on the far side.
+`lstat`, refuse dangling links, operate on the checked real path. `exec`
+returned no cleanup from `Effect.callback`, so a caller's interruption left
+the child running; it is now killed and awaited.
+
+**a2a.** A resumed run that asked a *second* question hung the continuation
+(only terminal events were awaited) and, worse, the respond idempotency key
+was per task, so the second answer was rejected as a replay of the first.
+The task entry was registered before the input and subscription could fail,
+leaving an entry a later cancel would act on — against whatever the session
+was running by then. The elicitation listener leaked one fibre per request
+that never paused. Malformed bodies answered `-32603`.
+
+**MCP.** Several text parts in a result — the most ordinary response there
+is — were refused as unsupported content, and an error result with content
+the client could not read lost its `McpToolError` classification, so the
+model never saw the refusal. `AgentMcp` eviction closed a session's scope
+under a call in flight; it now skips busy sessions and refuses the newcomer
+when every session is busy.
+
+**Compaction.** The retained tail opened wherever the message count fell —
+on a tool result whose call had just been summarised away, a projection
+providers reject on every turn until the window moved. The first fix aligned
+to a user turn and was wrong in the other direction: a long agentic run is
+one user message and many assistant/tool exchanges, and could never fold.
+The rule is exactly the invariant: never open on a tool result.
+
+**HTTP.** A failing event stream was framed as a bespoke `error` event; the
+generated client only treats `effect/httpapi/stream/failure` carrying an
+encoded `Cause` as a failure, so the declared `AgentTransportError` arrived
+as a `SchemaError` about an undecodable envelope.
+
+**AG-UI.** A session was created before the prompt was validated, so bad
+requests with fresh thread ids exhausted capacity. The mapper projected
+every submission on the session, so a second request on a busy thread could
+render the first run's answer as its own. Observer-versus-synthetic
+reporting was decided by reading a deferred after a yield; it is one atomic
+step now. The source ending without a terminal event left the SSE response
+open.
+
+**Client.** A missing session was a retryable `AgentTransportError` in the
+in-process and durable clients while the protocol already had
+`AgentSessionNotFoundError`; the client vocabulary now includes it and the
+protocol re-exports the client's class. A host shutting down with a mutation
+in flight stranded every joiner on its deferred; the owner's interruption
+now interrupts the deferred. `closeRaw` closed the session scope — and
+waited for its finalizers — while holding the registry gate.
+
+Two findings were examined and left as documented semantics rather than
+changed: steering accepted during a submission's final turn is discarded at
+release (the queue is per session and the drop is deliberate), and a failed
+or interrupted submission keeps its user message in history (the
+documented "only completed commits survive" rule applies to turns, not to
+the accepted input).

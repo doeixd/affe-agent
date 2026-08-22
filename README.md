@@ -546,7 +546,9 @@ arrives as `AgentExecutionError` carrying the originating tag.
 
 That is deliberately *not* `AgentTransportError`. An agent failure is a property
 of the request and will recur, so wearing the transport tag would turn a
-caller's retry policy into a loop with a model call per attempt. Failures that
+caller's retry policy into a loop with a model call per attempt. The same
+reasoning gives a missing session its own `AgentSessionNotFoundError`: a
+lookup that can never succeed is not a transport hiccup either. Failures that
 *are* part of the protocol stay typed, because every one of them is a
 `Schema.TaggedError`.
 
