@@ -377,12 +377,12 @@ const eventResponse = (
     AgentProtocol.RemoteError
   >
 ): HttpServerResponse.HttpServerResponse => {
-  const body = events.pipe(
-    // The wire projection: tool results go out in their encoded form, so a
-    // decoded `Date` or class instance cannot make an envelope unencodable.
-    // Should one still fail to encode, that event is logged and skipped --
-    // one bad frame must not end an otherwise healthy session's stream,
-    // which is what a failure frame would do.
+  // The wire projection: tool results go out in their encoded form, so a
+  // decoded `Date` or class instance cannot make an envelope unencodable.
+  // Should one still fail to encode, that event is logged and skipped --
+  // one bad frame must not end an otherwise healthy session's stream,
+  // which is what a failure frame would do.
+  const frames = events.pipe(
     Stream.map(AgentEvent.toWire),
     Stream.mapEffect((envelope) =>
       encodeEvent(envelope).pipe(
@@ -402,9 +402,23 @@ const eventResponse = (
     ),
     Stream.filter(Option.isSome),
     Stream.map((frame) => frame.value),
-    Stream.catch((error) => Stream.fromEffect(encodeStreamError(error))),
-    Stream.encodeText
+    Stream.catch((error) => Stream.fromEffect(encodeStreamError(error)))
   )
+  // An SSE comment first, so the response headers go out before the first
+  // event exists. A body that writes nothing until the session emits leaves
+  // the client waiting on headers -- `fetch` does not resolve, `EventSource`
+  // does not open -- for as long as the session stays quiet, which for a
+  // subscription opened *before* the prompt is exactly the interesting case.
+  //
+  // The subscription is acquired *eagerly*: the source is run into a queue
+  // from the moment the response starts, so a client that has connected is
+  // observing from then, not from its second read. (`concat` would start
+  // the source only once the comment had been consumed.)
+  const body = Stream.unwrap(
+    Effect.map(Stream.toQueue(frames, { capacity: "unbounded" }), (queue) =>
+      Stream.fromQueue(queue).pipe(Stream.prepend([": connected\n\n"]))
+    )
+  ).pipe(Stream.encodeText)
   return HttpServerResponse.stream(body, {
     contentType: "text/event-stream",
     headers: {

@@ -1767,3 +1767,90 @@ release (the queue is per session and the drop is deliberate), and a failed
 or interrupted submission keeps its user message in history (the
 documented "only completed commits survive" rule applies to turns, not to
 the accepted input).
+
+## The whole stack, and what only the whole stack could show
+
+`test/DurableHttpIntegration.test.ts` runs the generated HTTP client against
+an HTTP server whose `AgentClient` is the durable one over a SQLite-backed
+cluster engine, then kills that process with a submission parked on an
+approval and answers it over HTTP from a second process -- new server, new
+engine, new client, same database. Two things no unit suite had caught:
+
+**The session host could not reach a session it had not created.**
+`findSession` consulted only the host's own map, so over every transport a
+durable session created by another process -- or by this one before a
+restart -- was "not found". The headline of issue #5 held in-process and
+failed at the first HTTP boundary. A miss now asks the client: a session it
+can address is adopted into the registry under its own scope; one it cannot
+is the not-found it always was. The transport fixtures, whose fake clients
+had answered a miss with a transport error, now answer with
+`AgentSessionNotFoundError` as a real client does.
+
+**The SSE endpoint sent no headers until the first event.** A subscription
+opened *before* the prompt -- the only way to see a run from its start --
+left `fetch` unresolved and `EventSource` unopened for as long as the
+session stayed quiet; every existing test used a fake client that emitted
+at once. The response now opens with an SSE comment, and the subscription
+is acquired eagerly by running the source into a queue from the moment the
+response starts, so a connected client is observing from then rather than
+from its second read (a plain `concat` starts the source only after the
+comment is consumed -- the shutdown test caught that version).
+
+Noted, not fixed here: `NodeHttpServer`'s preemptive shutdown interrupts
+the fibre closing the scope when a request is in flight at close; the
+integration fixture disables it.
+
+## Sandbox, durable, cluster and streams: a second sweep
+
+**Sandbox.** `exec` waited on the child's `close`, which a descendant
+holding the stdio pipes -- `npm`, a shell with a background job -- could
+defer forever, past every timeout; it settles on `exit` with a short grace
+for the streams, and ends the command's whole tree (a process group on
+POSIX, `taskkill /T` on Windows), with a hard deadline after `SIGKILL`.
+Output kept accumulating after a limit tripped, and `Buffer.concat` per
+chunk was quadratic; chunks are dropped once a limit has tripped and joined
+once. A signal-ended process reports its signal rather than an exit code a
+tool might have chosen. `list` followed symlinks for sizes, reporting an
+outside file's metadata that `read` would refuse. `realpath` comparisons use
+the native implementation, which canonicalises case and 8.3 names on
+Windows. A missing `workspaceRoot` is refused at acquire rather than as a
+permission error on every operation. Temp-directory removal retries and
+logs. The memory provider's first acquisition of a workspace is one
+`Ref.modify`; two fibres used to fork the world.
+
+**Durable.** The interrupt intent was consumed on sight and cleared
+non-durably, so a crash between taking it and recording the interrupted
+outcome replayed into a run that completed normally; it is peeked, and
+cleared only inside the journalled finish activity -- which also clears the
+admission marker, so a replay after a crash past that activity cannot wipe
+the marker the next submission opened. A store failing under the agent (a
+busy database) was projected as the agent failing; it crosses as an
+`Infrastructure` outcome -- the session freed, the client told it was
+transport -- because a body defect is terminal for the engine and re-raising
+would have wedged the session. The SQL `claim` reads its row back and
+answers `Busy` when its `UPDATE` did not land, which row-level concurrency
+(Postgres) allows and SQLite's serialised writers never showed.
+`DurableAgent.submit` on a session whose execution completed returned the
+old result and reopened admission into channels nothing drained; it now
+recognises the finished execution. The entity cannot make that check
+(polling routes through its own runner) and says so.
+
+**Cluster.** `EntityClient` retried `AlreadyProcessingMessage` for `steer`
+and `followUp`: that error means the runner is already handling this very
+envelope, and a retry is a second envelope -- the same input offered and
+applied twice. It is accepted, not retried, for the non-idempotent
+operations.
+
+**Streams.** `EventBus.events` ends after `SessionClosed`, so SSE and RPC
+observers of a closed session complete instead of hanging until the
+connection drops. `MessageStarted` is emitted uninterruptibly, so the
+finalizer's `MessageInterrupted` cannot close a message never opened. One
+unencodable envelope is logged and skipped rather than ending a healthy
+session's SSE stream with a failure frame.
+
+Examined and not reproducible: a subagent run by a tool under durability
+was said to shift the parent's `model-N` journal on replay. A handler's
+context is fixed when its toolkit layer is built, before the durable wrapper
+exists, so a child inherits the raw model and its calls are covered by the
+tool activity's journal; the test pins that (three calls, nothing
+re-issued, the parent's own answer).
