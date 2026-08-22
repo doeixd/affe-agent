@@ -708,6 +708,58 @@ describe("AgentAgUi HTTP server", () => {
     })
   )
 
+  it.effect("a request with no user message consumes no session slot", () =>
+    Effect.gen(function* () {
+      const test = yield* serverFixture()
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          const url = `${HttpServer.formatAddress(httpServer.address)}/ag-ui`
+          const post = (threadId: string, messages: ReadonlyArray<unknown>) =>
+            promise(() =>
+              fetch(url, {
+                method: "POST",
+                headers: {
+                  authorization: "Bearer test",
+                  "content-type": "application/json"
+                },
+                body: JSON.stringify({
+                  threadId,
+                  runId: `${threadId}-run`,
+                  state: {},
+                  messages,
+                  tools: [],
+                  context: [],
+                  forwardedProps: {}
+                })
+              })
+            )
+
+          // More bad requests than the host has session slots (4). Each is
+          // rejected on its input; none may occupy a slot on the way out, or
+          // the fifth would be refused for capacity instead and a later
+          // valid request on a new thread would find the host full.
+          for (let i = 0; i < 6; i++) {
+            const response = yield* post(`empty-${i}`, [])
+            assert.strictEqual(response.status, 400)
+            const body = yield* promise(() => response.json()).pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(Schema.toCodecJson(AgentAgUi.Error))
+              )
+            )
+            assert.strictEqual(body._tag, "AgentAgUiInvalidInputError")
+          }
+          const valid = yield* post("valid-thread", [
+            { id: "u1", role: "user", content: "hello" }
+          ])
+          assert.strictEqual(valid.status, 200)
+          yield* promise(() => valid.text())
+        }).pipe(Effect.provide(test.server))
+      )
+    })
+  )
+
   it.effect("keeps one prompt alive when its first AG-UI observer disconnects", () =>
     Effect.gen(function* () {
       const test = yield* serverFixture({ blocked: true })

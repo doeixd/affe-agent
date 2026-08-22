@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { Sse } from "effect/unstable/encoding"
 import {
@@ -332,10 +332,25 @@ const encodeEvent = Effect.fn("AgentHttp.encodeEvent")(function* (
   })
 })
 
+/**
+ * The frame the generated client understands as a stream failure.
+ *
+ * `HttpApiClient` treats exactly one event name as a failure —
+ * `effect/httpapi/stream/failure` — and only when its data decodes as a
+ * `Cause` of the endpoint's declared error. Anything else is handed to the
+ * data schema, so a bespoke `event: "error"` frame reached the client as an
+ * envelope that failed to decode rather than as the typed `RemoteError` the
+ * Api declares. This mirrors what `HttpApiBuilder` writes for a failing
+ * stream handler.
+ */
+const StreamFailure = Schema.toCodecJson(
+  Schema.Cause(AgentProtocol.RemoteError, Schema.Defect())
+)
+
 const encodeStreamError = (
   error: AgentProtocol.RemoteError
 ): Effect.Effect<string> =>
-  Schema.encodeEffect(Schema.toCodecJson(AgentProtocol.RemoteError))(error).pipe(
+  Schema.encodeEffect(StreamFailure)(Cause.fail(error)).pipe(
     Effect.flatMap((encoded) =>
       Effect.try({
         try: () => JSON.stringify(encoded),
@@ -346,7 +361,7 @@ const encodeStreamError = (
       Sse.encoder.write({
         _tag: "Event",
         id: undefined,
-        event: "error",
+        event: "effect/httpapi/stream/failure",
         data
       })
     ),

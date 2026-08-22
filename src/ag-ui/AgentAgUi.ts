@@ -17,6 +17,7 @@ import {
   HttpServerRequest,
   HttpServerResponse
 } from "effect/unstable/http"
+import { AgentClosedError } from "../Errors.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
@@ -929,6 +930,13 @@ export const serverLayer = <Principal>(
         })
 
         const resumes = input.resume ?? []
+        // Validated before any session exists for it: a request with no
+        // usable user message must not consume a session slot on its way to
+        // a 400. Enough of those with fresh thread ids would exhaust the
+        // host's capacity without ever running anything.
+        const prompt = resumes.length === 0
+          ? Option.some(yield* promptInput(input))
+          : Option.none<Prompt.Prompt>()
         if (resumes.length === 0) {
           yield* host.session(principal, { sessionId }).pipe(
             Effect.catchTag("AgentSessionNotFoundError", () =>
@@ -950,17 +958,56 @@ export const serverLayer = <Principal>(
           started: true
         })
         const queue = yield* Queue.unbounded<Event>()
-        const progressed = yield* Deferred.make<void>()
         const terminal = yield* Deferred.make<void>()
+        // Who reports this run: the observer, once it has projected a fresh
+        // event, or the prompt fibre, synthesising a cached response for an
+        // idempotent replay that produced no events. Decided in one atomic
+        // step rather than read from a deferred after the fact -- the
+        // observer could otherwise be a breath away from enqueueing real
+        // events while the prompt fibre, seeing nothing yet, enqueued a
+        // synthetic message and its own RUN_FINISHED ahead of them.
+        const reporter = yield* Ref.make<"undecided" | "observer" | "synthetic">(
+          "undecided"
+        )
+        // The session's event stream carries every submission on it, and
+        // another client may have one running. This run follows exactly one:
+        // for a prompt, the first submission to *start* after subscribing;
+        // for a resume, the submission already in flight. Anything from
+        // another submission is not this run's to report -- without this, a
+        // second request on a busy thread rendered the first run's answer as
+        // its own success.
+        const pinned = yield* Ref.make<Option.Option<string>>(Option.none())
+        const admit = (envelope: AgentProtocol.AgentEventEnvelope) =>
+          Option.match(envelope.submissionId, {
+            onNone: () => Effect.succeed(true),
+            onSome: (submissionId) =>
+              Ref.modify(pinned, (current) => {
+                if (Option.isSome(current)) {
+                  return [current.value === submissionId, current]
+                }
+                const starts = resumes.length > 0 ||
+                  envelope.event._tag === "SubmissionStarted"
+                return starts
+                  ? [true, Option.some<string>(submissionId)]
+                  : [false, current]
+              })
+          })
         yield* source.pipe(
+          Stream.filterEffect(admit),
           Stream.runForEach((envelope) =>
             mapper.map(envelope).pipe(
               Effect.flatMap((events) =>
                 Effect.gen(function* () {
+                  if (events.length === 0) return
+                  const owner = yield* Ref.modify(reporter, (current) =>
+                    current === "undecided"
+                      ? ["observer" as const, "observer" as const]
+                      : [current, current]
+                  )
+                  // A synthetic response already went out: nothing real may
+                  // follow it on the same stream.
+                  if (owner !== "observer") return
                   yield* Queue.offerAll(queue, events)
-                  if (events.length > 0) {
-                    yield* Deferred.succeed(progressed, void 0)
-                  }
                   if (events.some((event) =>
                     event.type === "RUN_FINISHED" || event.type === "RUN_ERROR"
                   )) {
@@ -968,6 +1015,24 @@ export const serverLayer = <Principal>(
                   }
                 })
               )
+            )
+          ),
+          // The source ending without a terminal event means the session went
+          // away under this run -- closed by another client, or the host shut
+          // down. An SSE response with no terminal frame would stay open
+          // until the layer did.
+          Effect.andThen(
+            Effect.flatMap(Deferred.isDone(terminal), (done) =>
+              done
+                ? Effect.void
+                : Queue.offer(
+                    queue,
+                    errorEvent(
+                      new AgentClosedError({
+                        sessionId: AgentProtocol.SessionId.make(sessionId)
+                      })
+                    )
+                  ).pipe(Effect.andThen(Deferred.succeed(terminal, void 0)))
             )
           ),
           Effect.catch((error) =>
@@ -1015,24 +1080,28 @@ export const serverLayer = <Principal>(
             Effect.catch((error) => Queue.offer(queue, errorEvent(error))),
             Effect.forkScoped
           )
-        } else {
-          const prompt = yield* promptInput(input)
+        } else if (Option.isSome(prompt)) {
           yield* host.prompt(principal, {
             requestId: requestId(input, "prompt"),
             sessionId,
-            input: prompt,
+            input: prompt.value,
             options: { stream: true }
           }).pipe(
             Effect.flatMap((response) =>
               Effect.gen(function* () {
                 // A normal prompt publishes its terminal lifecycle before its
-                // Effect completes. Give the subscribed observer a turn; once
-                // it has seen any projected event, it owns completion. With no
-                // fresh event this was an idempotent replay, so synthesize the
-                // cached response for the new HTTP observer.
+                // Effect completes. Give the subscribed observer a turn, then
+                // claim reporting atomically: if the observer has projected
+                // anything it owns completion; otherwise this was an
+                // idempotent replay that produced no events, and the cached
+                // response is synthesised for the new HTTP observer.
                 yield* Effect.yieldNow
-                if (yield* mapper.terminal) return
-                if (yield* Deferred.isDone(progressed)) {
+                const owner = yield* Ref.modify(reporter, (current) =>
+                  current === "undecided"
+                    ? ["synthetic" as const, "synthetic" as const]
+                    : [current, current]
+                )
+                if (owner === "observer") {
                   yield* Deferred.await(terminal)
                   return
                 }

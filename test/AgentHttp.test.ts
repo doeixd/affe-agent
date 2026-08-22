@@ -43,6 +43,8 @@ const promise = <A>(evaluate: () => PromiseLike<A>) => Effect.promise(evaluate)
 const fixture = (options?: {
   readonly blockPrompt?: boolean
   readonly holdEvents?: boolean
+  /** The session's event stream fails after its first event. */
+  readonly failEvents?: boolean
 }) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
@@ -84,6 +86,16 @@ const fixture = (options?: {
           ]).pipe(
             options?.holdEvents === true
               ? Stream.concat(Stream.never)
+              : (stream) => stream,
+            options?.failEvents === true
+              ? Stream.concat(
+                  Stream.fail(
+                    new AgentClient.AgentTransportError({
+                      sessionId: id,
+                      detail: "the delivery log went away"
+                    })
+                  )
+                )
               : (stream) => stream,
             Stream.ensuring(Deferred.succeed(eventStreamReleased, void 0))
           )
@@ -388,6 +400,49 @@ describe("AgentHttp", () => {
         "authorize:status",
         "authorize:closeSession"
       ])
+    })
+  )
+
+  it.effect("a failing event stream reaches the generated client as its typed error", () =>
+    Effect.gen(function* () {
+      // A durable-backed session's `events` can fail with a transport error.
+      // The Api declares that error for the stream; the generated client only
+      // recognises it in the reserved failure frame, so anything else arrives
+      // as an envelope that does not decode.
+      const test = yield* fixture({ failEvents: true })
+      const id = sessionId("failing-events")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          const client = yield* HttpApiClient.make(AgentHttp.Api, {
+            baseUrl: HttpServer.formatAddress(httpServer.address)
+          })
+          yield* client.sessions.createSession({
+            headers,
+            payload: { requestId: requestId("create-failing"), sessionId: id }
+          })
+          const eventStream = yield* client.sessions.events({
+            params: { id },
+            headers
+          })
+          const seen: Array<string> = []
+          const failure = yield* Effect.flip(
+            Stream.runForEach(eventStream, (event) =>
+              Effect.sync(() => {
+                seen.push(event.event._tag)
+              })
+            )
+          )
+          // Everything before the failure was delivered, and the failure is
+          // the declared error, not a decode error about a strange frame.
+          assert.deepStrictEqual(seen, ["SessionStarted", "SubmissionStarted"])
+          assert.strictEqual(failure._tag, "AgentTransportError")
+          if (failure._tag === "AgentTransportError") {
+            assert.include(failure.detail, "delivery log")
+          }
+        }).pipe(Effect.provide(Layer.merge(FetchHttpClient.layer, test.server)))
+      )
     })
   )
 
