@@ -118,6 +118,65 @@ describe("Permission decisions", () => {
     })
   )
 
+  it.effect("except: a matching exception replaces the base; the carve-out and the extra restriction", () =>
+    Effect.gen(function* () {
+      const policy = Permission.except(
+        Permission.rules([{ action: "write", decision: Permission.deny("outside the workspace") }], {
+          otherwise: Permission.allow
+        }),
+        [
+          { action: "write", resource: /^\/workspace\/src\//, decision: Permission.allow },
+          { action: "write", resource: "/workspace/src/.env", decision: Permission.deny("secret") },
+          { action: "shell", resource: "rm -rf /", decision: Permission.deny("never") }
+        ]
+      )
+      const request = (action: string, resource: string): Permission.Request => ({
+        sessionId: "s",
+        toolCallId: "c",
+        tool: { name: "t", params: {} },
+        action,
+        resource,
+        intrinsicApproval: false,
+        messages: []
+      })
+      // The carve-out: base denies all writes, the exception allows /src.
+      assert.deepStrictEqual(yield* policy.evaluate(request("write", "/workspace/src/a.ts")), Permission.allow)
+      // No exception: the base stands.
+      assert.deepStrictEqual(yield* policy.evaluate(request("write", "/etc/passwd")), Permission.deny("outside the workspace"))
+      // Two exceptions match /src/.env -- the allow and the deny -- and deny
+      // wins among exceptions: an exception cannot widen another's Deny.
+      assert.deepStrictEqual(yield* policy.evaluate(request("write", "/workspace/src/.env")), Permission.deny("secret"))
+      // An extra restriction over a base allow (shell is allowed by otherwise).
+      assert.deepStrictEqual(yield* policy.evaluate(request("shell", "rm -rf /")), Permission.deny("never"))
+      assert.deepStrictEqual(yield* policy.evaluate(request("shell", "ls")), Permission.allow)
+    })
+  )
+
+  it.effect("except: remember passes through to the base policy", () =>
+    Effect.gen(function* () {
+      const base = yield* Permission.remembered(Permission.askAll)
+      const policy = Permission.except(base, [
+        { resource: "always-allowed", decision: Permission.allow }
+      ])
+      const request = (resource: string): Permission.Request => ({
+        sessionId: "s",
+        toolCallId: "c",
+        tool: { name: "t", params: {} },
+        action: "shell",
+        resource,
+        intrinsicApproval: false,
+        messages: []
+      })
+      // A resource with no exception falls through to the base, which asks
+      // and can be granted; the grant is recorded on the base.
+      assert.strictEqual((yield* policy.evaluate(request("git push")))._tag, "Ask")
+      yield* policy.remember!(request("git push"))
+      assert.strictEqual((yield* policy.evaluate(request("git push")))._tag, "Allow")
+      // The exception is still final and never consults the base.
+      assert.deepStrictEqual(yield* policy.evaluate(request("always-allowed")), Permission.allow)
+    })
+  )
+
   it.effect("remembered: a grant turns Ask into Allow for that exact action and resource, never a Deny", () =>
     Effect.gen(function* () {
       const policy = yield* Permission.remembered(

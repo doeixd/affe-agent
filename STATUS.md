@@ -2131,3 +2131,12 @@ exempt (its store is per-instance); falsified against the old PubSub-only
 `live`. `DurableHttpIntegration` adds a two-node SSE test: node B tails a
 session over `/events` before node A prompts and sees the whole submission
 live, contiguously numbered, having run none of it.
+## #12 item 6
+
+Permission.except(base, exceptions): a carve-out from a broad policy. A
+matching exception (exceptions combined conservatively among themselves,
+deny winning) replaces the base decision; no match leaves the base. So an
+exception allow overrides a base deny (the workspace carve-out) and an
+exception deny overrides a base allow; the intrinsic needsApproval floor
+still applies on top, and remember passes through to the base. rules stays
+conservative. README example, PublicApi pin.

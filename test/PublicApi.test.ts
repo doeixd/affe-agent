@@ -72,6 +72,7 @@ describe("public API", () => {
       "defaultProjection",
       "deny",
       "denyAll",
+      "except",
       "grantKey",
       "make",
       "projectionOf",

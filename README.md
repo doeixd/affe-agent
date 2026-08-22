@@ -776,6 +776,24 @@ const agent = Agent.make({
 })
 ```
 
+A carve-out from a broad rule reads better as an exception than as a
+double-negated matcher. `Permission.except(base, exceptions)` lets a matching
+exception replace the base decision — so "deny all writes, except inside
+`/workspace/src`" is written directly:
+
+```ts
+Permission.except(
+  Permission.rules([{ action: "write", decision: Permission.deny("outside the workspace") }], {
+    otherwise: Permission.ask()
+  }),
+  [{ action: "write", resource: /^\/workspace\/src\//, decision: Permission.allow }]
+)
+```
+
+Exceptions combine conservatively among themselves (a `deny` exception still
+wins over an `allow` one), an exception `allow` overrides the base `deny`, and
+the intrinsic `needsApproval` floor still applies on top.
+
 The rules, exactly:
 
 - **Conservative combination.** `Deny > Ask > Allow`, everywhere decisions

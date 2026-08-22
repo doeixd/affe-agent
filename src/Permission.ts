@@ -247,6 +247,58 @@ export const rules = (
     return Effect.succeed(decision ?? options.otherwise)
   })
 
+/**
+ * A carve-out from a broad policy.
+ *
+ * `rules` combines conservatively, which is the right default but cannot say
+ * "deny all writes, *except* inside `/workspace/src`" without a
+ * double-negated predicate an author gets backwards. `except` says it
+ * directly: a matching exception replaces the base decision.
+ *
+ * ```ts
+ * Permission.except(
+ *   Permission.rules([{ action: "write", decision: Permission.deny("outside the workspace") }], {
+ *     otherwise: Permission.ask()
+ *   }),
+ *   [{ action: "write", resource: /^\/workspace\/src\//, decision: Permission.allow }]
+ * )
+ * ```
+ *
+ * The exact rule, pinned in tests:
+ *
+ * - **No exception matches**: the base decision stands.
+ * - **Exceptions match**: they combine conservatively among themselves
+ *   (`Deny > Ask > Allow` -- one exception cannot widen another's `Deny`)
+ *   and that decision *replaces* the base. So an exception `Allow` overrides
+ *   a base `Deny` (the carve-out), and an exception `Deny` overrides a base
+ *   `Allow` (an extra restriction).
+ * - The intrinsic `needsApproval` floor is applied by the harness *after*
+ *   the policy, so an exception `Allow` on a tool that declares it needs
+ *   approval is still floored to `Ask`. No exception can lower that.
+ *
+ * `remember` passes through to the base, so a grant recorded by a
+ * `remembered(except(...))` reaches the underlying policy.
+ */
+export const except = <R>(
+  base: Policy<R>,
+  exceptions: ReadonlyArray<Rule>
+): Policy<R> => ({
+  evaluate: (request) => {
+    let override: Decision | undefined
+    for (const rule of exceptions) {
+      if (
+        matches(rule.action, request.action) &&
+        matches(rule.resource, request.resource) &&
+        matches(rule.tool, request.tool.name)
+      ) {
+        override = override === undefined ? rule.decision : combine(override, rule.decision)
+      }
+    }
+    return override === undefined ? base.evaluate(request) : Effect.succeed(override)
+  },
+  ...(base.remember === undefined ? {} : { remember: base.remember })
+})
+
 // ---------------------------------------------------------------------------
 // Remembered grants
 // ---------------------------------------------------------------------------
