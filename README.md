@@ -858,7 +858,7 @@ Layer.provideMerge(
   Sandbox.currentLayer(Sandbox.workspace("coding-agent")),
   MemorySandbox.layer({ seed: { "src/add.test.ts": "..." } })
 )
-// or:
+// or, from the Node-only entry `@doeixd/effect-agent/sandbox/local`:
 LocalSandbox.layer()
 ```
 
@@ -961,11 +961,31 @@ context transforms and canonical history are directly testable.
 - [`examples/sandbox.ts`](./examples/sandbox.ts) — user-defined coding tools
   over the sandbox seam; provider swap is one line of layer wiring
 
+## Runtimes
+
+The package declares no Node engine requirement, because it has none: every
+entry except `@doeixd/effect-agent/sandbox/local` reaches the host only
+through Effect's platform services (`SqlClient`, `HttpServer`, `HttpClient`,
+…), and the application supplies the concrete Layer for Node, Bun, Deno or an
+edge runtime. The local sandbox provider spawns processes and reads a real
+filesystem; it is Node-specific and lives at its own entry so that importing
+the portable sandbox surface never loads it. MCP over stdio loads the SDK's
+stdio transport only when `stdio(...)` is called.
+
+This is verified, not promised: `npm run lint:portability` rejects host
+coupling in portable source, and `npm run verify:package` imports every entry
+of the packed artifact under a resolution hook that refuses Node built-ins and
+resolves without the `node` export condition.
+
+Developing the library itself does use Node (the test suite runs SQLite
+through `node:sqlite`, which needs Node 22.5 or later).
+
 ## Development
 
 ```bash
-npm run check   # typecheck + Effect language service + tests
+npm run check   # typecheck + Effect language service + portability + tests
 npm run build
+npm run verify:package
 ```
 
 [`PLAN.md`](./PLAN.md) is the design authority; [`STATUS.md`](./STATUS.md)

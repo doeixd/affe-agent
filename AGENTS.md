@@ -107,6 +107,40 @@ as a build failure. It must stay at zero.
 * Assert span structure. The trace nesting is the cheapest proof that execution
   is shaped the way the design claims.
 
+## Portability
+
+The library is portable across Effect-supported runtimes, and that is a
+checked invariant, not a convention.
+
+* Whenever code needs an operating-system or network capability, require the
+  corresponding Effect platform service — `SqlClient`, `HttpServer`,
+  `HttpClient`, `FileSystem`, `Path` — and let the application supply the
+  concrete Layer. Never import `node:*`, `@effect/platform-node` (or `-bun`,
+  `-deno`), or a concrete SQL driver from a portable module; never read
+  `process.*` or use `Buffer`. Web-standard globals (`globalThis.crypto`,
+  `TextEncoder`, `fetch`) are fine: every supported runtime has them.
+* Three levels, with dependencies pointing one way only:
+
+  ```
+  host implementation  ->  capability-requiring  ->  portable/domain
+  sandbox/local            durable SQL stores,       core, client, compaction,
+  (Node)                   http, mcp, a2a, ...       testing, sandbox surface
+  ```
+
+  A genuine host implementation gets its own package entry
+  (`@doeixd/effect-agent/sandbox/local`) and a line in `HOST_MODULES` in
+  `scripts/verify-portability.mjs`, so importing a portable entry never loads
+  it. A transport that merely *can* use a host facility (MCP over stdio)
+  loads that facility on demand, inside the operation that needs it.
+* Do not duplicate platform error hierarchies. Wrap a platform failure in an
+  agent error only when the agent domain adds an invariant
+  (`PermissionDeniedError` for a workspace escape is one; a generic
+  `AgentFileReadError` would not be).
+* `npm run lint:portability` checks the source; `npm run verify:package`
+  imports every entry of the packed artifact under a resolution hook that
+  refuses Node built-ins and resolves without the `node` export condition —
+  the way Bun, Deno and edge runtimes would see the package.
+
 ## Scope discipline
 
 * No new exported concept until two independent features need it.
@@ -119,10 +153,11 @@ as a build failure. It must stay at zero.
 ## Verifying
 
 ```
-npm run typecheck   # src, test and examples, including the type assertions
-npm run lint        # Effect language service diagnostics
+npm run typecheck          # src, test and examples, including the type assertions
+npm run lint               # Effect language service diagnostics
+npm run lint:portability   # no host coupling outside host modules
 npm test
 ```
 
-All three must pass. `examples/anthropic.ts` is typechecked but never executed — it
+All four must pass (`npm run check` runs them). `examples/anthropic.ts` is typechecked but never executed — it
 would make live billed requests.

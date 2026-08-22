@@ -2,10 +2,7 @@ import {
   Client,
   type ClientOptions
 } from "@modelcontextprotocol/sdk/client/index.js"
-import {
-  StdioClientTransport,
-  type StdioServerParameters
-} from "@modelcontextprotocol/sdk/client/stdio.js"
+import type { StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   StreamableHTTPClientTransport,
   type StreamableHTTPClientTransportOptions
@@ -171,6 +168,12 @@ export const stdio = Effect.fn("McpClientV1.stdio")(
   function* (options: StdioOptions) {
     const client = new Client(options.clientInfo, options.clientOptions)
     const connection = yield* fromSdkClient(client)
+    // Loaded on demand: the stdio transport is a host capability (it spawns
+    // a process), and must not be the price of importing this entry.
+    const { StdioClientTransport } = yield* sdkEffect(
+      "load stdio transport",
+      () => import("@modelcontextprotocol/sdk/client/stdio.js")
+    )
     const transport = new StdioClientTransport(options.server)
     yield* sdkEffect("connect", () => client.connect(transport))
     return connection

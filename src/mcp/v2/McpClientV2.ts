@@ -6,10 +6,7 @@ import {
   type RequestOptions,
   type StreamableHTTPClientTransportOptions
 } from "@modelcontextprotocol/client"
-import {
-  StdioClientTransport,
-  type StdioServerParameters
-} from "@modelcontextprotocol/client/stdio"
+import type { StdioServerParameters } from "@modelcontextprotocol/client/stdio"
 import { Effect, Option, PubSub, Ref, Stream } from "effect"
 import * as McpClient from "../McpClient.js"
 import * as McpToolkit from "../McpToolkit.js"
@@ -188,6 +185,14 @@ export const stdio = Effect.fn("McpClientV2.stdio")(
       ...options.clientOptions
     })
     const { close } = yield* ownClient(client)
+    // Loaded on demand. The stdio transport spawns a subprocess, which is a
+    // host capability; importing it at module level would make this whole
+    // entry depend on `node:process` just by being imported, including for
+    // a consumer that only ever connects over HTTP.
+    const { StdioClientTransport } = yield* sdkEffect(
+      "load stdio transport",
+      () => import("@modelcontextprotocol/client/stdio")
+    )
     const transport = new StdioClientTransport(options.server)
     yield* sdkEffect("connect", () => client.connect(transport))
     return yield* adaptClient(client, close)

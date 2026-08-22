@@ -75,6 +75,10 @@
       "types": "./dist/sandbox/index.d.ts",
       "default": "./dist/sandbox/index.js"
     },
+    "./sandbox/local": {
+      "types": "./dist/sandbox/local.d.ts",
+      "default": "./dist/sandbox/local.js"
+    },
     "./mcp/v1": {
       "types": "./dist/mcp/v1/index.d.ts",
       "default": "./dist/mcp/v1/index.js"
@@ -92,9 +96,6 @@
     "README.md",
     "LICENSE"
   ],
-  "engines": {
-    "node": ">=22.5.0"
-  },
   "volta": {
     "node": "22.23.1"
   },
@@ -107,7 +108,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "effect-language-service diagnostics --project tsconfig.json",
-    "check": "npm run typecheck && npm run lint && npm run test",
+    "lint:portability": "node scripts/verify-portability.mjs",
+    "check": "npm run typecheck && npm run lint && npm run lint:portability && npm run test",
     "prepublishOnly": "npm run check && npm run build",
     "verify:package": "node scripts/verify-package.mjs"
   },

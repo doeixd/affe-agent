@@ -1854,3 +1854,29 @@ context is fixed when its toolkit layer is built, before the durable wrapper
 exists, so a child inherits the raw model and its calls are covered by the
 tool activity's journal; the test pins that (three calls, nothing
 re-issued, the parent's own answer).
+
+## Portability is a checked invariant (issue #7)
+
+The package claimed Node (`engines: node >= 22.5`) while nothing exported
+needed it. The constraint is gone; what replaced it is enforcement.
+`scripts/verify-portability.mjs` rejects `node:*` imports, concrete platform
+packages, `require`, `process.*` and `Buffer` in every portable module, with
+`sandbox/local.ts` the one declared host module — and it now has its own
+entry, `@doeixd/effect-agent/sandbox/local`, so `./sandbox` is portable.
+`verify:package` imports every entry of the packed artifact under a
+resolution hook that refuses Node built-ins and drops the `node` export
+condition, which is how a Bun, Deno or edge runtime resolves the same
+dependencies.
+
+The package-level probe found what the source scan could not: the MCP
+entries imported the SDK's stdio transport eagerly, so `import "@doeixd/
+effect-agent/mcp"` required `node:process` and `node:stream` even for a
+consumer connecting over HTTP. The stdio transport now loads inside
+`stdio(...)`. It also showed that dropping the `node` condition is
+necessary for the probe to mean anything: `uuid` (through the A2A SDK) and
+`msgpackr` (through Effect's cluster serialisation) list a Node build under
+`node` and a portable one under `browser`/`default`, and Node always asserts
+`node`, so a naive probe reported them as host coupling they are not.
+
+`globalThis.crypto.randomUUID()` in the durable client stays: a Web-standard
+global is not host coupling, and every supported runtime provides it.

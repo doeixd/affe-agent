@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { pathToFileURL } from "node:url"
 
 const run = (command, args, cwd) =>
   execFileSync(command, args, { cwd, encoding: "utf8", stdio: "pipe" }).trim()
@@ -54,16 +55,36 @@ try {
     scratch
   )
 
+  const hostEntries = new Set(["./sandbox/local"])
+  const hook = pathToFileURL(
+    path.join(root, "scripts", "no-node-builtins.mjs")
+  ).href
+
   for (const subpath of subpaths) {
     const specifier = subpath.replace(/^\./, manifest.name)
+    // Every entry is a host implementation or it is portable. A portable
+    // entry is imported under a resolution hook that refuses Node built-ins,
+    // so the check is on the artifact a consumer installs, not on the source:
+    // a dependency reaching for `node:fs` at import time fails here.
+    const portable = !hostEntries.has(subpath)
     fs.writeFileSync(
       path.join(scratch, "probe.mjs"),
       `const m = await import(${JSON.stringify(specifier)})\n` +
         `if (Object.keys(m).length === 0) throw new Error("no exports")\n` +
-        `console.log(${JSON.stringify(specifier)}, "->", Object.keys(m).join(","))\n`
+        `console.log(${JSON.stringify(specifier)}, ${
+          JSON.stringify(portable ? "(portable) ->" : "(host) ->")
+        }, Object.keys(m).join(","))\n`
     )
     try {
-      console.log(run("node", ["probe.mjs"], scratch))
+      console.log(
+        run(
+          "node",
+          portable
+            ? ["--import", hook, "probe.mjs"]
+            : ["probe.mjs"],
+          scratch
+        )
+      )
     } catch (error) {
       failures++
       console.error(`FAILED ${specifier}: ${error.stderr ?? error.message}`)

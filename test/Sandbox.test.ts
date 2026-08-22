@@ -526,12 +526,15 @@ describe("local sandbox", () => {
 
 describe("sandbox composition", () => {
   it("exports the sandbox vocabulary and nothing beyond it", async () => {
+    // The Node-backed provider is its own entry (`sandbox/local`): the
+    // portable surface must not pull in `node:*` by being imported.
     const surface = await import("../src/sandbox/index.js")
     assert.deepStrictEqual(Object.keys(surface).sort(), [
-      "LocalSandbox",
       "MemorySandbox",
       "Sandbox"
     ])
+    const local = await import("../src/sandbox/local.js")
+    assert.include(Object.keys(local), "layer")
   })
 
   it.effect("tools demanding the sandbox run against either provider", () =>
