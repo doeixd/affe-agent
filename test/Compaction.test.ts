@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Option, Ref } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import { Effect, Option, Ref, Schema } from "effect"
+import { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -71,6 +71,63 @@ describe("compaction", () => {
 
       // And it summarised, rather than re-summarising every turn.
       assert.isAtLeast((yield* Ref.get(summarised)).length, 1)
+    })
+  )
+
+  it.effect("never opens the retained tail on a tool result", () =>
+    Effect.gen(function* () {
+      // Every submission is four messages: user, assistant (tool call), tool,
+      // assistant. With `retain: 2` the raw boundary lands on the tool
+      // result — a projection a provider rejects — so the tail must open at
+      // the user turn before it instead.
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: ({ messages }) =>
+          Effect.succeed(`covered ${messages.content.length} messages`)
+      })
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({ query: Schema.String }),
+        success: Schema.String
+      })
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCall("search", { query: "a" }, { id: "c1" }),
+        TestLanguageModel.text("one"),
+        TestLanguageModel.toolCall("search", { query: "b" }, { id: "c2" }),
+        TestLanguageModel.text("two"),
+        TestLanguageModel.toolCall("search", { query: "c" }, { id: "c3" }),
+        TestLanguageModel.text("three")
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({
+              toolkit: Agent.toolkit([Search], {
+                search: ({ query }) => Effect.succeed(`hits for ${query}`)
+              }),
+              contextTransform: compaction,
+              loop: AgentLoop.bounded(2)
+            })
+          )
+          for (const input of ["a", "b", "c"]) {
+            yield* session.prompt(input)
+          }
+        })
+      ).pipe(Effect.provide(layer))
+
+      const prompts = yield* recorder.prompts
+      for (const prompt of prompts) {
+        const roles = prompt.content.map((m) => m.role)
+        // After any summary, the first message is a user turn, and every
+        // tool message follows an assistant message.
+        const tail = roles.filter((role) => role !== "system")
+        assert.strictEqual(tail[0], "user", roles.join(","))
+        roles.forEach((role, i) => {
+          if (role === "tool") assert.strictEqual(roles[i - 1], "assistant", roles.join(","))
+        })
+      }
+      // And compaction did happen.
+      assert.isTrue(prompts.some((prompt) => summaryOf(prompt).length === 1))
     })
   )
 
@@ -358,11 +415,11 @@ describe("compaction", () => {
       ).pipe(Effect.provide(layer))
 
       // Measured both ways rather than guessed: with the cache holding both
-      // sessions each extends its own checkpoint and summarises four times
+      // sessions each extends its own checkpoint and summarises twice
       // between them; with a cache of one they evict each other and have to
-      // re-summarise, giving six. An `isAtLeast(4)` bound would have passed
+      // re-summarise, giving four. An `isAtLeast(2)` bound would have passed
       // either way and proved nothing.
-      assert.strictEqual(yield* Ref.get(calls), 6)
+      assert.strictEqual(yield* Ref.get(calls), 4)
     })
   )
 
@@ -478,18 +535,20 @@ describe("compaction", () => {
         Effect.gen(function* () {
           const session = yield* AgentSession.restore(agent, snapshot)
           yield* session.prompt("m4")
+          yield* session.prompt("m5")
         })
       ).pipe(Effect.provide(layer))
 
       // Measured both ways rather than reasoned about. With the checkpoint
-      // honoured the folded ranges are [3, 4]: the first session folds three
-      // messages, the restored one folds only the four accumulated since.
-      // With it rejected they are [3, 5, 7] -- more compactions, each folding
-      // from the beginning. An `isBelow(range, transcriptLength)` bound was
-      // written first and passed either way, because 7 is also below 8.
+      // honoured the folded ranges are [4, 4]: the first session folds four
+      // messages (boundaries open on a user turn), the restored one folds
+      // only the four accumulated since. With it rejected the restored
+      // session folds from the beginning again -- [4, 8]. An
+      // `isBelow(range, transcriptLength)` bound was written first and
+      // passed either way.
       assert.deepStrictEqual(
         yield* Ref.get(ranges),
-        [3, 4],
+        [4, 4],
         "the restored session redid work the checkpoint had already done"
       )
     })

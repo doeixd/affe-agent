@@ -92,6 +92,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     readonly failFirstPrompt?: boolean
     /** With elicitFirstPrompt: the resumed run fails after the answer. */
     readonly failResumedRun?: boolean
+    /** With elicitFirstPrompt: the resumed run asks a second question. */
+    readonly askAgain?: boolean
   }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
@@ -104,6 +106,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
   >()
   const asked = yield* Deferred.make<void>()
   const answer = yield* Deferred.make<Elicitation.Response>()
+  const secondAnswer = yield* Deferred.make<Elicitation.Response>()
   const waiting = yield* Ref.make(new Map<string, Elicitation.Request>())
   const lastText = yield* Ref.make<string | undefined>(undefined)
   const eventQueue = yield* Queue.unbounded<AgentProtocol.AgentEventEnvelope>()
@@ -207,12 +210,33 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                       isDefect: false
                     })
                   }
+                  let finalText =
+                    `${id}:${count}:${text}:${String(response.value)}`
+                  if (fixtureOptions?.askAgain === true) {
+                    const again: Elicitation.Request = {
+                      id: `${id}:elicit:2`,
+                      kind: "approval",
+                      detail: "and once more?"
+                    }
+                    yield* Ref.update(waiting, (all) =>
+                      new Map(all).set(again.id, again)
+                    )
+                    yield* Queue.offer(
+                      eventQueue,
+                      emit({
+                        _tag: "ElicitationRequested",
+                        id: again.id,
+                        kind: again.kind,
+                        detail: again.detail
+                      })
+                    )
+                    const second = yield* Deferred.await(secondAnswer)
+                    finalText = `${finalText}:${String(second.value)}`
+                  }
                   yield* Queue.offer(
                     eventQueue,
                     emit({ _tag: "SubmissionCompleted", runs: 1 })
                   )
-                  const finalText =
-                    `${id}:${count}:${text}:${String(response.value)}`
                   yield* Ref.set(lastText, finalText)
                   return {
                     submissionId: AgentProtocol.SubmissionId.make(
@@ -257,7 +281,11 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   next.delete(response.id)
                   return next
                 })
-                yield* Deferred.succeed(answer, response)
+                if (response.id.endsWith(":elicit:2")) {
+                  yield* Deferred.succeed(secondAnswer, response)
+                } else {
+                  yield* Deferred.succeed(answer, response)
+                }
                 return true
               }),
             pending: Effect.map(Ref.get(waiting), (all) =>
@@ -833,6 +861,94 @@ describe("AgentA2A v1 server", () => {
         `${opened[0]}:1:ask`
       ])
       assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("a resumed run that asks again is input-required again, then completes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({
+        elicitFirstPrompt: true,
+        askAgain: true
+      })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(
+              HttpServer.formatAddress(server.address)
+            )
+          )
+          const responses = client.sendMessageStream({
+            tenant: "",
+            message: userMessage("twice-message", "", "ask"),
+            configuration: undefined,
+            metadata: undefined
+          })
+          const first = yield* promise(() => responses.next())
+          if (first.done || first.value.payload?.$case !== "task") {
+            assert.fail("expected a submitted task")
+          }
+          const taskId = first.value.payload.value.id
+          const contextId = first.value.payload.value.contextId
+          yield* promise(() => responses.next())
+          const paused = yield* promise(() => responses.next())
+          if (paused.done || paused.value.payload?.$case !== "statusUpdate") {
+            assert.fail("expected an input-required status")
+          }
+          assert.strictEqual(
+            paused.value.payload.value.status?.state,
+            TaskState.TASK_STATE_INPUT_REQUIRED
+          )
+          yield* promise(() => responses.return(undefined))
+
+          // The first answer does not finish the run: it asks again. The
+          // continuation must come back as input-required rather than hang.
+          const askedAgain = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: { ...userMessage("answer-1", contextId, "yes"), taskId },
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in askedAgain)) {
+            assert.fail("expected the continuation to return a task")
+          }
+          assert.strictEqual(
+            askedAgain.status?.state,
+            TaskState.TASK_STATE_INPUT_REQUIRED
+          )
+          const question = askedAgain.status?.message?.parts[0]?.content
+          if (question?.$case !== "text") {
+            assert.fail("expected the second question rendered as text")
+          }
+          assert.include(question.value, "approval")
+
+          const completed = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: { ...userMessage("answer-2", contextId, "also"), taskId },
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in completed)) {
+            assert.fail("expected the second continuation to return a task")
+          }
+          assert.strictEqual(
+            completed.status?.state,
+            TaskState.TASK_STATE_COMPLETED
+          )
+          assert.include(taskText(completed), ":yes:also")
+
+          // Once, not twice: the run produced a single terminal state.
+          const stored = yield* promise(() =>
+            client.getTask({ tenant: "", id: taskId })
+          )
+          assert.strictEqual(stored.status?.state, TaskState.TASK_STATE_COMPLETED)
+        }).pipe(Effect.provide(fixture.server))
+      )
     })
   )
 

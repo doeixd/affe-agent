@@ -35,6 +35,7 @@ import {
   Clock,
   Deferred,
   Effect,
+  Fiber,
   Exit,
   FiberSet,
   Layer,
@@ -424,7 +425,12 @@ export const serverLayer = <Principal>(
           sessionId: entry.sessionId
         })
         const matched = yield* host.respond(entry.principal, {
-          requestId: AgentProtocol.RequestId.make(`a2a:${entry.taskId}:respond`),
+          // Keyed by the question as well as the task: a run that asks twice
+          // is answered twice, and an idempotency key per task would reject
+          // the second answer as a replay of the first.
+          requestId: AgentProtocol.RequestId.make(
+            `a2a:${entry.taskId}:respond:${target.id}`
+          ),
           sessionId: entry.sessionId,
           response: { id: target.id, granted: true, value: answer }
         })
@@ -449,17 +455,48 @@ export const serverLayer = <Principal>(
         // How the resumed run settled decides the task's terminal state:
         // completion gets the answer artifact; a failed or interrupted run
         // must not be reported as completed just because it stopped.
+        //
+        // A resumed run may also ask *again*. Waiting only for a terminal
+        // event would then never return: the continuation request hangs, the
+        // bus is never finished, and a third message starts a second
+        // continuation on the same bus that later publishes duplicate
+        // terminal events. A second question is another INPUT_REQUIRED, with
+        // the task left paused exactly as the first one left it.
         let settledWith = ""
+        const askedAgain = yield* Ref.make<Option.Option<ElicitationRequestedEvent>>(Option.none())
         yield* eventsStream.pipe(
-          Stream.filter((envelope) => terminalTags.has(envelope.event._tag)),
+          Stream.filter((envelope) =>
+            terminalTags.has(envelope.event._tag) ||
+            envelope.event._tag === "ElicitationRequested"
+          ),
           Stream.take(1),
           Stream.runForEach((envelope) =>
-            Effect.sync(() => {
-              settledWith = envelope.event._tag
-            })
+            envelope.event._tag === "ElicitationRequested"
+              ? Ref.set(askedAgain, Option.some(envelope.event))
+              : Effect.sync(() => {
+                  settledWith = envelope.event._tag
+                })
           )
         )
         const settledAt = yield* timestamp
+        const again = yield* Ref.get(askedAgain)
+        if (Option.isSome(again)) {
+          yield* Effect.sync(() =>
+            eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
+              entry.taskId,
+              entry.contextId,
+              TaskState.TASK_STATE_INPUT_REQUIRED,
+              settledAt,
+              statusMessage(
+                entry.taskId,
+                entry.contextId,
+                describeRequest(again.value),
+                "input-required"
+              )
+            )))
+          )
+          return
+        }
         yield* Ref.update(paused, (all) => {
           if (!all.has(entry.taskId)) return all
           const next = new Set(all)
@@ -566,7 +603,6 @@ export const serverLayer = <Principal>(
           cancelRequested,
           cancelResolved
         }
-        yield* Ref.update(active, (all) => new Map(all).set(taskId, entry))
         // Only this invocation's entry: a continuation re-registering the same
         // task id must not be unregistered by the earlier fibre settling.
         const releaseEntry = Ref.update(active, (all) => {
@@ -575,6 +611,11 @@ export const serverLayer = <Principal>(
           next.delete(taskId)
           return next
         })
+        // Registered only once everything that can fail before work starts
+        // has succeeded. A task that failed on its input or its subscription
+        // used to stay registered forever, and a later cancel for that id
+        // found it — and interrupted whatever the session was running then.
+        const register = Ref.update(active, (all) => new Map(all).set(taskId, entry))
         yield* Effect.sync(() =>
           eventBus.publish(
             AgentEvent.statusUpdate(
@@ -593,6 +634,7 @@ export const serverLayer = <Principal>(
         const waiting = yield* host.pending(principal, { sessionId })
         const target = waiting.requests[0]
         if (target !== undefined) {
+          yield* register
           yield* continuePaused(
             entry,
             target,
@@ -606,9 +648,14 @@ export const serverLayer = <Principal>(
 
         // Subscribed before the prompt starts so the pause cannot slip past it.
         const eventsStream = yield* host.events(principal, { sessionId })
+        yield* register
         const promptDone = yield* Deferred.make<PromptOutcome>()
         const elicited = yield* Deferred.make<ElicitationRequestedEvent>()
-        yield* Effect.forkIn(
+        // Owned by this request: once the race below is decided the listener
+        // has no further purpose, and left in the layer scope it stayed
+        // subscribed to the session for the layer's lifetime — one fibre per
+        // request that never paused.
+        const listener = yield* Effect.forkIn(
           eventsStream.pipe(
             Stream.filter(isEvent("ElicitationRequested")),
             Stream.take(1),
@@ -653,7 +700,7 @@ export const serverLayer = <Principal>(
         const outcome = yield* Effect.race(
           Deferred.await(promptDone),
           Deferred.await(elicited)
-        )
+        ).pipe(Effect.ensuring(Fiber.interrupt(listener)))
         if (outcome._tag === "ElicitationRequested") {
           const pausedAt = yield* timestamp
           yield* Effect.sync(() =>
@@ -892,7 +939,15 @@ export const serverLayer = <Principal>(
               jsonrpc: "2.0",
               id: null,
               error: {
-                code: error._tag === "AgentUnauthorizedError" ? -32001 : -32603,
+                // JSON-RPC's own vocabulary: a body that is not a request is
+                // the client's fault (-32600), not a server fault (-32603),
+                // which strict clients treat as something to report rather
+                // than fix.
+                code: error._tag === "AgentUnauthorizedError"
+                  ? -32001
+                  : error._tag === "AgentA2AInvalidInputError"
+                    ? -32600
+                    : -32603,
                 message: error.message
               }
             }, {

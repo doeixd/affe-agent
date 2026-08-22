@@ -276,9 +276,20 @@ export const make = <E = never, R = never>(options: {
           // Everything except the retained tail is foldable. Computed from
           // canonical history, so it is the same on every turn that sees the
           // same history — including a replay.
-          const boundary = Math.max(
+          //
+          // Aligned to a user turn. `retain` counts messages, and a raw count
+          // can land the boundary on a tool result whose call was just folded
+          // into the summary — or on an assistant message mid-exchange. The
+          // projection then carries a `tool_result` with no `tool_use`, which
+          // providers reject, so every turn fails until the window happens to
+          // move. The tail therefore starts at the nearest user message at or
+          // before the raw boundary: `retain` is a minimum, never a cut
+          // through an exchange. If no user turn lies between the checkpoint
+          // and the raw boundary, nothing is foldable yet.
+          const boundary = alignToUserTurn(
+            messages,
             covered,
-            messages.length - options.policy.retain
+            Math.max(covered, messages.length - options.policy.retain)
           )
 
           // The threshold measures the stretch that can actually be *folded*:
@@ -339,3 +350,19 @@ export const make = <E = never, R = never>(options: {
         })
       )
   )
+
+/**
+ * The nearest index at or before `raw` (and not before `floor`) that begins
+ * a user turn, so a retained tail never opens mid-exchange.
+ */
+const alignToUserTurn = (
+  messages: ReadonlyArray<Prompt.Message>,
+  floor: number,
+  raw: number
+): number => {
+  let index = raw
+  while (index > floor && messages[index]?.role !== "user") {
+    index = index - 1
+  }
+  return index
+}
