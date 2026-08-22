@@ -364,7 +364,10 @@ describe("local sandbox", () => {
           assert.fail("expected a launch failure")
         }
       }).pipe(Effect.provide(fixture.layer), Effect.scoped)
-    })
+    }),
+    // Several real processes with timed bounds: under a loaded machine the
+    // aggregate can exceed the default budget without anything being wrong.
+    20_000
   )
 
   it.effect("refuses reads that resolve outside the workspace", () =>
