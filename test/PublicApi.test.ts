@@ -229,14 +229,18 @@ describe("durable and cluster surfaces", () => {
       "ResumeEntry",
       "RunAgentInput",
       "custom",
+      "encodePayload",
       "event",
       "events",
+      "initialState",
       "makeEventMapper",
+      "project",
       "run",
       "serverLayer",
       "step",
       "text",
-      "tool"
+      "tool",
+      "transition"
     ])
   })
 

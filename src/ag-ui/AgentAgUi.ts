@@ -415,13 +415,30 @@ export interface EventMapper {
   readonly terminal: Effect.Effect<boolean>
 }
 
-interface MapperState {
+/**
+ * The protocol-local state of one AG-UI run.
+ *
+ * Not agent state: which text messages and steps are open on the wire, which
+ * messages already streamed (so the canonical `MessageCompleted` does not
+ * repeat them), whether `RUN_STARTED` has gone out, and whether a terminal
+ * frame has. It threads through `transition` and lives nowhere else.
+ */
+export interface ProjectionState {
   readonly openMessages: ReadonlySet<string>
   readonly openSteps: ReadonlySet<string>
   readonly streamedMessages: ReadonlySet<string>
   readonly started: boolean
   readonly terminal: boolean
 }
+
+/** The state before any harness event has been projected. */
+export const initialState = (options: MapperOptions): ProjectionState => ({
+  openMessages: new Set(),
+  openSteps: new Set(),
+  streamedMessages: new Set(),
+  started: options.started === true,
+  terminal: false
+})
 
 const correlationKey = (envelope: AgentEvent.AgentEventEnvelope): string => {
   const runId = Option.getOrElse(envelope.runId, () => envelope.sessionId)
@@ -459,267 +476,313 @@ const startedEvent = (options: MapperOptions): RunStartedEvent =>
   })
 
 /**
+ * The wire form of a harness event's payload, for the few events that carry
+ * one: tool arguments and results, an elicitation's structured detail.
+ *
+ * Encoding is the one effectful part of projection -- `JSON.stringify` can
+ * refuse a value -- and is done before `transition`, which therefore stays
+ * a pure function of state and input.
+ */
+export const encodePayload = (
+  event: AgentEvent.AgentEvent
+): Effect.Effect<string | undefined, AgentProtocol.AgentProtocolCodecError> =>
+  event._tag === "ToolCallStarted"
+    ? json(event.params)
+    : event._tag === "ToolCallSucceeded" || event._tag === "ToolCallProgress"
+      ? json(event.encodedResult)
+      : event._tag === "ToolCallFailed"
+        ? json({ error: event.failure, returnedToModel: event.returnedToModel })
+        : event._tag === "ToolCallInterrupted"
+          ? json({ interrupted: true })
+          : event._tag === "ElicitationRequested" && typeof event.detail !== "string"
+            ? json(event.detail)
+            : Effect.void
+
+/**
+ * One harness event in, zero or more AG-UI events out, with the next state.
+ *
+ * This is the whole AG-UI lifecycle projection, as a pure function --
+ * `Stream.mapAccum`'s shape (named `transition` because `step` is the
+ * STEP_* constructor namespace). Everything about pairing lives here: a batch
+ * `MessageCompleted` becomes start/content/end; a streamed one was already
+ * opened by `MessageStarted` and is only closed; a terminal harness event
+ * closes every open frame before the run's own terminal frame; after a
+ * terminal frame nothing further is emitted.
+ */
+export const transition = (
+  options: MapperOptions,
+  current: ProjectionState,
+  envelope: AgentEvent.AgentEventEnvelope,
+  encoded: string | undefined
+): readonly [ProjectionState, ReadonlyArray<Event>] => {
+  const event = envelope.event
+    if (current.terminal) return [current, []]
+    const openMessages = new Set(current.openMessages)
+    const openSteps = new Set(current.openSteps)
+    const streamedMessages = new Set(current.streamedMessages)
+    let started = current.started
+    let terminal: boolean = current.terminal
+    let output: ReadonlyArray<Event> = []
+    const key = correlationKey(envelope)
+    const currentMessageId = messageId(envelope)
+    const currentStepName = stepName(envelope)
+    const closeOpenFrames = (): Array<Event> => {
+      const frames: Array<Event> = []
+      for (const id of openMessages) {
+        frames.push(text.end({ messageId: id }))
+      }
+      openMessages.clear()
+      for (const name of openSteps) {
+        frames.push(step.finished({ stepName: name }))
+      }
+      openSteps.clear()
+      return frames
+    }
+
+    switch (event._tag) {
+      case "SubmissionStarted":
+        if (!started) {
+          output = [startedEvent(options)]
+          started = true
+        }
+        break
+      case "SubmissionCompleted":
+        output = [...closeOpenFrames(), run.success({
+          threadId: options.threadId,
+          runId: options.runId,
+          result: { runs: event.runs }
+        })]
+        terminal = true
+        break
+      case "SubmissionFailed":
+        output = [...closeOpenFrames(), run.error({
+          message: event.failure.message,
+          code: event.failure.tag
+        })]
+        terminal = true
+        break
+      case "SubmissionInterrupted":
+        output = [...closeOpenFrames(), run.error({
+          message: "The agent run was interrupted",
+          code: "INTERRUPTED"
+        })]
+        terminal = true
+        break
+      case "RunStarted":
+        output = [custom({
+          name: "effect-harness/run-started",
+          value: {
+            runId: Option.getOrElse(envelope.runId, () => options.runId)
+          }
+        })]
+        break
+      case "RunCompleted":
+        output = [custom({
+          name: "effect-harness/run-completed",
+          value: {
+            runId: Option.getOrElse(envelope.runId, () => options.runId),
+            turns: event.turns
+          }
+        })]
+        break
+      case "RunFailed":
+        output = [custom({
+          name: "effect-harness/run-failed",
+          value: event.failure
+        })]
+        break
+      case "RunInterrupted":
+        output = [custom({
+          name: "effect-harness/run-interrupted",
+          value: {
+            runId: Option.getOrElse(envelope.runId, () => options.runId)
+          }
+        })]
+        break
+      case "TurnStarted":
+        if (!openSteps.has(currentStepName)) {
+          openSteps.add(currentStepName)
+          output = [step.started({ stepName: currentStepName })]
+        }
+        break
+      case "TurnCompleted":
+        if (openSteps.delete(currentStepName)) {
+          output = [step.finished({ stepName: currentStepName })]
+        }
+        break
+      case "MessageStarted":
+        openMessages.add(currentMessageId)
+        output = [text.start({
+          messageId: currentMessageId,
+          role: "assistant"
+        })]
+        break
+      case "MessageDelta":
+        output = event.kind === "text"
+          ? [text.content({
+              messageId: currentMessageId,
+              delta: event.delta
+            })]
+          : [custom({
+              name: "effect-harness/reasoning-delta",
+              value: { messageId: currentMessageId, delta: event.delta }
+            })]
+        break
+      case "MessageStreamCompleted":
+        if (openMessages.delete(currentMessageId)) {
+          streamedMessages.add(key)
+          output = [text.end({ messageId: currentMessageId })]
+        }
+        break
+      case "MessageCompleted":
+        if (!streamedMessages.has(key)) {
+          output = openMessages.delete(currentMessageId)
+            ? [
+                text.content({
+                  messageId: currentMessageId,
+                  delta: event.text
+                }),
+                text.end({ messageId: currentMessageId })
+              ]
+            : text.message({
+                id: currentMessageId,
+                role: "assistant",
+                text: event.text
+              })
+        }
+        break
+      case "MessageInterrupted":
+      case "MessageFailed":
+        if (openMessages.has(currentMessageId)) {
+          openMessages.delete(currentMessageId)
+          streamedMessages.add(key)
+          output = [text.end({ messageId: currentMessageId })]
+        }
+        break
+      case "ToolCallStarted":
+        output = tool.call({
+          id: event.id,
+          name: event.name,
+          args: encoded ?? "",
+          parentMessageId: currentMessageId
+        })
+        break
+      case "ToolCallProgress":
+        output = [custom({
+          name: "effect-harness/tool-progress",
+          value: {
+            toolCallId: event.id,
+            toolCallName: event.name,
+            content: encoded
+          }
+        })]
+        break
+      case "ToolCallSucceeded":
+        output = [tool.result({
+          messageId: `${event.id}:result`,
+          toolCallId: event.id,
+          content: encoded ?? "",
+          role: "tool"
+        })]
+        break
+      case "ToolCallFailed":
+        output = [tool.result({
+          messageId: `${event.id}:result`,
+          toolCallId: event.id,
+          content: encoded ?? "",
+          role: "tool"
+        })]
+        break
+      case "ToolCallInterrupted":
+        output = [tool.result({
+          messageId: `${event.id}:result`,
+          toolCallId: event.id,
+          content: encoded ?? "",
+          role: "tool"
+        })]
+        break
+      case "ElicitationRequested":
+        output = [...closeOpenFrames(), run.interrupt({
+          threadId: options.threadId,
+          runId: options.runId,
+          interrupts: [{
+            id: event.id,
+            reason: event.kind,
+            message: typeof event.detail === "string"
+              ? event.detail
+              : encoded
+          }]
+        })]
+        terminal = true
+        break
+      case "ElicitationResolved":
+        output = [custom({
+          name: "effect-harness/elicitation-resolved",
+          value: {
+            id: event.id,
+            kind: event.kind,
+            granted: event.granted
+          }
+        })]
+        break
+      case "SteeringQueued":
+      case "SteeringApplied":
+      case "FollowUpQueued":
+      case "FollowUpApplied":
+      case "SessionStarted":
+      case "SessionClosed":
+        break
+    }
+
+    return [{
+      openMessages,
+      openSteps,
+      streamedMessages,
+      started,
+      terminal
+    }, output]
+}
+
+/**
+ * Project a stream of harness events into AG-UI events.
+ *
+ * `Stream.mapAccumEffect` over `transition`: lazy, pull-driven, and carrying the
+ * source's error and requirement channels unchanged. The only effect in the
+ * loop is payload encoding.
+ */
+export const project = <E, R>(
+  options: MapperOptions,
+  events: Stream.Stream<AgentEvent.AgentEventEnvelope, E, R>
+): Stream.Stream<Event, E | AgentProtocol.AgentProtocolCodecError, R> =>
+  events.pipe(
+    Stream.mapAccumEffect(
+      () => initialState(options),
+      (state, envelope) =>
+        Effect.map(encodePayload(envelope.event), (encoded) =>
+          transition(options, state, envelope, encoded)
+        )
+    )
+  )
+
+/**
  * Build the stateful, sequential harness-event to AG-UI projection.
  *
- * Batch messages synthesize start/content/end. Streamed messages remember that
- * they already emitted those frames, so the later canonical MessageCompleted
- * event cannot duplicate the assistant response.
+ * The request handler drives the projection one event at a time from an
+ * observer fibre, so the same `transition` is applied through a `Ref` here; the
+ * `Stream`-shaped form is `project`. There is one implementation of the
+ * lifecycle either way.
  */
 export const makeEventMapper = Effect.fn("AgentAgUi.makeEventMapper")(
   function* (options: MapperOptions) {
-    const state = yield* Ref.make<MapperState>({
-      openMessages: new Set(),
-      openSteps: new Set(),
-      streamedMessages: new Set(),
-      started: options.started === true,
-      terminal: false
-    })
+    const state = yield* Ref.make<ProjectionState>(initialState(options))
 
     const map = Effect.fn("AgentAgUi.EventMapper.map")(function* (
       envelope: AgentEvent.AgentEventEnvelope
     ) {
-      const event = envelope.event
-      const encoded = event._tag === "ToolCallStarted"
-        ? yield* json(event.params)
-        : event._tag === "ToolCallSucceeded" || event._tag === "ToolCallProgress"
-        ? yield* json(event.encodedResult)
-        : event._tag === "ToolCallFailed"
-        ? yield* json({
-            error: event.failure,
-            returnedToModel: event.returnedToModel
-          })
-        : event._tag === "ToolCallInterrupted"
-        ? yield* json({ interrupted: true })
-        : event._tag === "ElicitationRequested" && typeof event.detail !== "string"
-        ? yield* json(event.detail)
-        : undefined
-
-      return yield* Ref.modify(state, (current): readonly [ReadonlyArray<Event>, MapperState] => {
-        if (current.terminal) return [[], current]
-        const openMessages = new Set(current.openMessages)
-        const openSteps = new Set(current.openSteps)
-        const streamedMessages = new Set(current.streamedMessages)
-        let started = current.started
-        let terminal: boolean = current.terminal
-        let output: ReadonlyArray<Event> = []
-        const key = correlationKey(envelope)
-        const currentMessageId = messageId(envelope)
-        const currentStepName = stepName(envelope)
-        const closeOpenFrames = (): Array<Event> => {
-          const frames: Array<Event> = []
-          for (const id of openMessages) {
-            frames.push(text.end({ messageId: id }))
-          }
-          openMessages.clear()
-          for (const name of openSteps) {
-            frames.push(step.finished({ stepName: name }))
-          }
-          openSteps.clear()
-          return frames
-        }
-
-        switch (event._tag) {
-          case "SubmissionStarted":
-            if (!started) {
-              output = [startedEvent(options)]
-              started = true
-            }
-            break
-          case "SubmissionCompleted":
-            output = [...closeOpenFrames(), run.success({
-              threadId: options.threadId,
-              runId: options.runId,
-              result: { runs: event.runs }
-            })]
-            terminal = true
-            break
-          case "SubmissionFailed":
-            output = [...closeOpenFrames(), run.error({
-              message: event.failure.message,
-              code: event.failure.tag
-            })]
-            terminal = true
-            break
-          case "SubmissionInterrupted":
-            output = [...closeOpenFrames(), run.error({
-              message: "The agent run was interrupted",
-              code: "INTERRUPTED"
-            })]
-            terminal = true
-            break
-          case "RunStarted":
-            output = [custom({
-              name: "effect-harness/run-started",
-              value: {
-                runId: Option.getOrElse(envelope.runId, () => options.runId)
-              }
-            })]
-            break
-          case "RunCompleted":
-            output = [custom({
-              name: "effect-harness/run-completed",
-              value: {
-                runId: Option.getOrElse(envelope.runId, () => options.runId),
-                turns: event.turns
-              }
-            })]
-            break
-          case "RunFailed":
-            output = [custom({
-              name: "effect-harness/run-failed",
-              value: event.failure
-            })]
-            break
-          case "RunInterrupted":
-            output = [custom({
-              name: "effect-harness/run-interrupted",
-              value: {
-                runId: Option.getOrElse(envelope.runId, () => options.runId)
-              }
-            })]
-            break
-          case "TurnStarted":
-            if (!openSteps.has(currentStepName)) {
-              openSteps.add(currentStepName)
-              output = [step.started({ stepName: currentStepName })]
-            }
-            break
-          case "TurnCompleted":
-            if (openSteps.delete(currentStepName)) {
-              output = [step.finished({ stepName: currentStepName })]
-            }
-            break
-          case "MessageStarted":
-            openMessages.add(currentMessageId)
-            output = [text.start({
-              messageId: currentMessageId,
-              role: "assistant"
-            })]
-            break
-          case "MessageDelta":
-            output = event.kind === "text"
-              ? [text.content({
-                  messageId: currentMessageId,
-                  delta: event.delta
-                })]
-              : [custom({
-                  name: "effect-harness/reasoning-delta",
-                  value: { messageId: currentMessageId, delta: event.delta }
-                })]
-            break
-          case "MessageStreamCompleted":
-            if (openMessages.delete(currentMessageId)) {
-              streamedMessages.add(key)
-              output = [text.end({ messageId: currentMessageId })]
-            }
-            break
-          case "MessageCompleted":
-            if (!streamedMessages.has(key)) {
-              output = openMessages.delete(currentMessageId)
-                ? [
-                    text.content({
-                      messageId: currentMessageId,
-                      delta: event.text
-                    }),
-                    text.end({ messageId: currentMessageId })
-                  ]
-                : text.message({
-                    id: currentMessageId,
-                    role: "assistant",
-                    text: event.text
-                  })
-            }
-            break
-          case "MessageInterrupted":
-          case "MessageFailed":
-            if (openMessages.has(currentMessageId)) {
-              openMessages.delete(currentMessageId)
-              streamedMessages.add(key)
-              output = [text.end({ messageId: currentMessageId })]
-            }
-            break
-          case "ToolCallStarted":
-            output = tool.call({
-              id: event.id,
-              name: event.name,
-              args: encoded ?? "",
-              parentMessageId: currentMessageId
-            })
-            break
-          case "ToolCallProgress":
-            output = [custom({
-              name: "effect-harness/tool-progress",
-              value: {
-                toolCallId: event.id,
-                toolCallName: event.name,
-                content: encoded
-              }
-            })]
-            break
-          case "ToolCallSucceeded":
-            output = [tool.result({
-              messageId: `${event.id}:result`,
-              toolCallId: event.id,
-              content: encoded ?? "",
-              role: "tool"
-            })]
-            break
-          case "ToolCallFailed":
-            output = [tool.result({
-              messageId: `${event.id}:result`,
-              toolCallId: event.id,
-              content: encoded ?? "",
-              role: "tool"
-            })]
-            break
-          case "ToolCallInterrupted":
-            output = [tool.result({
-              messageId: `${event.id}:result`,
-              toolCallId: event.id,
-              content: encoded ?? "",
-              role: "tool"
-            })]
-            break
-          case "ElicitationRequested":
-            output = [...closeOpenFrames(), run.interrupt({
-              threadId: options.threadId,
-              runId: options.runId,
-              interrupts: [{
-                id: event.id,
-                reason: event.kind,
-                message: typeof event.detail === "string"
-                  ? event.detail
-                  : encoded
-              }]
-            })]
-            terminal = true
-            break
-          case "ElicitationResolved":
-            output = [custom({
-              name: "effect-harness/elicitation-resolved",
-              value: {
-                id: event.id,
-                kind: event.kind,
-                granted: event.granted
-              }
-            })]
-            break
-          case "SteeringQueued":
-          case "SteeringApplied":
-          case "FollowUpQueued":
-          case "FollowUpApplied":
-          case "SessionStarted":
-          case "SessionClosed":
-            break
-        }
-
-        return [output, {
-          openMessages,
-          openSteps,
-          streamedMessages,
-          started,
-          terminal
-        }]
+      const encoded = yield* encodePayload(envelope.event)
+      return yield* Ref.modify(state, (current) => {
+        const [next, output] = transition(options, current, envelope, encoded)
+        return [output, next]
       })
     })
 

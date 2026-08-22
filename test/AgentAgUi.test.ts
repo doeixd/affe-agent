@@ -233,6 +233,60 @@ describe("AgentAgUi event projection", () => {
     })
   )
 
+  it.effect("the projection is a pure Stream transformation with one implementation", () =>
+    Effect.gen(function* () {
+      // The same harness events, once through the Stream-shaped projection
+      // and once through the mapper the request handler drives. They must
+      // agree exactly: there is one lifecycle, expressed as `transition`.
+      const options = { threadId: "thread-1", runId: "ag-ui-run-1" }
+      const source: ReadonlyArray<AgentEvent.AgentEvent> = [
+        { _tag: "SubmissionStarted" },
+        { _tag: "TurnStarted" },
+        { _tag: "MessageStarted" },
+        { _tag: "MessageDelta", kind: "text", delta: "hel" },
+        { _tag: "MessageDelta", kind: "text", delta: "lo" },
+        { _tag: "MessageStreamCompleted" },
+        { _tag: "MessageCompleted", text: "hello" },
+        { _tag: "ToolCallStarted", id: "c1", name: "search", params: { q: "x" } },
+        { _tag: "ToolCallSucceeded", id: "c1", name: "search", result: "r", encodedResult: "r" },
+        { _tag: "TurnCompleted" },
+        { _tag: "SubmissionCompleted", runs: 1 },
+        // After the terminal frame nothing may follow, whatever arrives.
+        { _tag: "TurnStarted" },
+        { _tag: "MessageCompleted", text: "late" }
+      ]
+      const envelopes = source.map((event, index) => envelope(index + 1, event))
+
+      const projected = AgentAgUi.project(options, Stream.fromIterable(envelopes))
+      // Lazy and typed: the source's channels pass through, plus the one
+      // failure projection itself can raise.
+      type _Error = Assert<
+        Equal<Stream.Error<typeof projected>, AgentProtocol.AgentProtocolCodecError>
+      >
+      type _Services = Assert<Equal<Stream.Services<typeof projected>, never>>
+      const viaStream = yield* Stream.runCollect(projected)
+
+      const mapper = yield* AgentAgUi.makeEventMapper(options)
+      const viaMapper = yield* mapAll(mapper, source)
+
+      assert.deepStrictEqual(viaStream, viaMapper)
+      assert.strictEqual(viaStream[viaStream.length - 1]?.type, "RUN_FINISHED")
+      assert.strictEqual(viaStream.filter((e) => e.type === "TEXT_MESSAGE_START").length, 1)
+      assert.strictEqual(viaStream.filter((e) => e.type === "TEXT_MESSAGE_END").length, 1)
+      for (const event of viaStream) {
+        assert.isTrue(EventSchemas.safeParse(event).success)
+      }
+
+      // And `transition` is pure: the same state and input give the same
+      // output, and it never mutates what it was given.
+      const initial = AgentAgUi.initialState(options)
+      const once = AgentAgUi.transition(options, initial, envelopes[0]!, undefined)
+      const twice = AgentAgUi.transition(options, initial, envelopes[0]!, undefined)
+      assert.deepStrictEqual(once, twice)
+      assert.deepStrictEqual(initial, AgentAgUi.initialState(options))
+    })
+  )
+
   it.effect("does not duplicate a streamed message and balances an interrupt", () =>
     Effect.gen(function* () {
       const mapper = yield* AgentAgUi.makeEventMapper({

@@ -1880,3 +1880,30 @@ necessary for the probe to mean anything: `uuid` (through the A2A SDK) and
 
 `globalThis.crypto.randomUUID()` in the durable client stays: a Web-standard
 global is not host coupling, and every supported runtime provides it.
+
+## The AG-UI projection is a pure transition (issue #6)
+
+Issue #6 asked that protocol flow be built from Effect's own primitives
+rather than a `Flow`/`Projection` runtime, and that the AG-UI adapter's
+lifecycle bookkeeping be one pure state machine wrapped by `Stream.mapAccum`.
+The typed constructors (`text`, `run`, `step`, `tool`, `custom`, `events`)
+already existed; the lifecycle lived inside a `Ref.modify` callback in
+`makeEventMapper`, which is the right shape hidden in the wrong place.
+
+It is now `AgentAgUi.transition(options, state, envelope, encoded)` -- a
+pure function of protocol-local `ProjectionState` and one harness event,
+returning the next state and zero or more AG-UI events -- with the single
+effectful part, payload encoding, hoisted into `encodePayload`.
+`AgentAgUi.project` is `Stream.mapAccumEffect` over it and carries the
+source's error and requirement channels unchanged; `makeEventMapper`
+applies the same function through a `Ref` for the request handler, which
+drives the projection one event at a time from an observer fibre. One
+implementation of the lifecycle, two shapes. (`transition`, not `step`:
+`step` is the `STEP_*` constructor namespace.)
+
+Pinned: the Stream form and the mapper agree event for event on a streamed
+message, a tool exchange and a terminal frame followed by late events;
+`transition` is pure (same inputs, same output, inputs untouched); the
+projection's error channel is exactly `AgentProtocolCodecError` and its
+requirements `never`, with the assertion broken once to confirm it holds.
+No `Flow`, `Pipeline` or `Channel` was added, and none is needed.
