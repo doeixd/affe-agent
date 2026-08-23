@@ -156,7 +156,7 @@ or a test hold the invariant instead.
   the advertised catalogue and the load tool always agree (dropping the transform
   is no longer expressible in the happy path).
 
-### C4 — `data` channel name collision `P2` · effort 1
+### C4 — `data` channel name collision `P2` · effort 1 · ✅ DONE (renamed the platform battery to /connectors instead)
 - **Problem:** The `channels` battery (platform front-ends) and `data`'s
   `channel()` (typed output buses) are unrelated concepts sharing a word in
   sibling packages. Cheap now, expensive after adoption.

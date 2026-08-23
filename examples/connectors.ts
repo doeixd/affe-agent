@@ -2,7 +2,7 @@ import { Config, Effect, Layer, Option, Schema } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpIncomingMessage, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Agent from "../src/Agent.js"
 import { AgentClient, AgentSessionHost } from "../src/client/index.js"
-import { Channels } from "../src/channels/index.js"
+import { Connectors } from "../src/connectors/index.js"
 
 /**
  * A Slack channel: the agent answers messages in a Slack workspace.
@@ -46,14 +46,14 @@ const decode = (request: HttpServerRequest.HttpServerRequest) =>
     const body = yield* HttpIncomingMessage.schemaBodyJson(SlackEnvelope)(request)
     // Slack's one-time endpoint verification.
     if (body.type === "url_verification" && body.challenge !== undefined) {
-      return Channels.respondWith(HttpServerResponse.text(body.challenge))
+      return Connectors.respondWith(HttpServerResponse.text(body.challenge))
     }
     const event = Option.fromNullishOr(body.event)
     // Ignore anything that isn't a user's message (a bot's own posts included).
     if (Option.isNone(event) || event.value.bot_id !== undefined || event.value.text === undefined) {
-      return Channels.ignored
+      return Connectors.ignored
     }
-    return Channels.delivered({
+    return Connectors.delivered({
       conversation: event.value.channel ?? "unknown",
       text: event.value.text,
       deliveryId: body.event_id ?? "unknown",
@@ -61,7 +61,7 @@ const decode = (request: HttpServerRequest.HttpServerRequest) =>
     })
   })
 
-const slack = Channels.serverLayer({
+const slack = Connectors.serverLayer({
   host: Host,
   path: "/slack/events",
   decode,

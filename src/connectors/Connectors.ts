@@ -5,9 +5,9 @@ import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 
 /**
- * Channels (issue #4 §10): put an agent in front of an external platform --
+ * Connectors (issue #4 §10): put an agent in front of an external platform --
  * Slack, a webhook, a queue -- over the same `AgentSessionHost` seam the HTTP,
- * RPC, AG-UI and A2A adapters use. A channel is a thin adapter, not a second
+ * RPC, AG-UI and A2A adapters use. A connector is a thin adapter, not a second
  * Agent API; it owns at most four things, and everything else is the host's:
  *
  * 1. **Verify/authenticate** the incoming event -- done by the host's
@@ -22,7 +22,7 @@ import * as AgentSessionHost from "../client/AgentSessionHost.js"
  * Two safety properties fall out and are worth stating:
  *
  * - **Duplicate deliveries dedupe for free.** Webhooks redeliver by design; a
- *   channel derives the host's `RequestId` from the platform's stable delivery
+ *   connector derives the host's `RequestId` from the platform's stable delivery
  *   id, and the host already joins a repeated mutation to its first result
  *   rather than running it twice. No extra store.
  * - **The prompt-injection boundary holds.** The message text is untrusted
@@ -58,7 +58,7 @@ export interface Options<Principal, SE = never, RE = never, RR = never> {
     | ((delivery: Delivery, principal: Principal) => Effect.Effect<AgentProtocol.SessionId, SE>)
     | undefined
   /**
-   * Post the agent's result back to the platform. This is where a Slack channel
+   * Post the agent's result back to the platform. This is where a Slack connector
    * calls `chat.postMessage`, or a webhook answers its callback url.
    */
   readonly reply: (
@@ -67,29 +67,29 @@ export interface Options<Principal, SE = never, RE = never, RR = never> {
   ) => Effect.Effect<void, RE, RR>
 }
 
-/** A channel: hand it a decoded delivery and it runs the agent and replies. */
-export interface Channel<SE, RE, RR> {
+/** A connector: hand it a decoded delivery and it runs the agent and replies. */
+export interface Connector<SE, RE, RR> {
   readonly deliver: (
     delivery: Delivery
   ) => Effect.Effect<AgentProtocol.RemoteResult, AgentProtocol.RemoteError | SE | RE, RR>
 }
 
 /**
- * Build a channel over a host. `deliver` authenticates, resolves and
+ * Build a connector over a host. `deliver` authenticates, resolves and
  * get-or-creates the session, prompts it, and replies -- with the request ids
  * derived from the delivery id, so a redelivery is deduped by the host.
  */
 export const make = <Principal, SE = never, RE = never, RR = never>(
   options: Options<Principal, SE, RE, RR>
-): Effect.Effect<Channel<SE, RE, RR>, never, AgentSessionHost.Service<Principal>> =>
-  Effect.map(options.host, (host): Channel<SE, RE, RR> => ({
+): Effect.Effect<Connector<SE, RE, RR>, never, AgentSessionHost.Service<Principal>> =>
+  Effect.map(options.host, (host): Connector<SE, RE, RR> => ({
     deliver: (delivery) =>
       Effect.gen(function* () {
         // The delivery id is the dedup key; an empty or non-unique one would
         // collapse distinct messages in a conversation into one run. That is a
         // decode bug, so fail loudly rather than silently drop a message.
         if (delivery.deliveryId === "") {
-          return yield* Effect.die(new Error("Channels: delivery.deliveryId must be a stable, non-empty id"))
+          return yield* Effect.die(new Error("Connectors: delivery.deliveryId must be a stable, non-empty id"))
         }
         // Authenticated from the headers before the session is known.
         const principal = yield* host.resolve({
@@ -166,7 +166,7 @@ export const serverLayer = <Principal, SE = never, RE = never, RR = never, DE = 
 ) =>
   HttpRouter.use((router) =>
     Effect.gen(function* () {
-      const channel = yield* make(options)
+      const connector = yield* make(options)
       // The layer's scope, not the per-request scope: a delivery is forked here
       // so it outlives the 200 ack. Forking into the request scope would have
       // the response's flush interrupt the run before the agent ever answered.
@@ -181,15 +181,15 @@ export const serverLayer = <Principal, SE = never, RE = never, RR = never, DE = 
                 return Effect.succeed(HttpServerResponse.empty({ status: 200 }))
               case "deliver":
                 // Ack fast; the reply is delivered by `reply` once the run ends.
-                return channel.deliver(decoded.delivery).pipe(
-                  Effect.catchCause((cause) => Effect.logError("channels: delivery failed", cause)),
+                return connector.deliver(decoded.delivery).pipe(
+                  Effect.catchCause((cause) => Effect.logError("connectors: delivery failed", cause)),
                   Effect.forkIn(layerScope),
                   Effect.as(HttpServerResponse.empty({ status: 200 }))
                 )
             }
           }),
           Effect.catchCause((cause) =>
-            Effect.logError("channels: decode failed", cause).pipe(
+            Effect.logError("connectors: decode failed", cause).pipe(
               Effect.as(HttpServerResponse.empty({ status: 400 }))
             ))
         ))

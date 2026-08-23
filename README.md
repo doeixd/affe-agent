@@ -59,7 +59,7 @@ on `Agent.make` or a `Layer` you provide at the session:
 | **`elicitation`** | `Agent.make` | where a paused run waits for an outside answer | `Elicitation` (local / durable) |
 | **`InputChannel`** | `Agent.make` | where steering / follow-up input is held | core (memory / durable) |
 | **`eventSink` / `events`** | session | synchronous or streamed observation of lifecycle events | `/observability`, `/hooks`, `/data` |
-| **`AgentSessionHost`** | transport | the request-facing session seam a transport drives | `/http`, `/rpc`, `/ag-ui`, `/a2a`, `/channels` |
+| **`AgentSessionHost`** | transport | the request-facing session seam a transport drives | `/http`, `/rpc`, `/ag-ui`, `/a2a`, `/connectors` |
 | **`LanguageModel`** | `Layer` | the model provider | `/openai`, `@effect/ai-*` |
 | **`Sandbox`** | `Layer` | the filesystem / process capability tools run against | `/sandbox` (+ `/sandbox/local`) |
 
@@ -74,7 +74,7 @@ Core is the default import; everything else is an explicit subpath.
 : `/client` · `/rpc` · `/http` · `/ag-ui` · `/a2a` · `/mcp` (`/mcp/v1`, `/mcp/v2`) · `/durable` · `/cluster` · `/durable-streams` · `/openai`.
 
 **Batteries** (capabilities over a seam)
-: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/channels` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop.
+: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop.
 
 **Host & testing**
 : `/sandbox` (portable) + `/sandbox/local` (host) · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
@@ -1316,32 +1316,32 @@ your `onError`), never tearing down the observer or the run. Hooks *observe*;
 behaviour is changed through the run's own seams (`Permission`,
 `ContextTransform`, `AgentLoop`).
 
-## Channels
+## Connectors
 
-`@doeixd/effect-agent/channels` puts an agent in front of an external platform —
+`@doeixd/effect-agent/connectors` puts an agent in front of an external platform —
 Slack, a webhook, a queue — over the same `AgentSessionHost` seam the HTTP, RPC,
-AG-UI and A2A adapters use. A channel is a thin adapter, not a second Agent API;
+AG-UI and A2A adapters use. A connector is a thin adapter, not a second Agent API;
 it owns at most four things, and everything else is the host's: verify (the
 host authenticates the principal from the delivery's headers), map the external
 conversation to a session, prompt, and reply.
 
 ```ts
-import { Channels } from "@doeixd/effect-agent/channels"
+import { Connectors } from "@doeixd/effect-agent/connectors"
 
-const channel = yield* Channels.make({
+const connector = yield* Connectors.make({
   host: Host,                                   // the shared AgentSessionHost tag
   reply: (result, { delivery }) => postToSlack(delivery.conversation, result.text)
 })
-yield* channel.deliver({ conversation, text, deliveryId, headers })
+yield* connector.deliver({ conversation, text, deliveryId, headers })
 ```
 
 Two properties fall out. **Duplicate deliveries dedupe for free**: webhooks
-redeliver by design, and a channel derives the host's `RequestId` from the
+redeliver by design, and a connector derives the host's `RequestId` from the
 platform's stable delivery id, so the host joins a repeat to its first result
 rather than running it twice — no extra store. And the **prompt-injection
 boundary holds**: the message text is untrusted model input, while identity and
 authorization come from the host's principal (from headers), never from strings
-the sender supplied. `Channels.serverLayer` mounts a webhook that acks within
+the sender supplied. `Connectors.serverLayer` mounts a webhook that acks within
 the platform's timeout and does the work in the background; the app's `decode`
 owns the platform specifics (signature check, challenge, retries) — so the core
 stays portable.
@@ -1665,8 +1665,8 @@ context transforms and canonical history are directly testable.
   `@doeixd/effect-agent/observability`
 - [`examples/data.ts`](./examples/data.ts) — a tool emitting typed records to a
   UI channel while the run proceeds, via `@doeixd/effect-agent/data`
-- [`examples/channels.ts`](./examples/channels.ts) — a Slack webhook that
-  verifies, dedupes, prompts and replies, via `@doeixd/effect-agent/channels`
+- [`examples/connectors.ts`](./examples/connectors.ts) — a Slack webhook that
+  verifies, dedupes, prompts and replies, via `@doeixd/effect-agent/connectors`
 - [`examples/hooks.ts`](./examples/hooks.ts) — typed lifecycle hooks logging
   tool and run events over a session, via `@doeixd/effect-agent/hooks`
 - [`examples/scheduling.ts`](./examples/scheduling.ts) — a tool that schedules a

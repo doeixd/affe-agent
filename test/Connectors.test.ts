@@ -6,7 +6,7 @@ import { createServer } from "node:http"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
-import { Channels } from "../src/channels/index.js"
+import { Connectors } from "../src/connectors/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -17,7 +17,7 @@ import { TestLanguageModel } from "../src/testing/index.js"
  * get distinct sessions; and a bad principal is refused before anything runs.
  */
 
-const Host = AgentSessionHost.Tag<string>("test/Channels/host")
+const Host = AgentSessionHost.Tag<string>("test/Connectors/host")
 
 // A host over an in-process client and a scripted model. The principal is the
 // `authorization` header; absent, the request is unauthorized. Built with the
@@ -42,7 +42,7 @@ const hostFor = (turns: ReadonlyArray<TestLanguageModel.Turn>) =>
   }))
 
 const auth = Headers.fromInput({ authorization: "user-a" })
-const delivery = (over: Partial<Channels.Delivery>): Channels.Delivery => ({
+const delivery = (over: Partial<Connectors.Delivery>): Connectors.Delivery => ({
   conversation: "C1",
   text: "hello",
   deliveryId: "d1",
@@ -50,13 +50,13 @@ const delivery = (over: Partial<Channels.Delivery>): Channels.Delivery => ({
   ...over
 })
 
-describe("Channels", () => {
+describe("Connectors", () => {
   it.effect("deliver authenticates, runs the agent, and replies with the result", () =>
     Effect.gen(function* () {
       const host = yield* hostFor([TestLanguageModel.text("the answer")])
       const out = yield* Effect.gen(function* () {
         const replies = yield* Ref.make<ReadonlyArray<{ conversation: string; text: string }>>([])
-        const channel = yield* Channels.make({
+        const channel = yield* Connectors.make({
           host: Host,
           reply: (result, { delivery }) =>
             Ref.update(replies, (all) => [...all, { conversation: delivery.conversation, text: result.text }])
@@ -74,7 +74,7 @@ describe("Channels", () => {
     Effect.gen(function* () {
       const host = yield* hostFor([TestLanguageModel.text("first"), TestLanguageModel.text("second")])
       const out = yield* Effect.gen(function* () {
-        const channel = yield* Channels.make({ host: Host, reply: () => Effect.void })
+        const channel = yield* Connectors.make({ host: Host, reply: () => Effect.void })
         const a = yield* channel.deliver(delivery({ deliveryId: "same" }))
         const b = yield* channel.deliver(delivery({ deliveryId: "same" }))
         return { a, b, calls: yield* host.recorder.calls }
@@ -91,7 +91,7 @@ describe("Channels", () => {
     Effect.gen(function* () {
       const host = yield* hostFor([TestLanguageModel.text("one"), TestLanguageModel.text("two")])
       const calls = yield* Effect.gen(function* () {
-        const channel = yield* Channels.make({ host: Host, reply: () => Effect.void })
+        const channel = yield* Connectors.make({ host: Host, reply: () => Effect.void })
         yield* channel.deliver(delivery({ conversation: "A", deliveryId: "a1" }))
         yield* channel.deliver(delivery({ conversation: "B", deliveryId: "b1" }))
         return yield* host.recorder.calls
@@ -109,7 +109,7 @@ describe("Channels", () => {
         // Two distinct conversations mapped to ONE session id: only if the
         // returned id is threaded through does the second run share the first's
         // history. (Under the default resolver these would be two sessions.)
-        const channel = yield* Channels.make({
+        const channel = yield* Connectors.make({
           host: Host,
           session: () => Effect.succeed(AgentProtocol.SessionId.make("shared")),
           reply: () => Effect.void
@@ -129,7 +129,7 @@ describe("Channels", () => {
     Effect.gen(function* () {
       const host = yield* hostFor([TestLanguageModel.text("answer")])
       const error = yield* Effect.gen(function* () {
-        const channel = yield* Channels.make({
+        const channel = yield* Connectors.make({
           host: Host,
           reply: () => Effect.fail("platform post failed" as const)
         })
@@ -144,7 +144,7 @@ describe("Channels", () => {
     Effect.gen(function* () {
       const host = yield* hostFor([TestLanguageModel.text("first"), TestLanguageModel.text("second")])
       const out = yield* Effect.gen(function* () {
-        const channel = yield* Channels.make({ host: Host, reply: () => Effect.void })
+        const channel = yield* Connectors.make({ host: Host, reply: () => Effect.void })
         const first = yield* channel.deliver(delivery({ deliveryId: "dup", text: "one" }))
         const conflict = yield* Effect.flip(channel.deliver(delivery({ deliveryId: "dup", text: "two" })))
         return { first, conflict }
@@ -159,7 +159,7 @@ describe("Channels", () => {
     Effect.gen(function* () {
       const host = yield* hostFor([TestLanguageModel.text("never")])
       const outcome = yield* Effect.gen(function* () {
-        const channel = yield* Channels.make({ host: Host, reply: () => Effect.void })
+        const channel = yield* Connectors.make({ host: Host, reply: () => Effect.void })
         const error = yield* Effect.flip(channel.deliver(delivery({ headers: Headers.empty })))
         return { error, calls: yield* host.recorder.calls }
       }).pipe(Effect.provide(host.layer), Effect.scoped)
@@ -170,7 +170,7 @@ describe("Channels", () => {
   )
 })
 
-describe("Channels.serverLayer", () => {
+describe("Connectors.serverLayer", () => {
   const Body = Schema.Struct({
     kind: Schema.String,
     conversation: Schema.optional(Schema.String),
@@ -201,17 +201,17 @@ describe("Channels.serverLayer", () => {
         Layer.provide(model)
       )
 
-      const app = Channels.serverLayer({
+      const app = Connectors.serverLayer({
         host: Host,
         path: "/hook",
         decode: (request) =>
           HttpIncomingMessage.schemaBodyJson(Body)(request).pipe(
             Effect.map((body) =>
               body.kind === "challenge" && body.challenge !== undefined
-                ? Channels.respondWith(HttpServerResponse.text(body.challenge))
+                ? Connectors.respondWith(HttpServerResponse.text(body.challenge))
                 : body.kind === "ignore"
-                ? Channels.ignored
-                : Channels.delivered({
+                ? Connectors.ignored
+                : Connectors.delivered({
                   conversation: body.conversation ?? "C",
                   text: body.text ?? "",
                   deliveryId: body.deliveryId ?? "d",

@@ -2319,25 +2319,25 @@ write→publish→read round-trip (deterministic via the fork-then-`yieldNow`
 pattern), channel isolation, and encode-on-the-wire / decode-on-read with a
 transforming schema. Falsified by removing the channel filter.
 
-## Channels (roadmap #4 §10)
+## Connectors (roadmap #4 §10)
 
-`/channels` puts an agent in front of an external platform over the same
+`/connectors` puts an agent in front of an external platform over the same
 `AgentSessionHost` seam the HTTP/RPC/AG-UI/A2A adapters use -- a thin adapter,
-not a second Agent API. `Channels.make({ host, session?, reply })` yields a
-channel whose `deliver(delivery)` authenticates via the host (from the
+not a second Agent API. `Connectors.make({ host, session?, reply })` yields a
+connector whose `deliver(delivery)` authenticates via the host (from the
 delivery's headers), get-or-creates the session from the conversation's opaque
 id, prompts it, and calls `reply` with the result. The request ids are derived
 from the delivery id, so a redelivery is deduped by the host with no extra
 store; the message text is untrusted input while identity comes from the
-host's principal (the prompt-injection boundary). `Channels.serverLayer` mounts
+host's principal (the prompt-injection boundary). `Connectors.serverLayer` mounts
 a webhook that acks within the platform's timeout and forks the work; the
 application's `decode` owns the platform specifics (signature verification,
 challenge, retries), keeping the core portable. Five tests
-(`test/Channels.test.ts`) against a real in-process host: deliver+reply, host
+(`test/Connectors.test.ts`) against a real in-process host: deliver+reply, host
 dedup of a redelivery (one run for two identical deliveries), distinct
 conversations to distinct sessions, a custom session resolver, and an
 unauthenticated delivery refused before anything runs. Falsified by dropping
-the reply. The Slack shape is in `examples/channels.ts`.
+the reply. The Slack shape is in `examples/connectors.ts`.
 
 ## Lifecycle hooks (roadmap #4 §13)
 

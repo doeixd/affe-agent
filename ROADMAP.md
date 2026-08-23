@@ -17,7 +17,7 @@ transforms, steering/follow-ups, interruption, model streaming, elicitation
 `/mcp` (+v1/v2), `/durable`, `/cluster`, `/durable-streams`, `/openai`.
 
 **Higher-level packages** — `/sandbox` (+local), `/coding`, `/subagent`,
-`/state`, `/skills`, `/memory`, `/evals`, `/observability`, `/data`, `/channels`,
+`/state`, `/skills`, `/memory`, `/evals`, `/observability`, `/data`, `/connectors`,
 `/hooks`, `/scheduling`, `/budget` (token ceiling over the loop seam), and an
 end-to-end integration proving they compose.
 
@@ -35,7 +35,7 @@ end-to-end integration proving they compose.
 | 8 | Reconnectable streaming | `/durable-streams` + DeliveryLog |
 | 11 | Evals | `/evals` |
 | 9 | Structured client/UI data | `/data` |
-| 10 | Channels | `/channels` |
+| 10 | Channels | `/connectors` |
 | 13 | Lifecycle hooks | `/hooks` |
 | 14 | Scheduling / self-dispatch | `/scheduling` |
 | 12 | Observability | `/observability` |
