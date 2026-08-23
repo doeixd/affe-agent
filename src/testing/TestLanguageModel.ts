@@ -1,5 +1,5 @@
-import { IdGenerator, LanguageModel, Prompt, Response } from "effect/unstable/ai"
-import { Deferred, Effect, Layer, Ref, Stream } from "effect"
+import { AiError, IdGenerator, LanguageModel, Prompt, Response } from "effect/unstable/ai"
+import { Deferred, Effect, Layer, Ref, Schedule, Stream } from "effect"
 
 /**
  * A `LanguageModel` that replays a fixed script.
@@ -295,6 +295,51 @@ export const counting = (
         streamText: ((options: never) =>
           Stream.unwrap(
             Ref.update(calls, (n) => n + 1).pipe(Effect.as(inner.streamText(options)))
+          )) as unknown as LanguageModel.Service["streamText"]
+      }
+    })
+  ).pipe(Layer.provide(base))
+
+/**
+ * Wrap a model layer so each call fails transiently the first `failFirst` times
+ * before delegating to `base`, with those failures absorbed by an internal
+ * retry -- exactly what a user does by wrapping a flaky provider layer in
+ * `Effect.retry`. A failed attempt never reaches `base`, so it consumes no
+ * scripted turn; `attempts` records every attempt (the failures plus the one
+ * that succeeds), so a test can prove the retries actually happened.
+ *
+ * Use it to assert that a run recovers from a flaky model deterministically. If
+ * `failFirst` exceeds the retry budget the retry is exhausted and the call fails
+ * for real, which is how the run-failure path is exercised.
+ */
+export const flaky = (
+  base: Layer.Layer<LanguageModel.LanguageModel>,
+  options: { readonly failFirst: number; readonly retries: number; readonly attempts: Ref.Ref<number> }
+): Layer.Layer<LanguageModel.LanguageModel> =>
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    Effect.gen(function* () {
+      const inner = yield* LanguageModel.LanguageModel
+      // One transient gate shared by both entry points: the nth attempt fails
+      // while n is within failFirst, then lets the real call through.
+      const gate = Effect.flatMap(
+        Ref.updateAndGet(options.attempts, (n) => n + 1),
+        (n) =>
+          n <= options.failFirst
+            ? Effect.fail(new AiError.InternalProviderError({ description: `transient failure ${n}` }))
+            : Effect.void
+      )
+      return {
+        ...inner,
+        generateText: ((callOptions: never) =>
+          Effect.andThen(gate, inner.generateText(callOptions)).pipe(
+            Effect.retry(Schedule.recurs(options.retries))
+          )) as unknown as LanguageModel.Service["generateText"],
+        streamText: ((callOptions: never) =>
+          Stream.unwrap(
+            Effect.as(gate, inner.streamText(callOptions)).pipe(
+              Effect.retry(Schedule.recurs(options.retries))
+            )
           )) as unknown as LanguageModel.Service["streamText"]
       }
     })

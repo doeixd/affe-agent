@@ -210,7 +210,7 @@ or a test hold the invariant instead.
 - **Files:** `src/AgentEvent.ts`.
 - **Acceptance:** One representation, or a written, sound rationale at the seam.
 
-### D4 — Retry-policy test coverage `P2` · effort 1
+### D4 — Retry-policy test coverage `P2` · effort 1 · ✅ DONE
 - **Problem:** The one real hole in an otherwise thorough suite. No dedicated
   test asserts fail-turn-N-then-succeed under a retry policy, nor its interaction
   with `maxTurns`, interruption, and event emission — central behavior for a
