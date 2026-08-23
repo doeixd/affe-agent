@@ -1,4 +1,4 @@
-import { Effect, Option, SubscriptionRef } from "effect"
+import { Effect, Option, Ref, SubscriptionRef } from "effect"
 import type { AiError, LanguageModel, Tool } from "effect/unstable/ai"
 import type { Correlation } from "./AgentEvent.js"
 import * as AgentTurn from "./AgentTurn.js"
@@ -67,6 +67,16 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
       if (result.text.length > 0) {
         text = result.text
       }
+
+      // The turn has committed atomically. Record it in the submission's live
+      // progress (turns is the submission-wide total, so it increments by one
+      // here) so an interrupt during a *later* turn still reports this one.
+      yield* Ref.update(session.progress, (p) => ({
+        runs: p.runs,
+        turns: p.turns + 1,
+        text: result.text.length > 0 ? result.text : p.text,
+        response: Option.some(result.response)
+      }))
 
       // Follow-up state is deliberately not passed: whether more work is
       // scheduled after this run is submission orchestration, not a reason for

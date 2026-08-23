@@ -30,7 +30,7 @@ import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
 import type { SubmissionId } from "./internal/ids.js"
-import type { Session, SessionState, Status } from "./internal/state.js"
+import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
 
 /** Correlation id for a session. See `AgentEvent` for the envelope. */
 export const Id = Ids.SessionId
@@ -247,6 +247,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     const activeFiber = yield* Ref.make<Option.Option<Fiber.Fiber<any, any>>>(
       Option.none()
     )
+    // Live progress of the active submission, so an interrupt can still report
+    // the runs/turns/text/usage that committed before it. Reset per submission.
+    const progress = yield* Ref.make<SubmissionProgress<Tools>>({
+      runs: 0,
+      turns: 0,
+      text: "",
+      response: Option.none()
+    })
     const ids = yield* Ids.makeIdSource
     const submissionName = options?.submissionIds ?? ((count: number) => `submission-${count}`)
 
@@ -255,6 +263,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       agent: agent as AgentDefinition<any, any>,
       state,
       history,
+      progress,
       bus,
       steering,
       followUps,
@@ -510,14 +519,18 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     if (Exit.isFailure(exit)) {
       // Interruption is a terminal state, not a caller-level failure: the
       // caller learns about it from the result rather than being interrupted.
+      // The runs/turns/text/usage reported are those that committed before the
+      // interrupt (turns commit atomically, so a rolled-back partial turn is not
+      // counted), read from the live submission progress.
       if (Cause.hasInterruptsOnly(exit.cause)) {
+        const landed = yield* Ref.get(self.progress)
         return {
           submissionId,
           status: "interrupted",
-          runs: 0,
-          turns: 0,
-          text: "",
-          response: Option.none()
+          runs: landed.runs,
+          turns: landed.turns,
+          text: landed.text,
+          response: landed.response
         } satisfies Result<Tools>
       }
       return yield* Effect.failCause(exit.cause)

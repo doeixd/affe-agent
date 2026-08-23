@@ -785,6 +785,37 @@ describe("interruption", () => {
     })
   )
 
+  it.effect("an interrupted Result reports the turns that committed before the interrupt", () =>
+    Effect.gen(function* () {
+      // Turn 1 answers with text and calls a tool, so it commits and the run
+      // continues; turn 2 hangs at the model. Interrupting during turn 2 must
+      // still report turn 1's committed work -- not zeros.
+      const started = yield* Deferred.make<void>()
+
+      const outcome = yield* withSession(
+        [
+          { text: "partial answer", toolCalls: [callEcho("t1")] },
+          { hang: true, started }
+        ],
+        Agent.make({ toolkit: echoToolkit, loop: AgentLoop.bounded(5) }),
+        ({ session }) =>
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(AgentSession.prompt(session, "go"))
+            yield* Deferred.await(started) // turn 1 committed, turn 2 has begun
+            yield* AgentSession.interrupt(session)
+            return yield* Fiber.join(fiber)
+          })
+      )
+
+      const result = outcome.value
+      assert.strictEqual(result.status, "interrupted")
+      assert.strictEqual(result.turns, 1) // exactly the one committed turn
+      assert.strictEqual(result.runs, 1)
+      assert.strictEqual(result.text, "partial answer")
+      assert.isTrue(Option.isSome(result.response))
+    })
+  )
+
   it.effect("an interrupted turn commits nothing", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()

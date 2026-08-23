@@ -1,5 +1,5 @@
 import type { Context, Effect, Fiber, Option, Ref, Scope, Semaphore, SubscriptionRef } from "effect"
-import type { Prompt, Tool } from "effect/unstable/ai"
+import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { Elicitor } from "../Elicitation.js"
 import type { InputChannel } from "../InputChannel.js"
@@ -40,6 +40,25 @@ export interface SessionState {
 }
 
 /**
+ * Progress of the active submission, accumulated as it runs so that an
+ * *interrupted* submission can still report the work that actually landed.
+ *
+ * Turns commit atomically, so this is updated once per committed turn (never for
+ * the partially-executed turn an interrupt rolls back) and once per run start.
+ * When a submission completes normally the caller gets these same figures from
+ * the run loop's return; the point of holding them here is the interrupt path,
+ * where there is no return value to read.
+ */
+export interface SubmissionProgress<
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+> {
+  readonly runs: number
+  readonly turns: number
+  readonly text: string
+  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+}
+
+/**
  * The internal session value threaded through turn, run and submission
  * execution. Not exported from the package.
  */
@@ -62,6 +81,12 @@ export interface Session<
    * stays the way to read it.
    */
   readonly history: Ref.Ref<Prompt.Prompt>
+  /**
+   * Live progress of the active submission, updated per committed turn. Read on
+   * the interrupt path to report what landed before the interrupt; reset by
+   * `AgentSubmission` when a new submission begins.
+   */
+  readonly progress: Ref.Ref<SubmissionProgress<Tools>>
   readonly bus: EventBus
   /** Out-of-band input; substitutable so a durable runtime can record it. */
   readonly steering: InputChannel

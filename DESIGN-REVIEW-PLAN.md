@@ -180,7 +180,7 @@ or a test hold the invariant instead.
 
 ## Workstream D — Kernel polish (smaller, real)
 
-### D1 — Interrupted `Result` is lossy `P2` · effort 1
+### D1 — Interrupted `Result` is lossy `P2` · effort 1 · ✅ DONE
 - **Problem:** `AgentSession.ts:518-525` returns `text:"", response:none,
   turns:0, runs:0` on interrupt even when completed turns produced text and usage
   before the interrupt. A caller interrupting mid-run learns nothing about work

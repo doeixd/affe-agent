@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Option, SubscriptionRef } from "effect"
+import { Cause, Effect, Exit, Option, Ref, SubscriptionRef } from "effect"
 import type { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
@@ -63,6 +63,11 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
 
+    // Fresh progress for this submission, so an interrupt reports only the work
+    // this submission committed, not a prior one's. Runs increment here; turns
+    // and text/usage are updated per committed turn inside `AgentRun`.
+    yield* Ref.set(session.progress, { runs: 0, turns: 0, text: "", response: Option.none() })
+
     while (next !== undefined) {
       if (runs > 0) {
         // Ordering: FollowUpQueued < RunCompleted < FollowUpApplied < RunStarted
@@ -73,6 +78,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       yield* History.commit(session.history, next)
       const runId = yield* session.ids.nextRun
       runs = runs + 1
+      yield* Ref.update(session.progress, (p) => ({ ...p, runs }))
 
       const exit = yield* Effect.exit(
         AgentRun.execute(session, submissionId, runId, options)
