@@ -1091,7 +1091,9 @@ the original request identity.
 `@doeixd/effect-agent/sandbox` is a scoped filesystem-and-process capability
 that user-defined tools demand through the ordinary requirement channel. It
 exists to prove the composition the whole design bets on — nothing here
-changes the agent core, and no first-party coding tools are exported:
+changes the agent core. A ready-made battery ships on top of it (see [Coding
+toolkit](#coding-toolkit) below), but the seam is the point, and a tool is just
+this:
 
 ```ts
 const ReadFile = Tool.make("read_file", {
@@ -1131,6 +1133,32 @@ removes it when the acquiring scope closes; commands run without a shell,
 with exact executable/argument separation, time limits and bounded output.
 Its documentation states plainly what it is not: **a security boundary**. It
 runs with your program's full privileges.
+
+### Coding toolkit
+
+`@doeixd/effect-agent/coding` is a ready-made battery of the tools a coding
+agent needs — `read_file` (with line numbers and a range), `write_file`,
+`edit_file` (an exact string replace that refuses an ambiguous match),
+`list_files`, `search` (an in-process tree walk, so it works against any
+provider) and `bash`. It is *not* a core capability: every tool is an ordinary
+`Tool` whose handler demands `Sandbox.Current`, exactly like the one above. That
+a serious toolkit needs no change to the agent core is the whole point.
+
+```ts
+import { CodingToolkit } from "@doeixd/effect-agent/coding"
+
+const Coder = Agent.make({
+  instructions: "You edit code in the workspace.",
+  toolkit: CodingToolkit.toolkit()
+})
+```
+
+Which sandbox runs — an in-memory world for tests, a real directory on disk —
+arrives through the same one-line layer wiring, invisible to the tools. And
+every tool carries a [permission](#permissions) projection: the file tools
+project to `read`/`write` on the path, `bash` to `shell` on the command, so a
+policy can allow reads, ask before writes and deny `rm -rf` without knowing
+anything about these tools' parameter shapes.
 
 ## Snapshots
 
@@ -1226,6 +1254,8 @@ context transforms and canonical history are directly testable.
   clients addressing one durable session
 - [`examples/sandbox.ts`](./examples/sandbox.ts) — user-defined coding tools
   over the sandbox seam; provider swap is one line of layer wiring
+- [`examples/coding-agent.ts`](./examples/coding-agent.ts) — the shipped
+  `@doeixd/effect-agent/coding` battery behind a permission policy
 
 ## Runtimes
 

@@ -63,6 +63,10 @@
       "types": "./dist/ag-ui/index.d.ts",
       "default": "./dist/ag-ui/index.js"
     },
+    "./coding": {
+      "types": "./dist/coding/index.d.ts",
+      "default": "./dist/coding/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"
