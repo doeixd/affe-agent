@@ -266,6 +266,35 @@ describe("OpenAiAgent over the in-process client", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("many concurrent requests with one idempotency key execute exactly once", () =>
+    Effect.gen(function* () {
+      // The begin() get-check-insert must be atomic: a non-atomic version lets
+      // two concurrent requests both observe no entry and both execute. Fire a
+      // burst at one key and assert a single execution.
+      const release = yield* Deferred.make<void>()
+      const { address, recorder } = yield* makeServer(
+        Agent.make({ loop: AgentLoop.bounded(2) }),
+        [{ text: "single", during: Deferred.await(release) }, TestLanguageModel.text("never")]
+      )
+      const request = { model: "agent", messages: [user("go")] }
+      const headers = { "idempotency-key": "burst" }
+      const fibers = yield* Effect.forkChild(
+        Effect.all(
+          Array.from({ length: 20 }, () => post(address, request, headers)),
+          { concurrency: "unbounded" }
+        )
+      )
+      yield* Deferred.succeed(release, void 0)
+      const responses = yield* Fiber.join(fibers)
+      const bodies = yield* Effect.forEach(responses, completion)
+      // All twenty joined the one execution and got the one result.
+      for (const body of bodies) {
+        assert.strictEqual(body.choices[0]?.message.content, "single")
+      }
+      assert.strictEqual(yield* recorder.calls, 1)
+    }).pipe(Effect.scoped)
+  )
+
   it.live("a failed attempt releases its idempotency key so a retry executes again", () =>
     Effect.gen(function* () {
       let attempts = 0
@@ -328,6 +357,44 @@ describe("OpenAiAgent over the in-process client", () => {
       yield* Deferred.succeed(release, void 0)
       const next = yield* post(address, { model: "agent", messages: [user("again")] })
       assert.strictEqual(next.status, 200)
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("a stream interrupted mid-generation does not poison its idempotency key with a partial result", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>()
+      const { address, recorder } = yield* makeServer(Agent.make({ loop: AgentLoop.bounded(2) }), [
+        { text: "the full and complete answer", chunks: ["the full ", "and complete ", "answer"], during: Deferred.await(release) },
+        TestLanguageModel.text("re-executed")
+      ])
+      const headers = { "idempotency-key": "cut-short" }
+      const controller = new AbortController()
+      const aborted = yield* Effect.forkChild(
+        Effect.promise(() =>
+          fetch(`${address}/v1/chat/completions`, {
+            method: "POST",
+            headers: { "content-type": "application/json", ...headers },
+            body: JSON.stringify({ model: "agent", messages: [user("go")], stream: true }),
+            signal: controller.signal
+          })
+            .then((r) => r.text())
+            .catch(() => "aborted")
+        )
+      )
+      yield* Effect.sleep("50 millis")
+      controller.abort()
+      assert.strictEqual(yield* Fiber.join(aborted), "aborted")
+      // The interrupted attempt did not commit a result for the key. A retry
+      // re-executes rather than replaying a truncated answer.
+      yield* Deferred.succeed(release, void 0)
+      const retry = yield* post(address, { model: "agent", messages: [user("go")] }, headers)
+      assert.strictEqual(retry.status, 200)
+      const body = yield* completion(retry)
+      // The retry re-executed (the model advanced to its second turn), rather
+      // than replaying the interrupted attempt's partial "the full ". Two
+      // executions, and the answer is a complete one, never a truncated chunk.
+      assert.strictEqual(body.choices[0]?.message.content, "re-executed")
+      assert.strictEqual(yield* recorder.calls, 2)
     }).pipe(Effect.scoped)
   )
 

@@ -97,15 +97,20 @@ export const memoryIdempotency: Effect.Effect<IdempotencyStore> = Effect.sync(()
     }
   >()
   return {
+    // One synchronous block: the get-check-insert must not yield, or two
+    // concurrent requests with the same key could both observe no entry and
+    // both execute -- the exact double-execution the key exists to prevent.
+    // `Effect.sync` runs atomically with respect to other fibers, and
+    // `Deferred.makeUnsafe` keeps it synchronous.
     begin: (key, fingerprint) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         const existing = entries.get(key)
         if (existing !== undefined) {
           return existing.fingerprint === fingerprint
             ? { _tag: "Joined" as const, result: Deferred.await(existing.result) }
             : { _tag: "Mismatch" as const }
         }
-        const result = yield* Deferred.make<
+        const result = Deferred.makeUnsafe<
           OpenAiSchema.ChatCompletionResponse,
           OpenAiSchema.ErrorBody
         >()
@@ -559,11 +564,19 @@ export const serverLayer = (
         // The collected text is what an idempotent retry replays.
         let text = ""
         let failure: OpenAiSchema.ErrorBody | undefined
+        // Whether the stream reached its terminal `Done` frame. A stream cut
+        // short -- the consumer disconnects mid-generation -- must not record
+        // the partial text as the answer, or a retry under the same key would
+        // replay a truncated result. It records a failure instead, releasing
+        // the key so the retry re-executes.
+        let completed = false
         return sseResponse(
           live(session, input, projection).pipe(
             Stream.tap((frame) =>
               Effect.sync(() => {
-                if (frame._tag === "Chunk") {
+                if (frame._tag === "Done") {
+                  completed = true
+                } else if (frame._tag === "Chunk") {
                   text += frame.chunk.choices[0]?.delta.content ?? ""
                 } else if (frame._tag === "Error") {
                   failure = frame.error
@@ -573,9 +586,21 @@ export const serverLayer = (
             Stream.ensuring(
               Effect.suspend(() =>
                 record(
-                  failure === undefined
-                    ? Exit.succeed(Projection.response.success(projection, text))
-                    : Exit.fail(new OpenAiError({ status: 422, error: failure }))
+                  failure !== undefined
+                    ? Exit.fail(new OpenAiError({ status: 422, error: failure }))
+                    : completed
+                      ? Exit.succeed(Projection.response.success(projection, text))
+                      // Interrupted before the terminal frame: release the key.
+                      : Exit.fail(
+                          new OpenAiError({
+                            status: 503,
+                            error: Projection.error(
+                              "server_error",
+                              "the stream was interrupted before completing",
+                              "interrupted"
+                            )
+                          })
+                        )
                 )
               )
             )
