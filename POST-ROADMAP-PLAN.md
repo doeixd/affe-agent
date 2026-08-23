@@ -83,9 +83,8 @@ extend*, not *create*.
   (per-tenant MCP, credentials, feature flags) — exists and is tested, but is
   undocumented, so nobody knows to reach for it. (Issue #4 item 7.)
 - **Fix:** a short README section under the tools material explaining the
-  Effect-valued `toolkit`, when it re-resolves, and the requirement/҃error
-  requirement/error implications; plus a typechecked
-  `examples/dynamic-capabilities.ts` that
+  Effect-valued `toolkit`, when it re-resolves, and the requirement/error
+  implications; plus a typechecked `examples/dynamic-capabilities.ts` that
   resolves a per-tenant toolkit from a service read at turn time.
 - **Files:** `README.md`, `examples/dynamic-capabilities.ts`.
 - **Acceptance:** the example typechecks under the examples tsconfig; the section
