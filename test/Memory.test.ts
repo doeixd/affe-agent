@@ -127,6 +127,37 @@ describe("Memory.rememberTool", () => {
   )
 })
 
+describe("Memory.install", () => {
+  it.effect("wires the remember tool and the recall transform together", () =>
+    Effect.gen(function* () {
+      const saved = yield* Ref.make<ReadonlyArray<string>>([])
+      const custom = Layer.succeed(Memory.Memory, {
+        recall: () => Effect.succeed({ entries: [{ content: "Alice prefers dark mode." }] }),
+        remember: (_scope, entry) => Ref.update(saved, (all) => [...all, entry.content])
+      })
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "r1", name: "remember", params: { content: "Alice's timezone is CET." } }] },
+        TestLanguageModel.text("noted")
+      ])
+      // One call bundles recall + remember; neither half can be forgotten.
+      const agent = Agent.make({ instructions: "assist", loop: AgentLoop.bounded(4) })
+        .pipe(Memory.install("alice"))
+
+      const { result, prompts, savedAfter } = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(agent)
+        const result = yield* session.prompt("hi")
+        return { result, prompts: yield* recorder.prompts, savedAfter: yield* Ref.get(saved) }
+      }).pipe(Effect.provide(Layer.merge(custom, layer)), Effect.scoped)
+
+      // recall ran: the remembered fact was injected into the first prompt...
+      assert.include(JSON.stringify(prompts[0]), "Alice prefers dark mode")
+      // ...and the remember tool ran: the new fact was saved.
+      assert.deepStrictEqual(savedAfter, ["Alice's timezone is CET."])
+      assert.strictEqual(result.text, "noted")
+    })
+  )
+})
+
 describe("Memory.writer", () => {
   it.effect("saves nothing when the extractor returns None", () =>
     Effect.gen(function* () {

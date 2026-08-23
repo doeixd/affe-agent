@@ -139,7 +139,7 @@ or a test hold the invariant instead.
 - **Acceptance:** No `unknown` in a public `Evals` signature; a type-level
   assertion pins the error channel and is falsified once.
 
-### C3 — Untyped "wiring triples" (`skills`, `memory`) `P2` · effort 1
+### C3 — Untyped "wiring triples" (`skills`, `memory`) `P2` · effort 1 · ✅ DONE
 - **Problem:** `skills` needs three independent pieces in agreement —
   `tools:[loadTool]`, `contextTransform: advertise`, `Effect.provide(layer)` —
   and nothing type-checks the pairing; omit the transform and the model never

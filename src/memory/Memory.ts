@@ -30,6 +30,11 @@ import * as Permission from "../Permission.js"
  *   each turn from an extractor you supply. Deliberate, model-driven saving and
  *   automatic saving; use either or both.
  *
+ * `Memory.install(scope)` bundles the recall transform and the remember tool
+ * onto an agent in one step -- `Agent.make({...}).pipe(Memory.install(scope))` --
+ * so a reader is never wired without a writer or vice versa; the pieces above
+ * stay available for hand composition.
+ *
  * `scope` is who the memory belongs to -- a user or tenant id. Derive it from a
  * trusted application service or auth, **never** from unvalidated model output,
  * or one user's session could read another's memory.
@@ -216,6 +221,33 @@ export const rememberTool = (scope: MemoryScope) => {
     )
   return Agent.tool(RememberMemory, handler)
 }
+
+/**
+ * Install memory for `scope` into an agent in one step: add the `remember` tool
+ * *and* compose the {@link recall} transform. Bundling the two removes the
+ * footgun of wiring one without the other -- recall without the tool lets the
+ * agent read memory but never write, the tool without recall lets it write
+ * memory it will never be shown. Provide a `Memory` layer at the session to
+ * satisfy the requirement this adds. Automatic post-turn writing (`writer`) is a
+ * separate, explicit opt-in and is not bundled here.
+ *
+ * ```ts
+ * const agent = Agent.make({ instructions: "..." }).pipe(Memory.install("user-42"))
+ * // ...then Effect.provide(Memory.layer())
+ * ```
+ */
+export const install = (
+  scope: MemoryScope,
+  options?: {
+    readonly query?: ((prompt: Prompt.Prompt) => string) | undefined
+    readonly render?: ((recall: MemoryRecall) => string) | undefined
+  }
+) =>
+<Tools extends Record<string, Tool.Any>, E, R>(agent: Agent.AgentDefinition<Tools, E, R>) =>
+  agent.pipe(
+    Agent.withTools(rememberTool(scope)),
+    Agent.updateContextTransform((current) => ContextTransform.compose(current, recall(scope, options)))
+  )
 
 /**
  * A loop hook that records to memory after each turn, from an extractor you

@@ -39,10 +39,10 @@ import * as Permission from "../Permission.js"
  *   })
  * ])
  *
- * const agent = Agent.make({
- *   tools: [Skills.loadTool],
- *   contextTransform: Skills.advertise
- * })
+ * // `install` bundles the load tool and the advertise transform so neither can
+ * // be wired without the other; `loadTool` / `advertise` remain available for
+ * // agents that compose them by hand.
+ * const agent = Agent.make({ instructions: "..." }).pipe(Skills.install)
  * // ...provide `registry` at the session.
  * ```
  */
@@ -243,3 +243,24 @@ const loadHandler: Agent.Handler<typeof LoadSkill> = ({ resource, skill_id }) =>
 
 /** The `load_skill` tool bound to its handler, ready for `Agent.make({ tools: [...] })`. */
 export const loadTool = Agent.tool(LoadSkill, loadHandler)
+
+/**
+ * Install skills into an agent in one step: add the `load_skill` tool *and*
+ * compose the {@link advertise} transform. Bundling the two removes the footgun
+ * of wiring one without the other -- advertise without the tool shows the model
+ * a catalogue it cannot open; the tool without advertise means it never learns
+ * the catalogue exists, and nothing type-checks that pairing. Provide
+ * `Skills.layer(...)` at the session to satisfy the `SkillRegistry` this adds.
+ *
+ * ```ts
+ * const agent = Agent.make({ instructions: "..." }).pipe(Skills.install)
+ * // ...then Effect.provide(Skills.layer([docsSkill, refactorSkill]))
+ * ```
+ */
+export const install = <Tools extends Record<string, Tool.Any>, E, R>(
+  agent: Agent.AgentDefinition<Tools, E, R>
+) =>
+  agent.pipe(
+    Agent.withTools(loadTool),
+    Agent.updateContextTransform((current) => ContextTransform.compose(current, advertise))
+  )

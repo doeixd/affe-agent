@@ -121,6 +121,30 @@ describe("Skills in a session", () => {
     })
   )
 
+  it.effect("Skills.install wires the load tool and the advertise transform together", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "l1", name: "load_skill", params: { skill_id: "refunds" } }] },
+        TestLanguageModel.text("refund issued")
+      ])
+      // One call bundles both halves -- neither can be forgotten.
+      const agent = Agent.make({ instructions: "Help with support.", loop: AgentLoop.bounded(4) })
+        .pipe(Skills.install)
+
+      const { result, prompts } = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(agent)
+        const result = yield* session.prompt("issue a refund")
+        return { result, prompts: yield* recorder.prompts }
+      }).pipe(Effect.provide(Layer.merge(Skills.layer([refunds, greeting]), layer)), Effect.scoped)
+
+      // advertise ran (metadata in the first prompt, never the body)...
+      assert.include(JSON.stringify(prompts[0]), "refunds: Issuing refunds")
+      assert.notInclude(JSON.stringify(prompts[0]), "verify the order")
+      // ...and the load_skill tool was callable, so the run completed.
+      assert.strictEqual(result.text, "refund issued")
+    })
+  )
+
   it.effect("loading an unknown skill returns a failure the model can read, not a defect", () =>
     Effect.gen(function* () {
       const { layer } = yield* TestLanguageModel.script([
