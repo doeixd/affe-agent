@@ -2351,3 +2351,25 @@ inferred from the registered handlers via `-?` extraction. Two deterministic
 tests (`test/Hooks.test.ts`) over a real run's collected events: typed dispatch
 with unregistered tags ignored, and a failing handler isolated while a sibling
 still fires. Falsified by removing the isolation.
+
+## Scheduling & self-dispatch (roadmap #4 §14)
+
+`/scheduling` is adapters over Effect's own scheduling, not a runtime. Two
+things: `AgentDispatcher` -- the "enqueue future work" seam a tool calls
+(`Scheduling.dispatch({ input, delay })`) to schedule a follow-up run, with the
+destination decided by a layer; and `Scheduling.recurring`, a resilient wrapper
+over `Effect.repeat` + `Schedule` (a failing run is logged and the cadence
+continues). `Scheduling.local` runs dispatched jobs in-process via `Effect.delay`
+and a fibre forked into the layer scope, capturing the agent's `LanguageModel | R`
+so each job is self-contained; a dispatched run's failure is isolated. Durable
+destinations (Workflow `DurableClock`, a durable queue, a remote `AgentClient`)
+are the same interface; durable cluster-wide cron already exists as
+`ScheduledAgent` over `ClusterCron`. Three deterministic tests
+(`test/Scheduling.test.ts`) driven by `TestClock`: a prompt job runs promptly, a
+delayed job runs only after its delay (one TestClock shared with the fibre via
+`Layer.build`/`succeedContext`), and a recurring run fires per interval and
+survives a failing run. Falsified by ignoring the delay.
+
+With this the issue #4 P0-P3 roadmap is complete: coding, subagent, state,
+skills, memory, evals, observability, data, channels, hooks and scheduling all
+ship as batteries over existing seams, with no core changes.

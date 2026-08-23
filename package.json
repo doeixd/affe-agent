@@ -103,6 +103,10 @@
       "types": "./dist/hooks/index.d.ts",
       "default": "./dist/hooks/index.js"
     },
+    "./scheduling": {
+      "types": "./dist/scheduling/index.d.ts",
+      "default": "./dist/scheduling/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"

@@ -36,21 +36,21 @@ they compose.
 | 9 | Structured client/UI data | `/data` |
 | 10 | Channels | `/channels` |
 | 13 | Lifecycle hooks | `/hooks` |
+| 14 | Scheduling / self-dispatch | `/scheduling` |
 | 12 | Observability | `/observability` |
 
 Issue #1 (items 1–9) is complete; the transports and sandbox it left open have
 all since landed.
 
-## Remaining gaps (all P2/P3)
+## Remaining gaps
 
-Ranked by value-to-surface for what to build next:
+The issue #4 P0–P3 capability roadmap (items 1–14) is **complete**. What's left
+is ecosystem polish, not capability:
 
-1. **Scheduling / self-dispatch (`#14`)** — an `AgentDispatcher` Service (local
-   / Workflow / queue impls) so an agent can enqueue future work without
-   learning a scheduling runtime. **Top (last) build pick.**
-2. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
+1. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
    sandbox/channel/deployment adapters (a real crypto-backed Slack signature
-   verifier as a host-flagged sub-entry, more channel platforms).
+   verifier as a host-flagged sub-entry, more channel platforms, durable/queue
+   implementations of `AgentDispatcher`).
 
 ### Small refinements worth folding in
 

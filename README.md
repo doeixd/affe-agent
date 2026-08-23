@@ -1197,6 +1197,32 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Scheduling & self-dispatch
+
+`@doeixd/effect-agent/scheduling` adds two thin things over Effect's own
+scheduling — it is not a scheduler runtime. **`AgentDispatcher`** is the
+"enqueue future work" seam: a tool calls `Scheduling.dispatch({ input, delay })`
+to schedule a follow-up run without touching timers or infrastructure, and a
+layer decides where it goes. **`Scheduling.recurring`** runs an agent on a
+`Schedule` (including `Schedule.cron`), resiliently — a failing run is logged
+and the cadence continues.
+
+```ts
+import { Scheduling } from "@doeixd/effect-agent/scheduling"
+
+// A tool self-dispatches a follow-up (depends on the dispatcher seam):
+Agent.tool(ScheduleFollowUp, ({ prompt, afterMinutes }) =>
+  Scheduling.dispatch({ input: prompt, delay: `${afterMinutes} minutes` }))
+
+// A daily digest, resiliently, on cron:
+yield* Effect.forkScoped(Scheduling.recurring(Digest, "summarise today", Schedule.cron("0 9 * * *")))
+```
+
+`Scheduling.local` runs dispatched jobs in-process (`Effect.delay` + a forked
+fibre in the layer's scope); for durability, provide a Workflow/queue
+implementation of the same `AgentDispatcher` — the agent doesn't change. For
+durable, cluster-wide cron there's already `ScheduledAgent` over `ClusterCron`.
+
 ## Lifecycle hooks
 
 `@doeixd/effect-agent/hooks` runs typed side effects at points in a run — a tool
@@ -1576,6 +1602,8 @@ context transforms and canonical history are directly testable.
   verifies, dedupes, prompts and replies, via `@doeixd/effect-agent/channels`
 - [`examples/hooks.ts`](./examples/hooks.ts) — typed lifecycle hooks logging
   tool and run events over a session, via `@doeixd/effect-agent/hooks`
+- [`examples/scheduling.ts`](./examples/scheduling.ts) — a tool that schedules a
+  follow-up run, and a resilient cron digest, via `@doeixd/effect-agent/scheduling`
 
 ## Runtimes
 
