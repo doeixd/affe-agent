@@ -435,7 +435,7 @@ modifying it:
 | | |
 |---|---|
 | **Durability in core** | Core stays in-process. Durable execution ships separately as `@doeixd/effect-agent/durable`, where the *same* agent definition runs inside an Effect `Workflow`: model and tool calls become `Activity`s, so a resumed submission replays them instead of repeating them. A refund goes out once. |
-| **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session. Memory is a service plus a transform. Neither needs a first-class concept. |
+| **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session. Memory is a service plus a transform. Neither needs a first-class concept — the optional `@doeixd/effect-agent/subagent` helper is just that pattern packaged, adding nothing to the core (see [Subagents](#subagents)). |
 
 ## Durable execution
 
@@ -1160,6 +1160,43 @@ project to `read`/`write` on the path, `bash` to `shell` on the command, so a
 policy can allow reads, ask before writes and deny `rm -rf` without knowing
 anything about these tools' parameter shapes.
 
+## Subagents
+
+A subagent is a tool that opens a child session — no first-class concept, just
+the pieces composing. `@doeixd/effect-agent/subagent` packages that pattern so
+you write it once instead of by hand:
+
+```ts
+import { Subagent } from "@doeixd/effect-agent/subagent"
+
+const research = Subagent.tool("research", Researcher, {
+  description: "Research a question and return a short findings summary.",
+  provide: OpenAiLanguageModel.model("gpt-4o-mini")   // the child's own world
+})
+
+const Lead = Agent.make({
+  instructions: "Delegate research, then decide.",
+  tools: [research]                                    // an ordinary bound tool
+})
+```
+
+`Subagent.tool` returns an `Agent.BoundTool`, so it drops into any agent's
+`tools` beside hand-written ones and is gated by a policy like anything else.
+Two properties come for free from the structured pieces underneath:
+
+- **Isolation.** The child runs under the model and services named in
+  `provide`, supplied there and nowhere else — so parent and child never share
+  a conversation, and a cheaper model for a narrow subtask is one argument.
+- **Interruption.** The child session opens inside the tool handler's scope,
+  which is the parent submission's scope, so interrupting the parent interrupts
+  the child through ordinary structured concurrency — no cancellation protocol
+  crosses the boundary.
+
+A child failure returns to the parent model as a string on the tool's `failure`
+channel by default — "the researcher could not find it" is something the parent
+can route around — while a defect still propagates as a bug. Pass
+`onError: "die"` to fail the parent run instead.
+
 ## Snapshots
 
 A conversation is a value, so it can be stored and brought back:
@@ -1256,6 +1293,9 @@ context transforms and canonical history are directly testable.
   over the sandbox seam; provider swap is one line of layer wiring
 - [`examples/coding-agent.ts`](./examples/coding-agent.ts) — the shipped
   `@doeixd/effect-agent/coding` battery behind a permission policy
+- [`examples/subagent.ts`](./examples/subagent.ts) — a lead agent that
+  delegates to a child running under its own model, via
+  `@doeixd/effect-agent/subagent`
 
 ## Runtimes
 
