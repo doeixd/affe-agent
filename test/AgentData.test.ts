@@ -28,6 +28,21 @@ describe("AgentData.channel reads", () => {
       assert.deepStrictEqual([...orders], [{ id: "A", total: 1 }, { id: "B", total: 2 }])
     })
   )
+
+  it.effect("drops an undecodable payload rather than killing the reader", () =>
+    Effect.gen(function* () {
+      // The middle event is on the orders channel but violates its schema --
+      // a different writer sharing the name, or a version skew.
+      const events: ReadonlyArray<AgentData.DataEvent> = [
+        { channel: "orders", sequence: 1, payload: { id: "A", total: 1 } },
+        { channel: "orders", sequence: 2, payload: { nope: true } },
+        { channel: "orders", sequence: 3, payload: { id: "B", total: 2 } }
+      ]
+      const orders = yield* Stream.runCollect(Orders.reads(Stream.fromIterable(events)))
+      // The bad event is skipped; the reader survives and gets the good ones.
+      assert.deepStrictEqual([...orders], [{ id: "A", total: 1 }, { id: "B", total: 2 }])
+    })
+  )
 })
 
 describe("AgentData round-trip", () => {
@@ -45,6 +60,35 @@ describe("AgentData round-trip", () => {
 
       const orders = yield* Queue.takeAll(received)
       assert.deepStrictEqual([...orders], [{ id: "A-1", total: 42 }, { id: "A-2", total: 7 }])
+    }).pipe(Effect.provide(AgentData.layer), Effect.scoped)
+  )
+
+  it.effect("assigns a strictly increasing sequence across channels", () =>
+    Effect.gen(function* () {
+      const raw = yield* Queue.unbounded<AgentData.DataEvent>()
+      const rawEvents = Stream.unwrap(Effect.map(AgentData.DataChannels, (channels) => channels.events))
+      yield* Effect.forkScoped(Stream.runForEach(rawEvents, (event) => Queue.offer(raw, event)))
+      yield* Effect.yieldNow
+      yield* Orders.write({ id: "A", total: 1 })
+      yield* Alerts.write({ message: "hi" })
+      yield* Orders.write({ id: "B", total: 2 })
+      yield* Effect.yieldNow
+      const seqs = [...(yield* Queue.takeAll(raw))].map((event) => event.sequence)
+      assert.deepStrictEqual(seqs, [1, 2, 3])
+    }).pipe(Effect.provide(AgentData.layer), Effect.scoped)
+  )
+
+  it.effect("fans out: two readers of a channel each receive every value", () =>
+    Effect.gen(function* () {
+      const a = yield* Queue.unbounded<Order>()
+      const b = yield* Queue.unbounded<Order>()
+      yield* Effect.forkScoped(Stream.runForEach(Orders.stream, (order) => Queue.offer(a, order)))
+      yield* Effect.forkScoped(Stream.runForEach(Orders.stream, (order) => Queue.offer(b, order)))
+      yield* Effect.yieldNow
+      yield* Orders.write({ id: "A-1", total: 9 })
+      yield* Effect.yieldNow
+      assert.deepStrictEqual([...(yield* Queue.takeAll(a))], [{ id: "A-1", total: 9 }])
+      assert.deepStrictEqual([...(yield* Queue.takeAll(b))], [{ id: "A-1", total: 9 }])
     }).pipe(Effect.provide(AgentData.layer), Effect.scoped)
   )
 

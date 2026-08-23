@@ -85,6 +85,12 @@ export const make = <Principal, SE = never, RE = never, RR = never>(
   Effect.map(options.host, (host): Channel<SE, RE, RR> => ({
     deliver: (delivery) =>
       Effect.gen(function* () {
+        // The delivery id is the dedup key; an empty or non-unique one would
+        // collapse distinct messages in a conversation into one run. That is a
+        // decode bug, so fail loudly rather than silently drop a message.
+        if (delivery.deliveryId === "") {
+          return yield* Effect.die(new Error("Channels: delivery.deliveryId must be a stable, non-empty id"))
+        }
         // Authenticated from the headers before the session is known.
         const principal = yield* host.resolve({
           operation: "prompt",
@@ -161,6 +167,10 @@ export const serverLayer = <Principal, SE = never, RE = never, RR = never, DE = 
   HttpRouter.use((router) =>
     Effect.gen(function* () {
       const channel = yield* make(options)
+      // The layer's scope, not the per-request scope: a delivery is forked here
+      // so it outlives the 200 ack. Forking into the request scope would have
+      // the response's flush interrupt the run before the agent ever answered.
+      const layerScope = yield* Effect.scope
       yield* router.add("POST", options.path, (request) =>
         options.decode(request).pipe(
           Effect.flatMap((decoded) => {
@@ -173,7 +183,7 @@ export const serverLayer = <Principal, SE = never, RE = never, RR = never, DE = 
                 // Ack fast; the reply is delivered by `reply` once the run ends.
                 return channel.deliver(decoded.delivery).pipe(
                   Effect.catchCause((cause) => Effect.logError("channels: delivery failed", cause)),
-                  Effect.forkScoped,
+                  Effect.forkIn(layerScope),
                   Effect.as(HttpServerResponse.empty({ status: 200 }))
                 )
             }

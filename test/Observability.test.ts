@@ -92,12 +92,45 @@ describe("Observability.describe", () => {
         "It is Sunny in Paris."
       )
 
-      // redact scrubs whatever content is turned on.
-      const scrubbed = Observability.describe(toolStarted, {
-        ...Observability.withContent,
-        redact: () => "[redacted]"
-      })
-      assert.strictEqual(scrubbed.attributes[N.toolParams], "[redacted]")
+      // redact scrubs every content field it is applied to -- params, results
+      // and model text alike, not only the first branch.
+      const redact = { ...Observability.withContent, redact: () => "[redacted]" }
+      assert.strictEqual(Observability.describe(toolStarted, redact).attributes[N.toolParams], "[redacted]")
+      assert.strictEqual(Observability.describe(toolSucceeded, redact).attributes[N.toolResult], "[redacted]")
+      assert.strictEqual(Observability.describe(message, redact).attributes[N.modelText], "[redacted]")
+    })
+  )
+})
+
+describe("Observability.describe on a failed tool", () => {
+  const Boom = Tool.make("boom", { parameters: Schema.Struct({}), success: Schema.String, failure: Schema.String })
+  const BoomAgent = Agent.make({
+    instructions: "boom",
+    tools: [Agent.tool(Boom, () => Effect.fail("nope"))],
+    loop: AgentLoop.bounded(3)
+  })
+
+  it.effect("a failed or interrupted tool records its name and id but never a result, even under withContent", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "b1", name: "boom", params: {} }] },
+        TestLanguageModel.text("gave up")
+      ])
+      const envelopes = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(BoomAgent)
+        const probe = yield* AgentProbe.make(session)
+        yield* session.prompt("go")
+        return yield* probe.events
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      const failed = find(envelopes, "ToolCallFailed")!
+      const record = Observability.describe(failed, Observability.withContent)
+      assert.strictEqual(record.name, "ai.tool")
+      assert.strictEqual(record.attributes[N.toolName], "boom")
+      assert.strictEqual(record.attributes[N.toolCallId], "b1")
+      // A failure carries no result, even with content turned on.
+      assert.isUndefined(record.attributes[N.toolResult])
+      assert.isUndefined(record.attributes[N.toolParams])
     })
   )
 })
@@ -119,6 +152,21 @@ describe("Observability.trace", () => {
       assert.isTrue(records.some((r) => r.name === "ai.model"))
       // Base attributes are merged into every record.
       assert.isTrue(records.every((r) => r.attributes[N.durable] === false))
+    })
+  )
+
+  it.effect("a record's own attributes win over a colliding base attribute", () =>
+    Effect.gen(function* () {
+      const envelopes = yield* collectEnvelopes
+      const captured = yield* Ref.make<ReadonlyArray<Observability.TelemetryRecord>>([])
+      // Base sets a key the record also sets: the record's real value must win.
+      yield* Observability.trace(Stream.fromIterable(envelopes), {
+        attributes: { [N.event]: "OVERRIDDEN" },
+        sink: (record) => Ref.update(captured, (all) => [...all, record])
+      })
+      const records = yield* Ref.get(captured)
+      assert.isTrue(records.length > 0)
+      assert.isTrue(records.every((r) => r.attributes[N.event] !== "OVERRIDDEN"))
     })
   )
 })

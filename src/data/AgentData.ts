@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
 
 /**
  * Structured client/UI data (issue #4 §9).
@@ -57,11 +57,17 @@ export const layer: Layer.Layer<DataChannels> = Layer.effect(
   Effect.gen(function* () {
     const pubsub = yield* PubSub.unbounded<DataEvent>()
     const sequence = yield* Ref.make(0)
+    // A permit so a sequence is assigned and published as one step: without it,
+    // two concurrent writers could publish out of sequence order, and a
+    // subscriber rendering in arrival order would show them reordered.
+    const lock = yield* Semaphore.make(1)
     return {
       publish: (channel, payload) =>
-        Ref.updateAndGet(sequence, (n) => n + 1).pipe(
-          Effect.flatMap((next) => PubSub.publish(pubsub, { channel, sequence: next, payload })),
-          Effect.asVoid
+        lock.withPermits(1)(
+          Ref.updateAndGet(sequence, (n) => n + 1).pipe(
+            Effect.flatMap((next) => PubSub.publish(pubsub, { channel, sequence: next, payload })),
+            Effect.asVoid
+          )
         ),
       events: Stream.fromPubSub(pubsub)
     }
@@ -70,8 +76,9 @@ export const layer: Layer.Layer<DataChannels> = Layer.effect(
 
 /**
  * A typed data channel. `write` encodes and publishes; `stream` and `reads`
- * decode. Encoding or decoding failures are defects -- the schema must round-trip
- * its own value.
+ * decode. An unencodable value is a defect (the schema must round-trip its own
+ * value); an event a reader cannot decode -- foreign traffic on a shared name --
+ * is dropped and logged rather than killing the reader.
  */
 export interface Channel<A, I> {
   readonly name: string
@@ -88,10 +95,24 @@ export interface Channel<A, I> {
 export const channel = <A, I>(name: string, schema: Schema.Codec<A, I>): Channel<A, I> => {
   const encode = Schema.encodeEffect(schema)
   const decode = Schema.decodeUnknownEffect(schema)
+  // A reader tolerates a payload it cannot decode -- another writer sharing the
+  // channel name with an incompatible schema, or a version skew -- by dropping
+  // and logging it rather than dying, so one bad publisher cannot kill every
+  // reader of a shared bus. A channel decoding its own round-tripped writes
+  // never hits this path.
   const reads = (events: Stream.Stream<DataEvent>): Stream.Stream<A> =>
     events.pipe(
       Stream.filter((event) => event.channel === name),
-      Stream.mapEffect((event) => decode(event.payload).pipe(Effect.orDie))
+      Stream.mapEffect((event) =>
+        decode(event.payload).pipe(
+          Effect.map(Option.some),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(`AgentData: dropped an undecodable "${name}" event`, cause).pipe(
+              Effect.as(Option.none<A>())
+            ))
+        )),
+      Stream.filter(Option.isSome),
+      Stream.map((some) => some.value)
     )
   return {
     name,
