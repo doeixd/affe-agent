@@ -1197,6 +1197,51 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Agent state
+
+The harness keeps no application-state slot on a session on purpose — "state
+belongs in ordinary Effect services, so the harness never becomes a competing
+state-management system." `@doeixd/effect-agent/state` is the ergonomic form of
+exactly that: a typed value a tool reads and writes, optionally shown to the
+model and optionally persisted, adding nothing to the engine. It is neither
+conversation history (canonical, owned by the run engine) nor semantic memory —
+it is structured state a session works on: a plan, a running total, a form.
+
+```ts
+import { AgentState } from "@doeixd/effect-agent/state"
+
+interface Plan { readonly steps: ReadonlyArray<string> }
+const Plan = AgentState.Tag<Plan>("app/Plan")
+
+// A tool declares the state as a dependency, exactly as a coding tool declares
+// the sandbox, and mutates it through the requirement channel.
+const record = Agent.tool(RecordStep, ({ step }) =>
+  AgentState.update(Plan, (p) => ({ steps: [...p.steps, step] })).pipe(Effect.as("recorded")))
+
+const agent = Agent.make({
+  tools: [record],
+  // The model sees the plan each turn, derived — canonical history untouched.
+  contextTransform: AgentState.transform(Plan, (p) => `Plan so far: ${p.steps.join("; ")}`)
+})
+```
+
+The value arrives through a layer, so which world the state lives in is wiring:
+
+```ts
+// Ephemeral: fresh each process.
+AgentState.layer(Plan, { initial: { steps: [] } })
+
+// Persistent: loaded at build, written through on every mutation, keyed per
+// user (or conversation) so a later session resumes where the last left off.
+AgentState.layer(Plan, {
+  initial: { steps: [] },
+  persistence: { schema: PlanSchema, store, key: `plan:${userId}` }
+})
+```
+
+A `Store` is two methods over JSON strings — `memoryStore` for tests, `sqlStore`
+for a real backend, or five lines of your own over Redis or a KV table.
+
 ## Snapshots
 
 A conversation is a value, so it can be stored and brought back:
@@ -1296,6 +1341,9 @@ context transforms and canonical history are directly testable.
 - [`examples/subagent.ts`](./examples/subagent.ts) — a lead agent that
   delegates to a child running under its own model, via
   `@doeixd/effect-agent/subagent`
+- [`examples/state.ts`](./examples/state.ts) — a plan the agent fills in as
+  typed state, shown to the model and persisted to SQLite, via
+  `@doeixd/effect-agent/state`
 
 ## Runtimes
 

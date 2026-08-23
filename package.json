@@ -71,6 +71,10 @@
       "types": "./dist/subagent/index.d.ts",
       "default": "./dist/subagent/index.js"
     },
+    "./state": {
+      "types": "./dist/state/index.d.ts",
+      "default": "./dist/state/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"
