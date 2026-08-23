@@ -471,6 +471,13 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
         if (claimed._tag !== "Claimed") return claimed
         const submissionId = claimed.submissionId
 
+        // Zero this submission's progress before the fibre exists, inside the
+        // uninterruptible claim: if it were reset inside the submission body it
+        // would sit behind the `SubmissionStarted` emit, and a submission
+        // interrupted in that window would report the *previous* submission's
+        // committed totals as its own.
+        yield* Ref.set(self.progress, { runs: 0, turns: 0, text: "", response: Option.none() })
+
         // The submission runs in a fiber owned by the session scope, so
         // `interrupt` is ordinary fiber interruption rather than a bespoke
         // cancellation protocol.

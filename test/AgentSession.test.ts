@@ -816,6 +816,39 @@ describe("interruption", () => {
     })
   )
 
+  it.effect("a fresh submission's interrupted Result never reports the prior submission's totals", () =>
+    Effect.gen(function* () {
+      // Submission 1 completes, committing a turn (progress holds its totals).
+      // Submission 2 is interrupted before it commits anything: its Result must
+      // report zeros, not submission 1's leftover turns/text.
+      const started = yield* Deferred.make<void>()
+
+      const outcome = yield* withSession(
+        [
+          { text: "first answer" }, // submission 1: commits and completes
+          { hang: true, started } // submission 2: hangs before committing
+        ],
+        Agent.make({ loop: AgentLoop.bounded(2) }),
+        ({ session }) =>
+          Effect.gen(function* () {
+            const first = yield* AgentSession.prompt(session, "one")
+            const fiber = yield* Effect.forkChild(AgentSession.prompt(session, "two"))
+            yield* Deferred.await(started)
+            yield* AgentSession.interrupt(session)
+            return { first, second: yield* Fiber.join(fiber) }
+          })
+      )
+
+      assert.strictEqual(outcome.value.first.turns, 1)
+      assert.strictEqual(outcome.value.first.text, "first answer")
+      // Submission 2 committed nothing -> zeros, not submission 1's data.
+      assert.strictEqual(outcome.value.second.status, "interrupted")
+      assert.strictEqual(outcome.value.second.turns, 0)
+      assert.strictEqual(outcome.value.second.text, "")
+      assert.isTrue(Option.isNone(outcome.value.second.response))
+    })
+  )
+
   it.effect("an interrupted turn commits nothing", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()
