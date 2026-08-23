@@ -2301,3 +2301,18 @@ routes them elsewhere. Three tests (`test/Observability.test.ts`) against the
 real events of a real run: the span-tree mapping and correlation attributes,
 the redaction default/opt-in/scrub, and the observer emitting one record per
 event with base attributes merged. Falsified by forcing content past the policy.
+
+## Structured client/UI data (roadmap #4 §9)
+
+`/data` gives an agent's typed output-beyond-the-reply a home: `AgentData.channel(name, schema)`
+is a Schema-first named channel a tool writes to (`Orders.write(value)`, typed,
+requiring the `DataChannels` service) and a UI or transport reads
+(`Orders.stream`, a typed stream of just that channel). The payload crosses the
+wire in its Schema-encoded form and is decoded back for the reader, so it is
+typed on both ends rather than `unknown`. It is observational -- a write never
+touches canonical history -- and `describe`-free: `reads` is a pure decode/filter
+over a `DataEvent` stream, `layer` an in-process PubSub with a monotonic
+sequence. Four tests (`test/AgentData.test.ts`): the pure read path, the real
+write→publish→read round-trip (deterministic via the fork-then-`yieldNow`
+pattern), channel isolation, and encode-on-the-wire / decode-on-read with a
+transforming schema. Falsified by removing the channel filter.

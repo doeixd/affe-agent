@@ -91,6 +91,10 @@
       "types": "./dist/observability/index.d.ts",
       "default": "./dist/observability/index.js"
     },
+    "./data": {
+      "types": "./dist/data/index.d.ts",
+      "default": "./dist/data/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"

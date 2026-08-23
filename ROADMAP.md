@@ -33,6 +33,7 @@ they compose.
 | 7 | Dynamic capability-set | toolkit-as-Effect, resolved per turn (mechanism exists; undocumented) |
 | 8 | Reconnectable streaming | `/durable-streams` + DeliveryLog |
 | 11 | Evals | `/evals` |
+| 9 | Structured client/UI data | `/data` |
 | 12 | Observability | `/observability` |
 
 Issue #1 (items 1–9) is complete; the transports and sandbox it left open have
@@ -42,16 +43,13 @@ all since landed.
 
 Ranked by value-to-surface for what to build next:
 
-1. **Structured client/UI data (`#9`)** — Schema-first named channels
-   (`AgentData.channel(name, schema)`) for typed, observational output to a UI;
-   pairs with the `/ag-ui` and `/http` transports already built. **Top build pick.**
-2. **Channels (`#10`)** — adapters (Slack, webhooks) over `AgentClient`: auth,
+1. **Channels (`#10`)** — adapters (Slack, webhooks) over `AgentClient`: auth,
    dedup by stable external id, external-conversation → session identity, and a
    prompt-injection boundary (trusted metadata via Services, not string
-   concatenation). Larger, external surface.
-4. **Lifecycle-hook convenience (`#13`)** and **scheduling / self-dispatch
+   concatenation). Larger, external surface. **Top build pick.**
+2. **Lifecycle-hook convenience (`#13`)** and **scheduling / self-dispatch
    (`#14`, an `AgentDispatcher` Service with local / Workflow / queue impls).**
-5. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
+3. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
    sandbox/channel/deployment adapters.
 
 ### Small refinements worth folding in

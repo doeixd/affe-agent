@@ -1197,6 +1197,31 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Structured data
+
+An agent often has typed output beyond its reply — an order it created, a row
+for a table, a chart's data. `@doeixd/effect-agent/data` gives that a home: a
+Schema-first named channel a tool writes to, and a stream a UI or transport
+reads, typed on both ends rather than `unknown` at the wire.
+
+```ts
+import { AgentData } from "@doeixd/effect-agent/data"
+
+const Orders = AgentData.channel("orders", OrderSchema)
+
+// In a tool handler — fully typed; requires the DataChannels service:
+yield* Orders.write({ id: "A-1", total: 42 })
+
+// In a UI/transport — a typed stream of just this channel's values:
+yield* Stream.runForEach(Orders.stream, (order) => render(order))
+```
+
+It is **observational**: writing to a channel never touches canonical
+conversation history — rendering a card is not the same as saying it. The
+payload crosses the wire in its Schema-encoded form and is decoded back for the
+reader; `AgentData.layer` is an in-process PubSub, and a transport can bridge
+`DataChannels.events` to a client.
+
 ## Observability
 
 `@doeixd/effect-agent/observability` standardises the *names and attributes* an
@@ -1489,6 +1514,8 @@ context transforms and canonical history are directly testable.
 - [`examples/observability.ts`](./examples/observability.ts) — tracing a run
   with the standard semantic attributes and a redaction policy, via
   `@doeixd/effect-agent/observability`
+- [`examples/data.ts`](./examples/data.ts) — a tool emitting typed records to a
+  UI channel while the run proceeds, via `@doeixd/effect-agent/data`
 
 ## Runtimes
 
