@@ -94,7 +94,7 @@ or a test hold the invariant instead.
   of `ToolExecution.RaisedError`; deleting one member from the alias breaks the
   test (falsify once). No behavior change; full gate green.
 
-### B2 — Pin the out-of-band input-gating invariants with a model/property test `P1` · effort 2
+### B2 — Pin the out-of-band input-gating invariants with a model/property test `P1` · effort 2 · ✅ DONE
 - **Problem:** The follow-up/steering admission machinery (`AgentSubmission.execute`
   drain→check→`admit(false)`→re-drain, plus the `inputGate` semaphore held across
   check-and-offer in three files) is correct but sustained by prose comments. It

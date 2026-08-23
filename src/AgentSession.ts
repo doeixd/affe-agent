@@ -191,6 +191,16 @@ export interface MakeOptions {
   readonly eventSink?:
     | ((envelope: AgentEventEnvelope) => Effect.Effect<void>)
     | undefined
+  /**
+   * Internal synchronisation seam: an effect run once per run, after the
+   * submission's first follow-up drain and before it decides to close its
+   * input — the exact window the input gate protects. Absent by default; the
+   * local runtime never supplies one. It exists so a test can act in that window
+   * deterministically (offer a follow-up that the *closing* drain must catch)
+   * rather than racing it. The permit is not held here, so acting through
+   * `followUp` is safe.
+   */
+  readonly beforeClose?: Effect.Effect<void> | undefined
 }
 
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(
@@ -257,6 +267,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     })
     const ids = yield* Ids.makeIdSource
     const submissionName = options?.submissionIds ?? ((count: number) => `submission-${count}`)
+    const beforeClose = options?.beforeClose ?? Effect.void
 
     const session: Session<Tools, E, R> = {
       id,
@@ -268,6 +279,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       steering,
       followUps,
       inputGate,
+      beforeClose,
       elicitation,
       admit,
       activeFiber,

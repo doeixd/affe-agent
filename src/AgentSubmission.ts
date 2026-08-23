@@ -123,6 +123,11 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
         )
       }
 
+      // Internal seam (default no-op): act in the window after the first drain
+      // and before the close decision. The permit is free here, so a test can
+      // offer a follow-up that the closing drain below must still catch.
+      yield* session.beforeClose
+
       if (pending.length === 0) {
         // Nothing left, so close this submission's input. Until this flips,
         // `followUp` may still be accepted, and anything accepted after the

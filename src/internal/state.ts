@@ -112,6 +112,12 @@ export interface Session<
    * concludes, and anything offered after is refused outright.
    */
   readonly inputGate: Semaphore.Semaphore
+  /**
+   * Internal seam run once per run, in the window between the first follow-up
+   * drain and the close decision (see `AgentSession.MakeOptions.beforeClose`).
+   * Defaults to `Effect.void`.
+   */
+  readonly beforeClose: Effect.Effect<void>
   readonly activeFiber: Ref.Ref<Option.Option<Fiber.Fiber<any, any>>>
   readonly scope: Scope.Scope
   /**
