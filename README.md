@@ -1460,6 +1460,9 @@ context transforms and canonical history are directly testable.
   `@doeixd/effect-agent/memory`
 - [`examples/evals.ts`](./examples/evals.ts) — one behavioural eval run against
   both a scripted model and a real provider, via `@doeixd/effect-agent/evals`
+- [`examples/full-stack-agent.ts`](./examples/full-stack-agent.ts) — coding,
+  skills, memory, typed state and permissions composed in one agent, every
+  capability arriving through the ordinary seams and one merged layer
 
 ## Runtimes
 

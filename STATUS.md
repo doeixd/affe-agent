@@ -2264,3 +2264,24 @@ defect into a failed check. `runAll` runs many (with concurrency), and
 (`test/Evals.test.ts`), all deterministic against a scripted model, including
 the judge (its generateText consumes a scripted turn) and both reporters;
 falsified by breaking tool-call extraction.
+
+## The whole stack composes (end-to-end integration)
+
+`test/Integration.test.ts` wires seven packages into one agent and proves they
+compose with no glue: the coding toolkit's tools (as bound tools) over a
+`MemorySandbox`, `Skills.loadTool` with `Skills.advertise`, `Memory.rememberTool`
+with `Memory.recall`, a typed `AgentState` plan surfaced by its transform, all
+behind one `Permission` policy, with `Evals` driving the run and asserting the
+behaviour. The three context transforms are composed with
+`ContextTransform.compose`, and every capability's requirement flows into one
+merged layer -- the agent definition mentions none of it.
+
+Two deterministic tests against a scripted model: the happy path (the model
+loads a skill, records a plan step, writes a file, remembers a fact; then the
+file is on the sandbox, the step in state, the fact recallable, and the first
+prompt carries the skill catalogue, the recalled memory and the plan -- all
+three transforms fired), and the policy path (a `.env` write is denied and
+returned to the model while the rest of the run proceeds, so the secret file is
+never written but the later step still records). Falsified by flipping the deny
+rule to allow. `examples/full-stack-agent.ts` is the same composition against a
+real provider.
