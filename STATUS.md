@@ -2285,3 +2285,19 @@ returned to the model while the rest of the run proceeds, so the secret file is
 never written but the later step still records). Falsified by flipping the deny
 rule to allow. `examples/full-stack-agent.ts` is the same composition against a
 real provider.
+
+## Observability (roadmap #4 §12)
+
+`/observability` standardises the names and attributes an agent emits rather
+than wrapping Effect's tracing. It observes the public event stream and maps
+each event to the span tree the runtime already nests -- `agent.session →
+submission → run → turn → {ai.model, ai.tool}` -- under stable `agent.*` / `ai.*`
+keys (`attributeNames`). Content is opt-in: `describe` (the pure event → record
+mapper) and `trace` (the observer) record ids and names by default and include
+prompts / tool params / tool results / model output only under a
+`RedactionPolicy`, with a `redact` hook to scrub what passes. The default
+`trace` sink logs structured records any Effect exporter captures; a custom sink
+routes them elsewhere. Three tests (`test/Observability.test.ts`) against the
+real events of a real run: the span-tree mapping and correlation attributes,
+the redaction default/opt-in/scrub, and the observer emitting one record per
+event with base attributes merged. Falsified by forcing content past the policy.

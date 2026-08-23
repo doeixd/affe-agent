@@ -1197,6 +1197,29 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Observability
+
+`@doeixd/effect-agent/observability` standardises the *names and attributes* an
+agent emits, rather than wrapping Effect's tracing. It observes the public event
+stream and maps each event to the span tree the runtime already nests —
+`agent.session → submission → run → turn → {ai.model, ai.tool}` — under stable
+`agent.*` / `ai.*` keys, so telemetry groups and filters the same way across
+services.
+
+```ts
+import { Observability } from "@doeixd/effect-agent/observability"
+
+// Fork an observer; metadata only by default (ids, event and tool names).
+yield* Effect.forkScoped(Observability.trace(AgentSession.events(session)))
+```
+
+**Content is opt-in.** Prompts, tool parameters, tool results and model output
+are omitted unless a `RedactionPolicy` turns them on, and a `redact` hook scrubs
+what does get through — telemetry defaults to metadata, never a PII or secret
+leak. `Observability.describe` is the pure event → record mapper if you want to
+build your own exporter; the default `trace` sink logs structured records any
+Effect tracing backend already captures.
+
 ## Evals
 
 A test asks whether the code works; an eval asks whether the *agent behaves* —
@@ -1463,6 +1486,9 @@ context transforms and canonical history are directly testable.
 - [`examples/full-stack-agent.ts`](./examples/full-stack-agent.ts) — coding,
   skills, memory, typed state and permissions composed in one agent, every
   capability arriving through the ordinary seams and one merged layer
+- [`examples/observability.ts`](./examples/observability.ts) — tracing a run
+  with the standard semantic attributes and a redaction policy, via
+  `@doeixd/effect-agent/observability`
 
 ## Runtimes
 

@@ -33,6 +33,7 @@ they compose.
 | 7 | Dynamic capability-set | toolkit-as-Effect, resolved per turn (mechanism exists; undocumented) |
 | 8 | Reconnectable streaming | `/durable-streams` + DeliveryLog |
 | 11 | Evals | `/evals` |
+| 12 | Observability | `/observability` |
 
 Issue #1 (items 1–9) is complete; the transports and sandbox it left open have
 all since landed.
@@ -41,15 +42,10 @@ all since landed.
 
 Ranked by value-to-surface for what to build next:
 
-1. **Observability (`#12`)** — semantic tracing conventions over the existing
-   Effect tracing: the span tree `agent.session → submission → run → turn →
-   {ai.model, ai.tool}`, a standard attribute set, and a content-redaction
-   policy (metadata by default, content opt-in). No new runtime — this is
-   naming + a policy layer. **Top build pick.**
-2. **Structured client/UI data (`#9`)** — Schema-first named channels
+1. **Structured client/UI data (`#9`)** — Schema-first named channels
    (`AgentData.channel(name, schema)`) for typed, observational output to a UI;
-   pairs with the `/ag-ui` and `/http` transports already built.
-3. **Channels (`#10`)** — adapters (Slack, webhooks) over `AgentClient`: auth,
+   pairs with the `/ag-ui` and `/http` transports already built. **Top build pick.**
+2. **Channels (`#10`)** — adapters (Slack, webhooks) over `AgentClient`: auth,
    dedup by stable external id, external-conversation → session identity, and a
    prompt-injection boundary (trusted metadata via Services, not string
    concatenation). Larger, external surface.
