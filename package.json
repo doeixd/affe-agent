@@ -79,6 +79,10 @@
       "types": "./dist/skills/index.d.ts",
       "default": "./dist/skills/index.js"
     },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "default": "./dist/memory/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"

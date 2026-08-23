@@ -1197,6 +1197,40 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Memory
+
+Long-term, cross-session memory — what a session should still know next week,
+not the conversation transcript. `@doeixd/effect-agent/memory` is a service plus
+a transform: the contract is the minimal `recall(scope, query)` /
+`remember(scope, entry)`, and everything is written against the `Memory`
+**service**, never a particular store. The in-memory keyword matcher shipped
+here is one implementation; a real backend — embeddings, Redis, a hosted
+system — is a layer you provide, and the agent above it does not change.
+
+```ts
+import { Memory } from "@doeixd/effect-agent/memory"
+
+const assistant = Agent.make({
+  tools: [Memory.rememberTool(userId)],       // the model saves durable facts
+  contextTransform: Memory.recall(userId)     // relevant memory, injected each turn
+})
+
+// Bring your own store — implement two methods and provide it as a layer:
+const embeddings = Layer.effect(Memory.Memory, Effect.succeed<Memory.MemoryShape>({
+  recall: (scope, query) => /* search a vector store */ Effect.succeed({ entries: [] }),
+  remember: (scope, entry) => /* upsert */ Effect.void
+}))
+// ...or the built-in for tests and single-node: Memory.layer()
+```
+
+Recall is **non-fatal** by default: a broken memory backend logs and passes the
+prompt through rather than failing the run. Writing has two paths — the
+`remember` tool (the model decides what's worth keeping) and `Memory.writer`, a
+loop hook that records after each turn from an extractor you supply. The `scope`
+is a trusted id (a user or tenant), derived from your auth and never from model
+output, so one user's session cannot read another's memory. `load_skill`-style
+gating applies too: `remember` carries a `memory` permission projection.
+
 ## Skills
 
 A skill is an on-demand capability — workflow guidance, reference material —
@@ -1385,6 +1419,9 @@ context transforms and canonical history are directly testable.
 - [`examples/skills.ts`](./examples/skills.ts) — a support agent that advertises
   skill metadata and loads a body on demand, via
   `@doeixd/effect-agent/skills`
+- [`examples/memory.ts`](./examples/memory.ts) — an assistant with long-term
+  memory, shown against the built-in store and a bring-your-own backend, via
+  `@doeixd/effect-agent/memory`
 
 ## Runtimes
 

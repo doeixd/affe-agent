@@ -50,7 +50,8 @@ src/
 ├ coding/              a coding-agent tool battery         (/coding)
 ├ subagent/            a tool that opens a child session   (/subagent)
 ├ state/               persistent typed agent state        (/state)
-└ skills/              on-demand skills, loaded lazily     (/skills)
+├ skills/              on-demand skills, loaded lazily     (/skills)
+└ memory/              long-term cross-session memory      (/memory)
 
 scripts/verify-package.mjs   imports each entry point from the packed tarball
 .github/workflows/ci.yml     check, build, and that verification
@@ -2176,9 +2177,9 @@ consumes the SDK generator by hand and, on interruption, calls iterator.return()
 fire-and-forget rather than awaiting it, so adapter teardown completes at once
 while the host session keeps running.
 
-## Four batteries over the seams (roadmap #4)
+## Five batteries over the seams (roadmap #4)
 
-Four packages, each proving the bet that a serious higher-level capability needs
+Five packages, each proving the bet that a serious higher-level capability needs
 no core change. Every one is an ordinary composition of pieces that already
 existed -- a tool, a service, a context transform, a layer -- and the engine is
 untouched by all four. End-user and test code needs no casts throughout.
@@ -2224,3 +2225,18 @@ until loaded. Catalogue visibility and execution authorization stay apart --
 decides which a session may load. Five tests (`test/Skills.test.ts`), proving a
 body is loaded exactly once, by the tool and not by advertising, and only then
 enters the transcript.
+
+**`/memory` -- long-term, cross-session memory.** Not conversation history and
+not `/state`'s structured slot: what a session should still know next week. The
+minimal `recall(scope, query)` / `remember(scope, entry)` contract is a
+`Memory` service, so everything is written against the service and never a
+store; the keyword-matching `layer` is the in-memory built-in, and a real
+backend (embeddings, Redis, hosted) is a two-method layer the application
+provides unchanged. `Memory.recall` is a `ContextTransform` that injects
+relevant memory before a model call and is non-fatal by default -- a broken
+backend logs and passes the prompt through rather than failing the run.
+`Memory.rememberTool` (model-driven, projected `memory` for policy) and
+`Memory.writer` (a loop hook over an app-supplied extractor) are the two write
+paths. `scope` is a trusted id, never model output. Six tests
+(`test/Memory.test.ts`), including cross-session recall and a bring-your-own
+backend provided as a plain layer.
