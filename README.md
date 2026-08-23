@@ -435,7 +435,7 @@ modifying it:
 | | |
 |---|---|
 | **Durability in core** | Core stays in-process. Durable execution ships separately as `@doeixd/effect-agent/durable`, where the *same* agent definition runs inside an Effect `Workflow`: model and tool calls become `Activity`s, so a resumed submission replays them instead of repeating them. A refund goes out once. |
-| **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session. Memory is a service plus a transform. Neither needs a first-class concept — the optional `@doeixd/effect-agent/subagent` helper is just that pattern packaged, adding nothing to the core (see [Subagents](#subagents)). |
+| **Memory, skills, sandboxes, subagents** | A subagent is a tool that opens a child session; a skill is a transform plus a tool; memory is a service plus a transform. None needs a first-class concept — the optional `@doeixd/effect-agent/subagent` and [`/skills`](#skills) packages are just those patterns packaged, adding nothing to the core. |
 
 ## Durable execution
 
@@ -1197,6 +1197,44 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Skills
+
+A skill is an on-demand capability — workflow guidance, reference material —
+that the model loads only when it needs it. `@doeixd/effect-agent/skills` is the
+[OpenCode loading strategy](https://opencode.ai/v2/docs/skills) over the seams
+the library already has: a registry service, one context transform that
+advertises metadata, and one tool that loads a body. Core stays ignorant of it.
+
+The strategy is the point: advertise only metadata, never the bodies. A hundred
+skills cost a hundred one-line descriptions in the prompt, not a hundred
+documents — the model reads the catalogue, decides what it needs, and pulls that
+one body (its resources staying lazy until asked for by name).
+
+```ts
+import { Skills } from "@doeixd/effect-agent/skills"
+
+const registry = Skills.layer([
+  Skills.skill({
+    id: "refunds",
+    name: "Issuing refunds",
+    description: "How to issue a refund and the limits on doing so.",
+    body: "1. Verify the order... 2. Refunds over $500 need a manager...",
+    resources: { policy: "...long-form document, read only if needed..." }
+  })
+])
+
+const agent = Agent.make({
+  tools: [Skills.loadTool],          // the model calls this to load a body
+  contextTransform: Skills.advertise // the catalogue, metadata only, each turn
+})
+// ...provide `registry` at the session.
+```
+
+Catalogue visibility and execution authorization stay apart: everything
+registered is advertised, but `load_skill` carries a `skill` [permission](#permissions)
+projection on its id, so a policy decides which skills a session may actually
+load — the Skills package owns no authorization of its own.
+
 ## Agent state
 
 The harness keeps no application-state slot on a session on purpose — "state
@@ -1344,6 +1382,9 @@ context transforms and canonical history are directly testable.
 - [`examples/state.ts`](./examples/state.ts) — a plan the agent fills in as
   typed state, shown to the model and persisted to SQLite, via
   `@doeixd/effect-agent/state`
+- [`examples/skills.ts`](./examples/skills.ts) — a support agent that advertises
+  skill metadata and loads a body on demand, via
+  `@doeixd/effect-agent/skills`
 
 ## Runtimes
 
