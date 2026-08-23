@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Ref, Schema, Stream, SubscriptionRef } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as ContextTransform from "../ContextTransform.js"
 
@@ -258,19 +258,34 @@ export const layer = <A, I>(
         ? () => Effect.void
         : (value) => encode(p.schema, value).pipe(Effect.flatMap((json) => p.store.save(p.key, json)))
 
+      // Persistence runs after the ref swap, so two concurrent mutations could
+      // each swap the ref in order yet have their stores land out of order,
+      // leaving the store holding the older value. When there is a store, a
+      // permit serialises swap-and-persist into one critical section so the
+      // ref and the store never diverge. Ephemeral state needs no lock: the
+      // ref's own modify is already atomic and there is nothing to persist.
+      const lock = yield* Semaphore.make(1)
+      const atomically: <T>(effect: Effect.Effect<T>) => Effect.Effect<T> = p === undefined
+        ? (effect) => effect
+        : (effect) => lock.withPermits(1)(effect)
+
       return {
         get: SubscriptionRef.get(ref),
-        set: (value) => Effect.flatMap(SubscriptionRef.set(ref, value), () => persist(value)),
+        set: (value) => atomically(Effect.flatMap(SubscriptionRef.set(ref, value), () => persist(value))),
         update: (f) =>
-          SubscriptionRef.modify(ref, (current) => {
-            const next = f(current)
-            return [next, next]
-          }).pipe(Effect.flatMap(persist)),
+          atomically(
+            SubscriptionRef.modify(ref, (current) => {
+              const next = f(current)
+              return [next, next]
+            }).pipe(Effect.flatMap(persist))
+          ),
         modify: (f) =>
-          SubscriptionRef.modify(ref, (current) => {
-            const [result, next] = f(current)
-            return [[result, next] as const, next]
-          }).pipe(Effect.flatMap(([result, next]) => Effect.as(persist(next), result))),
+          atomically(
+            SubscriptionRef.modify(ref, (current) => {
+              const [result, next] = f(current)
+              return [[result, next] as const, next]
+            }).pipe(Effect.flatMap(([result, next]) => Effect.as(persist(next), result)))
+          ),
         changes: SubscriptionRef.changes(ref)
       } satisfies AgentState<A>
     })

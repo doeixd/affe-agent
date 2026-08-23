@@ -56,6 +56,12 @@ describe("CodingToolkit handlers", () => {
         H.read_file({ path: "a.txt", offset: 2, limit: 2 }, ctx)
       )
       assert.strictEqual(middle, "2\ttwo\n3\tthree")
+      // A non-positive offset means the top, not slice(-1)'s last line.
+      const clamped = yield* withSandbox(
+        { "a.txt": "one\ntwo\nthree" },
+        H.read_file({ path: "a.txt", offset: 0, limit: 2 }, ctx)
+      )
+      assert.strictEqual(clamped, "1\tone\n2\ttwo")
       // A traversal path is a model-facing string, not a defect.
       const bad = yield* Effect.flip(withSandbox({}, H.read_file({ path: "../escape" }, ctx)))
       assertString(bad)
@@ -113,6 +119,15 @@ describe("CodingToolkit handlers", () => {
       )
       assertString(missing)
       assert.include(missing, "was not found")
+      // A `$` in new_string is literal, not a String.replace special pattern.
+      const dollars = yield* withSandbox(
+        { "f.ts": "price = OLD" },
+        Effect.gen(function* () {
+          yield* H.edit_file({ path: "f.ts", old_string: "OLD", new_string: "$&{amount}" }, ctx)
+          return yield* H.read_file({ path: "f.ts" }, ctx)
+        })
+      )
+      assert.strictEqual(dollars, "1\tprice = $&{amount}")
     })
   )
 

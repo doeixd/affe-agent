@@ -43,7 +43,14 @@ src/
 ├ http/                plain JSON routes + live SSE events   (/http)
 ├ durable/             the same agent inside a Workflow   (/durable)
 ├ cluster/             a session as a cluster Entity      (/cluster)
-└ mcp/                 expose an agent, and bind its tools (/mcp)
+├ mcp/                 expose an agent, and bind its tools (/mcp)
+│
+│  batteries — each a package over a seam, no core change:
+├ sandbox/             scoped filesystem + process         (/sandbox)
+├ coding/              a coding-agent tool battery         (/coding)
+├ subagent/            a tool that opens a child session   (/subagent)
+├ state/               persistent typed agent state        (/state)
+└ skills/              on-demand skills, loaded lazily     (/skills)
 
 scripts/verify-package.mjs   imports each entry point from the packed tarball
 .github/workflows/ci.yml     check, build, and that verification
@@ -2168,3 +2175,52 @@ not interrupted at adapter teardown to unblock it. The A2A streaming drain now
 consumes the SDK generator by hand and, on interruption, calls iterator.return()
 fire-and-forget rather than awaiting it, so adapter teardown completes at once
 while the host session keeps running.
+
+## Four batteries over the seams (roadmap #4)
+
+Four packages, each proving the bet that a serious higher-level capability needs
+no core change. Every one is an ordinary composition of pieces that already
+existed -- a tool, a service, a context transform, a layer -- and the engine is
+untouched by all four. End-user and test code needs no casts throughout.
+
+**`/coding` -- a coding-agent tool battery over the sandbox seam.** Six tools
+(read_file with line numbers and a range, write_file, edit_file as an exact
+replace that refuses an ambiguous match, list_files, search as an in-process
+tree walk so it works against any provider, bash), each an ordinary Tool whose
+handler demands `Sandbox.Current`. Which sandbox runs -- memory for tests, a
+real directory -- is layer wiring. Every tool carries a `Permission` projection
+(files to read/write on the path, bash to shell on the command), so a policy
+gates them without knowing their shapes. Failures reach the model as strings.
+Nine tests (`test/CodingToolkit.test.ts`); falsified by breaking `bash -lc` and
+the edit-uniqueness guard.
+
+**`/subagent` -- a tool that opens a child session.** `Subagent.tool(name,
+childAgent, { description, provide, onError? })` returns an `Agent.BoundTool`
+whose handler runs the child under its own model layer (`provide`), discharged
+inside the handler so nothing leaks up. Isolation and interruption fall out of
+the structured pieces: parent and child never share a conversation, and
+interrupting the parent interrupts the child through the tool's scope. A typed
+child failure returns to the parent model as a string by default; a defect still
+propagates; `onError: "die"` fails the run. Six tests
+(`test/Subagent.helper.test.ts`).
+
+**`/state` -- persistent typed agent state.** `AgentState.Tag<A>(id)` is a typed
+service a tool reads and writes through the requirement channel (the tag is a
+dependency, like a sandbox); `AgentState.transform` surfaces it into the prompt;
+`AgentState.layer(tag, { initial })` is ephemeral, and with `persistence` loads
+at build and writes through on every mutation, keyed per user/conversation. The
+`Store` seam is two methods over JSON strings, with `memoryStore` and a
+transactional `sqlStore` behind one interface. Neither conversation history nor
+semantic memory -- structured state a session works on. Six tests
+(`test/AgentState.test.ts`), including a real-SQLite round-trip.
+
+**`/skills` -- on-demand skills, loaded lazily.** A `SkillRegistry` service,
+`Skills.advertise` (a context transform that puts only metadata in the prompt),
+and `Skills.loadTool` (`load_skill`, which pulls one body into context). The
+OpenCode loading strategy: a hundred skills cost a hundred one-line
+descriptions, not a hundred documents; bodies and resources are Effects, lazy
+until loaded. Catalogue visibility and execution authorization stay apart --
+`load_skill` carries a `skill` permission projection on the id, so a policy
+decides which a session may load. Five tests (`test/Skills.test.ts`), proving a
+body is loaded exactly once, by the tool and not by advertising, and only then
+enters the transcript.

@@ -233,7 +233,9 @@ const loadHandler: Agent.Handler<typeof LoadSkill> = ({ resource, skill_id }) =>
       : registry.loadResource(skill_id, resource).pipe(
         Effect.flatMap(
           Option.match({
-            onNone: () => Effect.fail(`skill "${skill_id}" has no resource "${resource}"`),
+            // None covers both a missing skill and a missing resource; say so
+            // rather than asserting the skill exists.
+            onNone: () => Effect.fail(`no skill "${skill_id}", or it has no resource "${resource}"`),
             onSome: (value) => Effect.succeed(value)
           })
         )

@@ -183,7 +183,9 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
       const text = yield* Sandbox.readText(sandbox)(yield* Sandbox.path(file))
-      const start = offset ?? 1
+      // 1-based, and clamped: a model that passes 0 (or negative) means the
+      // top, not `slice(-1)`, which would return only the last line.
+      const start = Math.max(1, offset ?? 1)
       const slice = text
         .split("\n")
         .slice(start - 1, limit === undefined ? undefined : start - 1 + limit)
@@ -211,9 +213,11 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
           `old_string is not unique in ${file} (${occurrences} matches); pass replace_all or include more context`
         )
       }
-      const next = replace_all === true
-        ? text.split(old_string).join(new_string)
-        : text.replace(old_string, new_string)
+      // Always split/join, never String.replace: `replace` interprets `$&`,
+      // `$1` and friends in the replacement, which would corrupt any new_string
+      // containing a `$`. With replace_all off, occurrences is exactly 1 here,
+      // so join replaces that one occurrence and no other -- literally.
+      const next = text.split(old_string).join(new_string)
       yield* sandbox.write(sandboxPath, next).pipe(Effect.mapError(errorMessage))
       return `edited ${file} (${occurrences} replacement${occurrences === 1 ? "" : "s"})`
     }),
