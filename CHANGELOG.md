@@ -82,6 +82,6 @@ context transform, or a layer, and end-user code needs no type casts.
 - **Portability is checked.** Only `@doeixd/effect-agent/sandbox/local` reaches
   the host; every other entry point is verified to import no `node:*` module.
 - **Every published entry point is import-verified** from the packed tarball by
-  `npm run verify:package` (23 entries).
+  `npm run verify:package` (28 entries).
 
 [0.0.1]: https://github.com/doeixd/effect-agent/releases/tag/v0.0.1

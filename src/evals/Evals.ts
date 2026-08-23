@@ -149,27 +149,43 @@ export interface EvalContext<Tools extends Record<string, Tool.Any>, E> {
   readonly judge: (rubric: string) => Effect.Effect<void, never, LanguageModel.LanguageModel>
 }
 
+/**
+ * Read a PASS/FAIL verdict from a judge reply, fail-closed. The judge is asked
+ * to answer with *only* `PASS` or `FAIL`; the verdict is the reply's first word,
+ * and it passes only when that word is exactly `PASS`. A substring check would
+ * be fooled by prose like "this does not PASS the bar" (a failing verdict that
+ * happens to contain the word PASS); anchoring to the leading token is not.
+ */
+export const parseVerdict = (text: string): boolean =>
+  text.trim().toUpperCase().match(/^[A-Z]+/)?.[0] === "PASS"
+
 // ---------------------------------------------------------------------------
 // Defining and running
 // ---------------------------------------------------------------------------
 
-export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TR> {
+export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TE, TR> {
   readonly name: string
   readonly agent: AgentDefinition<Tools, E, R>
-  readonly test: (t: EvalContext<Tools, E>) => Effect.Effect<void, unknown, TR>
+  /**
+   * The test body. Its error `TE` is inferred from what the body actually raises
+   * (a bare `t.send` surfaces the agent's `PromptError`; a body that only records
+   * checks raises nothing) -- honest, never `unknown`. `run` discharges it: any
+   * failure or defect is caught and recorded as a failed check.
+   */
+  readonly test: (t: EvalContext<Tools, E>) => Effect.Effect<void, TE, TR>
 }
 
 /** Define an eval. Identity at runtime; it exists so `t` infers the agent's tools. */
-export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TR = never>(
-  options: Eval<Tools, E, R, TR>
-): Eval<Tools, E, R, TR> => options
+export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TE = never, TR = never>(
+  options: Eval<Tools, E, R, TE, TR>
+): Eval<Tools, E, R, TE, TR> => options
 
 /**
  * Run one eval to an `EvalResult`. Never fails: a send that errors, or a defect
  * in the test, is recorded as a failed check so the report is always complete.
  */
-export const run = <Tools extends Record<string, Tool.Any>, E, R, TR>(
-  evaluation: Eval<Tools, E, R, TR>
+export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
+  evaluation: Eval<Tools, E, R, TE, TR>
 ): Effect.Effect<EvalResult, never, LanguageModel.LanguageModel | R | TR> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -234,7 +250,7 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TR>(
               model.generateText({
                 prompt: `${rubric}\n\nThe reply to judge:\n${result.text}\n\nRespond with only PASS or FAIL.`
               })).pipe(
-              Effect.map((response) => response.text.toUpperCase().includes("PASS")),
+              Effect.map((response) => parseVerdict(response.text)),
               Effect.flatMap((passed) => record(`judge: ${rubric}`, passed, passed ? undefined : "the judge said FAIL")),
               Effect.catchCause((cause) => record(`judge: ${rubric}`, false, `the judge could not run: ${String(cause)}`))
             ))
@@ -250,8 +266,8 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TR>(
   )
 
 /** Run many evals, optionally concurrently. Each result is independent. */
-export const runAll = <Tools extends Record<string, Tool.Any>, E, R, TR>(
-  evaluations: ReadonlyArray<Eval<Tools, E, R, TR>>,
+export const runAll = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
+  evaluations: ReadonlyArray<Eval<Tools, E, R, TE, TR>>,
   options?: { readonly concurrency?: number | "unbounded" | undefined }
 ): Effect.Effect<ReadonlyArray<EvalResult>, never, LanguageModel.LanguageModel | R | TR> =>
   Effect.all(evaluations.map(run), { concurrency: options?.concurrency ?? 1 })

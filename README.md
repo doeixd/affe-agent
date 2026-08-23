@@ -26,11 +26,58 @@ That layer is all this library is.
 └──────────────────────────────────────────────┘
 ```
 
-> **Status: v0.1, pre-release.** The semantics below are implemented and tested,
-> but the API may still move. It targets Effect v4, which is itself at release
-> candidate. Durable and distributed execution ship as the
-> experimental subpath packages [`/durable`](#durable-execution) and
-> [`/cluster`](#across-a-cluster).
+> **Status: `0.0.1`, pre-release.** The semantics below are implemented and
+> tested, but the API may still move. See [Stability](#stability) before you pin
+> a dependency. Durable and distributed execution ship as the experimental
+> subpath packages [`/durable`](#durable-execution) and [`/cluster`](#across-a-cluster).
+
+## Contents
+
+- [Install](#install) · [Quickstart](#quickstart)
+- [The mental model: one kernel, a few seams](#the-mental-model-one-kernel-a-few-seams) — the map that makes the rest legible
+- [Package map](#package-map) — every entry point, one line each
+- [Stability](#stability) — what "pre-release" means for you
+
+## The mental model: one kernel, a few seams
+
+The kernel is small: it runs **sessions → submissions → runs → turns**, keeps
+one append-only canonical history, and emits typed lifecycle events. Everything
+else is a *battery* that plugs into one of a handful of **seams** — it adds a
+capability, policy, interpreter, or adapter, never a second execution model. The
+core depends on no battery.
+
+Learn these seams and the whole library falls into place — each is either a field
+on `Agent.make` or a `Layer` you provide at the session:
+
+| Seam | Where | What it swaps | Batteries that use it |
+|------|-------|---------------|-----------------------|
+| **`toolkit` / tools** | `Agent.make` | the tool set (static, or an `Effect` resolved per turn) | `/coding`, `/subagent`, `/skills`, `/mcp` |
+| **`contextTransform`** | `Agent.make` | how the model-facing prompt is *derived* from canonical history | `/compaction`, `/memory`, `/skills` (advertise) |
+| **`loop`** | `Agent.make` | the continue/stop policy after each turn | `AgentLoop.*`, a future `/budget` |
+| **`permission`** | `Agent.make` | allow / ask / deny per tool call | `Permission`, `/coding` projections |
+| **`toolExecution` / failure / denial** | `Agent.make` | concurrency and what a failed or denied call does | core policies |
+| **`elicitation`** | `Agent.make` | where a paused run waits for an outside answer | `Elicitation` (local / durable) |
+| **`InputChannel`** | `Agent.make` | where steering / follow-up input is held | core (memory / durable) |
+| **`eventSink` / `events`** | session | synchronous or streamed observation of lifecycle events | `/observability`, `/hooks`, `/data` |
+| **`AgentSessionHost`** | transport | the request-facing session seam a transport drives | `/http`, `/rpc`, `/ag-ui`, `/a2a`, `/channels` |
+| **`LanguageModel`** | `Layer` | the model provider | `/openai`, `@effect/ai-*` |
+| **`Sandbox`** | `Layer` | the filesystem / process capability tools run against | `/sandbox` (+ `/sandbox/local`) |
+
+## Package map
+
+Core is the default import; everything else is an explicit subpath.
+
+**Core** — `@doeixd/effect-agent`
+: `Agent`, `AgentSession`, `AgentLoop`, `AgentEvent`, `ContextTransform`, `Permission`, `Elicitation`, `Snapshot`.
+
+**Transports & durability**
+: `/client` · `/rpc` · `/http` · `/ag-ui` · `/a2a` · `/mcp` (`/mcp/v1`, `/mcp/v2`) · `/durable` · `/cluster` · `/durable-streams` · `/openai`.
+
+**Batteries** (capabilities over a seam)
+: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/channels` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule`.
+
+**Host & testing**
+: `/sandbox` (portable) + `/sandbox/local` (host) · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
 
 ## Install
 
@@ -409,6 +456,26 @@ These are enforced by tests, not just documented:
 - A turn commits atomically — an interrupted turn leaves no partial record.
 - Every event carries a monotonically increasing session sequence.
 - **End-user code never needs a type cast.**
+
+## Stability
+
+Two different things are pre-release here, and only one is under this library's
+control:
+
+- **The design is stable.** The session/run/turn model, the seams, and the
+  guarantees above are implemented, tested, and unlikely to change in shape. The
+  no-cast rule, the portability separation, and the deterministic test harness
+  are enforced by CI, not aspiration.
+- **The substrate is not yet.** This library targets **Effect v4, which is at
+  release candidate** (`effect@>=4.0.0-rc.111`), and it uses the AI modules from
+  `effect/unstable/ai` — explicitly unstable upstream. Expect API churn coming
+  *from Effect* until Effect 4 reaches GA, independent of this library's own
+  versioning.
+
+Practical guidance: pin `@doeixd/effect-agent`, `effect`, and your
+`@effect/ai-*` provider to exact versions and upgrade them together. Treat the
+subpath packages marked experimental (`/durable`, `/cluster`,
+`/durable-streams`) as the fastest-moving surface.
 
 ## Observability
 

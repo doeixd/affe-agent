@@ -1,11 +1,13 @@
-# Implementation status — v0.1
+# Implementation status — `0.0.1`
 
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 586 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 623 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
-imports every published entry point from the packed tarball (23 entries).
+imports every published entry point from the packed tarball (28 entries).
+`verify:package` is the source of truth for the entry-point count; regenerate
+these numbers from `npm run verify:package` and `npm run test` when they change.
 
 **The engine is generic end to end.** `Session`, `AgentTurn`, `AgentRun`,
 `AgentSubmission` and `ToolExecution` all carry `Tools`, so tool types are never

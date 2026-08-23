@@ -21,7 +21,7 @@ Legend: **P0** = do first (cheap, high leverage), **P1** = real defect / soon,
 The design is strong; it is not *discoverable*. This is the highest-leverage
 work and it is almost entirely documentation.
 
-### A1 — README package-map + seam table `P0` · effort 1
+### A1 — README package-map + seam table `P0` · effort 1 · ✅ DONE
 - **Problem:** 28 entry points, a 1,641-line README with no table of contents
   and no package map. The "small kernel, everything composes over a seam" model
   is buried in linear prose (self-identified in ROADMAP.md:62).
@@ -39,7 +39,7 @@ work and it is almost entirely documentation.
 - **Acceptance:** A newcomer can, from the first screen, name every seam and find
   the battery that uses it without scrolling into prose.
 
-### A2 — Fix doc/count drift `P0` · effort ½
+### A2 — Fix doc/count drift `P0` · effort ½ · ✅ DONE
 - **Problem:** STATUS.md titled "v0.1" while package is `0.0.1`; STATUS/CHANGELOG
   cite "23 entries" where `package.json` now declares 28; the review counted
   621 tests where STATUS says ~586.
@@ -50,7 +50,7 @@ work and it is almost entirely documentation.
 - **Acceptance:** `grep` for `23 ` entries / `v0.1` / stale test counts returns
   nothing; numbers match `npm run verify:package` and `npm run test` output.
 
-### A3 — RC / unstable-substrate disclaimer `P1` · effort ½
+### A3 — RC / unstable-substrate disclaimer `P1` · effort ½ · ✅ DONE
 - **Problem:** The library rides `effect@>=4.0.0-rc.111` (a release candidate)
   and `effect/unstable/ai`. That is the dominant adopter risk and it is nowhere
   stated for a reader deciding whether to depend on this.
@@ -116,7 +116,7 @@ or a test hold the invariant instead.
 
 ## Workstream C — Battery fixes (the surfaces users judge quality by)
 
-### C1 — `Evals.judge` substring scoring `P1` · effort ½
+### C1 — `Evals.judge` substring scoring `P1` · effort ½ · ✅ DONE
 - **Problem:** `Evals.ts:237` scores a judge by `response.text.toUpperCase().includes("PASS")`.
   "This does not PASS the bar" scores as a pass.
 - **Fix:** Make the judge return a **structured verdict** — a tool/Schema
@@ -128,7 +128,7 @@ or a test hold the invariant instead.
   failing verdict scores as a fail. Scored via the structured field, not the
   prose.
 
-### C2 — `Evals.Eval.test` `unknown` error channel `P1` · effort ½
+### C2 — `Evals.Eval.test` `unknown` error channel `P1` · effort ½ · ✅ DONE
 - **Problem:** `Evals.ts:159` types the public surface `Effect<void, unknown, TR>`.
   AGENTS.md:65-70 explicitly calls an `unknown` error channel a bug.
 - **Fix:** Give it a precise error type (the union the eval body can actually

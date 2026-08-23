@@ -121,6 +121,29 @@ describe("Evals", () => {
     })
   )
 
+  it.effect("the judge fails a verdict that only mentions PASS inside failing prose", () =>
+    Effect.gen(function* () {
+      // The judge disobeys "reply with only PASS/FAIL" and writes prose whose
+      // verdict is failing but which contains the word PASS. A substring check
+      // would wrongly score this a pass; the anchored verdict scores it a fail.
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("The answer is 42."),
+        TestLanguageModel.text("This does not PASS the bar.")
+      ])
+      const evaluation = Evals.defineEval({
+        name: "judged-fail",
+        agent: Agent.make({ instructions: "answer", loop: AgentLoop.bounded(2) }),
+        test: (t) =>
+          Effect.gen(function* () {
+            yield* t.send("what is the answer?")
+            yield* t.judge("Is the reply correct?")
+          })
+      })
+      const result = yield* Evals.run(evaluation).pipe(Effect.provide(layer))
+      assert.isFalse(result.passed)
+    })
+  )
+
   it.effect("runAll reports each eval independently, and the reporters render them", () =>
     Effect.gen(function* () {
       // One shared, sequentially-consumed script: eval one takes the first pair
@@ -155,3 +178,33 @@ describe("Evals", () => {
     })
   )
 })
+
+describe("Evals.parseVerdict", () => {
+  it("passes only when the verdict token leads the reply, fail-closed", () => {
+    assert.isTrue(Evals.parseVerdict("PASS"))
+    assert.isTrue(Evals.parseVerdict("  pass \n"))
+    assert.isTrue(Evals.parseVerdict("PASS - the reply is correct"))
+    assert.isFalse(Evals.parseVerdict("FAIL"))
+    assert.isFalse(Evals.parseVerdict("This does not PASS the bar"))
+    assert.isFalse(Evals.parseVerdict("FAIL: does not pass"))
+    assert.isFalse(Evals.parseVerdict(""))
+  })
+})
+
+// Type-level assertion (C2 / CLAUDE.md: assert inference, don't trust that it
+// compiled). The test body's error must be threaded honestly into the eval's
+// `TE` -- neither collapsed to `never` nor widened to `unknown`. A body that
+// fails with a `string` must make `TE` exactly `string`. This is falsified by
+// the pre-fix `unknown` channel (which leaves `TE` at its `never` default, so
+// `string` is no longer assignable to it).
+// `Eval`'s fourth type parameter is the test body's own error, and it lands in
+// the `test` field's error channel unchanged -- not `unknown` (the pre-fix
+// signature) and not `never`. This breaks if the parameter is dropped or the
+// channel is widened back to `unknown`.
+type StringErrorEval = Evals.Eval<Record<string, never>, never, never, string, never>
+type ItsTestError = StringErrorEval["test"] extends (t: never) => Effect.Effect<unknown, infer TE, unknown> ? TE
+  : never
+const _assertTestErrorIsExactlyString: [ItsTestError] extends [string]
+  ? ([string] extends [ItsTestError] ? true : false)
+  : false = true
+void _assertTestErrorIsExactlyString
