@@ -107,6 +107,10 @@
       "types": "./dist/scheduling/index.d.ts",
       "default": "./dist/scheduling/index.js"
     },
+    "./budget": {
+      "types": "./dist/budget/index.d.ts",
+      "default": "./dist/budget/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"

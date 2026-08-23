@@ -17,8 +17,9 @@ transforms, steering/follow-ups, interruption, model streaming, elicitation
 `/mcp` (+v1/v2), `/durable`, `/cluster`, `/durable-streams`, `/openai`.
 
 **Higher-level packages** — `/sandbox` (+local), `/coding`, `/subagent`,
-`/state`, `/skills`, `/memory`, `/evals`, and an end-to-end integration proving
-they compose.
+`/state`, `/skills`, `/memory`, `/evals`, `/observability`, `/data`, `/channels`,
+`/hooks`, `/scheduling`, `/budget` (token ceiling over the loop seam), and an
+end-to-end integration proving they compose.
 
 ### Issue #4 priority tier (P0/P1) — shipped
 

@@ -53,7 +53,7 @@ on `Agent.make` or a `Layer` you provide at the session:
 |------|-------|---------------|-----------------------|
 | **`toolkit` / tools** | `Agent.make` | the tool set (static, or an `Effect` resolved per turn) | `/coding`, `/subagent`, `/skills`, `/mcp` |
 | **`contextTransform`** | `Agent.make` | how the model-facing prompt is *derived* from canonical history | `/compaction`, `/memory`, `/skills` (advertise) |
-| **`loop`** | `Agent.make` | the continue/stop policy after each turn | `AgentLoop.*`, a future `/budget` |
+| **`loop`** | `Agent.make` | the continue/stop policy after each turn | `AgentLoop.*`, `/budget` |
 | **`permission`** | `Agent.make` | allow / ask / deny per tool call | `Permission`, `/coding` projections |
 | **`toolExecution` / failure / denial** | `Agent.make` | concurrency and what a failed or denied call does | core policies |
 | **`elicitation`** | `Agent.make` | where a paused run waits for an outside answer | `Elicitation` (local / durable) |
@@ -74,7 +74,7 @@ Core is the default import; everything else is an explicit subpath.
 : `/client` · `/rpc` · `/http` · `/ag-ui` · `/a2a` · `/mcp` (`/mcp/v1`, `/mcp/v2`) · `/durable` · `/cluster` · `/durable-streams` · `/openai`.
 
 **Batteries** (capabilities over a seam)
-: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/channels` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule`.
+: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/channels` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop.
 
 **Host & testing**
 : `/sandbox` (portable) + `/sandbox/local` (host) · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.

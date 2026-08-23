@@ -238,7 +238,7 @@ or a test hold the invariant instead.
 
 ## Workstream E — New capability (the obvious missing battery)
 
-### E1 — `/budget` — token/turn/cost enforcement `P2` · effort 2
+### E1 — `/budget` — token/turn/cost enforcement `P2` · effort 2 · ✅ DONE
 - **Problem:** Token/turn ceilings exist only as eval *assertions* and
   `AgentLoop.bounded`, not as an enforcement capability — despite usage data
   living on `Result` and the loop seam being right there. Budget enforcement is a

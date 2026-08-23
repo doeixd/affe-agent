@@ -59,6 +59,12 @@ export interface Turn {
    * has no equivalent.
    */
   readonly streamError?: string
+  /**
+   * Token usage this turn reports on its finish part. Defaults to zero, so a
+   * script that does not care about tokens is unaffected; set it to exercise
+   * anything that reads `response.usage` (e.g. `/budget`, `Evals.tokens`).
+   */
+  readonly usage?: { readonly input?: number; readonly output?: number }
 }
 
 export interface Recorder {
@@ -69,15 +75,19 @@ export interface Recorder {
 
 // Typed as the finish part itself, not the wide union: it belongs to both
 // the batch and stream part unions, and naming it lets both use it.
-const finishPart = (): Response.FinishPartEncoded => ({
-  type: "finish",
-  reason: "stop",
-  // v4 groups token counts by direction rather than a flat record.
-  usage: {
-    inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
-    outputTokens: { total: 0, text: 0, reasoning: 0 }
+const finishPart = (usage?: Turn["usage"]): Response.FinishPartEncoded => {
+  const input = usage?.input ?? 0
+  const output = usage?.output ?? 0
+  return {
+    type: "finish",
+    reason: "stop",
+    // v4 groups token counts by direction rather than a flat record.
+    usage: {
+      inputTokens: { total: input, uncached: input, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: output, text: output, reasoning: 0 }
+    }
   }
-})
+}
 
 const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
   const parts: Array<Response.PartEncoded> = []
@@ -95,7 +105,7 @@ const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
         : { providerExecuted: call.providerExecuted })
     })
   }
-  parts.push(finishPart())
+  parts.push(finishPart(turn.usage))
   return parts
 }
 
@@ -131,7 +141,7 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
     parts.push({ type: "error", error: new Error(turn.streamError) })
     return parts
   }
-  parts.push(finishPart())
+  parts.push(finishPart(turn.usage))
   return parts
 }
 
