@@ -311,9 +311,14 @@ export type AgentEvent = typeof AgentEvent.Type
 /**
  * Identifies the execution position an event belongs to.
  *
- * An options record supplied by the emitting code, not a domain value — hence
- * optional properties rather than `Option`, matching how Effect's own APIs
- * express arguments that may be omitted.
+ * This is an *argument bag* the emitting code fills in, not a domain value, so
+ * it uses optional properties the way Effect's own option records do — a caller
+ * writes `{ submissionId, runId }`, never `Option.some(...)` at every site. The
+ * moment it becomes a persisted domain value it crosses into the
+ * `AgentEventEnvelope`, whose `submissionId`/`runId`/`turn` are `Schema.Option`;
+ * `EventBus.emit` performs that `undefined`→`Option` conversion once, at that
+ * boundary. The two representations are therefore deliberate: `undefined` on the
+ * argument side, `Option` on the domain/wire side.
  */
 export interface Correlation {
   readonly submissionId?: SubmissionId | undefined

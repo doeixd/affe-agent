@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Queue, Schema, Stream } from "effect"
+import { Effect, Metric, Queue, Schema, Stream } from "effect"
 import { AgentData } from "../src/data/index.js"
 
 /**
@@ -38,9 +38,23 @@ describe("AgentData.channel reads", () => {
         { channel: "orders", sequence: 2, payload: { nope: true } },
         { channel: "orders", sequence: 3, payload: { id: "B", total: 2 } }
       ]
+      // The drop is observable: the same-named counter, tagged with this
+      // channel, ticks up by exactly the number dropped.
+      const dropped = Metric.withAttributes(
+        Metric.counter("agent_data_dropped_events", {
+          description: "DataChannel events dropped because a reader could not decode them",
+          incremental: true
+        }),
+        { channel: "orders" }
+      )
+      const before = (yield* Metric.value(dropped)).count
+
       const orders = yield* Stream.runCollect(Orders.reads(Stream.fromIterable(events)))
       // The bad event is skipped; the reader survives and gets the good ones.
       assert.deepStrictEqual([...orders], [{ id: "A", total: 1 }, { id: "B", total: 2 }])
+
+      const after = (yield* Metric.value(dropped)).count
+      assert.strictEqual(after - before, 1) // exactly the one undecodable event
     })
   )
 })

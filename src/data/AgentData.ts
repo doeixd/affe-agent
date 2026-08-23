@@ -1,4 +1,15 @@
-import { Context, Effect, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
+import { Context, Effect, Layer, Metric, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
+
+/**
+ * Counts events a reader dropped because it could not decode them (a schema
+ * skew between an incompatible writer and reader), tagged by channel name. The
+ * drop stays non-fatal, but it is no longer invisible: a rising count on a
+ * channel is the signal that two ends disagree on its schema.
+ */
+const droppedEvents = Metric.counter("agent_data_dropped_events", {
+  description: "DataChannel events dropped because a reader could not decode them",
+  incremental: true
+})
 
 /**
  * Structured client/UI data (issue #4 §9).
@@ -97,9 +108,12 @@ export const channel = <A, I>(name: string, schema: Schema.Codec<A, I>): Channel
   const decode = Schema.decodeUnknownEffect(schema)
   // A reader tolerates a payload it cannot decode -- another writer sharing the
   // channel name with an incompatible schema, or a version skew -- by dropping
-  // and logging it rather than dying, so one bad publisher cannot kill every
-  // reader of a shared bus. A channel decoding its own round-tripped writes
-  // never hits this path.
+  // it rather than dying, so one bad publisher cannot kill every reader of a
+  // shared bus. The drop is made observable, not silent: it logs and increments
+  // the `agent_data_dropped_events` counter tagged with this channel, so a
+  // schema skew surfaces as a rising metric instead of vanishing. A channel
+  // decoding its own round-tripped writes never hits this path.
+  const dropped = Metric.withAttributes(droppedEvents, { channel: name })
   const reads = (events: Stream.Stream<DataEvent>): Stream.Stream<A> =>
     events.pipe(
       Stream.filter((event) => event.channel === name),
@@ -107,7 +121,8 @@ export const channel = <A, I>(name: string, schema: Schema.Codec<A, I>): Channel
         decode(event.payload).pipe(
           Effect.map(Option.some),
           Effect.catchCause((cause) =>
-            Effect.logWarning(`AgentData: dropped an undecodable "${name}" event`, cause).pipe(
+            Metric.update(dropped, 1).pipe(
+              Effect.andThen(Effect.logWarning(`AgentData: dropped an undecodable "${name}" event`, cause)),
               Effect.as(Option.none<A>())
             ))
         )),

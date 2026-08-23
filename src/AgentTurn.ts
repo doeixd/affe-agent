@@ -7,6 +7,7 @@ import type { Correlation } from "./AgentEvent.js"
 import * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
+import * as InternalToolkit from "./internal/toolkit.js"
 import type { RunId, SubmissionId } from "./internal/ids.js"
 import type { Session } from "./internal/state.js"
 import * as Accumulator from "./internal/streamAccumulator.js"
@@ -60,10 +61,9 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
 const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools>
 ): Effect.Effect<Toolkit.WithHandler<Tools>> =>
-  Effect.gen(function* () {
-    const toolkit = session.agent.toolkit
-    return Effect.isEffect(toolkit) ? yield* toolkit : toolkit
-  }) as Effect.Effect<Toolkit.WithHandler<Tools>>
+  // The session env satisfies the toolkit's requirements, so the shared
+  // resolver's `E`/`R` are discharged to `never` here.
+  InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<Toolkit.WithHandler<Tools>>
 
 /**
  * Execute one turn: derive context, call the model, run its tool calls, and

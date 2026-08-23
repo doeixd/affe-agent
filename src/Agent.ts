@@ -7,6 +7,7 @@ import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
 import * as AgentSession from "./AgentSession.js"
 import * as ContextTransform from "./ContextTransform.js"
+import * as InternalToolkit from "./internal/toolkit.js"
 import * as Permission from "./Permission.js"
 import * as ToolExecution from "./ToolExecution.js"
 
@@ -397,7 +398,7 @@ const mergeHandled = <
 const resolveToolkit = <Tools extends Record<string, Tool.Any>, E, R>(
   input: ToolkitInput<Tools, E, R>
 ): Effect.Effect<Toolkit.WithHandler<Tools>, E, R> =>
-  Effect.isEffect(input) ? input : Effect.succeed(input)
+  InternalToolkit.resolveToolkitInput(input)
 
 // ---------------------------------------------------------------------------
 // Pipeable combinators

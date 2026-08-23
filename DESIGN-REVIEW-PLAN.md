@@ -167,7 +167,7 @@ or a test hold the invariant instead.
 - **Acceptance:** "channel" refers to exactly one concept across the tree;
   `channels` and `data` no longer collide.
 
-### C5 — `data` silent drop of undecodable events `P3` · effort ½
+### C5 — `data` silent drop of undecodable events `P3` · effort ½ · ✅ DONE
 - **Problem:** `AgentData.ts:103-116` drops schema-undecodable events with only a
   `logWarning`; a writer/reader schema skew becomes invisible data loss.
 - **Fix:** Make the drop observable — a metrics counter and/or an optional
@@ -192,14 +192,14 @@ or a test hold the invariant instead.
 - **Acceptance:** A test that interrupts after N committed turns sees `turns===N`
   and the accumulated text/usage, not zeros.
 
-### D2 — De-dup `resolveToolkit` `P3` · effort ½
+### D2 — De-dup `resolveToolkit` `P3` · effort ½ · ✅ DONE
 - **Problem:** `Agent.ts:397-400` and `AgentTurn.ts:60-66` implement the same
   `isEffect ? run : succeed` toolkit resolution.
 - **Fix:** One shared helper; both call sites use it.
 - **Files:** `src/Agent.ts`, `src/AgentTurn.ts`.
 - **Acceptance:** One implementation; gate green.
 
-### D3 — `Correlation` `undefined` vs `Option` inconsistency `P3` · effort ½
+### D3 — `Correlation` `undefined` vs `Option` inconsistency `P3` · effort ½ · ✅ DONE (kept undefined; strengthened the boundary rationale)
 - **Problem:** `Correlation` (`AgentEvent.ts:318-322`) expresses absence with
   `undefined` optionals while the envelope (`:335-344`) uses `Option`, bridged by
   `Option.fromUndefinedOr`. AGENTS.md mandates `Option` for domain absence.
