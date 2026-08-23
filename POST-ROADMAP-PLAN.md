@@ -21,18 +21,18 @@ CI already exists (`.github/workflows/ci.yml`: `npm run check` + `build` +
 `verify:package` on Node 22/24, plus an mcp-v1 floor job). So this is *audit and
 extend*, not *create*.
 
-### R1 — Audit and close CI gaps `P0` · effort ½
-- **Now:** the workflow runs the full gate but does **not** run
-  `lint:portability` explicitly (it is not part of `npm run check`), nor a
-  packaged smoke import beyond `verify:package`.
-- **Do:** add `npm run lint:portability` as its own CI step (it is a real gate
-  that currently only runs locally); confirm `check` = typecheck + lint + test
-  and that portability is separate. Add a step that fails if `git status` is
-  dirty after build (generated files committed by mistake).
+### R1 — Audit and close CI gaps `P0` · effort ½ · ✅ DONE
+- **Audit result:** `npm run check` already chains
+  `typecheck && lint && lint:portability && test` (package.json), so CI *does*
+  run the portability gate — the premise that it was missing was wrong. The one
+  real gap was that nothing asserted the build has no tracked side effects.
+- **Done:** added a `git diff --exit-code` step after `npm run build`, so a
+  generated file written into a tracked path fails CI (`dist/` is gitignored, so
+  a clean build leaves the tree clean).
 - **Files:** `.github/workflows/ci.yml`.
-- **Acceptance:** CI runs tsc + lint + **portability** + test + build +
-  verify:package on every push/PR; a portability regression fails CI, not just
-  local review.
+- **Acceptance:** CI already runs tsc + lint + portability + test + build +
+  verify:package on every push/PR (Node 22/24); now also fails if the build
+  dirties a tracked file.
 
 ### R2 — Publish dry-run + pinning guidance `P2` · effort ½
 - **Do:** a `npm pack` dry-run check (the tarball contains `dist`, `README`,
@@ -77,7 +77,7 @@ extend*, not *create*.
 
 ## Workstream D — Document the dynamic-capability story (#7)
 
-### D1 — Toolkit-as-Effect section + example `P2` · effort 1
+### D1 — Toolkit-as-Effect section + example `P2` · effort 1 · ✅ DONE
 - **Problem:** the mechanism for per-turn capability resolution — a `toolkit`
   that is an `Effect`, re-resolved each turn so tools can vary with runtime state
   (per-tenant MCP, credentials, feature flags) — exists and is tested, but is

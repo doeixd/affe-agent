@@ -365,6 +365,35 @@ Agent.make({ toolkit, toolFailurePolicy: ToolExecution.FailRun })
 Defects always fail the run either way — a broken handler is not something the
 model can correct.
 
+### Dynamic capabilities: a toolkit resolved per turn
+
+A `toolkit` may be a plain value **or an `Effect`**. In the Effect form the
+harness re-resolves it **once per turn**, so the tools — and the state their
+handlers close over — can vary with whatever the resolver reads at that moment:
+the current tenant, a feature flag, a freshly-fetched credential, a per-tenant
+MCP connection.
+
+```ts
+class Tenant extends Context.Service<Tenant, { searchIndex: string }>()("Tenant") {}
+
+const Assistant = Agent.make({
+  // Re-read every turn; one definition serves every tenant.
+  toolkit: Effect.flatMap(Tenant, (tenant) =>
+    Agent.toolkit([Search], {
+      search: ({ query }) => searchIn(tenant.searchIndex, query)
+    }))
+})
+// Switching the provided `Tenant` layer switches what the tool reaches.
+```
+
+Two things follow from it being an ordinary Effect. Its **requirements join the
+agent's** — here `Tenant` surfaces in the agent's `R`, so a session that forgets
+to provide it is a type error, not a runtime surprise. And its **failures join
+the agent's error channel** — acquiring a capability (connecting to a tenant's
+MCP server, reading a policy) is allowed to fail, and that failure is catchable
+by tag on the run rather than becoming a defect. Full example:
+[`examples/dynamic-capabilities.ts`](./examples/dynamic-capabilities.ts).
+
 ### Composing declarative values
 
 `Agent`, `AgentLoop` and `ContextTransform` are values, so an external
@@ -1671,6 +1700,8 @@ context transforms and canonical history are directly testable.
   tool and run events over a session, via `@doeixd/effect-agent/hooks`
 - [`examples/scheduling.ts`](./examples/scheduling.ts) — a tool that schedules a
   follow-up run, and a resilient cron digest, via `@doeixd/effect-agent/scheduling`
+- [`examples/dynamic-capabilities.ts`](./examples/dynamic-capabilities.ts) — a
+  per-tenant toolkit resolved per turn from a service in the agent's context
 
 ## Runtimes
 

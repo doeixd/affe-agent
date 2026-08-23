@@ -36,6 +36,13 @@ jobs:
 
       - run: npm run build
 
+      # Nothing tracked should change as a side effect of building. A generated
+      # file written into a tracked path (an errant codegen step, a stale
+      # snapshot) would otherwise slip in unnoticed; here it fails the build.
+      # `dist/` is gitignored, so a clean build leaves the tree clean.
+      - name: Working tree is clean after build
+        run: git diff --exit-code
+
       # The suite proves the source is sound and says nothing about whether the
       # package is. Every exported subpath must resolve from the tarball; a
       # wrong path or missing build output is invisible to source tests and
