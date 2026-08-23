@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Layer, Option, Schedule } from "effect"
+import { Cron, Deferred, Effect, Layer, Option, Schedule } from "effect"
 import { TestClock } from "effect/testing"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -57,7 +57,62 @@ describe("Scheduling.local dispatcher", () => {
       )
     }).pipe(Effect.scoped)
   )
+
+  it.effect("a failing job is isolated: it does not stop the dispatcher or sibling jobs", () =>
+    Effect.gen(function* () {
+      const s1 = yield* Deferred.make<void>()
+      const s2 = yield* Deferred.make<void>()
+      const s3 = yield* Deferred.make<void>()
+      // Second dispatched run fails; the dispatcher must survive it and keep
+      // serving further jobs (and the first job already ran independently).
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "one", started: s1 },
+        { fail: "boom", started: s2 },
+        { text: "three", started: s3 }
+      ])
+      yield* Effect.gen(function* () {
+        yield* Scheduling.dispatch({ input: "a" })
+        yield* Deferred.await(s1)
+        yield* Scheduling.dispatch({ input: "b" }) // this run fails
+        yield* Deferred.await(s2)
+        yield* Scheduling.dispatch({ input: "c" }) // dispatcher still works
+        // Reaching s3 proves the failing run did not break the dispatcher.
+        yield* Deferred.await(s3)
+      }).pipe(
+        Effect.provide(Layer.merge(Scheduling.local(Simple).pipe(Layer.provide(model)), TestClock.layer())),
+        Effect.scoped
+      )
+    })
+  )
+
+  it.effect("a delayed job is interrupted when the layer scope closes, and never runs", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const { layer: model } = yield* TestLanguageModel.script([{ text: "done", started }])
+      // Dispatch with a long delay, then close the scope WITHOUT advancing the
+      // clock: the forked job is still sleeping and is interrupted, never runs.
+      yield* Effect.gen(function* () {
+        yield* Scheduling.dispatch({ input: "go", delay: "1 hour" })
+        yield* Effect.yieldNow // let the job reach its delay
+      }).pipe(
+        Effect.provide(Layer.merge(Scheduling.local(Simple).pipe(Layer.provide(model)), TestClock.layer())),
+        Effect.scoped
+      )
+      // Scope closed while the job slept -> it was interrupted before the model.
+      assert.isTrue(Option.isNone(yield* Deferred.poll(started)))
+    })
+  )
 })
+
+// Type-level assertion (CLAUDE.md: assert inference, do not trust that it compiled):
+// `recurring` over `Schedule.cron` carries the schedule's `CronParseError` in its
+// error channel. If it did not, `cronError` would not be assignable to `RecurringError`.
+const _recurringCron = Scheduling.recurring(Simple, "x", Schedule.cron("0 9 * * *"))
+type RecurringError = [typeof _recurringCron] extends [Effect.Effect<unknown, infer Err, unknown>] ? Err : never
+// `true` only if the schedule's CronParseError is present in the error channel.
+type _CronErrorInChannel = Cron.CronParseError extends RecurringError ? true : never
+const _assertCronErrorInChannel: _CronErrorInChannel = true
+void _assertCronErrorInChannel
 
 describe("Scheduling.recurring", () => {
   it.effect("fires once per interval and a failing run does not stop the schedule", () =>

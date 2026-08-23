@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Schedule } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
 import type { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { LanguageModel } from "effect/unstable/ai"
@@ -46,9 +46,11 @@ export class AgentDispatcher extends Context.Service<AgentDispatcher, {
 /**
  * An in-process dispatcher: each job runs the agent, after its delay, in a
  * fibre forked into the layer's scope -- so it outlives the `dispatch` call and
- * is interrupted when the layer closes. A dispatched run's failure is logged,
- * never propagated to the dispatcher. The agent's `LanguageModel | R` is
- * captured at layer build, so a dispatched run is self-contained.
+ * is interrupted when the layer closes. A dispatched run's genuine failure is
+ * logged, never propagated to the dispatcher; interruption on layer close is
+ * not a failure and is not logged. The job runs in the layer's context: the
+ * agent's `LanguageModel | R` is captured at layer build (making `dispatch`
+ * itself requirement-free), and time comes from that same context's `Clock`.
  *
  * For durability, provide a Workflow/queue implementation of `AgentDispatcher`
  * instead; the tool that calls `dispatch` does not change.
@@ -68,7 +70,10 @@ export const local = <Tools extends Record<string, Tool.Any>, E, R>(
             : Effect.delay(Agent.run(agent, job.input), job.delay)
           return delayed.pipe(
             Effect.provide(env),
-            Effect.catchCause((cause) => Effect.logError("scheduling: a dispatched run failed", cause)),
+            Effect.catchCause((cause): Effect.Effect<void> =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : Effect.logError("scheduling: a dispatched run failed", cause)),
             Effect.forkIn(scope),
             Effect.asVoid
           )
@@ -100,6 +105,9 @@ export const recurring = <Tools extends Record<string, Tool.Any>, E, R, SO, SE, 
   schedule: Schedule.Schedule<SO, unknown, SE, SR>
 ): Effect.Effect<SO, SE, LanguageModel.LanguageModel | R | SR> =>
   Agent.run(agent, input).pipe(
-    Effect.catchCause((cause) => Effect.logError("scheduling: a scheduled run failed", cause)),
+    Effect.catchCause((cause): Effect.Effect<void> =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.void
+        : Effect.logError("scheduling: a scheduled run failed", cause)),
     Effect.repeat(schedule)
   )
