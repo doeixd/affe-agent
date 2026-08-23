@@ -1,8 +1,9 @@
-import { Config, Effect, Layer, Option, Schema } from "effect"
-import { HttpBody, HttpClient, HttpClientRequest, HttpIncomingMessage, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
+import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Agent from "../src/Agent.js"
 import { AgentClient, AgentSessionHost } from "../src/client/index.js"
 import { Connectors } from "../src/connectors/index.js"
+import * as Slack from "../src/connectors/slack.js"
 
 /**
  * A Slack channel: the agent answers messages in a Slack workspace.
@@ -34,16 +35,27 @@ const SlackEnvelope = Schema.Struct({
   }))
 })
 
-// The app owns signature verification (Slack's HMAC needs platform crypto, so
-// it stays out of the portable core). Sketch:
-declare const verifySlackSignature: (
-  request: HttpServerRequest.HttpServerRequest
-) => Effect.Effect<void>
+// Signature verification uses platform crypto, so it is the one host-flagged
+// entry (`@doeixd/effect-agent/connectors/slack`); the rest of this file stays
+// portable.
+const verify = (signingSecret: Redacted.Redacted<string>) => Slack.verifier({ signingSecret })
 
 const decode = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    yield* verifySlackSignature(request)
-    const body = yield* HttpIncomingMessage.schemaBodyJson(SlackEnvelope)(request)
+    const signingSecret = yield* Config.redacted("SLACK_SIGNING_SECRET")
+    // Verify against the *raw* body Slack signed, before parsing anything.
+    const raw = yield* request.text
+    const ok = yield* verify(signingSecret)({
+      signature: request.headers["x-slack-signature"],
+      timestamp: request.headers["x-slack-request-timestamp"],
+      body: raw
+    })
+    if (!ok) {
+      return Connectors.respondWith(HttpServerResponse.empty({ status: 401 }))
+    }
+    // The signature checked out, so the body is genuinely Slack's JSON; a parse
+    // failure here is a defect, not something to handle.
+    const body = yield* Schema.decodeUnknownEffect(SlackEnvelope)(JSON.parse(raw))
     // Slack's one-time endpoint verification.
     if (body.type === "url_verification" && body.challenge !== undefined) {
       return Connectors.respondWith(HttpServerResponse.text(body.challenge))
@@ -93,4 +105,3 @@ export const main = slack.pipe(
   )
 )
 
-void Config.redacted

@@ -31,7 +31,7 @@ const sourceRoot = process.argv[2] === undefined
   : path.resolve(process.argv[2])
 
 /** Host implementations, by path relative to `src/`. Keep this list short. */
-const HOST_MODULES = new Set(["sandbox/local.ts"])
+const HOST_MODULES = new Set(["sandbox/local.ts", "connectors/slack.ts"])
 
 const builtins = new Set(builtinModules)
 const hostPackages =

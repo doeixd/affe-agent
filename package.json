@@ -99,6 +99,10 @@
       "types": "./dist/connectors/index.d.ts",
       "default": "./dist/connectors/index.js"
     },
+    "./connectors/slack": {
+      "types": "./dist/connectors/slack.d.ts",
+      "default": "./dist/connectors/slack.js"
+    },
     "./hooks": {
       "types": "./dist/hooks/index.d.ts",
       "default": "./dist/hooks/index.js"

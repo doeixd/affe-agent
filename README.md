@@ -1375,6 +1375,13 @@ the platform's timeout and does the work in the background; the app's `decode`
 owns the platform specifics (signature check, challenge, retries) — so the core
 stays portable.
 
+Signature verification is the one platform bit that needs real crypto, so it
+ships as a **host-flagged** sub-entry rather than in the portable core:
+`@doeixd/effect-agent/connectors/slack` provides `Slack.verifier`, which checks
+Slack's `v0=` HMAC-SHA256 over `v0:{timestamp}:{body}`, rejects stale timestamps
+(the replay window), and compares in constant time — drop it into a `decode`
+instead of re-implementing it. See [`examples/connectors.ts`](./examples/connectors.ts).
+
 ## Structured data
 
 An agent often has typed output beyond its reply — an order it created, a row

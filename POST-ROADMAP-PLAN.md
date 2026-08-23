@@ -136,7 +136,7 @@ does not change.
   fires after the delay even though the “first process” is gone. Interface parity
   with `local` is type-asserted.
 
-### P2 — Crypto-backed Slack signature verifier for `/connectors` `P1` · effort 1
+### P2 — Crypto-backed Slack signature verifier for `/connectors` `P1` · effort 1 · ✅ DONE
 - **Problem:** the `/connectors` webhook example leaves signature verification to
   the application's `decode`; there is no shipped, correct verifier, so every
   adopter re-implements Slack's HMAC and risks getting timestamp-freshness or
