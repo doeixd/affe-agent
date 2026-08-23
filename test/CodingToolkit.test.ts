@@ -8,7 +8,7 @@ import * as Permission from "../src/Permission.js"
 import * as MemorySandbox from "../src/sandbox/memory.js"
 import * as Sandbox from "../src/sandbox/Sandbox.js"
 import * as ToolExecution from "../src/ToolExecution.js"
-import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
  * The coding toolkit is a battery over the sandbox seam: nothing here provides
@@ -119,6 +119,12 @@ describe("CodingToolkit handlers", () => {
       )
       assertString(missing)
       assert.include(missing, "was not found")
+      // An empty old_string is refused, not treated as matching everywhere.
+      const emptyOld = yield* Effect.flip(
+        withSandbox({ "f.ts": "hello" }, H.edit_file({ path: "f.ts", old_string: "", new_string: "x" }, ctx))
+      )
+      assertString(emptyOld)
+      assert.include(emptyOld, "was not found")
       // A `$` in new_string is literal, not a String.replace special pattern.
       const dollars = yield* withSandbox(
         { "f.ts": "price = OLD" },
@@ -138,6 +144,15 @@ describe("CodingToolkit handlers", () => {
       assert.deepStrictEqual(byPath, [
         { path: "a.txt", type: "file" },
         { path: "dir", type: "directory" }
+      ])
+      // A path scopes the listing to that subtree.
+      const scoped = yield* withSandbox(
+        { "dir/b.txt": "2", "dir/c.txt": "3", "a.txt": "1" },
+        H.list_files({ path: "dir" }, ctx)
+      )
+      assert.deepStrictEqual([...scoped].sort((x, y) => (x.path < y.path ? -1 : 1)), [
+        { path: "dir/b.txt", type: "file" },
+        { path: "dir/c.txt", type: "file" }
       ])
     })
   )
@@ -183,6 +198,22 @@ describe("CodingToolkit handlers", () => {
       assert.deepStrictEqual(result, { exit_code: 0, stdout: "hi\n", stderr: "" })
       // The command reached exec as a shell invocation, not split into argv.
       assert.deepStrictEqual(yield* Ref.get(seen), { executable: "bash", args: ["-lc", "echo hi"] })
+    })
+  )
+
+  it.effect("bash reports a non-zero exit and stderr as a success value, and forwards a timeout", () =>
+    Effect.gen(function* () {
+      const opts = yield* Ref.make<unknown>(undefined)
+      const result = yield* withSandbox(
+        {},
+        H.bash({ command: "false", timeout_ms: 500 }, ctx),
+        (_cmd, options) =>
+          Ref.set(opts, options).pipe(Effect.as({ exitCode: 2, stdout: "", stderr: "boom" }))
+      )
+      // A non-zero exit is not a run failure -- it is a success the model reads.
+      assert.deepStrictEqual(result, { exit_code: 2, stdout: "", stderr: "boom" })
+      // timeout_ms is forwarded to exec as a timeout option.
+      assert.deepStrictEqual(yield* Ref.get(opts), { timeout: 500 })
     })
   )
 })
@@ -268,19 +299,21 @@ describe("CodingToolkit in a session", () => {
       ])
       const out = yield* Effect.gen(function* () {
         const session = yield* AgentSession.make(agent)
-        const probe = yield* AgentProbe.make(session)
         const result = yield* session.prompt("try to edit")
-        return { text: result.text, file: yield* fileNow, events: yield* probe.events }
+        return { text: result.text, file: yield* fileNow, history: yield* session.history }
       }).pipe(Effect.provide(env(layer)), Effect.scoped)
       assert.strictEqual(out.text, "could not write")
       // The write was denied: the file is unchanged on disk.
       assert.strictEqual(out.file, "const value = 1")
-      // And the model was told, with the reason, rather than the run failing.
-      const failed = out.events.find(AgentEventIsToolFailed)
-      assert.isDefined(failed)
+      // The read actually ran (success, with the file content) and the write was
+      // refused (failure, carrying the deny reason) -- not the read failing too.
+      const toolResults = out.history.content.flatMap((m) => (m.role === "tool" ? m.content : []))
+      const read = toolResults[0]
+      assert.isTrue(read !== undefined && read.type === "tool-result" && !read.isFailure)
+      assert.include(JSON.stringify(read), "const value = 1")
+      const write = toolResults[1]
+      assert.isTrue(write !== undefined && write.type === "tool-result" && write.isFailure)
+      assert.include(JSON.stringify(write), "read-only session")
     })
   )
 })
-
-const AgentEventIsToolFailed = (e: { readonly event: { readonly _tag: string } }): boolean =>
-  e.event._tag === "ToolCallFailed"

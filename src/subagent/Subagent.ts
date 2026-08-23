@@ -107,7 +107,9 @@ const describeError = (error: unknown): string => {
  * The result is an `Agent.BoundTool` with no residual requirements: the child
  * agent's `LanguageModel | R` is discharged by `options.provide` inside the
  * handler, so nothing leaks up to the parent's wiring. Add it to any agent's
- * `tools`, alongside ordinary tools, and gate it with a policy like any other.
+ * `tools`, alongside ordinary tools. A policy can gate it by tool name -- it
+ * carries no action/resource projection, since a delegated prompt has no
+ * natural resource to project (unlike a file path or a shell command).
  */
 export const tool = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
   name: string,

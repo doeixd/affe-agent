@@ -46,9 +46,10 @@ import * as ContextTransform from "../ContextTransform.js"
  * A handle to one typed value, readable and writable from anywhere with the
  * service in context -- a tool handler, a context transform, a policy.
  *
- * Every mutation is atomic (a single `SubscriptionRef` step) and, when the
- * layer was built with persistence, written through to the store before it
- * returns. `changes` is the live stream for a UI that watches the state move.
+ * Every mutation is atomic -- one `SubscriptionRef` step when the state is
+ * ephemeral, and a serialized swap-and-persist when the layer has a store --
+ * and, with persistence, written through to the store before it returns.
+ * `changes` is the live stream for a UI that watches the state move.
  */
 export interface AgentState<A> {
   readonly get: Effect.Effect<A>

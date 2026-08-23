@@ -45,6 +45,22 @@ describe("Memory service (in-memory built-in)", () => {
       assert.deepStrictEqual(empty.entries, [])
     })
   )
+
+  it.effect("more query words matched ranks an entry higher", () =>
+    Effect.gen(function* () {
+      const ranked = yield* Effect.gen(function* () {
+        const memory = yield* Memory.Memory
+        yield* memory.remember("s", { content: "Alice enjoys mountains" })
+        yield* memory.remember("s", { content: "Alice loves hiking and mountain trips" })
+        return yield* memory.recall("s", "mountain hiking trips")
+      }).pipe(Effect.provide(Memory.layer()))
+      // The three-hit entry outranks the one-hit entry -- the sort is load-bearing.
+      assert.deepStrictEqual(ranked.entries, [
+        { content: "Alice loves hiking and mountain trips" },
+        { content: "Alice enjoys mountains" }
+      ])
+    })
+  )
 })
 
 describe("Memory.recall transform", () => {
@@ -72,13 +88,66 @@ describe("Memory.recall transform", () => {
   )
 })
 
-describe("Memory.rememberTool projection", () => {
+describe("Memory.rememberTool", () => {
   it.effect("projects to a memory action on the content, so a policy can gate writes", () => {
     const projection = Permission.projectionOf(Memory.rememberTool("alice").tool)
     assert.strictEqual(projection.action, "memory")
     assert.strictEqual(projection.resource({ content: "a fact" }), "a fact")
     return Effect.void
   })
+
+  it.effect("a store failure reaches the model as a failed tool result, not a defect", () =>
+    Effect.gen(function* () {
+      const broken = Layer.succeed(Memory.Memory, {
+        recall: () => Effect.succeed({ entries: [] }),
+        remember: () => Effect.fail(new Memory.MemoryError({ reason: "disk full" }))
+      })
+      const { layer } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "r1", name: "remember", params: { content: "a fact" } }] },
+        TestLanguageModel.text("could not save")
+      ])
+      const agent = Agent.make({
+        instructions: "save",
+        tools: [Memory.rememberTool("alice")],
+        loop: AgentLoop.bounded(4)
+      })
+      const { history, result } = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(agent)
+        const result = yield* session.prompt("go")
+        return { result, history: yield* session.history }
+      }).pipe(Effect.provide(Layer.merge(broken, layer)), Effect.scoped)
+
+      // The run finished; the write surfaced as a failure the model could read.
+      assert.strictEqual(result.text, "could not save")
+      const toolResults = history.content.flatMap((m) => (m.role === "tool" ? m.content : []))
+      const failure = toolResults[0]
+      assert.isTrue(failure !== undefined && failure.type === "tool-result" && failure.isFailure)
+      assert.include(JSON.stringify(failure), "disk full")
+    })
+  )
+})
+
+describe("Memory.writer", () => {
+  it.effect("saves nothing when the extractor returns None", () =>
+    Effect.gen(function* () {
+      const saved = yield* Ref.make<ReadonlyArray<string>>([])
+      const custom = Layer.succeed(Memory.Memory, {
+        recall: () => Effect.succeed({ entries: [] }),
+        remember: (_scope, entry) => Ref.update(saved, (all) => [...all, entry.content])
+      })
+      const writerLoop = Memory.writer<Record<string, never>>("alice", () => Option.none())
+      const agent = Agent.make({
+        instructions: "work",
+        loop: AgentLoop.and(writerLoop, AgentLoop.bounded(2))
+      })
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("done")])
+      yield* Effect.flatMap(AgentSession.make(agent), (s) => s.prompt("go")).pipe(
+        Effect.provide(Layer.merge(custom, layer)),
+        Effect.scoped
+      )
+      assert.deepStrictEqual(yield* Ref.get(saved), [])
+    })
+  )
 })
 
 describe("Memory across sessions", () => {

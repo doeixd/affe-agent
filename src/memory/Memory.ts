@@ -77,8 +77,13 @@ export class Memory extends Context.Service<Memory, MemoryShape>()(
 // In-memory built-in
 // ---------------------------------------------------------------------------
 
+// Distinct words of length >= 2, lowercased. Deduped so a query that repeats a
+// word ("budget budget report") does not score an entry twice for it; the
+// score is how many *distinct* query words an entry contains. This is a plain
+// keyword matcher for tests and single-node use -- a real adapter ranks with
+// embeddings; see the module doc.
 const tokens = (text: string): ReadonlyArray<string> =>
-  text.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 2)
+  Array.from(new Set(text.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 2)))
 
 /**
  * A keyword-matching, in-process memory. Suitable for tests and single-node

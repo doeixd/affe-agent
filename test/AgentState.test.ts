@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Effect, Layer, Option, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
@@ -33,20 +33,33 @@ describe("AgentState service", () => {
       }).pipe(Effect.provide(AgentState.layer(Counter, { initial: 1 })))
 
       assert.strictEqual(observed.start, 1)
-      assert.strictEqual(observed.doubled, 30) // read of 15, before modify wrote it back unchanged
+      // modify's f returns [returnValue, newState]: here [n*2, n], so it
+      // returns 30 (from n=15) and leaves the state at 15.
+      assert.strictEqual(observed.doubled, 30)
       assert.strictEqual(observed.end, 15)
     })
   )
 
-  it.effect("changes reflects the live value", () =>
+  it.effect("changes is a live subscription: the current value, then each later update", () =>
     Effect.gen(function* () {
-      const head = yield* Effect.gen(function* () {
-        yield* AgentState.set(Counter, 5)
-        // `changes` publishes the current value first, so its head is live state.
-        return yield* Stream.runHead(AgentState.changes(Counter))
+      const collected = yield* Effect.gen(function* () {
+        // A handshake makes this deterministic: only set the second value once
+        // the subscriber has actually received the first (the current one).
+        const gotFirst = yield* Deferred.make<void>()
+        const fiber = yield* Effect.forkChild(
+          Stream.runCollect(
+            AgentState.changes(Counter).pipe(
+              Stream.tap(() => Deferred.succeed(gotFirst, void 0)),
+              Stream.take(2)
+            )
+          )
+        )
+        yield* Deferred.await(gotFirst)
+        yield* AgentState.set(Counter, 2)
+        return yield* Fiber.join(fiber)
       }).pipe(Effect.provide(AgentState.layer(Counter, { initial: 1 })))
 
-      assert.deepStrictEqual(head, Option.some(5))
+      assert.deepStrictEqual([...collected], [1, 2])
     })
   )
 })

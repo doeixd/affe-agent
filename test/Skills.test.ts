@@ -121,6 +121,32 @@ describe("Skills in a session", () => {
     })
   )
 
+  it.effect("loading an unknown skill returns a failure the model can read, not a defect", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "l1", name: "load_skill", params: { skill_id: "does-not-exist" } }] },
+        TestLanguageModel.text("no such skill")
+      ])
+      const agent = Agent.make({
+        instructions: "Help.",
+        tools: [Skills.loadTool],
+        loop: AgentLoop.bounded(4),
+        contextTransform: Skills.advertise
+      })
+      const { result, history } = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(agent)
+        const result = yield* session.prompt("load it")
+        return { result, history: yield* session.history }
+      }).pipe(Effect.provide(Layer.merge(Skills.layer([refunds]), layer)), Effect.scoped)
+
+      assert.strictEqual(result.text, "no such skill")
+      const toolResults = history.content.flatMap((m) => (m.role === "tool" ? m.content : []))
+      const miss = toolResults[0]
+      assert.isTrue(miss !== undefined && miss.type === "tool-result" && miss.isFailure)
+      assert.include(JSON.stringify(miss), "does-not-exist")
+    })
+  )
+
   it.effect("a policy can deny a specific skill's load without touching the catalogue", () =>
     Effect.gen(function* () {
       const { layer } = yield* TestLanguageModel.script([
