@@ -42,8 +42,10 @@ export type Handlers<E, R> = {
 
 export interface Options<E, EO, RO> {
   /**
-   * What to do when a handler fails. Defaults to logging the cause and
-   * continuing -- one bad hook never stops the others or ends the observer.
+   * What to do when a handler fails (a typed failure, a die, or a synchronous
+   * throw). Defaults to logging the cause and continuing. `onError` itself is
+   * also isolated -- if it fails, that is logged rather than ending the
+   * observer -- so `on` never fails, whatever a hook does.
    */
   readonly onError?: (cause: Cause.Cause<E>, envelope: AgentEventEnvelope) => Effect.Effect<void, EO, RO>
 }
@@ -69,7 +71,7 @@ export const on = <H extends Handlers<any, any>, EO = never, RO = never>(
   events: Stream.Stream<AgentEventEnvelope>,
   handlers: H,
   options?: Options<ErrorsOf<H>, EO, RO>
-): Effect.Effect<void, EO, ServicesOf<H> | RO> =>
+): Effect.Effect<void, never, ServicesOf<H> | RO> =>
   Stream.runForEach(events, (envelope) => {
     // The tag->handler lookup and call are the one structural erasure here, as
     // `AgentEvent.match` does internally: the compiler cannot relate a runtime
@@ -80,11 +82,16 @@ export const on = <H extends Handlers<any, any>, EO = never, RO = never>(
       ((event: AgentEvent.AgentEvent, envelope: AgentEventEnvelope) => Effect.Effect<void, ErrorsOf<H>, ServicesOf<H>>) | undefined
     >
     const handler = table[envelope.event._tag]
-    const ran = handler === undefined ? Effect.void : handler(envelope.event, envelope)
-    return ran.pipe(
+    // `suspend` runs the handler invocation *inside* the caught region, so a
+    // handler that throws synchronously (before returning its Effect) is
+    // isolated too, not only one that fails or dies within its Effect.
+    return Effect.suspend(() => (handler === undefined ? Effect.void : handler(envelope.event, envelope))).pipe(
       Effect.catchCause((cause) =>
         options?.onError === undefined
           ? Effect.logError("Hooks: a handler failed", cause)
-          : options.onError(cause, envelope))
+          : options.onError(cause, envelope)),
+      // A failing `onError` must not end the observer either -- the whole point
+      // is that no hook can tear down the stream. So it too is caught and logged.
+      Effect.catchCause((cause) => Effect.logError("Hooks: an onError handler failed", cause))
     )
   })
