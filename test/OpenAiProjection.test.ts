@@ -215,6 +215,21 @@ describe("OpenAiAgent message rules", () => {
         )
       : []
     assert.deepStrictEqual(texts, ["two", "three"])
+    // "Last" assistant, not "an" assistant: with two assistant turns the
+    // delta is only what follows the *second* one.
+    const twoTurns = [
+      { role: "user", content: "a" },
+      { role: "assistant", content: "1" },
+      { role: "user", content: "b" },
+      { role: "assistant", content: "2" },
+      { role: "user", content: "c" }
+    ] as const
+    const twoDelta = OpenAiAgent.statefulDelta(twoTurns)
+    assert.isTrue(
+      Option.isSome(twoDelta) &&
+        twoDelta.value.content.every((m) => m.role === "user") &&
+        twoDelta.value.content.length === 1
+    )
     // Nothing after the last assistant message: nothing to submit.
     assert.isTrue(Option.isNone(OpenAiAgent.statefulDelta(messages.slice(0, 3))))
     // A trailing system message alone is not input either.
