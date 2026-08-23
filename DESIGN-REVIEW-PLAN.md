@@ -61,7 +61,7 @@ work and it is almost entirely documentation.
 - **Acceptance:** The stability posture is stated above the fold, not implied by
   the version number alone.
 
-### A4 — Examples for the un-exampled entry points `P2` · effort 2
+### A4 — Examples for the un-exampled entry points `P2` · effort 2 · 🟡 PARTIAL (compaction + testing done; the 5 transport examples remain)
 - **Problem:** ~7 entry points (`/rpc`, `/http`, `/ag-ui`, `/a2a`, `/mcp*`,
   `/compaction`, `/testing`) have no dedicated example; examples are the
   typechecked, trustworthy documentation.
@@ -223,7 +223,7 @@ or a test hold the invariant instead.
 - **Acceptance:** Retry behavior is asserted structurally, deterministically (no
   `sleep`).
 
-### D5 — Reduce `sleep`-based settling in durable-SQL integration tests `P3` · effort 1
+### D5 — Reduce `sleep`-based settling in durable-SQL integration tests `P3` · effort 1 · ✅ DONE (replaced the one settle with a clean predicate; genuine store settles kept + commented)
 - **Problem:** Real `sleep`/`setTimeout` settling margins survive in the
   durable-SQL integration tests (`DurableAgentClientSql.test.ts` and siblings) —
   a latent CI-flakiness surface.

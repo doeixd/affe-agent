@@ -149,8 +149,12 @@ describe("DurableAgentClient on SQL storage", () => {
           const session = yield* Effect.scoped(a.client.createSession({ sessionId: "replay-stream" }))
           yield* Effect.forkDetach(session.prompt("wipe it", { stream: true }))
           const waiting = yield* until(session.pending, (p) => p.length > 0)
-          yield* Effect.sleep(Duration.millis(500))
-          const recorded = yield* a.delivery.read("replay-stream")
+          // Poll the delivery log until turn 1's two streamed chunks have
+          // landed, rather than sleeping a fixed interval and reading once.
+          const recorded = yield* until(
+            a.delivery.read("replay-stream"),
+            (events) => events.filter((e) => e.event._tag === "MessageDelta").length >= 2
+          )
           return {
             requestId: waiting[0]!.id,
             live: recorded.flatMap((e) => (e.event._tag === "MessageDelta" ? [e.event.delta] : []))
