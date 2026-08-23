@@ -35,6 +35,7 @@ they compose.
 | 11 | Evals | `/evals` |
 | 9 | Structured client/UI data | `/data` |
 | 10 | Channels | `/channels` |
+| 13 | Lifecycle hooks | `/hooks` |
 | 12 | Observability | `/observability` |
 
 Issue #1 (items 1–9) is complete; the transports and sandbox it left open have
@@ -44,9 +45,9 @@ all since landed.
 
 Ranked by value-to-surface for what to build next:
 
-1. **Lifecycle-hook convenience (`#13`)** and **scheduling / self-dispatch
-   (`#14`, an `AgentDispatcher` Service with local / Workflow / queue impls).**
-   **Top build pick.**
+1. **Scheduling / self-dispatch (`#14`)** — an `AgentDispatcher` Service (local
+   / Workflow / queue impls) so an agent can enqueue future work without
+   learning a scheduling runtime. **Top (last) build pick.**
 2. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
    sandbox/channel/deployment adapters (a real crypto-backed Slack signature
    verifier as a host-flagged sub-entry, more channel platforms).

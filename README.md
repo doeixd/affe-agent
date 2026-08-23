@@ -1197,6 +1197,32 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Lifecycle hooks
+
+`@doeixd/effect-agent/hooks` runs typed side effects at points in a run — a tool
+starting, a run completing — without touching the run. There's no new mechanism
+and, deliberately, no new PubSub: a session already publishes its lifecycle as
+`AgentEvent`s over an internal PubSub, and `AgentSession.events(session)` is a
+subscription to it, so hooks fan out off the one bus alongside observability, a
+UI and a delivery log.
+
+```ts
+import { Hooks } from "@doeixd/effect-agent/hooks"
+
+// Fork it beside the run; it runs until the stream ends.
+yield* Effect.forkScoped(Hooks.on(AgentSession.events(session), {
+  ToolCallStarted: (e) => Metrics.toolStarted(e.name),   // event.name is typed
+  RunCompleted:    (_e, env) => Audit.record(env.sessionId)
+}))
+```
+
+Over a raw `AgentEvent.match` loop it adds the two things a convenience layer
+should: handlers are **optional** (register only the events you want), and each
+handler's failure is **isolated** — a hook that throws is logged (or sent to
+your `onError`), never tearing down the observer or the run. Hooks *observe*;
+behaviour is changed through the run's own seams (`Permission`,
+`ContextTransform`, `AgentLoop`).
+
 ## Channels
 
 `@doeixd/effect-agent/channels` puts an agent in front of an external platform —
@@ -1548,6 +1574,8 @@ context transforms and canonical history are directly testable.
   UI channel while the run proceeds, via `@doeixd/effect-agent/data`
 - [`examples/channels.ts`](./examples/channels.ts) — a Slack webhook that
   verifies, dedupes, prompts and replies, via `@doeixd/effect-agent/channels`
+- [`examples/hooks.ts`](./examples/hooks.ts) — typed lifecycle hooks logging
+  tool and run events over a session, via `@doeixd/effect-agent/hooks`
 
 ## Runtimes
 

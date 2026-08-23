@@ -2336,3 +2336,18 @@ dedup of a redelivery (one run for two identical deliveries), distinct
 conversations to distinct sessions, a custom session resolver, and an
 unauthenticated delivery refused before anything runs. Falsified by dropping
 the reply. The Slack shape is in `examples/channels.ts`.
+
+## Lifecycle hooks (roadmap #4 §13)
+
+`/hooks` runs typed side effects at points in a run without touching it, and
+deliberately introduces no new PubSub: a session already publishes its
+lifecycle as `AgentEvent`s over an internal PubSub, and `AgentSession.events` is
+a subscription to it, so hooks fan out off the one bus alongside observability
+and a delivery log. `Hooks.on(events, handlers, options?)` is a typed dispatcher
+over that stream on top of `AgentEvent.match`; what it adds over a raw match
+loop is optional handlers and per-handler failure isolation (a throwing hook is
+logged, or sent to `onError`, never ending the observer or the run). `E`/`R` are
+inferred from the registered handlers via `-?` extraction. Two deterministic
+tests (`test/Hooks.test.ts`) over a real run's collected events: typed dispatch
+with unregistered tags ignored, and a failing handler isolated while a sibling
+still fires. Falsified by removing the isolation.
