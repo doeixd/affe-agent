@@ -34,6 +34,7 @@ they compose.
 | 8 | Reconnectable streaming | `/durable-streams` + DeliveryLog |
 | 11 | Evals | `/evals` |
 | 9 | Structured client/UI data | `/data` |
+| 10 | Channels | `/channels` |
 | 12 | Observability | `/observability` |
 
 Issue #1 (items 1–9) is complete; the transports and sandbox it left open have
@@ -43,14 +44,12 @@ all since landed.
 
 Ranked by value-to-surface for what to build next:
 
-1. **Channels (`#10`)** — adapters (Slack, webhooks) over `AgentClient`: auth,
-   dedup by stable external id, external-conversation → session identity, and a
-   prompt-injection boundary (trusted metadata via Services, not string
-   concatenation). Larger, external surface. **Top build pick.**
-2. **Lifecycle-hook convenience (`#13`)** and **scheduling / self-dispatch
+1. **Lifecycle-hook convenience (`#13`)** and **scheduling / self-dispatch
    (`#14`, an `AgentDispatcher` Service with local / Workflow / queue impls).**
-3. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
-   sandbox/channel/deployment adapters.
+   **Top build pick.**
+2. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
+   sandbox/channel/deployment adapters (a real crypto-backed Slack signature
+   verifier as a host-flagged sub-entry, more channel platforms).
 
 ### Small refinements worth folding in
 

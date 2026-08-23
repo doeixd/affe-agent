@@ -95,6 +95,10 @@
       "types": "./dist/data/index.d.ts",
       "default": "./dist/data/index.js"
     },
+    "./channels": {
+      "types": "./dist/channels/index.d.ts",
+      "default": "./dist/channels/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"

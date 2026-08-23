@@ -1197,6 +1197,36 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Channels
+
+`@doeixd/effect-agent/channels` puts an agent in front of an external platform —
+Slack, a webhook, a queue — over the same `AgentSessionHost` seam the HTTP, RPC,
+AG-UI and A2A adapters use. A channel is a thin adapter, not a second Agent API;
+it owns at most four things, and everything else is the host's: verify (the
+host authenticates the principal from the delivery's headers), map the external
+conversation to a session, prompt, and reply.
+
+```ts
+import { Channels } from "@doeixd/effect-agent/channels"
+
+const channel = yield* Channels.make({
+  host: Host,                                   // the shared AgentSessionHost tag
+  reply: (result, { delivery }) => postToSlack(delivery.conversation, result.text)
+})
+yield* channel.deliver({ conversation, text, deliveryId, headers })
+```
+
+Two properties fall out. **Duplicate deliveries dedupe for free**: webhooks
+redeliver by design, and a channel derives the host's `RequestId` from the
+platform's stable delivery id, so the host joins a repeat to its first result
+rather than running it twice — no extra store. And the **prompt-injection
+boundary holds**: the message text is untrusted model input, while identity and
+authorization come from the host's principal (from headers), never from strings
+the sender supplied. `Channels.serverLayer` mounts a webhook that acks within
+the platform's timeout and does the work in the background; the app's `decode`
+owns the platform specifics (signature check, challenge, retries) — so the core
+stays portable.
+
 ## Structured data
 
 An agent often has typed output beyond its reply — an order it created, a row
@@ -1516,6 +1546,8 @@ context transforms and canonical history are directly testable.
   `@doeixd/effect-agent/observability`
 - [`examples/data.ts`](./examples/data.ts) — a tool emitting typed records to a
   UI channel while the run proceeds, via `@doeixd/effect-agent/data`
+- [`examples/channels.ts`](./examples/channels.ts) — a Slack webhook that
+  verifies, dedupes, prompts and replies, via `@doeixd/effect-agent/channels`
 
 ## Runtimes
 
