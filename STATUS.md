@@ -51,7 +51,8 @@ src/
 ├ subagent/            a tool that opens a child session   (/subagent)
 ├ state/               persistent typed agent state        (/state)
 ├ skills/              on-demand skills, loaded lazily     (/skills)
-└ memory/              long-term cross-session memory      (/memory)
+├ memory/              long-term cross-session memory      (/memory)
+└ evals/               behavioural evals over the session   (/evals)
 
 scripts/verify-package.mjs   imports each entry point from the packed tarball
 .github/workflows/ci.yml     check, build, and that verification
@@ -2240,3 +2241,26 @@ backend logs and passes the prompt through rather than failing the run.
 paths. `scope` is a trusted id, never model output. Six tests
 (`test/Memory.test.ts`), including cross-session recall and a bring-your-own
 backend provided as a plain layer.
+
+## Behavioural evals (roadmap #4 / ADDITIONAL §9)
+
+`/evals` is the sixth package on the higher-level track and the one that makes
+the rest verifiable: it asks whether the *agent behaves*, where a test asks
+whether the code works. Kept separate from `/testing` as the brief requires,
+and it operates entirely through the public session interface -- `prompt`, the
+committed `history`, the `Result` -- so an eval written against a scripted model
+runs unchanged against a real provider; only the `LanguageModel` layer differs.
+
+`Evals.defineEval({ name, agent, test })` gives the test a context `t` that
+drives the session (`send`) and records checks: `succeeded`, `calledTool` /
+`notCalledTool` / `calledToolWith` / `toolCalls`, `turns`, `tokens`, `reply`, a
+generic `check`, and an LLM `judge` that scores the reply through the same model
+interface. Matchers (`includes`, `matchesRegex`, `equals`, `atMost`, `atLeast`,
+`satisfying`) are named so a failure says what it wanted. Checks are recorded,
+not thrown -- every check runs and the `EvalResult` collects them all, so one
+failure never hides the next; `run` never fails, folding a send error or a test
+defect into a failed check. `runAll` runs many (with concurrency), and
+`formatText` / `formatJUnit` render results for humans and CI. Five tests
+(`test/Evals.test.ts`), all deterministic against a scripted model, including
+the judge (its generateText consumes a scripted turn) and both reporters;
+falsified by breaking tool-call extraction.

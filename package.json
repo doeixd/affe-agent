@@ -83,6 +83,10 @@
       "types": "./dist/memory/index.d.ts",
       "default": "./dist/memory/index.js"
     },
+    "./evals": {
+      "types": "./dist/evals/index.d.ts",
+      "default": "./dist/evals/index.js"
+    },
     "./durable-streams": {
       "types": "./dist/durable-streams/index.d.ts",
       "default": "./dist/durable-streams/index.js"

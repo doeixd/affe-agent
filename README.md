@@ -1197,6 +1197,42 @@ channel by default — "the researcher could not find it" is something the paren
 can route around — while a defect still propagates as a bug. Pass
 `onError: "die"` to fail the parent run instead.
 
+## Evals
+
+A test asks whether the code works; an eval asks whether the *agent behaves* —
+did it call the right tool, stay under a turn budget, answer with the right
+shape. `@doeixd/effect-agent/evals` is that, kept separate from `/testing`, and
+it runs entirely through the public session interface, so one eval runs
+unchanged against a scripted model (exact, CI-friendly) or a real provider —
+swap the `LanguageModel` layer, nothing else.
+
+```ts
+import { Evals } from "@doeixd/effect-agent/evals"
+
+const eval = Evals.defineEval({
+  name: "reports the weather",
+  agent: WeatherAgent,
+  test: (t) => Effect.gen(function* () {
+    yield* t.send("what's the weather in Paris?")
+    yield* t.succeeded()
+    yield* t.calledTool("get_weather")
+    yield* t.reply(Evals.includes("Sunny"))
+    yield* t.turns(Evals.atMost(3))
+    yield* t.judge("Does the reply name a real city?")   // optional LLM judge
+  })
+})
+
+const results = yield* Evals.runAll([eval], { concurrency: 4 })
+console.log(Evals.formatText(results))    // or Evals.formatJUnit(results) for CI
+```
+
+Checks are recorded, not thrown, so every check in a test runs and the
+`EvalResult` collects them all — one failure never hides the next. Assertions
+cover the classes that matter: completed, tool called / not called / called-with
+/ count, reply and value matchers, turn and token ceilings, and an LLM judge.
+Paired with `/testing`'s deterministic model, infra evals are exactly
+reproducible.
+
 ## Memory
 
 Long-term, cross-session memory — what a session should still know next week,
@@ -1422,6 +1458,8 @@ context transforms and canonical history are directly testable.
 - [`examples/memory.ts`](./examples/memory.ts) — an assistant with long-term
   memory, shown against the built-in store and a bring-your-own backend, via
   `@doeixd/effect-agent/memory`
+- [`examples/evals.ts`](./examples/evals.ts) — one behavioural eval run against
+  both a scripted model and a real provider, via `@doeixd/effect-agent/evals`
 
 ## Runtimes
 
