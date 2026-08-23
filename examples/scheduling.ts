@@ -53,5 +53,21 @@ const dailyDigest = Effect.forkScoped(
   Scheduling.recurring(Digest, "produce today's digest", Schedule.cron("0 9 * * *"))
 ).pipe(Effect.provide(model))
 
+// The durable swap: `queued` persists each dispatched job to a `JobStore` and a
+// `worker` (possibly in another process) runs it, so a scheduled follow-up
+// survives a restart. `dispatch` and the tool that calls it do not change — only
+// the layer does. Provide a durable `JobStore` (a SQL table) in production;
+// `memoryStore` is the single-node one.
+const durableSelfDispatch = Effect.gen(function* () {
+  const store = yield* Scheduling.memoryStore
+  // Run the workers beside the app; scale them horizontally over the same store.
+  yield* Effect.forkScoped(Scheduling.worker(Assistant, store).pipe(Effect.provide(model)))
+  return yield* AgentSession.make(Assistant).pipe(
+    Effect.flatMap((session) => AgentSession.prompt(session, "Remind me to review the PR in 10 minutes.")),
+    Effect.provide(Layer.merge(model, Scheduling.queued(store)))
+  )
+})
+
 export const main = conversation
 void dailyDigest
+void durableSelfDispatch

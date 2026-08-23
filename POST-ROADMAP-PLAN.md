@@ -118,7 +118,7 @@ Two batteries ship built-ins explicitly scoped to “tests / single-node”. Giv
 each a production-grade implementation of the *same* interface, so the agent code
 does not change.
 
-### P1 — Durable / queue `AgentDispatcher` for `/scheduling` `P1` · effort 2
+### P1 — Durable / queue `AgentDispatcher` for `/scheduling` `P1` · effort 2 · ✅ DONE (queue route)
 - **Problem:** `/scheduling` ships only `Scheduling.local` (in-process, dies with
   the process). The `AgentDispatcher` seam was built so a durable implementation
   is a drop-in, and `cluster/ScheduledAgent` already wraps `ClusterCron` for
@@ -130,7 +130,20 @@ does not change.
   process that scheduled it. Same `AgentDispatcher` tag; the tool that calls
   `dispatch` is unchanged. Likely a `scheduling/durable` sub-entry (host-neutral;
   the durable backend is provided as a layer).
-- **Files:** `src/scheduling/` (new impl + export), example, test.
+- **Delivered (queue route):** chose the queue over the workflow route — a
+  workflow-backed dispatcher needs the heavy `ClusterWorkflowEngine`+SQLite test
+  harness (the flaky/slow surface D5 was about) for a "survives restart" test.
+  Instead: `Scheduling.queued(store)` (an `AgentDispatcher` whose `dispatch`
+  persists a `PersistedJob` to a bring-your-own `JobStore` and returns) +
+  `Scheduling.worker(agent, store)` (drains due jobs, resilient like `recurring`)
+  + `Scheduling.memoryStore` (in-process; a durable store is BYO — same shape as
+  `/memory` and `/state`). `dispatch` needs no `LanguageModel`, so `queued` is
+  requirement-free. Semantics are at-most-once, documented (a store with a
+  visibility timeout gets at-least-once behind the same interface). Three tests:
+  due-time persistence + claim-and-take, a job outliving the dispatcher's scope
+  (the "restart"), and a worker running a job the dispatcher queued.
+- **Files:** `src/scheduling/Scheduling.ts` (queued/worker/JobStore/memoryStore),
+  example, test.
 - **Acceptance:** a durable dispatcher runs a *delayed* job across a simulated
   restart, driven by `TestClock` + a durable store, deterministically — the job
   fires after the delay even though the “first process” is gone. Interface parity

@@ -1,5 +1,5 @@
-import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
-import type { Prompt } from "effect/unstable/ai"
+import { Cause, Clock, Context, Duration, Effect, Layer, Ref, Schedule } from "effect"
+import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { LanguageModel } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -18,8 +18,10 @@ import type { AgentDefinition } from "../Agent.js"
  * - **`AgentDispatcher`** -- the "enqueue future work" seam. An agent's tool
  *   dispatches a follow-up run without touching timers or infrastructure; a
  *   layer decides where it goes. `local` runs it in-process after a delay;
- *   Workflow, queue and remote implementations are the same interface over
- *   `DurableClock`, a durable queue, or an `AgentClient`.
+ *   `queued` persists it to a `JobStore` a `worker` drains, so a job survives
+ *   the process that dispatched it (durable when the store is). Workflow and
+ *   remote implementations are the same interface over `DurableClock` or an
+ *   `AgentClient`.
  * - **`recurring`** -- run an agent on a `Schedule`, resiliently (a failing run
  *   is logged and the schedule continues), for "every morning" / "every 5m".
  *
@@ -85,6 +87,116 @@ export const local = <Tools extends Record<string, Tool.Any>, E, R>(
 /** Enqueue a job through the ambient dispatcher. */
 export const dispatch = (job: Dispatched): Effect.Effect<void, never, AgentDispatcher> =>
   Effect.flatMap(AgentDispatcher, (dispatcher) => dispatcher.dispatch(job))
+
+// ---------------------------------------------------------------------------
+// Queue-backed dispatch (durable when the store is)
+// ---------------------------------------------------------------------------
+
+/**
+ * A dispatched job at rest: the input to run, and the wall-clock time it becomes
+ * due. `prompt` is a decoded `Prompt`, which carries its own Schema, so a
+ * durable store round-trips a multimodal job exactly as a text one.
+ */
+export interface PersistedJob {
+  readonly id: string
+  readonly prompt: Prompt.Prompt
+  readonly runAfterMillis: number
+}
+
+/**
+ * Where dispatched jobs live between `dispatch` and the run — the seam that
+ * makes `queued` outlast the process that dispatched. Bring a durable backend
+ * (a SQL table, a Redis list); `memoryStore` is the in-process one for tests and
+ * single-node use, the same bring-your-own-store shape `/memory` and `/state`
+ * use.
+ *
+ * `claimDue` is claim-and-take: it returns the jobs whose time has come and
+ * removes them, so no two workers run the same job. Semantics are at-most-once —
+ * a worker that crashes after claiming but before running drops that job, which
+ * matches `local`'s fire-and-forget stance (a lost run is not retried). A store
+ * that needs at-least-once implements `claimDue` with a visibility timeout and
+ * re-queues on non-completion, behind this same interface.
+ */
+export interface JobStore {
+  readonly enqueue: (job: PersistedJob) => Effect.Effect<void>
+  readonly claimDue: (nowMillis: number) => Effect.Effect<ReadonlyArray<PersistedJob>>
+}
+
+/** An in-memory `JobStore`. Durable only for as long as the process lives. */
+export const memoryStore: Effect.Effect<JobStore> = Effect.map(
+  Ref.make<ReadonlyArray<PersistedJob>>([]),
+  (ref): JobStore => ({
+    enqueue: (job) => Ref.update(ref, (all) => [...all, job]),
+    claimDue: (now) =>
+      Ref.modify(ref, (all) => [
+        all.filter((job) => job.runAfterMillis <= now),
+        all.filter((job) => job.runAfterMillis > now)
+      ])
+  })
+)
+
+/**
+ * A dispatcher that persists jobs to a `JobStore` instead of running them
+ * itself. `dispatch` records the job and its due time and returns; a `worker`
+ * (below), possibly in another process, is what runs it. This is what makes
+ * self-dispatch survive a restart: the job outlives the dispatching process
+ * exactly as long as the store does.
+ *
+ * `dispatch` needs no `LanguageModel` — enqueuing is not running — so the
+ * dispatcher layer is requirement-free.
+ */
+export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
+  Layer.effect(
+    AgentDispatcher,
+    Effect.map(Ref.make(0), (counter): AgentDispatcher["Service"] => ({
+      dispatch: (job) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          const seq = yield* Ref.getAndUpdate(counter, (n) => n + 1)
+          const delayMillis = job.delay === undefined ? 0 : Duration.toMillis(job.delay)
+          yield* store.enqueue({
+            id: `${now}-${seq}`,
+            prompt: Prompt.make(job.input),
+            runAfterMillis: now + delayMillis
+          })
+        })
+    }))
+  )
+
+/**
+ * Drain a `JobStore`: claim every due job and run the agent for it, forever.
+ * Fork it beside the rest of the program (one or more workers over the same
+ * store). Resilient like `recurring`: a run's genuine failure is logged and the
+ * worker keeps going; interruption on shutdown stops it without a spurious log.
+ *
+ * ```ts
+ * yield* Effect.forkScoped(Scheduling.worker(Assistant, store))
+ * ```
+ */
+export const worker = <Tools extends Record<string, Tool.Any>, E, R>(
+  agent: AgentDefinition<Tools, E, R>,
+  store: JobStore,
+  options?: { readonly pollInterval?: Duration.Input | undefined }
+): Effect.Effect<never, never, LanguageModel.LanguageModel | R> =>
+  Effect.gen(function* () {
+    const poll = options?.pollInterval ?? Duration.seconds(1)
+    while (true) {
+      const now = yield* Clock.currentTimeMillis
+      const due = yield* store.claimDue(now)
+      yield* Effect.forEach(
+        due,
+        (job) =>
+          Agent.run(agent, job.prompt).pipe(
+            Effect.catchCause((cause): Effect.Effect<void> =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : Effect.logError("scheduling: a queued run failed", cause))
+          ),
+        { concurrency: "unbounded", discard: true }
+      )
+      yield* Effect.sleep(poll)
+    }
+  })
 
 /**
  * Run an agent on a schedule, forever, resiliently: each run's failure is

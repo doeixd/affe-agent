@@ -144,3 +144,51 @@ describe("Scheduling.recurring", () => {
     })
   )
 })
+
+describe("Scheduling.queued (queue-backed, durable when the store is)", () => {
+  it.effect("dispatch persists a job with the right due time; a worker is what runs it", () =>
+    Effect.gen(function* () {
+      const store = yield* Scheduling.memoryStore
+      yield* Scheduling.dispatch({ input: "later", delay: "1 hour" }).pipe(
+        Effect.provide(Scheduling.queued(store))
+      )
+      // now = 0 under TestClock, so the job is due at 3_600_000ms.
+      assert.deepStrictEqual(yield* store.claimDue(0), [])
+      const due = yield* store.claimDue(3_600_000)
+      assert.strictEqual(due.length, 1)
+      assert.deepStrictEqual(TestLanguageModel.userTexts(due[0]!.prompt), ["later"])
+      // claimDue is claim-and-take: a second claim finds nothing left.
+      assert.deepStrictEqual(yield* store.claimDue(3_600_000), [])
+    }).pipe(Effect.provide(TestClock.layer()))
+  )
+
+  it.effect("a dispatched job outlives the dispatcher's scope (survives 'restart')", () =>
+    Effect.gen(function* () {
+      const store = yield* Scheduling.memoryStore
+      // The dispatcher layer is built and torn down entirely...
+      yield* Effect.scoped(
+        Scheduling.dispatch({ input: "go" }).pipe(Effect.provide(Scheduling.queued(store)))
+      )
+      // ...yet the job is still in the store, claimable by a fresh worker.
+      const due = yield* store.claimDue(0)
+      assert.strictEqual(due.length, 1)
+    }).pipe(Effect.provide(TestClock.layer()))
+  )
+
+  it.effect("a worker over the shared store runs a job the dispatcher queued", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const { layer: model } = yield* TestLanguageModel.script([{ text: "done", started }])
+      const store = yield* Scheduling.memoryStore
+
+      yield* Effect.gen(function* () {
+        // "Process A": dispatch, then vanish (no worker of its own).
+        yield* Scheduling.dispatch({ input: "go" }).pipe(Effect.provide(Scheduling.queued(store)))
+        // "Process B": a worker over the same store claims and runs it.
+        yield* Effect.forkScoped(Scheduling.worker(Simple, store, { pollInterval: "1 millis" }))
+        // Reaching here means the worker ran the job and reached the model.
+        yield* Deferred.await(started)
+      }).pipe(Effect.provide(model), Effect.scoped)
+    })
+  )
+})
