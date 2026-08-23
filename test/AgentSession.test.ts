@@ -1008,3 +1008,13 @@ describe("definition of done", () => {
     })
   )
 })
+
+// Type-level assertion (B1 / CLAUDE.md: assert inference). Every error that
+// ToolExecution raises itself (approval required, permission denied) must be a
+// member of PromptError, so `prompt`'s type can never silently drop one when a
+// new harness-raised error is added. Falsified if PromptError stops deriving
+// from ToolExecution.RaisedError.
+type RaisedInPromptError = [ToolExecution.RaisedError] extends
+  [AgentSession.PromptError<Record<string, never>>] ? true : false
+const _assertRaisedInPromptError: RaisedInPromptError = true
+void _assertRaisedInPromptError

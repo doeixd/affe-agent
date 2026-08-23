@@ -23,10 +23,9 @@ import * as AgentSubmission from "./AgentSubmission.js"
 import {
   AgentBusyError,
   AgentClosedError,
-  AgentIdleError,
-  ToolApprovalRequiredError,
-  ToolPermissionDeniedError
+  AgentIdleError
 } from "./Errors.js"
+import type * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
@@ -356,16 +355,13 @@ export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
   | AiError.AiError
   | Tool.HandlerError<Tools[keyof Tools]>
   /**
-   * The harness refused a tool that requires approval.
-   *
-   * Easy to miss, because it is the one failure here that no *tool* produces:
-   * `ToolExecution` raises it instead of running the handler, so it does not
-   * appear in `Tool.HandlerError`. Leaving it out let `prompt` claim an
-   * approval-requiring agent could not fail with the exact error it throws.
+   * The failures `ToolExecution` raises itself when the harness declines a call
+   * (approval required, permission denied) rather than running the handler. No
+   * *tool* produces these, so they are absent from `Tool.HandlerError` above;
+   * this alias is derived from `ToolExecution`'s own signature, so a new
+   * harness-raised error can never silently go missing from `prompt`'s type.
    */
-  | ToolApprovalRequiredError
-  /** The permission policy denied a tool call. Same provenance. */
-  | ToolPermissionDeniedError
+  | ToolExecution.RaisedError
   // Whatever the agent's own loop or context transform can fail with.
   | E
 

@@ -78,7 +78,7 @@ work and it is almost entirely documentation.
 Two places in the kernel stay correct only by human vigilance. Make the compiler
 or a test hold the invariant instead.
 
-### B1 — Derive `PromptError` from `ToolExecution`'s raised errors `P1` · effort 1
+### B1 — Derive `PromptError` from `ToolExecution`'s raised errors `P1` · effort 1 · ✅ DONE
 - **Problem:** `AgentSession.PromptError` (`AgentSession.ts:353-370`) manually
   re-lists `ToolApprovalRequiredError` and `ToolPermissionDeniedError`, which are
   raised by `ToolExecution`, not by any tool — with a comment admitting they are

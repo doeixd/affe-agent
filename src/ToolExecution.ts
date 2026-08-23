@@ -10,6 +10,16 @@ import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 
 /**
+ * The errors `ToolExecution` raises *itself*, rather than surfacing from a tool
+ * handler: the harness declined a call before running it. Because no tool
+ * produces these, they do not appear in `Tool.HandlerError`, so any caller whose
+ * error union must be complete (notably `AgentSession.PromptError`) references
+ * this alias instead of re-listing the members — add a new harness-raised error
+ * here and `execute`'s signature and the session's error flow with it.
+ */
+export type RaisedError = ToolApprovalRequiredError | ToolPermissionDeniedError
+
+/**
  * How concurrently the tool calls of a single model response are executed.
  *
  * This controls scheduling only. Retries, timeouts and tracing belong on the
@@ -480,9 +490,7 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   context: TurnContext<R>
 ): Effect.Effect<
   ReadonlyArray<Response.AnyPart>,
-  | Tool.HandlerError<Tools[keyof Tools]>
-  | ToolApprovalRequiredError
-  | ToolPermissionDeniedError,
+  Tool.HandlerError<Tools[keyof Tools]> | RaisedError,
   Tool.HandlerServices<Tools[keyof Tools]> | R
 > =>
   Effect.all(
