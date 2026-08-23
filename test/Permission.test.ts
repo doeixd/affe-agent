@@ -480,6 +480,36 @@ describe("Permission enforcement", () => {
     })
   )
 
+  it.effect("except: an exception Allow on a tool that needs approval is still floored to Ask", () =>
+    Effect.gen(function* () {
+      // The carve-out allows the tool, but the tool's own needsApproval is a
+      // floor the harness applies *after* the policy -- so it still asks, and
+      // a granted answer runs it.
+      const policy = Permission.except(Permission.denyAll, [
+        { resource: "carved", decision: Permission.allow }
+      ])
+      const f = yield* fixture([call("c1", "carved"), TestLanguageModel.text("done")], {
+        tool: Bash.setNeedsApproval(true),
+        permission: policy
+      })
+      const { asked, ran, text } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(f.agent, { elicitation: Elicitation.memory })
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          const question = yield* nextAsk(session)
+          yield* AgentSession.respond(session, { id: question.id, granted: true })
+          const result = yield* Fiber.join(running)
+          return { asked: question.detail.resource, ran: yield* Ref.get(f.ran), text: result.text }
+        })
+      ).pipe(Effect.provide(f.layer))
+      // It asked (floor), the resource was the carved-out one, and once
+      // granted it ran.
+      assert.strictEqual(asked, "carved")
+      assert.deepStrictEqual(ran, ["carved"])
+      assert.strictEqual(text, "done")
+    })
+  )
+
   it.effect("allow always: a granted answer with remember:true stops the next identical ask", () =>
     Effect.gen(function* () {
       const policy = yield* Permission.remembered(Permission.askAll)

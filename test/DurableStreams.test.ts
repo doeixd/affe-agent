@@ -331,6 +331,40 @@ describe("DurableStreamsDeliveryLog across processes", () => {
     15_000
   )
 
+  it.live("two instances appending the same key concurrently agree on one event and one sequence", () =>
+    Effect.gen(function* () {
+      const { url } = yield* server
+      const a = yield* DurableStreamsDeliveryLog.make({ baseUrl: `${url}/sessions` })
+      const b = yield* DurableStreamsDeliveryLog.make({ baseUrl: `${url}/sessions` })
+      // Two recorders (an old runner and its replacement) offer the *same*
+      // event under the same key at once. The stream may hold the record
+      // twice, but every reader counts one event at one sequence, and both
+      // recorders are told Appended -- never a second offset, never a death.
+      const [first, second] = yield* Effect.all(
+        [
+          a.append("race", "k1", envelope(1, { _tag: "SubmissionStarted" })),
+          b.append("race", "k1", envelope(9, { _tag: "SubmissionStarted" }))
+        ],
+        { concurrency: "unbounded" }
+      )
+      // Same event: both Appended at sequence 1 (the payload matches, so
+      // neither is a conflict).
+      assert.deepStrictEqual([first, second].map((o) => o._tag).sort(), ["Appended", "Appended"])
+      for (const outcome of [first, second]) {
+        if (outcome._tag === "Appended") assert.strictEqual(outcome.sequence, 1)
+      }
+      // One event in the log, numbered 1, from either reader.
+      assert.deepStrictEqual((yield* a.read("race")).map((e) => e.sequence), [1])
+      assert.deepStrictEqual((yield* b.read("race")).map((e) => e.sequence), [1])
+      // A genuine disagreement under the same key is a conflict, and still
+      // one event -- the first one -- survives.
+      const conflict = yield* a.append("race", "k1", envelope(1, { _tag: "RunStarted" }))
+      assert.strictEqual(conflict._tag, "Conflict")
+      assert.deepStrictEqual((yield* a.read("race")).map((e) => e.event._tag), ["SubmissionStarted"])
+    }).pipe(Effect.scoped),
+    15_000
+  )
+
   it.live("a raw duplicate record in the stream is skipped by every reader and numbered by none", () =>
     Effect.gen(function* () {
       const { url } = yield* server

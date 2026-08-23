@@ -266,6 +266,27 @@ describe("OpenAiAgent over the in-process client", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("an idempotency key is scoped to the exact request: a different model is a mismatch, a different message too", () =>
+    Effect.gen(function* () {
+      const { address } = yield* makeServer(Agent.make({ loop: AgentLoop.bounded(2) }), [
+        TestLanguageModel.text("done")
+      ])
+      const headers = { "idempotency-key": "scoped" }
+      const first = yield* post(address, { model: "agent", messages: [user("one")] }, headers)
+      assert.strictEqual(first.status, 200)
+      // Same key, a model the fingerprint did not cover: refused, not silently
+      // returning the first result. (The unknown model is caught first, but a
+      // *known* different model would mismatch too -- there is only one here,
+      // so vary the message, which the fingerprint also covers.)
+      const differentMessage = yield* post(address, { model: "agent", messages: [user("two")] }, headers)
+      assert.strictEqual(differentMessage.status, 400)
+      assert.strictEqual((yield* errorBody(differentMessage)).error.code, "idempotency_key_reuse")
+      // The original request under the key still replays.
+      const same = yield* post(address, { model: "agent", messages: [user("one")] }, headers)
+      assert.strictEqual((yield* completion(same)).choices[0]?.message.content, "done")
+    }).pipe(Effect.scoped)
+  )
+
   it.live("many concurrent requests with one idempotency key execute exactly once", () =>
     Effect.gen(function* () {
       // The begin() get-check-insert must be atomic: a non-atomic version lets
