@@ -49,6 +49,37 @@ export const Response = Schema.Struct({
 export type Response = typeof Response.Type
 
 /**
+ * Elicit an answer and decode its `value` against a schema.
+ *
+ * `Response.value` is `unknown` on the wire — the harness is deliberately
+ * agnostic about what a given `kind` of question carries, and it survives a
+ * durable round-trip as opaque JSON. A consumer that knows what it asked for
+ * uses this to get the answer *typed and validated*: `value` is decoded against
+ * `answer`, so a malformed answer surfaces as the caller's own `SchemaError`
+ * rather than being read as garbage downstream. `granted` passes through
+ * unchanged, and an answer that carried no value yields `Option.none`.
+ *
+ * This is a thin wrapper over `Elicitor.elicit`, so it works identically under
+ * the in-memory and durable interpreters — validation lives at the point the run
+ * *receives* the answer, which is the only place that knows the expected shape.
+ */
+export const elicitValue = <A, I>(
+  elicitor: Elicitor,
+  request: Request,
+  announce: Effect.Effect<void>,
+  answer: Schema.Codec<A, I>
+): Effect.Effect<{ readonly granted: boolean; readonly value: Option.Option<A> }, Schema.SchemaError> => {
+  const decode = Schema.decodeUnknownEffect(answer)
+  return Effect.flatMap(elicitor.elicit(request, announce), (response) =>
+    response.value === undefined
+      ? Effect.succeed({ granted: response.granted, value: Option.none<A>() })
+      : Effect.map(decode(response.value), (value) => ({
+        granted: response.granted,
+        value: Option.some(value)
+      })))
+}
+
+/**
  * Where a paused run waits, and where an answer is delivered.
  *
  * `elicit` blocks until answered. That is the point: the run is paused, not

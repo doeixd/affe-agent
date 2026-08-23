@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Ref, Schema } from "effect"
+import { Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
@@ -290,3 +290,79 @@ describe("elicitation", () => {
     })
   )
 })
+
+describe("Elicitation.elicitValue and the terminal answer state", () => {
+  const AnswerSchema = Schema.Struct({ choice: Schema.String })
+  const request: Elicitation.Request = { id: "q1", kind: "pick", detail: {} }
+
+  it.effect("decodes a valid answer value against the schema, typed", () =>
+    Effect.gen(function* () {
+      const elicitor = yield* Elicitation.memory.make("s")
+      const fiber = yield* Effect.forkChild(
+        Elicitation.elicitValue(elicitor, request, Effect.void, AnswerSchema)
+      )
+      yield* Effect.yieldNow // let elicit register before we answer
+      const accepted = yield* elicitor.respond({ id: "q1", granted: true, value: { choice: "b" } })
+      const answer = yield* Fiber.join(fiber)
+
+      assert.isTrue(accepted)
+      assert.strictEqual(answer.granted, true)
+      assert.deepStrictEqual(answer.value, Option.some({ choice: "b" }))
+    })
+  )
+
+  it.effect("fails with a SchemaError when the answer value is malformed", () =>
+    Effect.gen(function* () {
+      const elicitor = yield* Elicitation.memory.make("s")
+      const fiber = yield* Effect.forkChild(
+        Elicitation.elicitValue(elicitor, request, Effect.void, AnswerSchema).pipe(Effect.exit)
+      )
+      yield* Effect.yieldNow
+      yield* elicitor.respond({ id: "q1", granted: true, value: { wrong: 1 } })
+      const exit = yield* Fiber.join(fiber)
+      // The run receives a typed decode failure, not garbage.
+      assert.isTrue(Exit.isFailure(exit))
+    })
+  )
+
+  it.effect("an answer that carries no value yields Option.none", () =>
+    Effect.gen(function* () {
+      const elicitor = yield* Elicitation.memory.make("s")
+      const fiber = yield* Effect.forkChild(
+        Elicitation.elicitValue(elicitor, request, Effect.void, AnswerSchema)
+      )
+      yield* Effect.yieldNow
+      yield* elicitor.respond({ id: "q1", granted: false })
+      const answer = yield* Fiber.join(fiber)
+
+      assert.strictEqual(answer.granted, false)
+      assert.isTrue(Option.isNone(answer.value))
+    })
+  )
+
+  it.effect("a second respond to an already-answered request is refused (terminal state)", () =>
+    Effect.gen(function* () {
+      const elicitor = yield* Elicitation.memory.make("s")
+      const fiber = yield* Effect.forkChild(elicitor.elicit(request, Effect.void))
+      yield* Effect.yieldNow
+      const first = yield* elicitor.respond({ id: "q1", granted: true })
+      yield* Fiber.join(fiber)
+      // The request is answered; a late second answer is refused, not applied.
+      const second = yield* elicitor.respond({ id: "q1", granted: true })
+
+      assert.isTrue(first)
+      assert.isFalse(second)
+    })
+  )
+})
+
+// Type-level assertion (E1 / CLAUDE.md: assert inference). `elicitValue`'s
+// decoded `value` is the schema's type, not `unknown` -- the whole point of the
+// typed boundary. Falsified if the value channel is widened back to `unknown`.
+const _elicitValueTyped = Elicitation.elicitValue<{ readonly choice: string }, { readonly choice: string }>
+type _Ret = ReturnType<typeof _elicitValueTyped>
+type _Success = [_Ret] extends [Effect.Effect<infer S, unknown, unknown>] ? S : never
+const _assertTypedValue: [_Success["value"]] extends [Option.Option<{ readonly choice: string }>]
+  ? ([Option.Option<{ readonly choice: string }>] extends [_Success["value"]] ? true : false)
+  : false = true
+void _assertTypedValue

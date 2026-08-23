@@ -48,7 +48,25 @@ extend*, not *create*.
 
 ## Workstream E — Elicitation refinement (sharpen the core HITL primitive)
 
-### E1 — Schema-typed elicitation resolution + terminal state `P1` · effort 1½
+### E1 — Schema-typed elicitation resolution + terminal state `P1` · effort 1½ · ✅ DONE
+- **Delivered:** `Elicitation.elicitValue(elicitor, request, announce, answer)` —
+  a thin, interpreter-agnostic wrapper over `elicit` that decodes `Response.value`
+  against a caller-supplied schema. A malformed answer surfaces as the run's own
+  `SchemaError` instead of garbage; the decoded value is typed `Option<A>`, never
+  `unknown` (pinned by a type-level assertion, falsified once). The core
+  tool-approval path reads only `granted`, so `value` was always application-only
+  — `elicitValue` gives applications the safe typed path.
+- **Terminal state — already sound, now tested:** both interpreters already guard
+  double-resolution — the in-memory elicitor's `respond` returns `false` once
+  answered (the entry is deleted / the `Deferred` is already succeeded), and the
+  durable elicitor's `DurableDeferred` is write-once. Rather than add a redundant
+  state machine that would risk the durable path, a test pins the observable
+  refusal (a second `respond` returns `false`). Same judgment as D3.
+- **Files:** `src/Elicitation.ts`, `test/Elicitation.test.ts`. Four new tests
+  (valid decode, malformed → SchemaError, no-value → none, second-respond refusal)
+  + the type assertion. No cast; `Permission.ask` unaffected.
+
+<details><summary>Original plan (for the record)</summary>
 - **Problem:** `Elicitation.Response.value` is `Schema.optional(Schema.Unknown)`
   (`src/Elicitation.ts:47`) and the `Request` carries only `id`/`kind`/`detail`
   — there is no declared schema for the answer, so a resolver can hand back a
@@ -72,6 +90,7 @@ extend*, not *create*.
   the typed-request boundary, falsified once. No cast at any call site.
 - **Note:** this touches a core seam and the durable interpreter — do it behind
   the existing `Elicitation.Factory` so the durable path stays in step.
+</details>
 
 ---
 
