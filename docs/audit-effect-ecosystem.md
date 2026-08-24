@@ -567,88 +567,58 @@ the `Toolkit.empty` default, `Agent.ts`'s `definition`, `mergeHandled`, and
 `Permission.annotate`. It closes with the rule that matters: *"Adding another
 needs a reason of that kind."*
 
-Measured: **16 cast sites**, distributed as
+Measured, and the measurement had to be redone properly. A `grep " as any"`
+reports **17**, and one of them is the phrase *"survives for as long as anyone
+holds it"* in a comment — `as anyone` contains `as any`. Casts are syntax, so
+they must be found by parsing.
 
-| File | Sites | On the list? |
+Parsing `src/` gives **112 `as` expressions**, which is the more interesting
+number, because it shows the original finding was measuring the wrong thing.
+Two categories:
+
+- **A plain `x as T`** — around a hundred of them. TypeScript still checks these
+  for overlap; they narrow, they cannot claim a string is a number. Ordinary.
+- **The erasing forms** — `x as any`, which turns the checker off, and
+  `x as unknown as T`, which routes around it. **Sixteen, in four files.**
+
+| File | Erasing casts | On the list? |
 |---|---|---|
-| `Agent.ts` | 4 (2 `as any` at 391–392, 2 `as unknown as`) | yes — `mergeHandled`, `definition`, `Toolkit.empty` |
+| `Agent.ts` | 4 | yes — phantom `Tools`, `Toolkit.empty`, `definition`, `mergeHandled` |
 | `durable/DurableModel.ts` | 5 | **no** |
 | `durable/DurableToolkit.ts` | 3 | **no** |
 | `testing/TestLanguageModel.ts` | 4 | **no** |
 
+A bare `JSON.parse(x) as unknown` is deliberately not counted: that is the
+*safe* direction, taking `any` down to `unknown` so the value must be decoded
+before use. Counting it would punish the defensive idiom, and it appears in five
+files that do exactly the right thing.
+
 The twelve unlisted ones are all in library code, so **the user-facing rule is
 not violated** — nothing here means a caller needs a cast, and that is the rule
-that matters most. But they are a third and fourth *kind* (wrapping a
-`LanguageModel.Service` whose method types are closed; widening an error channel
-to `unknown` to cross an `Activity` boundary, `DurableModel.ts:129`), and the
-enumeration that was supposed to make adding one deliberate has silently stopped
-being an enumeration.
+that matters most. But they are two further *kinds*, and the enumeration that
+was supposed to make adding one deliberate had stopped being an enumeration.
 
-Two things to do, both cheap:
+**One list entry is not an erasure at all.** `Permission.annotate` is a plain
+`as T`; the projection is typed against `Tool.Parameters<T>` before the cast, so
+a wrong resource function still fails to compile. It stays documented, but as
+what it is.
 
-1. **Add the missing kinds to AGENTS.md**, or review them and remove what does
-   not earn its place. The list is only useful if it is complete.
-2. **Make drift a build failure.** The tools port already established this
-   technique: `test/CodingPrompts.test.ts` rejects any number in a description
-   that no constant holds. The same shape works here — a test that enumerates
-   cast sites per file and fails when the set changes, so adding one forces the
-   AGENTS.md edit rather than merely inviting it. That converts a convention
-   into an invariant, which is the standard the rest of the repository is held
-   to.
+**What landed (A-11).** `test/Casts.test.ts` walks the TypeScript AST of every
+file in `src/`, counts erasing casts per file, and compares against an inventory
+that mirrors AGENTS.md. Adding one fails the build with a message naming the
+file and the reasons its existing casts are allowed — so the next author sees
+what kind of argument a new one has to make. AGENTS.md gained the two missing
+kinds and the distinction above.
 
-### E20. `/observability`'s content promise does not cover the span tree
+A second test asserts the detector is falsifiable in both directions: it sees
+`y as unknown as string` (two nested `as` nodes) and does **not** see the
+`as anyone` comment that fooled the grep. Falsified by adding one erasing cast
+to `AgentLoop.ts` — the suite fails naming that file — then removing it.
 
-Found while fixing E15, and the most serious finding in the audit — it is a
-privacy issue, not an ergonomics one.
-
-`/observability` opens with a promise: *"**Content is opt-in.** By default only
-metadata is recorded — ids, event names, tool names. Prompts, tool parameters,
-tool results and model output are omitted unless a `RedactionPolicy` turns them
-on... Telemetry should not become a PII/secret leak."*
-
-That promise is kept — for the event stream this package maps. It does not, and
-structurally cannot, cover the other channel. Effect AI's `Toolkit.handle`
-annotates the **current span**:
-
-```ts
-// effect/unstable/ai/Toolkit.ts:276
-yield* Effect.annotateCurrentSpan({ tool: name, parameters: params })
-```
-
-and the current span at that point is the harness's own `ToolExecution.tool`,
-because `handle` is `Effect.fnUntraced` and opens none of its own. So **any
-application that wires a tracer exports every tool call's raw parameters**,
-whatever `RedactionPolicy` it set. `metadataOnly` — the default, chosen to be
-safe — does not prevent it.
-
-Nothing here is upstream's bug: annotating the tool call is reasonable, and
-`Toolkit` makes no redaction promise. The defect is ours, in that we make a
-promise broad enough to be read as covering both channels while owning only one.
-
-Three honest options, and the first is already done:
-
-1. **Say so.** `Observability.ts` now states the limit at the point the promise
-   is made, and `examples/tracing.ts` repeats it where a tracer is actually
-   wired. Cheapest, and it stops the promise being misleading — but it leaves
-   the leak.
-2. **Scrub in a tracer layer.** A `Layer` that wraps the configured tracer and
-   drops or redacts `parameters` on spans named `ToolExecution.tool`. This
-   genuinely closes it, applies to any exporter, and is the kind of thing this
-   package is for — but it means `/observability` starts owning tracer wiring,
-   which AGENTS.md's *"tracing export is application wiring, never a harness
-   dependency"* argues against. Worth the argument.
-3. **Open our own span for the handler** so upstream's annotation lands on a
-   span we control and can strip. More invasive, changes the trace shape, and
-   trades a leak for a structural change users would notice.
-
-**Recommend 1 now (done) and 2 as A-13**, with the AGENTS.md tension resolved
-explicitly: a redacting tracer layer the application *opts into* is not a
-harness dependency on an exporter, it is a policy value — the same shape as
-`RedactionPolicy` itself.
-
-A test pins the current behaviour either way: `test/Tracing.test.ts` asserts
-`tool.attributes["tool"] === "echo"`, so if upstream stops annotating our span,
-we find out from a failing test rather than from a silently narrower trace.
+This is the technique `test/CodingPrompts.test.ts` already established for
+prompt constants: a convention nobody can drift away from is one the build
+checks. It would have caught the two casts this audit's own `A-2` work nearly
+shipped in a `Metric.withAttributes` helper.
 
 ### E19. Unbounded queues, without a stated policy
 
@@ -783,10 +753,10 @@ outrank most of round one.
   `Schedule.exponential(...).pipe(jittered)` where fixed spacing retries shared
   infrastructure. Pairs with A-8; the interval becomes a floor rather than the
   whole policy.
-- **A-11 — Close the cast-inventory drift (E18).** Add the two missing kinds to
-  AGENTS.md, then a test that fails when the cast set changes — the
-  `CodingPrompts` technique, applied to a convention that has stopped being
-  enforced.
+- **A-11 — Close the cast-inventory drift (E18). ✅ Done.**
+  `test/Casts.test.ts` counts erasing casts per file from the AST and fails when
+  the set changes; AGENTS.md gained the two missing kinds and the
+  erasing-vs-narrowing distinction. Falsified by adding a cast.
 - **A-12 — State each unbounded queue's policy (E19).** Documentation, plus a
   bound wherever the writing shows one belongs.
 
@@ -818,8 +788,10 @@ outrank most of round one.
   at the caller, not three defects (E14, D7). *Met for `DurableSessionStore`
   and `DeliveryLog` (`test/StorageError.test.ts`); `DurableChannels` and
   `AgentState` still answer every fault with a defect.*
-- **AS9:** Adding a cast anywhere in `src/` fails the build until AGENTS.md
-  records it — falsified by adding one and watching it fail (E18).
+- **AS9 ✅:** Adding an *erasing* cast anywhere in `src/` fails the build until
+  AGENTS.md records it — falsified by adding one to `AgentLoop.ts` and watching
+  the suite name that file (E18). *Plain narrowings are deliberately out of
+  scope; see the finding for why.*
 - **AS10:** Every retry interval in `src/` is either derived from `Config` or
   documented at its site as deliberately fixed, and no retry against shared
   infrastructure is un-jittered (E16).

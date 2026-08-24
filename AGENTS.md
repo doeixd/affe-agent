@@ -15,8 +15,20 @@ The library absorbs type friction so callers never see it. Where the engine's
 erased internals meet the generic public API, the assertion belongs *inside*
 `src/`, confined to one place and commented with why it is sound.
 
-The casts that exist in `src/` are structural, and each is documented at the
-site:
+Two kinds of `as` are worth telling apart, because only one is a hole.
+
+A plain `x as T` is still checked for overlap — it can narrow, it cannot claim a
+string is a number. `src/` has around a hundred of those and they are ordinary.
+What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
+which routes around it. **Sixteen of those exist, in four files**, and they are
+the list below. `test/Casts.test.ts` enforces it: adding one fails the build
+until it is written down here, with its reason.
+
+(The test parses rather than greps, because `grep " as any"` matches the phrase
+*"survives for as long as anyone holds it"* in a real comment. That is how it
+came to be written that way.)
+
+The erasing casts in `src/` are structural, and each is documented at the site:
 
 * constructing the phantom `Tools` field on `AgentSession`, which has no runtime
   counterpart;
@@ -30,13 +42,28 @@ site:
 * merging two handled toolkits by delegation (`mergeHandled`), because Effect
   AI composes toolkits before handlers are bound and a `WithHandler` is a
   closed value;
-* returning the caller's exact tool type from `Permission.annotate`, because
-  Effect AI's `Tool.annotate` widens to the structural `Tool<Name, Config, R>`
-  and the annotation changes nothing about the type -- the projection is
-  typed against `Tool.Parameters<T>` before the erasure, so a wrong resource
-  function still fails to compile.
+* **wrapping a service whose method types are closed** — `DurableModel` (5),
+  `DurableToolkit` (3) and `TestLanguageModel` (4). Each replaces a method on a
+  `LanguageModel.Service` or a `Toolkit.WithHandler` with one that journals,
+  counts or replays around it. The value is the original's behaviour plus a
+  wrapper; the type cannot say so, because Effect AI's service methods are
+  declared with concrete signatures rather than a mappable shape. Confined to
+  the wrapper's construction: everything the wrapper is *given* and everything
+  it *returns* is typed;
+* **widening an error channel to cross an `Activity` boundary**
+  (`DurableModel.ts:129`), where a workflow activity's `execute` must be typed
+  against the schema the journal declares, and the underlying effect's error is
+  the caller's own `E`.
 
-Adding another needs a reason of that kind.
+Adding another needs a reason of that kind, and `test/Casts.test.ts` will ask
+for it.
+
+One entry that is **not** in that list, because it does not erase: returning the
+caller's exact tool type from `Permission.annotate` is a plain `as T`. Effect
+AI's `Tool.annotate` widens to the structural `Tool<Name, Config, R>` and the
+annotation changes nothing about the type -- the projection is typed against
+`Tool.Parameters<T>` before the cast, so a wrong resource function still fails
+to compile.
 
 ### `Agent.make` does not grow new type parameters
 

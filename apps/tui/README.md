@@ -122,10 +122,21 @@ better `waitForFrame(predicate)` — that turns the smoke test into a real
 assertion, because a broken pipeline times out instead of quietly printing a
 stale frame.
 
+## Streaming
+
+Prompts are sent with `{ stream: true }`, so the reply builds up a token at a
+time and the smoke test drives that path with a chunked script. Whether a call
+streams is the *caller's* choice rather than the agent's, which is why it is
+set here and nowhere in the agent definition.
+
+Turning it on found two bugs that no other path could reach -- a drain that
+mutated the list being rendered, and an empty assistant bubble that never
+settled and so blocked the whole transcript. Both are written up in
+`docs/plan-tui-port.md`; the short version is that the live tree being usually
+empty hid a class of bug, and only a lingering entry exposed it.
+
 ## Not done yet
 
-Streaming deltas render (`MessageDelta` → append), but the scripted model emits
-whole messages, so the cursor path is untested against a real provider.
 History navigation, elicitation/approval prompts, session switching and the
 `/`-command palette are all absent, as is syntax highlighting for code
 bodies (opencode uses `CodeRenderable` with tree-sitter; we render plain

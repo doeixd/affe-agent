@@ -137,6 +137,9 @@ const checks: Array<readonly [string, boolean]> = [
   // W4: edit_file returns a record, so the change renders from fields.
   ["edit renders a change summary", /\+\d+ -\d+/.test(transcript)],
   ["change names the file", transcript.includes("src/index.ts")],
+  // Streaming: the reply was chunked, so the delta path built it up.
+  ["streamed reply committed whole", transcript.includes("That is what the workspace holds.")],
+  ["no empty assistant bubble", !/● \s*$/m.test(transcript)],
   ["turn summary committed", transcript.includes("▣")],
   ["summary reports a tool count", transcript.includes("1 tool")],
   ["summary reports a duration", /▣ \d+(\.\d+)?(ms|s)/.test(transcript)],

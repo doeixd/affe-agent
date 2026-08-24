@@ -42,7 +42,8 @@ const modelLayer = Layer.unwrap(
   Effect.map(
     TestLanguageModel.script([
       { toolCalls: [{ id: "t1", name: "list_files", params: {} }] },
-      TestLanguageModel.text("That is what the workspace holds."),
+      // Chunked, so the streaming path is exercised rather than assumed.
+      { text: "That is what the workspace holds.", chunks: ["That is ", "what the ", "workspace holds."] },
       { toolCalls: [{ id: "t2", name: "bash", params: { command: "echo hi" } }] },
       TestLanguageModel.text("The command ran."),
       {
@@ -130,33 +131,42 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
         sink.setStatus("working")
         return
 
-      case "MessageStarted": {
-        const id = nextId("assistant")
-        assistant = id
-        sink.append({
-          id,
-          kind: "assistant",
-          title: "",
-          body: { type: "none" },
-          streaming: true
-        })
-        return
-      }
-
+      /**
+       * Deliberately nothing on `MessageStarted`.
+       *
+       * A turn that only calls a tool still starts a message, so creating the
+       * entry here leaves an empty assistant bubble that never completes --
+       * and, because it never stops streaming, never settles, so it blocks
+       * every later entry from reaching the scrollback. The entry is created
+       * by the first thing that gives it content instead.
+       */
       case "MessageDelta": {
-        if (assistant === undefined || event.kind !== "text") return
+        if (event.kind !== "text") return
+        if (assistant === undefined) {
+          assistant = nextId("assistant")
+          sink.append({
+            id: assistant,
+            kind: "assistant",
+            title: "",
+            body: { type: "none" },
+            streaming: true
+          })
+        }
         sink.appendTitle(assistant, event.delta)
         return
       }
 
       case "MessageCompleted": {
+        // Empty text is a tool-only turn: there is no message to show.
         if (assistant === undefined) {
-          sink.append({
-            id: nextId("assistant"),
-            kind: "assistant",
-            title: event.text,
-            body: { type: "none" }
-          })
+          if (event.text !== "") {
+            sink.append({
+              id: nextId("assistant"),
+              kind: "assistant",
+              title: event.text,
+              body: { type: "none" }
+            })
+          }
           return
         }
         sink.patch(assistant, { title: event.text, streaming: false })
@@ -287,7 +297,10 @@ export const start = (
             body: { type: "none" }
           })
           Effect.runFork(
-            session.prompt(text).pipe(
+            // Streamed, so `MessageDelta` arrives and the reply builds up a
+            // token at a time. Whether a call streams is the caller's choice,
+            // not the agent's -- and a UI is exactly the caller that wants it.
+            session.prompt(text, { stream: true }).pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() =>
                   sink.append({

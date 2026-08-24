@@ -313,6 +313,47 @@ findings that plan turns on:
   `p.metadata.diff`; their edit tool returns a diff and ours returns prose.
   That is a library decision, not a UI one.
 
+## Streaming, and the two bugs it exposed (2026-08-24)
+
+The `Not done yet` list said streaming deltas rendered but were untested,
+because the scripted model emitted whole messages. Turning it on --
+`session.prompt(text, { stream: true })` and a `chunks` script -- found **two
+latent bugs that no other path could reach**. 35 smoke checks now pass, and
+the delta path is exercised rather than assumed.
+
+**1. Draining the array `<For>` is rendering, from inside the effect that
+renders it.** V2 committed settled entries to scrollback from a
+`createEffect`, splicing them off the front of the store. That was invisible
+while every entry settled immediately -- the live tree was always empty. The
+moment a message streams, an entry lingers, and the splice tears the list out
+from under the row callbacks:
+
+```
+TypeError: undefined is not an object (evaluating 'e.title')
+```
+
+Reproduced in isolation before fixing, then fixed by deferring the drain to a
+microtask so the mutation lands after the render completes. The isolation
+mattered: the first two reproductions (three static entries; a body added
+dynamically) both *passed*, which is what ruled out layout and pointed at the
+mutation.
+
+**2. An empty assistant bubble that never settles.** The projection created an
+assistant entry on `MessageStarted`. But a turn that only calls a tool still
+starts a message, so that entry stayed empty and streaming for ever -- and
+because it never settled, it blocked every later entry from reaching the
+scrollback. A deadlock that presents as "the transcript stopped updating".
+
+Fixed by creating the entry from the first thing that gives it content, a
+delta or a completion, rather than from the announcement that one is coming.
+`MessageCompleted` with empty text is now understood as a tool-only turn and
+renders nothing.
+
+Both are worth stating as a general lesson: **the live tree being usually
+empty hid a whole class of bug.** V2's architecture is what made the
+transcript fast, and it is also what kept these two from surfacing until
+something lingered on screen.
+
 ## Invariants
 
 **VT1 — `vendor/` is never compiled.** It sits outside `src/`; nothing imports

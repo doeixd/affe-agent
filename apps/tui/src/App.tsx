@@ -235,11 +235,20 @@ export const App = (props: {
   // Finished entries are handed to the terminal and leave the reactive tree.
   // The effect tracks `entries` because that is what changes; the drain itself
   // decides how much has settled.
+  //
+  // Deferred to a microtask, and that is load-bearing: `drainSettled` splices
+  // the very array `<For>` below is rendering, and doing that *inside* the
+  // effect that renders it tears the list out from under the row callbacks --
+  // `undefined is not an object` from a row reading an index that no longer
+  // exists. Only visible once an entry lingers in the live tree, which is to
+  // say once a message streams.
   createEffect(() => {
     props.entries.length
-    for (const entry of props.drainSettled()) {
-      writeSolidToScrollback(renderer, () => <EntryView entry={entry} />)
-    }
+    queueMicrotask(() => {
+      for (const entry of props.drainSettled()) {
+        writeSolidToScrollback(renderer, () => <EntryView entry={entry} />)
+      }
+    })
   })
 
   return (
