@@ -129,8 +129,9 @@ const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
   ],
   [
     "src/testing/TestLanguageModel.ts",
-    4,
-    "the same service-wrapping shape, for the scripted model"
+    5,
+    "the same service-wrapping shape: four for the scripted model, one for " +
+      "`failingAfter`, which exists so a test never has to write one"
   ]
 ]
 

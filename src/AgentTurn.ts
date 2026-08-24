@@ -1,4 +1,4 @@
-import { Cause, Effect, Stream } from "effect"
+import { Cause, Effect, Option, Stream } from "effect"
 import { LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
 import type { Tool, Toolkit } from "effect/unstable/ai"
@@ -86,6 +86,35 @@ export interface Options {
    */
   readonly stream?: boolean | undefined
 }
+
+/**
+ * Run the model call under the agent's `ExecutionPlan`, if it has one.
+ *
+ * **Only the model call.** A turn is a model call *and the tool calls it asked
+ * for*; a plan around the turn would retry tools -- side effects on the world
+ * -- because a different part of the turn failed. Confining it here also makes
+ * retry safe by construction: nothing the harness commits has happened yet
+ * while the plan is still choosing, so falling back cannot disturb canonical
+ * history, the event ordering, or the atomic turn commit.
+ *
+ * **Batch only, for now.** The streaming path is deliberately not wrapped.
+ * `MessageStarted` and `MessageDelta` are emitted *as the stream runs*, so a
+ * fallback after partial output would leave an observer holding text the
+ * transcript will never contain, and about to see a second `MessageStarted`
+ * for the same turn. Choosing between "refuse to fall back once output is
+ * observed" and "announce the partial message void first" is a real decision
+ * and it is not made here -- see `docs/plan-execution-plan.md`, milestone X2.
+ * `withExecutionPlan`'s documentation says so, because a fallback that
+ * silently does not apply is worse than one that is honestly absent.
+ */
+const withPlan = <A, E, R>(
+  session: Session<any, any, any>,
+  call: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  Option.match(session.agent.executionPlan, {
+    onNone: () => call,
+    onSome: (plan) => Effect.withExecutionPlan(call, plan)
+  })
 
 const streamResponse = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools, any, any>,
@@ -198,13 +227,16 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
 
     const response = options.stream === true
       ? yield* streamResponse(session, correlation, context, handler)
-      : yield* LanguageModel.generateText({
-          prompt: context,
-          toolkit: handler,
-          // The harness owns tool execution so that it can emit the lifecycle
-          // events, choose the concurrency, and commit results itself.
-          disableToolCallResolution: true
-        })
+      : yield* withPlan(
+          session,
+          LanguageModel.generateText({
+            prompt: context,
+            toolkit: handler,
+            // The harness owns tool execution so that it can emit the lifecycle
+            // events, choose the concurrency, and commit results itself.
+            disableToolCallResolution: true
+          })
+        )
 
     // Calls the provider already executed are resolved: their results are in
     // the response, and Effect AI's own resolver skips them too. Running them

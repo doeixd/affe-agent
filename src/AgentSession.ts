@@ -205,18 +205,23 @@ export interface MakeOptions {
   readonly beforeClose?: Effect.Effect<void> | undefined
 }
 
-export const make = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>,
+export const make = <
+  Tools extends Record<string, Tool.Any>,
+  E,
+  R,
+  Model = LanguageModel.LanguageModel
+>(
+  agent: AgentDefinition<Tools, E, R, Model>,
   options?: MakeOptions
-): Effect.Effect<
-  AgentSession<Tools, E>,
-  never,
-  Scope.Scope | LanguageModel.LanguageModel | R
-> =>
+): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> =>
   Effect.gen(function* () {
     // Captured once, so the session handle carries no residual requirements
     // and a child session can run under an entirely different model layer.
-    const env = yield* Effect.context<LanguageModel.LanguageModel | R>()
+    //
+    // `Model` is `LanguageModel` unless the agent carries an `ExecutionPlan`,
+    // in which case the plan names its own models and this is `never` -- see
+    // `Agent.withExecutionPlan`.
+    const env = yield* Effect.context<Model | R>()
     const scope = yield* Effect.scope
     const id =
       options?.sessionId === undefined
@@ -773,15 +778,16 @@ export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
  * run, which is over. What it has is the transcript, which is what the next
  * turn is derived from.
  */
-export const restore = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>,
+export const restore = <
+  Tools extends Record<string, Tool.Any>,
+  E,
+  R,
+  Model = LanguageModel.LanguageModel
+>(
+  agent: AgentDefinition<Tools, E, R, Model>,
   snapshot: Snapshot,
   options?: Omit<MakeOptions, "sessionId" | "history">
-): Effect.Effect<
-  AgentSession<Tools, E>,
-  never,
-  Scope.Scope | LanguageModel.LanguageModel | R
-> =>
+): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> =>
   make(agent, {
     ...options,
     sessionId: snapshot.sessionId,

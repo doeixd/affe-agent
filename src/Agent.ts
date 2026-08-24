@@ -1,4 +1,5 @@
 import { Effect, Option } from "effect"
+import type * as ExecutionPlan from "effect/ExecutionPlan"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
 import { Toolkit } from "effect/unstable/ai"
@@ -22,7 +23,21 @@ import * as ToolExecution from "./ToolExecution.js"
 export interface AgentDefinition<
   Tools extends Record<string, Tool.Any> = {},
   E = never,
-  R = never
+  R = never,
+  /**
+   * What the session must still be given to resolve a model.
+   *
+   * `LanguageModel.LanguageModel` by default -- the model arrives through the
+   * environment, which is the invariant this library is built on. An agent
+   * carrying an `ExecutionPlan` names its own models, so `withExecutionPlan`
+   * sets this to `never` and `AgentSession.make` stops asking for one.
+   *
+   * A parameter rather than a flag because it is the *signature* that has to
+   * change: requiring a model an agent will not consult is a lie the compiler
+   * should not tell. Defaulted, so no existing reference to
+   * `AgentDefinition<Tools, E, R>` moves.
+   */
+  Model = LanguageModel.LanguageModel
 > extends Pipeable {
   readonly instructions: Option.Option<string>
   /**
@@ -44,6 +59,13 @@ export interface AgentDefinition<
   readonly permission: Permission.Policy<R>
   /** What a denied or refused call does to the run. See `ToolExecution.Options`. */
   readonly toolDenialPolicy: ToolExecution.FailurePolicy
+  /**
+   * An ordered fallback ladder for the model call. See `withExecutionPlan`.
+   *
+   * Absent by default: the model comes from the environment and there is
+   * nothing to fall back to.
+   */
+  readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
 }
 
 /**
@@ -200,7 +222,7 @@ export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
  * parameters even when the value is exactly right. A spread of a definition
  * keeps `pipe` as an own property, so derived values pipe too.
  */
-const definition = <Tools extends Record<string, Tool.Any>, E, R>(fields: {
+const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel>(fields: {
   readonly instructions: Option.Option<string>
   readonly toolkit: ToolkitInput<any, any, any>
   readonly loop: AgentLoop.AgentLoop<any, any, any>
@@ -209,7 +231,8 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R>(fields: {
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
   readonly permission: Permission.Policy<any>
   readonly toolDenialPolicy: ToolExecution.FailurePolicy
-}): AgentDefinition<Tools, E, R> =>
+  readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
+}): AgentDefinition<Tools, E, R, Model> =>
   ({
     instructions: fields.instructions,
     toolkit: fields.toolkit,
@@ -219,10 +242,11 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R>(fields: {
     toolFailurePolicy: fields.toolFailurePolicy,
     permission: fields.permission,
     toolDenialPolicy: fields.toolDenialPolicy,
+    executionPlan: fields.executionPlan,
     pipe() {
       return pipeArguments(this, arguments)
     }
-  }) as AgentDefinition<Tools, E, R>
+  }) as AgentDefinition<Tools, E, R, Model>
 
 export const make = <
   Tools extends Record<string, Tool.Any> = {},
@@ -279,7 +303,11 @@ export const make = <
     toolExecution: config?.toolExecution ?? ToolExecution.Parallel,
     toolFailurePolicy: config?.toolFailurePolicy ?? ToolExecution.ReturnToModel,
     permission: config?.permission ?? Permission.allowAll,
-    toolDenialPolicy: config?.toolDenialPolicy ?? ToolExecution.FailRun
+    toolDenialPolicy: config?.toolDenialPolicy ?? ToolExecution.FailRun,
+    // Not in `Config`, deliberately. A plan is a combinator
+    // (`withExecutionPlan`) because it changes the *signature* -- it
+    // discharges `LanguageModel` -- and `Config` cannot express that.
+    executionPlan: Option.none()
   })
 }
 
@@ -590,6 +618,61 @@ export const withPermission =
     agent: AgentDefinition<Tools, E, R>
   ): AgentDefinition<Tools, E, R | PR> =>
     definition({ ...agent, permission: policy })
+
+/**
+ * Give the agent an ordered ladder of models to try.
+ *
+ * The model still does not appear in the `Agent`: every step in the plan names
+ * one, and the plan is supplied at the edge exactly as a layer would be. What
+ * changes is that the agent no longer needs one from its environment --
+ * `AgentSession.make` stops requiring `LanguageModel`, because requiring a
+ * model the agent will not consult is a lie the signature should not tell.
+ *
+ * ```ts
+ * const plan = ExecutionPlan.make(
+ *   { provide: Anthropic, attempts: 2, schedule: Schedule.exponential("200 millis") },
+ *   { provide: OpenAi }
+ * )
+ * const agent = Agent.make({ toolkit, loop }).pipe(Agent.withExecutionPlan(plan))
+ * ```
+ *
+ * **The plan wraps the model call and nothing wider.** A turn is a model call
+ * *and the tool calls it asked for*, so a plan around the turn would retry
+ * tools -- side effects on the world -- because a different part of the turn
+ * failed. Confining it to the call also makes retry safe by construction:
+ * nothing the harness guarantees has happened yet while the plan is still
+ * choosing. See `docs/plan-execution-plan.md`.
+ *
+ * A combinator rather than a `Config` field, per AGENTS.md §42.1 -- and here
+ * the rule earns itself twice over, because this is the one cross-cutting
+ * concern that changes what the session *requires*.
+ */
+export const withExecutionPlan =
+  <
+    Types extends {
+      provides: any
+      input: any
+      error: any
+      requirements: any
+    }
+  >(
+    // Generic over the plan's whole type rather than over `provides` alone.
+    // Naming only `provides` and widening the rest to `any` reads as more
+    // permissive and is in fact *stricter*: `ExecutionPlan` is invariant in
+    // those slots, so a real `ExecutionPlan.make(...)` -- which infers
+    // `input: unknown, error: never` -- would not be assignable, and the
+    // combinator would compile while being impossible to call.
+    plan: ExecutionPlan.ExecutionPlan<Types>
+  ) =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<
+    Tools,
+    E,
+    Exclude<R, Types["provides"]>,
+    Exclude<Model, Types["provides"]>
+  > =>
+    definition({ ...agent, executionPlan: Option.some(plan) })
 
 /** Replace what a denied or refused call does to the run. */
 export const withToolDenialPolicy =

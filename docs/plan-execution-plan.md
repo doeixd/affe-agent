@@ -200,19 +200,56 @@ what they were. Asserted in `examples/typed-agent.ts` the way the rest are.
 
 ## Milestones
 
-### P0 — Settle two questions, in writing, before any code
+### P0 — Settle two questions, in writing ✅
 
-1. **Can `LanguageModel` be discharged without a cast?** Write the signature,
-   try it against a real plan, and record the answer. If it needs a cast, the
-   feature is still worth having in its weaker form — but that is a decision,
-   and per E18 a new cast now has to be argued and added to the inventory.
-2. **Which streaming policy?** Options 1–3 above. Recommendation is 1.
+**1. Can `LanguageModel` be discharged without a cast? — Yes.**
 
-### X1 — The combinator, non-streaming
+`AgentDefinition` gained a fourth type parameter, `Model`, defaulting to
+`LanguageModel.LanguageModel`; `withExecutionPlan` sets it to
+`Exclude<Model, Types["provides"]>`, and `AgentSession.make` requires
+`Scope | Model | R` instead of hard-coding the model. Because the parameter is
+defaulted, **all fifty existing `AgentDefinition<Tools, E, R>` references
+compiled untouched**, and `Agent.make` still carries nine parameters.
+
+The first signature *did* compile and was still wrong, which is the
+"compiling is not proof" rule earning its place. Naming only `provides` and
+widening the rest to `any`:
+
+```ts
+plan: ExecutionPlan.ExecutionPlan<{ provides: Provides, input: any, error: any, requirements: any }>
+```
+
+reads as more permissive and is in fact **stricter** — `ExecutionPlan` is
+invariant in those slots, so a real `ExecutionPlan.make(...)`, which infers
+`input: unknown, error: never`, is not assignable. The combinator would have
+shipped compiling and impossible to call. Being generic over the whole `Types`
+object fixes it.
+
+**2. Which streaming policy? — Deferred, and the code says so.**
+
+X1 wraps the batch path only. The streaming path is left alone rather than
+wrapped-and-hoped, because emitting `MessageStarted` and deltas before a
+fallback is the one outcome that is definitely wrong. `withExecutionPlan`'s
+documentation states the limit, so a fallback that does not apply is never
+silent. Settling between options 1 and 2 is X2.
+
+### X1 — The combinator, non-streaming ✅
 
 `Agent.withExecutionPlan`, the model call wrapped in `Effect.withExecutionPlan`,
-`generateText` only. Tests X1, X2, X3 and X5. This is the whole feature for the
-batch path and is where the design is proved.
+`generateText` only.
+
+Three tests (`test/ExecutionPlan.test.ts`). The one that matters is X1's
+invariant, and it is arranged so the failure lands *after* a tool has run: the
+primary answers the first model call with a tool call, then fails the call that
+would read the tool's result. **A plan around the turn would re-run the tool;
+this asserts it ran once.** Falsified by removing the wrapping entirely — two
+of the three fail.
+
+One cast was added, in `TestLanguageModel.failingAfter`. A test needed a
+provider that answers once and then fails, and **test code counts as user
+code**, so the cast belongs in the one place licensed to hold it rather than in
+the test that wanted it. `test/Casts.test.ts` caught it and refused to pass
+until AGENTS.md recorded it — which is A-11 doing exactly its job.
 
 ### X2 — Streaming
 

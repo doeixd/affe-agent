@@ -311,6 +311,57 @@ export const counting = (
   ).pipe(Layer.provide(base))
 
 /**
+ * Wrap a model layer so it succeeds `succeedFirst` calls and then fails every
+ * one after, with the failure *escaping* rather than being retried away.
+ *
+ * The opposite of `flaky`, and needed for a different question. `flaky` asks
+ * "does a run recover from a transient provider?"; this asks "does something
+ * *outside* the layer take over when a provider stops working?" -- which is
+ * what an `ExecutionPlan` fallback is for, and it can only be tested if the
+ * failure reaches the plan.
+ *
+ * `succeedFirst: 1` is the interesting setting: the provider answers the first
+ * model call, so a tool runs, and then fails the call that would read the tool
+ * result. That is how `Agent.withExecutionPlan`'s central invariant is
+ * checked -- a fallback there must not re-run the tool.
+ */
+export const failingAfter = (
+  base: Layer.Layer<LanguageModel.LanguageModel>,
+  options: {
+    readonly succeedFirst: number
+    /** Counts every call, so a test can prove the primary was really tried. */
+    readonly calls: Ref.Ref<number>
+  }
+): Layer.Layer<LanguageModel.LanguageModel> =>
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    Effect.gen(function* () {
+      const inner = yield* LanguageModel.LanguageModel
+      const gate = Effect.flatMap(
+        Ref.updateAndGet(options.calls, (n) => n + 1),
+        (n) =>
+          n > options.succeedFirst
+            ? Effect.fail(
+                new AiError.InternalProviderError({
+                  description: `provider unavailable (call ${n})`
+                })
+              )
+            : Effect.void
+      )
+      return {
+        ...inner,
+        // The same closed-service wrapping the rest of this file does, and the
+        // reason this helper lives here rather than in a test: `Tool` handlers
+        // and test code must never need a cast, so the one place that does
+        // keeps it, documented and inventoried.
+        generateText: ((callOptions: never) =>
+          Effect.andThen(gate, inner.generateText(callOptions))) as unknown as
+            LanguageModel.Service["generateText"]
+      }
+    })
+  ).pipe(Layer.provide(base))
+
+/**
  * Wrap a model layer so each call fails transiently the first `failFirst` times
  * before delegating to `base`, with those failures absorbed by an internal
  * retry -- exactly what a user does by wrapping a flaky provider layer in

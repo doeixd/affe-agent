@@ -49,6 +49,10 @@ describe("public API", () => {
       "updateContextTransform",
       "updateLoop",
       "withContextTransform",
+      // Provider fallback. A combinator rather than a `Config` field because it
+      // changes the signature -- a planned agent no longer needs a
+      // `LanguageModel` from its environment.
+      "withExecutionPlan",
       "withInstructions",
       "withLoop",
       "withPermission",

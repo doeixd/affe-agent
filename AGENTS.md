@@ -20,8 +20,8 @@ Two kinds of `as` are worth telling apart, because only one is a hole.
 A plain `x as T` is still checked for overlap — it can narrow, it cannot claim a
 string is a number. `src/` has around a hundred of those and they are ordinary.
 What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
-which routes around it. **Sixteen of those exist, in four files**, and they are
-the list below. `test/Casts.test.ts` enforces it: adding one fails the build
+which routes around it. **Seventeen of those exist, in four files**, and they
+are the list below. `test/Casts.test.ts` enforces it: adding one fails the build
 until it is written down here, with its reason.
 
 (The test parses rather than greps, because `grep " as any"` matches the phrase
@@ -43,13 +43,16 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   AI composes toolkits before handlers are bound and a `WithHandler` is a
   closed value;
 * **wrapping a service whose method types are closed** — `DurableModel` (5),
-  `DurableToolkit` (3) and `TestLanguageModel` (4). Each replaces a method on a
+  `DurableToolkit` (3) and `TestLanguageModel` (5). Each replaces a method on a
   `LanguageModel.Service` or a `Toolkit.WithHandler` with one that journals,
   counts or replays around it. The value is the original's behaviour plus a
   wrapper; the type cannot say so, because Effect AI's service methods are
   declared with concrete signatures rather than a mappable shape. Confined to
   the wrapper's construction: everything the wrapper is *given* and everything
-  it *returns* is typed;
+  it *returns* is typed. `TestLanguageModel.failingAfter` is the newest, and it
+  is in `src/` for a reason worth stating: a test needed a provider that fails
+  after answering once, and **test code counts as user code**, so the cast lives
+  in the one place licensed to hold it rather than in the test that wanted it;
 * **widening an error channel to cross an `Activity` boundary**
   (`DurableModel.ts:129`), where a workflow activity's `execute` must be typed
   against the schema the journal declares, and the underlying effect's error is
