@@ -66,12 +66,40 @@ const expandAll = (values: ReadonlyArray<string>, options: DecodeOptions): Optio
   return Option.some(out)
 }
 
+/** True if a `/`-joined relative path never rises above its root via `..`. */
+const staysWithin = (relPath: string): boolean => {
+  let depth = 0
+  for (const segment of relPath.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment === "..") {
+      depth -= 1
+      if (depth < 0) return false
+    } else depth += 1
+  }
+  return true
+}
+
+/**
+ * The plugin-relative part of a valid `cwd`, or `undefined` if `cwd` is not one
+ * of the allowed forms (`./…`, `${PLUGIN_ROOT}[/…]`, `${PLUGIN_DATA}[/…]`).
+ */
+const cwdRelative = (cwd: string): string | undefined => {
+  if (cwd.startsWith("./")) return cwd
+  const root = "${PLUGIN_ROOT}"
+  const data = "${PLUGIN_DATA}"
+  if (cwd === root || cwd.startsWith(`${root}/`)) return cwd.slice(root.length)
+  if (cwd === data || cwd.startsWith(`${data}/`)) return cwd.slice(data.length)
+  return undefined
+}
+
 type Decoded = { readonly server: McpServer } | { readonly warning: string }
 
 const decodeStdio = (name: string, entry: Record<string, unknown>, options: DecodeOptions): Decoded => {
   if (!options.allowStdio) return { warning: `${name}: stdio servers are disabled` }
   const command = entry["command"]
   if (!Predicate.isString(command) || command === "") return { warning: `${name}: stdio "command" is required` }
+  // A plugin-relative command must not escape the plugin root.
+  if (!staysWithin(command)) return { warning: `${name}: stdio "command" escapes the plugin root` }
 
   const rawArgs = entry["args"] ?? []
   if (!Array.isArray(rawArgs) || !rawArgs.every(Predicate.isString)) return { warning: `${name}: "args" must be strings` }
@@ -94,6 +122,11 @@ const decodeStdio = (name: string, entry: Record<string, unknown>, options: Deco
   let cwd: string | undefined
   if (rawCwd !== undefined) {
     if (!Predicate.isString(rawCwd)) return { warning: `${name}: "cwd" must be a string` }
+    const relative = cwdRelative(rawCwd)
+    if (relative === undefined) {
+      return { warning: `${name}: "cwd" must be ./-relative or start with a PLUGIN_ROOT/PLUGIN_DATA placeholder` }
+    }
+    if (!staysWithin(relative)) return { warning: `${name}: "cwd" escapes its root` }
     const expanded = expand(rawCwd, options)
     if (Option.isNone(expanded)) return { warning: `${name}: unresolved placeholder in "cwd"` }
     cwd = expanded.value

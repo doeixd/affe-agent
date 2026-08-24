@@ -146,6 +146,29 @@ describe("mcp.json decoding", () => {
     })
   )
 
+  it.effect("rejects a command or cwd that escapes the plugin root", () =>
+    Effect.gen(function* () {
+      // command escapes
+      assert.deepStrictEqual((yield* decode({ s: { type: "stdio", command: "../evil" } })).servers, [])
+      assert.deepStrictEqual((yield* decode({ s: { type: "stdio", command: "./../evil" } })).servers, [])
+      // cwd wrong form / escapes
+      assert.deepStrictEqual((yield* decode({ s: { type: "stdio", command: "c", cwd: "../etc" } })).servers, [])
+      assert.deepStrictEqual((yield* decode({ s: { type: "stdio", command: "c", cwd: "./../etc" } })).servers, [])
+      assert.deepStrictEqual((yield* decode({ s: { type: "stdio", command: "c", cwd: "${PLUGIN_ROOT}/../etc" } })).servers, [])
+    })
+  )
+
+  it.effect("allows a safe plugin-relative command and cwd", () =>
+    Effect.gen(function* () {
+      const { servers } = yield* decode({
+        s: { type: "stdio", command: "./bin/server", cwd: "${PLUGIN_ROOT}/work" }
+      })
+      const s = servers[0]
+      assert.strictEqual(s?.transport === "stdio" ? s.command : undefined, "./bin/server")
+      assert.strictEqual(s?.transport === "stdio" ? s.cwd : undefined, "/root/work")
+    })
+  )
+
   it.effect("skips a server that references PLUGIN_DATA when none was supplied", () =>
     Effect.gen(function* () {
       const { servers, warnings } = yield* decode(
