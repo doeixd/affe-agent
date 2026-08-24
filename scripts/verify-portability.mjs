@@ -30,8 +30,14 @@ const sourceRoot = process.argv[2] === undefined
   ? path.join(root, "src")
   : path.resolve(process.argv[2])
 
-/** Host implementations, by path relative to `src/`. Keep this list short. */
-const HOST_MODULES = new Set(["sandbox/local.ts", "connectors/slack.ts"])
+/**
+ * Host implementations, by path relative to `src/`. Keep this list short.
+ *
+ * `connectors/slack.ts` was on this list until it moved from `node:crypto` to
+ * the Web Crypto API. Removing an entry is the only proof that a module became
+ * portable, which is why the list is checked rather than merely documented.
+ */
+const HOST_MODULES = new Set(["sandbox/local.ts"])
 
 const builtins = new Set(builtinModules)
 const hostPackages =

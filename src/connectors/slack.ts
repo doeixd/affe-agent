@@ -1,13 +1,28 @@
-import { createHmac, timingSafeEqual } from "node:crypto"
 import { Clock, Effect, Redacted } from "effect"
 
 /**
  * Slack request-signature verification.
  *
- * **A host module** — it uses `node:crypto`, so it lives in its own entry
- * (`@doeixd/effect-agent/connectors/slack`) and out of the portable surface,
- * exactly like `sandbox/local`. The rest of `/connectors` stays portable; an
- * application that deploys on Slack opts into this one host entry.
+ * **Portable.** This used to be a host module, kept out of the portable surface
+ * because it reached for `node:crypto`. It now uses the Web Crypto API
+ * (`globalThis.crypto.subtle`), which Node, Bun, Deno and edge runtimes all
+ * implement, so the entry point carries no host dependency.
+ *
+ * The interesting part of that change is the *comparison*. Verifying a
+ * signature by computing the expected one and comparing strings needs the
+ * compare to be constant-time, or the time it takes leaks how much of a forged
+ * signature was right. `node:crypto` gives that as `timingSafeEqual`; Web
+ * Crypto has no such function, and hand-rolling one in JavaScript is a promise
+ * the language cannot keep.
+ *
+ * So the comparison is not done here at all. `subtle.verify` takes the
+ * signature and the data and answers the question directly, doing the compare
+ * inside an implementation that is built for it. That is both more portable
+ * and a better guarantee than the code it replaces.
+ *
+ * Note this is *not* `effect/Crypto`, which was the obvious candidate and does
+ * not fit: it offers random bytes, UUIDs and SHA digests, and neither HMAC nor
+ * a constant-time compare. See `docs/audit-effect-ecosystem.md` E10.
  *
  * Slack signs each request: `X-Slack-Signature` is `v0=` + the HMAC-SHA256 of
  * `v0:{timestamp}:{body}` under the app's signing secret, and
@@ -39,13 +54,27 @@ export interface Options {
 
 const DEFAULT_TOLERANCE_SECONDS = 300
 
-// Length-safe, constant-time string comparison. `timingSafeEqual` throws on a
-// length mismatch, so unequal lengths are treated as a (non-throwing) mismatch.
-const safeEqual = (a: string, b: string): boolean => {
-  const left = Buffer.from(a)
-  const right = Buffer.from(b)
-  return left.length === right.length && timingSafeEqual(left, right)
+/**
+ * The bytes of a `v0=<hex>` signature, or `undefined` if it is not one.
+ *
+ * Malformed input is a `false` verification, never a throw: the header is
+ * attacker-controlled, so every shape it can take has to be an ordinary answer.
+ */
+const signatureBytes = (signature: string): Uint8Array | undefined => {
+  if (!signature.startsWith("v0=")) return undefined
+  const hex = signature.slice(3)
+  // An odd length, or anything outside hex, is not a signature.
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    return undefined
+  }
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < bytes.length; i = i + 1) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  }
+  return bytes
 }
+
+const utf8 = new TextEncoder()
 
 /**
  * Build a verifier for one signing secret. The returned function checks a
@@ -73,7 +102,26 @@ export const verifier = (options: Options) =>
     const tolerance = options.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS
     if (Math.abs(nowSeconds - signedAt) > tolerance) return false
 
+    const provided = signatureBytes(request.signature)
+    if (provided === undefined) return false
+
     const base = `v0:${request.timestamp}:${request.body}`
-    const expected = `v0=${createHmac("sha256", Redacted.value(options.signingSecret)).update(base).digest("hex")}`
-    return safeEqual(expected, request.signature)
+    // `verify` rather than sign-then-compare: the comparison happens inside the
+    // implementation, in constant time, which is the property that matters and
+    // the one JavaScript cannot provide for itself.
+    return yield* Effect.promise(async () => {
+      const key = await globalThis.crypto.subtle.importKey(
+        "raw",
+        utf8.encode(Redacted.value(options.signingSecret)),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["verify"]
+      )
+      return globalThis.crypto.subtle.verify(
+        "HMAC",
+        key,
+        provided,
+        utf8.encode(base)
+      )
+    })
   })

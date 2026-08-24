@@ -75,4 +75,46 @@ describe("Slack.verifier", () => {
       assert.isFalse(yield* verify({ signature: sign("nope", body), timestamp: "nope", body }))
     }))
   )
+
+  /**
+   * The signature header is attacker-controlled, so every shape it can take has
+   * to be an ordinary `false` rather than a throw. These are the paths the Web
+   * Crypto rewrite introduced: `subtle.verify` takes *bytes*, so the hex has to
+   * be parsed first, and parsing is where malformed input now lands.
+   */
+  it.effect("rejects a malformed signature header without throwing", () =>
+    run(Effect.gen(function* () {
+      yield* at(Number(timestamp))
+      const good = sign(timestamp, body)
+      const cases = [
+        "",                              // empty
+        "v1=abcdef",                     // wrong version prefix
+        good.slice(3),                   // hex, but no `v0=`
+        "v0=",                           // prefix with nothing after it
+        "v0=abc",                        // odd number of hex digits
+        "v0=zzzz",                       // not hex
+        `v0=${good.slice(3, -2)}`,       // right shape, truncated
+        `${good}00`                      // right shape, too long
+      ]
+      for (const signature of cases) {
+        assert.isFalse(
+          yield* verify({ signature, timestamp, body }),
+          `expected ${JSON.stringify(signature)} to be rejected`
+        )
+      }
+    }))
+  )
+
+  it.effect("a signature for a different body does not verify", () =>
+    run(Effect.gen(function* () {
+      // The cross-implementation check that matters: the signature is produced
+      // by `node:crypto` and verified by Web Crypto, so a passing suite proves
+      // the two agree rather than that our own code is self-consistent.
+      yield* at(Number(timestamp))
+      assert.isTrue(yield* verify({ signature: sign(timestamp, body), timestamp, body }))
+      assert.isFalse(
+        yield* verify({ signature: sign(timestamp, `${body}&extra=1`), timestamp, body })
+      )
+    }))
+  )
 })

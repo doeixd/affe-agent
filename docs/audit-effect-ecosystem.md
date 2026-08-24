@@ -291,12 +291,45 @@ Recommendation: keep `local` as the host-coupled adapter, but check what a
 `FileSystem`/`Process`-backed sandbox costs — it may be a second adapter behind
 the same seam rather than a rewrite, which is the cheapest possible answer.
 
-### E10. `Crypto` — closes a flagged entry on our own roadmap
+### E10. `Crypto` — the goal was right, the mechanism was wrong
 
-`connectors/slack.ts` uses `node:crypto`'s `createHmac` and `timingSafeEqual`
-and is host-flagged in its own entry point for it. ROADMAP names "a real
-crypto-backed Slack signature verifier as a host-flagged sub-entry" as remaining
-work. Effect's `Crypto` removes the flag and the sub-entry.
+`connectors/slack.ts` used `node:crypto`'s `createHmac` and `timingSafeEqual`
+and was host-flagged in `scripts/verify-portability.mjs` for it. ROADMAP names
+"a real crypto-backed Slack signature verifier as a host-flagged sub-entry" as
+remaining work. This finding said Effect's `Crypto` "removes the flag".
+
+**It cannot.** `effect/Crypto` offers random bytes, random numbers, UUIDv4/v7
+and SHA message digests — and neither **HMAC** nor a **constant-time compare**,
+which are the only two things this verifier needs. Checked by reading the
+module and grepping the whole of `effect/src` for `hmac`: no hits.
+
+**What landed (A-7)** is the goal by a better route. The Web Crypto API
+(`globalThis.crypto.subtle`) is implemented by Node, Bun, Deno and edge
+runtimes, so it carries no host dependency — and it turns out to be a *stronger*
+answer than the code it replaced, not merely a portable one.
+
+The interesting part is the comparison. Verifying by computing the expected
+signature and comparing strings needs that compare to be constant-time, or its
+duration leaks how much of a forged signature was correct. `node:crypto` gives
+that as `timingSafeEqual`; Web Crypto has no equivalent, and hand-rolling one in
+JavaScript is a promise the language cannot keep — a JIT is free to optimise it.
+
+So the comparison is not done in our code at all. **`subtle.verify` takes the
+signature and the data and answers directly**, comparing inside an
+implementation built for it. Portability and the timing guarantee both improve;
+the tempting middle option — Web Crypto plus a hand-written XOR loop — would
+have traded the second for the first, and is exactly what this finding would
+have produced if it had been implemented as written.
+
+`connectors/slack.ts` is **removed from `HOST_MODULES`**, which is the only
+proof that matters: `npm run lint:portability` now passes without an exemption
+for it, and would fail if the host coupling came back. Two new tests cover the
+paths the rewrite introduced — `subtle.verify` takes bytes, so the `v0=<hex>`
+header must be parsed, and every malformed shape an attacker can send is an
+ordinary `false`. The suite still signs with `node:crypto` and verifies with Web
+Crypto, so a pass proves the two agree rather than that our code is
+self-consistent. Falsified by removing the freshness check and by verifying the
+wrong bytes.
 
 ### E11. `PartitionedSemaphore` — per-tool concurrency
 
@@ -830,7 +863,11 @@ outrank most of round one.
   the milestones that depend on them.
 - **A-6 — `PartitionedSemaphore` strategy (E11)** and **`Cache` where the cost
   is real (E12).**
-- **A-7 — `Crypto` in `/connectors/slack` (E10)**, un-flagging the entry.
+- **A-7 — Un-flag `/connectors/slack` (E10). ✅ Done.** Not with `effect/Crypto`,
+  which has neither HMAC nor a constant-time compare: with Web Crypto's
+  `subtle.verify`, which does the comparison natively and is therefore both more
+  portable *and* a better guarantee than the `timingSafeEqual` it replaces.
+  `HOST_MODULES` is one entry shorter, which is the proof.
 - **A-8 — `Config` and `Redacted` sweep (E13, E16)**, alongside the server and
   CLI, starting with the five hard-coded poll intervals that are policy today.
 - **A-9 — `unstable/cli` (E6).** The named roadmap gap, once the tree exists to
