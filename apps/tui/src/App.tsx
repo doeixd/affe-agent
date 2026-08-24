@@ -6,7 +6,7 @@ import {
   writeSolidToScrollback
 } from "@opentui/solid"
 import type { Accessor } from "solid-js"
-import { createEffect, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js"
 import * as Diff from "./diff.ts"
 import { marker, theme } from "./theme.ts"
 import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
@@ -66,15 +66,27 @@ const clip = (text: string, limit = BODY_LINES): { lines: Array<string>; hidden:
  */
 const DIFF_LINES = 12
 
+interface Clipped {
+  readonly lines: ReadonlyArray<Diff.Line>
+  readonly hidden: number
+  readonly note: string | undefined
+}
+
 const diffOf = (
   before: string | undefined,
   after: string | undefined
-): { lines: ReadonlyArray<Diff.Line>; hidden: number } => {
-  if (before === undefined && after === undefined) return { lines: [], hidden: 0 }
-  const all = Diff.of(before ?? "", after ?? "")
-  return all.length <= DIFF_LINES
-    ? { lines: all, hidden: 0 }
-    : { lines: all.slice(0, DIFF_LINES), hidden: all.length - DIFF_LINES }
+): Clipped => {
+  if (before === undefined && after === undefined) {
+    return { lines: [], hidden: 0, note: undefined }
+  }
+  const diff = Diff.of(before ?? "", after ?? "")
+  const hidden = Math.max(0, diff.lines.length - DIFF_LINES)
+  const note = diff.summarised
+    ? "too large to line up"
+    : diff.newlineChange === undefined
+    ? undefined
+    : `no newline at end of file (${diff.newlineChange})`
+  return { lines: diff.lines.slice(0, DIFF_LINES), hidden, note }
 }
 
 const diffColour = (kind: Diff.Line["kind"]): ColorInput =>
@@ -96,6 +108,38 @@ const Lines = (props: { text: string; fg: ColorInput }) => {
       </For>
       <Show when={clipped().hidden > 0}>
         <text fg={theme.block.muted}>{`  … ${clipped().hidden} more lines`}</text>
+      </Show>
+    </box>
+  )
+}
+
+/**
+ * The diff, computed once.
+ *
+ * A child component with one derived value, because the previous version
+ * called `diffOf` three separate times in the same JSX -- for the list, for
+ * the `<Show>` condition, and for the hidden-line label. Each of those is an
+ * alignment, so a reactive render did the work three times over.
+ */
+const ChangeBody = (props: {
+  before: string | undefined
+  after: string | undefined
+}) => {
+  const clipped = createMemo(() => diffOf(props.before, props.after))
+  return (
+    <box flexDirection="column">
+      <For each={clipped().lines}>
+        {(line) => (
+          <text fg={diffColour(line.kind)}>
+            {`  ${diffMarker(line.kind)} ${line.text}`}
+          </text>
+        )}
+      </For>
+      <Show when={clipped().hidden > 0}>
+        <text fg={theme.block.muted}>{`  … ${clipped().hidden} more lines`}</text>
+      </Show>
+      <Show when={clipped().note !== undefined}>
+        <text fg={theme.block.muted}>{`  ${clipped().note}`}</text>
       </Show>
     </box>
   )
@@ -146,18 +190,7 @@ const Snapshot = (props: { snapshot: ToolSnapshot }) => (
           {/* The two sides, lined up. `before` is what was *actually*
               replaced, so when a fuzzy strategy matched, the difference
               between what was asked for and what was changed shows here. */}
-          <For each={diffOf(snapshot().before, snapshot().after).lines}>
-            {(line) => (
-              <text fg={diffColour(line.kind)}>
-                {`  ${diffMarker(line.kind)} ${line.text}`}
-              </text>
-            )}
-          </For>
-          <Show when={diffOf(snapshot().before, snapshot().after).hidden > 0}>
-            <text fg={theme.block.muted}>
-              {`  … ${diffOf(snapshot().before, snapshot().after).hidden} more lines`}
-            </text>
-          </Show>
+          <ChangeBody before={snapshot().before} after={snapshot().after} />
         </box>
       )}
     </Match>

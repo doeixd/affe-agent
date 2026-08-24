@@ -5,8 +5,7 @@
  * `p.metadata.diff` because *their* edit tool returns a diff, and ours returns
  * prose, so porting it looked like a library decision. It is not. `edit_file`
  * reports `matched` -- the span it actually replaced -- and the call carries
- * `new_string`, which is both sides. What was missing was the diff itself, and
- * that is thirty lines.
+ * `new_string`, which is both sides.
  *
  * Computing it here rather than in the library is also the right place for it.
  * A diff is a *presentation* of a change; the library's job is to report what
@@ -21,14 +20,41 @@ export interface Line {
   readonly text: string
 }
 
+/** What came back, and whether it is the whole story. */
+export interface Diff {
+  readonly lines: ReadonlyArray<Line>
+  /**
+   * True when the edit was too large to line up, and the lines above are a
+   * summary rather than a diff.
+   */
+  readonly summarised: boolean
+  /** Set when only the file's final newline changed. */
+  readonly newlineChange: "added" | "removed" | undefined
+}
+
+/**
+ * The most cells the alignment may allocate.
+ *
+ * The first version of this file argued no budget was needed, because the
+ * input is "the span an edit touched, not a file". That was wrong: nothing
+ * bounds the span. A model may replace an entire file, and `matched` then
+ * returns the entire file -- so a valid edit could allocate a matrix of
+ * millions of cells and freeze the UI *after* the change had already been
+ * written to disk. Clipping the output at twelve lines happened afterwards and
+ * protected nothing.
+ *
+ * 250,000 is a 500x500 edit: far past anything worth reading line by line, and
+ * a few megabytes at worst.
+ */
+export const BUDGET = 250_000
+
 /**
  * Longest common subsequence over lines.
  *
- * Quadratic, and that is fine here: this runs over the span an edit touched,
- * not over a file. `edit_file` replaces a matched region, so both sides are
- * the size of the thing that changed -- and a renderer clips at a few lines
- * anyway. A linear-space variant would be more code defending against an input
- * this cannot receive.
+ * Quadratic in time and space, which is why nothing reaches it without passing
+ * the budget check above. A linear-space variant would raise the ceiling and
+ * not remove it, and the presentation is clipped to twelve lines regardless --
+ * so the useful thing to do past the ceiling is to stop, not to work harder.
  */
 const lcs = (
   before: ReadonlyArray<string>,
@@ -73,20 +99,70 @@ const lcs = (
 }
 
 /**
- * Split into lines without the phantom trailing entry.
+ * Split into lines, with empty text meaning *no* lines.
  *
- * `"a\nb\n".split("\n")` is `["a", "b", ""]`, and that empty string becomes a
- * spurious removed-or-added line at the end of every whole-line edit. The same
- * trap the library's `readFormat.toLines` exists for.
+ * The drop of the trailing entry is what does that: `"".split` yields one
+ * entry and it is the phantom, so it goes. An explicit early return for `""`
+ * was here and was dead code -- worth recording, because it looked like the
+ * mechanism and was not.
+ *
+ * `"".split("\\n")` is `[""]`, and treating that as one line made an insertion
+ * into an empty file render as "remove a blank line, add the content" -- and
+ * made the unified header claim the empty side had one line.
+ *
+ * The trailing entry for text that ends in a newline is dropped, because
+ * `"a\\nb\\n".split("\\n")` is `["a", "b", ""]` and that phantom would appear as
+ * a spurious blank line on every whole-line edit. Whether the newline was
+ * there is not lost -- `endsWithNewline` keeps it, because a change consisting
+ * only of that newline is otherwise invisible.
  */
 const toLines = (text: string): ReadonlyArray<string> => {
   const lines = text.split("\n")
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop()
+  if (lines[lines.length - 1] === "") lines.pop()
   return lines
 }
 
-export const of = (before: string, after: string): ReadonlyArray<Line> =>
-  lcs(toLines(before), toLines(after))
+const endsWithNewline = (text: string): boolean => text.endsWith("\n")
+
+/**
+ * Line up two versions of a span.
+ *
+ * Normalises CRLF first: a file with Windows line endings would otherwise
+ * differ from itself on every line, because the `\\r` rides along on the end of
+ * each one.
+ */
+export const of = (before: string, after: string): Diff => {
+  const left = toLines(before.replaceAll("\r\n", "\n"))
+  const right = toLines(after.replaceAll("\r\n", "\n"))
+
+  /**
+   * The change nobody sees.
+   *
+   * With the trailing entry dropped, `"a"` and `"a\\n"` are the same lines, so
+   * adding or removing a file's final newline produced an all-context diff
+   * that showed nothing at all -- while the file on disk had changed.
+   */
+  const newlineChange = before !== after &&
+      endsWithNewline(before) !== endsWithNewline(after) &&
+      left.join("\n") === right.join("\n")
+    ? (endsWithNewline(after) ? "added" as const : "removed" as const)
+    : undefined
+
+  if (left.length * right.length > BUDGET) {
+    // Past the ceiling, and the honest answer is what changed in the large
+    // rather than a diff nobody could read anyway.
+    return {
+      lines: [
+        { kind: "removed", text: `${left.length} lines` },
+        { kind: "added", text: `${right.length} lines` }
+      ],
+      summarised: true,
+      newlineChange
+    }
+  }
+
+  return { lines: lcs(left, right), summarised: false, newlineChange }
+}
 
 /**
  * The same, as the unified-diff text OpenTUI's `<diff>` parses.
@@ -94,24 +170,31 @@ export const of = (before: string, after: string): ReadonlyArray<Line> =>
  * One hunk covering everything, because the input *is* one hunk: an edit
  * replaced a contiguous span, so there is nothing between hunks to elide. The
  * counts are the real line counts -- a parser that trusts the header and finds
- * a different number of lines renders nonsense.
+ * a different number of lines renders nonsense. A side with no lines is
+ * written `-0,0`, which is the conventional way to say "this file was empty".
  */
 export const unified = (
   path: string,
   before: string,
   after: string
 ): string => {
-  const lines = of(before, after)
-  const removed = lines.filter((line) => line.kind !== "added").length
-  const added = lines.filter((line) => line.kind !== "removed").length
-  const body = lines.map((line) =>
+  const diff = of(before, after)
+  const removed = diff.lines.filter((line) => line.kind !== "added").length
+  const added = diff.lines.filter((line) => line.kind !== "removed").length
+  const body = diff.lines.map((line) =>
     `${line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "}${line.text}`
   )
+  // The conventional marker, so a reader is told about a change that has no
+  // line of its own to sit on.
+  const trailer = diff.newlineChange === undefined
+    ? []
+    : ["\\ No newline at end of file"]
   return [
     `--- a/${path}`,
     `+++ b/${path}`,
-    `@@ -1,${removed} +1,${added} @@`,
-    ...body
+    `@@ -${removed === 0 ? 0 : 1},${removed} +${added === 0 ? 0 : 1},${added} @@`,
+    ...body,
+    ...trailer
   ].join("\n")
 }
 

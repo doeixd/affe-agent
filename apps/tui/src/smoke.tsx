@@ -697,6 +697,25 @@ const pureAddition = Diff.of("a\n", "a\nb\n")
 const unchanged = Diff.of("same\n", "same\n")
 const unifiedText = Diff.unified("src/x.ts", "a\nb\n", "a\nc\n")
 
+const intoEmpty = Diff.of("", "one\n")
+const emptied = Diff.of("one\n", "")
+const bothEmpty = Diff.of("", "")
+const newlineAdded = Diff.of("a", "a\n")
+const newlineRemoved = Diff.of("a\n", "a")
+const crlf = Diff.of("a\nb\n", "a\r\nb\r\n")
+
+/**
+ * Past the budget, the alignment must not run at all.
+ *
+ * Timed rather than inspected: the failure this guards against is
+ * allocating a matrix of millions of cells, which shows up as the UI
+ * freezing after the file has already been written. A test that only
+ * checked the output would pass against the quadratic version.
+ */
+const huge = Array.from({ length: 1200 }, (_, index) => `line ${index}`).join("\n") + "\n"
+const hugeOther = Array.from({ length: 1200 }, (_, index) => `other ${index}`).join("\n") + "\n"
+const hugeDiff = Diff.of(huge, hugeOther)
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
@@ -862,23 +881,55 @@ checks.push(
   ["answering takes it away at once, not at the end of the run",
     afterAnswering === "prompt"],
 
+  // R107: a budget in front of the alignment
+  ["an oversized edit is summarised, not aligned", hugeDiff.summarised],
+  ["and it says how much changed",
+    hugeDiff.lines.some((line) => line.text.includes("1200 lines"))],
+  // 1200x1200 is 1.44M cells; the quadratic version took seconds and
+  // allocated hundreds of megabytes to produce output clipped to twelve
+  // lines.
+  // The summary and the alignment are exclusive paths, so asserting the
+  // summary *is* asserting the matrix was never allocated. A timing assertion
+  // was here first and passed with the budget removed: 1200x1200 is fast
+  // enough on this machine to hide the thing it was meant to catch.
+  ["so the alignment never ran", hugeDiff.lines.length === 2],
+
+  // R108: empty sides and the EOF newline
+  ["inserting into an empty file removes nothing",
+    intoEmpty.lines.every((line) => line.kind === "added")],
+  ["emptying a file adds nothing",
+    emptied.lines.every((line) => line.kind === "removed")],
+  ["empty to empty is no change at all", bothEmpty.lines.length === 0],
+  // Both sides have the same lines, so this change has no line to sit on;
+  // without tracking it the diff showed nothing while the file had changed.
+  ["adding a final newline is reported", newlineAdded.newlineChange === "added"],
+  ["removing one is too", newlineRemoved.newlineChange === "removed"],
+  ["and the unified form marks it",
+    Diff.unified("f", "a", "a\n").includes("No newline at end of file")],
+  // An empty side is `-0,0`, not `-1,0`.
+  ["an empty side is zero lines in the header",
+    Diff.unified("f", "", "x\n").includes("@@ -0,0 +1,1 @@")],
+  // A file with Windows line endings would otherwise differ from itself on
+  // every line, the carriage return riding along on the end of each.
+  ["CRLF is not a change to every line",
+    crlf.lines.every((line) => line.kind === "context")],
   // The diff
   ["a replaced line shows as one removal and one addition",
-    oneLine.filter((line) => line.kind === "removed").length === 1
-      && oneLine.filter((line) => line.kind === "added").length === 1],
+    oneLine.lines.filter((line) => line.kind === "removed").length === 1
+      && oneLine.lines.filter((line) => line.kind === "added").length === 1],
   // The whole reason to diff rather than print each side: lines that did
   // not change are shown once, in place, so a reader can see where the
   // change landed.
   ["unchanged lines survive as context",
-    withContext.filter((line) => line.kind === "context")
+    withContext.lines.filter((line) => line.kind === "context")
       .map((line) => line.text).join(",") === "a,c"],
   ["an addition removes nothing",
-    pureAddition.every((line) => line.kind !== "removed")],
+    pureAddition.lines.every((line) => line.kind !== "removed")],
   ["an identical edit is all context",
-    unchanged.every((line) => line.kind === "context")],
+    unchanged.lines.every((line) => line.kind === "context")],
   // `split` reports a phantom trailing entry for text ending in a newline,
   // which would give every whole-line edit a spurious blank line.
-  ["no phantom trailing line", oneLine.length === 2],
+  ["no phantom trailing line", oneLine.lines.length === 2],
   ["the unified form carries real counts",
     unifiedText.includes("@@ -1,2 +1,2 @@")],
   ["and names the file on both sides",
