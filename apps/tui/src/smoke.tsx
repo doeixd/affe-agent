@@ -3,10 +3,13 @@ import { App } from "./App.tsx"
 import { Effect } from "effect"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as NodeStore from "../../../src/tree/NodeStore.js"
+import { Prompt } from "effect/unstable/ai"
 import { TestLanguageModel } from "../../../src/testing/index.js"
-import { fromArgv, scriptedWith } from "./backend.ts"
+import { entriesOf } from "./restore.ts"
+import { VERSION } from "./version.ts"
+import { fromArgv, scripted, scriptedWith } from "./backend.ts"
 import * as Diff from "./diff.ts"
-import { project, start, stop } from "./harness.ts"
+import { project, provenanceOf, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
 import type { Handle, Sink } from "./view.ts"
 import { Schema } from "effect"
@@ -214,6 +217,23 @@ await until(() => entries.length === 0, "the unknown-command notice")
 // Export writes a real file through the sandbox seam.
 handle.command("export")
 await until(() => entries.length === 0, "the export notice")
+
+/**
+ * R100 -- and what it claims has to be true.
+ *
+ * The file said `harnessVersion: "tui"`, which is not a version of anything,
+ * and listed the *renderer's* view names as the agent's tools -- so
+ * registering a custom view claimed a tool that never existed and omitting one
+ * hid a tool that did.
+ *
+ * Asserted at `provenanceOf`, which is what the command passes to
+ * `TreeExport`. Reading the written file back would be better still, but the
+ * sandbox is a memory provider owned by the harness's layer: any other
+ * runtime building the same layer gets a *different*, empty sandbox, so a
+ * read-back here would be checking a file nobody wrote. The path it went to is
+ * already asserted through the notice above.
+ */
+const scriptedProvenance = provenanceOf(scripted)
 
 // The agent still works afterwards.
 await ask("still there?")
@@ -503,6 +523,73 @@ const askedEachTime = async (answer: "y" | "a"): Promise<number> => {
 const askedWithY = await askedEachTime("y")
 const askedWithA = await askedEachTime("a")
 
+/**
+ * R132 -- a repaint must say what history says.
+ *
+ * `restore.ts` reads a conversation that has no events, so every fact it shows
+ * comes from the messages themselves. Status used to be inferred from whether
+ * a result was present, which got both directions wrong: a recorded *failure*
+ * was repainted with a success tick, and a success whose decoded value is
+ * `undefined` was shown as failed. Results were also matched by call id across
+ * the whole conversation, so a reused id meant both calls displayed the later
+ * output.
+ *
+ * Built as a literal history rather than driven through a session, because
+ * these are exactly the shapes a scripted run will not produce.
+ */
+const restored = (
+  parts: ReadonlyArray<ReadonlyArray<unknown>>
+): ReadonlyArray<{ kind: string; status?: string; title: string }> =>
+  entriesOf(
+    Prompt.fromMessages(parts.map((content) => content[0] as never)),
+    defaultViews
+  ).map((entry) => ({
+    kind: entry.kind,
+    ...(entry.status === undefined ? {} : { status: entry.status }),
+    title: entry.title
+  }))
+
+const call = (id: string, name: string, params: unknown) =>
+  Prompt.assistantMessage({
+    content: [Prompt.toolCallPart({ id, name, params, providerExecuted: false } as never)]
+  })
+
+const toolResult = (id: string, name: string, result: unknown, isFailure: boolean) =>
+  Prompt.toolMessage({
+    content: [Prompt.toolResultPart({ id, name, result, isFailure } as never)]
+  })
+
+// A failure recorded in history.
+const failedRestore = restored([
+  [call("c1", "bash", { command: "boom" })],
+  [toolResult("c1", "bash", "it exploded", true)]
+])
+
+// A success whose value is `undefined`.
+const undefinedRestore = restored([
+  [call("c2", "bash", { command: "quiet" })],
+  [toolResult("c2", "bash", undefined, false)]
+])
+
+// The same id in two turns.
+const duplicateRestore = restored([
+  [call("c3", "bash", { command: "first" })],
+  [toolResult("c3", "bash", { exit_code: 0, stdout: "one", stderr: "" }, false)],
+  [call("c3", "bash", { command: "second" })],
+  [toolResult("c3", "bash", { exit_code: 1, stdout: "two", stderr: "" }, true)]
+])
+
+// A result recorded under this id but for a different tool.
+const mismatchedRestore = restored([
+  [call("c4", "bash", { command: "mine" })],
+  [toolResult("c4", "read_file", "someone else's", false)]
+])
+
+// A call whose turn never finished.
+const unfinishedRestore = restored([
+  [call("c5", "bash", { command: "interrupted" })]
+])
+
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
 await flush()
@@ -752,6 +839,7 @@ const drawnWhenNotOffered = rejectedStore.drainSettled().length
  */
 const defaultBackend = fromArgv([])
 const liveBackend = fromArgv(["--live", "--workspace", "/tmp/work", "--model", "some-model"])
+const liveProvenance = provenanceOf(liveBackend)
 let helpText = ""
 try {
   fromArgv(["--live"])
@@ -1034,6 +1122,52 @@ checks.push(
   // Bound in the renderer rather than left to SIGINT, which a raw-mode
   // terminal need not deliver.
   ["ctrl+c interrupts from the keyboard", interruptRequests === 1],
+  // R100
+  ["it names the library version, not the app",
+    scriptedProvenance.harnessVersion === VERSION],
+  ["it lists the agent's tools, not the renderer's views",
+    scriptedProvenance.tools?.includes("edit_file") === true
+      && scriptedProvenance.tools?.includes("bash") === true],
+  // Every tool, so an omission from the registry cannot hide one.
+  ["it lists every tool the agent has",
+    CodingToolkit.tools.every((tool) =>
+      scriptedProvenance.tools?.includes(tool.name) === true)],
+  // The load-bearing property, and it is structural rather than a value:
+  // `provenanceOf` takes a backend and *cannot see the view registry at all*.
+  // A value assertion cannot show this, because today the six view names and
+  // the six tool names coincide exactly -- which is precisely why the original
+  // bug was invisible. Registering a custom view is what made them differ, and
+  // the signature is what now makes that impossible to get wrong.
+  ["and cannot see the view registry", provenanceOf.length === 1],
+  ["a scripted run says so", scriptedProvenance.model?.modelId === "scripted"],
+  ["and a live run names its real model",
+    liveProvenance.model?.modelId === "some-model"],
+  // `cwd` stays opt-in even here, where a workspace is obviously known.
+  ["and neither records a path",
+    scriptedProvenance.cwd === undefined && liveProvenance.cwd === undefined],
+
+  // R132
+  ["a recorded failure repaints as a failure",
+    failedRestore.some((entry) => entry.kind === "tool" && entry.status === "failed")],
+  // Status comes from `isFailure`, not from whether a value is present: a
+  // failure has a result too, and a success may not.
+  ["a success with no value is still a success",
+    undefinedRestore.some((entry) => entry.kind === "tool" && entry.status === "ok")],
+  // Matched within the turn, because provider ids are unique in a
+  // response and not across one.
+  ["a reused id does not make both calls show the same result",
+    duplicateRestore.filter((entry) => entry.kind === "tool").length === 2
+      && duplicateRestore.filter((entry) => entry.status === "ok").length === 1
+      && duplicateRestore.filter((entry) => entry.status === "failed").length === 1],
+  ["and each keeps its own arguments",
+    duplicateRestore.some((entry) => entry.title.includes("first"))
+      && duplicateRestore.some((entry) => entry.title.includes("second"))],
+  // Better to show a call with no output than somebody else's.
+  ["a result for another tool is not borrowed",
+    mismatchedRestore.some((entry) => entry.kind === "tool" && entry.status === "failed")],
+  ["an unfinished call is terminal, not running",
+    unfinishedRestore.every((entry) => entry.status !== "running")],
+
   // R109
   ["answering once asks again next time", askedWithY === 2],
   ["answering always does not", askedWithA === 1],

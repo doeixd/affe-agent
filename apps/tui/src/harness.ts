@@ -6,6 +6,7 @@ import * as AgentSession from "../../../src/AgentSession.js"
 import * as Elicitation from "../../../src/Elicitation.js"
 import * as Permission from "../../../src/Permission.js"
 import { CodingToolkit } from "../../../src/coding/index.js"
+import { VERSION } from "./version.ts"
 import * as Export from "../../../src/export/Export.js"
 import * as Redaction from "../../../src/redaction/Redaction.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
@@ -83,6 +84,25 @@ const makeAgent = Effect.map(Permission.remembered(permission), (remembering) =>
  * a palette whose entries a reader has to scroll is a menu, and a menu is
  * where features go to be forgotten.
  */
+/**
+ * What an export claims about where it came from.
+ *
+ * Named rather than written inline at the call site, because each field is a
+ * claim a reader six months from now has no other way to check -- and two of
+ * them were wrong. `harnessVersion` said `"tui"`, which is not a version of
+ * anything, and `tools` listed the *renderer's* view names, so registering a
+ * custom view claimed a tool the agent never had and omitting one hid a tool
+ * it did.
+ *
+ * Provenance is advisory. Advisory is not licence to be wrong: its only job is
+ * to let an import explain a mismatch it cannot prevent.
+ */
+export const provenanceOf = (backend: Backend): Export.Provenance => ({
+  harnessVersion: VERSION,
+  tools: CodingToolkit.tools.map((tool) => tool.name),
+  model: backend.model
+})
+
 export const commands: ReadonlyArray<Command> = [
   { name: "branch", description: "fork here, and keep this line too" },
   { name: "branches", description: "switch to another line of work" },
@@ -691,10 +711,7 @@ export const start = (
         Effect.gen(function*() {
           const node = yield* tree.active
           if (Option.isNone(node)) return yield* notice("nothing to export yet")
-          const exported = yield* TreeExport.path(tree, node.value, {
-            harnessVersion: "tui",
-            tools: Object.keys(options?.views ?? defaultViews)
-          })
+          const exported = yield* TreeExport.path(tree, node.value, provenanceOf(backend))
           const text = yield* Export.encode(exported, {
             // Two matchers, and they miss almost everything -- see
             // `Redaction`. Naming the file `.redacted.json` and saying so in

@@ -76,6 +76,14 @@ export interface Backend {
   readonly label: string
   /** Said once at startup, when there is something a user needs to know. */
   readonly warning?: string | undefined
+  /**
+   * What produced a transcript, for an export's provenance.
+   *
+   * From the backend because the backend is what knows: an exporter guessing
+   * at the model would be writing a field whose whole purpose is to be
+   * trusted by a reader who has no other way to find out.
+   */
+  readonly model: { readonly provider: string; readonly modelId: string }
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +157,9 @@ export const scriptedWith = (
 ): Backend => ({
   kind: "scripted",
   label: "scripted",
+  // Named honestly: an export from a scripted run is a recording of a fixture,
+  // and a reader six months later has no other way to know that.
+  model: { provider: "test", modelId: "scripted" },
   layer: Layer.mergeAll(
     Layer.unwrap(Effect.map(TestLanguageModel.script(turns), ({ layer }) => layer)),
     scriptedSandbox
@@ -210,6 +221,7 @@ export const live = (options: {
 }): Backend => ({
   kind: "live",
   label: `${options.model} · ${options.workspaceRoot}`,
+  model: { provider: "anthropic", modelId: options.model },
   /**
    * Shown once at startup, where a user will see it.
    *

@@ -32,23 +32,56 @@ const textOf = (
     .join("")
     .trim()
 
+/** What a tool message recorded about one call. */
+interface Recorded {
+  readonly result: unknown
+  /**
+   * Whether the tool *failed*, as history recorded it.
+   *
+   * Not "did it return a value". An earlier version inferred status from
+   * whether a result was present, which got both directions wrong: a recorded
+   * failure was repainted with a success tick, and a success whose decoded
+   * value happens to be `undefined` was shown as failed.
+   */
+  readonly isFailure: boolean
+  /** The tool it belongs to, so a reused id cannot be matched blindly. */
+  readonly name: string
+}
+
 /**
- * The tool results of a turn, by call id.
+ * Tool results, matched to the call that produced them.
  *
  * A tool call and its result are in *different* messages -- the assistant's
- * and the following tool message -- so rendering a call with its output means
- * looking ahead. Built once for the whole conversation rather than searched
- * per call, because the alternative is quadratic on the transcripts most worth
- * restoring: the long ones.
+ * and the tool message that follows it -- so rendering a call with its output
+ * means looking ahead. Matching is done **within the turn**: the results for
+ * an assistant message are in the tool messages between it and the next
+ * assistant message, and only there.
+ *
+ * That scoping is what a flat `Map<id, result>` over the whole conversation
+ * got wrong. Provider call ids are unique within a response, not across one --
+ * so a reused id meant the later result overwrote the earlier, and both
+ * restored calls displayed the same output.
  */
-const resultsById = (
-  history: Prompt.Prompt
-): ReadonlyMap<string, unknown> => {
-  const results = new Map<string, unknown>()
-  for (const message of history.content) {
+const resultsForTurn = (
+  history: Prompt.Prompt,
+  from: number
+): ReadonlyMap<string, Recorded> => {
+  const results = new Map<string, Recorded>()
+  for (let index = from + 1; index < history.content.length; index++) {
+    const message = history.content[index]!
+    // The next assistant message begins the next turn; its results are not
+    // this turn's, whatever ids they carry.
+    if (message.role === "assistant") break
     if (message.role !== "tool") continue
     for (const part of message.content) {
-      if (part.type === "tool-result") results.set(part.id, part.result)
+      if (part.type !== "tool-result") continue
+      // A preliminary result is superseded by the final one for the same call.
+      // Later wins *within* a turn, which is the only place both can appear.
+      results.set(part.id, {
+        result: part.result,
+        isFailure: part.isFailure,
+        name: part.name
+      })
     }
   }
   return results
@@ -65,7 +98,6 @@ export const entriesOf = (
   history: Prompt.Prompt,
   views: Views
 ): ReadonlyArray<Entry> => {
-  const results = resultsById(history)
   const entries: Array<Entry> = []
 
   history.content.forEach((message, index) => {
@@ -98,20 +130,38 @@ export const entriesOf = (
           body: { type: "none" }
         })
       }
+      const results = resultsForTurn(history, index)
       for (const part of message.content) {
         if (part.type !== "tool-call") continue
-        const result = results.get(part.id)
+        const recorded = results.get(part.id)
+        // A result recorded under this id but for another tool is not this
+        // call's. Better to show the call with no output than to attach
+        // somebody else's.
+        const matched = recorded !== undefined && recorded.name === part.name
+          ? recorded
+          : undefined
         entries.push({
           id: `restored-${index}-tool-${part.id}`,
           kind: "tool",
           title: titleOf(views, part.name, part.params),
-          // A call with no result in history is one whose turn did not finish.
-          // Marked as such rather than shown as running: nothing is going to
-          // finish it now, and an entry that never settles would block the
-          // whole transcript from reaching scrollback.
-          ...(result === undefined
+          // No result in history means the turn did not finish. Marked failed
+          // rather than shown running: nothing is going to finish it now, and
+          // an entry that never settles blocks the whole transcript from
+          // reaching scrollback.
+          //
+          // Status comes from `isFailure`, never from whether a value is
+          // present -- a recorded failure has a result too.
+          ...(matched === undefined
             ? { status: "failed" as const, body: { type: "none" as const } }
-            : { status: "ok" as const, body: bodyOf(views, part.name, result, part.params) })
+            : matched.isFailure
+            ? {
+              status: "failed" as const,
+              body: bodyOf(views, part.name, matched.result, part.params)
+            }
+            : {
+              status: "ok" as const,
+              body: bodyOf(views, part.name, matched.result, part.params)
+            })
         })
       }
     }
