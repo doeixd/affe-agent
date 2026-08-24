@@ -1,6 +1,7 @@
 import { testRender } from "@opentui/solid"
 import { App } from "./App.tsx"
 import { fromArgv } from "./backend.ts"
+import * as Diff from "./diff.ts"
 import { project, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
 import type { Sink } from "./view.ts"
@@ -358,6 +359,19 @@ try {
   refusedWhenWorkspaceIsAFlag = true
 }
 
+/**
+ * The diff, which the plan had recorded as blocked on a library decision.
+ *
+ * It was not: `edit_file` reports `matched` and the call carries
+ * `new_string`, so both sides were already here and only the diff itself
+ * was missing.
+ */
+const oneLine = Diff.of("const value = 1;\n", "const value = 2;\n")
+const withContext = Diff.of("a\nb\nc\n", "a\nB\nc\n")
+const pureAddition = Diff.of("a\n", "a\nb\n")
+const unchanged = Diff.of("same\n", "same\n")
+const unifiedText = Diff.unified("src/x.ts", "a\nb\n", "a\nc\n")
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
@@ -451,6 +465,33 @@ checks.push(
   ["export writes a file and names it", /wrote \.effect-agent\/export-.*\.json/.test(transcript)],
   ["and says it was not redacted", transcript.includes("unredacted")],
   ["the agent still works after a command", transcript.includes("still there?")],
+
+  // The diff
+  ["a replaced line shows as one removal and one addition",
+    oneLine.filter((line) => line.kind === "removed").length === 1
+      && oneLine.filter((line) => line.kind === "added").length === 1],
+  // The whole reason to diff rather than print each side: lines that did
+  // not change are shown once, in place, so a reader can see where the
+  // change landed.
+  ["unchanged lines survive as context",
+    withContext.filter((line) => line.kind === "context")
+      .map((line) => line.text).join(",") === "a,c"],
+  ["an addition removes nothing",
+    pureAddition.every((line) => line.kind !== "removed")],
+  ["an identical edit is all context",
+    unchanged.every((line) => line.kind === "context")],
+  // `split` reports a phantom trailing entry for text ending in a newline,
+  // which would give every whole-line edit a spurious blank line.
+  ["no phantom trailing line", oneLine.length === 2],
+  ["the unified form carries real counts",
+    unifiedText.includes("@@ -1,2 +1,2 @@")],
+  ["and names the file on both sides",
+    unifiedText.includes("--- a/src/x.ts")
+      && unifiedText.includes("+++ b/src/x.ts")],
+  // Through the rendered transcript, with the fuzzy edit's real `matched`
+  // text: interleaved, not one list then another.
+  ["the transcript shows a diff, not two lists",
+    /- const value = 1;/.test(transcript) && /[+] const value = 2;/.test(transcript)],
 
   // The backend seam
   ["scripted unless asked otherwise", defaultBackend.kind === "scripted"],

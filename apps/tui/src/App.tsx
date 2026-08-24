@@ -7,6 +7,7 @@ import {
 } from "@opentui/solid"
 import type { Accessor } from "solid-js"
 import { createEffect, For, Match, Show, Switch } from "solid-js"
+import * as Diff from "./diff.ts"
 import { marker, theme } from "./theme.ts"
 import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
 import type {
@@ -51,18 +52,40 @@ const clip = (text: string, limit = BODY_LINES): { lines: Array<string>; hidden:
 }
 
 /**
- * One side of an edit, as prefixed lines.
+ * An edit, as an interleaved diff.
  *
- * Clipped like any other body: an edit can be large, and the point is to show
- * *what* changed rather than all of it. A trailing newline is dropped so a
- * whole-line replacement does not render a blank final row.
+ * Previously this printed one side and then the other, which is legible for a
+ * one-line change and unreadable for anything else -- a reader has to hold six
+ * removed lines in their head to see which three of them came back. Lining
+ * them up is what a diff is for.
+ *
+ * Clipped like any other body: the point is to show *what* changed, not all of
+ * it. Clipped after diffing rather than before, so the lines that survive are
+ * the ones a reader wants -- clipping each side first would show six removals
+ * and no additions.
  */
-const sides = (text: string | undefined, marker: string): ReadonlyArray<string> => {
-  if (text === undefined || text === "") return []
-  const { hidden, lines } = clip(text.replace(/\n$/, ""), 6)
-  const shown = lines.map((line) => `  ${marker} ${line}`)
-  return hidden === 0 ? shown : [...shown, `  ${marker} … ${hidden} more lines`]
+const DIFF_LINES = 12
+
+const diffOf = (
+  before: string | undefined,
+  after: string | undefined
+): { lines: ReadonlyArray<Diff.Line>; hidden: number } => {
+  if (before === undefined && after === undefined) return { lines: [], hidden: 0 }
+  const all = Diff.of(before ?? "", after ?? "")
+  return all.length <= DIFF_LINES
+    ? { lines: all, hidden: 0 }
+    : { lines: all.slice(0, DIFF_LINES), hidden: all.length - DIFF_LINES }
 }
+
+const diffColour = (kind: Diff.Line["kind"]): ColorInput =>
+  kind === "added"
+    ? theme.block.diffAdded
+    : kind === "removed"
+    ? theme.block.diffRemoved
+    : theme.block.muted
+
+const diffMarker = (kind: Diff.Line["kind"]): string =>
+  kind === "added" ? "+" : kind === "removed" ? "-" : " "
 
 const Lines = (props: { text: string; fg: ColorInput }) => {
   const clipped = () => clip(props.text)
@@ -120,15 +143,21 @@ const Snapshot = (props: { snapshot: ToolSnapshot }) => (
             {`  +${snapshot().added} -${snapshot().removed}`
               + (snapshot().strategy === undefined ? "" : `  (matched by ${snapshot().strategy})`)}
           </text>
-          {/* The two sides of the edit. `before` is what was *actually*
-              replaced, so when a fuzzy strategy matched, this is where that
-              shows. */}
-          <For each={sides(snapshot().before, "-")}>
-            {(line) => <text fg={theme.block.diffRemoved}>{line}</text>}
+          {/* The two sides, lined up. `before` is what was *actually*
+              replaced, so when a fuzzy strategy matched, the difference
+              between what was asked for and what was changed shows here. */}
+          <For each={diffOf(snapshot().before, snapshot().after).lines}>
+            {(line) => (
+              <text fg={diffColour(line.kind)}>
+                {`  ${diffMarker(line.kind)} ${line.text}`}
+              </text>
+            )}
           </For>
-          <For each={sides(snapshot().after, "+")}>
-            {(line) => <text fg={theme.block.diffAdded}>{line}</text>}
-          </For>
+          <Show when={diffOf(snapshot().before, snapshot().after).hidden > 0}>
+            <text fg={theme.block.muted}>
+              {`  … ${diffOf(snapshot().before, snapshot().after).hidden} more lines`}
+            </text>
+          </Show>
         </box>
       )}
     </Match>
