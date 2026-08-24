@@ -104,7 +104,8 @@ describe("public API", () => {
         "snapshot",
         "state",
         "status",
-        "steer"
+        "steer",
+        "subscribe"
       ]
     )
     assert.deepStrictEqual(Object.keys(Harness.AgentLoop).sort(), [
@@ -197,7 +198,8 @@ describe("durable and cluster surfaces", () => {
     const testing = await import("../src/testing/index.js")
     assert.deepStrictEqual(Object.keys(testing).sort(), [
       "AgentProbe",
-      "TestLanguageModel"
+      "TestLanguageModel",
+      "TestWebSearch"
     ])
   })
 

@@ -1,6 +1,19 @@
-import { Clock, Effect, Option, Ref, Schema, Scope, Stream } from "effect"
+import {
+  Clock,
+  Effect,
+  Exit,
+  Option,
+  RcMap,
+  PubSub,
+  Ref,
+  Schema,
+  Scope,
+  Stream,
+  SubscriptionRef
+} from "effect"
 import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
+import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
 
 /**
@@ -116,6 +129,20 @@ export interface Lane {
   readonly leaf: Node
 }
 
+/**
+ * The branch that is currently in front of the user.
+ *
+ * `history` is what to draw *before* following `events`, and handing both back
+ * together is the point: a caller that fetched a snapshot and then subscribed
+ * would miss anything that arrived in between, and one that subscribed first
+ * would draw an empty transcript.
+ */
+export interface Activation<Tools extends Record<string, Tool.Any>, E> {
+  readonly node: Node
+  readonly session: AgentSession.AgentSession<Tools, E>
+  readonly history: Prompt.Prompt
+}
+
 export interface BranchOptions {
   /** Name this line of work, so it can be found again. */
   readonly lane?: string | undefined
@@ -162,6 +189,40 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
   /** One named leaf. */
   readonly lane: (name: string) => Effect.Effect<Option.Option<Node>>
 
+  /**
+   * Put a branch in front of the user, releasing the one that was.
+   *
+   * Branches are reference counted, so switching away releases a branch only
+   * when nobody else holds it -- and switching *back* to one somebody still
+   * holds finds it live rather than rebuilding it. A branch taken with
+   * `branch` is the caller's to hold and is unaffected by activation.
+   */
+  readonly activate: (
+    node: Node
+  ) => Effect.Effect<Activation<Tools, E>, NodeMissing>
+
+  /** Which branch is in front of the user, if any. */
+  readonly active: Effect.Effect<Option.Option<Node>>
+
+  /**
+   * Every event from whichever branch is active, as one stream.
+   *
+   * A renderer subscribes once for the life of the application: a switch ends
+   * the inner subscription and begins the next, and nothing downstream
+   * notices. Without this every caller writes the same swap by hand and gets
+   * the interleaving subtly wrong.
+   */
+  readonly events: Stream.Stream<AgentEventEnvelope>
+
+  /**
+   * The active branch's status.
+   *
+   * A node can only be captured from an idle session, so a UI needs this to
+   * disable "branch from here" while a turn is in flight rather than offering
+   * it and failing.
+   */
+  readonly status: Stream.Stream<AgentSession.State>
+
   readonly branch: (
     node: Node,
     options?: BranchOptions
@@ -202,7 +263,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     /** How branch session ids are named. Defaults to the node's id. */
     readonly sessionIds?: ((node: Node) => string) | undefined
   }
-): Effect.Effect<SessionTree<Tools, E>, never, R> =>
+): Effect.Effect<SessionTree<Tools, E>, never, R | Scope.Scope | LanguageModel.LanguageModel> =>
   Effect.gen(function*() {
     const environment = yield* Effect.context<R>()
     const prefix = `t${++trees}`
@@ -219,6 +280,55 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     // on which lane, so a commit can advance the right one.
     const lanes = yield* Ref.make(new Map<string, NodeId>())
     const laneOf = yield* Ref.make(new Map<string, string>())
+
+    /**
+     * Live branches, reference counted by node.
+     *
+     * Lifetime is the half of this design easiest to get wrong. A branch is a
+     * keyed, scoped resource with a varying number of holders -- the active
+     * one, plus any the caller kept -- and it should be released when the last
+     * of them goes rather than when the tree guesses. `RcMap` is exactly that,
+     * so "switching leaks nothing" becomes a property of the structure instead
+     * of a discipline enforced by hand.
+     */
+    const branches = yield* RcMap.make({
+      lookup: (id: NodeId) =>
+        Effect.gen(function*() {
+          const found = (yield* Ref.get(held)).get(id)
+          if (found === undefined) return yield* new NodeMissing({ id })
+          const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
+          const sessionId = `${id}-active-${n}`
+          const session = yield* AgentSession.make(agent, {
+            history: found.history,
+            sessionId
+          }).pipe(Effect.provide(environment))
+          yield* Ref.update(at, (all) => new Map(all).set(sessionId, id))
+          return session
+        })
+    })
+
+    /**
+     * One channel for the whole tree, fed by whichever branch is active.
+     *
+     * The obvious implementation -- `switchMap` over the active branch -- has
+     * a race that costs real events: the inner subscription is established
+     * when the *consumer* gets around to it, so anything the branch emits
+     * between `activate` returning and that moment is lost. A first prompt
+     * right after a switch is exactly that window, and losing it means a turn
+     * that never appears.
+     *
+     * So activation subscribes eagerly, into a scope the tree owns, and pumps
+     * into this. By the time `activate` returns, the branch's events are
+     * already being captured.
+     */
+    const feed = yield* PubSub.unbounded<AgentEventEnvelope>()
+
+    // What is in front of the user, and the scope holding it. Closing that
+    // scope is what releases the reference taken from `branches`.
+    const current = yield* SubscriptionRef.make(
+      Option.none<Activation<Tools, E>>()
+    )
+    const currentScope = yield* Ref.make(Option.none<Scope.Closeable>())
 
     const nextId = Effect.map(
       Ref.updateAndGet(counter, (n) => n + 1),
@@ -354,6 +464,38 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         return walked.reverse()
       })
 
+    const activate: SessionTree<Tools, E>["activate"] = (node) =>
+      Effect.gen(function*() {
+        const { history } = yield* find(node.id)
+        // A scope of the tree's own, so the reference is dropped on the next
+        // switch rather than when some caller's scope happens to end.
+        const scope = yield* Scope.make()
+        const session = yield* RcMap.get(branches, node.id).pipe(
+          Effect.provideService(Scope.Scope, scope)
+        )
+        // Subscribed before anything else can happen, which is the point.
+        const subscription = yield* AgentSession.subscribe(session).pipe(
+          Effect.provideService(Scope.Scope, scope)
+        )
+        yield* Effect.forkIn(
+          Effect.forever(
+            Effect.flatMap(PubSub.take(subscription), (envelope) => PubSub.publish(feed, envelope))
+          ),
+          scope
+        )
+
+        const previous = yield* Ref.get(currentScope)
+        yield* Ref.set(currentScope, Option.some(scope))
+        const activation: Activation<Tools, E> = { node, session, history }
+        yield* SubscriptionRef.set(current, Option.some(activation))
+        // Released after the new one is in place: closing first would leave a
+        // window with nothing active, which a renderer would see as a flicker.
+        if (Option.isSome(previous)) {
+          yield* Scope.close(previous.value, Exit.void)
+        }
+        return activation
+      })
+
     const track: SessionTree<Tools, E>["track"] = (session, trackOptions) =>
       Effect.gen(function*() {
         if (trackOptions?.lane !== undefined) {
@@ -371,6 +513,16 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     return {
       commit,
       track,
+      activate,
+      active: Effect.map(
+        SubscriptionRef.get(current),
+        Option.map((activation) => activation.node)
+      ),
+      events: Stream.fromPubSub(feed),
+      status: Stream.switchMap(SubscriptionRef.changes(current), (activation) =>
+        Option.isNone(activation)
+          ? Stream.empty
+          : AgentSession.state(activation.value.session).changes),
       lanes: Effect.gen(function*() {
         const named = yield* Ref.get(lanes)
         const all = yield* Ref.get(held)

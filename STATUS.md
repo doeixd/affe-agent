@@ -2434,3 +2434,49 @@ survives a failing run. Falsified by ignoring the delay.
 With this the issue #4 P0-P3 roadmap is complete: coding, subagent, state,
 skills, memory, evals, observability, data, channels, hooks and scheduling all
 ship as batteries over existing seams, with no core changes.
+
+## Web search battery (M6 / W1)
+
+`/web` now ships as a battery beside `/coding`, never inside it. `WebToolkit`
+contains the ordinary Effect AI `web_search` tool and handler; the handler
+requires the provider-neutral `WebSearch` infrastructure service, so selecting
+the tool without supplying a provider is visible in the Effect requirement
+channel. `Agent.withTool(WebToolkit.search)` composes it into either a coding
+agent or a search-only research/child agent without casts, annotations or a
+core change. `TestWebSearch.layer` is the deterministic canned provider.
+
+Permission sees search as `action: "net.search"` on the exact outbound query.
+Allow reaches the provider once, Ask carries that semantic request, and Deny
+runs no provider work. The tool has no intrinsic approval floor: applications
+choose Allow/Ask/Deny. It does not depend on Sandbox and does not claim to
+isolate `bash` or another route to the network.
+
+`/web/brave` is the first real provider Layer. It uses Effect's abstract
+`HttpClient` and `Config.redacted("BRAVE_SEARCH_API_KEY")`, fixes the provider
+endpoint, maps the neutral limit/freshness options, marks the subscription
+header for redaction, decodes through Schema and returns only title/URL/snippet.
+Request plus body has a 15-second total timeout; responses are streamed under a
+1 MiB advertised-and-actual byte cap; concurrency is four; transport and 429
+failures get at most one bounded retry; authentication and decode failures are
+never retried. Provider errors remain named `Schema.TaggedError`s and the tool
+maps anticipated failures to actionable model strings.
+
+Sixteen deterministic tests cover public inference and requirements,
+coding/research composition, exact Permission projection, Allow/Ask/Deny,
+actionable failures, request and result mapping, auth redaction, both byte-cap
+paths, malformed data, retry bounds, timeout, HTTP abort on interruption,
+provider concurrency, and durable replay. The durable test suspends after a
+completed search and proves resumption does not issue it twice. The critical
+requirement assertion was deliberately broken once and produced the expected
+compiler failure before being restored. Both packed `/web` entries import
+under the no-Node-builtins resolution hook.
+
+W2 (`web_fetch`) remains unimplemented and separately gated by the decoded
+permission-parameter prerequisite in `PLAN.md`.
+
+Verification for W1: 872 tests pass; Effect language-service diagnostics are
+zero; portability and build pass; and all 33 packed entry points, including
+`/web` and `/web/brave`, import successfully. The branch-wide `npm run check`
+is currently stopped at typecheck by unrelated concurrent work in
+`SessionTree.ts` and `StorageError.test.ts`; W1 typechecked cleanly before those
+edits landed, and its focused suites remain green.

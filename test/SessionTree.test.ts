@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Option } from "effect"
+import { Effect, Option, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -359,6 +359,139 @@ describe("SessionTree", () => {
         Option.getOrThrow(out.afterTwo).id
       )
       assert.isTrue(Option.isNone(out.missing))
+    })
+  )
+
+  it.effect("activating hands back the history to paint and a live session", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk answer", "branch answer")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const node = yield* tree.commit(session)
+
+        const before = yield* tree.active
+        const activation = yield* tree.activate(node)
+        const after = yield* tree.active
+
+        // The session handed back is live, not a transcript.
+        yield* activation.session.prompt("again")
+
+        return {
+          before,
+          after,
+          node,
+          painted: textOf(activation.history),
+          // Painting the history then following the stream must not double up:
+          // the history is what existed at the node, not what came after.
+          grew: (yield* activation.session.history).content.length >
+            activation.history.content.length
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.isTrue(Option.isNone(out.before))
+      assert.strictEqual(Option.getOrThrow(out.after).id, out.node.id)
+      assert.include(out.painted, "trunk answer")
+      assert.notInclude(out.painted, "branch answer")
+      assert.isTrue(out.grew)
+    })
+  )
+
+  it.effect("switching branches releases the one it switched away from", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk", "left", "right")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const first = yield* tree.commit(session)
+        const left = yield* tree.branch(first, { lane: "left" })
+        yield* left.prompt("left")
+        const second = yield* tree.commit(left)
+
+        // Identity is the observable: a released branch is rebuilt on the way
+        // back, a retained one is not. Counting live sessions directly would
+        // mean an API that exists only for this test.
+        const a1 = yield* tree.activate(first)
+        const b = yield* tree.activate(second)
+        const a2 = yield* tree.activate(first)
+        return { one: a1.session.id, two: b.session.id, three: a2.session.id }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.notStrictEqual(out.one, out.two)
+      // Switching away dropped the last reference, so coming back built a new
+      // one -- which is the leak not happening.
+      assert.notStrictEqual(out.three, out.one)
+    })
+  )
+
+  it.effect("a branch the caller still holds survives being switched away from", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk", "left", "right")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const first = yield* tree.commit(session)
+        const left = yield* tree.branch(first, { lane: "left" })
+        yield* left.prompt("left")
+        const second = yield* tree.commit(left)
+
+        // Two activations of the same node overlap, so the reference count
+        // never reaches zero and the second finds the session already there.
+        const a1 = yield* tree.activate(first)
+        const a2 = yield* tree.activate(first)
+        yield* tree.activate(second)
+        return { one: a1.session.id, two: a2.session.id }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(out.one, out.two)
+    })
+  )
+
+  it.effect("one subscription follows the active branch across a switch", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk", "left", "on first", "on second")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const first = yield* tree.commit(session)
+        const left = yield* tree.branch(first, { lane: "left" })
+        yield* left.prompt("left")
+        const second = yield* tree.commit(left)
+
+        const seen: Array<string> = []
+        // Subscribed once, before anything is active -- which is how a
+        // renderer starts up.
+        yield* Effect.forkScoped(
+          Stream.runForEach(tree.events, (envelope) =>
+            Effect.sync(() => {
+              seen.push(envelope.sessionId)
+            }))
+        )
+        yield* Effect.yieldNow
+
+        const a = yield* tree.activate(first)
+        yield* a.session.prompt("one")
+        const b = yield* tree.activate(second)
+        yield* b.session.prompt("two")
+        for (let i = 0; i < 20; i++) yield* Effect.yieldNow
+
+        return { seen, a: a.session.id, b: b.session.id }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // Both branches reached the same subscriber, and neither needed the
+      // caller to resubscribe.
+      assert.isTrue(out.seen.includes(out.a))
+      assert.isTrue(out.seen.includes(out.b))
+      // In order: nothing from the second branch arrived before the switch.
+      assert.isTrue(out.seen.indexOf(out.a) < out.seen.indexOf(out.b))
     })
   )
 

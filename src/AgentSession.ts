@@ -5,6 +5,7 @@ import {
   Exit,
   Fiber,
   Option,
+  PubSub,
   Ref,
   Schema,
   Scope,
@@ -812,3 +813,22 @@ export const state = (session: AgentSession<any, any>): StateView =>
 export const events = (
   session: AgentSession<any, any>
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
+
+/**
+ * Subscribe now, consume later, miss nothing.
+ *
+ * `events` is a `Stream`, and a `Stream` subscribes when it is *run* -- so a
+ * caller that forks a consumer and then does something that emits has a race
+ * it cannot close, because there is no moment it can point to and say "I am
+ * attached now". Anything published in that window is simply gone.
+ *
+ * This closes it by acquiring the subscription in the caller's scope: by the
+ * time this returns, every subsequent event is queued, whether or not anyone
+ * is reading yet. Use it when missing an event is a bug rather than a
+ * cosmetic gap -- a renderer switching branches, a recorder attaching to a
+ * session already in flight.
+ */
+export const subscribe = (
+  session: AgentSession<any, any>
+): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>
+  PubSub.subscribe(unwrap(session).bus.pubsub)

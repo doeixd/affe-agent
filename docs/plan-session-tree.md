@@ -283,6 +283,39 @@ tree-owned scope per active branch, released on switch (IT4); `tree.events`
 following the active branch across switches; status surfaced for the busy
 affordance.
 
+**T3: landed (2026-08-24).** `activate`, `active`, `events`, `status`. 13 tree
+tests pass.
+
+**`RcMap` was the right call, and it made IT4 structural.** A branch has a
+varying number of holders, and the tree should not be the one guessing when the
+last of them is gone. Activation takes a reference into a scope the tree owns
+and closes the previous one *after* the new one is in place -- closing first
+would leave a window with nothing active, which a renderer reads as a flicker.
+The test asserts release by identity rather than by inspecting a count: a
+released branch is rebuilt on the way back and gets a new session id, a
+retained one does not. That needs no API existing only for tests, and it fails
+when the release is removed.
+
+**The plan's `switchMap` sketch loses events, and a test proved it.** `Stream`
+subscribes when it is *run*, so with `switchMap` the inner subscription is
+established whenever the consumer gets around to it -- and everything the
+branch emits before then is gone. The window is precisely "a first prompt right
+after a switch", so the symptom is a whole turn that never appears. Measured,
+the first branch's events were lost entirely while the second's arrived.
+
+The fix is to subscribe *eagerly*, in the activation's scope, and pump into one
+tree-owned `PubSub`. `tree.events` is then a plain stream over that, with no
+switching in it at all. This required a new `AgentSession.subscribe` -- a
+scoped subscription established at acquisition -- which is the seam `EventBus`
+already anticipated in prose ("the race every `Stream` subscriber carries")
+but had only offered at session construction via `sink`. It is useful well
+beyond the tree: any recorder attaching to a session already in flight has the
+same problem.
+
+**`activate` returns history and session together** for the same reason:
+fetching a snapshot and then subscribing misses the gap between them, and
+subscribing first paints an empty transcript.
+
 ### T4 — Metadata and shape queries
 
 `cause`, timestamps, turn counts, labels, auto preview; `commonAncestor`,

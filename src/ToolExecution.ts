@@ -169,8 +169,11 @@ const approvalValueJson = Schema.toCodecJson(Permission.ApprovalValue)
  * `Ask` carries the action and resource to whoever answers and a remembered
  * grant is keyed by them.
  */
-export const decide = Effect.fn("ToolExecution.decide")(function* <R>(
-  tool: Tool.Any,
+export const decide = Effect.fn("ToolExecution.decide")(function* <
+  T extends Tool.Any,
+  R
+>(
+  tool: T,
   call: { readonly id: string; readonly name: string; readonly params: unknown },
   options: {
     readonly sessionId: string
@@ -178,7 +181,19 @@ export const decide = Effect.fn("ToolExecution.decide")(function* <R>(
     readonly permission: Permission.Policy<R>
   }
 ) {
-  const intrinsic = yield* intrinsicApproval(tool, call.params, {
+  const decoded = yield* Schema.decodeUnknownEffect(tool.parametersSchema)(
+    call.params
+  ).pipe(Effect.option)
+
+  // Toolkit.handle owns the ordinary validation failure and its model-facing
+  // error. Permission must not inspect or authorize a value that did not pass
+  // the tool's parameter schema, so signal the caller to continue directly to
+  // that existing validation path.
+  if (Option.isNone(decoded)) {
+    return { _tag: "InvalidParameters" as const }
+  }
+
+  const intrinsic = yield* intrinsicApproval(tool, decoded.value, {
     toolCallId: call.id,
     messages: options.messages
   })
@@ -187,7 +202,7 @@ export const decide = Effect.fn("ToolExecution.decide")(function* <R>(
   // evaluate a policy against a resource nobody computed.
   const resource = yield* Effect.sync(() => {
     try {
-      return projection.resource(call.params)
+      return projection.resource(decoded.value)
     } catch (cause) {
       throw new Error(`permission projection for tool ${call.name} threw`, { cause })
     }
@@ -210,7 +225,7 @@ export const decide = Effect.fn("ToolExecution.decide")(function* <R>(
   // The floor: the tool's own requirement is at least an `Ask`, whatever
   // the policy said. Nothing here can lower it.
   const decision = Permission.combine(intrinsic ? Permission.ask() : Permission.allow, policy)
-  return { decision, request }
+  return { _tag: "Decided" as const, decision, request }
 })
 
 const executeOne = Effect.fn("ToolExecution.tool")(function* <
@@ -234,11 +249,11 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     // own `needsApproval` and the application's policy into one of three
     // answers. The tool not being in the toolkit is a bug upstream: the
     // harness only dispatches calls it matched.
-    const tool = handler.tools[call.name as keyof Tools] as Tool.Any | undefined
+    const tool = handler.tools[call.name as keyof Tools]
     if (tool === undefined) {
       return yield* Effect.die(new Error(`Tool ${String(call.name)} is not in the toolkit`))
     }
-    const { decision, request } = yield* decide(tool, call, {
+    const outcome = yield* decide(tool, call, {
       sessionId: session.id,
       messages,
       permission: agent.permission
@@ -259,19 +274,21 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         return returnedToModel ? failureResultPart(call, error) : yield* error
       })
 
-    if (decision._tag === "Deny") {
+    if (outcome._tag === "Decided" && outcome.decision._tag === "Deny") {
       return yield* refuse(
         new ToolPermissionDeniedError({
           toolName: String(call.name),
           toolCallId: call.id,
-          action: request.action,
-          resource: request.resource,
-          ...(decision.reason === undefined ? {} : { reason: decision.reason })
+          action: outcome.request.action,
+          resource: outcome.request.resource,
+          ...(outcome.decision.reason === undefined
+            ? {}
+            : { reason: outcome.decision.reason })
         })
       )
     }
 
-    if (decision._tag === "Ask") {
+    if (outcome._tag === "Decided" && outcome.decision._tag === "Ask") {
       // Asked, not refused: the run *pauses* until an answer arrives. The
       // default elicitor answers "no", so an agent with no way to ask still
       // fails closed.
@@ -285,9 +302,11 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       const detail: Permission.ApprovalDetail = {
         toolName: String(call.name),
         toolCallId: call.id,
-        action: request.action,
-        resource: request.resource,
-        ...(decision.reason === undefined ? {} : { reason: decision.reason })
+        action: outcome.request.action,
+        resource: outcome.request.resource,
+        ...(outcome.decision.reason === undefined
+          ? {}
+          : { reason: outcome.decision.reason })
       }
       const elicitationRequest = {
         id,
@@ -327,7 +346,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         remember.value.remember &&
         agent.permission.remember !== undefined
       ) {
-        yield* agent.permission.remember(request)
+        yield* agent.permission.remember(outcome.request)
       }
     }
 
