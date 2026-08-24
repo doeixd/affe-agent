@@ -340,27 +340,42 @@ each layer is tested before the next builds on it.
 
 ---
 
-## 8. Open decisions (for you)
+## 8. Decisions (settled)
 
-1. **Extension namespace.** Reserve a reverse-domain namespace for
-   effect-agent-specific plugin config (e.g. `dev.doeixd.effect-agent`) so a
-   plugin can carry, say, a default `permission` policy or loop bound. v1 can
-   simply *ignore* all namespaces (spec-compliant); reserving one is a
-   forward-looking choice. **Which string, and do we want it in v1 at all?**
-2. **stdio in the default path.** stdio MCP servers spawn subprocesses (host at
-   runtime). Include them in `/plugins` (isolated behind the existing dynamic
-   import, so still portable to the checker), or gate stdio behind an explicit
-   opt-in so a "portable-only" deployment can refuse subprocess servers? I lean
-   **include, with an `allowStdio` option defaulting to true**.
-3. **Discovered-tool typing.** Confirm we accept `Tool.dynamic` (`unknown` params)
-   for plugin MCP tools — the pragmatic, spec-aligned choice — versus asking
-   authors to also ship local `Tool.make` declarations. I recommend
-   `Tool.dynamic`; statically-typed use remains available via plain
-   `McpToolkit.bind` outside `/plugins`.
-4. **`PLUGIN_DATA` default.** Where does the client-managed data dir live when the
-   caller doesn't supply one? Options: a subdir of the sandbox workspace, or
-   require the caller to pass it. I lean **require it for stdio servers that
-   reference `${PLUGIN_DATA}`, else omit**.
+1. **Extension namespace — reserve `dev.doeixd.effect-agent`, but v1 ignores all
+   namespaces.** Spec-compliant clients ignore namespaces they don't implement;
+   v1 does exactly that (report + continue, never inspect contents). The name is
+   reserved in the docs so a later version can read effect-agent-specific config
+   (a default permission policy, a loop bound) without a breaking change. No v1
+   code reads any namespace.
+2. **stdio — include, gated by `allowStdio` (default `true`).** stdio servers are
+   supported by default (host coupling stays isolated behind `McpClientV2`'s
+   dynamic import, so the portability checker stays green). A portable-only
+   deployment sets `allowStdio: false`, and stdio server entries are then skipped
+   with a warning.
+3. **Discovered tools — `Tool.dynamic` (JSON-Schema mode, `unknown` params).**
+   Confirmed available and documented by Effect AI for exactly "MCP tools
+   discovered at runtime, plugin systems." `/plugins` binds each discovered tool
+   as a `Tool.dynamic`; statically-typed use stays available via plain
+   `McpToolkit.bind` for authors who ship local `Tool.make` declarations.
+4. **`PLUGIN_DATA` — caller-supplied, required only when referenced.** `load`
+   takes an optional `pluginData` path. A server that references `${PLUGIN_DATA}`
+   (in `args`/`env`/`cwd`) when none was supplied is an invalid server entry →
+   skipped with a warning. Servers that don't reference it are unaffected. No
+   silent default directory (a wrong guess is worse than an explicit skip).
+
+### PL0 spike — resolved
+
+- **`Tool.dynamic`** exists with a JSON-Schema mode whose handler receives
+  `unknown` params — its docstring names "MCP tools discovered at runtime, plugin
+  systems" as the use case. Confirmed fit for §3b.
+- **`MemorySandbox.layer({ seed: { "path": "content" } })`**
+  (`src/sandbox/memory.ts`) seeds fixture files by path — the deterministic test
+  substrate for the whole loader, no disk.
+- **`McpToolkit.Connection`** is a plain interface (`listTools`, `callTool`),
+  trivially faked in tests; `McpToolkit.bind`'s own docs already point at
+  `Tool.dynamic` for discovered tools. If a `bindDiscovered` helper turns out to
+  belong next to `bind`, it goes in `src/mcp/McpToolkit.ts`, not `/plugins`.
 
 ---
 
