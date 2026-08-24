@@ -106,7 +106,10 @@ const withPlan = <A, E, R>(
 ): Effect.Effect<A, E, R> =>
   Option.match(session.agent.executionPlan, {
     onNone: () => call,
-    onSome: (plan) => Effect.withExecutionPlan(call, plan)
+    onSome: (plan) =>
+      Effect.withExecutionPlan(call, plan, {
+        onEvent: Telemetry.recordAttempt
+      })
   })
 
 /**
@@ -143,7 +146,8 @@ const withPlanStream = <A, E, R>(
     onNone: () => stream,
     onSome: (plan) =>
       Stream.withExecutionPlan(stream, plan, {
-        preventFallbackOnPartialStream: true
+        preventFallbackOnPartialStream: true,
+        onEvent: Telemetry.recordAttempt
       })
   })
 

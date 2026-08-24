@@ -282,11 +282,45 @@ The after-output case is *forbidden* rather than handled, which is the whole
 point of the flag — so there is no behaviour of ours to test there, only a
 policy to state.
 
-### X3 — Telemetry
+### X3 — Telemetry ✅
 
-`onEvent` wired to a counter attributed by step and outcome, following A-2's
-instruments. Falsified by making a plan fall back and asserting the counter
-moved.
+`agent_model_attempts`, a counter attributed by **step** and **outcome**, fed
+from `onEvent` on both the batch and streaming wrappings.
+
+It is defined in `internal/telemetry.ts` rather than in `/observability`, for
+the reason A-0 established: the kernel produces it -- a plan runs inside
+`AgentTurn` -- and a battery cannot be imported by the thing it is built over.
+`/observability` re-exports it in `instruments`, so it is read like the rest.
+
+`AttemptStart` is ignored, because every start is followed by a settle and
+counting both would double every attempt.
+
+One inference detail worth recording: the handler is generic in the failure
+type. Typing it `Event<unknown>` pins what `withExecutionPlan` infers the
+plan's error channel from, widening the whole call's `E` to `unknown`.
+
+### X4 — Documentation and one example ✅
+
+`examples/execution-plan.ts`: two rungs, a retry schedule on the first, and the
+budget-driven-selection note showing what a plan *is not* for.
+
+**The example nearly shipped with a false claim.** It said "without the plan
+this program would not compile" -- and removing the combinator changed nothing,
+because an exported `Effect` may carry requirements nobody has met yet. So the
+file would have compiled just as happily with `LanguageModel` sitting
+unsatisfied in `R`, while claiming the opposite.
+
+The fix is a compile-time assertion in `typed-agent.ts`'s style, naming `R`
+directly:
+
+```ts
+export type _NeedsNoModel = Assert<[Requirements] extends [never] ? true : false>
+```
+
+Removing the combinator now fails with *"Type 'false' does not satisfy the
+constraint 'true'"*. This is the "compiling is not proof" rule applying to an
+*example* rather than to library code -- the demonstration needed an assertion
+for the same reason the library does.
 
 ### X4 — Documentation and one example
 

@@ -1,9 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, ExecutionPlan, Ref, Schema } from "effect"
+import { Effect, ExecutionPlan, Metric, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import { Observability } from "../src/observability/index.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -155,6 +156,63 @@ describe("Agent.withExecutionPlan", () => {
       assert.strictEqual(started.length, 1)
       assert.isAbove(deltas.length, 0)
     })
+  )
+
+  /**
+   * X3 — the ladder is observable.
+   *
+   * "How often are we falling back, and to what" is the question a fallback
+   * ladder exists to make answerable, and it is not answerable from the event
+   * stream: which provider answered is an infrastructure fact, not something
+   * the conversation did, so it is a metric rather than an `AgentEvent`.
+   */
+  it.effect("records an attempt per step, by outcome", () =>
+    Effect.gen(function* () {
+      const primaryCalls = yield* Ref.make(0)
+      const primaryScript = yield* TestLanguageModel.script([
+        TestLanguageModel.text("primary answered")
+      ])
+      const fallbackScript = yield* TestLanguageModel.script([
+        TestLanguageModel.text("fallback answered")
+      ])
+
+      const plan = ExecutionPlan.make(
+        {
+          provide: TestLanguageModel.failingAfter(primaryScript.layer, {
+            succeedFirst: 0,
+            calls: primaryCalls
+          }),
+          attempts: 1
+        },
+        { provide: fallbackScript.layer }
+      )
+
+      const agent = Agent.make({ loop: AgentLoop.bounded(2) }).pipe(
+        Agent.withExecutionPlan(plan)
+      )
+
+      yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(agent), (session) =>
+          AgentSession.prompt(session, "go")
+        )
+      )
+
+      const attempt = (step: string, outcome: string) =>
+        Metric.value(
+          Metric.withAttributes(Observability.instruments.modelAttempts, {
+            step,
+            outcome
+          })
+        )
+
+      // Step 0 was tried and failed; step 1 answered. Both are recorded, and
+      // they are distinguishable -- a single "fallbacks happened" counter
+      // would not tell an operator which rung is carrying the load.
+      assert.strictEqual((yield* attempt("0", "failed")).count, 1)
+      assert.strictEqual((yield* attempt("1", "succeeded")).count, 1)
+      // The step that failed did not also record a success.
+      assert.strictEqual((yield* attempt("0", "succeeded")).count, 0)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
   )
 
   it.effect("an agent without a plan is unchanged", () =>

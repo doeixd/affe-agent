@@ -30,7 +30,7 @@ where a finding turned out to be wrong.
 | ✅ | A-10 (E16) | An unbounded 10ms poll, under a comment saying the wait could be days |
 | ✅ | A-11 (E18) | The documented cast inventory had drifted from 5 to 16 |
 | ✅ | A-13 (E20) | Tool arguments reached any exporter regardless of `RedactionPolicy` |
-| ◑ | A-3 (E1) | Planned in [plan-execution-plan.md](./plan-execution-plan.md); not built |
+| ✅ | A-3 (E1) | Provider fallback: the one capability gap the audit found, now built |
 | ○ | A-4/5/6/8/9/12 | Open. None blocks anything; several are gated on unbuilt plans |
 
 **The audit was wrong four times, and each correction is recorded next to the
@@ -898,7 +898,14 @@ outrank most of round one.
   nothing has to restate a description to read one. Tokens dropped from the
   original list: no event carries usage, so that instrument would have to be
   invented rather than observed.
-- **A-3 — `ExecutionPlan` combinator (E1). ◑ Planned.**
+- **A-3 — `ExecutionPlan` combinator (E1). ✅ Done.**
+  `Agent.withExecutionPlan` ships: batch and streaming fallback, `LanguageModel`
+  discharged from the requirements without a cast, an `agent_model_attempts`
+  counter by step and outcome, and an example whose assertion fails if the
+  combinator is removed. Four milestones, five tests, falsified at each step.
+  The plan below records what it cost -- including a signature that compiled and
+  was impossible to call, and an example that nearly shipped a false claim.
+  *Originally:*
   [plan-execution-plan.md](./plan-execution-plan.md) written: the combinator
   shape, the model-call-only scope and why, the streaming problem and three
   options for it, the `/durable` replay interaction, five invariants and P0's

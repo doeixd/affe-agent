@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect"
+import * as Metric from "effect/Metric"
+import type * as ExecutionPlan from "effect/ExecutionPlan"
 import type { RunId, SubmissionId } from "./ids.js"
 
 /**
@@ -119,3 +121,54 @@ export const annotateTool = (
     [attributeNames.toolName]: name,
     [attributeNames.toolCallId]: toolCallId
   })
+
+// ---------------------------------------------------------------------------
+// Model attempts, under an ExecutionPlan
+// ---------------------------------------------------------------------------
+
+/**
+ * How often the model ladder was climbed, and how far.
+ *
+ * Lives here for the same reason `attributeNames` does: the kernel produces
+ * these (an `ExecutionPlan` runs inside `AgentTurn`) and `/observability`
+ * publishes them, so the definition belongs below both. A battery cannot be
+ * imported by the kernel it is built over.
+ *
+ * Attributed by **step** and **outcome**, because "how often are we falling
+ * back, and to what" is the question a fallback ladder exists to make
+ * answerable. A ladder whose second step is carrying production is working
+ * exactly as designed and is also something an operator should know.
+ *
+ * Deliberately not an `AgentEvent`. The kernel's event vocabulary describes
+ * what the *conversation* did; which provider answered is an infrastructure
+ * fact, and adding a tag for it would be the first event that is not about the
+ * agent at all.
+ */
+export const modelAttempts = Metric.counter("agent_model_attempts", {
+  description:
+    "Model calls attempted under an ExecutionPlan, by ladder step and outcome",
+  incremental: true
+})
+
+/**
+ * Record one plan event, if it is one that settles.
+ *
+ * `AttemptStart` is deliberately ignored: every start is followed by a success
+ * or a failure, so counting starts as well would double every attempt and make
+ * the ratio between them meaningless.
+ */
+export const recordAttempt = <E>(
+  // Generic in the failure type rather than taking `Event<unknown>`: the
+  // handler's parameter is what `withExecutionPlan` infers the plan's error
+  // channel from, so pinning it to `unknown` widens the whole call's `E`.
+  event: ExecutionPlan.Event<E>
+): Effect.Effect<void> => {
+  if (event._tag === "AttemptStart") return Effect.void
+  return Metric.update(
+    Metric.withAttributes(modelAttempts, {
+      step: String(event.stepIndex),
+      outcome: event._tag === "AttemptSuccess" ? "succeeded" : "failed"
+    }),
+    1
+  )
+}

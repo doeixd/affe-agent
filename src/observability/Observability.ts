@@ -245,6 +245,7 @@ export const trace = (
  * kernel's vocabulary and belongs in its own decision, not smuggled in here.
  */
 export const metricNames = {
+  modelAttempts: "agent_model_attempts",
   turns: "agent_turns",
   turnsPerRun: "agent_turns_per_run",
   toolCalls: "agent_tool_calls",
@@ -321,6 +322,15 @@ const pendingInput = Metric.gauge(metricNames.pendingInput, {
  * `Metric.withAttributes` it would anyway.
  */
 export const instruments = {
+  /**
+   * Model calls attempted under an `ExecutionPlan`, by ladder step and outcome.
+   *
+   * Defined in the kernel rather than here, because the kernel is what produces
+   * it -- a plan runs inside `AgentTurn` -- and a battery cannot be imported by
+   * the thing it is built over. Re-exported so it is read the same way as the
+   * rest.
+   */
+  modelAttempts: Telemetry.modelAttempts,
   turns: turnsTotal,
   turnsPerRun,
   toolCalls,
