@@ -828,6 +828,26 @@ export const events = (
  * cosmetic gap -- a renderer switching branches, a recorder attaching to a
  * session already in flight.
  */
+/**
+ * Observe events synchronously, as they are published.
+ *
+ * The difference from `subscribe` is *when* the observer runs, and it decides
+ * which of the two you want. A subscriber consumes at its own pace, so by the
+ * time it handles `TurnCompleted` the session may have moved on -- fine for a
+ * renderer, wrong for anything that reads session state to interpret the
+ * event, because it would read state as of the wrong moment. An observer runs
+ * under the publishing permit, so what it reads is what was true then.
+ *
+ * The cost is the mirror image: an observer runs *inside* publication, so a
+ * slow one slows the agent loop. Keep it short, and reach for `subscribe`
+ * whenever lag is merely cosmetic.
+ */
+export const observe = (
+  session: AgentSession<any, any>,
+  observer: (envelope: AgentEventEnvelope) => Effect.Effect<void>
+): Effect.Effect<void, never, Scope.Scope> =>
+  EventBus.observe(unwrap(session).bus, observer)
+
 export const subscribe = (
   session: AgentSession<any, any>
 ): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>

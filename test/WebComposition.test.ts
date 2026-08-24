@@ -107,7 +107,7 @@ describe("WebToolkit composition", () => {
         search: () => Ref.updateAndGet(calls, (n) => n + 1).pipe(Effect.as(sources))
       })
       const agent = Agent.make({
-        toolkit: WebToolkit.toolkit(),
+        toolkit: WebToolkit.searchToolkit(),
         loop: AgentLoop.bounded(4),
         permission: Permission.allowAll
       })
@@ -133,7 +133,7 @@ describe("WebToolkit composition", () => {
         search: () => Ref.updateAndGet(calls, (n) => n + 1).pipe(Effect.as(sources))
       })
       const agent = Agent.make({
-        toolkit: WebToolkit.toolkit(),
+        toolkit: WebToolkit.searchToolkit(),
         loop: AgentLoop.bounded(4),
         permission: Permission.denyAll
       })
@@ -166,6 +166,8 @@ describe("WebToolkit composition", () => {
         }
       )
 
+      assert.strictEqual(decided._tag, "Decided")
+      if (decided._tag !== "Decided") return
       assert.strictEqual(decided.decision._tag, "Ask")
       assert.strictEqual(decided.request.action, "net.search")
       assert.strictEqual(decided.request.resource, "sensitive query")

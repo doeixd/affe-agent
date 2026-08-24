@@ -4,6 +4,8 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as Permission from "../src/Permission.js"
+import * as ToolExecution from "../src/ToolExecution.js"
 import { withSession } from "./helpers.js"
 
 /**
@@ -21,6 +23,73 @@ const Remind = Tool.make("remind", {
 })
 
 describe("encoded tool parameters", () => {
+  it.effect("permission and dynamic approval receive decoded parameters", () =>
+    Effect.gen(function* () {
+      const approvalSaw = yield* Ref.make<Array<Date>>([])
+      const policyCalls = yield* Ref.make(0)
+      const DecodedRemind = Permission.annotate(
+        Tool.make("decoded_remind", {
+          parameters: Schema.Struct({ at: Schema.DateFromString }),
+          success: Schema.String,
+          needsApproval: ({ at }) =>
+            Ref.update(approvalSaw, (all) => [...all, at]).pipe(
+              Effect.as(false)
+            )
+        }),
+        {
+          action: "schedule",
+          resource: ({ at }) => at.toISOString()
+        }
+      )
+
+      const valid = yield* ToolExecution.decide(
+        DecodedRemind,
+        {
+          id: "r1",
+          name: "decoded_remind",
+          params: { at: "2026-01-01T00:00:00.000Z" }
+        },
+        {
+          sessionId: "session-1",
+          messages: [],
+          permission: Permission.make(() =>
+            Ref.updateAndGet(policyCalls, (count) => count + 1).pipe(
+              Effect.as(Permission.allow)
+            ))
+        }
+      )
+
+      assert.strictEqual(valid._tag, "Decided")
+      if (valid._tag !== "Decided") return
+      assert.strictEqual(valid.request.resource, "2026-01-01T00:00:00.000Z")
+      const seen = yield* Ref.get(approvalSaw)
+      assert.strictEqual(seen.length, 1)
+      assert.instanceOf(seen[0], Date)
+      assert.strictEqual(yield* Ref.get(policyCalls), 1)
+
+      const invalid = yield* ToolExecution.decide(
+        DecodedRemind,
+        {
+          id: "r2",
+          name: "decoded_remind",
+          params: { at: "not-a-date" }
+        },
+        {
+          sessionId: "session-1",
+          messages: [],
+          permission: Permission.make(() =>
+            Ref.updateAndGet(policyCalls, (count) => count + 1).pipe(
+              Effect.as(Permission.allow)
+            ))
+        }
+      )
+
+      assert.strictEqual(invalid._tag, "InvalidParameters")
+      assert.strictEqual((yield* Ref.get(approvalSaw)).length, 1)
+      assert.strictEqual(yield* Ref.get(policyCalls), 1)
+    })
+  )
+
   it.effect("a loop observes encoded params, and is typed for them", () =>
     Effect.gen(function* () {
       const seenByLoop = yield* Ref.make<Array<unknown>>([])

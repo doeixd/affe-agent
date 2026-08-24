@@ -163,6 +163,28 @@ const approvalDetailJson = Schema.toCodecJson(Permission.ApprovalDetail)
 const approvalValueJson = Schema.toCodecJson(Permission.ApprovalValue)
 
 /**
+ * Recover the concrete parameter schema hidden by Effect AI's `Tool.Any`
+ * surface. Spelling the return through Tool's utility types keeps the exact
+ * decoding requirement available to callers of `decide`.
+ */
+const decodePermissionParameters = <T extends Tool.Any>(
+  tool: T,
+  params: unknown
+): Effect.Effect<
+  Tool.Parameters<T>,
+  Schema.SchemaError,
+  Tool.ParametersSchema<T>["DecodingServices"]
+> =>
+  // `Tool.Any.parametersSchema` is exposed as `Schema.Top`, losing the
+  // relationship which Tool's own utility types still know. The assertion
+  // restores that relationship without changing the runtime value.
+  Schema.decodeUnknownEffect(tool.parametersSchema)(params) as Effect.Effect<
+    Tool.Parameters<T>,
+    Schema.SchemaError,
+    Tool.ParametersSchema<T>["DecodingServices"]
+  >
+
+/**
  * Decide one call: the tool's floor, the tool's projection, the policy.
  *
  * Returned as the decision *and* the request it was made for, because an
@@ -181,9 +203,9 @@ export const decide = Effect.fn("ToolExecution.decide")(function* <
     readonly permission: Permission.Policy<R>
   }
 ) {
-  const decoded = yield* Schema.decodeUnknownEffect(tool.parametersSchema)(
-    call.params
-  ).pipe(Effect.option)
+  const decoded = yield* decodePermissionParameters(tool, call.params).pipe(
+    Effect.option
+  )
 
   // Toolkit.handle owns the ordinary validation failure and its model-facing
   // error. Permission must not inspect or authorize a value that did not pass
@@ -253,11 +275,19 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     if (tool === undefined) {
       return yield* Effect.die(new Error(`Tool ${String(call.name)} is not in the toolkit`))
     }
-    const outcome = yield* decide(tool, call, {
+    const decisionEffect = decide(tool, call, {
       sessionId: session.id,
       messages,
       permission: agent.permission
     })
+    // Parameter decoding services are one constituent of HandlerServices, but
+    // TypeScript cannot reduce that conditional type after the indexed tool
+    // lookup. Widen only the requirement channel to the public handler union.
+    const outcome = yield* decisionEffect as Effect.Effect<
+      Effect.Success<typeof decisionEffect>,
+      Effect.Error<typeof decisionEffect>,
+      R | Tool.HandlerServices<Tools[keyof Tools]>
+    >
 
     // A refusal, from the policy or from the person asked. The call never
     // runs; `denialPolicy` decides whether the model hears about it.

@@ -75,6 +75,10 @@
       "types": "./dist/web/brave.d.ts",
       "default": "./dist/web/brave.js"
     },
+    "./web/http": {
+      "types": "./dist/web/http.d.ts",
+      "default": "./dist/web/http.js"
+    },
     "./subagent": {
       "types": "./dist/subagent/index.d.ts",
       "default": "./dist/subagent/index.js"

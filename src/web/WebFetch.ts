@@ -1,0 +1,163 @@
+import { Context, Effect, Layer, Option, Schema } from "effect"
+
+/** The representation of a bounded textual response body. */
+export const BodyFormat = Schema.Literals(["text", "html", "markdown"])
+export type BodyFormat = typeof BodyFormat.Type
+
+/** A fetched textual resource. Bodies are untrusted external input. */
+export const FetchResult = Schema.Struct({
+  finalUrl: Schema.String,
+  status: Schema.Number,
+  mediaType: Schema.String,
+  format: BodyFormat,
+  body: Schema.String
+})
+export type FetchResult = typeof FetchResult.Type
+
+/** Remove the fragment which never reaches HTTP and normalize URL syntax. */
+export const canonicalize = (input: URL): URL => {
+  const url = new URL(input.href)
+  url.hash = ""
+  return url
+}
+
+/** Canonical permission resource: scheme, hostname and effective port. */
+export const canonicalOrigin = (url: URL): string => canonicalize(url).origin
+
+export class WebFetchInvalidUrlError extends
+  Schema.TaggedError<WebFetchInvalidUrlError>()(
+    "@doeixd/effect-agent/web/WebFetchInvalidUrlError",
+    { url: Schema.String, reason: Schema.String }
+  ) {
+  override get message() {
+    return `Web fetch rejected URL ${this.url}: ${this.reason}`
+  }
+}
+
+export class WebFetchDeniedTargetError extends
+  Schema.TaggedError<WebFetchDeniedTargetError>()(
+    "@doeixd/effect-agent/web/WebFetchDeniedTargetError",
+    { url: Schema.String, reason: Schema.String }
+  ) {
+  override get message() {
+    return `Web fetch denied target ${this.url}: ${this.reason}`
+  }
+}
+
+export class WebFetchTransportError extends
+  Schema.TaggedError<WebFetchTransportError>()(
+    "@doeixd/effect-agent/web/WebFetchTransportError",
+    { url: Schema.String, detail: Schema.String }
+  ) {
+  override get message() {
+    return `Web fetch transport failed for ${this.url}: ${this.detail}`
+  }
+}
+
+export class WebFetchHttpResponseError extends
+  Schema.TaggedError<WebFetchHttpResponseError>()(
+    "@doeixd/effect-agent/web/WebFetchHttpResponseError",
+    { url: Schema.String, status: Schema.Number }
+  ) {
+  override get message() {
+    return `Web fetch received HTTP ${this.status} from ${this.url}`
+  }
+}
+
+export class WebFetchCrossOriginRedirectError extends
+  Schema.TaggedError<WebFetchCrossOriginRedirectError>()(
+    "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError",
+    { from: Schema.String, to: Schema.String }
+  ) {
+  override get message() {
+    return `Web fetch refused cross-origin redirect from ${this.from} to ${this.to}`
+  }
+}
+
+export class WebFetchRedirectLimitError extends
+  Schema.TaggedError<WebFetchRedirectLimitError>()(
+    "@doeixd/effect-agent/web/WebFetchRedirectLimitError",
+    { url: Schema.String, maxRedirects: Schema.Number }
+  ) {
+  override get message() {
+    return `Web fetch exceeded ${this.maxRedirects} redirects at ${this.url}`
+  }
+}
+
+export class WebFetchUnsupportedContentTypeError extends
+  Schema.TaggedError<WebFetchUnsupportedContentTypeError>()(
+    "@doeixd/effect-agent/web/WebFetchUnsupportedContentTypeError",
+    { url: Schema.String, contentType: Schema.Option(Schema.String) }
+  ) {
+  override get message() {
+    return Option.match(this.contentType, {
+      onNone: () => `Web fetch response from ${this.url} had no textual content type`,
+      onSome: (contentType) =>
+        `Web fetch does not accept content type ${contentType} from ${this.url}`
+    })
+  }
+}
+
+export class WebFetchResponseTooLargeError extends
+  Schema.TaggedError<WebFetchResponseTooLargeError>()(
+    "@doeixd/effect-agent/web/WebFetchResponseTooLargeError",
+    { url: Schema.String, maxBytes: Schema.Number, observedBytes: Schema.Number }
+  ) {
+  override get message() {
+    return `Web fetch response from ${this.url} exceeded ${this.maxBytes} bytes (observed ${this.observedBytes})`
+  }
+}
+
+export class WebFetchDecodeError extends
+  Schema.TaggedError<WebFetchDecodeError>()(
+    "@doeixd/effect-agent/web/WebFetchDecodeError",
+    { url: Schema.String, detail: Schema.String }
+  ) {
+  override get message() {
+    return `Web fetch response from ${this.url} could not be decoded: ${this.detail}`
+  }
+}
+
+export class WebFetchTimeoutError extends
+  Schema.TaggedError<WebFetchTimeoutError>()(
+    "@doeixd/effect-agent/web/WebFetchTimeoutError",
+    { url: Schema.String, timeoutMillis: Schema.Number }
+  ) {
+  override get message() {
+    return `Web fetch of ${this.url} exceeded ${this.timeoutMillis}ms`
+  }
+}
+
+export type WebFetchError =
+  | WebFetchInvalidUrlError
+  | WebFetchDeniedTargetError
+  | WebFetchTransportError
+  | WebFetchHttpResponseError
+  | WebFetchCrossOriginRedirectError
+  | WebFetchRedirectLimitError
+  | WebFetchUnsupportedContentTypeError
+  | WebFetchResponseTooLargeError
+  | WebFetchDecodeError
+  | WebFetchTimeoutError
+
+/** Provider-neutral arbitrary HTTP(S) retrieval capability. */
+export interface Service {
+  readonly fetch: (
+    url: URL
+  ) => Effect.Effect<FetchResult, WebFetchError>
+}
+
+/**
+ * Infrastructure service supplied by a guarded fetch provider.
+ *
+ * The portable provider is baseline defense. Strong DNS/address isolation
+ * requires an application provider backed by an egress proxy or an
+ * address-aware runtime.
+ */
+export class WebFetch extends Context.Service<WebFetch, Service>()(
+  "@doeixd/effect-agent/web/WebFetch"
+) {}
+
+/** Provide an already-constructed fetch service. */
+export const layer = (service: Service): Layer.Layer<WebFetch> =>
+  Layer.succeed(WebFetch)(service)

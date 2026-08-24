@@ -34,7 +34,7 @@ describe("durable WebToolkit", () => {
             ])
           )
       })
-      const toolkit = yield* WebToolkit.toolkit().pipe(Effect.provide(provider))
+      const toolkit = yield* WebToolkit.searchToolkit().pipe(Effect.provide(provider))
 
       // Suspend only while deriving turn 2, after turn 1's search activity has
       // completed. Resumption replays turn 1 and must reuse that activity.

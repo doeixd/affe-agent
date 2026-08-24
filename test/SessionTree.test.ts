@@ -267,7 +267,10 @@ describe("SessionTree", () => {
         const last = nodes[nodes.length - 1]
         return {
           nodes,
-          path: last === undefined ? [] : yield* tree.path(last)
+          path: last === undefined ? [] : yield* tree.path(last),
+          // Each node must hold the conversation as it stood at *its* turn.
+          sizes: yield* Effect.forEach(nodes, (node) =>
+            Effect.map(tree.historyOf(node), (history) => history.content.length))
         }
       }).pipe(Effect.provide(layer), Effect.scoped)
 
@@ -276,6 +279,18 @@ describe("SessionTree", () => {
       assert.strictEqual(out.nodes.length, 3)
       // And they form a chain, not a fan.
       assert.strictEqual(out.path.length, 3)
+      // Strictly growing, which is the property that catches a *lagging*
+      // recorder. `TurnCompleted` carries no payload, so capture has to read
+      // the session's history -- and one driven from a stream subscription
+      // reads it whenever that fibre happens to run. Three turns then record
+      // the same final conversation three times, and dedup hides two of them.
+      // Hence an observer, which runs under the publishing permit.
+      assert.deepStrictEqual(
+        out.sizes,
+        [...out.sizes].sort((a, b) => a - b),
+        "histories must grow with their turns"
+      )
+      assert.strictEqual(new Set(out.sizes).size, 3)
     })
   )
 

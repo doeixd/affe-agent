@@ -464,6 +464,48 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         return walked.reverse()
       })
 
+    /**
+     * Watch a session's events from a fibre owned by `scope`.
+     *
+     * Subscribing is separated from consuming on purpose. `Stream.runForEach`
+     * in a forked fibre subscribes whenever that fibre first runs, so anything
+     * emitted before then is lost -- and the caller has no moment it can point
+     * to and say "I am attached now". Acquiring the subscription here, before
+     * returning, means everything from this point on is queued whether or not
+     * the consumer has started.
+     */
+    const consume = (
+      session: AgentSession.AgentSession<Tools, E>,
+      scope: Scope.Scope,
+      onEvent: (envelope: AgentEventEnvelope) => Effect.Effect<void>
+    ): Effect.Effect<void> =>
+      Effect.gen(function*() {
+        const subscription = yield* AgentSession.subscribe(session).pipe(
+          Effect.provideService(Scope.Scope, scope)
+        )
+        yield* Effect.forkIn(
+          Effect.forever(Effect.flatMap(PubSub.take(subscription), onEvent)),
+          scope
+        )
+      })
+
+    /**
+     * Record a node at every turn boundary.
+     *
+     * Attached as an *observer* rather than consumed from a subscription, and
+     * that is the whole correctness argument: `TurnCompleted` carries no
+     * payload, so this has to read `session.history` -- and a subscriber that
+     * lagged would read the history as of whenever it got around to it. Three
+     * turns would then record one node holding the final conversation, with
+     * dedup quietly hiding the other two.
+     */
+    const capture = (session: AgentSession.AgentSession<Tools, E>) =>
+    (envelope: AgentEventEnvelope): Effect.Effect<void> =>
+      envelope.event._tag === "TurnCompleted"
+        ? Effect.flatMap(session.history, (history) =>
+          Effect.asVoid(record(session.id, history)))
+        : Effect.void
+
     const activate: SessionTree<Tools, E>["activate"] = (node) =>
       Effect.gen(function*() {
         const { history } = yield* find(node.id)
@@ -473,16 +515,18 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         const session = yield* RcMap.get(branches, node.id).pipe(
           Effect.provideService(Scope.Scope, scope)
         )
-        // Subscribed before anything else can happen, which is the point.
-        const subscription = yield* AgentSession.subscribe(session).pipe(
+        // Activation is also tracking: the branch in front of the user is
+        // exactly the one whose turns must stay reachable, and a rewind that
+        // could not reach the turn just taken would be useless.
+        //
+        // Two mechanisms because they want different things. Forwarding to the
+        // feed is for a renderer, which may lag without harm. Capturing must
+        // not lag, because it reads history to interpret an event. Both end
+        // with the activation's scope.
+        yield* AgentSession.observe(session, capture(session)).pipe(
           Effect.provideService(Scope.Scope, scope)
         )
-        yield* Effect.forkIn(
-          Effect.forever(
-            Effect.flatMap(PubSub.take(subscription), (envelope) => PubSub.publish(feed, envelope))
-          ),
-          scope
-        )
+        yield* consume(session, scope, (envelope) => PubSub.publish(feed, envelope))
 
         const previous = yield* Ref.get(currentScope)
         yield* Ref.set(currentScope, Option.some(scope))
@@ -501,13 +545,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         if (trackOptions?.lane !== undefined) {
           yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, trackOptions.lane!))
         }
-        yield* Effect.forkScoped(
-          Stream.runForEach(session.events, (envelope) =>
-            envelope.event._tag === "TurnCompleted"
-              ? Effect.flatMap(session.history, (history) =>
-                Effect.asVoid(record(session.id, history)))
-              : Effect.void)
-        )
+        yield* AgentSession.observe(session, capture(session))
       })
 
     return {

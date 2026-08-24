@@ -97,6 +97,7 @@ describe("public API", () => {
         "history",
         "interrupt",
         "make",
+        "observe",
         "pending",
         "prompt",
         "respond",
@@ -199,6 +200,7 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(testing).sort(), [
       "AgentProbe",
       "TestLanguageModel",
+      "TestWebFetch",
       "TestWebSearch"
     ])
   })

@@ -1,4 +1,4 @@
-import { Effect, Option, PubSub, Ref, Semaphore, Stream } from "effect"
+import { Effect, Option, PubSub, Ref, Scope, Semaphore, Stream } from "effect"
 import type { AgentEvent, AgentEventEnvelope, Correlation } from "../AgentEvent.js"
 import type { SessionId } from "./ids.js"
 
@@ -31,6 +31,25 @@ export interface EventBus {
    * means zero behaviour change.
    */
   readonly sink: ((envelope: AgentEventEnvelope) => Effect.Effect<void>) | undefined
+  /**
+   * Observers attached after construction, invoked under the same permit.
+   *
+   * `sink` covers the consumer that exists before the session does. This
+   * covers the one that arrives later and still cannot afford to lag --
+   * anything whose job is to read session state *as of* an event.
+   *
+   * That distinction is not pedantic. `TurnCompleted` carries no payload, so a
+   * consumer that wants the history at that boundary has to go and read it;
+   * read it from a fibre scheduled later and it gets the history as of
+   * *whenever that fibre ran*, which after a lag is a different conversation
+   * entirely. A `Stream` subscriber cannot avoid this, because the whole point
+   * of a stream is that it consumes at its own pace.
+   *
+   * Mutable, and deliberately so: attaching is `Set.add` under the emit
+   * permit, so it is atomic with respect to publication -- an observer is
+   * either attached before an envelope or after it, never during.
+   */
+  readonly observers: Set<(envelope: AgentEventEnvelope) => Effect.Effect<void>>
 }
 
 export const make = (
@@ -46,7 +65,8 @@ export const make = (
       pubsub,
       sequence,
       order,
-      sink
+      sink,
+      observers: new Set()
     } satisfies EventBus
   })
 
@@ -75,12 +95,35 @@ export const emit = (
       return PubSub.publish(bus.pubsub, envelope).pipe(
         // Under the same permit, so a sink observes envelopes in sequence
         // order exactly as the PubSub delivers them.
-        Effect.andThen(bus.sink !== undefined ? bus.sink(envelope) : Effect.void)
+        Effect.andThen(bus.sink !== undefined ? bus.sink(envelope) : Effect.void),
+        Effect.andThen(
+          bus.observers.size === 0
+            ? Effect.void
+            : Effect.forEach([...bus.observers], (observe) => observe(envelope), {
+              discard: true
+            })
+        )
       )
     }),
     Semaphore.withPermit(bus.order),
     Effect.asVoid
   )
+
+/**
+ * Attach an observer for the life of the scope.
+ *
+ * Attachment and detachment both take the emit permit, so they cannot
+ * interleave with a publication: an observer sees a contiguous run of
+ * envelopes, with no half-delivered one at either end.
+ */
+export const observe = (
+  bus: EventBus,
+  observer: (envelope: AgentEventEnvelope) => Effect.Effect<void>
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Semaphore.withPermit(bus.order)(Effect.sync(() => bus.observers.add(observer))),
+    () => Semaphore.withPermit(bus.order)(Effect.sync(() => bus.observers.delete(observer)))
+  ).pipe(Effect.asVoid)
 
 /**
  * The live feed, ending with the session.
