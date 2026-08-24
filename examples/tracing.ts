@@ -26,16 +26,24 @@ const Researcher = Agent.make({ instructions: "Research carefully." })
  * A trace of one prompt nests as the execution actually nests:
  *
  * ```text
- * AgentSession.prompt
- * └── AgentSubmission.execute        submissionId
- *     └── AgentRun.execute           runId
- *         └── AgentTurn.execute      runId, turn
+ * AgentSession.prompt        agent.session.id
+ * └── AgentSubmission.execute        + agent.submission.id
+ *     └── AgentRun.execute           + agent.run.id
+ *         └── AgentTurn.execute      + agent.turn.index
  *             ├── LanguageModel.generateText   (GenAI conventions, from Effect AI)
- *             └── ToolExecution.tool           tool, toolCallId
+ *             └── ToolExecution.tool  + ai.tool.name, ai.tool.call_id
  * ```
  *
+ * The attribute keys are `Observability.attributeNames` -- the same ones the
+ * `/observability` event records use, so a trace and the events describing the
+ * same run join on `agent.run.id` with no translation table. Span *names* are
+ * `Module.operation`, which is the Effect convention and what `Effect.fn`
+ * produces; the join is by attribute, not by name.
+ *
  * The model span and its GenAI attributes come from Effect AI itself; the
- * harness only supplies the structure above it.
+ * harness only supplies the structure above it. Effect AI also annotates
+ * `ToolExecution.tool` with its own `tool` and `parameters` keys -- note
+ * `parameters` is unredacted, so scrub at the exporter if tools see secrets.
  */
 export const program = Effect.gen(function* () {
   const session = yield* AgentSession.make(Researcher)

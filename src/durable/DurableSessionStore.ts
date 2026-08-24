@@ -2,6 +2,7 @@ import { Effect, Option, Ref, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { SqlClient } from "effect/unstable/sql"
 import * as Elicitation from "../Elicitation.js"
+import { detailOf, isStorageError, StorageError } from "./StorageError.js"
 
 /**
  * The durable logical session, as distinct from any one workflow execution.
@@ -109,7 +110,7 @@ export interface DurableSessionStore {
   /** Read one session, if it exists. */
   readonly get: (
     sessionId: string
-  ) => Effect.Effect<Option.Option<SessionRecord>>
+  ) => Effect.Effect<Option.Option<SessionRecord>, StorageError>
 
   /**
    * Read one session, creating it if absent.
@@ -121,7 +122,7 @@ export interface DurableSessionStore {
   readonly getOrCreate: (
     sessionId: string,
     initialHistory: Prompt.Prompt
-  ) => Effect.Effect<SessionRecord>
+  ) => Effect.Effect<SessionRecord, StorageError>
 
   /**
    * Ask an existing idle session to accept a submission.
@@ -138,7 +139,7 @@ export interface DurableSessionStore {
       readonly prompt: Prompt.Prompt
       readonly stream: boolean
     }
-  ) => Effect.Effect<ClaimOutcome>
+  ) => Effect.Effect<ClaimOutcome, StorageError>
 
   /**
    * Record which workflow execution is carrying the claim.
@@ -150,7 +151,7 @@ export interface DurableSessionStore {
     sessionId: string,
     submissionId: string,
     executionId: string
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, StorageError>
 
   /**
    * Complete a submission however it ends — succeeded, failed, interrupted.
@@ -173,7 +174,7 @@ export interface DurableSessionStore {
     sessionId: string,
     submissionId: string,
     history: Prompt.Prompt
-  ) => Effect.Effect<boolean>
+  ) => Effect.Effect<boolean, StorageError>
 
   // -- Elicitation projection -------------------------------------------------
   //
@@ -185,12 +186,12 @@ export interface DurableSessionStore {
   readonly addPendingRequest: (
     sessionId: string,
     request: Elicitation.Request
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, StorageError>
 
   /** Everything the session is currently waiting to be told. */
   readonly pendingRequests: (
     sessionId: string
-  ) => Effect.Effect<ReadonlyArray<Elicitation.Request>>
+  ) => Effect.Effect<ReadonlyArray<Elicitation.Request>, StorageError>
 
   /**
    * Deliver an answer, atomically moving the request from waiting to answered.
@@ -203,7 +204,7 @@ export interface DurableSessionStore {
   readonly answerRequest: (
     sessionId: string,
     response: Elicitation.Response
-  ) => Effect.Effect<boolean>
+  ) => Effect.Effect<boolean, StorageError>
 
   /**
    * Take a recorded answer, removing it in the same step.
@@ -215,7 +216,7 @@ export interface DurableSessionStore {
   readonly takeAnswer: (
     sessionId: string,
     requestId: string
-  ) => Effect.Effect<Option.Option<Elicitation.Response>>
+  ) => Effect.Effect<Option.Option<Elicitation.Response>, StorageError>
 
   /**
    * Answers recorded but not yet taken.
@@ -225,18 +226,25 @@ export interface DurableSessionStore {
    */
   readonly recordedAnswers: (
     sessionId: string
-  ) => Effect.Effect<ReadonlyArray<Elicitation.Response>>
+  ) => Effect.Effect<ReadonlyArray<Elicitation.Response>, StorageError>
 
   /** Forget a request whose answer the run has consumed. */
   readonly removeRequest: (
     sessionId: string,
     requestId: string
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, StorageError>
 }
 
 // -- Encoded prompts -------------------------------------------------------------
 
-/** Prompts cross storage as JSON; an unencodable prompt is a bug, not a case. */
+/**
+ * Prompts cross storage as JSON; an unencodable prompt is a bug, not a case.
+ *
+ * Encoding stays a defect deliberately. The value was assembled by this
+ * process a moment ago, so a schema that cannot encode it means the library
+ * is wrong about its own types -- there is nothing a caller could do with
+ * that information but crash, which is what a defect already does.
+ */
 export const encodeHistory = (
   prompt: Prompt.Prompt
 ): Effect.Effect<string> =>
@@ -245,10 +253,32 @@ export const encodeHistory = (
     Effect.orDie
   )
 
-export const decodeHistory = (encoded: string): Effect.Effect<Prompt.Prompt> =>
+/**
+ * Decoding is the other direction, and it is not the same claim.
+ *
+ * This value came *back* from storage, so it can be a truncated write, a row
+ * written by an older schema version, a half-committed transaction or a
+ * corrupted blob. None of those are bugs in this library and all of them are
+ * conditions a caller can act on -- retry elsewhere, quarantine the session,
+ * report it -- so they belong in the error channel.
+ *
+ * This was `Effect.orDie`, which declared the operation infallible while
+ * reading from a database. See `StorageError` for what that cost.
+ */
+export const decodeHistory = (
+  encoded: string,
+  sessionId?: string
+): Effect.Effect<Prompt.Prompt, StorageError> =>
   Effect.try(() => JSON.parse(encoded) as unknown).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Prompt.Prompt)),
-    Effect.orDie
+    Effect.mapError(
+      (cause) =>
+        new StorageError({
+          operation: "decodeHistory",
+          ...(sessionId === undefined ? {} : { sessionId }),
+          detail: detailOf(cause)
+        })
+    )
   )
 
 // -- Memory implementation ---------------------------------------------------------
@@ -490,6 +520,7 @@ interface SessionRow {
   readonly history: string
 }
 
+/** Encoding a value we just built: a defect, for the reason `encodeHistory` gives. */
 const encodeJson =
   <S extends Schema.Codec<any, any, never, never>>(schema: S) =>
   (value: S["Type"]): Effect.Effect<string> =>
@@ -498,22 +529,25 @@ const encodeJson =
       Effect.orDie
     )
 
+/** Decoding a value from storage: a condition, for the reason `decodeHistory` gives. */
 const decodeJson =
-  <S extends Schema.Codec<any, any, never, never>>(schema: S) =>
-  (encoded: string): Effect.Effect<S["Type"]> =>
+  <S extends Schema.Codec<any, any, never, never>>(schema: S, operation: string) =>
+  (encoded: string): Effect.Effect<S["Type"], StorageError> =>
     Effect.try(() => JSON.parse(encoded) as unknown).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-      Effect.orDie
+      Effect.mapError(
+        (cause) => new StorageError({ operation, detail: detailOf(cause) })
+      )
     )
 
 const encodeClaim = encodeJson(Claim)
-const decodeClaim = decodeJson(Claim)
+const decodeClaim = decodeJson(Claim, "decodeClaim")
 const encodeRequest = encodeJson(Elicitation.Request)
-const decodeRequest = decodeJson(Elicitation.Request)
+const decodeRequest = decodeJson(Elicitation.Request, "decodeRequest")
 const encodeResponse = encodeJson(Elicitation.Response)
-const decodeResponse = decodeJson(Elicitation.Response)
+const decodeResponse = decodeJson(Elicitation.Response, "decodeResponse")
 
-const rowToRecord = (row: SessionRow): Effect.Effect<SessionRecord> =>
+const rowToRecord = (row: SessionRow): Effect.Effect<SessionRecord, StorageError> =>
   Effect.map(
     row.claim === null
       ? Effect.succeed(Option.none<Claim>())
@@ -555,6 +589,31 @@ export const sqlStore = (
       escapeIdentifier(options?.elicitationTable ?? sqlElicitationTable)
     )
 
+    /**
+     * Every store operation's failure, named.
+     *
+     * A `SqlError` from the driver, or a `StorageError` a decoder already
+     * raised, becomes one `StorageError` carrying the operation and session.
+     * An existing `StorageError` passes through unchanged rather than being
+     * wrapped, so the innermost description -- "decodeHistory", not "get" --
+     * is the one the caller sees.
+     *
+     * This replaced `Effect.orDie` on each operation. See `StorageError` for
+     * what declaring a database infallible cost us.
+     */
+    const storage =
+      (operation: string, sessionId?: string) =>
+      <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, StorageError> =>
+        Effect.mapError(effect, (cause): StorageError =>
+          isStorageError(cause)
+            ? cause
+            : new StorageError({
+                operation,
+                ...(sessionId === undefined ? {} : { sessionId }),
+                detail: detailOf(cause)
+              })
+        )
+
     const readRow = (sessionId: string) =>
       sql<SessionRow>`SELECT * FROM ${sessions} WHERE session_id = ${sessionId}`.pipe(
         Effect.map((rows) => Option.fromNullishOr(rows[0]))
@@ -571,7 +630,7 @@ export const sqlStore = (
       )
 
     return {
-      get: (sessionId) => readRecord(sessionId).pipe(Effect.orDie),
+      get: (sessionId) => readRecord(sessionId).pipe(storage("get", sessionId)),
 
       getOrCreate: (sessionId, initialHistory) =>
         Effect.flatMap(encodeHistory(initialHistory), (encoded) =>
@@ -597,7 +656,7 @@ export const sqlStore = (
                 return created
               })
             )
-            .pipe(Effect.orDie)
+            .pipe(storage("getOrCreate", sessionId))
         ),
 
       claim: (sessionId, submission) =>
@@ -645,7 +704,7 @@ export const sqlStore = (
                 } as const
               })
             )
-            .pipe(Effect.orDie)
+            .pipe(storage("claim", sessionId))
         ),
 
       attachExecution: (sessionId, submissionId, executionId) =>
@@ -667,7 +726,7 @@ export const sqlStore = (
               yield* sql`UPDATE ${sessions} SET claim = ${claimJson} WHERE session_id = ${sessionId}`
             })
           )
-          .pipe(Effect.orDie),
+          .pipe(storage("attachExecution", sessionId)),
 
       finish: (sessionId, submissionId, history) =>
         Effect.flatMap(encodeHistory(history), (encoded) =>
@@ -687,7 +746,7 @@ export const sqlStore = (
                 return true
               })
             )
-            .pipe(Effect.orDie)
+            .pipe(storage("finish", sessionId))
         ),
 
       addPendingRequest: (sessionId, request) =>
@@ -710,7 +769,7 @@ export const sqlStore = (
                 })}`
               })
             )
-            .pipe(Effect.orDie)
+            .pipe(storage("addPendingRequest", sessionId))
         ),
 
       pendingRequests: (sessionId) =>
@@ -720,7 +779,7 @@ export const sqlStore = (
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) => decodeRequest(row.payload))
           ),
-          Effect.orDie
+          storage("pendingRequests", sessionId)
         ),
 
       answerRequest: (sessionId, response) =>
@@ -736,7 +795,7 @@ export const sqlStore = (
                 return true
               })
             )
-            .pipe(Effect.orDie)
+            .pipe(storage("answerRequest", sessionId))
         ),
 
       takeAnswer: (sessionId, requestId) =>
@@ -754,7 +813,7 @@ export const sqlStore = (
               return Option.some(yield* decodeResponse(answered[0]!.payload))
             })
           )
-          .pipe(Effect.orDie),
+          .pipe(storage("takeAnswer", sessionId)),
 
       recordedAnswers: (sessionId) =>
         sql<{
@@ -763,13 +822,13 @@ export const sqlStore = (
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) => decodeResponse(row.payload))
           ),
-          Effect.orDie
+          storage("recordedAnswers", sessionId)
         ),
 
       removeRequest: (sessionId, requestId) =>
         sql`DELETE FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${requestId} AND state = 'pending'`.pipe(
           Effect.asVoid,
-          Effect.orDie
+          storage("removeRequest", sessionId)
         )
     }
   })

@@ -1,5 +1,6 @@
 import { Effect, Option, Stream } from "effect"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
+import * as Telemetry from "../internal/telemetry.js"
 
 /**
  * Observability (issue #4 §12): semantic tracing conventions, not a wrapper.
@@ -9,15 +10,34 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
  * that generic tracing does not -- redaction. It operates through the public
  * event stream (`AgentSession.events`), so it observes without touching the run.
  *
- * The vocabulary follows the span tree the runtime already nests
- * (`agent.session → submission → run → turn → {ai.model, ai.tool}`): every
- * record carries the correlation ids under stable `agent.*` / `ai.*` keys, so an
- * exporter can group and filter agent telemetry the same way across services.
+ * The vocabulary follows the span tree the runtime already nests --
+ * `AgentSession.prompt → AgentSubmission.execute → AgentRun.execute →
+ * AgentTurn.execute → ToolExecution.tool` -- and shares its attribute keys with
+ * it: every record carries the correlation ids under the same stable `agent.*`
+ * / `ai.*` names the kernel annotates its spans with, so an exporter can group
+ * and filter agent telemetry the same way across services, and can join a trace
+ * to the events describing the same run.
+ *
+ * The join is by attribute, not by name. Span names are `Module.operation`
+ * (the Effect convention, and what `Effect.fn` produces); `describe` names an
+ * event's *record* in the `agent.*` / `ai.*` vocabulary. `agent.run.id` means
+ * the same run in both.
  *
  * **Content is opt-in.** By default only metadata is recorded -- ids, event
  * names, tool names. Prompts, tool parameters, tool results and model output are
  * omitted unless a `RedactionPolicy` turns them on, and a `redact` hook can
  * scrub what does get through. Telemetry should not become a PII/secret leak.
+ *
+ * **That promise covers this event stream, and not the span tree.** Effect AI's
+ * `Toolkit.handle` annotates the current span with `{ tool, parameters }`
+ * (`effect/unstable/ai/Toolkit.ts`), and the current span there is the harness's
+ * own `ToolExecution.tool`. So an application that wires a tracer exports raw
+ * tool parameters regardless of the policy set here -- the policy governs what
+ * *this package* records, and cannot reach an annotation made upstream.
+ *
+ * Anyone tracing an agent that handles secrets should therefore scrub at the
+ * exporter as well. Stated here rather than left to be discovered, because the
+ * default reads as safe and is only safe for one of the two channels.
  *
  * ```ts
  * // Fork an observer over a session's events, metadata only (the default):
@@ -35,24 +55,28 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
 // The attribute vocabulary
 // ---------------------------------------------------------------------------
 
-/** Stable attribute keys, so every emitter and dashboard agrees on the names. */
-export const attributeNames = {
-  session: "agent.session.id",
-  submission: "agent.submission.id",
-  run: "agent.run.id",
-  turn: "agent.turn.index",
-  sequence: "agent.sequence",
-  event: "agent.event",
-  toolName: "ai.tool.name",
-  toolCallId: "ai.tool.call_id",
-  toolParams: "ai.tool.params",
-  toolResult: "ai.tool.result",
-  modelText: "ai.model.text",
-  streaming: "agent.streaming",
-  durable: "agent.durable"
-} as const
+/**
+ * Stable attribute keys, so every emitter and dashboard agrees on the names.
+ *
+ * Re-exported from `internal/telemetry.ts` rather than defined here, because
+ * the kernel annotates its spans through the same object. This package used to
+ * hold its own copy, and the two drifted: spans said `runId` while this said
+ * `agent.run.id`, so an exporter could not join a trace to the events emitted
+ * about that same run. The definition now lives below both halves and neither
+ * writes a key literal.
+ */
+export const attributeNames = Telemetry.attributeNames
 
-/** The span an event belongs to, from the tree the runtime nests. */
+/**
+ * The span an event belongs to.
+ *
+ * Note this names the span an *event* is attributed to, which is not the same
+ * string as the span the runtime opens for the work itself: those are
+ * `Effect.fn` names in the `Module.operation` style (`AgentTurn.execute`,
+ * `ToolExecution.tool`). Both are correct and they are joined by the attributes
+ * above, not by their names — an event carrying `agent.run.id` and the
+ * `AgentRun.execute` span carrying the same key are the same run.
+ */
 const spanNameFor = (tag: string): string => {
   if (tag.startsWith("ToolCall")) return "ai.tool"
   if (tag.startsWith("Message")) return "ai.model"

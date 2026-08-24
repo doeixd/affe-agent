@@ -52,6 +52,17 @@ is ecosystem polish, not capability:
    sandbox/channel/deployment adapters (a real crypto-backed Slack signature
    verifier as a host-flagged sub-entry, more channel platforms, durable/queue
    implementations of `AgentDispatcher`).
+2. **Effect modules we are re-deriving** —
+   [docs/audit-effect-ecosystem.md](./docs/audit-effect-ecosystem.md) measured
+   every `effect` import against the v4 module list. The core is used deeply;
+   the gaps cluster, and most are primitives an unbuilt plan proposes to
+   hand-roll. One is a genuine capability gap rather than polish:
+   **`ExecutionPlan`** — provider fallback and per-model retry ladders, which
+   every user currently writes themselves and which `/budget` has no seam for.
+   The rest are folded into the plans that should act on them (`Tx*` for the
+   coding toolkit's documented lock leak, `LayerMap`/`RcMap` for the server and
+   the session tree, `Metric` for `/observability`, `Crypto` for the Slack
+   verifier above, `unstable/cli` for the CLI above).
 
 ### Small refinements worth folding in
 

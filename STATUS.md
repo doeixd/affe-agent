@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 698 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 837 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
 imports every published entry point from the packed tarball (31 entries).
 `verify:package` is the source of truth for the entry-point count; regenerate
@@ -2188,15 +2188,48 @@ existed -- a tool, a service, a context transform, a layer -- and the engine is
 untouched by all four. End-user and test code needs no casts throughout.
 
 **`/coding` -- a coding-agent tool battery over the sandbox seam.** Six tools
-(read_file with line numbers and a range, write_file, edit_file as an exact
-replace that refuses an ambiguous match, list_files, search as an in-process
-tree walk so it works against any provider, bash), each an ordinary Tool whose
-handler demands `Sandbox.Current`. Which sandbox runs -- memory for tests, a
-real directory -- is layer wiring. Every tool carries a `Permission` projection
-(files to read/write on the path, bash to shell on the command), so a policy
-gates them without knowing their shapes. Failures reach the model as strings.
-Nine tests (`test/CodingToolkit.test.ts`); falsified by breaking `bash -lc` and
-the edit-uniqueness guard.
+(read_file, write_file, edit_file, list_files, search, bash), each an ordinary
+Tool whose handler demands `Sandbox.Current`. Which sandbox runs -- memory for
+tests, a real directory -- is layer wiring. Every tool carries a `Permission`
+projection (files to read/write on the path, bash to shell on the command), so a
+policy gates them without knowing their shapes. Failures reach the model as
+strings it can act on. 134 tests (`test/CodingToolkit.test.ts`,
+`test/Replace.test.ts`, `test/CodingPrompts.test.ts`).
+
+The tool internals are ported from opencode v2 (MIT), verified line by line
+against commit `2a6be0a`; `docs/plan-opencode-tools-port.md` records the method,
+the invariants and every deliberate divergence. What that bought, beyond the
+original battery:
+
+- **`edit_file` tolerates the ways a model's quotation drifts** -- trailing
+  whitespace, indentation, over-escaped `\n`, a reformatted block middle --
+  through nine matching strategies tried strictest first. A strategy may only
+  ever *select a span of real file text*; the splice is by index, so nothing is
+  ever synthesized. Non-unique matches fall through rather than guessing, and a
+  span far larger than `old_string` is refused outright. Line endings and a BOM
+  survive an edit because the search strings are converted to the file's
+  convention rather than the file being normalised. A per-path lock makes
+  read-modify-write atomic, so concurrent edits cannot lose an update. The lock
+  registry is a `TxRef` of ref-counted entries, so an entry is evicted on the
+  last release *in the same commit that observes it* -- the check-then-delete a
+  plain `Map` forces is what made the earlier version leak one semaphore per
+  path ever edited. Three tests cover the drain, a waiter racing the drain, and
+  an interrupted edit; see `docs/audit-effect-ecosystem.md` E7.
+- **Bounded output everywhere, with a way to continue.** Reads cap at 2000 lines
+  and 50 KB and end with the exact `offset` to pass next; search caps at 100
+  matches grouped by file and says when it truncated; command output keeps the
+  *tail* within 2000 lines and 50 KB, repaired to a UTF-8 character boundary,
+  with the whole of it saved under `.effect-agent/tool-output/` for `search` and
+  `read_file` to work on.
+- **Descriptions that cannot drift from the code.** Every limit a prompt quotes
+  is interpolated from the constant that enforces it, and a test rejects any
+  number in a description that is not a value some constant currently holds.
+
+Falsified by breaking each invariant in turn: removing the per-path lock, the
+proportionality guard, the line-ending reconciliation and the BOM preservation
+each fail their own tests, and four differential harnesses against upstream's
+own code (179 cases across editing, reading, search rendering and output
+tailing) show zero unexpected divergences.
 
 **`/subagent` -- a tool that opens a child session.** `Subagent.tool(name,
 childAgent, { description, provide, onError? })` returns an `Agent.BoundTool`

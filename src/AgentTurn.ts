@@ -11,6 +11,7 @@ import * as InternalToolkit from "./internal/toolkit.js"
 import type { RunId, SubmissionId } from "./internal/ids.js"
 import type { Session } from "./internal/state.js"
 import * as Accumulator from "./internal/streamAccumulator.js"
+import * as Telemetry from "./internal/telemetry.js"
 
 export interface Result<Tools extends Record<string, Tool.Any>> {
   /**
@@ -175,7 +176,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     // Correlation is passed down rather than read back from state: the caller
     // already knows it, and state is shared mutable data that may have moved on.
     const correlation: Correlation = { submissionId, runId, turn }
-    yield* Effect.annotateCurrentSpan({ runId, turn })
+    yield* Telemetry.annotateTurn(session.id, runId, turn)
 
     // Ordering per PLAN §14: steering has already been drained and committed by
     // the run, so the snapshot includes it. The prompt is derived before

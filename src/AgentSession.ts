@@ -31,6 +31,7 @@ import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
 import type { SubmissionId } from "./internal/ids.js"
 import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
+import * as Telemetry from "./internal/telemetry.js"
 
 /** Correlation id for a session. See `AgentEvent` for the envelope. */
 export const Id = Ids.SessionId
@@ -455,6 +456,7 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
   options: PromptOptions = {}
 ) {
     const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
 
     // Claim, fork and register as one uninterruptible step, and the release
     // finalizer installed in the same step. Each gap here was a real hole:
@@ -584,6 +586,7 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
   input: Prompt.RawInput
 ) {
     const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
     const submissionId = yield* requireRunning(self, "steer")
     // Offer and announcement are one step under the input gate, which the
     // turn-boundary drain holds too — so a drain can never observe the input
@@ -607,6 +610,7 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
   input: Prompt.RawInput
 ) {
     const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
     const submissionId = yield* requireRunning(self, "followUp")
     // The submission may have closed its input without the session being idle
     // yet; accepting here would mean promising work that is about to be
@@ -651,6 +655,7 @@ export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
   session: AgentSession<any, any>
 ) {
     const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
     yield* requireRunning(self, "interrupt")
     const fiber = yield* Ref.get(self.activeFiber)
     if (Option.isSome(fiber)) {
@@ -691,6 +696,7 @@ export const respond = Effect.fn("AgentSession.respond")(function* (
   response: Elicitation.Response
 ) {
     const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
     const answered = yield* self.elicitation.respond(response)
     return answered
   })
@@ -740,6 +746,7 @@ export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
   session: AgentSession<any, any>
 ) {
     const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
     const current = yield* SubscriptionRef.get(self.state)
     if (current.status === "closed") {
       return yield* new AgentClosedError({ sessionId: self.id })

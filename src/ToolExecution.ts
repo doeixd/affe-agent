@@ -8,6 +8,7 @@ import { ToolApprovalRequiredError, ToolPermissionDeniedError } from "./Errors.j
 import type * as Elicitation from "./Elicitation.js"
 import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
+import * as Telemetry from "./internal/telemetry.js"
 
 /**
  * The errors `ToolExecution` raises *itself*, rather than surfacing from a tool
@@ -221,10 +222,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
   context: TurnContext<R>
 ) {
     const { agent, correlation, messages, session } = context
-    yield* Effect.annotateCurrentSpan({
-      tool: call.name,
-      toolCallId: call.id
-    })
+    yield* Telemetry.annotateTool(session.id, call.name, call.id)
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "ToolCallStarted",
       id: call.id,

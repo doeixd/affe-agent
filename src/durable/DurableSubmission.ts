@@ -22,6 +22,7 @@ import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
+import { isStorageError, StorageError } from "./StorageError.js"
 
 /**
  * One submission of a durable logical session, as a workflow.
@@ -126,7 +127,7 @@ const finishProjection = (
   history: Prompt.Prompt
 ): Effect.Effect<
   void,
-  never,
+  StorageError,
   WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 > =>
   Effect.gen(function* () {
@@ -145,6 +146,10 @@ const finishProjection = (
     yield* Activity.make({
       name: `session-projection/${payload.sessionId}/${payload.submissionId}/finish`,
       success: Schema.Boolean,
+      // A store failure here is declared, not a defect: the whole point of
+      // `StorageError` is that the workflow can tell infrastructure from the
+      // agent. It crosses the journal because it is a `Schema.TaggedError`.
+      error: StorageError,
       execute: Effect.all([
         store.takeAll(DurableChannels.openKey(payload.sessionId)),
         store.takeAll(
@@ -198,8 +203,24 @@ export const projectedElicitation = (
             // is not: the only sensible way to answer is to react to the
             // announcement, and answering a request nothing was yet waiting on
             // would strand the answer and hang the run.
+            // The two `orDie`s below are deliberate, and are the third
+            // triage bucket from `StorageError`: a real failure the caller
+            // cannot act on.
+            //
+            // `Elicitation.Elicitor` is a *core* seam whose methods declare no
+            // error, because a local elicitor genuinely cannot fail. Widening
+            // it so the durable implementation can report a store failure
+            // would push durability's concerns into the kernel, which is the
+            // one thing every package here is forbidden to do. And there is no
+            // useful answer at this depth anyway: a run whose elicitation
+            // projection is unwritable cannot ask its question, so it cannot
+            // continue. Failing the fibre is the honest outcome; the
+            // difference from before is that it is now a considered choice
+            // with a reason, not the default.
             Effect.gen(function* () {
-              yield* sessionStore.addPendingRequest(sessionId, request)
+              yield* Effect.orDie(
+                sessionStore.addPendingRequest(sessionId, request)
+              )
               yield* announce
               const response = yield* DurableDeferred.await(
                 DurableElicitation.deferredFor(request.id)
@@ -208,11 +229,14 @@ export const projectedElicitation = (
               // Consumed. Whoever delivered the answer already recorded it in
               // the store; removing the request is what makes the run look
               // unpaused to every other observer.
-              yield* sessionStore.removeRequest(sessionId, request.id)
+              yield* Effect.orDie(
+                sessionStore.removeRequest(sessionId, request.id)
+              )
               return response
             }),
           respond: () => Effect.succeed(false),
-          pending: sessionStore.pendingRequests(sessionId)
+          // Same reason as `elicit` above: the seam declares no error.
+          pending: Effect.orDie(sessionStore.pendingRequests(sessionId))
         })
     }
   })
@@ -362,13 +386,32 @@ const recordingSink = (
 
 /**
  * Whether a cause is the infrastructure under the agent failing rather than
- * the agent. The stores convert their SQL and persistence failures into
- * defects, so the check walks the defects by tag and name.
+ * the agent.
+ *
+ * The distinction matters because an infrastructure failure must not be
+ * reported to a client as the submission ending: the same call may succeed on
+ * another attempt, while an agent failure is a property of the request and
+ * will recur.
+ *
+ * This used to walk the *defects*, matching `_tag === "SqlError"` and, failing
+ * that, asking whether a `name` string merely *contained* `"SqlError"`. It had
+ * to: the stores converted every failure into a defect with `Effect.orDie`, so
+ * the only evidence left was the shape of whatever object happened to be
+ * thrown. That check reconstructed, unreliably, exactly the information the
+ * error channel had been made to discard -- a store returning a differently
+ * named driver error was silently reported to a caller as its agent failing.
+ *
+ * Now the stores name it. A `StorageError` in the error channel is the answer,
+ * and the defect walk survives only for what genuinely still arrives that way:
+ * the elicitation seam, which declares no error and dies on a store failure
+ * for the reason recorded at that site.
  */
 const isInfrastructure = (cause: Cause.Cause<unknown>): boolean =>
+  Option.isSome(Cause.findErrorOption(cause).pipe(Option.filter(isStorageError))) ||
   cause.reasons.some((reason) => {
     if (!Cause.isDieReason(reason)) return false
     const defect: unknown = reason.defect
+    if (isStorageError(defect)) return true
     if (typeof defect !== "object" || defect === null) return false
     const tagged = defect as { readonly _tag?: unknown; readonly name?: unknown }
     const tag = typeof tagged._tag === "string" ? tagged._tag : ""

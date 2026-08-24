@@ -15,6 +15,7 @@ import * as DurableElicitation from "./DurableElicitation.js"
 import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableSubmission from "./DurableSubmission.js"
 import * as DurableSessionStore from "./DurableSessionStore.js"
+import type { StorageError } from "./StorageError.js"
 
 /**
  * The durable interpreter of the client contract.
@@ -167,6 +168,36 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
    * a pure function of the claim — including when the dispatching process
    * died before recording it.
    */
+
+  /**
+   * A store failure, seen from a client, is a transport failure.
+   *
+   * The stores now name what went wrong (`StorageError`) instead of dying,
+   * which is what lets `DurableSubmission` tell infrastructure from agent
+   * failure without inspecting defects. A *client* wants one bit less than
+   * that: whether retrying could work. `AgentTransportError` is already that
+   * bit — its doc says the caller can tell "this session is busy" from "the
+   * transport broke" without either being a defect — and a database that
+   * failed a read is the same kind of news as a socket that dropped.
+   *
+   * So `RemoteError` does not grow a variant. The distinction survives where
+   * it is acted on and is folded where it is only reported, which is also why
+   * the wire protocol is unchanged.
+   */
+  const storageAsTransport =
+    (sessionId: string) =>
+    <A, R>(
+      effect: Effect.Effect<A, AgentClient.RemoteError | StorageError, R>
+    ): Effect.Effect<A, AgentClient.RemoteError, R> =>
+      Effect.catchTag(effect, "StorageError", (error) =>
+        Effect.fail(
+          new AgentClient.AgentTransportError({
+            sessionId,
+            detail: error.message
+          })
+        )
+      )
+
   const executionIdFor = (
     sessionId: string,
     claim: DurableSessionStore.Claim
@@ -193,7 +224,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
     sessionId: string,
     claim: DurableSessionStore.Claim,
     initialHistory: Prompt.Prompt
-  ): Effect.Effect<string, never, WorkflowEngine.WorkflowEngine> =>
+  ): Effect.Effect<string, StorageError, WorkflowEngine.WorkflowEngine> =>
     Effect.gen(function* () {
       const prompt = yield* DurableSessionStore.decodeHistory(claim.prompt)
       const payload: DurableSubmission.Payload = {
@@ -227,7 +258,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
     sessionId: string,
     claim: DurableSessionStore.Claim,
     response: Parameters<DurableSessionStore.DurableSessionStore["answerRequest"]>[1]
-  ): Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> =>
+  ): Effect.Effect<void, StorageError, WorkflowEngine.WorkflowEngine> =>
     Effect.gen(function* () {
       const executionId = yield* executionIdFor(sessionId, claim)
       yield* DurableElicitation.respond({
@@ -247,7 +278,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
    */
   const reconcile = (
     record: DurableSessionStore.SessionRecord
-  ): Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> =>
+  ): Effect.Effect<void, StorageError, WorkflowEngine.WorkflowEngine> =>
     Effect.gen(function* () {
       if (Option.isNone(record.claim)) return
       const claim = record.claim.value
@@ -348,7 +379,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           turns: exit.value.turns,
           text: exit.value.text
         }
-      }).pipe(Effect.provide(env)),
+      }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
     steer: (input) => DurableAgent.steer(options.store, sessionId, input),
 
@@ -390,7 +421,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
                 : Effect.void
           )
         )
-      }).pipe(Effect.provide(env)),
+      }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
     respond: (response) =>
       Effect.gen(function* () {
@@ -406,17 +437,19 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           yield* deliverAnswer(sessionId, found.value.claim.value, response)
         }
         return true
-      }).pipe(Effect.provide(env)),
+      }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
-    pending: options.sessionStore.pendingRequests(sessionId),
+    pending: options.sessionStore
+      .pendingRequests(sessionId)
+      .pipe(storageAsTransport(sessionId)),
 
     history: Effect.gen(function* () {
       const found = yield* options.sessionStore.get(sessionId)
       if (Option.isNone(found)) {
         return yield* noSuchSession(sessionId)
       }
-      return yield* DurableSessionStore.decodeHistory(found.value.history)
-    }),
+      return yield* DurableSessionStore.decodeHistory(found.value.history, sessionId)
+    }).pipe(storageAsTransport(sessionId)),
 
     status: Effect.gen(function* () {
       const found = yield* options.sessionStore.get(sessionId)
@@ -424,7 +457,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
         return yield* noSuchSession(sessionId)
       }
       return found.value.status
-    }),
+    }).pipe(storageAsTransport(sessionId)),
 
     // Live delivery from the shared log when one is supplied. The stream is
     // live-only — events recorded after this subscription begins — matching
@@ -454,7 +487,12 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           // Nothing handle-owned is acquired, so there is nothing to release:
           // closing this scope ends the *handle*, never the logical session.
           return makeRemoteSession(sessionId, env)
-        }).pipe(Effect.provide(env))
+          // The id is known only inside the block, so the transport error names
+          // what the caller asked for -- or says it had not been assigned yet.
+        }).pipe(
+          storageAsTransport(sessionOptions?.sessionId ?? "(unassigned)"),
+          Effect.provide(env)
+        )
 
       const session: AgentClient.Service["session"] = (requested) =>
         Effect.gen(function* () {
@@ -467,7 +505,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           }
           yield* reconcile(found.value)
           return makeRemoteSession(requested, env)
-        }).pipe(Effect.provide(env))
+        }).pipe(storageAsTransport(requested), Effect.provide(env))
 
       return { createSession, session }
     })

@@ -8,6 +8,7 @@ import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
 import type { SubmissionId } from "./internal/ids.js"
+import * as Telemetry from "./internal/telemetry.js"
 
 /** Correlation id for one externally observed unit of work. */
 export const Id = Ids.SubmissionId
@@ -50,7 +51,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
   options: AgentTurn.Options = {}
 ) {
     const correlation: Correlation = { submissionId }
-    yield* Effect.annotateCurrentSpan({ submissionId })
+    yield* Telemetry.annotateSubmission(session.id, submissionId)
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "SubmissionStarted"
     })
