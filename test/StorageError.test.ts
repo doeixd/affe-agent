@@ -1,11 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Option } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as AgentEvent from "../src/AgentEvent.js"
+import { AgentState } from "../src/state/index.js"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import * as Ids from "../src/internal/ids.js"
-import { isStorageError, StorageError } from "../src/durable/StorageError.js"
+import { isStorageError, StorageError } from "../src/Errors.js"
 
 /**
  * The durable stores used to convert every failure into a defect, so their
@@ -144,6 +145,42 @@ describe("StorageError", () => {
       const decoded = yield* DeliveryLog.decodeEnvelope(encoded, "s1")
       assert.strictEqual(decoded.sequence, 1)
       assert.strictEqual(decoded.event._tag, "SessionStarted")
+    })
+  )
+
+  /**
+   * `/state`'s motivation is different from the durable stores', and sharper.
+   *
+   * Persistent state is keyed per user or per conversation and outlives
+   * deployments, so meeting a value written by an *older schema* is the
+   * ordinary case, not the exotic one. A caller that sees the failure can
+   * migrate or fall back to `initial`; a defect gives it neither option.
+   */
+  it.effect("state written by an older schema is a failure the caller can handle", () =>
+    Effect.gen(function* () {
+      const store = yield* AgentState.memoryStore
+      // What last release wrote: a number. What this release expects: a struct.
+      yield* store.save("plan:user-42", "7")
+
+      const Plan = AgentState.Tag<{ readonly goal: string }>("test/DriftPlan")
+      const built = yield* Effect.exit(
+        Effect.void.pipe(
+          Effect.provide(
+            AgentState.layer(Plan, {
+              initial: { goal: "fresh" },
+              persistence: {
+                schema: Schema.Struct({ goal: Schema.String }),
+                store,
+                key: "plan:user-42"
+              }
+            })
+          )
+        )
+      )
+      assert.isTrue(Exit.isFailure(built))
+      const error = Cause.findErrorOption(built.cause)
+      assert.isTrue(Option.isSome(error))
+      assert.isTrue(isStorageError(error.value))
     })
   )
 

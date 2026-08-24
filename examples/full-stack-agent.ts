@@ -51,7 +51,13 @@ const Assistant = Agent.make({
     Skills.loadTool,
     Memory.rememberTool(userId),
     Agent.tool(RecordStep, ({ step }) =>
-      AgentState.update(Plan, (plan) => ({ steps: [...plan.steps, step] })).pipe(Effect.as("recorded")))
+      AgentState.update(Plan, (plan) => ({ steps: [...plan.steps, step] })).pipe(
+        Effect.as("recorded"),
+        // Persisted state writes through, so this can fail; tell the model.
+        Effect.catchTag("StorageError", (error) =>
+          Effect.succeed(`could not record the step: ${error.detail}`)
+        )
+      ))
   ],
   contextTransform: ContextTransform.compose(
     Skills.advertise,

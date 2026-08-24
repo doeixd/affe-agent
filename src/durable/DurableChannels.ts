@@ -3,6 +3,8 @@ import { Prompt } from "effect/unstable/ai"
 import { SqlClient } from "effect/unstable/sql"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import type * as InputChannel from "../InputChannel.js"
+import { isStorageError, StorageError } from "../Errors.js"
+import { detailOf } from "../internal/detail.js"
 
 /**
  * Steering and follow-up input, persisted per drain.
@@ -30,9 +32,11 @@ import type * as InputChannel from "../InputChannel.js"
  * Encoding happens in `factory` below.
  */
 export interface Store {
-  readonly offer: (key: string, input: string) => Effect.Effect<void>
-  readonly takeAll: (key: string) => Effect.Effect<ReadonlyArray<string>>
-  readonly size: (key: string) => Effect.Effect<number>
+  readonly offer: (key: string, input: string) => Effect.Effect<void, StorageError>
+  readonly takeAll: (
+    key: string
+  ) => Effect.Effect<ReadonlyArray<string>, StorageError>
+  readonly size: (key: string) => Effect.Effect<number, StorageError>
   /**
    * Offer input, but only if the gate key currently holds something.
    *
@@ -50,7 +54,7 @@ export interface Store {
     key: string,
     input: string,
     gateKey: string
-  ) => Effect.Effect<boolean>
+  ) => Effect.Effect<boolean, StorageError>
 }
 
 /**
@@ -120,7 +124,7 @@ export const offer = (
   sessionId: string,
   name: "steering" | "followUps",
   input: Prompt.RawInput
-): Effect.Effect<void> =>
+): Effect.Effect<void, StorageError> =>
   Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
     store.offer(`${sessionId}:${name}`, encoded)
   )
@@ -139,22 +143,39 @@ export const offerIfAdmitting = (
   sessionId: string,
   name: "steering" | "followUps",
   input: Prompt.RawInput
-): Effect.Effect<boolean> =>
+): Effect.Effect<boolean, StorageError> =>
   Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
     store.offerIfOpen(`${sessionId}:${name}`, encoded, openKey(sessionId))
   )
 
-/** Prompts cross the store as JSON; an unencodable prompt is a bug, not a case. */
+/**
+ * Prompts cross the store as JSON; an unencodable prompt is a bug, not a case.
+ *
+ * Encoding stays a defect for the reason `StorageError` gives: the value was
+ * built by this process, so a schema that cannot encode it is a bug here.
+ */
 const encodePrompt = (prompt: Prompt.Prompt): Effect.Effect<string> =>
   Schema.encodeEffect(Prompt.Prompt)(prompt).pipe(
     Effect.map((encoded) => JSON.stringify(encoded)),
     Effect.orDie
   )
 
-const decodePrompt = (encoded: string): Effect.Effect<Prompt.Prompt> =>
+/**
+ * Decoding is steering or follow-up input coming *back* out of the store, so it
+ * can be a truncated write or a row from an older schema -- conditions, not
+ * bugs. D1 makes this one matter more than it looks: input reported as accepted
+ * must be executed or its failure reported, and a defect while draining is
+ * neither.
+ */
+const decodePrompt = (
+  encoded: string
+): Effect.Effect<Prompt.Prompt, StorageError> =>
   Effect.try(() => JSON.parse(encoded) as unknown).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Prompt.Prompt)),
-    Effect.orDie
+    Effect.mapError(
+      (cause) =>
+        new StorageError({ operation: "decodePrompt", detail: detailOf(cause) })
+    )
   )
 
 /**
@@ -182,31 +203,54 @@ export const factory = (
       // The published half of admission. The session drives this at the exact
       // moment its own gate moves, so an out-of-process `followUp` sees the
       // same answer an in-process one would.
+      //
+      // `orDie` here is the third triage bucket, for the fourth time:
+      // `InputChannel.Factory` is a *core* seam declaring `Effect<void>`, and
+      // widening it so a durable channel can report a store failure would push
+      // durability into the kernel. It is also the outcome we want. A stale
+      // marker is precisely the failure this hook exists to prevent -- the
+      // comment on `Factory.setAdmitting` describes it: input accepted for as
+      // long as the published marker is wrong, then discarded on release. D1
+      // says accepting and dropping is never allowed, so failing loudly beats
+      // publishing a marker we could not write.
       setAdmitting: (sessionId, admitting) =>
-        admitting
-          ? store.offer(openKey(sessionId), "open")
-          : Effect.asVoid(store.takeAll(openKey(sessionId))),
+        Effect.orDie(
+          admitting
+            ? store.offer(openKey(sessionId), "open")
+            : Effect.asVoid(store.takeAll(openKey(sessionId)))
+        ),
       make: (sessionId, name) =>
         Effect.map(Ref.make(0), (drainIndex): InputChannel.InputChannel => {
           const key = `${sessionId}:${name}`
           return {
+            // Same seam, same reason: `InputChannel` declares no error.
             offer: (input) =>
-              Effect.flatMap(encodePrompt(input), (encoded) =>
-                store.offer(key, encoded)
+              Effect.orDie(
+                Effect.flatMap(encodePrompt(input), (encoded) =>
+                  store.offer(key, encoded)
+                )
               ),
-            size: store.size(key),
-            drain: Effect.gen(function* () {
+            size: Effect.orDie(store.size(key)),
+            // `InputChannel.drain` declares no error, so the seam constraint
+            // applies here too. A drain that cannot read its own journalled
+            // batch has lost accepted input, which D1 forbids silently: dying
+            // is the loud version, and `isInfrastructure` classifies it.
+            drain: Effect.orDie(Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(drainIndex, (n) => n + 1)
               const encoded = yield* Activity.make({
                 name: `${options?.prefix ?? ""}${name}-drain-${index}`,
                 success: inputs,
+                // A store failure here is declared, not a defect: the drain is
+                // journalled, so it crosses as a value and a resumed run sees
+                // what the original saw.
+                error: StorageError,
                 execute: store.takeAll(key)
               }).pipe(Effect.provide(workflowContext))
 
               // Decoding after the activity keeps the journalled value in its
               // wire form, which is what makes the drain replayable.
               return yield* Effect.forEach(encoded, decodePrompt)
-            })
+            }))
           }
         })
     }
@@ -253,13 +297,27 @@ export const sqlStore = (
 ): Effect.Effect<Store, never, SqlClient.SqlClient> =>
   Effect.map(SqlClient.SqlClient, (sql) => {
     const table = sql.literal(escapeIdentifier(options?.table ?? sqlStoreTable))
+
+    /** Every channel operation's failure, named. As `DurableSessionStore`. */
+    const storage =
+      (operation: string, key?: string) =>
+      <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, StorageError> =>
+        Effect.mapError(effect, (cause): StorageError =>
+          isStorageError(cause)
+            ? cause
+            : new StorageError({
+                operation,
+                detail: key === undefined ? detailOf(cause) : `${key}: ${detailOf(cause)}`
+              })
+        )
+
     return {
       offer: (key, input) =>
         sql`INSERT INTO ${table} ${sql.insert({ channel_key: key, value: input })}`.pipe(
           Effect.asVoid,
           // A store failure is not a case a caller can act on: the alternative
           // is a typed error on every `offer` in the library.
-          Effect.orDie
+          storage("offer", key)
         ),
       takeAll: (key) =>
         // One transaction, because a drain that read rows and then deleted them
@@ -281,13 +339,13 @@ export const sqlStore = (
               return rows.map((row) => row.value)
             })
           )
-          .pipe(Effect.orDie),
+          .pipe(storage("takeAll", key)),
       size: (key) =>
         sql<{
           readonly count: number
         }>`SELECT COUNT(*) AS count FROM ${table} WHERE channel_key = ${key}`.pipe(
           Effect.map((rows) => Number(rows[0]?.count ?? 0)),
-          Effect.orDie
+          storage("size", key)
         ),
       offerIfOpen: (key, input, gateKey) =>
         // One transaction, for the same reason `takeAll` is: the check and the
@@ -306,7 +364,7 @@ export const sqlStore = (
               return true
             })
           )
-          .pipe(Effect.orDie)
+          .pipe(storage("offerIfOpen", key))
     }
   })
 

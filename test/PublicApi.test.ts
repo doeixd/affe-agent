@@ -20,9 +20,14 @@ describe("public API", () => {
       "ContextTransform",
       "InputChannel",
       "Permission",
+      // The vocabulary for a failing store, public because a caller has to be
+      // able to catch it and to recognise one that crossed a journal.
+      // `detailOf`, which fills in its `detail`, is deliberately internal.
+      "StorageError",
       "ToolApprovalRequiredError",
       "ToolExecution",
-      "ToolPermissionDeniedError"
+      "ToolPermissionDeniedError",
+      "isStorageError"
     ])
   })
 

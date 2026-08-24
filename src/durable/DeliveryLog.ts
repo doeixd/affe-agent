@@ -1,7 +1,8 @@
 import { Duration, Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as AgentEvent from "../AgentEvent.js"
-import { detailOf, isStorageError, StorageError } from "./StorageError.js"
+import { isStorageError, StorageError } from "../Errors.js"
+import { detailOf } from "../internal/detail.js"
 
 /**
  * Client-facing event delivery, kept apart from the Workflow journal.

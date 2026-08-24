@@ -120,7 +120,12 @@ describe("AgentState in a session", () => {
     success: Schema.String,
     dependencies: [Counter]
   })
-  const bump = Agent.tool(Bump, () => AgentState.update(Counter, (n) => n + 1).pipe(Effect.as("bumped")))
+  // Ephemeral state here, so the store failure cannot happen -- but the type
+  // says it could, because the same agent must be runnable against a store.
+  // `orDie` is the honest way for a caller with no store to say so.
+  const bump = Agent.tool(Bump, () =>
+    AgentState.update(Counter, (n) => n + 1).pipe(Effect.orDie, Effect.as("bumped"))
+  )
 
   it.effect("a tool mutates the state and the transform shows the model its current value each turn", () =>
     Effect.gen(function* () {

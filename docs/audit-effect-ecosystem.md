@@ -448,8 +448,43 @@ defect used to be whatever the driver threw, recognised by matching `"SqlError"`
 against its `name`; it is now a `StorageError` matched by tag, whether it
 arrives as a failure or as a defect.
 
-**Still to do:** `DurableChannels` (8 sites) and `state/AgentState` (5). Neither
-carries a durability invariant of its own, so both are ordinary follow-ups.
+**`DurableChannels` and `state/AgentState` finished it**, and the first was
+mis-scoped above: `offerIfOpen` *is* the admission gate, so D1 (*work reported
+as accepted is executed exactly once, or the failure is reported to the caller*)
+runs straight through it. A defect during admission is neither of D1's two
+allowed outcomes.
+
+`StorageError` moved to `Errors.ts` in the process. It was never
+durability-specific -- `/state` persists through a `Store` too -- and a second
+error meaning the same thing is the duplication this audit exists to remove.
+`detailOf` stayed internal: it fills in a `detail` and is not vocabulary a
+caller needs.
+
+**The `/state` design question, and how it was settled.** Typing the store's
+failure means `AgentState`'s mutations declare it, which reaches user code: a
+tool writing persisted state must now decide what to tell the model. The
+obvious refinement was to make the error depend on whether `persistence` was
+supplied -- `AgentState<A, E = never>`, so ephemeral state acknowledges nothing.
+
+That was built, and then reverted, because `examples/state.ts` proves it wrong:
+it runs **the same agent** ephemerally in development and persisted in
+production. Two types make that swap impossible. So there is one type, its
+mutations declare `StorageError`, and ephemeral state simply never raises it --
+a deliberate overstatement, chosen because interchangeability is worth more
+than a `never` the ephemeral case would have enjoyed. A caller with no store
+writes `Effect.orDie`; a caller with one now learns its write failed.
+
+The examples were updated to *handle* it rather than to suppress it, which is
+the honest demonstration: a tool that could not save a step tells the model so,
+and the model can retry or carry on.
+
+**A mistake worth recording.** `AgentEntity`'s Rpc handlers declare
+`AgentIdleError` and cannot grow a variant without a protocol change, so a
+store failure dies there. The first version used `Effect.orDie`, which took
+`AgentIdleError` with it -- the one error the Rpc *does* declare and the only
+one a caller can act on. `test/Cluster.test.ts` caught it
+(*"steering an idle session fails as a typed error, not a defect"*). It is now
+`catchTag("StorageError", Effect.die)`, which dies for exactly one reason.
 
 ### E15. Two telemetry vocabularies for the same facts — **fixed, A-0**
 
@@ -760,10 +795,10 @@ outrank most of round one.
   7 tests, falsified twice. `DeliveryLog` followed: `append`/`live`/`read`
   declare it, and the client's event stream fails rather than dying, so a
   consumer can reconnect from its last sequence (D5).
-  **Remaining:** `DurableChannels` (8) and `state/AgentState` (5), neither
-  carrying a durability invariant of its own. Unblocks
-  [plan-durability-hardening.md](./plan-durability-hardening.md) H4 for the two
-  components its invariants are about.
+  `DurableChannels` and `state/AgentState` completed it. **H4 is unblocked
+  across every store.** `StorageError` now lives in `Errors.ts`, since it was
+  never durability-specific. The open half is `AgentEntity`'s Rpc error schema:
+  widening it is a wire change and belongs with whoever owns the protocol.
 - **A-2 — Metrics in `/observability` (E8, E17). ✅ Done.** Five instruments
   over the event stream the package already consumes -- turns, turns-per-run,
   tool calls by tool and outcome, tool duration, pending input -- exported so
@@ -824,9 +859,8 @@ outrank most of round one.
   either channel (E20). *Not met — currently documented rather than enforced.*
 - **AS8 ◑:** Under H4's fault injection, a failed store write, a duplicated
   record and a corrupt stored history are **three distinguishable observations**
-  at the caller, not three defects (E14, D7). *Met for `DurableSessionStore`
-  and `DeliveryLog` (`test/StorageError.test.ts`); `DurableChannels` and
-  `AgentState` still answer every fault with a defect.*
+  at the caller, not three defects (E14, D7). *Met across all four stores
+  (`test/StorageError.test.ts`, 8 tests).*
 - **AS9 ✅:** Adding an *erasing* cast anywhere in `src/` fails the build until
   AGENTS.md records it — falsified by adding one to `AgentLoop.ts` and watching
   the suite name that file (E18). *Plain narrowings are deliberately out of

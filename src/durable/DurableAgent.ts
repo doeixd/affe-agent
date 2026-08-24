@@ -14,6 +14,7 @@ import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import * as Schedules from "../internal/schedules.js"
+import type { StorageError } from "../Errors.js"
 
 /**
  * A submission, interpreted as a durable workflow.
@@ -350,7 +351,7 @@ export const submit = <W extends ReturnType<typeof workflow>>(
   store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
-): Effect.Effect<string, never, WorkflowEngine.WorkflowEngine> =>
+): Effect.Effect<string, StorageError, WorkflowEngine.WorkflowEngine> =>
   Effect.gen(function* () {
     const prompt = Prompt.make(input)
     const executionId = yield* agent.definition.executionId({
@@ -392,7 +393,7 @@ export const steer = (
   store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
-): Effect.Effect<void, AgentIdleError> =>
+): Effect.Effect<void, AgentIdleError | StorageError> =>
   DurableChannels.offerIfAdmitting(store, sessionId, "steering", input).pipe(
     Effect.flatMap((admitted) =>
       admitted
@@ -412,7 +413,7 @@ export const followUp = (
   store: DurableChannels.Store,
   sessionId: string,
   input: Prompt.RawInput
-): Effect.Effect<void, AgentIdleError> =>
+): Effect.Effect<void, AgentIdleError | StorageError> =>
   DurableChannels.offerIfAdmitting(store, sessionId, "followUps", input).pipe(
     Effect.flatMap((admitted) =>
       admitted
@@ -458,7 +459,7 @@ const openKey = DurableChannels.openKey
 export const open = (
   store: DurableChannels.Store,
   sessionId: string
-): Effect.Effect<void> =>
+): Effect.Effect<void, StorageError> =>
   throughReassignment(store.offer(openKey(sessionId), "open"))
 
 /**

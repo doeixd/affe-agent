@@ -124,10 +124,31 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
           }).pipe(Effect.orDie),
         // Admission failures cross as `AgentIdleError`, declared by the RPCs
         // above, so a remote caller gets the same answer a local one would.
+        // A store failure dies here rather than crossing the wire -- and only
+        // a store failure. `Effect.orDie` was wrong: it took `AgentIdleError`
+        // with it, which is the one error this Rpc *does* declare and the one
+        // a caller can act on. Caught by `test/Cluster.test.ts`, which asserts
+        // steering an idle session is a typed error and not a defect.
+        //
+        // These handlers implement an `Rpc` whose error schema declares
+        // `AgentIdleError` and nothing else. Reporting a `StorageError` to the
+        // caller would mean adding a variant to that schema -- a protocol
+        // change, and one every peer has to agree to -- which is a bigger
+        // decision than this triage should make on its own. The cluster
+        // transport already models infrastructure failure separately from an
+        // entity's declared errors, and `EntityClient` retries what it judges
+        // transient, so the caller is not left without a story.
+        //
+        // Recorded as the open half of E14: widening the entity's error schema
+        // is the better answer, and it belongs with whoever owns the wire.
         steer: ({ payload }) =>
-          DurableAgent.steer(store, sessionId, payload.input),
+          DurableAgent.steer(store, sessionId, payload.input).pipe(
+            Effect.catchTag("StorageError", (error) => Effect.die(error))
+          ),
         followUp: ({ payload }) =>
-          DurableAgent.followUp(store, sessionId, payload.input),
+          DurableAgent.followUp(store, sessionId, payload.input).pipe(
+            Effect.catchTag("StorageError", (error) => Effect.die(error))
+          ),
         // Routed to the session's own execution, so a caller needs only the
         // session id it already used to submit.
         respond: ({ payload }) =>

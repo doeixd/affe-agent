@@ -22,7 +22,7 @@ import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
-import { isStorageError, StorageError } from "./StorageError.js"
+import { isStorageError, StorageError } from "../Errors.js"
 
 /**
  * One submission of a durable logical session, as a workflow.
@@ -255,7 +255,7 @@ export const interrupt = (
   store: DurableChannels.Store,
   sessionId: string,
   submissionId: string
-): Effect.Effect<void> =>
+): Effect.Effect<void, StorageError> =>
   store.offer(interruptSignalName(sessionId, submissionId), "interrupt")
 
 /**
@@ -542,8 +542,14 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       // that finds no intent, re-issues the model call, and completes --
       // the user's interrupt silently lost. Signalling the deferred twice
       // is harmless.
+      // The store read dies rather than failing, because this is handed to
+      // `projectedElicitation` as the elicitor's `onResume` hook, and
+      // `Elicitation.Elicitor` declares no error -- the same core seam that
+      // already forced the two `orDie`s inside that function. Losing an
+      // interrupt intent to a store failure must not be quiet, and a defect
+      // that `isInfrastructure` recognises by tag is the loud version.
       const checkInterrupt = Effect.flatMap(
-        options.store.size(interruptKey),
+        Effect.orDie(options.store.size(interruptKey)),
         (pending) =>
           pending > 0 ? Deferred.succeed(requested, void 0) : Effect.void
       ).pipe(Effect.asVoid)

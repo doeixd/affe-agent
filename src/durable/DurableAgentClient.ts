@@ -16,7 +16,7 @@ import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableSubmission from "./DurableSubmission.js"
 import * as DurableSessionStore from "./DurableSessionStore.js"
 import * as Schedules from "../internal/schedules.js"
-import type { StorageError } from "./StorageError.js"
+import type { StorageError } from "../Errors.js"
 
 /**
  * The durable interpreter of the client contract.
@@ -389,9 +389,15 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
         }
       }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
-    steer: (input) => DurableAgent.steer(options.store, sessionId, input),
+    steer: (input) =>
+      DurableAgent.steer(options.store, sessionId, input).pipe(
+        storageAsTransport(sessionId)
+      ),
 
-    followUp: (input) => DurableAgent.followUp(options.store, sessionId, input),
+    followUp: (input) =>
+      DurableAgent.followUp(options.store, sessionId, input).pipe(
+        storageAsTransport(sessionId)
+      ),
 
     interrupt: () =>
       Effect.gen(function* () {

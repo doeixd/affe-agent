@@ -2,7 +2,8 @@ import { Effect, Option, Ref, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { SqlClient } from "effect/unstable/sql"
 import * as Elicitation from "../Elicitation.js"
-import { detailOf, isStorageError, StorageError } from "./StorageError.js"
+import { isStorageError, StorageError } from "../Errors.js"
+import { detailOf } from "../internal/detail.js"
 
 /**
  * The durable logical session, as distinct from any one workflow execution.

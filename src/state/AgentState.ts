@@ -1,6 +1,8 @@
 import { Context, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as ContextTransform from "../ContextTransform.js"
+import { isStorageError, StorageError } from "../Errors.js"
+import { detailOf } from "../internal/detail.js"
 
 /**
  * Persistent, typed agent state (issue #4).
@@ -51,11 +53,28 @@ import * as ContextTransform from "../ContextTransform.js"
  * and, with persistence, written through to the store before it returns.
  * `changes` is the live stream for a UI that watches the state move.
  */
+/**
+ * State of type `A`.
+ *
+ * Mutations declare `StorageError` because a persisted state writes through to
+ * a store on every one, and a store can be unreachable. Reads do not: the value
+ * is already in memory.
+ *
+ * **Ephemeral state never raises it.** That is a deliberate overstatement, and
+ * the alternative was worse. Making the error depend on whether `persistence`
+ * was supplied means two different types, and then the same agent cannot be
+ * run ephemerally in development and persisted in production -- which is
+ * exactly what `examples/state.ts` demonstrates, and the property worth
+ * keeping. A caller with no store can `Effect.orDie` and move on; a caller
+ * with one now learns that its write failed instead of losing the fibre.
+ */
 export interface AgentState<A> {
   readonly get: Effect.Effect<A>
-  readonly set: (value: A) => Effect.Effect<void>
-  readonly update: (f: (current: A) => A) => Effect.Effect<void>
-  readonly modify: <B>(f: (current: A) => readonly [B, A]) => Effect.Effect<B>
+  readonly set: (value: A) => Effect.Effect<void, StorageError>
+  readonly update: (f: (current: A) => A) => Effect.Effect<void, StorageError>
+  readonly modify: <B>(
+    f: (current: A) => readonly [B, A]
+  ) => Effect.Effect<B, StorageError>
   readonly changes: Stream.Stream<A>
 }
 
@@ -82,21 +101,24 @@ export const get = <A>(tag: Tag<A>): Effect.Effect<A, never, AgentState<A>> =>
   Effect.flatMap(tag, (state) => state.get)
 
 /** Replace the value. Persists through the store when the layer has one. */
-export const set = <A>(tag: Tag<A>, value: A): Effect.Effect<void, never, AgentState<A>> =>
+export const set = <A>(
+  tag: Tag<A>,
+  value: A
+): Effect.Effect<void, StorageError, AgentState<A>> =>
   Effect.flatMap(tag, (state) => state.set(value))
 
 /** Update the value with a pure function. */
 export const update = <A>(
   tag: Tag<A>,
   f: (current: A) => A
-): Effect.Effect<void, never, AgentState<A>> =>
+): Effect.Effect<void, StorageError, AgentState<A>> =>
   Effect.flatMap(tag, (state) => state.update(f))
 
 /** Update the value and return something computed from the transition. */
 export const modify = <A, B>(
   tag: Tag<A>,
   f: (current: A) => readonly [B, A]
-): Effect.Effect<B, never, AgentState<A>> =>
+): Effect.Effect<B, StorageError, AgentState<A>> =>
   Effect.flatMap(tag, (state) => state.modify(f))
 
 /** The live stream of values, starting with the current one. */
@@ -127,8 +149,10 @@ export const transform = <A>(
  * file in a handful of lines. `memoryStore` and `sqlStore` are provided.
  */
 export interface Store {
-  readonly load: (key: string) => Effect.Effect<Option.Option<string>>
-  readonly save: (key: string, value: string) => Effect.Effect<void>
+  readonly load: (
+    key: string
+  ) => Effect.Effect<Option.Option<string>, StorageError>
+  readonly save: (key: string, value: string) => Effect.Effect<void, StorageError>
 }
 
 /**
@@ -166,11 +190,22 @@ export const sqlStore = (
 ): Effect.Effect<Store, never, SqlClient.SqlClient> =>
   Effect.map(SqlClient.SqlClient, (sql) => {
     const table = sql.literal(escapeIdentifier(options?.table ?? sqlStoreTable))
+
+    /** Every store operation's failure, named. As `DurableSessionStore`. */
+    const storage =
+      (operation: string, key: string) =>
+      <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, StorageError> =>
+        Effect.mapError(effect, (cause): StorageError =>
+          isStorageError(cause)
+            ? cause
+            : new StorageError({ operation, detail: `${key}: ${detailOf(cause)}` })
+        )
+
     return {
       load: (key) =>
         sql<{ readonly value: string }>`SELECT value FROM ${table} WHERE state_key = ${key} LIMIT 1`.pipe(
           Effect.map((rows) => Option.fromNullishOr(rows[0]?.value)),
-          Effect.orDie
+          storage("load", key)
         ),
       save: (key, value) =>
         sql
@@ -180,7 +215,7 @@ export const sqlStore = (
               yield* sql`INSERT INTO ${table} ${sql.insert({ state_key: key, value })}`
             })
           )
-          .pipe(Effect.orDie)
+          .pipe(storage("save", key))
     }
   })
 
@@ -225,10 +260,27 @@ export interface Options<A, I> {
 const encode = <A, I>(schema: Schema.Codec<A, I>, value: A): Effect.Effect<string> =>
   Schema.encodeEffect(schema)(value).pipe(Effect.map((encoded) => JSON.stringify(encoded)), Effect.orDie)
 
-const decode = <A, I>(schema: Schema.Codec<A, I>, encoded: string): Effect.Effect<A> =>
+/**
+ * Decoding is what the store gives back, so it is a condition, not a bug.
+ *
+ * The case that matters: persistent state is keyed per user or per conversation
+ * and outlives deployments, so meeting a value written by an older schema is
+ * ordinary. A caller that sees the failure can migrate or fall back to
+ * `initial`; a defect gives it neither option.
+ */
+const decode = <A, I>(
+  schema: Schema.Codec<A, I>,
+  encoded: string
+): Effect.Effect<A, StorageError> =>
   Effect.try(() => JSON.parse(encoded) as unknown).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-    Effect.orDie
+    Effect.mapError(
+      (cause) =>
+        new StorageError({
+          operation: "AgentState.decode",
+          detail: detailOf(cause)
+        })
+    )
   )
 
 /**
@@ -243,7 +295,10 @@ const decode = <A, I>(schema: Schema.Codec<A, I>, encoded: string): Effect.Effec
 export const layer = <A, I>(
   tag: Tag<A>,
   options: Options<A, I>
-): Layer.Layer<AgentState<A>> =>
+// The build itself can fail: loading and decoding the stored value happens
+// here, so a store that is unreachable at wiring time says so rather than
+// dying. Ephemeral state supplies no store and the channel stays unused.
+): Layer.Layer<AgentState<A>, StorageError> =>
   Layer.effect(
     tag,
     Effect.gen(function* () {
@@ -255,7 +310,7 @@ export const layer = <A, I>(
 
       const ref = yield* SubscriptionRef.make(start)
 
-      const persist: (value: A) => Effect.Effect<void> = p === undefined
+      const persist: (value: A) => Effect.Effect<void, StorageError> = p === undefined
         ? () => Effect.void
         : (value) => encode(p.schema, value).pipe(Effect.flatMap((json) => p.store.save(p.key, json)))
 
@@ -265,8 +320,14 @@ export const layer = <A, I>(
       // permit serialises swap-and-persist into one critical section so the
       // ref and the store never diverge. Ephemeral state needs no lock: the
       // ref's own modify is already atomic and there is nothing to persist.
+      //
+      // This cannot become a transaction: STM commits by retrying, and the
+      // critical section contains a store write. See
+      // `docs/audit-effect-ecosystem.md` E7b.
       const lock = yield* Semaphore.make(1)
-      const atomically: <T>(effect: Effect.Effect<T>) => Effect.Effect<T> = p === undefined
+      const atomically: <T>(
+        effect: Effect.Effect<T, StorageError>
+      ) => Effect.Effect<T, StorageError> = p === undefined
         ? (effect) => effect
         : (effect) => lock.withPermits(1)(effect)
 

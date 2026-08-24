@@ -34,7 +34,15 @@ const RecordStep = Tool.make("record_step", {
   dependencies: [Plan]
 })
 const recordStep = Agent.tool(RecordStep, ({ step }) =>
-  AgentState.update(Plan, (plan) => ({ ...plan, steps: [...plan.steps, step] })).pipe(Effect.as("recorded")))
+  AgentState.update(Plan, (plan) => ({ ...plan, steps: [...plan.steps, step] })).pipe(
+    Effect.as("recorded"),
+    // A persisted state writes through on every mutation, so this can fail.
+    // The model is the right audience: it can try again or carry on without
+    // the step recorded, which a defect would not have let it do.
+    Effect.catchTag("StorageError", (error) =>
+      Effect.succeed(`could not record the step: ${error.detail}`)
+    )
+  ))
 
 const Planner = Agent.make({
   instructions: "Plan before you act. Record each step you decide on.",

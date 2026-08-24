@@ -40,7 +40,14 @@ const RecordStep = Tool.make("record_step", {
   dependencies: [Plan]
 })
 const recordStep = Agent.tool(RecordStep, ({ step }) =>
-  AgentState.update(Plan, (plan) => ({ steps: [...plan.steps, step] })).pipe(Effect.as("recorded")))
+  AgentState.update(Plan, (plan) => ({ steps: [...plan.steps, step] })).pipe(
+    Effect.as("recorded"),
+    // Persisted state can fail to write; the model is told rather than the
+    // fibre dying under it.
+    Effect.catchTag("StorageError", (error) =>
+      Effect.succeed(`could not record the step: ${error.detail}`)
+    )
+  ))
 
 // The coding write tool as a bound tool, so it sits beside the battery tools.
 const writeFile = Agent.tool(CodingToolkit.WriteFile, CodingToolkit.handlers.write_file)
