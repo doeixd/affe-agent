@@ -200,11 +200,81 @@ only for rendering, and the common path is independent of how nodes are stored.
 history — it is Schema-defined and crosses processes — but it is what
 `historyOf` produces, not what a `Node` is.
 
+**T1: landed (2026-08-24).** `src/tree/SessionTree.ts` and
+`test/SessionTree.test.ts` (6 tests). No core change, as the spike predicted.
+
+`Node` carries id, parent, cause, timestamp and label -- **no history and no
+snapshot field**, with a compile-time assertion saying so, because that is the
+decision T5 cannot afford to have made wrongly. `historyOf` is an `Effect`, so
+a later store can hold whole snapshots, walk deltas, or read a database without
+any caller noticing.
+
+**Deliberately not exported.** `src/tree/` is absent from `src/index.ts` and
+from `package.json`. The scope rule that held M6 applies here too -- a new
+exported concept wants a second consumer or a recorded decision in `PLAN.md` --
+so the module is built and tested while the *export* stays an open decision.
+Nothing is blocked by that: the TUI imports source directly.
+
+**The tests found two real bugs**, both of which would have been invisible
+until someone used the feature:
+
+- **IT2 was violated by the default naming.** Branch sessions were named
+  `${node.id}-branch`, so branching *twice from one node* produced two sessions
+  with the same id -- which also conflated them in the tree's own bookkeeping,
+  since that map is keyed by session id. Branches are now numbered
+  independently of nodes.
+- **A node from another tree was not refused.** Every tree started its counter
+  at one, so two trees both minted `node-1`, and `historyOf` answered for the
+  wrong tree's node -- returning a different conversation rather than failing.
+  Node ids now carry a per-tree prefix. Ids are unique per process, which is
+  all an in-memory tree needs; a persisted tree (T5) needs ids that survive
+  one, and that is now a documented requirement rather than a latent bug.
+
+The second is the more interesting failure: it is exactly the class of error a
+`history` *field* would have hidden, because the wrong history would simply
+have been there to read. Making materialisation an operation is what gave it
+somewhere to fail.
+
 ### T2 — Auto-capture and lanes
 
 Capture on `TurnCompleted` from the session's event stream; named lanes over
 leaves (`lane(name)`, `lanes()`, `switchLane`). This is what makes the tree
 fill itself and what a selector lists.
+
+**T2: landed (2026-08-24).** `track`, `lanes`, `lane`, and a `lane` option on
+`branch`. 9 tree tests pass.
+
+**One constraint the plan did not anticipate: `commit` is idle-only, but
+`TurnCompleted` fires mid-submission.** A submission with three turns is
+working throughout, so auto-capture cannot go through `AgentSession.snapshot` --
+it would be refused every time. The idle guard is a *coarse proxy* for the
+invariant that actually matters, which is "at a turn boundary"; `TurnCompleted`
+is that boundary exactly, since the turn's assistant message and tool results
+have been committed as a unit by the time it is published. So capture reads
+`session.history` directly at that point, and the two paths -- `commit`
+reaching a boundary by waiting for idle, `track` being told about one -- share
+a single recorder.
+
+**Dedup, and the design question it raised.** Recording a node when nothing has
+changed leaves two nodes holding the same conversation, which a manual commit
+next to an automatic one produces immediately. History is append-only, so an
+unchanged `content.length` is a sound proxy for "this turn added nothing".
+
+That broke an existing test, and the break was worth having: a
+`commit({ label })` on unchanged history returned the existing *unlabelled*
+node, silently discarding the caller's intent to mark that point. Neither
+"always dedup" nor "always create" is right -- so a label or an explicit cause
+now lands on the node already there. Marking a point adds no node, and asking
+to mark one is never ignored.
+
+**Lanes** are a name over a leaf, and they follow their session: a lane starts
+at the node it branched from, so it points somewhere real before its first turn
+finishes, and advances as that session records. Two lanes over one branch point
+are what a selector lists.
+
+`switchLane` from the plan's sketch is **not** here. Switching lanes means
+activating a different branch -- releasing one session's scope and starting
+another's -- which is T3's subject, not a naming concern.
 
 ### T3 — Activation: scopes, replay, and one stream
 

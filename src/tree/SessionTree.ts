@@ -1,0 +1,407 @@
+import { Clock, Effect, Option, Ref, Schema, Scope, Stream } from "effect"
+import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
+import type { AgentDefinition } from "../Agent.js"
+import * as AgentSession from "../AgentSession.js"
+
+/**
+ * Branch and rewind a conversation.
+ *
+ * A tree of *nodes*, where a node is a point a session can be resumed from and
+ * a branch is a session seeded with that node's history. Built entirely on the
+ * existing primitives -- `AgentSession.snapshot` captures a node,
+ * `AgentSession.make({ history })` starts one from it -- so nothing in the core
+ * changes to support this. See `docs/research-session-tree.md` for the spike
+ * that established that, and `docs/plan-session-tree.md` for the design.
+ *
+ * **Branching forks the conversation, not the world.** Files a tool wrote,
+ * `AgentState` and memory are services: they are shared by every branch and
+ * are not rewound. "Rewind and try again" therefore reads like undo and is
+ * not -- the model forgets, the world does not. Anything that must be undone
+ * with a branch needs its own mechanism.
+ *
+ * The tree owns the agent, which is what makes it type-safe: every session it
+ * hands back is `AgentSession<Tools, E>` inferred from that agent, and the
+ * unsafe operation -- grafting an arbitrary snapshot onto an arbitrary agent --
+ * is simply not exposed. A `Snapshot` is Schema-defined so it can be
+ * serialised, and no phantom type survives that, so the binding is made once
+ * here instead.
+ */
+
+export const NodeId = Schema.String.pipe(
+  Schema.brand("@doeixd/effect-agent/tree/NodeId")
+)
+export type NodeId = typeof NodeId.Type
+
+// The brand exists to stop a bare string being passed where a node id belongs;
+// minting one is this module's own business, so the assertion is absorbed here
+// exactly as `internal/ids.ts` does for session and run ids.
+const nodeId = (value: string): NodeId => value as NodeId
+
+/**
+ * Distinguishes one tree's nodes from another's.
+ *
+ * Without it every tree starts counting at one, so two trees mint the same
+ * ids and `historyOf` happily answers for a node that belongs to a different
+ * tree -- returning the wrong conversation rather than refusing. Ids are
+ * unique per process, which is all an in-memory tree needs; a persisted tree
+ * (T5) needs ids that survive one.
+ */
+let trees = 0
+
+/** Why a node exists. A renderer picks a glyph from this. */
+export type NodeCause = "root" | "prompt" | "fork" | "manual"
+
+/**
+ * A point in the conversation.
+ *
+ * **Bounded metadata lives on the value; unbounded content lives behind an
+ * operation.** There is deliberately no `history` or `snapshot` field: a field
+ * would force every node to hold a fully materialised transcript for ever and
+ * would make delta storage a breaking change. `SessionTree.historyOf` is an
+ * `Effect` instead, so a store can hold whole snapshots, walk deltas to the
+ * root, or read a database -- and can fail when a node is gone, which a field
+ * cannot express.
+ */
+export interface Node {
+  readonly id: NodeId
+  readonly parent: Option.Option<NodeId>
+  readonly cause: NodeCause
+  /** When the node was captured, in epoch milliseconds. */
+  readonly at: number
+  readonly label: Option.Option<string>
+}
+
+/** The node is not in this tree. */
+export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
+  "@doeixd/effect-agent/tree/NodeMissing",
+  { id: Schema.String }
+) {
+  override get message() {
+    return `No such node in this tree: ${this.id}`
+  }
+}
+
+/**
+ * A session that is not idle cannot be captured.
+ *
+ * Inherited from `AgentSession.snapshot`, and the reason is the invariant the
+ * whole tree rests on: a turn commits an assistant message and its tool
+ * results as one unit, so a node taken mid-turn would record a conversation
+ * that never existed -- and every branch from it would start from one.
+ */
+export class SessionBusy extends Schema.TaggedError<SessionBusy>()(
+  "@doeixd/effect-agent/tree/SessionBusy",
+  { sessionId: Schema.String }
+) {
+  override get message() {
+    return `Cannot capture a node from a running session: ${this.sessionId}`
+  }
+}
+
+export interface CommitOptions {
+  readonly cause?: NodeCause | undefined
+  readonly label?: string | undefined
+}
+
+/**
+ * A named leaf.
+ *
+ * What a branch selector lists, and what "go back to what I was doing" means.
+ * A lane follows its session: as that session commits, the lane advances to
+ * the newest node, so the name always points at the tip of that line of work
+ * rather than at where it started.
+ */
+export interface Lane {
+  readonly name: string
+  readonly leaf: Node
+}
+
+export interface BranchOptions {
+  /** Name this line of work, so it can be found again. */
+  readonly lane?: string | undefined
+}
+
+export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
+  /**
+   * Capture the session's current conversation as a node.
+   *
+   * Idle only. The node's parent is whatever this session was last known at --
+   * the node it branched from, or its own previous commit -- so committing
+   * repeatedly from one session builds a chain rather than a fan.
+   */
+  readonly commit: (
+    session: AgentSession.AgentSession<Tools, E>,
+    options?: CommitOptions
+  ) => Effect.Effect<Node, SessionBusy>
+
+  /**
+   * Start a session from a node.
+   *
+   * A *new* session with a fresh id: resuming is the same conversation
+   * continuing, branching is a different one, and the two should not be
+   * confused in a log. History is materialised internally, so a caller never
+   * has to know how nodes are stored.
+   */
+  /**
+   * Capture a node at every turn boundary, for as long as the scope lives.
+   *
+   * Rewind is only as good as what was recorded: a tree that captures on
+   * explicit commits alone offers a rewind that cannot reach most of the
+   * conversation. `TurnCompleted` is the safe point -- the turn's assistant
+   * message and tool results have been committed as a unit by then -- which is
+   * why this does not need the session to be idle.
+   */
+  readonly track: (
+    session: AgentSession.AgentSession<Tools, E>,
+    options?: BranchOptions
+  ) => Effect.Effect<void, never, Scope.Scope>
+
+  /** Every named leaf, in the order the lanes were first named. */
+  readonly lanes: Effect.Effect<ReadonlyArray<Lane>>
+
+  /** One named leaf. */
+  readonly lane: (name: string) => Effect.Effect<Option.Option<Node>>
+
+  readonly branch: (
+    node: Node,
+    options?: BranchOptions
+  ) => Effect.Effect<
+    AgentSession.AgentSession<Tools, E>,
+    NodeMissing,
+    Scope.Scope | LanguageModel.LanguageModel
+  >
+
+  /** A node's conversation. For rendering; `branch` does not need it. */
+  readonly historyOf: (node: Node) => Effect.Effect<Prompt.Prompt, NodeMissing>
+
+  /** From the root down to this node. */
+  readonly path: (node: Node) => Effect.Effect<ReadonlyArray<Node>, NodeMissing>
+
+  readonly children: (node: Node) => Effect.Effect<ReadonlyArray<Node>>
+
+  readonly root: Effect.Effect<Option.Option<Node>>
+
+  /** Every node, oldest first. */
+  readonly nodes: Effect.Effect<ReadonlyArray<Node>>
+}
+
+interface Held {
+  readonly node: Node
+  readonly history: Prompt.Prompt
+}
+
+/**
+ * Build a tree over one agent.
+ *
+ * `R` is absorbed here: the agent's own requirements are satisfied when a
+ * branch is created, which is why `branch` asks only for a scope and a model.
+ */
+export const make = <Tools extends Record<string, Tool.Any>, E, R>(
+  agent: AgentDefinition<Tools, E, R>,
+  options?: {
+    /** How branch session ids are named. Defaults to the node's id. */
+    readonly sessionIds?: ((node: Node) => string) | undefined
+  }
+): Effect.Effect<SessionTree<Tools, E>, never, R> =>
+  Effect.gen(function*() {
+    const environment = yield* Effect.context<R>()
+    const prefix = `t${++trees}`
+    const held = yield* Ref.make(new Map<string, Held>())
+    // Where each live session sits in the tree: its branch point, then its own
+    // latest commit. Keyed by session id, which is why a branch must not reuse
+    // one.
+    const at = yield* Ref.make(new Map<string, NodeId>())
+    const counter = yield* Ref.make(0)
+    // Branch sessions are numbered independently of nodes: two branches from
+    // one node are two different conversations and must not share an id.
+    const branchCounter = yield* Ref.make(0)
+    // A lane is a name over a leaf; `laneOf` remembers which session is working
+    // on which lane, so a commit can advance the right one.
+    const lanes = yield* Ref.make(new Map<string, NodeId>())
+    const laneOf = yield* Ref.make(new Map<string, string>())
+
+    const nextId = Effect.map(
+      Ref.updateAndGet(counter, (n) => n + 1),
+      (n) => nodeId(`${prefix}-node-${n}`)
+    )
+
+    const find = (id: NodeId): Effect.Effect<Held, NodeMissing> =>
+      Effect.flatMap(Ref.get(held), (all) => {
+        const found = all.get(id)
+        return found === undefined
+          ? Effect.fail(new NodeMissing({ id }))
+          : Effect.succeed(found)
+      })
+
+    /**
+     * Record a node from a conversation already known to be at a boundary.
+     *
+     * Shared by `commit`, which reaches a boundary by waiting for idle, and by
+     * `track`, which is told about one by `TurnCompleted`.
+     *
+     * Nothing new since the session's current node means no node: history is
+     * append-only, so an unchanged length is a sound proxy for "this turn
+     * added nothing", and it keeps a manual commit next to an automatic one
+     * from leaving two nodes holding the same conversation.
+     */
+    const record = (
+      sessionId: string,
+      history: Prompt.Prompt,
+      commitOptions?: CommitOptions
+    ): Effect.Effect<Option.Option<Node>> =>
+      Effect.gen(function*() {
+        const parentId = (yield* Ref.get(at)).get(sessionId)
+        const parent = Option.fromNullishOr(parentId)
+        if (parentId !== undefined) {
+          const existing = (yield* Ref.get(held)).get(parentId)
+          if (existing !== undefined && existing.history.content.length === history.content.length) {
+            return Option.none()
+          }
+        }
+
+        const id = yield* nextId
+        const node: Node = {
+          id,
+          parent,
+          cause: commitOptions?.cause ?? (Option.isNone(parent) ? "root" : "prompt"),
+          at: yield* Clock.currentTimeMillis,
+          label: Option.fromNullishOr(commitOptions?.label)
+        }
+        yield* Ref.update(held, (all) => new Map(all).set(id, { node, history }))
+        // The session now sits at its new node, so a later commit chains from
+        // here rather than re-parenting to where it started.
+        yield* Ref.update(at, (all) => new Map(all).set(sessionId, id))
+
+        // Advance this session's lane, if it is working on one.
+        const name = (yield* Ref.get(laneOf)).get(sessionId)
+        if (name !== undefined) {
+          yield* Ref.update(lanes, (all) => new Map(all).set(name, id))
+        }
+        return Option.some(node)
+      })
+
+    const commit: SessionTree<Tools, E>["commit"] = (session, commitOptions) =>
+      Effect.gen(function*() {
+        const captured = yield* AgentSession.snapshot(session).pipe(
+          Effect.mapError(() => new SessionBusy({ sessionId: session.id }))
+        )
+        const recorded = yield* record(captured.sessionId, captured.history, commitOptions)
+        if (Option.isSome(recorded)) return recorded.value
+
+        // Nothing changed, so the session is still at the node it was already
+        // at, and a second node holding the same conversation would be noise.
+        //
+        // But a label or an explicit cause is the caller *marking* this point,
+        // and dedup must not silently discard that -- returning an unlabelled
+        // node would answer a different question than the one asked. The mark
+        // lands on the node that is already there.
+        const current = (yield* Ref.get(at)).get(captured.sessionId)
+        const existing = current === undefined
+          ? undefined
+          : (yield* Ref.get(held)).get(current)
+        if (existing !== undefined) {
+          if (commitOptions?.label === undefined && commitOptions?.cause === undefined) {
+            return existing.node
+          }
+          const marked: Node = {
+            ...existing.node,
+            ...(commitOptions.cause === undefined ? {} : { cause: commitOptions.cause }),
+            ...(commitOptions.label === undefined
+              ? {}
+              : { label: Option.some(commitOptions.label) })
+          }
+          yield* Ref.update(held, (all) =>
+            new Map(all).set(marked.id, { node: marked, history: existing.history }))
+          return marked
+        }
+        // Only reachable for an empty conversation with no prior node.
+        return yield* Effect.map(
+          record(captured.sessionId, captured.history, { ...commitOptions, cause: "root" }),
+          Option.getOrThrow
+        )
+      })
+
+    const branch: SessionTree<Tools, E>["branch"] = (node, branchOptions) =>
+      Effect.gen(function*() {
+        const { history } = yield* find(node.id)
+        const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
+        const sessionId = options?.sessionIds?.(node) ?? `${node.id}-branch-${n}`
+        const session = yield* AgentSession.make(agent, { history, sessionId }).pipe(
+          Effect.provide(environment)
+        )
+        yield* Ref.update(at, (all) => new Map(all).set(sessionId, node.id))
+        if (branchOptions?.lane !== undefined) {
+          yield* Ref.update(laneOf, (all) => new Map(all).set(sessionId, branchOptions.lane!))
+          // A new lane starts at the node it branched from, so it points
+          // somewhere real before its first turn completes.
+          yield* Ref.update(lanes, (all) => new Map(all).set(branchOptions.lane!, node.id))
+        }
+        return session
+      })
+
+    const path: SessionTree<Tools, E>["path"] = (node) =>
+      Effect.gen(function*() {
+        const all = yield* Ref.get(held)
+        const walked: Array<Node> = []
+        let current: Option.Option<NodeId> = Option.some(node.id)
+        while (Option.isSome(current)) {
+          const found = all.get(current.value)
+          if (found === undefined) return yield* new NodeMissing({ id: current.value })
+          walked.push(found.node)
+          current = found.node.parent
+        }
+        // Walked leaf-to-root; a path reads root-first.
+        return walked.reverse()
+      })
+
+    const track: SessionTree<Tools, E>["track"] = (session, trackOptions) =>
+      Effect.gen(function*() {
+        if (trackOptions?.lane !== undefined) {
+          yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, trackOptions.lane!))
+        }
+        yield* Effect.forkScoped(
+          Stream.runForEach(session.events, (envelope) =>
+            envelope.event._tag === "TurnCompleted"
+              ? Effect.flatMap(session.history, (history) =>
+                Effect.asVoid(record(session.id, history)))
+              : Effect.void)
+        )
+      })
+
+    return {
+      commit,
+      track,
+      lanes: Effect.gen(function*() {
+        const named = yield* Ref.get(lanes)
+        const all = yield* Ref.get(held)
+        return [...named.entries()].flatMap(([name, id]) => {
+          const found = all.get(id)
+          return found === undefined ? [] : [{ name, leaf: found.node }]
+        })
+      }),
+      lane: (name) =>
+        Effect.gen(function*() {
+          const id = (yield* Ref.get(lanes)).get(name)
+          if (id === undefined) return Option.none<Node>()
+          const found = (yield* Ref.get(held)).get(id)
+          return found === undefined ? Option.none<Node>() : Option.some(found.node)
+        }),
+      branch,
+      historyOf: (node) => Effect.map(find(node.id), (found) => found.history),
+      path,
+      children: (node) =>
+        Effect.map(Ref.get(held), (all) =>
+          [...all.values()]
+            .map((entry) => entry.node)
+            .filter((candidate) =>
+              Option.isSome(candidate.parent) && candidate.parent.value === node.id
+            )),
+      root: Effect.map(Ref.get(held), (all) =>
+        Option.fromNullishOr(
+          [...all.values()].map((entry) => entry.node).find((node) =>
+            Option.isNone(node.parent)
+          )
+        )),
+      nodes: Effect.map(Ref.get(held), (all) => [...all.values()].map((entry) => entry.node))
+    }
+  })
