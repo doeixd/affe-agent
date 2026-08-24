@@ -49,6 +49,11 @@ jobs:
       # visible to the first person who installs it.
       - run: npm run verify:package
 
+      # The tarball ships exactly dist + the metadata files and nothing stray
+      # (no src, no tests). A mistake in `files` is invisible to the suite and
+      # visible to the first installer.
+      - run: npm run verify:pack
+
   mcp-v1-floor:
     runs-on: ubuntu-latest
     steps:

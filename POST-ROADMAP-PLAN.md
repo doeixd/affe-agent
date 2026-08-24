@@ -34,7 +34,7 @@ extend*, not *create*.
   verify:package on every push/PR (Node 22/24); now also fails if the build
   dirties a tracked file.
 
-### R2 — Publish dry-run + pinning guidance `P2` · effort ½
+### R2 — Publish dry-run + pinning guidance `P2` · effort ½ · ✅ DONE
 - **Do:** a `npm pack` dry-run check (the tarball contains `dist`, `README`,
   `CHANGELOG`, `LICENSE` and nothing stray); document exact-version pinning of
   `effect` + `@effect/ai-*` + this package, and the peer-dep matrix, in a short

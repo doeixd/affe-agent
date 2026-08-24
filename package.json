@@ -172,7 +172,8 @@
     "lint:portability": "node scripts/verify-portability.mjs",
     "check": "npm run typecheck && npm run lint && npm run lint:portability && npm run test",
     "prepublishOnly": "npm run check && npm run build",
-    "verify:package": "node scripts/verify-package.mjs"
+    "verify:package": "node scripts/verify-package.mjs",
+    "verify:pack": "node scripts/pack-check.mjs"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",

@@ -88,6 +88,29 @@ npm install @doeixd/effect-agent effect
 `effect` is a peer dependency. Provider packages (`@effect/ai-anthropic`,
 `@effect/ai-openai`) are yours to choose.
 
+**Pin exact versions and upgrade them together.** This library, `effect`, and
+your `@effect/ai-*` provider are all pre-1.0 and move in lockstep with the Effect
+release candidate — a version skew between them surfaces as confusing type errors
+at the `effect/unstable/ai` boundary, not a clean failure. Peer deps:
+
+| Peer | Range | Notes |
+|------|-------|-------|
+| `effect` | `>=4.0.0-rc.111 <5.0.0` | required; pin the exact rc you build against |
+| `@modelcontextprotocol/sdk` | `>=1.10.0 <2.0.0` | optional — only for the `/mcp` entry |
+
+```jsonc
+// package.json — exact, not caret ranges, until Effect 4 is GA
+"dependencies": {
+  "@doeixd/effect-agent": "0.0.1",
+  "effect": "4.0.0-rc.111",
+  "@effect/ai-anthropic": "4.0.0-rc.111"
+}
+```
+
+See [Stability](#stability) for what "pre-release" means here. Node 22.5+ is
+required only by the host entries (`/sandbox/local`, `/durable`'s SQLite journal);
+the portable core has no engine requirement.
+
 ## Quickstart
 
 ```ts
