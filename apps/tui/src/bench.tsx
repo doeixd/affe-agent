@@ -29,7 +29,8 @@ const handle: Handle = {
 const { flush } = await testRender(
   () => (
     <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
-      openPalette={() => sink.setPalette(handle.commands)} />
+      openPalette={() => sink.setPalette(handle.commands)}
+      quit={() => {}} />
   ),
   {
     width: 80,

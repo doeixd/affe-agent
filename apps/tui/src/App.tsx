@@ -377,6 +377,8 @@ export const App = (props: {
   dismiss: () => void
   /** Open the `/` palette. */
   openPalette: () => void
+  /** Leave. The footer advertises ctrl+d, so something has to answer it. */
+  quit: () => void
   views?: Readonly<Record<string, ToolView>>
 }) => {
   const renderer = useRenderer()
@@ -432,19 +434,26 @@ export const App = (props: {
    * would leave a run waiting on an answer nobody can give.
    */
   useKeyboard((key) => {
-    if (props.footer.type !== "prompt") return
     const name = String(key.name ?? "").toLowerCase()
+
+    /**
+     * Leaving and interrupting are bound before the footer check, because they
+     * have to work from every surface.
+     *
+     * The footer advertised `ctrl+d quit` and nothing answered it -- an
+     * affordance that does nothing teaches the user the app is broken. And
+     * `ctrl+c` reached the app only through `process.on("SIGINT")`, which a
+     * terminal in raw mode need not deliver: the renderer owns the keyboard,
+     * so the key has to be handled where the keys are.
+     */
+    if (key.ctrl === true && name === "d") return props.quit()
+    if (key.ctrl === true && name === "c") return props.handle.interrupt()
+
+    if (props.footer.type !== "prompt") return
 
     // History, the way every shell does it.
     if (name === "up") return recall(-1)
     if (name === "down") return recall(1)
-
-    // `/` on an empty prompt opens the palette; typed mid-line it is a
-    // character, because paths and regexes contain slashes.
-    if (name === "/" && (input?.value ?? "") === "") {
-      props.handle.command // referenced so the dependency is explicit
-      return props.openPalette()
-    }
 
     if (key.ctrl === true && name === "r" && canRewind()) props.handle.rewind()
   })
@@ -550,6 +559,27 @@ export const App = (props: {
               }}
               focused
               placeholder="message…  (/ for commands, ↑ for history)"
+              onInput={(value: unknown) => {
+                /**
+                 * `/` on an empty prompt opens the palette.
+                 *
+                 * Read from the input rather than from a key handler, because
+                 * a focused input *consumes* printable keys -- control keys
+                 * are broadcast to the global handler and characters are not.
+                 * A `useKeyboard` binding for `/` therefore never fired, which
+                 * is the sort of thing that looks like a state bug for an hour.
+                 *
+                 * Cleared as it opens, so dismissing the palette does not
+                 * leave a stray slash in the prompt. Typed mid-line it stays a
+                 * character: paths and regexes contain slashes.
+                 */
+                if (value !== "/") return
+                // Clearing needs the ref; opening does not, and making the
+                // one depend on the other would mean a palette that silently
+                // stops opening if the ref is ever not set.
+                if (input !== undefined) input.value = ""
+                props.openPalette()
+              }}
               onSubmit={(value: unknown) => {
                 // The element types `onSubmit` as accepting either shape; only
                 // the string form carries what was typed.

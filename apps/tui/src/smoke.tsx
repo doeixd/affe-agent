@@ -7,7 +7,7 @@ import { fromArgv } from "./backend.ts"
 import * as Diff from "./diff.ts"
 import { project, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
-import type { Sink } from "./view.ts"
+import type { Handle, Sink } from "./view.ts"
 import { Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { CodingToolkit } from "../../../src/coding/index.js"
@@ -51,10 +51,11 @@ const counting: Sink = {
 
 const handle = await start(counting)
 
-const { captureCharFrame, externalOutput, flush } = await testRender(
+const { captureCharFrame, externalOutput, flush, mockInput } = await testRender(
   () => (
     <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
-      openPalette={() => sink.setPalette(handle.commands)} />
+      openPalette={() => sink.setPalette(handle.commands)}
+      quit={() => {}} />
   ),
   {
     width: 100,
@@ -403,6 +404,11 @@ const afterAnswering = resolvedStore.footer().type
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
 await flush()
+// Snapshotted here, before the key section below presses `/` and changes the
+// footer. A check that reads live state at assertion time is a check whose
+// result depends on everything that ran after it.
+const footerAtEnd = footer().type
+
 const transcript = transcriptSoFar + externalOutput.takeText()
 const live = captureCharFrame()
 
@@ -410,6 +416,70 @@ console.log("--- committed to terminal scrollback ---")
 console.log(transcript)
 console.log("--- live region, after ---")
 console.log(live)
+
+/**
+ * Every key the footer advertises does something.
+ *
+ * `ctrl+d quit` sat in the footer bound to nothing, and `ctrl+c` reached the
+ * app only through `process.on("SIGINT")` -- which a terminal in raw mode need
+ * not deliver, because the renderer owns the keyboard. An affordance that does
+ * nothing teaches the user the app is broken, so the advertisement and the
+ * binding are checked against each other rather than separately.
+ *
+ * Driven through `mockInput`, which is the only way to test a key: the handler
+ * is inside the renderer and there is nothing else to call.
+ */
+let quitRequests = 0
+let interruptRequests = 0
+const keyRun = makeStore()
+const keyHandle: Handle = {
+  ...handle,
+  interrupt: () => {
+    interruptRequests++
+  }
+}
+const keyRender = await testRender(
+  () => (
+    <App
+      entries={keyRun.entries}
+      status={keyRun.status()}
+      handle={keyHandle}
+      drainSettled={keyRun.drainSettled}
+      footer={keyRun.footer()}
+      rewind={keyRun.rewind()}
+      backend={keyRun.backend()}
+      dismiss={() => keyRun.sink.setPalette(undefined)}
+      openPalette={() => keyRun.sink.setPalette(keyHandle.commands)}
+      quit={() => {
+        quitRequests++
+      }}
+    />
+  ),
+  { width: 80, height: 12 }
+)
+await keyRender.flush()
+
+keyRender.mockInput.pressKey("d", { ctrl: true })
+keyRender.mockInput.pressKey("c", { ctrl: true })
+await keyRender.flush()
+
+/**
+ * `/` is tested on the *main* renderer, not the one above.
+ *
+ * A printable key goes to whichever focused input owns the keyboard, and with
+ * two renderers alive that is not necessarily the one whose `mockInput` was
+ * called. Control keys broadcast, which is why ctrl+d and ctrl+c can be tested
+ * in isolation and this cannot.
+ */
+mockInput.pressKey("/")
+await flush()
+const paletteOpened = footer().type === "palette"
+// Getting out again. `dismiss` is what the escape binding calls; asserting the
+// keystroke would be asserting how OpenTUI routes a key inside a focused
+// `<select>`, which is theirs to get right and not ours to pin.
+sink.setPalette(undefined)
+const dismissed = footer().type === "prompt"
+
 
 const checks: Array<readonly [string, boolean]> = [
   ["user message committed", transcript.includes("what is in this workspace?")],
@@ -494,7 +564,7 @@ const checks: Array<readonly [string, boolean]> = [
   ["approval uses the tool's own prose", asking.includes("? run: rm -rf /")],
   ["approval names the resource", asking.includes("rm -rf")],
   ["refusal is recorded", transcript.includes("refused")],
-  ["footer returned to the prompt", footer().type === "prompt"],
+  ["footer returned to the prompt", footerAtEnd === "prompt"],
   ["durations read at each magnitude", duration(340) === "340ms" && duration(1234) === "1.2s" && duration(125_000) === "2m 05s"]
 ]
 
@@ -665,7 +735,7 @@ checks.push(
   ["and marks which one that is", listed.some((item) => item.active)],
   ["a branch is described, not just named", listed.every((item) =>
     item.detail.includes("message"))],
-  ["switching returns the footer to the prompt", footer().type === "prompt"],
+  ["switching returns the footer to the prompt", footerAtEnd === "prompt"],
   ["an unknown command is reported", transcript.includes("no such command")],
   ["export writes a file and names it", /wrote \.effect-agent\/export-.*\.json/.test(transcript)],
   ["and says it was not redacted", transcript.includes("unredacted")],
@@ -699,6 +769,14 @@ checks.push(
   // Moving branches mid-run
   ["forking while a turn runs is refused", refusedFork],
   ["and does not happen anyway", !forkedAnyway],
+
+  // Advertised keys
+  ["ctrl+d quits, as the footer says", quitRequests === 1],
+  // Bound in the renderer rather than left to SIGINT, which a raw-mode
+  // terminal need not deliver.
+  ["ctrl+c interrupts from the keyboard", interruptRequests === 1],
+  ["/ opens the palette", paletteOpened],
+  ["and dismissing leaves it", dismissed],
 
   // R14
   ["a streaming message holds back the transcript",

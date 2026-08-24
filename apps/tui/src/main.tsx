@@ -24,11 +24,22 @@ const handle = await start(sink, {
   ...(backendChoice.store === undefined ? {} : { store: backendChoice.store })
 })
 
+/**
+ * A fallback, not the binding.
+ *
+ * The renderer owns the keyboard in raw mode, so `ctrl+c` is handled there;
+ * this catches a signal sent from outside the terminal -- a `kill`, a parent
+ * process shutting the tree down.
+ */
 process.on("SIGINT", () => handle.interrupt())
 
 await render(
   () => <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
-      openPalette={() => sink.setPalette(handle.commands)} />,
+      openPalette={() => sink.setPalette(handle.commands)}
+      quit={() => {
+        stop()
+        process.exit(0)
+      }} />,
   // Finished entries are committed to the terminal's own scrollback, which
   // needs the live UI pinned to a footer region below it.
   { screenMode: "split-footer" }

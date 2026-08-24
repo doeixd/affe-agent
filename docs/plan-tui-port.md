@@ -520,6 +520,38 @@ Two things the tests themselves taught, both worth keeping:
   App's job, so a store with no App renders never drains and the count only
   reads zero before anything starts. The turn summary is the latch.
 
+### Keys that were advertised and not bound (2026-08-24)
+
+`ctrl+d quit` had sat in the footer since V3 bound to nothing, and `ctrl+c`
+reached the app only through `process.on("SIGINT")` -- which a terminal in raw
+mode need not deliver, because the renderer owns the keyboard. An affordance
+that does nothing teaches the user the app is broken, which is worse than not
+offering it.
+
+Finding this took a test that checks the advertisement against the binding
+rather than each separately, and writing that turned up a genuine platform
+detail worth recording:
+
+**A focused `<input>` consumes printable keys; control keys are broadcast.** A
+`useKeyboard` binding for `/` therefore never fired, while one for `ctrl+d`
+does. The palette opens from the input's own `onInput` instead, clearing the
+slash as it goes so dismissing does not leave one behind. This is exactly the
+sort of thing that reads as a state bug for an hour.
+
+Two consequences for the tests, both recorded because they will recur:
+
+- Control keys can be tested against a second, isolated renderer. Printable
+  keys cannot: with two renderers alive, the key goes to whichever focused
+  input owns the keyboard, not to whichever `mockInput` was called. `/` is
+  tested against the real App, at the very end.
+- A check that reads live state at assertion time depends on everything that
+  ran after it. Two footer assertions had to be snapshotted before the key
+  section, having silently started measuring the wrong moment.
+
+Escape-to-dismiss is asserted through `dismiss` rather than the keystroke:
+routing a key inside a focused `<select>` is OpenTUI's to get right, and
+pinning it here would be testing their widget.
+
 ### Still not implemented
 
 - **No scrolling inside the live region.** Finished entries go to the
