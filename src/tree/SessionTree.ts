@@ -143,6 +143,53 @@ export interface Activation<Tools extends Record<string, Tool.Any>, E> {
   readonly history: Prompt.Prompt
 }
 
+/**
+ * What a node holds, without handing over the conversation.
+ *
+ * A selector draws a list of branch points: each needs a label, a size, and
+ * enough of the text to be recognised. Reaching for `historyOf` to get that
+ * would mean holding every branch's full conversation in memory to draw one
+ * list -- so the counting and the excerpting happen here, and only the summary
+ * escapes.
+ */
+export interface Summary {
+  readonly node: Node
+  /** Messages in this node's conversation. */
+  readonly messages: number
+  /**
+   * Messages this node's turn added.
+   *
+   * Zero at a root, and never negative: history is append-only, so a node
+   * always holds at least what its parent held.
+   */
+  readonly added: number
+  /** How many turn boundaries lie between the root and here, inclusive. */
+  readonly depth: number
+  /**
+   * The newest user message, as one line.
+   *
+   * The user's words rather than the model's: a branch is remembered by what
+   * was asked of it. `None` when the turn added no user message, which is what
+   * a tool-only continuation looks like.
+   */
+  readonly preview: Option.Option<string>
+}
+
+/**
+ * Where two lines of work parted, and what each did afterwards.
+ *
+ * The shape a diff view wants: one shared prefix, then two runs to show side
+ * by side. `at` is the last node they share -- `None` only when they come from
+ * different roots, which one tree can hold if it was given two unrelated
+ * sessions.
+ */
+export interface Divergence {
+  readonly at: Option.Option<Node>
+  /** Nodes below the fork on the first branch, root-first. Empty if it *is* the fork. */
+  readonly left: ReadonlyArray<Node>
+  readonly right: ReadonlyArray<Node>
+}
+
 export interface BranchOptions {
   /** Name this line of work, so it can be found again. */
   readonly lane?: string | undefined
@@ -182,6 +229,35 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
     session: AgentSession.AgentSession<Tools, E>,
     options?: BranchOptions
   ) => Effect.Effect<void, never, Scope.Scope>
+
+  /**
+   * What a node holds, without the conversation itself.
+   *
+   * See `Summary`: this exists so a selector can list twenty branch points
+   * without materialising twenty conversations.
+   */
+  readonly summary: (node: Node) => Effect.Effect<Summary, NodeMissing>
+
+  /**
+   * The deepest node both descend from.
+   *
+   * `None` when they share no ancestor at all. That is not an error -- one
+   * tree can hold two unrelated roots, since a tree records whatever sessions
+   * it is given.
+   */
+  readonly commonAncestor: (
+    a: Node,
+    b: Node
+  ) => Effect.Effect<Option.Option<Node>, NodeMissing>
+
+  /**
+   * Where two branches parted, and what each did after.
+   *
+   * Built from one pair of walks rather than by calling `commonAncestor` and
+   * then walking again: the fork and the two suffixes all fall out of the same
+   * two paths.
+   */
+  readonly divergence: (a: Node, b: Node) => Effect.Effect<Divergence, NodeMissing>
 
   /** Every named leaf, in the order the lanes were first named. */
   readonly lanes: Effect.Effect<ReadonlyArray<Lane>>
@@ -501,6 +577,79 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       })
 
     /**
+     * The newest user message, flattened to one line.
+     *
+     * Only `text` parts: a file part has no words to show, and a message that
+     * is only a file should read as having no preview rather than as having an
+     * empty one. Whitespace is collapsed because this goes in a list -- a
+     * pasted stack trace must occupy one row, not thirty.
+     */
+    const previewOf = (history: Prompt.Prompt): Option.Option<string> => {
+      for (let i = history.content.length - 1; i >= 0; i--) {
+        const message = history.content[i]
+        if (message === undefined || message.role !== "user") continue
+        const text = message.content
+          .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+          .map((part) => part.text)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+        return text === "" ? Option.none() : Option.some(text)
+      }
+      return Option.none()
+    }
+
+    const summary: SessionTree<Tools, E>["summary"] = (node) =>
+      Effect.gen(function*() {
+        const found = yield* find(node.id)
+        const all = yield* Ref.get(held)
+        // The parent's size, so `added` is this turn's contribution rather
+        // than the whole conversation.
+        const before = Option.isNone(node.parent)
+          ? 0
+          : all.get(node.parent.value)?.history.content.length ?? 0
+        const walked = yield* path(node)
+        return {
+          node: found.node,
+          messages: found.history.content.length,
+          added: Math.max(0, found.history.content.length - before),
+          depth: walked.length,
+          preview: previewOf(found.history)
+        }
+      })
+
+    /**
+     * Both paths to the root, and the last node they share.
+     *
+     * One walk answers all three of `commonAncestor`, `divergence`, and the
+     * suffixes -- which is why they are not built on top of each other.
+     */
+    const fork = (
+      a: Node,
+      b: Node
+    ): Effect.Effect<
+      { at: Option.Option<Node>; left: ReadonlyArray<Node>; right: ReadonlyArray<Node> },
+      NodeMissing
+    > =>
+      Effect.gen(function*() {
+        const left = yield* path(a)
+        const right = yield* path(b)
+        // Both are root-first, so the shared prefix is a straight comparison
+        // and its last element is the deepest common ancestor.
+        let shared = 0
+        while (
+          shared < left.length &&
+          shared < right.length &&
+          left[shared]!.id === right[shared]!.id
+        ) shared++
+        return {
+          at: shared === 0 ? Option.none<Node>() : Option.some(left[shared - 1]!),
+          left: left.slice(shared),
+          right: right.slice(shared)
+        }
+      })
+
+    /**
      * Watch a session's events from a fibre owned by `scope`.
      *
      * Subscribing is separated from consuming on purpose. `Stream.runForEach`
@@ -604,6 +753,9 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         Option.isNone(activation)
           ? Stream.empty
           : AgentSession.state(activation.value.session).changes),
+      summary,
+      commonAncestor: (a, b) => Effect.map(fork(a, b), (found) => found.at),
+      divergence: (a, b) => fork(a, b),
       lanes: Effect.gen(function*() {
         const named = yield* Ref.get(lanes)
         const all = yield* Ref.get(held)

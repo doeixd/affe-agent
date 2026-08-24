@@ -374,6 +374,74 @@ unanswered evaluation as worse than an unasked one, because it reads as decided.
 Either way this is a T4 question, not a T1 one — T1's discipline of keeping
 history out of `Node` is what leaves the choice open this late.
 
+**T4: the `effect/Graph` evaluation, settled (2026-08-24).** Not used. Parent
+pointers stay. The plan asked for this to be recorded either way, so here is
+the reasoning rather than the verdict alone.
+
+**`Graph` copies on every append, and we append once per turn.** Mutation goes
+through `beginMutation` / `endMutation`, and `beginMutation` calls
+`internal.clone`, which rebuilds `nodes`, `edges`, and *both* adjacency maps:
+
+```ts
+graph.nodes = new Map(source.nodes)
+graph.edges = new Map(source.edges)
+graph.adjacency = cloneAdjacency(source.adjacency)
+graph.reverseAdjacency = cloneAdjacency(source.reverseAdjacency)
+```
+
+Our access pattern is one node appended per turn boundary, forever. That is
+O(n) per turn and O(n²) over a session, to maintain two adjacency structures
+for a graph whose out-degree we never query by edge. This is not a criticism of
+`Graph` -- it is built to be constructed and then queried, which the module's
+own shape says plainly -- it is a statement that our pattern is the other one.
+
+**The queries T4 actually needs are not in `Graph`.** Its surface is a weighted
+general-graph toolkit: `dijkstra`, `bellmanFord`, `astar`, `floydWarshall`,
+`topo`, strongly-connected components, minimum spanning forest. What T4 wants
+is a lowest common ancestor and the two divergent runs below it. Neither is
+there, so they would be hand-rolled *anyway* -- on top of an index indirection
+we do not currently have, since `Graph` identifies nodes by `NodeIndex`
+(a `number` it assigns) while ours are strings that must survive serialisation.
+Adopting `Graph` would mean maintaining a `NodeId <-> NodeIndex` map for the
+privilege of writing the same walks.
+
+**With parent pointers those walks are the trivial ones.** A rooted tree where
+every node knows its parent answers all of T4 in O(depth) with no adjacency
+structure at all: `path` is a `while` loop, `commonAncestor` is two paths and a
+set, and divergence is the two suffixes after the fork.
+
+**What would change the answer.** If the tree ever grows queries that are
+genuinely graph-shaped -- shortest path under weights, cycles, topological
+order over a DAG of merges -- reopen this. A merge in particular would make
+`parent` a list rather than an `Option` and the structure would stop being a
+tree, which is the point at which a graph library earns its indirection.
+
+**T4: landed (2026-08-24).** `summary`, `commonAncestor`, `divergence`. 18 tree
+tests. Every new invariant broken once to confirm its test bites.
+
+**`Summary` exists so a selector need not materialise conversations.** Drawing
+a list of twenty branch points wants a label, a size, and enough text to
+recognise -- and reaching for `historyOf` to get that means holding twenty
+whole conversations to draw one list. Counting and excerpting happen inside the
+tree; only the summary escapes.
+
+`messages` and `added` are kept apart deliberately. Conflating them makes every
+node look identical once the transcript is long, because the interesting number
+is what *this* turn contributed.
+
+**The preview takes the user's words, not the model's.** A branch is remembered
+by what was asked of it. Whitespace collapses because the destination is one
+row in a list: a pasted stack trace has to occupy a row, not thirty.
+
+**`commonAncestor` and `divergence` are one walk, not two.** Both paths to the
+root, compared as prefixes -- the last shared element is the deepest common
+ancestor and the two suffixes are what a diff view draws side by side.
+Implementing `divergence` in terms of `commonAncestor` would walk twice for
+answers that fall out of the same comparison.
+
+Sharing no ancestor is an answer (`None`), not a failure. One tree can hold two
+unrelated roots, because a tree records whatever sessions it is given.
+
 ### T5 — Persistence
 
 A node store behind an interface, in-memory by default, with a Schema-backed

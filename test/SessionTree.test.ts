@@ -555,6 +555,160 @@ describe("SessionTree", () => {
     })
   )
 
+  it.effect("a summary describes a node without handing over the conversation", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("first answer", "second answer")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* tree.track(session)
+
+        yield* session.prompt("what is in the workspace?")
+        yield* settle(tree, 1)
+        yield* session.prompt("and now?")
+        yield* settle(tree, 2)
+
+        const nodes = yield* tree.nodes
+        return {
+          first: yield* tree.summary(nodes[0]!),
+          second: yield* tree.summary(nodes[1]!)
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // The user's words, not the model's: a branch is remembered by what was
+      // asked of it.
+      assert.strictEqual(Option.getOrThrow(out.first.preview), "what is in the workspace?")
+      assert.strictEqual(Option.getOrThrow(out.second.preview), "and now?")
+
+      assert.strictEqual(out.first.depth, 1)
+      assert.strictEqual(out.second.depth, 2)
+
+      // `added` is this turn's contribution; `messages` is the whole
+      // conversation. Conflating them would make every node look identical
+      // once the transcript is long.
+      assert.isAbove(out.second.messages, out.first.messages)
+      assert.isAbove(out.second.added, 0)
+      assert.isBelow(out.second.added, out.second.messages)
+      // History is append-only, so a node holds at least what its parent did.
+      assert.strictEqual(
+        out.second.messages - out.first.messages,
+        out.second.added
+      )
+    })
+  )
+
+  it.effect("a preview collapses to one line", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("answered")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* tree.track(session)
+        // What a pasted stack trace looks like: it must occupy one row in a
+        // selector, not thirty.
+        yield* session.prompt("fix this:\n  at foo (a.ts:1)\n\n  at bar (b.ts:2)")
+        yield* settle(tree, 1)
+        const nodes = yield* tree.nodes
+        return yield* tree.summary(nodes[0]!)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      const preview = Option.getOrThrow(out.preview)
+      assert.notInclude(preview, "\n")
+      assert.strictEqual(preview, "fix this: at foo (a.ts:1) at bar (b.ts:2)")
+    })
+  )
+
+  it.effect("two branches share an ancestor and diverge below it", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk", "left one", "left two", "right one")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const trunk = yield* AgentSession.make(agent)
+        yield* trunk.prompt("start")
+        const at = yield* tree.commit(trunk)
+
+        const left = yield* tree.branch(at, { lane: "left" })
+        yield* tree.track(left, { lane: "left" })
+        const right = yield* tree.branch(at, { lane: "right" })
+        yield* tree.track(right, { lane: "right" })
+
+        yield* left.prompt("one")
+        yield* settle(tree, 2)
+        yield* left.prompt("two")
+        yield* settle(tree, 3)
+        yield* right.prompt("one")
+        yield* settle(tree, 4)
+
+        const leftTip = Option.getOrThrow(yield* tree.lane("left"))
+        const rightTip = Option.getOrThrow(yield* tree.lane("right"))
+        return {
+          at,
+          leftTip,
+          rightTip,
+          ancestor: yield* tree.commonAncestor(leftTip, rightTip),
+          split: yield* tree.divergence(leftTip, rightTip),
+          // A node against itself: the fork is the node, and neither side
+          // went anywhere.
+          self: yield* tree.divergence(leftTip, leftTip),
+          // An ancestor against its own descendant: one side is empty.
+          lineage: yield* tree.divergence(at, leftTip)
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(Option.getOrThrow(out.ancestor).id, out.at.id)
+      assert.strictEqual(Option.getOrThrow(out.split.at).id, out.at.id)
+
+      // Two turns on the left, one on the right -- which is what a diff view
+      // draws side by side.
+      assert.strictEqual(out.split.left.length, 2)
+      assert.strictEqual(out.split.right.length, 1)
+      // The fork itself belongs to neither side.
+      assert.notInclude(out.split.left.map((node) => node.id), out.at.id)
+      assert.strictEqual(out.split.left[out.split.left.length - 1]!.id, out.leftTip.id)
+      assert.strictEqual(out.split.right[0]!.id, out.rightTip.id)
+
+      assert.strictEqual(Option.getOrThrow(out.self.at).id, out.leftTip.id)
+      assert.deepStrictEqual([out.self.left.length, out.self.right.length], [0, 0])
+
+      // A node is its own descendant's ancestor, so the fork is the ancestor
+      // and only the descendant's side has anything below it.
+      assert.strictEqual(Option.getOrThrow(out.lineage.at).id, out.at.id)
+      assert.strictEqual(out.lineage.left.length, 0)
+      assert.strictEqual(out.lineage.right.length, 2)
+    })
+  )
+
+  it.effect("unrelated roots share no ancestor, and that is not an error", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("one", "two")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        // One tree, two sessions that never met. A tree records whatever it is
+        // given, so this is representable and must answer rather than fail.
+        const a = yield* AgentSession.make(agent)
+        const b = yield* AgentSession.make(agent)
+        yield* a.prompt("first")
+        yield* b.prompt("second")
+        const rootA = yield* tree.commit(a)
+        const rootB = yield* tree.commit(b)
+        return {
+          ancestor: yield* tree.commonAncestor(rootA, rootB),
+          split: yield* tree.divergence(rootA, rootB)
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.isTrue(Option.isNone(out.ancestor))
+      assert.isTrue(Option.isNone(out.split.at))
+      // Both sides are whole: nothing is shared, so nothing is trimmed.
+      assert.strictEqual(out.split.left.length, 1)
+      assert.strictEqual(out.split.right.length, 1)
+    })
+  )
+
   it.effect("a label is carried, and is absent unless given", () =>
     Effect.gen(function*() {
       const { layer } = yield* script("answered")
