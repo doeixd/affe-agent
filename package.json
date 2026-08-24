@@ -111,6 +111,10 @@
       "types": "./dist/scheduling/index.d.ts",
       "default": "./dist/scheduling/index.js"
     },
+    "./plugins": {
+      "types": "./dist/plugins/index.d.ts",
+      "default": "./dist/plugins/index.js"
+    },
     "./budget": {
       "types": "./dist/budget/index.d.ts",
       "default": "./dist/budget/index.js"
