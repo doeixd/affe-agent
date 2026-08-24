@@ -544,6 +544,41 @@ an obvious job today rather than when the server lands. It also connects to
 the 25ms poll under `TestClock`: a value that is configurable is also trivially
 testable.
 
+**What landed (A-10), and the pathology it found.** `src/internal/schedules.ts`
+holds the two shapes, because they are genuinely different and were being
+re-derived as the same constant:
+
+- **`steady(interval)`** — jittered, not exponential, for retrying shared
+  infrastructure where the wait is bounded by an attempt count
+  (`EntityClient` ×2, `DurableAgent`'s shard-reassignment retry). Growing the
+  delay would silently turn those sites' one-minute ceiling into a
+  twenty-minute one, so removing the herd and changing the timing envelope are
+  kept as separate decisions.
+- **`backoff({ start, cap })`** — capped exponential with jitter, for polling
+  for a state change.
+
+The second exists because of a real defect. `DurableAgentClient.awaitOutcome`
+polled at a fixed 10ms with **no upper bound**, directly under a comment reading
+*"Unbounded by design: a submission parked for a human may take days."* Those two
+facts together are roughly **8.6 million polls per waiting client per day**, for
+an answer that is not arriving until somebody wakes up. Capped exponential keeps
+the fast path fast — the first retry is still `start` — while a long wait costs
+one poll per second instead of a hundred.
+
+**A second bug, caught by asserting the thing rather than assuming it.**
+`Schedule.jittered` multiplies by a factor in `[0.8, 1.2]`, so it can make a
+delay *longer*. The first version of `backoff` capped and then jittered, which
+let delays exceed the cap by 20% — the test failed with *"expected 223ms to be
+at most 200"*. Jitter now comes first and the cap last, so the cap is a ceiling
+rather than a suggestion. The same discovery corrected `steady`'s doc, which
+claimed the interval was an upper bound when it is a mean.
+
+Three tests, falsified twice: swapping the cap and jitter back reproduces the
+223ms overshoot, and removing jitter fails the desynchronisation assertion.
+
+**Still open:** the intervals themselves are still literals. Turning them into
+`Config` is A-8, and unchanged by this.
+
 ### E17. `Metric` has exactly one instance, and it is the right one
 
 Refining E8 with the specific. The single `Metric` use in the repository:
@@ -749,10 +784,14 @@ outrank most of round one.
   CLI, starting with the five hard-coded poll intervals that are policy today.
 - **A-9 — `unstable/cli` (E6).** The named roadmap gap, once the tree exists to
   drive it.
-- **A-10 — Backoff and jitter on retry schedules (E16).**
-  `Schedule.exponential(...).pipe(jittered)` where fixed spacing retries shared
-  infrastructure. Pairs with A-8; the interval becomes a floor rather than the
-  whole policy.
+- **A-10 — Backoff and jitter on retry schedules (E16). ✅ Done.**
+  `internal/schedules.ts` supplies `steady` (jittered, for count-bounded
+  retries against shared infrastructure) and `backoff` (capped exponential, for
+  polls). Fixes an unbounded 10ms poll that cost millions of queries a day for
+  a submission parked on a human. Three tests, falsified twice — one of which
+  caught that `jittered` can *exceed* its base delay, so a cap applied before
+  it is not a cap. The intervals are still literals; making them `Config` is
+  A-8.
 - **A-11 — Close the cast-inventory drift (E18). ✅ Done.**
   `test/Casts.test.ts` counts erasing casts per file from the AST and fails when
   the set changes; AGENTS.md gained the two missing kinds and the

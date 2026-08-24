@@ -13,6 +13,7 @@ import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurableToolkit from "./DurableToolkit.js"
+import * as Schedules from "../internal/schedules.js"
 
 /**
  * A submission, interpreted as a durable workflow.
@@ -278,7 +279,7 @@ const throughReassignment = <A, E, R>(
     Effect.retry({
       while: (error: E | Reassigning) => error instanceof Reassigning,
       times: 600,
-      schedule: Schedule.spaced(Duration.millis(100))
+      schedule: Schedules.steady(Duration.millis(100))
     }),
     Effect.catchIf(
       (error: E | Reassigning): error is Reassigning =>

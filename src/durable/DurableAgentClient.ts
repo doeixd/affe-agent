@@ -15,6 +15,7 @@ import * as DurableElicitation from "./DurableElicitation.js"
 import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableSubmission from "./DurableSubmission.js"
 import * as DurableSessionStore from "./DurableSessionStore.js"
+import * as Schedules from "../internal/schedules.js"
 import type { StorageError } from "./StorageError.js"
 
 /**
@@ -93,7 +94,14 @@ const awaitOutcome = (
   ).pipe(
     Effect.retry({
       while: (reason) => reason === "pending",
-      schedule: Schedule.spaced(interval)
+      // Capped backoff, not a fixed interval. This poll is unbounded on
+      // purpose -- see the note above -- and at a fixed 10ms that is millions
+      // of polls a day for a submission waiting on a person. The first retry
+      // is still `interval`, so a fast answer stays fast.
+      schedule: Schedules.backoff({
+        start: interval,
+        cap: Schedules.defaultPollCap
+      })
     }),
     Effect.orDie
   )

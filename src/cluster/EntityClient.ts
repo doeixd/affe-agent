@@ -3,6 +3,7 @@ import { Prompt } from "effect/unstable/ai"
 import type * as Elicitation from "../Elicitation.js"
 import { AgentIdleError } from "../Errors.js"
 import { AgentEntity } from "./AgentEntity.js"
+import * as Schedules from "../internal/schedules.js"
 
 /**
  * The session operations, as a caller wants to call them.
@@ -119,7 +120,7 @@ const retryTransient = <A, E, R>(
   Effect.retry(effect, {
     while: isTransient,
     times: 600,
-    schedule: Schedule.spaced(Duration.millis(100))
+    schedule: Schedules.steady(Duration.millis(100))
   })
 
 /**
@@ -148,7 +149,7 @@ const admitting = <A, E, R>(
     while: (error) =>
       isTransient(error) && tagOf(error) !== "AlreadyProcessingMessage",
     times: 600,
-    schedule: Schedule.spaced(Duration.millis(100))
+    schedule: Schedules.steady(Duration.millis(100))
   }).pipe(
     Effect.asVoid,
     Effect.catch((error: AgentIdleError | E) =>
