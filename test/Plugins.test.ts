@@ -1,9 +1,13 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Exit, Layer } from "effect"
+import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentSession from "../src/AgentSession.js"
 import * as Sandbox from "../src/sandbox/Sandbox.js"
 import { MemorySandbox } from "../src/sandbox/index.js"
 import { Skills } from "../src/skills/index.js"
 import { Plugins } from "../src/plugins/index.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
  * `Plugins.load` aggregates the manifest, skills, and mcp.json decoders into one
@@ -92,6 +96,41 @@ describe("Plugins.load", () => {
       assert.deepStrictEqual(list.map((m) => m.id), ["refunds"])
       assert.strictEqual(list[0]?.description, "How to issue a refund.")
       assert.strictEqual(body._tag === "Some" ? body.value : undefined, "Step 1: verify.")
+    })
+  )
+
+  it.effect("end-to-end: a plugin installs onto an agent; advertise + load_skill work", () =>
+    Effect.gen(function* () {
+      const { layer: model, recorder } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "l1", name: "load_skill", params: { skill_id: "refunds" } }] },
+        TestLanguageModel.text("refund issued")
+      ])
+      const seed = {
+        "plugin.json": JSON.stringify({ $schema: S, name: "support" }),
+        "skills/refunds/SKILL.md": "---\nname: refunds\ndescription: Issuing refunds\n---\nStep 1: verify the order."
+      }
+
+      const outcome = yield* Effect.gen(function* () {
+        const loaded = yield* Plugins.load()
+        const agent = yield* Agent.make({ instructions: "Help.", loop: AgentLoop.bounded(4) }).pipe(Plugins.install(loaded))
+        return yield* Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          const result = yield* AgentSession.prompt(session, "issue a refund")
+          return { text: result.text, prompts: yield* recorder.prompts }
+        }).pipe(Effect.provide(Plugins.skillsLayer(loaded)))
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.merge(
+          model,
+          Sandbox.currentLayer(Sandbox.workspace("plugin")).pipe(Layer.provide(MemorySandbox.layer({ seed })))
+        ))
+      )
+
+      // advertise put the skill metadata in the first prompt, not the body...
+      assert.include(JSON.stringify(outcome.prompts[0]), "Issuing refunds")
+      assert.notInclude(JSON.stringify(outcome.prompts[0]), "verify the order")
+      // ...and load_skill returned the body, so the run completed.
+      assert.strictEqual(outcome.text, "refund issued")
     })
   )
 })

@@ -1,4 +1,7 @@
 import { Effect, Layer, Option } from "effect"
+import type { Tool } from "effect/unstable/ai"
+import * as Agent from "../Agent.js"
+import type { AgentDefinition } from "../Agent.js"
 import * as McpClient from "../mcp/McpClient.js"
 import * as McpToolkit from "../mcp/McpToolkit.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
@@ -136,3 +139,26 @@ export const mcpToolkit = (
     }
     return yield* McpToolkit.bindDiscovered(connections)
   })
+
+/**
+ * Install a whole plugin onto an agent in one step: set its MCP tools as the
+ * agent's toolkit and add the skills (`load_skill` tool + the advertise
+ * transform, via `Skills.install`). Scoped, because the MCP connections are live.
+ * Still provide `Plugins.skillsLayer(loaded)` at the session for the skills to
+ * resolve.
+ *
+ * ```ts
+ * const agent = yield* Agent.make({ instructions: "…" }).pipe(Plugins.install(loaded))
+ * // …then Effect.provide(Plugins.skillsLayer(loaded)) at the session.
+ * ```
+ *
+ * This *sets* the toolkit to the plugin's tools — intended for an agent whose
+ * capabilities come from the plugin. An agent that also has its own tools should
+ * compose `mcpToolkit` and `skillsLayer` by hand instead.
+ */
+export const install = (
+  loaded: LoadedPlugin,
+  options?: { readonly clientInfo?: McpClient.ClientInfo | undefined }
+) =>
+<Tools extends Record<string, Tool.Any>, E, R>(agent: AgentDefinition<Tools, E, R>) =>
+  Effect.map(mcpToolkit(loaded, options), (toolkit) => agent.pipe(Agent.withToolkit(toolkit), Skills.install))
