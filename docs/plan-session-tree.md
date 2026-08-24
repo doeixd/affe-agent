@@ -537,6 +537,51 @@ after `state/AgentState.ts` and `durable/DurableChannels.ts` (audit E3). If the
 T5, take its answer rather than re-deriving one — the conformance suite above is
 worth writing once, not three times.
 
+**T5: landed (2026-08-24).** `NodeStore` with two implementations, one
+conformance suite, and the tree exported at `@doeixd/effect-agent/tree`.
+21 tree tests, 19 store tests, 928 in total.
+
+**The `effect/unstable/persistence` question, settled.** `KeyValueStore` is
+adopted as the *substrate*, so `NodeStore` is not the third hand-rolled storage
+abstraction audit E3 warned about -- it is a domain adapter over a standard
+one, and memory, filesystem, SQL and web-storage backings come with it.
+
+What `KeyValueStore` cannot do is scan, and "the children of this node" and
+"every node" are exactly scans. So the adapter maintains indexes on write: a
+`put` appends to at most three lists. That is the price of an interface that
+promises nothing but a map, and it is written down in the module rather than
+discovered later.
+
+**Two implementations, and the second is not redundant.** The in-memory store
+keeps the `Prompt` object it was handed. That is the whole reason it exists
+next to `KeyValueStore.layerMemory`, which would encode: prompts are immutable
+and share their message objects with their parent's, so holding a reference
+costs a pointer, while a JSON round-trip deep-copies every conversation on
+every write and throws the sharing away -- to persist into a map that dies with
+the process. `test/NodeStore.test.ts` asserts identity, not equality, for
+exactly this.
+
+**`SE` is a type parameter, defaulting to `never`.** A tree that never persists
+carries no error it cannot raise, so existing signatures are unchanged; a
+persistent store makes `StoreError` visible in precisely the operations that
+touch storage. Fixing the error type instead would have made every caller
+handle a disk failure that cannot happen to them.
+
+**One decision the type checker forced into the open: what happens when the
+store fails during auto-capture.** That runs as an *observer*, under the event
+bus's publish permit, so raising would fail the emit -- an unwritable disk
+would stop the agent mid-turn, and a UI would watch the run die for a reason
+unrelated to the conversation. The turn goes uncaptured and the failure is
+logged. Rewind cannot reach that turn, which is a real loss and the lesser one.
+`commit` still reports storage failure to its caller, because there somebody
+asked and is waiting.
+
+**Deltas are not implemented, deliberately.** Whole snapshots are obviously
+correct, and the plan's delta representation needs a cache in front of it to be
+worth having. Swapping it in changes `NodeStore.ts` and nothing else -- which
+is what keeping `history` off `Node` bought, and is the point at which the
+`Cache` note above applies.
+
 ## Success conditions
 
 - **ST1:** The spike's divergence test passes through the public tree API

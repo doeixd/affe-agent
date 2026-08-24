@@ -214,6 +214,33 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(compaction).sort(), ["Compaction"])
   })
 
+  it("exports the tree vocabulary and nothing beyond it", async () => {
+    const tree = await import("../src/tree/index.js")
+    assert.deepStrictEqual(Object.keys(tree).sort(), ["NodeStore", "SessionTree"])
+
+    // The store is a seam, so what it offers is part of the contract: two
+    // implementations and the vocabulary to write a third.
+    assert.deepStrictEqual(Object.keys(tree.NodeStore).sort(), [
+      "Node",
+      "NodeCause",
+      "NodeId",
+      "StoreError",
+      "keyValue",
+      "memory"
+    ])
+
+    assert.deepStrictEqual(Object.keys(tree.SessionTree).sort(), [
+      "Node",
+      "NodeCause",
+      "NodeId",
+      "NodeMissing",
+      "SessionBusy",
+      "SessionClosed",
+      "StoreError",
+      "make"
+    ])
+  })
+
   it("exports the client vocabulary and nothing beyond it", async () => {
     const client = await import("../src/client/index.js")
     assert.deepStrictEqual(Object.keys(client).sort(), [

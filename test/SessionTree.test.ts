@@ -3,6 +3,8 @@ import { Effect, Option, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
+import * as NodeStore from "../src/tree/NodeStore.js"
 import * as SessionTree from "../src/tree/SessionTree.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
@@ -59,13 +61,13 @@ const textOf = (prompt: { readonly content: ReadonlyArray<unknown> }): string =>
  * exists so a genuine failure reports as a failed assertion instead of
  * hanging.
  */
-const settle = <Tools extends Record<string, never>, E>(
-  tree: SessionTree.SessionTree<Tools, E>,
+const settle = <Tools extends Record<string, never>, E, SE>(
+  tree: SessionTree.SessionTree<Tools, E, SE>,
   count: number
 ): Effect.Effect<void> =>
   Effect.gen(function*() {
     for (let attempt = 0; attempt < 100; attempt++) {
-      if ((yield* tree.nodes).length >= count) return
+      if ((yield* Effect.orDie(tree.nodes)).length >= count) return
       yield* Effect.yieldNow
     }
   })
@@ -779,6 +781,81 @@ describe("SessionTree", () => {
       // Both sides are whole: nothing is shared, so nothing is trimmed.
       assert.strictEqual(out.split.left.length, 1)
       assert.strictEqual(out.split.right.length, 1)
+    })
+  )
+
+  it.effect("a tree rebuilt over the same store remembers its nodes", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("first", "second", "third")
+
+      const out = yield* Effect.gen(function*() {
+        const kv = yield* KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+          Effect.provide(KeyValueStore.layerMemory)
+        )
+        const store = NodeStore.keyValue(kv)
+
+        const before = yield* SessionTree.make(agent, { store })
+        const session = yield* AgentSession.make(agent)
+        yield* before.track(session)
+        yield* session.prompt("one")
+        yield* settle(before, 1)
+        yield* session.prompt("two")
+        yield* settle(before, 2)
+
+        const original = yield* before.nodes
+        const originalPath = yield* before.path(original[original.length - 1]!)
+
+        // A second tree over the same backing, holding nothing of its own --
+        // which is what a restart looks like from in here.
+        const after = yield* SessionTree.make(agent, { store })
+        const restored = yield* after.nodes
+        const leaf = restored[restored.length - 1]!
+
+        return {
+          original: original.map((node) => node.id),
+          restored: restored.map((node) => node.id),
+          originalDepth: originalPath.length,
+          restoredDepth: (yield* after.path(leaf)).length,
+          history: (yield* after.historyOf(leaf)).content.length,
+          root: yield* after.root,
+          // And it can be worked from, not merely read: branching needs the
+          // stored conversation to be a real prompt again, not a shape.
+          branched: yield* after.branch(leaf)
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.deepStrictEqual(out.restored, out.original)
+      assert.strictEqual(out.restoredDepth, out.originalDepth)
+      assert.isAbove(out.history, 0)
+      assert.isTrue(Option.isSome(out.root))
+      assert.isDefined(out.branched.id)
+    })
+  )
+
+  it.effect("a store failure reaches the caller who asked", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("answered")
+
+      const out = yield* Effect.gen(function*() {
+        // Everything fails. What matters is not the message but that `commit`
+        // reports it rather than swallowing it or reporting "no such node":
+        // storage being unavailable is not the same answer as an empty tree.
+        const broken: NodeStore.NodeStore<NodeStore.StoreError> = {
+          put: () => Effect.fail(new NodeStore.StoreError({ operation: "write", detail: "disk" })),
+          get: () => Effect.fail(new NodeStore.StoreError({ operation: "read", detail: "disk" })),
+          children: () => Effect.fail(new NodeStore.StoreError({ operation: "read", detail: "disk" })),
+          roots: Effect.fail(new NodeStore.StoreError({ operation: "read", detail: "disk" })),
+          nodes: Effect.fail(new NodeStore.StoreError({ operation: "read", detail: "disk" }))
+        }
+        const tree = yield* SessionTree.make(agent, { store: broken })
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        return yield* Effect.flip(tree.commit(session))
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // The store's own error, not a `NodeMissing` and not a `SessionBusy`:
+      // storage being unavailable is a different answer from an empty tree.
+      assert.strictEqual(out._tag, "@doeixd/effect-agent/tree/StoreError")
     })
   )
 

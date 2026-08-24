@@ -16,6 +16,7 @@ import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
+import * as NodeStore from "./NodeStore.js"
 
 /**
  * Branch and rewind a conversation.
@@ -41,10 +42,20 @@ import * as AgentSession from "../AgentSession.js"
  * here instead.
  */
 
-export const NodeId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/tree/NodeId")
-)
-export type NodeId = typeof NodeId.Type
+/**
+ * Re-exported from `NodeStore`, which is where they are now declared.
+ *
+ * A node has to be *persisted*, and the schema that writes it belongs beside
+ * the thing doing the writing -- otherwise the two definitions drift and a
+ * store round-trips a node into something subtly different. They are still
+ * named here because this is the module a caller reaches for.
+ */
+export { Node, NodeCause, NodeId, StoreError } from "./NodeStore.js"
+export type { Held, NodeStore } from "./NodeStore.js"
+
+type Node = NodeStore.Node
+type NodeId = NodeStore.NodeId
+type NodeCause = NodeStore.NodeCause
 
 // The brand exists to stop a bare string being passed where a node id belongs;
 // minting one is this module's own business, so the assertion is absorbed here
@@ -58,32 +69,9 @@ const nodeId = (value: string): NodeId => value as NodeId
  * ids and `historyOf` happily answers for a node that belongs to a different
  * tree -- returning the wrong conversation rather than refusing. Ids are
  * unique per process, which is all an in-memory tree needs; a persisted tree
- * (T5) needs ids that survive one.
+ * gets its separation from the store's namespace instead.
  */
 let trees = 0
-
-/** Why a node exists. A renderer picks a glyph from this. */
-export type NodeCause = "root" | "prompt" | "fork" | "manual"
-
-/**
- * A point in the conversation.
- *
- * **Bounded metadata lives on the value; unbounded content lives behind an
- * operation.** There is deliberately no `history` or `snapshot` field: a field
- * would force every node to hold a fully materialised transcript for ever and
- * would make delta storage a breaking change. `SessionTree.historyOf` is an
- * `Effect` instead, so a store can hold whole snapshots, walk deltas to the
- * root, or read a database -- and can fail when a node is gone, which a field
- * cannot express.
- */
-export interface Node {
-  readonly id: NodeId
-  readonly parent: Option.Option<NodeId>
-  readonly cause: NodeCause
-  /** When the node was captured, in epoch milliseconds. */
-  readonly at: number
-  readonly label: Option.Option<string>
-}
 
 /** The node is not in this tree. */
 export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
@@ -213,7 +201,7 @@ export interface BranchOptions {
   readonly lane?: string | undefined
 }
 
-export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
+export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = never> {
   /**
    * Capture the session's current conversation as a node.
    *
@@ -224,7 +212,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
   readonly commit: (
     session: AgentSession.AgentSession<Tools, E>,
     options?: CommitOptions
-  ) => Effect.Effect<Node, SessionBusy | SessionClosed>
+  ) => Effect.Effect<Node, SessionBusy | SessionClosed | SE>
 
   /**
    * Start a session from a node.
@@ -254,7 +242,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
    * See `Summary`: this exists so a selector can list twenty branch points
    * without materialising twenty conversations.
    */
-  readonly summary: (node: Node) => Effect.Effect<Summary, NodeMissing>
+  readonly summary: (node: Node) => Effect.Effect<Summary, NodeMissing | SE>
 
   /**
    * The deepest node both descend from.
@@ -266,7 +254,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
   readonly commonAncestor: (
     a: Node,
     b: Node
-  ) => Effect.Effect<Option.Option<Node>, NodeMissing>
+  ) => Effect.Effect<Option.Option<Node>, NodeMissing | SE>
 
   /**
    * Where two branches parted, and what each did after.
@@ -275,13 +263,13 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
    * then walking again: the fork and the two suffixes all fall out of the same
    * two paths.
    */
-  readonly divergence: (a: Node, b: Node) => Effect.Effect<Divergence, NodeMissing>
+  readonly divergence: (a: Node, b: Node) => Effect.Effect<Divergence, NodeMissing | SE>
 
   /** Every named leaf, in the order the lanes were first named. */
-  readonly lanes: Effect.Effect<ReadonlyArray<Lane>>
+  readonly lanes: Effect.Effect<ReadonlyArray<Lane>, SE>
 
   /** One named leaf. */
-  readonly lane: (name: string) => Effect.Effect<Option.Option<Node>>
+  readonly lane: (name: string) => Effect.Effect<Option.Option<Node>, SE>
 
   /**
    * Put a branch in front of the user, releasing the one that was.
@@ -293,7 +281,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
    */
   readonly activate: (
     node: Node
-  ) => Effect.Effect<Activation<Tools, E>, NodeMissing>
+  ) => Effect.Effect<Activation<Tools, E>, NodeMissing | SE>
 
   /**
    * Where the active branch is *now*, if any.
@@ -304,7 +292,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
    * counts back from, and answering with the branch point would make rewind
    * refuse from the second turn onwards.
    */
-  readonly active: Effect.Effect<Option.Option<Node>>
+  readonly active: Effect.Effect<Option.Option<Node>, SE>
 
   /**
    * The node with this id, if the tree still holds it.
@@ -314,7 +302,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
    * shared -- so anything walking upwards needs this. Rewind is the obvious
    * case: "the turn before this one" is a parent id and nothing else.
    */
-  readonly node: (id: NodeId) => Effect.Effect<Option.Option<Node>>
+  readonly node: (id: NodeId) => Effect.Effect<Option.Option<Node>, SE>
 
   /**
    * Every event from whichever branch is active, as one stream.
@@ -340,28 +328,24 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
     options?: BranchOptions
   ) => Effect.Effect<
     AgentSession.AgentSession<Tools, E>,
-    NodeMissing,
+    NodeMissing | SE,
     Scope.Scope | LanguageModel.LanguageModel
   >
 
   /** A node's conversation. For rendering; `branch` does not need it. */
-  readonly historyOf: (node: Node) => Effect.Effect<Prompt.Prompt, NodeMissing>
+  readonly historyOf: (node: Node) => Effect.Effect<Prompt.Prompt, NodeMissing | SE>
 
   /** From the root down to this node. */
-  readonly path: (node: Node) => Effect.Effect<ReadonlyArray<Node>, NodeMissing>
+  readonly path: (node: Node) => Effect.Effect<ReadonlyArray<Node>, NodeMissing | SE>
 
-  readonly children: (node: Node) => Effect.Effect<ReadonlyArray<Node>>
+  readonly children: (node: Node) => Effect.Effect<ReadonlyArray<Node>, SE>
 
-  readonly root: Effect.Effect<Option.Option<Node>>
+  readonly root: Effect.Effect<Option.Option<Node>, SE>
 
   /** Every node, oldest first. */
-  readonly nodes: Effect.Effect<ReadonlyArray<Node>>
+  readonly nodes: Effect.Effect<ReadonlyArray<Node>, SE>
 }
 
-interface Held {
-  readonly node: Node
-  readonly history: Prompt.Prompt
-}
 
 /**
  * Build a tree over one agent.
@@ -369,9 +353,18 @@ interface Held {
  * `R` is absorbed here: the agent's own requirements are satisfied when a
  * branch is created, which is why `branch` asks only for a scope and a model.
  */
-export const make = <Tools extends Record<string, Tool.Any>, E, R>(
+export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
   agent: AgentDefinition<Tools, E, R>,
   options?: {
+    /**
+     * Where nodes live. In memory by default.
+     *
+     * `SE` is the store's failure and defaults to `never`, so a tree that
+     * never persists carries no error it cannot raise: today's signatures are
+     * unchanged for today's callers, and a persistent store makes its failure
+     * visible in exactly the operations that touch storage.
+     */
+    readonly store?: NodeStore.NodeStore<SE> | undefined
     /**
      * How branch session ids are named.
      *
@@ -402,11 +395,16 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
      */
     readonly session?: Omit<AgentSession.MakeOptions, "sessionId" | "history"> | undefined
   }
-): Effect.Effect<SessionTree<Tools, E>, never, R | Scope.Scope | LanguageModel.LanguageModel> =>
+): Effect.Effect<
+  SessionTree<Tools, E, SE>,
+  never,
+  R | Scope.Scope | LanguageModel.LanguageModel
+> =>
   Effect.gen(function*() {
     const environment = yield* Effect.context<R>()
     const prefix = `t${++trees}`
-    const held = yield* Ref.make(new Map<string, Held>())
+    const store: NodeStore.NodeStore<SE> = options?.store ??
+      ((yield* NodeStore.memory) as NodeStore.NodeStore<SE>)
     // Where each live session sits in the tree: its branch point, then its own
     // latest commit. Keyed by session id, which is why a branch must not reuse
     // one.
@@ -433,8 +431,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     const branches = yield* RcMap.make({
       lookup: (id: NodeId) =>
         Effect.gen(function*() {
-          const found = (yield* Ref.get(held)).get(id)
-          if (found === undefined) return yield* new NodeMissing({ id })
+          const found = yield* find(id)
           const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
           const sessionId = `${id}-active-${n}`
           const session = yield* AgentSession.make(agent, {
@@ -489,13 +486,9 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       (n) => nodeId(`${prefix}-node-${n}`)
     )
 
-    const find = (id: NodeId): Effect.Effect<Held, NodeMissing> =>
-      Effect.flatMap(Ref.get(held), (all) => {
-        const found = all.get(id)
-        return found === undefined
-          ? Effect.fail(new NodeMissing({ id }))
-          : Effect.succeed(found)
-      })
+    const find = (id: NodeId): Effect.Effect<NodeStore.Held, NodeMissing | SE> =>
+      Effect.flatMap(store.get(id), (found) =>
+        Option.isNone(found) ? Effect.fail(new NodeMissing({ id })) : Effect.succeed(found.value))
 
     /**
      * Record a node from a conversation already known to be at a boundary.
@@ -512,13 +505,16 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       sessionId: string,
       history: Prompt.Prompt,
       commitOptions?: CommitOptions
-    ): Effect.Effect<Option.Option<Node>> =>
+    ): Effect.Effect<Option.Option<Node>, SE> =>
       Effect.gen(function*() {
         const parentId = (yield* Ref.get(at)).get(sessionId)
         const parent = Option.fromNullishOr(parentId)
         if (parentId !== undefined) {
-          const existing = (yield* Ref.get(held)).get(parentId)
-          if (existing !== undefined && existing.history.content.length === history.content.length) {
+          const existing = yield* store.get(parentId)
+          if (
+            Option.isSome(existing) &&
+            existing.value.history.content.length === history.content.length
+          ) {
             return Option.none()
           }
         }
@@ -531,7 +527,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
           at: yield* Clock.currentTimeMillis,
           label: Option.fromNullishOr(commitOptions?.label)
         }
-        yield* Ref.update(held, (all) => new Map(all).set(id, { node, history }))
+        yield* store.put(node, history)
         // The session now sits at its new node, so a later commit chains from
         // here rather than re-parenting to where it started.
         yield* Ref.update(at, (all) => new Map(all).set(sessionId, id))
@@ -544,7 +540,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         return Option.some(node)
       })
 
-    const commit: SessionTree<Tools, E>["commit"] = (session, commitOptions) =>
+    const commit: SessionTree<Tools, E, SE>["commit"] = (session, commitOptions) =>
       Effect.gen(function*() {
         const captured = yield* AgentSession.snapshot(session).pipe(
           // Preserved rather than flattened: `snapshot` already knows which of
@@ -568,21 +564,22 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         // lands on the node that is already there.
         const current = (yield* Ref.get(at)).get(captured.sessionId)
         const existing = current === undefined
-          ? undefined
-          : (yield* Ref.get(held)).get(current)
-        if (existing !== undefined) {
+          ? Option.none<NodeStore.Held>()
+          : yield* store.get(current)
+        if (Option.isSome(existing)) {
           if (commitOptions?.label === undefined && commitOptions?.cause === undefined) {
-            return existing.node
+            return existing.value.node
           }
           const marked: Node = {
-            ...existing.node,
+            ...existing.value.node,
             ...(commitOptions.cause === undefined ? {} : { cause: commitOptions.cause }),
             ...(commitOptions.label === undefined
               ? {}
               : { label: Option.some(commitOptions.label) })
           }
-          yield* Ref.update(held, (all) =>
-            new Map(all).set(marked.id, { node: marked, history: existing.history }))
+          // Re-stored under its own id, which every store treats as replacing
+          // the node rather than adding one -- see the contract.
+          yield* store.put(marked, existing.value.history)
           return marked
         }
         // Only reachable for an empty conversation with no prior node.
@@ -592,7 +589,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         )
       })
 
-    const branch: SessionTree<Tools, E>["branch"] = (node, branchOptions) =>
+    const branch: SessionTree<Tools, E, SE>["branch"] = (node, branchOptions) =>
       Effect.gen(function*() {
         const { history } = yield* find(node.id)
         const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
@@ -612,16 +609,15 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         return session
       })
 
-    const path: SessionTree<Tools, E>["path"] = (node) =>
+    const path: SessionTree<Tools, E, SE>["path"] = (node) =>
       Effect.gen(function*() {
-        const all = yield* Ref.get(held)
         const walked: Array<Node> = []
         let current: Option.Option<NodeId> = Option.some(node.id)
         while (Option.isSome(current)) {
-          const found = all.get(current.value)
-          if (found === undefined) return yield* new NodeMissing({ id: current.value })
-          walked.push(found.node)
-          current = found.node.parent
+          const found = yield* store.get(current.value)
+          if (Option.isNone(found)) return yield* new NodeMissing({ id: current.value })
+          walked.push(found.value.node)
+          current = found.value.node.parent
         }
         // Walked leaf-to-root; a path reads root-first.
         return walked.reverse()
@@ -650,15 +646,15 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       return Option.none()
     }
 
-    const summary: SessionTree<Tools, E>["summary"] = (node) =>
+    const summary: SessionTree<Tools, E, SE>["summary"] = (node) =>
       Effect.gen(function*() {
         const found = yield* find(node.id)
-        const all = yield* Ref.get(held)
         // The parent's size, so `added` is this turn's contribution rather
         // than the whole conversation.
-        const before = Option.isNone(node.parent)
-          ? 0
-          : all.get(node.parent.value)?.history.content.length ?? 0
+        const parent = Option.isNone(node.parent)
+          ? Option.none<NodeStore.Held>()
+          : yield* store.get(node.parent.value)
+        const before = Option.isNone(parent) ? 0 : parent.value.history.content.length
         const walked = yield* path(node)
         return {
           node: found.node,
@@ -680,7 +676,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       b: Node
     ): Effect.Effect<
       { at: Option.Option<Node>; left: ReadonlyArray<Node>; right: ReadonlyArray<Node> },
-      NodeMissing
+      NodeMissing | SE
     > =>
       Effect.gen(function*() {
         const left = yield* path(a)
@@ -739,10 +735,28 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     (envelope: AgentEventEnvelope): Effect.Effect<void> =>
       envelope.event._tag === "TurnCompleted"
         ? Effect.flatMap(session.history, (history) =>
-          Effect.asVoid(record(session.id, history)))
+          Effect.asVoid(record(session.id, history))).pipe(
+            /**
+             * A store that fails here must not take the agent down with it.
+             *
+             * This runs under the event bus's publish permit, so raising would
+             * fail the *emit* -- an unwritable disk would stop the agent
+             * mid-turn, and a UI would see the run die for a reason that has
+             * nothing to do with the conversation. The turn goes uncaptured
+             * instead: rewind cannot reach it, which is a real loss and the
+             * lesser one.
+             *
+             * `commit` is the path that reports storage failure to a caller,
+             * because there a caller asked and is waiting for an answer.
+             */
+            Effect.catchCause((cause) =>
+              Effect.logError("Failed to capture a node at a turn boundary", cause).pipe(
+                Effect.annotateLogs({ sessionId: session.id })
+              ))
+          )
         : Effect.void
 
-    const activate: SessionTree<Tools, E>["activate"] = (node) =>
+    const activate: SessionTree<Tools, E, SE>["activate"] = (node) =>
       Effect.gen(function*() {
         const { history } = yield* find(node.id)
         // A scope of the tree's own, so the reference is dropped on the next
@@ -763,7 +777,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       node: Node,
       history: Prompt.Prompt,
       scope: Scope.Closeable
-    ): Effect.Effect<Activation<Tools, E>, NodeMissing> =>
+    ): Effect.Effect<Activation<Tools, E>, NodeMissing | SE> =>
       Effect.gen(function*() {
         const session = yield* RcMap.get(branches, node.id).pipe(
           Effect.provideService(Scope.Scope, scope)
@@ -795,7 +809,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         return activation
       })
 
-    const track: SessionTree<Tools, E>["track"] = (session, trackOptions) =>
+    const track: SessionTree<Tools, E, SE>["track"] = (session, trackOptions) =>
       Effect.gen(function*() {
         if (trackOptions?.lane !== undefined) {
           yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, trackOptions.lane!))
@@ -812,12 +826,15 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         if (Option.isNone(activation)) return Option.none<Node>()
         // Through `at`, which is what advances as the branch records turns.
         const id = (yield* Ref.get(at)).get(activation.value.session.id)
-        const held_ = yield* Ref.get(held)
-        const found = id === undefined ? undefined : held_.get(id)
-        return Option.some(found?.node ?? activation.value.node)
+        const found = id === undefined
+          ? Option.none<NodeStore.Held>()
+          : yield* store.get(id)
+        return Option.some(
+          Option.isSome(found) ? found.value.node : activation.value.node
+        )
       }),
       node: (id) =>
-        Effect.map(Ref.get(held), (all) => Option.fromNullishOr(all.get(id)?.node)),
+        Effect.map(store.get(id), Option.map((found) => found.node)),
       events: Stream.fromPubSub(feed),
       status: Stream.switchMap(SubscriptionRef.changes(current), (activation) =>
         Option.isNone(activation)
@@ -828,35 +845,24 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       divergence: (a, b) => fork(a, b),
       lanes: Effect.gen(function*() {
         const named = yield* Ref.get(lanes)
-        const all = yield* Ref.get(held)
-        return [...named.entries()].flatMap(([name, id]) => {
-          const found = all.get(id)
-          return found === undefined ? [] : [{ name, leaf: found.node }]
-        })
+        const found = yield* Effect.forEach([...named.entries()], ([name, id]) =>
+          Effect.map(store.get(id), Option.map((held) => ({ name, leaf: held.node }))))
+        return found.flatMap((lane) => Option.isNone(lane) ? [] : [lane.value])
       }),
       lane: (name) =>
         Effect.gen(function*() {
           const id = (yield* Ref.get(lanes)).get(name)
           if (id === undefined) return Option.none<Node>()
-          const found = (yield* Ref.get(held)).get(id)
-          return found === undefined ? Option.none<Node>() : Option.some(found.node)
+          const found = yield* store.get(id)
+          return Option.map(found, (held) => held.node)
         }),
       branch,
       historyOf: (node) => Effect.map(find(node.id), (found) => found.history),
       path,
-      children: (node) =>
-        Effect.map(Ref.get(held), (all) =>
-          [...all.values()]
-            .map((entry) => entry.node)
-            .filter((candidate) =>
-              Option.isSome(candidate.parent) && candidate.parent.value === node.id
-            )),
-      root: Effect.map(Ref.get(held), (all) =>
-        Option.fromNullishOr(
-          [...all.values()].map((entry) => entry.node).find((node) =>
-            Option.isNone(node.parent)
-          )
-        )),
-      nodes: Effect.map(Ref.get(held), (all) => [...all.values()].map((entry) => entry.node))
+      // Straight through: the store answers these from indexes it keeps on
+      // write, because a key-value backing cannot scan for them.
+      children: (node) => store.children(node.id),
+      root: Effect.map(store.roots, (roots) => Option.fromNullishOr(roots[0])),
+      nodes: store.nodes
     }
   })

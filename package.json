@@ -67,6 +67,10 @@
       "types": "./dist/coding/index.d.ts",
       "default": "./dist/coding/index.js"
     },
+    "./tree": {
+      "types": "./dist/tree/index.d.ts",
+      "default": "./dist/tree/index.js"
+    },
     "./web": {
       "types": "./dist/web/index.d.ts",
       "default": "./dist/web/index.js"
