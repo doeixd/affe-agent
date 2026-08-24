@@ -216,7 +216,7 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the tree vocabulary and nothing beyond it", async () => {
     const tree = await import("../src/tree/index.js")
-    assert.deepStrictEqual(Object.keys(tree).sort(), ["NodeStore", "SessionTree"])
+    assert.deepStrictEqual(Object.keys(tree).sort(), ["NodeStore", "SessionTree", "TreeExport"])
 
     // The store is a seam, so what it offers is part of the contract: two
     // implementations and the vocabulary to write a third.
@@ -265,6 +265,25 @@ describe("durable and cluster surfaces", () => {
       "toolsUsed",
       "turnsOf",
       "unavailable"
+    ])
+  })
+
+  it("exports the redaction vocabulary and nothing beyond it", async () => {
+    const redaction = await import("../src/redaction/index.js")
+    assert.deepStrictEqual(Object.keys(redaction).sort(), ["Redaction"])
+
+    // Two matchers, and the surface says so. A longer list here would be the
+    // first step towards looking like a secret scanner.
+    assert.deepStrictEqual(Object.keys(redaction.Redaction).sort(), [
+      "asHook",
+      "asSpanHook",
+      "bearerTokens",
+      "deep",
+      "environmentSecrets",
+      "literal",
+      "make",
+      "none",
+      "pattern"
     ])
   })
 

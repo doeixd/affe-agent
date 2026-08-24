@@ -255,7 +255,53 @@ frequently the bug being chased.
 provenance says what the agent *had*, this says what the transcript actually
 *used*, and when they disagree the second decides whether a replay can run.
 
-**Not yet done:** E3 (redaction), E4 (the commit log), E5 (tree-aware export).
+**E3 and E5: landed (2026-08-24).** `@doeixd/effect-agent/redaction` and
+`TreeExport`. 16 further tests; every redaction invariant broken once.
+
+**Redaction belongs to neither package, so it lives apart from both.** The plan
+said export and observability should share one vocabulary rather than each
+grow a `redact` hook, and the only way to mean that is a module neither owns:
+observability depending on export would be backwards, and the reverse would
+drag a tracer into a file format. `Redaction.asHook` and `asSpanHook` produce
+exactly the two signatures observability already takes, so one rule covers
+span attributes and exports both.
+
+**IE3 is why redaction runs over the *encoded* form.** A redactor written
+against known fields covers the fields its author thought of -- the tool
+result, usually -- and misses the truncation banner quoting the output, the
+error echoing the command, and the parameters of the call that produced it,
+which is where the interesting copy is. Walking every string in the encoded
+document is total by construction. The test that proves it plants one secret in
+five places and asserts it appears nowhere; breaking `deep` into a
+field-by-field redactor fails it.
+
+Keys are left alone, deliberately: a key is structure, and a redactor that
+corrupts its output has lost the transcript rather than protected it.
+
+**Redaction happens at `encode`, not when the envelope is built.** That is the
+moment the transcript stops being a value in a process and becomes text someone
+can paste. Redacting earlier would leave every `Export` in memory a
+differently-redacted thing depending on who made it.
+
+**Two matchers, and the surface says so.** `PublicApi` pins the list, because a
+longer one is the first step towards looking like a secret scanner. There is a
+test asserting the matchers plainly miss an ordinary API key -- the honest half
+of the claim.
+
+**E5: a path and a subtree, and neither is a format.** Every piece is an
+ordinary `Export` that restores into a plain session, with `provenance.parent`
+naming what it branched from. `leaves` is the useful middle: each leaf's export
+already contains its whole path, so the set covers everything said without
+filing a branch point as its own file. The dependency runs tree -> export,
+because an export knows nothing about nodes and a tree can say what one is.
+
+**Suggestion 7 settled: leave it.** `bash` names a saved-output path that an
+export does not carry. The plan's own first preference is right -- the
+reference is honest and the banner already says the output was truncated -- and
+the alternative would couple the export format to the coding toolkit's banner
+text, which is a worse trade than the gap it closes.
+
+**Not yet done:** E4 (the commit log).
 Note that E4's premise has shifted -- T5 landed a `NodeStore` over
 `KeyValueStore` with whole snapshots, so the shared append-only log is now a
 change to one module rather than a new one. Suggestion 7 (`bash` output files

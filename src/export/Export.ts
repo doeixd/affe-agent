@@ -2,6 +2,7 @@ import { DateTime, Effect, Option, Schema } from "effect"
 import type { Prompt } from "effect/unstable/ai"
 import * as AgentSession from "../AgentSession.js"
 import type { AgentBusyError, AgentClosedError } from "../Errors.js"
+import * as Redaction from "../redaction/Redaction.js"
 
 /**
  * A transcript that leaves the process.
@@ -195,11 +196,31 @@ const encodeExport = Schema.encodeUnknownEffect(Export)
  * Two exports of one session have to be byte-identical or every fixture update
  * is an unreadable diff -- and key order is the part of that nobody notices
  * until it bites.
+ *
+ * **Redaction happens here, at the boundary, and nowhere earlier.** This is the
+ * moment the transcript stops being a value in a process and becomes text that
+ * can be pasted into a bug report; redacting when the envelope is *built*
+ * would leave every `Export` value in memory a differently-redacted thing
+ * depending on who made it. Applied to the encoded form, so it reaches inside
+ * tool results, truncation banners and call parameters alike -- see
+ * `Redaction.deep` for why partial coverage is the failure mode that matters.
+ *
+ * The default is `Redaction.none`, and that is documented rather than
+ * implied: a caller should have to know that nothing is being removed.
  */
-export const encode = (self: Export): Effect.Effect<string, ExportError> =>
+export const encode = (
+  self: Export,
+  options?: { readonly redact?: Redaction.Redaction | undefined }
+): Effect.Effect<string, ExportError> =>
   encodeExport(self).pipe(
     Effect.mapError((error) => new ExportError({ reason: "malformed", detail: error.message })),
-    Effect.map((encoded) => JSON.stringify(sorted(encoded), null, 2))
+    Effect.map((encoded) =>
+      JSON.stringify(
+        sorted(Redaction.deep(encoded, options?.redact ?? Redaction.none)),
+        null,
+        2
+      )
+    )
   )
 
 /** Recursively order object keys, leaving arrays alone. */

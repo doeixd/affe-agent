@@ -75,6 +75,10 @@
       "types": "./dist/export/index.d.ts",
       "default": "./dist/export/index.js"
     },
+    "./redaction": {
+      "types": "./dist/redaction/index.d.ts",
+      "default": "./dist/redaction/index.js"
+    },
     "./web": {
       "types": "./dist/web/index.d.ts",
       "default": "./dist/web/index.js"

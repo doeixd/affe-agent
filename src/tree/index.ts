@@ -12,3 +12,4 @@
  */
 export * as NodeStore from "./NodeStore.js"
 export * as SessionTree from "./SessionTree.js"
+export * as TreeExport from "./TreeExport.js"
