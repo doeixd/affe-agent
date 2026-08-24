@@ -89,6 +89,7 @@ const ask = async (text: string) => {
 // asking for a tool, so the second scripted tool call needs a second prompt.
 await ask("what is in this workspace?")
 await ask("now run something")
+await ask("rename the greeting")
 
 // V4: a run that pauses on approval. `ask` waits for the submission to end,
 // which never happens while the footer is asking, so drive it explicitly.
@@ -133,6 +134,9 @@ const checks: Array<readonly [string, boolean]> = [
   ["status returned to idle", live.includes("idle")],
 
   // V3
+  // W4: edit_file returns a record, so the change renders from fields.
+  ["edit renders a change summary", /\+\d+ -\d+/.test(transcript)],
+  ["change names the file", transcript.includes("src/index.ts")],
   ["turn summary committed", transcript.includes("▣")],
   ["summary reports a tool count", transcript.includes("1 tool")],
   ["summary reports a duration", /▣ \d+(\.\d+)?(ms|s)/.test(transcript)],

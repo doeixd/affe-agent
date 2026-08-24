@@ -1,4 +1,4 @@
-import { Effect, Option, Stream } from "effect"
+import { Clock, Effect, Metric, Option, Stream } from "effect"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as Telemetry from "../internal/telemetry.js"
 
@@ -219,3 +219,210 @@ export const trace = (
     return sink(base === undefined ? record : { name: record.name, attributes: { ...base, ...record.attributes } })
   })
 }
+
+// ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+/**
+ * The instruments an agent runtime is asked about.
+ *
+ * This package standardised span names and attributes and shipped no metrics,
+ * which left the four questions every operator actually asks -- how much work,
+ * how deep, which tools fail, how much input is backed up -- answerable only by
+ * aggregating logs. `/data`'s `agent_data_dropped_events` counter was the only
+ * instrument in the repository, and it is the template these follow: a real
+ * failure mode, attributed by the dimension you would group by.
+ *
+ * Names follow the attribute vocabulary above: `agent_*`, snake_case, with the
+ * unit in the name where there is one. Nothing here is derived from a new
+ * event -- every instrument reads the public stream `trace` already consumes.
+ *
+ * **What is deliberately absent: tokens.** No event carries model usage, so a
+ * token counter would have to be invented rather than observed. Adding one
+ * means adding usage to the event stream first, which is a change to the
+ * kernel's vocabulary and belongs in its own decision, not smuggled in here.
+ */
+export const metricNames = {
+  turns: "agent_turns",
+  turnsPerRun: "agent_turns_per_run",
+  toolCalls: "agent_tool_calls",
+  toolDuration: "agent_tool_duration_ms",
+  pendingInput: "agent_pending_input"
+} as const
+
+/** Turns executed, across every run. */
+const turnsTotal = Metric.counter(metricNames.turns, {
+  description: "Model turns completed",
+  incremental: true
+})
+
+/**
+ * How deep runs go.
+ *
+ * A histogram rather than a counter because the interesting question is the
+ * shape: a loop that usually stops at two turns and occasionally runs to its
+ * bound is a different system from one that always runs to eight.
+ */
+const turnsPerRun = Metric.histogram(metricNames.turnsPerRun, {
+  description: "Turns taken by one run",
+  boundaries: Metric.linearBoundaries({ start: 1, width: 1, count: 12 })
+})
+
+/** Tool calls, by tool and by how they ended. */
+const toolCalls = Metric.counter(metricNames.toolCalls, {
+  description: "Tool calls, attributed by tool name and outcome",
+  incremental: true
+})
+
+/**
+ * How long tools take, by tool.
+ *
+ * Measured between `ToolCallStarted` and the call's terminal event **as this
+ * observer sees them**, because no event carries a timestamp. On a live stream
+ * that is the tool's duration plus the stream's own latency; on a replayed or
+ * recorded stream it is meaningless. Stated rather than left to be discovered:
+ * an instrument whose validity depends on how it is fed should say so.
+ */
+const toolDuration = Metric.histogram(metricNames.toolDuration, {
+  description: "Tool call duration in milliseconds, as observed",
+  boundaries: Metric.exponentialBoundaries({ start: 1, factor: 4, count: 10 })
+})
+
+/**
+ * Input accepted and not yet applied.
+ *
+ * Steering and follow-ups are queued and then applied at a turn boundary, so
+ * the difference is work the session has promised and not yet done. A gauge
+ * that climbs is the backpressure signal; a gauge that never returns to zero
+ * means something accepted input it then dropped, which is the invariant
+ * `AgentSession` exists to keep.
+ */
+const pendingInput = Metric.gauge(metricNames.pendingInput, {
+  description: "Steering and follow-up input accepted but not yet applied"
+})
+
+/**
+ * The instruments themselves.
+ *
+ * Exported because a metric's *identity* is its name **and** its description,
+ * so anything wanting to read one has to reconstruct both exactly. `/data`'s
+ * test does reconstruct them, and that is a description string duplicated in
+ * two places waiting to drift -- the same failure the coding toolkit's prompt
+ * rendering was built to prevent.
+ *
+ * Handing out the instrument removes the duplication, and it is useful beyond
+ * tests: an application exposing its own health endpoint can read these
+ * directly rather than going through an exporter.
+ *
+ * Attributes are not applied here. `metrics` merges its `attributes` option at
+ * update time, so a reader interested in one dimension applies the same
+ * `Metric.withAttributes` it would anyway.
+ */
+export const instruments = {
+  turns: turnsTotal,
+  turnsPerRun,
+  toolCalls,
+  toolDuration,
+  pendingInput
+} as const
+
+/** How a tool call ended, as a metric dimension. */
+const toolOutcome = (tag: string): string | undefined => {
+  if (tag === "ToolCallSucceeded") return "succeeded"
+  if (tag === "ToolCallFailed") return "failed"
+  if (tag === "ToolCallInterrupted") return "interrupted"
+  return undefined
+}
+
+/**
+ * Observe an agent's event stream and record metrics from it.
+ *
+ * The sibling of `trace`, and forked the same way
+ * (`Effect.forkScoped(Observability.metrics(AgentSession.events(session)))`).
+ * Kept separate rather than folded into `trace` because the two have different
+ * costs and different reasons to be switched off: tracing is per-event and
+ * carries content policy, metrics are aggregate and carry none.
+ *
+ * There is no redaction policy here on purpose. A metric dimension must be
+ * low-cardinality to be useful, so nothing user-supplied is ever an attribute:
+ * tool *names* are, tool parameters and results are not, and no metric can
+ * become the leak that `RedactionPolicy` exists to prevent.
+ */
+export const metrics = (
+  events: Stream.Stream<AgentEventEnvelope>,
+  options?: {
+    /** Attributes added to every instrument -- e.g. a deployment or agent name. */
+    readonly attributes?: Readonly<Record<string, string>> | undefined
+  }
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const base = options?.attributes ?? {}
+    // Start times by tool-call id. Local to one observer, and cleared as each
+    // call ends, so a long session does not accumulate entries for calls that
+    // have finished.
+    const started = new Map<string, { readonly at: number; readonly name: string }>()
+    // Accepted-not-applied, tracked as a running count rather than read from
+    // the session: the gauge must describe what the *stream* has reported, or
+    // it disagrees with the events beside it.
+    let outstanding = 0
+
+    // `withAttributes` preserves `Metric<Input, State>`, so this needs no cast:
+    // the instrument that goes in is the instrument that comes out, and a
+    // wrong `Metric.update` against it still fails to compile.
+    const withBase = <Input, State>(
+      metric: Metric.Metric<Input, State>,
+      extra?: Readonly<Record<string, string>>
+    ): Metric.Metric<Input, State> =>
+      Metric.withAttributes(metric, { ...base, ...extra })
+
+    return yield* Stream.runForEach(events, (envelope) => {
+      const event = envelope.event
+      switch (event._tag) {
+        case "TurnCompleted":
+          return Metric.update(withBase(turnsTotal), 1)
+        case "RunCompleted":
+          return Metric.update(withBase(turnsPerRun), event.turns)
+        case "ToolCallStarted":
+          return Clock.currentTimeMillis.pipe(
+            Effect.map((at) => {
+              started.set(event.id, { at, name: event.name })
+            })
+          )
+        case "ToolCallSucceeded":
+        case "ToolCallFailed":
+        case "ToolCallInterrupted": {
+          const outcome = toolOutcome(event._tag)!
+          const begun = started.get(event.id)
+          started.delete(event.id)
+          const count = Metric.update(
+            withBase(toolCalls, { tool: event.name, outcome }),
+            1
+          )
+          return begun === undefined
+            ? count
+            : Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  Effect.andThen(
+                    count,
+                    Metric.update(
+                      withBase(toolDuration, { tool: event.name }),
+                      now - begun.at
+                    )
+                  )
+                )
+              )
+        }
+        case "SteeringQueued":
+        case "FollowUpQueued":
+          outstanding = outstanding + 1
+          return Metric.update(withBase(pendingInput), outstanding)
+        case "SteeringApplied":
+        case "FollowUpApplied":
+          outstanding = Math.max(0, outstanding - 1)
+          return Metric.update(withBase(pendingInput), outstanding)
+        default:
+          return Effect.void
+      }
+    })
+  })

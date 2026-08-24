@@ -170,6 +170,53 @@ Blocked on the library decision above. When `edit_file` returns
 `{ path, added, removed, strategy }`, the `change` snapshot that V0 already
 defined stops being speculative and gets a renderer and a test.
 
+**W4: landed (2026-08-24), library change included.** 33 smoke checks pass;
+the library's own suite is green at 839.
+
+```
+› rename the greeting
+
+✓ edit src/index.ts
+  +2 -2
+
+● Renamed it.
+```
+
+**The decision turned out to be easier than this plan assumed.** It framed a
+structured `edit_file` result as a departure needing justification. It is not:
+`bash` already returns `{exit_code, stdout, stderr}` and `list_files` returns an
+array, so a record is *consistent* with the toolkit and the sentence was the
+odd one out.
+
+`edit_file` now returns:
+
+```ts
+{ path, replacements, added, removed, strategy }
+```
+
+This is a **breaking change to a public tool contract**, and it reaches the
+model as well as the UI. Two things make it a good trade rather than a merely
+convenient one:
+
+- **The model gains precision, not noise.** `strategy` was previously buried in
+  prose (`matched by line-trimmed`); it is now a field, and the prompt says
+  what anything other than `simple` means -- the text matched was not the text
+  supplied, so re-read before editing again. That was always the useful signal.
+- **The compiler found every affected caller.** Changing `success` from
+  `Schema.String` to a struct broke exactly the assertions that read the
+  sentence, each with a message naming the field it wanted. A contract that
+  fails loudly at the call site is the reason to encode it in a schema at all.
+
+The UI side is then trivial, which is the point: `edit_file`'s rule gained a
+`body` that reads fields instead of parsing prose, and V0's `change` snapshot
+stopped being speculative. `strategy` is rendered *only* when it is not
+`simple` -- the expected case said every time is noise.
+
+One rendering detail, learned twice now: adjacent `<text>` nodes paint over one
+another rather than laying out side by side, so a line is one string. The path
+is also not repeated in the body, since the entry's title already names the
+file.
+
 ### W5 — Diff rendering (gated, optional)
 
 Only if W4 goes further than a summary and a real diff is available. Their
@@ -196,9 +243,10 @@ backgrounds, the `RunBlockTheme` diff tokens V1 already ported the names of.
 that turns two switch statements into an extension point, and the toolkit is
 explicitly built to be extended. W3 is cheap once W1 exists.
 
-**W4 and W5 should wait for a reason.** The diff is the only genuinely missing
-capability, it is blocked on a library decision, and V0's structured bodies
-already render all six of our tools legibly. Doing W5 speculatively would mean
-porting a renderer for data we do not produce.
+**W4 is done.** **W5 should still wait for a reason.** A real unified diff is
+the only genuinely missing capability, and it needs a diff implementation the
+portable `/coding` module should not take on -- `+A -B` plus the strategy
+already tells the reader what changed. Doing W5 speculatively would mean
+porting a renderer for data we still do not produce.
 
-If V5 is never finished past W2, the TUI loses nothing it has today.
+If V5 is never finished past W4, the TUI loses nothing it has today.

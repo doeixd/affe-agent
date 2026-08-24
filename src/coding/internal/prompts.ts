@@ -56,7 +56,8 @@ Usage:
 - \`old_string\` must identify one place in the file. If it appears more than once the edit is refused: add surrounding context to make it unique, or pass \`replace_all\` to change every occurrence.
 - \`replace_all\` is what you want for renaming a variable throughout a file.
 - \`new_string\` must differ from \`old_string\`, and \`old_string\` cannot be empty. To replace a whole file, use \`write_file\`.
-- Small drift is tolerated: trailing whitespace, indentation, and an over-escaped \\n still match. When the match was not literal the result says which strategy found it -- treat that as a sign your copy of the file is stale and read it again before editing further.
+- Small drift is tolerated: trailing whitespace, indentation, and an over-escaped \\n still match. The result reports \`strategy\`; anything but \`simple\` means the text matched was not the text you supplied, so your copy of the file has drifted -- read it again before editing further.
+- The result also reports \`path\`, \`replacements\`, and the lines \`added\` and \`removed\`.
 - An edit is refused rather than guessed if the closest match is far larger than \`old_string\`. Re-read the file and quote the exact text.
 - ALWAYS prefer editing an existing file over writing a new one. Only use emojis if the user asks for them.`
 

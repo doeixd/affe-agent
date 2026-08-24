@@ -88,11 +88,13 @@ const Snapshot = (props: { snapshot: ToolSnapshot }) => (
 
     <Match when={props.snapshot.kind === "change" ? props.snapshot : undefined}>
       {(snapshot: Accessor<Extract<ToolSnapshot, { kind: "change" }>>) => (
-        <box flexDirection="row">
-          <text fg={theme.block.diffAdded}>{`  +${snapshot().added}`}</text>
-          <text fg={theme.block.diffRemoved}>{` -${snapshot().removed}`}</text>
-          <text fg={theme.block.muted}>{`  ${snapshot().path}`}</text>
-        </box>
+        // One string: adjacent text nodes paint over one another rather than
+        // laying out side by side. The path is not repeated -- the entry's
+        // title already names the file being edited.
+        <text fg={theme.block.text}>
+          {`  +${snapshot().added} -${snapshot().removed}`
+            + (snapshot().strategy === undefined ? "" : `  (matched by ${snapshot().strategy})`)}
+        </text>
       )}
     </Match>
 

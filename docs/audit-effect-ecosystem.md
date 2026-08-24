@@ -224,12 +224,44 @@ pieces of *in-memory* state. The lock registry qualified; this does not.
 ### E8. `Metric` — `/observability` has spans and almost no metrics
 
 One import in the whole repository. `/observability` standardises span names and
-attributes carefully and ships essentially no counters or histograms, yet the
-four dashboards every agent runtime needs are all derivable from the event
-stream it already consumes: turns per run, tokens in/out, tool latency and
-failure rate by tool name, and steering/follow-up queue depth.
+attributes carefully and ships essentially no counters or histograms, yet most
+of what an operator asks is derivable from the event stream it already consumes.
 
-Small surface, no new API shape, fits inside the existing package.
+**One correction to this finding.** It listed *tokens in/out* among them. No
+event carries model usage, so a token metric would have to be **invented rather
+than observed** -- adding usage to the event stream is a change to the kernel's
+vocabulary and deserves its own decision, not a smuggled dependency inside a
+metrics change. Dropped, and said so in the module.
+
+**What landed (A-2).** `Observability.metrics(events)` -- the sibling of
+`trace`, forked the same way, kept separate because the two have different costs
+and different reasons to be switched off. Five instruments, all three shapes:
+
+| Instrument | Shape | From |
+|---|---|---|
+| `agent_turns` | counter | `TurnCompleted` |
+| `agent_turns_per_run` | histogram | `RunCompleted.turns` |
+| `agent_tool_calls` | counter, by `tool` + `outcome` | the three terminal tool events |
+| `agent_tool_duration_ms` | histogram, by `tool` | `ToolCallStarted` paired with its terminal event |
+| `agent_pending_input` | gauge | queued minus applied, for steering and follow-ups |
+
+Two decisions worth recording. **No redaction policy here, on purpose**: a
+metric dimension must be low-cardinality to be useful, so nothing user-supplied
+is ever an attribute -- tool *names* are, parameters and results are not -- and
+no metric can become the leak `RedactionPolicy` exists to prevent. And the
+duration histogram is measured **as the observer sees the events**, because no
+event carries a timestamp; on a live stream that is the tool's duration plus
+stream latency, and on a replayed stream it is meaningless. Stated in the
+module rather than left to be discovered.
+
+The instruments are **exported**, which the existing counter's test argued for:
+a metric's identity is its name *and* its description, so `test/AgentData.test.ts`
+restates the description verbatim to read it back -- a duplicated string waiting
+to drift, the same failure the toolkit's prompt rendering exists to prevent.
+Handing out the instrument removes the duplication, and lets an application read
+its own health numbers without going through an exporter.
+
+Two tests, falsified twice (drop the turn count; stop decrementing the gauge).
 
 ### E9. `FileSystem` / `Path` / `unstable/process` / `Stdio`
 
@@ -727,9 +759,12 @@ outrank most of round one.
   carrying a durability invariant of its own. Unblocks
   [plan-durability-hardening.md](./plan-durability-hardening.md) H4 for the two
   components its invariants are about.
-- **A-2 — Metrics in `/observability` (E8, E17).** Four instruments over the
-  event stream the package already consumes, following the
-  `agent_data_dropped_events` counter as the template.
+- **A-2 — Metrics in `/observability` (E8, E17). ✅ Done.** Five instruments
+  over the event stream the package already consumes -- turns, turns-per-run,
+  tool calls by tool and outcome, tool duration, pending input -- exported so
+  nothing has to restate a description to read one. Tokens dropped from the
+  original list: no event carries usage, so that instrument would have to be
+  invented rather than observed.
 - **A-3 — `ExecutionPlan` combinator (E1).** Needs its own plan; the largest
   capability gap.
 - **A-4 — `LayerMap` / `RcMap` in the server and the tree (E4).** Folded into
@@ -761,8 +796,10 @@ outrank most of round one.
   with no window in which a held lock can be dropped — the test the old comment
   said could not be written. *Met: three tests in `test/CodingToolkit.test.ts`,
   falsified by removing the eviction and by dropping `acquireUseRelease`.*
-- **AS2:** `/observability` exposes turn, token, tool-latency and queue-depth
-  instruments, asserted from a scripted session.
+- **AS2 ✅:** `/observability` exposes turn, run-depth, tool-outcome,
+  tool-latency and queue-depth instruments, asserted from a scripted session
+  (`test/Observability.test.ts`). *Token instruments are excluded by decision,
+  not omission -- the event stream carries no usage.*
 - **AS3:** An agent falls back from a failing model to a second one without the
   `Agent` naming either, and `Agent.make` still carries nine type parameters.
 - **AS4:** Mounting and unmounting N agents leaves no live sessions and no live

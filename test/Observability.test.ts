@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Ref, Schema, Stream } from "effect"
-import { Tool } from "effect/unstable/ai"
+import { Effect, Metric, Option, Ref, Schema, Stream } from "effect"
+import { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import type { AgentEventEnvelope } from "../src/AgentEvent.js"
+import * as Ids from "../src/internal/ids.js"
 import { Observability } from "../src/observability/index.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
@@ -168,5 +169,75 @@ describe("Observability.trace", () => {
       assert.isTrue(records.length > 0)
       assert.isTrue(records.every((r) => r.attributes[N.event] !== "OVERRIDDEN"))
     })
+  )
+})
+
+describe("Observability.metrics", () => {
+  it.effect("records turns, tool outcomes and queue depth from the event stream", () =>
+    Effect.gen(function* () {
+      const envelopes = yield* collectEnvelopes
+      yield* Observability.metrics(Stream.fromIterable(envelopes))
+
+      // Turns: one per TurnCompleted in the real run.
+      const turns = envelopes.filter((e) => e.event._tag === "TurnCompleted").length
+      const turnsMetric = yield* Metric.value(Observability.instruments.turns)
+      assert.strictEqual(turnsMetric.count, turns)
+
+      // Tool calls are attributed by tool name *and* by how the call ended, so
+      // "which tool is failing" is a query rather than a log search.
+      const succeeded = yield* Metric.value(
+        Metric.withAttributes(Observability.instruments.toolCalls, {
+          tool: "get_weather",
+          outcome: "succeeded"
+        })
+      )
+      assert.strictEqual(succeeded.count, 1)
+
+      // A tool that never failed has no failure count, rather than a zero that
+      // looks like a measurement.
+      const failed = yield* Metric.value(
+        Metric.withAttributes(Observability.instruments.toolCalls, {
+          tool: "get_weather",
+          outcome: "failed"
+        })
+      )
+      assert.strictEqual(failed.count, 0)
+
+      // Run depth landed in the histogram.
+      const perRun = yield* Metric.value(
+        Observability.instruments.turnsPerRun
+      )
+      assert.isAbove(perRun.count, 0)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
+  )
+
+  it.effect("pending input returns to zero once everything queued is applied", () =>
+    Effect.gen(function* () {
+      // The invariant behind the gauge: accepted input is always applied, so a
+      // gauge that does not return to zero means something was dropped. Driven
+      // from synthetic envelopes so the queue depth is exactly known.
+      const envelope = (tag: string, sequence: number): AgentEventEnvelope => ({
+        sessionId: Ids.sessionId("s1"),
+        submissionId: Option.some(Ids.submissionId("s1:submission-1")),
+        runId: Option.none(),
+        turn: Option.none(),
+        sequence,
+        event: { _tag: tag, input: Prompt.empty } as never
+      })
+
+      yield* Observability.metrics(
+        Stream.fromIterable([
+          envelope("SteeringQueued", 1),
+          envelope("FollowUpQueued", 2),
+          envelope("SteeringApplied", 3),
+          envelope("FollowUpApplied", 4)
+        ])
+      )
+
+      const gauge = yield* Metric.value(
+        Observability.instruments.pendingInput
+      )
+      assert.strictEqual(gauge.value, 0)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
   )
 })

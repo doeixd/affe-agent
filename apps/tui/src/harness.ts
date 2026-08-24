@@ -45,7 +45,20 @@ const modelLayer = Layer.unwrap(
       TestLanguageModel.text("That is what the workspace holds."),
       { toolCalls: [{ id: "t2", name: "bash", params: { command: "echo hi" } }] },
       TestLanguageModel.text("The command ran."),
-      { toolCalls: [{ id: "t3", name: "bash", params: { command: "rm -rf /" } }] },
+      {
+        toolCalls: [{
+          id: "t3",
+          name: "edit_file",
+          params: {
+            path: "src/index.ts",
+            old_string: "hello",
+            new_string: "greetings",
+            replace_all: true
+          }
+        }]
+      },
+      TestLanguageModel.text("Renamed it."),
+      { toolCalls: [{ id: "t4", name: "bash", params: { command: "rm -rf /" } }] },
       TestLanguageModel.text("I did not run that."),
       TestLanguageModel.text(
         "I am a scripted model. Edit harness.ts to point at a real provider."

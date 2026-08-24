@@ -195,6 +195,27 @@ export const defaultViews: Readonly<Record<string, ToolView>> = {
       const path = str(dict(params).path)
       return path === "" ? "edit_file" : `edit ${path}`
     },
+    // `edit_file` returns a record rather than a sentence, so the change is
+    // rendered from fields instead of parsed out of prose.
+    body: (result) => {
+      const fields = dict(result)
+      const added = num(fields.added)
+      const removed = num(fields.removed)
+      if (added === undefined || removed === undefined) return undefined
+      const strategy = str(fields.strategy)
+      return {
+        type: "structured",
+        snapshot: {
+          kind: "change",
+          path: str(fields.path),
+          added,
+          removed,
+          // Only when the match was not literal: "simple" is the expected
+          // case and saying so every time would be noise.
+          ...(strategy === "" || strategy === "simple" ? {} : { strategy })
+        }
+      }
+    },
     approval: (request) => `edit ${request.resource}`
   },
 

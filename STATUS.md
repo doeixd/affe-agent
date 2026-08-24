@@ -3,7 +3,7 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 839 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 841 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
 imports every published entry point from the packed tarball (31 entries).
 `verify:package` is the source of truth for the entry-point count; regenerate
@@ -2221,6 +2221,11 @@ original battery:
   *tail* within 2000 lines and 50 KB, repaired to a UTF-8 character boundary,
   with the whole of it saved under `.effect-agent/tool-output/` for `search` and
   `read_file` to work on.
+- **`edit_file` reports what changed as a record** -- `{ path, replacements,
+  added, removed, strategy }` -- rather than a sentence, so a caller does not
+  parse prose to learn the outcome. `strategy` is the signal worth having
+  explicitly: anything but `simple` means the text matched was not the text
+  supplied, so the model's copy of the file has drifted.
 - **Descriptions that cannot drift from the code.** Every limit a prompt quotes
   is interpolated from the constant that enforces it, and a test rejects any
   number in a description that is not a value some constant currently holds.

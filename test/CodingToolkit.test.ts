@@ -115,7 +115,9 @@ describe("CodingToolkit handlers", () => {
           return { msg, after }
         })
       )
-      assert.include(edited.msg, "1 replacement")
+      assert.strictEqual(edited.msg.replacements, 1)
+      assert.strictEqual(edited.msg.path, "f.ts")
+      assert.strictEqual(edited.msg.strategy, "simple")
       assert.include(edited.after, "const x = 42")
       // Ambiguous without replace_all: refused, file untouched.
       const ambiguous = yield* Effect.flip(
@@ -132,7 +134,7 @@ describe("CodingToolkit handlers", () => {
           return { msg, after }
         })
       )
-      assert.include(all.msg, "3 replacements")
+      assert.strictEqual(all.msg.replacements, 3)
       assert.include(all.after, "1: b\n2: b\n3: b")
       // Not found.
       const missing = yield* Effect.flip(
@@ -421,8 +423,9 @@ describe("CodingToolkit edit_file: the replacer chain", () => {
           return { msg, after: yield* readRaw("f.ts") }
         })
       )
-      // The edit landed, and the model is told its quotation was not literal.
-      assert.include(out.msg, "matched by line-trimmed")
+      // The edit landed, and the result names the strategy so the model can
+      // tell its quotation was not literal.
+      assert.strictEqual(out.msg.strategy, "line-trimmed")
       assert.strictEqual(out.after, "function f() {\n  return 2;\n}\n")
     })
   )
@@ -435,15 +438,15 @@ describe("CodingToolkit edit_file: the replacer chain", () => {
         { "f.ts": "alpha\nbeta\n" },
         H.edit_file({ path: "f.ts", old_string: "alpha\n", new_string: "ALPHA\n" }, ctx)
       )
-      assertString(single)
-      assert.include(single, "+1 -1")
+      assert.strictEqual(single.added, 1)
+      assert.strictEqual(single.removed, 1)
       // Two lines becoming three.
       const grown = yield* withSandbox(
         { "f.ts": "a\nb\nc\n" },
         H.edit_file({ path: "f.ts", old_string: "a\nb", new_string: "x\ny\nz" }, ctx)
       )
-      assertString(grown)
-      assert.include(grown, "+3 -2")
+      assert.strictEqual(grown.added, 3)
+      assert.strictEqual(grown.removed, 2)
     })
   )
 

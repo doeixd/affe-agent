@@ -150,7 +150,23 @@ export const EditFile = Permission.annotate(
       new_string: Schema.String,
       replace_all: Schema.optional(Schema.Boolean)
     }),
-    success: Schema.String,
+    /**
+     * What changed, structured.
+     *
+     * A record rather than a sentence, for the same reason `bash` returns
+     * `{exit_code, stdout, stderr}`: the caller should not have to parse prose
+     * to learn what happened. `strategy` is the part worth having explicitly --
+     * anything but `"simple"` means the text matched was not the text supplied,
+     * so the model's copy of the file has drifted and it should re-read before
+     * editing again.
+     */
+    success: Schema.Struct({
+      path: Schema.String,
+      replacements: Schema.Number,
+      added: Schema.Number,
+      removed: Schema.Number,
+      strategy: Schema.String
+    }),
     failure: Schema.String,
     dependencies: [Sandbox.Current]
   }),
@@ -543,14 +559,13 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
                 yield* sandbox.write(sandboxPath, outcome.content).pipe(
                   Effect.mapError(errorMessage)
                 )
-                const removed = lineCount(outcome.matched) * outcome.count
-                const added = lineCount(replacement) * outcome.count
-                // Name the strategy when the match was not literal: the model
-                // learns its quotation drifted, even though the edit landed.
-                const how = outcome.strategy === "simple" ? "" : `, matched by ${outcome.strategy}`
-                return `edited ${file} (${outcome.count} replacement${
-                  outcome.count === 1 ? "" : "s"
-                }, +${added} -${removed}${how})`
+                return {
+                  path: file,
+                  replacements: outcome.count,
+                  added: lineCount(replacement) * outcome.count,
+                  removed: lineCount(outcome.matched) * outcome.count,
+                  strategy: outcome.strategy
+                }
               }
             }
           })
