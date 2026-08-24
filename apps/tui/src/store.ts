@@ -103,5 +103,29 @@ export const makeStore = () => {
     return taken
   }
 
-  return { entries, status, footer, rewind, backend, sink, drainSettled }
+  /**
+   * Hand settled entries to `write`, one at a time, keeping any it refuses.
+   *
+   * `drainSettled` removes the whole settled prefix and *then* the caller
+   * writes each one. If writing throws partway -- a disposed renderer, a
+   * malformed extension view -- every entry in that batch has already left the
+   * store and the unwritten remainder is simply gone. Retrying is unsafe too,
+   * because the earlier ones were written irreversibly to the terminal.
+   *
+   * So the entry stays until the write returns. Ownership transfers one line
+   * at a time, and a failure costs nothing that has not already been shown.
+   */
+  const commitSettled = (write: (entry: Entry) => void): void => {
+    while (entries.length > 0 && settled(entries[0]!)) {
+      const entry = { ...unwrap(entries[0]!) }
+      // Throws propagate to the caller *after* the entry is still in place,
+      // which is the whole point -- the next attempt starts here again.
+      write(entry)
+      setEntries(produce((list) => {
+        list.splice(0, 1)
+      }))
+    }
+  }
+
+  return { entries, status, footer, rewind, backend, sink, drainSettled, commitSettled }
 }

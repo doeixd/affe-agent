@@ -401,7 +401,8 @@ export const App = (props: {
   entries: ReadonlyArray<Entry>
   status: Status
   handle: Handle
-  drainSettled: () => ReadonlyArray<Entry>
+  /** Hand settled entries to the terminal, one at a time. See the store. */
+  commitSettled: (write: (entry: Entry) => void) => void
   footer: FooterView
   rewind: Rewind
   /** Which model and workspace are behind this. See `Sink.setBackend`. */
@@ -515,8 +516,25 @@ export const App = (props: {
   createEffect(() => {
     props.entries.length
     queueMicrotask(() => {
-      for (const entry of props.drainSettled()) {
-        writeSolidToScrollback(renderer, () => <EntryView entry={entry} />)
+      /**
+       * One entry at a time, and each stays in the store until it is written.
+       *
+       * The batch version removed the whole settled prefix first, so a throw
+       * partway -- a disposed renderer, a bad extension view -- lost every
+       * entry after it, and retrying was unsafe because the earlier ones had
+       * already reached the terminal irreversibly.
+       *
+       * The catch is not swallowing the failure so much as bounding it: this
+       * runs in an unowned microtask, so an escaping exception bypasses the
+       * harness's error handling entirely and becomes an unhandled rejection.
+       * What is left in the store is written on the next drain.
+       */
+      try {
+        props.commitSettled((entry) => {
+          writeSolidToScrollback(renderer, () => <EntryView entry={entry} />)
+        })
+      } catch (cause) {
+        console.error("could not write to scrollback:", cause)
       }
     })
   })
@@ -624,6 +642,21 @@ export const App = (props: {
                 // user typed and will want back.
                 typed.push(text)
                 cursor = -1
+                /**
+                 * R106 -- clear it.
+                 *
+                 * `InputRenderable.submit()` emits the value and leaves it in
+                 * the box; the Solid adapter only forwards the event. So the
+                 * sent prompt stayed on screen, the next thing typed appended
+                 * to it, `/` was never at an empty prompt again, and history
+                 * navigation started from stale visible text.
+                 *
+                 * Cleared even if the kernel refuses the prompt. The draft is
+                 * not lost -- it is the newest entry in the history above, one
+                 * press of Up away -- and leaving it would mean the box
+                 * disagreeing with the transcript about what was sent.
+                 */
+                if (input !== undefined) input.value = ""
                 props.handle.submit(text)
               }}
             />

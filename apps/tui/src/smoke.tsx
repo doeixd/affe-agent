@@ -27,7 +27,7 @@ import { duration, widthPolicy } from "./width.ts"
  * instead of printing a stale frame and passing.
  */
 
-const { backend, drainSettled, entries, footer, rewind, sink, status } = makeStore()
+const { backend, commitSettled, drainSettled, entries, footer, rewind, sink, status } = makeStore()
 /**
  * Count completed submissions.
  *
@@ -53,7 +53,7 @@ const handle = await start(counting)
 
 const { captureCharFrame, externalOutput, flush, mockInput } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
+    <App entries={entries} status={status()} handle={handle} commitSettled={commitSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
       openPalette={() => sink.setPalette(handle.commands)}
       quit={() => {}} />
   ),
@@ -484,7 +484,7 @@ const keyRender = await testRender(
       entries={keyRun.entries}
       status={keyRun.status()}
       handle={keyHandle}
-      drainSettled={keyRun.drainSettled}
+      commitSettled={keyRun.commitSettled}
       footer={keyRun.footer()}
       rewind={keyRun.rewind()}
       backend={keyRun.backend()}
@@ -511,6 +511,31 @@ await keyRender.flush()
  * called. Control keys broadcast, which is why ctrl+d and ctrl+c can be tested
  * in isolation and this cannot.
  */
+/**
+ * R106 -- what actually happens when someone types.
+ *
+ * Every other prompt in this suite goes through `handle.submit`, which cannot
+ * see the input box at all -- so none of them could detect that
+ * `InputRenderable.submit()` emits the value and *leaves it there*. The sent
+ * prompt stayed on screen, the next keystroke appended to it, and `/` was
+ * never at an empty prompt again.
+ */
+mockInput.typeText("typed by hand")
+await flush()
+const beforeEnter = captureCharFrame()
+mockInput.pressEnter()
+await flush()
+const afterEnter = captureCharFrame()
+
+// A slash mid-line is a character, not a command: paths and regexes have them.
+mockInput.typeText("src/a.ts")
+await flush()
+const midLineSlash = footer().type
+const midLineFrame = captureCharFrame()
+// Clear it again for the checks below.
+for (let index = 0; index < "src/a.ts".length; index++) mockInput.pressBackspace()
+await flush()
+
 mockInput.pressKey("/")
 await flush()
 const paletteOpened = footer().type === "palette"
@@ -716,6 +741,37 @@ const huge = Array.from({ length: 1200 }, (_, index) => `line ${index}`).join("\
 const hugeOther = Array.from({ length: 1200 }, (_, index) => `other ${index}`).join("\n") + "\n"
 const hugeDiff = Diff.of(huge, hugeOther)
 
+/**
+ * R129 -- a failed write loses nothing.
+ *
+ * The batch version removed the whole settled prefix and *then* wrote each
+ * entry, so a throw partway lost every entry after it -- and retrying was
+ * unsafe, because the earlier ones had already reached the terminal
+ * irreversibly. Ownership now transfers one line at a time.
+ */
+const failStore = makeStore()
+for (const id of ["one", "two", "three"]) {
+  failStore.sink.append({ id, kind: "notice", title: id, body: { type: "none" } })
+}
+const written: Array<string> = []
+let threw = false
+try {
+  failStore.commitSettled((entry) => {
+    // Fails on the second, with the first already irreversibly written.
+    if (entry.id === "two") throw new Error("terminal went away")
+    written.push(entry.id)
+  })
+} catch {
+  threw = true
+}
+const leftAfterFailure = failStore.entries.map((entry) => entry.id)
+
+// A later attempt picks up exactly where it stopped.
+const retried: Array<string> = []
+failStore.commitSettled((entry) => {
+  retried.push(entry.id)
+})
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
@@ -845,6 +901,22 @@ checks.push(
   // Bound in the renderer rather than left to SIGINT, which a raw-mode
   // terminal need not deliver.
   ["ctrl+c interrupts from the keyboard", interruptRequests === 1],
+  // R129
+  ["a write failure surfaces", threw],
+  ["what was written is gone from the store", !leftAfterFailure.includes("one")],
+  // The entry that failed is still there, so nothing was lost -- and nothing
+  // after it was written twice.
+  ["what failed is kept", leftAfterFailure[0] === "two"],
+  ["and so is everything behind it", leftAfterFailure.includes("three")],
+  ["a retry resumes where it stopped", retried.join(",") === "two,three"],
+  ["and does not repeat what was already written", !retried.includes("one")],
+
+  // R106
+  ["typing reaches the input", beforeEnter.includes("typed by hand")],
+  ["and enter clears it", !afterEnter.includes("typed by hand")],
+  ["a slash mid-line stays a character", midLineSlash === "prompt"],
+  ["and is shown as typed", midLineFrame.includes("src/a.ts")],
+
   ["/ opens the palette", paletteOpened],
   ["and dismissing leaves it", dismissed],
 
