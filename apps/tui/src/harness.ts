@@ -6,10 +6,8 @@ import * as AgentSession from "../../../src/AgentSession.js"
 import * as Elicitation from "../../../src/Elicitation.js"
 import * as Permission from "../../../src/Permission.js"
 import { CodingToolkit } from "../../../src/coding/index.js"
-import * as MemorySandbox from "../../../src/sandbox/memory.js"
-import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import * as SessionTree from "../../../src/tree/SessionTree.js"
-import { TestLanguageModel } from "../../../src/testing/index.js"
+import { type Backend, scripted } from "./backend.ts"
 import { bodyOf, defaultViews, titleOf, type Views } from "./tools.ts"
 import { type Approval, type Handle, type Sink } from "./view.ts"
 import { duration } from "./width.ts"
@@ -31,77 +29,9 @@ import { duration } from "./width.ts"
 export type { Entry, Handle, Sink, Status } from "./view.ts"
 
 // ---------------------------------------------------------------------------
-// Wiring: the only place that names a model, a toolkit or a sandbox
+// Wiring: the policy and the toolkit. The model and the workspace are chosen
+// together in `backend.ts`, because they have to agree about what is real.
 // ---------------------------------------------------------------------------
-
-/**
- * A scripted model, so the TUI runs with no API key and no network -- which is
- * also what makes it testable. A real provider is a different `Layer` here and
- * no change anywhere else.
- */
-const modelLayer = Layer.unwrap(
-  Effect.map(
-    TestLanguageModel.script([
-      { toolCalls: [{ id: "t1", name: "list_files", params: {} }] },
-      // Chunked, so the streaming path is exercised rather than assumed.
-      { text: "That is what the workspace holds.", chunks: ["That is ", "what the ", "workspace holds."] },
-      { toolCalls: [{ id: "t2", name: "bash", params: { command: "echo hi" } }] },
-      TestLanguageModel.text("The command ran."),
-      {
-        toolCalls: [{
-          id: "t3",
-          name: "edit_file",
-          params: {
-            path: "src/index.ts",
-            old_string: "hello",
-            new_string: "greetings",
-            replace_all: true
-          }
-        }]
-      },
-      TestLanguageModel.text("Renamed it."),
-      {
-        toolCalls: [{
-          id: "t5",
-          name: "edit_file",
-          params: {
-            path: "src/drift.ts",
-            old_string: "const value = 1;\n",
-            new_string: "const value = 2;\n"
-          }
-        }]
-      },
-      TestLanguageModel.text("Bumped it."),
-      { toolCalls: [{ id: "t4", name: "bash", params: { command: "rm -rf /" } }] },
-      TestLanguageModel.text("I did not run that."),
-      TestLanguageModel.text(
-        "I am a scripted model. Edit harness.ts to point at a real provider."
-      ),
-      // Headroom, so a prompt after a rewind has something to answer with.
-      // The script is a flat sequence and a rewind does not rewind it, which
-      // is a property of this stub rather than of the tree.
-      TestLanguageModel.text("Answering from the rewound branch."),
-      TestLanguageModel.text("And again.")
-    ]),
-    ({ layer }) => layer
-  )
-)
-
-const sandboxLayer = Sandbox.currentLayer(Sandbox.workspace("tui")).pipe(
-  Layer.provide(
-    MemorySandbox.layer({
-      seed: {
-        "README.md": "# demo workspace\n\nSeeded so the tools have something to find.\n",
-        "src/index.ts": "export const hello = () => \"hello\"\n",
-        // Trailing spaces the scripted model will not reproduce, so the
-        // second edit matches fuzzily and `matched` differs from what was
-        // asked for -- which is the case the two-sided body exists to show.
-        "src/drift.ts": "const value = 1;   \n"
-      },
-      exec: () => Effect.succeed({ exitCode: 0, stdout: "hi\n", stderr: "" })
-    })
-  )
-)
 
 /**
  * Ask before anything that changes the world; allow the rest.
@@ -364,10 +294,21 @@ let disposeFiber: () => void = () => {}
  */
 export const start = (
   sink: Sink,
-  /** Rendering rules. An application adds its own tools' rules here. */
-  views: Views = defaultViews
+  options?: {
+    /** Rendering rules. An application adds its own tools' rules here. */
+    readonly views?: Views | undefined
+    /**
+     * The model and workspace. Scripted unless asked otherwise.
+     *
+     * Defaulted rather than required, because the default is what makes this
+     * runnable with no key and no network -- which every test depends on.
+     */
+    readonly backend?: Backend | undefined
+  }
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
+    const backend = options?.backend ?? scripted
+    sink.setBackend(backend.label)
     const program = Effect.gen(function*() {
       /**
        * A tree, not a session.
@@ -395,7 +336,11 @@ export const start = (
        * remove somebody else's when two are outstanding.
        */
       const offered: Array<{ readonly text: string }> = []
-      const projection = project(sink, views, () => offered.shift()?.text)
+      const projection = project(
+        sink,
+        options?.views ?? defaultViews,
+        () => offered.shift()?.text
+      )
 
       /**
        * Subscribed once, to the tree rather than to a session.
@@ -527,7 +472,7 @@ export const start = (
 
     const fiber = Effect.runFork(
       program.pipe(
-        Effect.provide(Layer.mergeAll(modelLayer, sandboxLayer)),
+        Effect.provide(backend.layer),
         Effect.scoped,
         Effect.catchCause((cause) =>
           Effect.sync(() => reject(new Error(Cause.pretty(cause))))

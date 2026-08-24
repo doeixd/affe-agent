@@ -75,12 +75,38 @@ into it from an Effect fibre, and Solid reads it in JSX.
 Swapping the model, the toolkit or the sandbox is a change to `harness.ts` and
 to nothing else — which is the library's central claim, made concrete.
 
-## The model
+## The backend: what it is actually talking to
 
-A **scripted model** by default (`TestLanguageModel`), so the TUI runs with no
-API key and no network — and so the smoke test is deterministic. Point
-`modelLayer` in `harness.ts` at a real provider to make it a real assistant;
-nothing else changes.
+A **model and a workspace, chosen together** in `backend.ts`. Together, because
+they have to agree about what is real: a live model pointed at a memory sandbox
+would confidently describe three seeded files and a `bash` that always prints
+`hi`, and the transcript would look like work while being fiction.
+
+**Scripted by default.** No API key, no network, no filesystem — which is what
+makes the smoke suite deterministic and runnable anywhere. Every reply comes
+from a fixed list, so typing something else does not change the answer. The
+footer says `scripted` for exactly that reason: a demo that looks like an agent
+is worse than one that says it is a demo.
+
+**Live, when you ask for it:**
+
+```
+bun src/main.tsx --live --workspace ../some-working-copy
+bun src/main.tsx --live --workspace ../some-working-copy --model claude-opus-4-5
+```
+
+Needs `ANTHROPIC_API_KEY`. Neither half is defaulted, and that is deliberate:
+defaulting the workspace to the current directory would make the dangerous case
+the easy one, and inferring "live" from the presence of a key would mean an
+exported variable silently changes what a demo does.
+
+**What `--workspace` means.** The sandbox seam holds a real boundary — paths
+are relative and `..`-free, so that directory is the whole of what the agent
+can reach. It is not a sufficient one: everything under it is writable and
+`bash` runs there. Point it at a working copy you can throw away.
+
+Swapping in a different provider is a change to `backend.ts` and to nothing
+else.
 
 ## Two traps worth knowing
 

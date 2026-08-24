@@ -259,6 +259,8 @@ export const App = (props: {
   drainSettled: () => ReadonlyArray<Entry>
   footer: FooterView
   rewind: Rewind
+  /** Which model and workspace are behind this. See `Sink.setBackend`. */
+  backend: string
   views?: Readonly<Record<string, ToolView>>
 }) => {
   const renderer = useRenderer()
@@ -341,6 +343,12 @@ export const App = (props: {
         </Show>
         {/* Only offered when it would do something. An affordance shown while
             inert teaches the user it does not work. */}
+        {/* Named before the hints, and kept at the narrowest width the
+            footer still draws anything at: which backend is running changes
+            what the transcript above *means*, so it is the last thing to go. */}
+        <Show when={props.backend !== ""}>
+          <text fg={theme.footer.muted}>{`   ${props.backend}`}</text>
+        </Show>
         <Show when={policy().hints && props.status === "idle" && canRewind()}>
           <text fg={theme.footer.muted}>
             {`   ctrl+r rewind${props.rewind.taken === 0 ? "" : ` (${props.rewind.taken}×)`}`}

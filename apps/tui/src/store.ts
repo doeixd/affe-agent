@@ -32,6 +32,7 @@ export const makeStore = () => {
   // unrepresentable rather than merely avoided.
   const [footer, setFooter] = createSignal<FooterView>({ type: "prompt" })
   const [rewind, setRewind] = createSignal<Rewind>({ depth: 0, taken: 0 })
+  const [backend, setBackend] = createSignal<string>("")
 
   const indexOf = (id: string): number => entries.findIndex((entry) => entry.id === id)
 
@@ -57,7 +58,9 @@ export const makeStore = () => {
     setApproval: (request: Approval | undefined) =>
       setFooter(request === undefined ? { type: "prompt" } : { type: "approval", request }),
 
-    setRewind
+    setRewind,
+
+    setBackend
   }
 
   /**
@@ -82,5 +85,5 @@ export const makeStore = () => {
     return taken
   }
 
-  return { entries, status, footer, rewind, sink, drainSettled }
+  return { entries, status, footer, rewind, backend, sink, drainSettled }
 }

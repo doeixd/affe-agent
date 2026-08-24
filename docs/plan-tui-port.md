@@ -354,6 +354,44 @@ empty hid a whole class of bug.** V2's architecture is what made the
 transcript fast, and it is also what kept these two from surfacing until
 something lingered on screen.
 
+## The backend seam (2026-08-24)
+
+The port was complete and the application was a demo: `harness.ts` hard-wired
+`TestLanguageModel.script` and a memory sandbox whose `exec` always returned
+`hi`, so the TUI rendered faithfully and could not do any work. That was right
+for V0-V5 -- it is what made the smoke suite deterministic and keyless -- and
+wrong to leave as the only option.
+
+`backend.ts` now owns the choice, and owns **both halves of it**. A model and a
+workspace are one decision, not two: a live model over a memory sandbox would
+describe a workspace that does not exist, and the transcript would read as real
+work. Typing the seam as `Layer<LanguageModel | Sandbox.Current, unknown,
+Scope>` rather than `Layer<any, any, any>` is what keeps the two
+interchangeable -- a loose type lets one of them quietly stop providing
+something the other does, discovered at runtime in a terminal as an unhandled
+fibre failure.
+
+**Two defaults that are safety properties, each broken once to confirm the
+test bites:**
+
+- `--live` requires `--workspace <dir>` explicitly. Defaulting it to the
+  current directory makes the dangerous case the easy one.
+- `--live` is never inferred from the presence of `ANTHROPIC_API_KEY`, because
+  then an exported variable silently changes what a demo does.
+
+**The footer names the running backend**, and that is not decoration. A
+scripted run and a live one produce transcripts that look identical; which one
+is behind it changes what the transcript *means*. It is the last thing dropped
+as the terminal narrows.
+
+**Still not implemented**, and worth listing rather than discovering: no
+scrolling within the live region, no session switching or branch selector
+(`SessionTree` has `lanes`, `summary` and `divergence`, and the TUI surfaces
+none of it -- ctrl+r is the only tree affordance), no `/`-command palette, no
+history navigation, no syntax highlighting. `edit_file` renders before/after
+text rather than a diff, which stays blocked on the library decision noted in
+V5. SV4 -- diffing `vendor/` against `src/` file by file -- has never been run.
+
 ## Invariants
 
 **VT1 — `vendor/` is never compiled.** It sits outside `src/`; nothing imports

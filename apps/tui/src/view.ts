@@ -125,6 +125,15 @@ export interface Sink {
   /** The footer's active surface; `undefined` returns it to the prompt. */
   readonly setApproval: (request: Approval | undefined) => void
   readonly setRewind: (rewind: Rewind) => void
+  /**
+   * Name the model and workspace in the footer.
+   *
+   * Not decoration. A scripted backend answers every prompt from a fixed list
+   * and a memory sandbox invents a workspace, so a transcript from one looks
+   * exactly like real work. Saying which is running is the difference between
+   * a demo and a lie.
+   */
+  readonly setBackend: (label: string) => void
 }
 
 /**

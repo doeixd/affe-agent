@@ -1,5 +1,6 @@
 import { testRender } from "@opentui/solid"
 import { App } from "./App.tsx"
+import { fromArgv } from "./backend.ts"
 import { project, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
 import type { Sink } from "./view.ts"
@@ -22,7 +23,7 @@ import { duration, widthPolicy } from "./width.ts"
  * instead of printing a stale frame and passing.
  */
 
-const { drainSettled, entries, footer, rewind, sink, status } = makeStore()
+const { backend, drainSettled, entries, footer, rewind, sink, status } = makeStore()
 /**
  * Count completed submissions.
  *
@@ -48,7 +49,7 @@ const handle = await start(counting)
 
 const { captureCharFrame, externalOutput, flush } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} />
+    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} />
   ),
   {
     width: 100,
@@ -298,6 +299,28 @@ const drawnWhenAdmitted = rejectedStore.drainSettled().map((entry) => entry.titl
 onAdmitted({ _tag: "SubmissionStarted" })
 const drawnWhenNotOffered = rejectedStore.drainSettled().length
 
+/**
+ * The backend seam.
+ *
+ * Checked as pure functions rather than by starting a live session, because
+ * the live path needs a key and a network -- which is the whole reason the
+ * default is scripted.
+ */
+const defaultBackend = fromArgv([])
+const liveBackend = fromArgv(["--live", "--workspace", "/tmp/work", "--model", "some-model"])
+let refusedWithoutWorkspace = false
+try {
+  fromArgv(["--live"])
+} catch {
+  refusedWithoutWorkspace = true
+}
+let refusedWhenWorkspaceIsAFlag = false
+try {
+  fromArgv(["--live", "--workspace", "--model", "x"])
+} catch {
+  refusedWhenWorkspaceIsAFlag = true
+}
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
@@ -376,7 +399,18 @@ checks.push(
 
   // R13
   ["an admitted prompt is drawn", drawnWhenAdmitted.includes("accepted")],
-  ["a prompt the kernel never took is not", drawnWhenNotOffered === 0]
+  ["a prompt the kernel never took is not", drawnWhenNotOffered === 0],
+
+  // The backend seam
+  ["scripted unless asked otherwise", defaultBackend.kind === "scripted"],
+  ["the footer names the running backend", backend() === "scripted"],
+  ["--live selects a real model and workspace", liveBackend.kind === "live"],
+  ["and names both, so it is never a guess",
+    liveBackend.label.includes("some-model") && liveBackend.label.includes("/tmp/work")],
+  // Neither half is defaulted: defaulting the workspace would make the
+  // dangerous case the easy one.
+  ["--live without a workspace is refused", refusedWithoutWorkspace],
+  ["and a flag is not mistaken for a directory", refusedWhenWorkspaceIsAFlag]
 )
 
 console.log("--- checks ---")

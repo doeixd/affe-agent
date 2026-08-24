@@ -13,7 +13,7 @@ import type { Entry, Handle } from "./view.ts"
  * -- and "should" is what this measures.
  */
 
-const { drainSettled, entries, footer, rewind, sink, status } = makeStore()
+const { backend, drainSettled, entries, footer, rewind, sink, status } = makeStore()
 
 const handle: Handle = {
   submit: () => {},
@@ -24,7 +24,7 @@ const handle: Handle = {
 
 const { flush } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} />
+    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} />
   ),
   {
     width: 80,
