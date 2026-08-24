@@ -394,9 +394,30 @@ round-trips, that distinct faults produce **distinct, inspectable** observations
 recognised — which `isInfrastructure` depends on. Falsified by restoring
 `Effect.orDie` on `decodeHistory`: three of the five fail.
 
-**Still to do:** `DurableChannels` (8 sites), `DeliveryLog` (7) and
-`state/AgentState` (5). The pattern is now established and each is independent;
-`DeliveryLog` matters most, because D5 and D6 are claims about it.
+**`DeliveryLog` followed**, and it is the one where the emptied channel hid the
+most. D5 says *a consumer that disconnects and reconnects from its saved offset
+sees every event it had not seen, in order, with no gap.* A row that cannot be
+decoded **is** that gap -- and while `decodeEnvelope` was `orDie`, a reconnecting
+consumer met it as a dead fibre. The failure mode D5 exists to forbid was also
+the one hardest to observe. `append`, `live` and `read` now declare
+`StorageError`, and the client's `events` stream ends with an
+`AgentTransportError` rather than a defect, so a consumer can reconnect from its
+last sequence -- which is the entire point of a log readable from an offset.
+
+That triage surfaced a third instance of the same core-seam constraint.
+`AgentSession.MakeOptions.eventSink` declares `Effect<void>`, so
+`DurableSubmission`'s recorder cannot report a failed append through it. The
+`orDie` stays -- and here it is also the *outcome we want*: a submission whose
+events cannot be recorded has a gap in the client's reconnect stream, so it must
+not be reported as having completed normally, and `isInfrastructure` turns
+exactly this into an `Infrastructure` outcome the client reports as retryable.
+What the typed error bought is the **reliability of that classification**: the
+defect used to be whatever the driver threw, recognised by matching `"SqlError"`
+against its `name`; it is now a `StorageError` matched by tag, whether it
+arrives as a failure or as a defect.
+
+**Still to do:** `DurableChannels` (8 sites) and `state/AgentState` (5). Neither
+carries a durability invariant of its own, so both are ordinary follow-ups.
 
 ### E15. Two telemetry vocabularies for the same facts — **fixed, A-0**
 
@@ -699,10 +720,13 @@ outrank most of round one.
   `StorageError` introduced; the store interface now declares it; the client
   folds it into `AgentTransportError` so `RemoteError` and the wire are
   unchanged; `isInfrastructure`'s defect-sniffing replaced with a typed check.
-  5 tests, falsified. **Remaining:** `DurableChannels` (8), `DeliveryLog` (7),
-  `state/AgentState` (5) -- `DeliveryLog` first, since D5/D6 are claims about
-  it. Unblocks [plan-durability-hardening.md](./plan-durability-hardening.md)
-  H4 for the session store.
+  7 tests, falsified twice. `DeliveryLog` followed: `append`/`live`/`read`
+  declare it, and the client's event stream fails rather than dying, so a
+  consumer can reconnect from its last sequence (D5).
+  **Remaining:** `DurableChannels` (8) and `state/AgentState` (5), neither
+  carrying a durability invariant of its own. Unblocks
+  [plan-durability-hardening.md](./plan-durability-hardening.md) H4 for the two
+  components its invariants are about.
 - **A-2 — Metrics in `/observability` (E8, E17).** Four instruments over the
   event stream the package already consumes, following the
   `agent_data_dropped_events` counter as the template.
@@ -754,9 +778,9 @@ outrank most of round one.
   either channel (E20). *Not met — currently documented rather than enforced.*
 - **AS8 ◑:** Under H4's fault injection, a failed store write, a duplicated
   record and a corrupt stored history are **three distinguishable observations**
-  at the caller, not three defects (E14, D7). *Met for
-  `DurableSessionStore` (`test/StorageError.test.ts`); the other three stores
-  still answer every fault with a defect.*
+  at the caller, not three defects (E14, D7). *Met for `DurableSessionStore`
+  and `DeliveryLog` (`test/StorageError.test.ts`); `DurableChannels` and
+  `AgentState` still answer every fault with a defect.*
 - **AS9:** Adding a cast anywhere in `src/` fails the build until AGENTS.md
   records it — falsified by adding one and watching it fail (E18).
 - **AS10:** Every retry interval in `src/` is either derived from `Config` or

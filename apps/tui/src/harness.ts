@@ -9,13 +9,8 @@ import { CodingToolkit } from "../../../src/coding/index.js"
 import * as MemorySandbox from "../../../src/sandbox/memory.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
-import {
-  bodyOfToolResult,
-  titleOfToolCall,
-  type Approval,
-  type Handle,
-  type Sink
-} from "./view.ts"
+import { bodyOf, defaultViews, titleOf, type ToolView } from "./tools.ts"
+import { type Approval, type Handle, type Sink } from "./view.ts"
 import { duration } from "./width.ts"
 
 /**
@@ -108,7 +103,7 @@ const nextId = (prefix: string): string => `${prefix}-${++counter}`
  * arrive without one: the harness owns that correlation so the renderer does
  * not have to.
  */
-const project = (sink: Sink) => {
+const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
   let assistant: string | undefined
   // Closed over rather than kept in the store: this is bookkeeping for one
   // submission, not something the UI should be able to see half-finished.
@@ -191,7 +186,7 @@ const project = (sink: Sink) => {
         sink.append({
           id: `tool-${event.id}`,
           kind: "tool",
-          title: titleOfToolCall(event.name, event.params),
+          title: titleOf(views, event.name, event.params),
           body: { type: "none" },
           status: "running"
         })
@@ -200,7 +195,7 @@ const project = (sink: Sink) => {
       case "ToolCallSucceeded":
         sink.patch(`tool-${event.id}`, {
           status: "ok",
-          body: bodyOfToolResult(event.name, event.result)
+          body: bodyOf(views, event.name, event.result)
         })
         return
 
@@ -252,14 +247,18 @@ let disposeFiber: () => void = () => {}
  * The root program stays alive until `stop`, which closes its scope and with it
  * the session -- interrupting any run in flight.
  */
-export const start = (sink: Sink): Promise<Handle> =>
+export const start = (
+  sink: Sink,
+  /** Rendering rules. An application adds its own tools' rules here. */
+  views: Readonly<Record<string, ToolView>> = defaultViews
+): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
     const program = Effect.gen(function*() {
       const session = yield* AgentSession.make(agent, {
         // Without this a run needing approval is refused rather than asked.
         elicitation: Elicitation.memory
       })
-      const onEvent = project(sink)
+      const onEvent = project(sink, views)
 
       yield* Effect.forkScoped(
         Stream.runForEach(session.events, (envelope) =>

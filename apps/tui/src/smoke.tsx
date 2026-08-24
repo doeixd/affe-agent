@@ -3,6 +3,7 @@ import { App } from "./App.tsx"
 import { start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
 import type { Sink } from "./view.ts"
+import { bodyOf, defaultViews, titleOf, withViews } from "./tools.ts"
 import { duration, widthPolicy } from "./width.ts"
 
 /**
@@ -117,7 +118,7 @@ console.log(transcript)
 console.log("--- live region, after ---")
 console.log(live)
 
-const checks: ReadonlyArray<readonly [string, boolean]> = [
+const checks: Array<readonly [string, boolean]> = [
   ["user message committed", transcript.includes("what is in this workspace?")],
   ["tool call committed with argument", transcript.includes("bash echo hi")],
   ["tool marked succeeded", transcript.includes("✓")],
@@ -140,12 +141,39 @@ const checks: ReadonlyArray<readonly [string, boolean]> = [
   ["compact below its breakpoint", widthPolicy(50).compact === true],
   ["spacious only when wide", widthPolicy(80).spacious === false && widthPolicy(120).spacious],
   ["approval surface replaces the prompt", asking.includes("y allow") && !asking.includes("message")],
-  ["approval names the tool and action", asking.includes("bash wants to shell")],
+  ["approval uses the tool's own prose", asking.includes("? run: rm -rf /")],
   ["approval names the resource", asking.includes("rm -rf")],
   ["refusal is recorded", transcript.includes("refused")],
   ["footer returned to the prompt", footer().type === "prompt"],
   ["durations read at each magnitude", duration(340) === "340ms" && duration(1234) === "1.2s" && duration(125_000) === "2m 05s"]
 ]
+
+// W1/W2: the registry. Exercised directly rather than through a render, so a
+// fallback and a user-supplied rule are both provable without a tool existing.
+const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
+const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
+
+// What an application adding its own tool would write.
+const extended = withViews({
+  deploy: {
+    title: (params) => `deploy → ${(params as { environment: string }).environment}`,
+    body: () => ({ type: "text", content: "rolled out" }),
+    approval: (request) => `deploy to ${request.resource}`
+  }
+})
+const customTitle = titleOf(extended, "deploy", { environment: "prod" })
+
+// Replacing one of ours, the way handlers can be replaced.
+const replaced = withViews({ bash: { title: () => "shell" } })
+
+checks.push(
+  ["unknown tool falls back to a legible title", unknownTitle === "deploy [environment=prod]"],
+  ["unknown tool still renders a body", unknownBody.type === "text"],
+  ["an application can register its own tool", customTitle === "deploy → prod"],
+  ["a registered rule can replace one of ours", titleOf(replaced, "bash", {}) === "shell"],
+  ["replacing one rule keeps the others", bodyOf(replaced, "list_files", []).type === "structured"],
+  ["our own titles still apply", titleOf(defaultViews, "edit_file", { path: "a.ts" }) === "edit a.ts"]
+)
 
 console.log("--- checks ---")
 let failed = 0

@@ -464,7 +464,22 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
     // the HTTP adapter's policy; replay from an offset is `DeliveryLog.read`.
     events:
       options.delivery !== undefined
-        ? options.delivery.live(sessionId)
+        ? options.delivery
+            .live(sessionId)
+            // A log that stops being readable mid-stream ends the stream with
+            // a transport failure rather than a defect, so a consumer can
+            // reconnect from its last sequence — which is the whole point of
+            // the log being readable from an offset.
+            .pipe(
+              Stream.catchTag("StorageError", (error) =>
+                Stream.fail(
+                  new AgentClient.AgentTransportError({
+                    sessionId,
+                    detail: error.message
+                  })
+                )
+              )
+            )
         : Stream.fromIterable<AgentEventEnvelope>([])
   })
 

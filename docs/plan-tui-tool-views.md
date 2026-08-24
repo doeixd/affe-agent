@@ -123,6 +123,47 @@ should be *asked about*, not only how it renders. `bash wants to shell:
 rm -rf /` becomes whatever `bash`'s rule says, and a tool with no rule keeps
 today's generic line.
 
+**W1, W2 and W3: landed (2026-08-24).** `apps/tui/src/tools.ts`; the two switch
+statements are gone from `view.ts`. 31 smoke checks pass.
+
+The registry, and what it made possible:
+
+```ts
+// ours
+defaultViews = { list_files, search, read_file, bash, edit_file, write_file }
+
+// an application's, without editing our files
+withViews({
+  deploy: {
+    title: (params) => `deploy → ${...}`,
+    body: () => ({ type: "text", content: "rolled out" }),
+    approval: (request) => `deploy to ${request.resource}`
+  }
+})
+```
+
+Tested in both directions, which is the point of W2: an application can
+**add** a rule for its own tool, and **replace** one of ours (`bash` renamed to
+`shell`) while the others keep working -- the same rule `Agent.toolkit` follows
+for handlers, mirroring `test/CodingComposition.test.ts` in the library.
+
+**W3 came free**, since the registry already had the hook: a tool now says how
+it should be *asked about*. `bash` renders `? run: rm -rf /` rather than the
+generic `? bash wants to shell: rm -rf /`, and a tool with no `approval` rule
+keeps the generic line.
+
+Also ported: their narrowing helpers (`dict`, `str`, `num`, `list`, `count`)
+and `info()`. `info` is worth the twelve lines -- for a tool nobody wrote a
+rule for it renders every scalar argument as `[environment=prod]`, so an
+unknown tool shows *something* about what it was asked to do rather than its
+name alone. That surfaced as a failing test rather than as a design idea: the
+first fallback only looked at `command`/`pattern`/`path`/`query`, so a tool
+with none of them rendered bare.
+
+One assertion had to change rather than being fixed: "approval names the tool
+and action" was asserting the generic prose, which W3 deliberately replaced.
+The test now asserts the tool's own line.
+
 ### W4 — Structured `edit_file` result (gated)
 
 Blocked on the library decision above. When `edit_file` returns

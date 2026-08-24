@@ -180,12 +180,27 @@ now reads a typed error instead of matching `"SqlError"` against defect `name`
 strings. `test/StorageError.test.ts` asserts that distinct faults produce
 distinct observations — the property this milestone needs.
 
-**Remaining before H4 is fully unblocked:** `DurableChannels` (8 sites),
-`DeliveryLog` (7) and `state/AgentState` (5). **Do `DeliveryLog` first** — D5
-(*a stable cursor, at-least-once, no gap*) and D6 (*replay-stable keys*) are
-claims about that component specifically, so a fault-injection suite that cannot
-distinguish its failures cannot test the two invariants most particular to this
-plan.
+**`DeliveryLog` is done too**, and it mattered most. D5 (*a stable cursor,
+at-least-once, no gap*) is a claim about this component specifically, and a row
+that cannot be decoded **is** the gap D5 forbids — yet while `decodeEnvelope`
+was `orDie`, a reconnecting consumer met it as a dead fibre rather than as
+something it could report or retry from its last sequence. `append`, `live` and
+`read` now declare `StorageError`; the client's `events` stream ends with an
+`AgentTransportError` instead of a defect.
+
+One `orDie` in this path stays, deliberately.
+`AgentSession.MakeOptions.eventSink` is a core seam declaring `Effect<void>`, so
+`DurableSubmission`'s recorder cannot report a failed append through it — and
+dying is also the right outcome, because a submission whose events were not
+recorded has a gap in the client's stream and must not be reported as having
+completed normally. `isInfrastructure` turns it into an `Infrastructure`
+outcome, which the client reports as retryable. The typed error made that
+classification reliable rather than dependent on a driver's `name` string.
+
+**Remaining before H4 is fully unblocked:** `DurableChannels` (8 sites) and
+`state/AgentState` (5). Neither carries a durability invariant of its own, so
+H4 can begin against the session store and the delivery log — which is where
+D1, D5, D6 and D7 actually live — while those two follow.
 
 This is also the milestone where D7 stops being aspirational, which makes it a
 better place for the work than a general cleanup pass would be.

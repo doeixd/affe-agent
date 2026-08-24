@@ -340,8 +340,28 @@ const recordingSink = (
 ): Recorder => {
   // Mutated only from within the bus's permit, which serialises the sink.
   const counts = new Map<string, number>()
+  /**
+   * A failed append dies here, and that is the third triage bucket again.
+   *
+   * `AgentSession.MakeOptions.eventSink` is a *core* seam declaring
+   * `Effect<void>`: an interpreter recording events cannot report a failure
+   * through it without durability's concerns reaching the kernel.
+   *
+   * Dying is also the outcome we want, which is why this is not a workaround.
+   * A submission whose events cannot be recorded has a gap in the client's
+   * reconnect stream (D5), so it must not be reported as having completed
+   * normally -- and `isInfrastructure` turns exactly this into an
+   * `Infrastructure` outcome, which the client reports as the retryable
+   * transport failure it is.
+   *
+   * What the typed error bought here is reliability of *that* classification.
+   * The defect used to be whatever the driver threw, recognised by matching
+   * `"SqlError"` against its `name`; it is now a `StorageError`, which
+   * `isInfrastructure` matches by tag whether it arrives as a failure or, as
+   * here, as a defect.
+   */
   const record = (key: string, projected: AgentEventEnvelope) =>
-    Effect.flatMap(delivery.append(sessionId, key, projected), (outcome) =>
+    Effect.flatMap(Effect.orDie(delivery.append(sessionId, key, projected)), (outcome) =>
       // A conflict on a `MessageDelta` is expected, not a bug: the first run
       // streams the provider's chunks live and a replay re-expresses the
       // journalled text as one chunk, so the payloads differ under the same

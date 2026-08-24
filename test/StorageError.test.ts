@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Exit, Option } from "effect"
 import { Prompt } from "effect/unstable/ai"
+import * as AgentEvent from "../src/AgentEvent.js"
+import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import * as Ids from "../src/internal/ids.js"
 import { isStorageError, StorageError } from "../src/durable/StorageError.js"
 
 /**
@@ -103,6 +106,44 @@ describe("StorageError", () => {
         assert.include(error.message, "decodeHistory")
         assert.include(error.message, "failed")
       }
+    })
+  )
+
+  /**
+   * D5 is a claim about `DeliveryLog` specifically: *a consumer that
+   * disconnects and reconnects from its saved offset sees every event it had
+   * not seen, in order, with no gap.*
+   *
+   * A row that cannot be decoded is exactly that gap. While `decodeEnvelope`
+   * was `orDie`, a reconnecting consumer met it as a dead fibre -- so the
+   * failure mode D5 exists to forbid was also the one hardest to observe.
+   */
+  it.effect("an undecodable delivery row is a failure a consumer can see", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        DeliveryLog.decodeEnvelope("{ truncated", "s1")
+      )
+      assert.isTrue(isStorageError(error))
+      assert.strictEqual(error.operation, "decodeEnvelope")
+      assert.strictEqual(error.sessionId, "s1")
+    })
+  )
+
+  it.effect("a delivery envelope still round-trips", () =>
+    Effect.gen(function* () {
+      // The typed channel must not have cost the happy path.
+      const envelope: AgentEvent.AgentEventEnvelope = {
+        sessionId: Ids.sessionId("s1"),
+        submissionId: Option.none(),
+        runId: Option.none(),
+        turn: Option.none(),
+        sequence: 1,
+        event: { _tag: "SessionStarted" }
+      }
+      const encoded = yield* DeliveryLog.encodeEnvelope(envelope)
+      const decoded = yield* DeliveryLog.decodeEnvelope(encoded, "s1")
+      assert.strictEqual(decoded.sequence, 1)
+      assert.strictEqual(decoded.event._tag, "SessionStarted")
     })
   )
 

@@ -1,6 +1,7 @@
 import { Duration, Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as AgentEvent from "../AgentEvent.js"
+import { detailOf, isStorageError, StorageError } from "./StorageError.js"
 
 /**
  * Client-facing event delivery, kept apart from the Workflow journal.
@@ -48,18 +49,18 @@ export interface DeliveryLog {
     sessionId: string,
     key: string,
     envelope: AgentEvent.AgentEventEnvelope
-  ) => Effect.Effect<AppendOutcome>
+  ) => Effect.Effect<AppendOutcome, StorageError>
 
   /** Events accepted after this subscription begins. Never ends. */
   readonly live: (
     sessionId: string
-  ) => Stream.Stream<AgentEvent.AgentEventEnvelope>
+  ) => Stream.Stream<AgentEvent.AgentEventEnvelope, StorageError>
 
   /** Everything recorded for the session above `after`, in sequence order. */
   readonly read: (
     sessionId: string,
     options?: { readonly after?: number | undefined }
-  ) => Effect.Effect<ReadonlyArray<AgentEvent.AgentEventEnvelope>>
+  ) => Effect.Effect<ReadonlyArray<AgentEvent.AgentEventEnvelope>, StorageError>
 }
 
 // -- Encoding ----------------------------------------------------------------------
@@ -72,6 +73,10 @@ export interface DeliveryLog {
 // explicit JSON form to survive text storage, as the SSE adapter also found.
 const EnvelopeJson = Schema.toCodecJson(AgentEvent.AgentEventEnvelope)
 
+/**
+ * Encoding stays a defect: the envelope was built by this process, so a schema
+ * that cannot encode it is a bug in the recorder. See `StorageError`.
+ */
 export const encodeEnvelope = (
   envelope: AgentEvent.AgentEventEnvelope
 ): Effect.Effect<string> =>
@@ -80,12 +85,29 @@ export const encodeEnvelope = (
     Effect.orDie
   )
 
+/**
+ * Decoding is a different claim, and this one matters more here than anywhere.
+ *
+ * D5 says a consumer reconnecting from its saved offset sees every event it
+ * had not seen, with no gap. A row it cannot decode -- truncated, written by an
+ * older schema, corrupted -- is exactly the gap D5 forbids, and `orDie` made it
+ * arrive as a dead fibre rather than as something the consumer could report or
+ * retry. It is now in the error channel, where a reconnect strategy can see it.
+ */
 export const decodeEnvelope = (
-  encoded: string
-): Effect.Effect<AgentEvent.AgentEventEnvelope> =>
+  encoded: string,
+  sessionId?: string
+): Effect.Effect<AgentEvent.AgentEventEnvelope, StorageError> =>
   Effect.try(() => JSON.parse(encoded) as unknown).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(EnvelopeJson)),
-    Effect.orDie
+    Effect.mapError(
+      (cause) =>
+        new StorageError({
+          operation: "decodeEnvelope",
+          ...(sessionId === undefined ? {} : { sessionId }),
+          detail: detailOf(cause)
+        })
+    )
   )
 
 /**
@@ -157,6 +179,8 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
     const sessions = yield* Ref.make(new Map<string, ReadonlyArray<Entry>>())
     const busFor = yield* makeBuses
 
+
+
     return {
       append: (sessionId, key, envelope) =>
         Effect.gen(function* () {
@@ -203,6 +227,26 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
         })
     }
   })
+
+/**
+ * Every log operation's failure, named.
+ *
+ * The same shape `DurableSessionStore` uses: a driver error or an already-typed
+ * `StorageError` becomes one `StorageError` carrying the operation and session,
+ * with an existing one passed through so the innermost description survives.
+ */
+const storage =
+  (operation: string, sessionId?: string) =>
+  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, StorageError> =>
+    Effect.mapError(effect, (cause): StorageError =>
+      isStorageError(cause)
+        ? cause
+        : new StorageError({
+            operation,
+            ...(sessionId === undefined ? {} : { sessionId }),
+            detail: detailOf(cause)
+          })
+    )
 
 // -- SQL implementation --------------------------------------------------------------
 
@@ -273,7 +317,7 @@ export const sqlLog = (
                 return { _tag: "Pending", stored, sequence } as const
               })
             )
-            .pipe(Effect.orDie)
+            .pipe(storage("append", sessionId))
           if (outcome._tag !== "Pending") return outcome
           const bus = yield* busFor(sessionId)
           yield* PubSub.publish(bus, outcome.stored)
@@ -285,7 +329,7 @@ export const sqlLog = (
           Effect.gen(function* () {
             const bus = yield* busFor(sessionId)
             const start = yield* sql<{ readonly max: number | null }>`SELECT MAX(sequence) AS max FROM ${table} WHERE session_id = ${sessionId}`.pipe(
-              Effect.orDie,
+              storage("live", sessionId),
               Effect.map((rows) => Number(rows[0]?.max ?? 0))
             )
             // Neither wake signal carries data: every delivery comes from the
@@ -300,9 +344,11 @@ export const sqlLog = (
                 () => start,
                 (cursor: number) =>
                   sql<{ readonly payload: string }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${cursor} ORDER BY sequence`.pipe(
-                    Effect.orDie,
+                    storage("live", sessionId),
                     Effect.flatMap((rows) =>
-                      Effect.forEach(rows, (row) => decodeEnvelope(row.payload))
+                      Effect.forEach(rows, (row) =>
+                        decodeEnvelope(row.payload, sessionId)
+                      )
                     ),
                     Effect.map((events): readonly [number, ReadonlyArray<AgentEvent.AgentEventEnvelope>] => [
                       events.length > 0 ? events[events.length - 1]!.sequence : cursor,
@@ -318,9 +364,9 @@ export const sqlLog = (
         sql<{
           readonly payload: string
         }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${options?.after ?? 0} ORDER BY sequence`.pipe(
-          Effect.orDie,
+          storage("read", sessionId),
           Effect.flatMap((rows) =>
-            Effect.forEach(rows, (row) => decodeEnvelope(row.payload))
+            Effect.forEach(rows, (row) => decodeEnvelope(row.payload, sessionId))
           )
         )
     }

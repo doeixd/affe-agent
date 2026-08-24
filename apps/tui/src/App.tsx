@@ -8,6 +8,7 @@ import {
 import type { Accessor } from "solid-js"
 import { createEffect, For, Match, Show, Switch } from "solid-js"
 import { marker, theme } from "./theme.ts"
+import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
 import type { Body, Entry, FooterView, Handle, Status, ToolSnapshot } from "./view.ts"
 import { widthPolicy } from "./width.ts"
 
@@ -187,6 +188,7 @@ export const EntryView = (props: { entry: Entry }) => (
 const ApprovalView = (props: {
   request: Extract<FooterView, { type: "approval" }>["request"]
   handle: Handle
+  views: Readonly<Record<string, ToolView>>
 }) => {
   useKeyboard((key) => {
     const name = String(key.name ?? "").toLowerCase()
@@ -207,7 +209,7 @@ const ApprovalView = (props: {
           over one another -- so anything that must be its own line has to be
           its own string, and anything on one line has to be one string. */}
       <text fg={theme.footer.text}>
-        {`? ${props.request.toolName} wants to ${props.request.action}: ${props.request.resource}`
+        {`? ${approvalOf(props.views, props.request)}`
           + (props.request.reason === undefined ? "" : `  (${props.request.reason})`)}
       </text>
       <text fg={theme.footer.muted}>{"  y allow · n refuse"}</text>
@@ -221,8 +223,10 @@ export const App = (props: {
   handle: Handle
   drainSettled: () => ReadonlyArray<Entry>
   footer: FooterView
+  views?: Readonly<Record<string, ToolView>>
 }) => {
   const renderer = useRenderer()
+  const views = () => props.views ?? defaultViews
   const dimensions = useTerminalDimensions()
   const policy = () => widthPolicy(dimensions().width)
 
@@ -265,7 +269,7 @@ export const App = (props: {
       <Switch>
         <Match when={props.footer.type === "approval" ? props.footer : undefined}>
           {(footer: Accessor<Extract<FooterView, { type: "approval" }>>) => (
-            <ApprovalView request={footer().request} handle={props.handle} />
+            <ApprovalView request={footer().request} handle={props.handle} views={views()} />
           )}
         </Match>
         <Match when={props.footer.type === "prompt"}>
