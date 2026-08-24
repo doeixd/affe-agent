@@ -241,6 +241,33 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  it("exports the export vocabulary and nothing beyond it", async () => {
+    const exported = await import("../src/export/index.js")
+    assert.deepStrictEqual(Object.keys(exported).sort(), ["Export", "Replay"])
+
+    assert.deepStrictEqual(Object.keys(exported.Export).sort(), [
+      "Export",
+      "ExportError",
+      "Provenance",
+      "VERSION",
+      "decode",
+      "encode",
+      "historyOf",
+      "missingTools",
+      "of",
+      "ofSession",
+      "parse"
+    ])
+
+    assert.deepStrictEqual(Object.keys(exported.Replay).sort(), [
+      "promptsOf",
+      "seedOf",
+      "toolsUsed",
+      "turnsOf",
+      "unavailable"
+    ])
+  })
+
   it("exports the client vocabulary and nothing beyond it", async () => {
     const client = await import("../src/client/index.js")
     assert.deepStrictEqual(Object.keys(client).sort(), [

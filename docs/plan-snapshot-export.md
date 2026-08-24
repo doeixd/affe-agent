@@ -213,6 +213,54 @@ rule.
 - **E5 — Tree-aware export.** Branch path and subtree selection, `parent` in
   provenance.
 
+## Progress
+
+**E1 and E2: landed (2026-08-24).** `@doeixd/effect-agent/export`, 15 tests.
+IE1, IE2 and IE4 hold; each was broken once to confirm its test bites.
+
+**The distinction this plan rests on survived contact.** `Export` embeds
+`AgentSession.Snapshot` unchanged, so restoring from an export *is* restoring
+from a snapshot -- there is a test that does exactly that, because it is the
+claim that makes the envelope additive rather than a second format.
+
+**Version before payload, and this is the whole reason a version exists.**
+Decoding first reports a newer file as a missing field, which sends the reader
+hunting for a bug in their data instead of telling them to upgrade. There is a
+test with a newer file that is *also* structurally wrong for this build; it
+must fail as `unsupported-version`.
+
+**Determinism came from sorting keys, not from hoping.** Two exports of one
+snapshot are byte-identical, which is what lets an export be committed as a
+fixture without every update being an unreadable diff. `exportedAt` reads the
+`Clock`, so a test can fix it.
+
+**Open question settled: `cwd` is opt-in.** Pi records it unconditionally. An
+absolute path routinely carries a username, and the first thing anyone does
+with an export is paste it into a bug report -- so absent by default, and there
+is a test that the string does not appear.
+
+**Open question settled: where it lives.** Its own subpath, next to `/tree`.
+It has the two consumers the scope rule wants -- fixtures, and eventually the
+tree's storage -- and putting it beside `/evals` would have made the format
+look like test infrastructure rather than a thing users can rely on.
+
+**Replay reproduces the model, not the world, and says so.** Tool *results* are
+not scripted: they came from handlers that ran against a real filesystem and
+shell, and playing a recorded result back would quietly turn a test of the
+agent into a test of nothing. The tools run again against whatever the test
+provides, and the difference between those answers and the recorded ones is
+frequently the bug being chased.
+
+`Replay.toolsUsed` reads the conversation rather than provenance, deliberately:
+provenance says what the agent *had*, this says what the transcript actually
+*used*, and when they disagree the second decides whether a replay can run.
+
+**Not yet done:** E3 (redaction), E4 (the commit log), E5 (tree-aware export).
+Note that E4's premise has shifted -- T5 landed a `NodeStore` over
+`KeyValueStore` with whole snapshots, so the shared append-only log is now a
+change to one module rather than a new one. Suggestion 7 (`bash` output files
+referenced but not carried) is still undecided.
+
 ## Risks and open questions
 
 - **Format gravity.** An export format is a promise. E1 should ship the smallest
