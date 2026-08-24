@@ -11,6 +11,8 @@ import { marker, theme } from "./theme.ts"
 import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
 import type {
   Body,
+  BranchItem,
+  Command,
   Entry,
   FooterView,
   Handle,
@@ -252,6 +254,83 @@ const ApprovalView = (props: {
   )
 }
 
+/**
+ * The `/` palette.
+ *
+ * A `<select>` rather than a list plus key handling, because a list that does
+ * not move under the arrow keys is a picture of a menu. Escape returns to the
+ * prompt, which is the only other thing that can be meant here.
+ */
+const PaletteView = (props: {
+  commands: ReadonlyArray<Command>
+  handle: Handle
+  dismiss: () => void
+}) => {
+  useKeyboard((key) => {
+    if (String(key.name ?? "").toLowerCase() === "escape") props.dismiss()
+  })
+
+  return (
+    <box border borderColor={theme.footer.border} flexDirection="column" marginTop={1}>
+      <text fg={theme.footer.muted}>{"  ↑↓ choose · enter run · esc cancel"}</text>
+      <select
+        focused
+        options={props.commands.map((command) => ({
+          name: `/${command.name}`,
+          description: command.description,
+          value: command.name
+        }))}
+        showDescription
+        onSelect={(_index: number, option: { value?: unknown } | null) => {
+          const name = option?.value
+          if (typeof name === "string") props.handle.command(name)
+        }}
+      />
+    </box>
+  )
+}
+
+/**
+ * Somewhere else to be.
+ *
+ * The active branch is marked rather than hidden: a selector that omits where
+ * you are makes "switch" read as "leave", and the whole point of a tree is
+ * that the line you are on is one of several equals.
+ */
+const BranchesView = (props: {
+  items: ReadonlyArray<BranchItem>
+  handle: Handle
+  dismiss: () => void
+}) => {
+  useKeyboard((key) => {
+    if (String(key.name ?? "").toLowerCase() === "escape") props.dismiss()
+  })
+
+  return (
+    <box border borderColor={theme.footer.border} flexDirection="column" marginTop={1}>
+      <Show
+        when={props.items.length > 0}
+        fallback={<text fg={theme.footer.muted}>{"  no other line of work yet"}</text>}
+      >
+        <text fg={theme.footer.muted}>{"  ↑↓ choose · enter switch · esc cancel"}</text>
+        <select
+          focused
+          options={props.items.map((item) => ({
+            name: `${item.active ? "● " : "  "}${item.label}`,
+            description: item.detail,
+            value: item.id
+          }))}
+          showDescription
+          onSelect={(_index: number, option: { value?: unknown } | null) => {
+            const id = option?.value
+            if (typeof id === "string") props.handle.switchTo(id)
+          }}
+        />
+      </Show>
+    </box>
+  )
+}
+
 export const App = (props: {
   entries: ReadonlyArray<Entry>
   status: Status
@@ -261,6 +340,10 @@ export const App = (props: {
   rewind: Rewind
   /** Which model and workspace are behind this. See `Sink.setBackend`. */
   backend: string
+  /** Return the footer to the prompt. Escape, from anywhere. */
+  dismiss: () => void
+  /** Open the `/` palette. */
+  openPalette: () => void
   views?: Readonly<Record<string, ToolView>>
 }) => {
   const renderer = useRenderer()
@@ -270,6 +353,28 @@ export const App = (props: {
 
   /** Nowhere to go back to from the first turn. */
   const canRewind = () => props.rewind.depth > 1
+
+  /**
+   * What has been typed, newest last, and where in it the user is.
+   *
+   * Kept here rather than in the store because it is not transcript: a prompt
+   * the kernel refused is still something the user typed and should still be
+   * recallable, so this deliberately does *not* share the store's rule that a
+   * line is only drawn once the agent accepted it.
+   */
+  let input: { value: string } | undefined
+  const typed: Array<string> = []
+  let cursor = -1
+
+  const recall = (delta: number) => {
+    if (input === undefined || typed.length === 0) return
+    // -1 means "at the empty prompt", which is where down-arrow returns to.
+    const next = cursor === -1
+      ? (delta < 0 ? typed.length - 1 : -1)
+      : Math.min(typed.length - 1, Math.max(-1, cursor + (delta < 0 ? -1 : 1)))
+    cursor = next
+    input.value = next === -1 ? "" : typed[next]!
+  }
 
   /**
    * Ctrl+R rewinds a turn.
@@ -282,9 +387,20 @@ export const App = (props: {
    */
   useKeyboard((key) => {
     if (props.footer.type !== "prompt") return
-    if (key.ctrl !== true || String(key.name ?? "").toLowerCase() !== "r") return
-    if (!canRewind()) return
-    props.handle.rewind()
+    const name = String(key.name ?? "").toLowerCase()
+
+    // History, the way every shell does it.
+    if (name === "up") return recall(-1)
+    if (name === "down") return recall(1)
+
+    // `/` on an empty prompt opens the palette; typed mid-line it is a
+    // character, because paths and regexes contain slashes.
+    if (name === "/" && (input?.value ?? "") === "") {
+      props.handle.command // referenced so the dependency is explicit
+      return props.openPalette()
+    }
+
+    if (key.ctrl === true && name === "r" && canRewind()) props.handle.rewind()
   })
 
   /**
@@ -362,17 +478,44 @@ export const App = (props: {
             <ApprovalView request={footer().request} handle={props.handle} views={views()} />
           )}
         </Match>
+        <Match when={props.footer.type === "palette" ? props.footer : undefined}>
+          {(footer: Accessor<Extract<FooterView, { type: "palette" }>>) => (
+            <PaletteView
+              commands={footer().commands}
+              handle={props.handle}
+              dismiss={props.dismiss}
+            />
+          )}
+        </Match>
+        <Match when={props.footer.type === "branches" ? props.footer : undefined}>
+          {(footer: Accessor<Extract<FooterView, { type: "branches" }>>) => (
+            <BranchesView
+              items={footer().items}
+              handle={props.handle}
+              dismiss={props.dismiss}
+            />
+          )}
+        </Match>
         <Match when={props.footer.type === "prompt"}>
           <box border borderColor={theme.footer.border} marginTop={1}>
             <input
+              ref={(element: { value: string }) => {
+                input = element
+              }}
               focused
-              placeholder="message…"
+              placeholder="message…  (/ for commands, ↑ for history)"
               onSubmit={(value: unknown) => {
                 // The element types `onSubmit` as accepting either shape; only
                 // the string form carries what was typed.
                 if (typeof value !== "string") return
                 const text = value.trim()
-                if (text.length > 0) props.handle.submit(text)
+                if (text.length === 0) return
+                // Recorded before submission, and regardless of what the
+                // kernel does with it: a refused prompt is still something the
+                // user typed and will want back.
+                typed.push(text)
+                cursor = -1
+                props.handle.submit(text)
               }}
             />
           </box>

@@ -20,7 +20,8 @@ const handle = await start(sink, { backend: fromArgv(process.argv.slice(2)) })
 process.on("SIGINT", () => handle.interrupt())
 
 await render(
-  () => <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} />,
+  () => <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
+      openPalette={() => sink.setPalette(handle.commands)} />,
   // Finished entries are committed to the terminal's own scrollback, which
   // needs the live UI pinned to a footer region below it.
   { screenMode: "split-footer" }

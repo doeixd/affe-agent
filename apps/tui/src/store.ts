@@ -1,6 +1,15 @@
 import { createSignal } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
-import type { Approval, Entry, FooterView, Rewind, Sink, Status } from "./view.ts"
+import type {
+  Approval,
+  BranchItem,
+  Command,
+  Entry,
+  FooterView,
+  Rewind,
+  Sink,
+  Status
+} from "./view.ts"
 
 /**
  * The reactive state, and the `Sink` the harness writes into.
@@ -60,7 +69,16 @@ export const makeStore = () => {
 
     setRewind,
 
-    setBackend
+    setBackend,
+
+    // Each of these *replaces* the footer's surface rather than layering on
+    // it, which is what keeps "asking for approval while also choosing a
+    // branch" unrepresentable instead of merely avoided.
+    setPalette: (commands: ReadonlyArray<Command> | undefined) =>
+      setFooter(commands === undefined ? { type: "prompt" } : { type: "palette", commands }),
+
+    setBranches: (items: ReadonlyArray<BranchItem> | undefined) =>
+      setFooter(items === undefined ? { type: "prompt" } : { type: "branches", items })
   }
 
   /**

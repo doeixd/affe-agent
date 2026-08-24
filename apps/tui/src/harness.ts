@@ -6,10 +6,14 @@ import * as AgentSession from "../../../src/AgentSession.js"
 import * as Elicitation from "../../../src/Elicitation.js"
 import * as Permission from "../../../src/Permission.js"
 import { CodingToolkit } from "../../../src/coding/index.js"
+import * as Export from "../../../src/export/Export.js"
+import * as Redaction from "../../../src/redaction/Redaction.js"
+import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import * as SessionTree from "../../../src/tree/SessionTree.js"
+import * as TreeExport from "../../../src/tree/TreeExport.js"
 import { type Backend, scripted } from "./backend.ts"
 import { bodyOf, defaultViews, titleOf, type Views } from "./tools.ts"
-import { type Approval, type Handle, type Sink } from "./view.ts"
+import { type Approval, type BranchItem, type Command, type Handle, type Sink } from "./view.ts"
 import { duration } from "./width.ts"
 
 /**
@@ -54,6 +58,22 @@ const agent = Agent.make({
   loop: AgentLoop.bounded(10),
   permission
 })
+
+/**
+ * What `/` offers.
+ *
+ * A list rather than a lookup, because the renderer filters it as the user
+ * types and needs the descriptions to do that usefully. Deliberately short:
+ * a palette whose entries a reader has to scroll is a menu, and a menu is
+ * where features go to be forgotten.
+ */
+export const commands: ReadonlyArray<Command> = [
+  { name: "branches", description: "switch to another line of work" },
+  { name: "rewind", description: "take back the last turn (ctrl+r)" },
+  { name: "export", description: "write this conversation to a file" },
+  { name: "export-redacted", description: "the same, with secrets removed" },
+  { name: "help", description: "what these do" }
+]
 
 // ---------------------------------------------------------------------------
 // Event projection
@@ -336,6 +356,11 @@ export const start = (
        * remove somebody else's when two are outstanding.
        */
       const offered: Array<{ readonly text: string }> = []
+      // Captured once, so every command below has `R = never` and can be run
+      // straight from a keypress. The same reason `AgentSession` captures its
+      // environment at construction.
+      const sandbox = yield* Sandbox.Current
+
       const projection = project(
         sink,
         options?.views ?? defaultViews,
@@ -412,7 +437,132 @@ export const start = (
         yield* publishDepth()
       })
 
+      /**
+       * The branch selector's contents.
+       *
+       * Built from `summary`, which is the operation that exists so a list of
+       * twenty branch points does not mean holding twenty conversations. A
+       * lane's name wins over the preview when it has one: a name is what the
+       * user chose to call this, and the preview is a guess at it.
+       */
+      const branchItems = Effect.gen(function*() {
+        const active = yield* tree.active
+        const lanes = yield* tree.lanes
+        const named = new Map(lanes.map((lane) => [lane.leaf.id, lane.name]))
+        const leaves = yield* Effect.filter(yield* tree.nodes, (node) =>
+          Effect.map(tree.children(node), (children) => children.length === 0))
+        return yield* Effect.forEach(leaves, (node) =>
+          Effect.map(tree.summary(node), (summary): BranchItem => ({
+            id: node.id,
+            label: named.get(node.id)
+              ?? Option.getOrElse(summary.preview, () => node.id),
+            detail: `${summary.depth} turn${summary.depth === 1 ? "" : "s"}`
+              + ` · ${summary.messages} messages`,
+            active: Option.isSome(active) && active.value.id === node.id
+          })))
+      })
+
+      const notice = (title: string) =>
+        Effect.sync(() =>
+          sink.append({ id: nextId("notice"), kind: "notice", title, body: { type: "none" } })
+        )
+
+      /**
+       * Write the active branch to a file.
+       *
+       * The path is relative and inside the workspace, so the sandbox seam
+       * decides where it can land -- an exporter that could write anywhere
+       * would be a way around the boundary the whole toolkit rests on.
+       */
+      const exportBranch = (redact: boolean) =>
+        Effect.gen(function*() {
+          const node = yield* tree.active
+          if (Option.isNone(node)) return yield* notice("nothing to export yet")
+          const exported = yield* TreeExport.path(tree, node.value, {
+            harnessVersion: "tui",
+            tools: Object.keys(options?.views ?? defaultViews)
+          })
+          const text = yield* Export.encode(exported, {
+            // Two matchers, and they miss almost everything -- see
+            // `Redaction`. Naming the file `.redacted.json` and saying so in
+            // the notice is the honest version of this feature.
+            ...(redact
+              ? {
+                redact: Redaction.make(
+                  Redaction.bearerTokens,
+                  Redaction.environmentSecrets
+                )
+              }
+              : {})
+          })
+          const path = redact
+            ? `.effect-agent/export-${node.value.id}.redacted.json`
+            : `.effect-agent/export-${node.value.id}.json`
+          yield* sandbox.write(yield* Sandbox.path(path), text)
+          yield* notice(
+            redact
+              ? `wrote ${path} — two matchers only, read it before sharing`
+              : `wrote ${path} — unredacted`
+          )
+        })
+
+      const run = (name: string): Effect.Effect<void> => {
+        switch (name) {
+          case "branches":
+            return Effect.ignore(
+              Effect.flatMap(branchItems, (items) =>
+                Effect.sync(() => sink.setBranches(items)))
+            )
+          case "rewind":
+            return Effect.ignore(rewind)
+          case "export":
+            return Effect.catchCause(exportBranch(false), (cause) =>
+              notice(`export failed: ${Cause.pretty(cause)}`))
+          case "export-redacted":
+            return Effect.catchCause(exportBranch(true), (cause) =>
+              notice(`export failed: ${Cause.pretty(cause)}`))
+          case "help":
+            return Effect.forEach(
+              commands,
+              (command) => notice(`/${command.name} — ${command.description}`),
+              { discard: true }
+            )
+          default:
+            // Reported rather than ignored: a command that silently does
+            // nothing is indistinguishable from one that is broken.
+            return notice(`no such command: /${name}`)
+        }
+      }
+
       resolve({
+        commands,
+
+        command: (name) => {
+          sink.setPalette(undefined)
+          Effect.runFork(Effect.ignore(run(name)))
+        },
+
+        switchTo: (id) => {
+          sink.setBranches(undefined)
+          Effect.runFork(
+            Effect.ignore(
+              Effect.gen(function*() {
+                const found = yield* tree.node(id as never)
+                if (Option.isNone(found)) return yield* notice("that branch is gone")
+                const activation = yield* tree.activate(found.value)
+                session = activation.session
+                projection.forget()
+                sink.setStatus("idle")
+                sink.setApproval(undefined)
+                yield* notice(
+                  `switched to ${id} · ${activation.history.content.length} messages`
+                )
+                yield* publishDepth()
+              })
+            )
+          )
+        },
+
         submit: (text) => {
           /**
            * Offered, not yet shown.

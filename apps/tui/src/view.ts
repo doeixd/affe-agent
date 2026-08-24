@@ -134,6 +134,10 @@ export interface Sink {
    * a demo and a lie.
    */
   readonly setBackend: (label: string) => void
+  /** Open the palette, or `undefined` to return to the prompt. */
+  readonly setPalette: (commands: ReadonlyArray<Command> | undefined) => void
+  /** Open the branch selector, or `undefined` to return to the prompt. */
+  readonly setBranches: (items: ReadonlyArray<BranchItem> | undefined) => void
 }
 
 /**
@@ -150,6 +154,33 @@ export interface Sink {
 export type FooterView =
   | { readonly type: "prompt" }
   | { readonly type: "approval"; readonly request: Approval }
+  /** `/` typed at an empty prompt. */
+  | { readonly type: "palette"; readonly commands: ReadonlyArray<Command> }
+  /** Somewhere else to be. Empty means the tree has only one line of work. */
+  | { readonly type: "branches"; readonly items: ReadonlyArray<BranchItem> }
+
+/** One thing the `/` palette can do. */
+export interface Command {
+  readonly name: string
+  readonly description: string
+}
+
+/**
+ * A branch, as a selector lists it.
+ *
+ * Flattened from `SessionTree.Summary` on purpose: the renderer should not
+ * have to know what a node is, and a list of branch points is a list of
+ * strings and one flag whatever the tree underneath looks like.
+ */
+export interface BranchItem {
+  readonly id: string
+  /** The lane's name, or the words that started this line of work. */
+  readonly label: string
+  /** `3 turns · 12 messages`, or similar. */
+  readonly detail: string
+  /** The one the user is on. A selector that cannot say so is a list. */
+  readonly active: boolean
+}
 
 /** A tool call waiting on a decision. */
 export interface Approval {
@@ -177,4 +208,10 @@ export interface Handle {
    * and is also what a reader wants.
    */
   readonly rewind: () => void
+  /** Run a palette command by name. Unknown names are reported, not ignored. */
+  readonly command: (name: string) => void
+  /** Switch to a branch by id. */
+  readonly switchTo: (id: string) => void
+  /** The commands the palette offers. Static, so the renderer can filter. */
+  readonly commands: ReadonlyArray<Command>
 }

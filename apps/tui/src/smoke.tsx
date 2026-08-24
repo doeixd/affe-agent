@@ -49,7 +49,8 @@ const handle = await start(counting)
 
 const { captureCharFrame, externalOutput, flush } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} />
+    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
+      openPalette={() => sink.setPalette(handle.commands)} />
   ),
   {
     width: 100,
@@ -157,10 +158,46 @@ const depthAfter = rewind().depth
 await ask("and now?")
 const answeredAfterRewind = completed > rewoundFrom
 
+// V7: the palette and the branch selector.
+//
+// Driven through the handle rather than through keystrokes: what is under test
+// is that the commands do something, and a `<select>`'s own arrow handling is
+// OpenTUI's to test, not ours.
+handle.command("help")
+await until(() => entries.length === 0, "the help notices to settle")
+// `takeText` *drains*, so what is read here would otherwise be missing from
+// the final transcript. Read early to assert on it early, and keep it.
+const transcriptSoFar = externalOutput.takeText()
+
+// `/branches` fills the footer from the tree.
+handle.command("branches")
+await until(() => footer().type === "branches", "the branch selector")
+const listed = footer().type === "branches"
+  ? (footer() as { type: "branches"; items: ReadonlyArray<{ id: string; label: string; detail: string; active: boolean }> }).items
+  : []
+
+// Switching to the branch already active is the identity case, and has to
+// leave a working prompt behind rather than a footer nobody dismissed.
+const activeBranch = listed.find((item) => item.active)
+if (activeBranch !== undefined) handle.switchTo(activeBranch.id)
+await until(() => footer().type === "prompt", "the footer to return to the prompt")
+await until(() => entries.length === 0, "the switch notice to settle")
+
+// An unknown command is reported rather than ignored.
+handle.command("nonsense")
+await until(() => entries.length === 0, "the unknown-command notice")
+
+// Export writes a real file through the sandbox seam.
+handle.command("export")
+await until(() => entries.length === 0, "the export notice")
+
+// The agent still works afterwards.
+await ask("still there?")
+
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
 await flush()
-const transcript = externalOutput.takeText()
+const transcript = transcriptSoFar + externalOutput.takeText()
 const live = captureCharFrame()
 
 console.log("--- committed to terminal scrollback ---")
@@ -400,6 +437,20 @@ checks.push(
   // R13
   ["an admitted prompt is drawn", drawnWhenAdmitted.includes("accepted")],
   ["a prompt the kernel never took is not", drawnWhenNotOffered === 0],
+
+  // V7
+  ["the palette offers commands", handle.commands.length > 0],
+  ["/help explains each of them", handle.commands.every((command) =>
+    transcriptSoFar.includes(`/${command.name}`))],
+  ["/branches lists at least the branch in use", listed.length > 0],
+  ["and marks which one that is", listed.some((item) => item.active)],
+  ["a branch is described, not just named", listed.every((item) =>
+    item.detail.includes("message"))],
+  ["switching returns the footer to the prompt", footer().type === "prompt"],
+  ["an unknown command is reported", transcript.includes("no such command")],
+  ["export writes a file and names it", /wrote \.effect-agent\/export-.*\.json/.test(transcript)],
+  ["and says it was not redacted", transcript.includes("unredacted")],
+  ["the agent still works after a command", transcript.includes("still there?")],
 
   // The backend seam
   ["scripted unless asked otherwise", defaultBackend.kind === "scripted"],

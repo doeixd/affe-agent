@@ -19,12 +19,16 @@ const handle: Handle = {
   submit: () => {},
   interrupt: () => {},
   respond: () => {},
-  rewind: () => {}
+  rewind: () => {},
+  command: () => {},
+  switchTo: () => {},
+  commands: []
 }
 
 const { flush } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} />
+    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
+      openPalette={() => sink.setPalette(handle.commands)} />
   ),
   {
     width: 80,
