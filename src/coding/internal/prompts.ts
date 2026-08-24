@@ -57,7 +57,7 @@ Usage:
 - \`replace_all\` is what you want for renaming a variable throughout a file.
 - \`new_string\` must differ from \`old_string\`, and \`old_string\` cannot be empty. To replace a whole file, use \`write_file\`.
 - Small drift is tolerated: trailing whitespace, indentation, and an over-escaped \\n still match. The result reports \`strategy\`; anything but \`simple\` means the text matched was not the text you supplied, so your copy of the file has drifted -- read it again before editing further.
-- The result also reports \`path\`, \`replacements\`, and the lines \`added\` and \`removed\`.
+- The result also reports \`path\`, \`replacements\`, the lines \`added\` and \`removed\`, and \`matched\` -- the text that was actually replaced, which differs from your \`old_string\` whenever the match was not exact.
 - An edit is refused rather than guessed if the closest match is far larger than \`old_string\`. Re-read the file and quote the exact text.
 - ALWAYS prefer editing an existing file over writing a new one. Only use emojis if the user asks for them.`
 

@@ -550,88 +550,26 @@ typed literal fails with the diagnostic
 51200)`. Changing a constant on its own correctly does *not* fail, because the
 prose follows it -- which is the behaviour being bought.
 
-**Status: on hold (2026-08-24) -- the gate is not cleared.** M1-M5 are done;
-this one is not started, and should not be started on my own authority.
+**Status: authorised by the owner on 2026-08-24.** The gate is cleared and the
+authoritative design now lives in `PLAN.md`, §48 "Web battery". That section
+supersedes the exploratory design that used to be here, including its single
+`WebAccess` service, shared `action: "net"`, domain projection for search and
+over-broad "no ambient network" claim.
 
-The plan's own "verified against the repo" section put a gate here: a new
-exported concept needs either a second independent consumer or a recorded
-justification in `PLAN.md`. Checked against the repository rather than assumed,
-the gate holds shut:
+### M6 — Web battery (independent of M1–M5)
 
-- **`PLAN.md` is the design authority and does not contemplate a network
-  seam.** Its extension list is Memory, Sandbox, Subagent, Persistence, AG-UI
-  and the coding toolkit. Adding one is a change to that document, which is the
-  owner's call, not a porting decision.
-- **The bar is explicit and this does not meet it.** §42.2 admits a new
-  exported concept for "friction that was demonstrably repeated in this
-  repository rather than friction someone might hypothetically feel". Nothing
-  here has wanted web access. `WebAccess` would have exactly one consumer: the
-  two tools written in the same change.
-- **There is no upstream implementation to port anyway.** opencode's
-  `websearch` is a thin wrapper over a paid API chosen by an env-var-then-flag-
-  then-session-checksum A/B split; the engineering worth taking -- the year
-  injection, result defaults, the Cloudflare `cf-mitigated` retry -- is prompt
-  text and a few lines of fetch handling, not an algorithm. S9's differential
-  verification has nothing to compare against.
-- **It costs more than the other milestones.** A new `./web` export entry, and
-  probably a runtime dependency for HTML-to-markdown, against a package whose
-  `dependencies` is currently three entries.
+M6 is split into two ordered milestones:
 
-Writing a justification into `PLAN.md` to clear a gate I set is the exact
-failure the gate exists to prevent, so it is not being done.
+1. **W1 / `web_search`:** provider-neutral search capability and tool,
+   deterministic canned provider, and one Brave REST adapter.
+2. **W2 / `web_fetch`:** a separately composable guarded-fetch capability and
+   tool, after permission evaluation is proven to decode transformed tool
+   parameters before projecting the canonical origin.
 
-**What would change this:** a second consumer appearing (an agent in this repo
-that genuinely needs to fetch), or the owner deciding the seam is wanted and
-recording it in `PLAN.md`. If it is wanted, the design in this section stands
-as written -- seam first, thin tools over it, `action: "net"` on the domain,
-providers as layers, I11 (no ambient network) as the invariant -- and the
-smallest honest version is `web_fetch` alone, since fetching has real logic to
-own while searching is an API key.
-
-### M6 — Web tools: a seam, then thin tools (independent of M1–M5)
-
-opencode's `websearch` has no algorithm to vendor — it is a thin tool over paid
-APIs (Exa or Parallel, chosen env → flag → session-checksum A/B). `webfetch` is
-closer to portable (5 MB cap, Turndown HTML→markdown, Cloudflare
-`cf-mitigated: challenge` retry with an honest UA) but does raw network I/O.
-Which backend exists — or whether network access exists at all — is the
-application's business, so this mirrors the `Sandbox` answer:
-
-1. **`src/web/WebAccess.ts` — a new seam**, shaped like `Sandbox`:
-   - `search(query, options)` → ranked results (title, url, snippet/content),
-     `fetch(url, options)` → `{ status, contentType, body }` with format
-     (`text|markdown|html`), timeout, and byte-cap options.
-   - Tagged errors in house style (`FetchDeniedError`, `ByteLimitError`,
-     `SearchProviderError`, …); failures reach the model as actionable
-     strings per I8.
-   - A `WebAccessProvider`/`Current` pair exactly like `SandboxProvider`/
-     `Sandbox.Current`, so tools depend on `WebAccess.Current` and apps wire
-     a provider layer.
-2. **Toolkit tools** `web_search` and `web_fetch` over the seam,
-   `Permission.annotate`d with `action: "net"` and the *domain* as resource —
-   so a policy can allow `docs.*` and ask about everything else without
-   knowing the tools' parameter shapes.
-3. **Reference providers** (separate modules, optional): one fetch provider
-   (global `fetch`, 5 MB checked on Content-Length *and* body, HTML→markdown,
-   the Cloudflare retry trick) and one search provider over a single
-   pick-one API (decide at implementation: whichever has the simplest
-   keyed REST surface). A canned-results test provider ships with the
-   testing utilities.
-4. **From opencode verbatim:** the prompt engineering — current-year
-   injection ("The current year is ${year}. You MUST use this year when
-   searching for recent information."), result-count defaults, format
-   parameter docs, timeout prose.
-
-New invariant for this milestone:
-
-**I11 — No ambient network.** No tool in the package performs network I/O
-except through `WebAccess.Current`; an application that wires no web provider
-has agents that *cannot* fetch, and the tools are simply absent from the
-toolkit unless explicitly included. Fetch responses are byte-capped before
-they reach the model (I6 applies).
-
-This is a new seam — a design decision, not a port — so it lands as its own
-PR series and must not block or be blocked by M1–M5.
+All architecture, security boundaries, typed errors and acceptance conditions
+for M6 are defined in `PLAN.md`. This document remains the record for the
+completed OpenCode coding-tool port; web access is a new Effect Harness design,
+not behavior to vendor from OpenCode.
 
 ## Success conditions
 
@@ -664,12 +602,12 @@ its own rows before merge.
 - **S6 (M5):** A test renders every tool description and asserts each
   numeric limit named in prose equals the enforcing constant; changing any
   constant without the prompt following breaks the build.
-- **S7 (M6):** With no web provider wired, the package compiles and a
-  toolkit without web tools runs unchanged (I11); with the test provider, a
-  policy on `action: "net"` gates by domain without referencing tool
-  parameter shapes; the reference fetch provider enforces the byte cap on a
-  response whose Content-Length lies.
-- **S8 (global):** Every invariant I1–I12 has at least one test that fails
+- **S7 (M6):** The ordered W1 search and W2 fetch acceptance suites in
+  `PLAN.md` pass. In particular, web tools are absent unless composed,
+  `net.search` projects the outbound query, `net.fetch` projects the canonical
+  origin after Schema decoding, and the fetch provider enforces its actual-body
+  cap when `Content-Length` lies.
+- **S8 (global):** Every port invariant I1–I10 and I12 has at least one test that fails
   when the invariant is deliberately broken (each was broken once during
   development to prove it — the repo's standing rule for inference applies
   to invariants too); no `as any`/`as unknown as` anywhere in `src/coding/`
@@ -687,9 +625,9 @@ its own rows before merge.
 
 Claims in this plan checked against the actual codebase:
 
-- **`action: "net"` is legal.** `Permission.Projection.action` is an open
-  `string` (`src/Permission.ts`); no registry to extend. Rules match by
-  string/RegExp/predicate, so domain-gating policies work as sketched.
+- **`action: "net.search"` and `action: "net.fetch"` are legal.**
+  `Permission.Projection.action` is an open `string` (`src/Permission.ts`); no
+  registry needs extending. Rules match by string/RegExp/predicate.
 - **The in-memory sandbox is byte-faithful.** `sandbox/memory.ts` stores raw
   `Uint8Array` (strings pass through `TextEncoder` once, on write); CRLF and
   BOM bytes survive round-trips, so the I4 tests are trustworthy against it.
@@ -698,18 +636,16 @@ Claims in this plan checked against the actual codebase:
   build is plain `tsc` (`tsconfig.build.json`) with no asset copying, so
   `.txt` imports would need build machinery we don't have.
 - **Packaging:** `./coding` already has an export entry; M1–M5 need no
-  `package.json` change (`internal/` and `prompts/` stay unexported). **M6
-  requires a new `./web` export entry**, and if a reference provider grows a
-  real dependency (HTML→markdown), that dependency must be weighed against
-  the near-dependency-free posture (`dependencies` is currently three
-  packages) — prefer a minimal built-in tag-stripper or make markdown
-  conversion pluggable before adding Turndown.
+  `package.json` change (`internal/` and `prompts/` stay unexported). M6 adds
+  the portable `./web` surface and separate provider entries defined in
+  `PLAN.md`. W1 needs no provider SDK and W2 deliberately adds no
+  HTML-to-Markdown dependency.
 - **Portability rules (AGENTS.md):** `src/coding` is a portable module — the
   vendored code must import nothing host-specific (it doesn't; pure string
-  work), and `npm run lint:portability` enforces it. For M6, `fetch` is an
-  explicitly allowed web-standard global, so the reference fetch provider
-  can live in portable code; if any part needs more, it follows the
-  `sandbox/local` pattern: own export entry + `HOST_MODULES` line.
+  work), and `npm run lint:portability` enforces it. M6's portable providers
+  require Effect's abstract `HttpClient`; application wiring selects a
+  concrete implementation. If any provider needs host facilities, it follows
+  the `sandbox/local` pattern: own export entry + `HOST_MODULES` line.
 - **Test conventions:** flat `test/*.test.ts` on `@effect/vitest`;
   `CodingToolkit.test.ts` and `Sandbox.test.ts` exist to extend, and pure
   internals get their own files (`Replace.test.ts`, `Truncate.test.ts`).
@@ -721,12 +657,9 @@ Claims in this plan checked against the actual codebase:
 - **Governance:** AGENTS.md names `PLAN.md` as the design authority and bans
   new exported concepts "until two independent features need it". M1–M5 add
   no exported concept (everything lands behind the existing `./coding`
-  surface). **M6's `WebAccess` seam is a new exported concept with one
-  consumer** — before implementing it, either record it in `PLAN.md` with
-  the justification (the second "feature" is the seam's own purpose:
-  applications supplying providers, same argument that admitted `Sandbox`)
-  or hold M6 until a second consumer materializes. `STATUS.md` gets a line
-  per landed milestone.
+  surface). The owner authorised M6 in `PLAN.md` with two independent
+  consumers — coding and research/child agents — and separate least-authority
+  search and fetch services. `STATUS.md` gets a line only when W1 or W2 lands.
 - **House error style:** internal modules return typed results or
   `Schema.TaggedError`s (message as getter); the *toolkit* surface keeps
   `failure: Schema.String` as today, mapping errors to actionable strings at
@@ -897,16 +830,18 @@ needs it.
 
 ## Explicit non-goals
 
-LSP diagnostics in tool output, tree-sitter command parsing for permissions,
-apply_patch, task/subagent tooling, todo tools, and any change to `Sandbox`,
-`Permission`, or the agent core. All are catalogued in the research doc if
-they're wanted later. (Web search/fetch were originally here; promoted to M6.)
+For M1–M5: LSP diagnostics in tool output, tree-sitter command parsing for
+permissions, apply_patch, task/subagent tooling, todo tools, and any change to
+`Sandbox`, `Permission`, or the agent core. M6 is governed separately by
+`PLAN.md`; its only authorised core-adjacent prerequisite is correcting decoded
+parameter evaluation before fetch permissions. Web search/fetch were
+originally non-goals here and are now W1/W2.
 
 ## Order & effort
 
 M1 is the win and the risk concentrate — do it first and alone. M2 unlocks the
 read/edit contract (`N: ` prefix rule) so it follows immediately. M3–M5 are
-independent of each other after M2 and small. M6 is a separate track — a new
-seam, independent of the others, can proceed in parallel or later. Each
-milestone is one PR with its invariant tests; no milestone starts until the
-previous one's invariants are green.
+independent of each other after M2 and small. M6 is a separate track,
+independent of M1–M5: W1 search lands first, then W2 fetch after the decoded
+permission prerequisite. Each milestone is one PR with its invariant tests;
+no milestone starts until its stated prerequisites are green.

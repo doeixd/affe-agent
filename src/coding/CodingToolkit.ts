@@ -165,7 +165,18 @@ export const EditFile = Permission.annotate(
       replacements: Schema.Number,
       added: Schema.Number,
       removed: Schema.Number,
-      strategy: Schema.String
+      strategy: Schema.String,
+      /**
+       * The text that was actually replaced, exactly as it stood in the file.
+       *
+       * Not the same as `old_string` whenever `strategy` is anything but
+       * `"simple"`: the matching chain selects a span that *resembles* what was
+       * supplied, so this is the only way for a caller to see what an edit
+       * really did. Bounded by the size of the edit rather than the file, and
+       * the proportionality guard already refuses a span far larger than asked
+       * for.
+       */
+      matched: Schema.String
     }),
     failure: Schema.String,
     dependencies: [Sandbox.Current]
@@ -564,7 +575,8 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
                   replacements: outcome.count,
                   added: lineCount(replacement) * outcome.count,
                   removed: lineCount(outcome.matched) * outcome.count,
-                  strategy: outcome.strategy
+                  strategy: outcome.strategy,
+                  matched: outcome.matched
                 }
               }
             }

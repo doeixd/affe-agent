@@ -118,6 +118,8 @@ describe("CodingToolkit handlers", () => {
       assert.strictEqual(edited.msg.replacements, 1)
       assert.strictEqual(edited.msg.path, "f.ts")
       assert.strictEqual(edited.msg.strategy, "simple")
+      // An exact match replaced exactly what was asked for.
+      assert.strictEqual(edited.msg.matched, "const x = 1")
       assert.include(edited.after, "const x = 42")
       // Ambiguous without replace_all: refused, file untouched.
       const ambiguous = yield* Effect.flip(
@@ -426,6 +428,11 @@ describe("CodingToolkit edit_file: the replacer chain", () => {
       // The edit landed, and the result names the strategy so the model can
       // tell its quotation was not literal.
       assert.strictEqual(out.msg.strategy, "line-trimmed")
+      // The point of reporting the matched span: it is what was *actually*
+      // replaced, which under a fuzzy strategy is not what was asked for.
+      // Here the file had trailing spaces the caller did not reproduce.
+      assert.strictEqual(out.msg.matched, "  return 1;   \n")
+      assert.notStrictEqual(out.msg.matched, "  return 1;\n")
       assert.strictEqual(out.after, "function f() {\n  return 2;\n}\n")
     })
   )
