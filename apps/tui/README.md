@@ -75,6 +75,31 @@ into it from an Effect fibre, and Solid reads it in JSX.
 Swapping the model, the toolkit or the sandbox is a change to `harness.ts` and
 to nothing else — which is the library's central claim, made concrete.
 
+## Using it
+
+| Key | |
+| --- | --- |
+| `enter` | send |
+| `↑` `↓` | what you typed before |
+| `/` | commands (only at an empty prompt — paths contain slashes) |
+| `ctrl+r` | take back the last turn |
+| `ctrl+c` | interrupt a running turn |
+| `ctrl+d` | quit |
+| `y` `a` `n` | when asked for approval: allow, allow always, refuse |
+
+| Command | |
+| --- | --- |
+| `/branch` | fork here, and keep this line too |
+| `/branches` | switch to another line of work |
+| `/rewind` | the same as `ctrl+r` |
+| `/export` | write this conversation to a file |
+| `/export-redacted` | the same, with two matchers applied — read it before sharing |
+| `/help` | what these do |
+
+`/branch` and `/rewind` are different things. Rewind moves *back* and continues
+from an earlier point; branch stays where it is and starts a second line from
+here, so trying an alternative does not cost a turn.
+
 ## The backend: what it is actually talking to
 
 A **model and a workspace, chosen together** in `backend.ts`. Together, because

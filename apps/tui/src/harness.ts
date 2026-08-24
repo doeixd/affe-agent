@@ -68,6 +68,7 @@ const agent = Agent.make({
  * where features go to be forgotten.
  */
 export const commands: ReadonlyArray<Command> = [
+  { name: "branch", description: "fork here, and keep this line too" },
   { name: "branches", description: "switch to another line of work" },
   { name: "rewind", description: "take back the last turn (ctrl+r)" },
   { name: "export", description: "write this conversation to a file" },
@@ -384,6 +385,7 @@ export const start = (
       // handle closes over this binding rather than over a value.
       let session = (yield* tree.activate(start)).session
       let taken = 0
+      let forks = 0
 
       const publishDepth = () =>
         Effect.gen(function*() {
@@ -506,8 +508,39 @@ export const start = (
           )
         })
 
+      /**
+       * Fork the conversation and continue on the fork.
+       *
+       * The difference from `rewind`: rewind moves *back* and continues from
+       * an earlier point, this stays where it is and starts a second line from
+       * here. Without it the only way to get a branch is to undo something,
+       * which makes exploring an alternative cost a turn.
+       *
+       * The new lane is named after the branch point so it can be found again;
+       * `branches` prefers a lane's name over the preview for exactly this.
+       */
+      const forkHere = Effect.gen(function*() {
+        const node = yield* tree.active
+        if (Option.isNone(node)) return yield* notice("nothing to fork yet")
+        const lane = `fork-${++forks}`
+        // Named on activation: a lane is a name for the line the user is on,
+        // and `branch` here would build a session only to register the name
+        // and then be discarded, since activation makes its own.
+        const activation = yield* tree.activate(node.value, { lane })
+        session = activation.session
+        projection.forget()
+        sink.setStatus("idle")
+        yield* notice(
+          `forked at ${node.value.id} as ${lane} — the other line is still there`
+        )
+        yield* publishDepth()
+      })
+
       const run = (name: string): Effect.Effect<void> => {
         switch (name) {
+          case "branch":
+            return Effect.catchCause(forkHere, (cause) =>
+              notice(`fork failed: ${Cause.pretty(cause)}`))
           case "branches":
             return Effect.ignore(
               Effect.flatMap(branchItems, (items) =>
@@ -607,12 +640,22 @@ export const start = (
 
         rewind: () => Effect.runFork(Effect.ignore(rewind)),
 
-        respond: (id, granted) => {
+        respond: (id, granted, respondOptions) => {
           // `respond` reports `false` for an answer nothing was waiting on --
           // a late keypress after the run moved on. Not an error, and not
           // worth interrupting the user over.
           Effect.runFork(
-            Effect.ignore(AgentSession.respond(session, { id, granted }))
+            Effect.ignore(
+              AgentSession.respond(session, {
+                id,
+                granted,
+                // Only when asked. Sending `{ remember: false }` unconditionally
+                // would be a policy instruction the user never gave.
+                ...(respondOptions?.remember === true
+                  ? { value: { remember: true } }
+                  : {})
+              })
+            )
           )
         }
       })

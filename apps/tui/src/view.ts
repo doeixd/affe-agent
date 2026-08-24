@@ -195,8 +195,20 @@ export interface Approval {
 export interface Handle {
   readonly submit: (text: string) => void
   readonly interrupt: () => void
-  /** Answer the pending approval. Refusal is an answer, not a failure. */
-  readonly respond: (id: string, granted: boolean) => void
+  /**
+   * Answer the pending approval. Refusal is an answer, not a failure.
+   *
+   * `remember` asks the *policy* to keep the grant, which is a different thing
+   * from answering this call: the answer is always honoured, and whether it is
+   * remembered depends on whether the policy keeps grants at all. Saying yes
+   * to a policy that does not is not an error and not a silent failure -- it
+   * is an answer that happens not to persist.
+   */
+  readonly respond: (
+    id: string,
+    granted: boolean,
+    options?: { readonly remember?: boolean | undefined }
+  ) => void
   /**
    * Take the conversation back one turn and continue from there.
    *

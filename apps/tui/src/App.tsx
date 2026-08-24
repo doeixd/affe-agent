@@ -259,6 +259,10 @@ const ApprovalView = (props: {
   useKeyboard((key) => {
     const name = String(key.name ?? "").toLowerCase()
     if (name === "y") props.handle.respond(props.request.id, true)
+    // `a` allows and asks the policy to keep the grant. Separate from `y`
+    // rather than a modifier on it, because "just this once" is the answer a
+    // user should be able to give without thinking about policy at all.
+    if (name === "a") props.handle.respond(props.request.id, true, { remember: true })
     if (name === "n" || name === "escape") props.handle.respond(props.request.id, false)
   })
 
@@ -278,7 +282,7 @@ const ApprovalView = (props: {
         {`? ${approvalOf(props.views, props.request)}`
           + (props.request.reason === undefined ? "" : `  (${props.request.reason})`)}
       </text>
-      <text fg={theme.footer.muted}>{"  y allow · n refuse"}</text>
+      <text fg={theme.footer.muted}>{"  y allow · a always · n refuse"}</text>
     </box>
   )
 }

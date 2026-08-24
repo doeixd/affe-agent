@@ -184,6 +184,24 @@ if (activeBranch !== undefined) handle.switchTo(activeBranch.id)
 await until(() => footer().type === "prompt", "the footer to return to the prompt")
 await until(() => entries.length === 0, "the switch notice to settle")
 
+// `/branch` forks here and keeps the line it forked from, which is the
+// difference from `/rewind`: exploring an alternative should not cost a turn.
+const branchesBeforeFork = listed.length
+handle.command("branch")
+await until(() => entries.length === 0, "the fork notice")
+handle.command("branches")
+await until(() => footer().type === "branches", "the selector after forking")
+const afterFork = footer().type === "branches"
+  ? (footer() as {
+    type: "branches"
+    items: ReadonlyArray<{ id: string; label: string; detail: string; active: boolean }>
+  }).items
+  : []
+handle.command("branch")  // dismisses nothing; the selector is still open
+await until(() => entries.length === 0, "the second fork notice")
+sink.setBranches(undefined)
+await until(() => footer().type === "prompt", "the footer to return")
+
 // An unknown command is reported rather than ignored.
 handle.command("nonsense")
 await until(() => entries.length === 0, "the unknown-command notice")
@@ -465,6 +483,14 @@ checks.push(
   ["export writes a file and names it", /wrote \.effect-agent\/export-.*\.json/.test(transcript)],
   ["and says it was not redacted", transcript.includes("unredacted")],
   ["the agent still works after a command", transcript.includes("still there?")],
+
+  // Forking
+  ["a fork is named so it can be found again", /forked at .* as fork-1/.test(transcript)],
+  ["and says the other line survives", transcript.includes("still there")],
+  // The point of a fork rather than a rewind: the line forked from is one of
+  // the choices afterwards, not something that was undone.
+  ["forking adds a line of work", afterFork.length >= branchesBeforeFork],
+  ["the fork is the one in use", afterFork.some((item) => item.active)],
 
   // The diff
   ["a replaced line shows as one removal and one addition",

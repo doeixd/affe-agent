@@ -280,7 +280,8 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
    * `branch` is the caller's to hold and is unaffected by activation.
    */
   readonly activate: (
-    node: Node
+    node: Node,
+    options?: BranchOptions
   ) => Effect.Effect<Activation<Tools, E>, NodeMissing | SE>
 
   /**
@@ -756,14 +757,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
           )
         : Effect.void
 
-    const activate: SessionTree<Tools, E, SE>["activate"] = (node) =>
+    const activate: SessionTree<Tools, E, SE>["activate"] = (node, activateOptions) =>
       Effect.gen(function*() {
         const { history } = yield* find(node.id)
         // A scope of the tree's own, so the reference is dropped on the next
         // switch rather than when some caller's scope happens to end.
         const scope = yield* Scope.make()
         return yield* Effect.onExit(
-          install(node, history, scope),
+          install(node, history, scope, activateOptions?.lane),
           // Anything that is not a completed install leaves this scope
           // holding a branch reference and two consumers that nobody will
           // ever close, because nobody else has a handle on it. Interruption
@@ -776,7 +777,17 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
     const install = (
       node: Node,
       history: Prompt.Prompt,
-      scope: Scope.Closeable
+      scope: Scope.Closeable,
+      /**
+       * Name this line of work.
+       *
+       * On `activate` rather than only on `branch` because a lane is a name
+       * for the line the user is on, and activation is how that line is
+       * chosen. Requiring `branch` to name one meant building a session purely
+       * to register a name and then discarding it, since activation makes its
+       * own.
+       */
+      lane?: string | undefined
     ): Effect.Effect<Activation<Tools, E>, NodeMissing | SE> =>
       Effect.gen(function*() {
         const session = yield* RcMap.get(branches, node.id).pipe(
@@ -797,6 +808,11 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
 
         // Serialised by the permit above, so this read-then-write cannot
         // interleave with another activation's.
+        if (lane !== undefined) {
+          yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, lane))
+          yield* Ref.update(lanes, (all) => new Map(all).set(lane, node.id))
+        }
+
         const previous = yield* Ref.get(currentScope)
         yield* Ref.set(currentScope, Option.some(scope))
         const activation: Activation<Tools, E> = { node, session, history }

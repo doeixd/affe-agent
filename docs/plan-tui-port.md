@@ -384,13 +384,80 @@ scripted run and a live one produce transcripts that look identical; which one
 is behind it changes what the transcript *means*. It is the last thing dropped
 as the terminal narrows.
 
-**Still not implemented**, and worth listing rather than discovering: no
-scrolling within the live region, no session switching or branch selector
-(`SessionTree` has `lanes`, `summary` and `divergence`, and the TUI surfaces
-none of it -- ctrl+r is the only tree affordance), no `/`-command palette, no
-history navigation, no syntax highlighting. `edit_file` renders before/after
-text rather than a diff, which stays blocked on the library decision noted in
-V5. SV4 -- diffing `vendor/` against `src/` file by file -- has never been run.
+## V6-V8: from a port to an application (2026-08-24)
+
+V0-V5 finished the *port*. What was left was that the result could not do any
+work, and that the session tree it was wired to was invisible.
+
+**A model and a workspace, chosen together** (`backend.ts`). Together, because
+they have to agree about what is real: a live model over a memory sandbox would
+describe three seeded files that do not exist, and the transcript would read as
+work. Scripted is still the default -- no key, no network -- and the footer
+names whichever is running, because a scripted transcript and a live one look
+identical and which is behind it changes what the transcript *means*.
+
+Two defaults are safety properties, each broken once to confirm its test bites:
+`--live` requires `--workspace` explicitly, since defaulting it to the current
+directory makes the dangerous case the easy one; and live is never inferred
+from the presence of an API key, since then an exported variable silently
+changes what a demo does.
+
+**The tree, surfaced.** `/branches` lists every leaf via `summary` -- the
+operation that exists so listing twenty branch points does not mean holding
+twenty conversations -- and marks the active one, because a selector that hides
+where you are makes "switch" read as "leave". `/branch` forks *here* and keeps
+the line it forked from, which is the difference from ctrl+r: exploring an
+alternative should not cost a turn.
+
+That last one needed a small library change. Naming a lane was only possible on
+`branch`, which builds a session -- and activation builds its own, so forking
+meant creating a session purely to register a name and then discarding it.
+`activate` takes a lane now, because a lane is a name for the line the user is
+*on*, and activation is how that line is chosen.
+
+**The footer is a four-state machine** -- prompt, approval, palette, branches --
+so two surfaces at once stays unrepresentable rather than merely avoided.
+
+**Edits render as a diff**, and the plan was wrong that this was blocked.
+`snapEdit` reads `p.metadata.diff` because opencode's edit tool returns one and
+ours returns prose -- but `edit_file` reports `matched`, the span it actually
+replaced, and the call carries `new_string`. Both sides were already here; only
+the diff was missing, and it is thirty lines. Computing it in the UI is also
+correct: a diff is a *presentation*, and the library reports what changed more
+precisely than a diff can.
+
+**Approvals can be remembered.** `a` allows and asks the policy to keep the
+grant -- the kernel already supported this through `Permission.ApprovalValue`
+and nothing surfaced it. Separate from `y` rather than a modifier on it,
+because "just this once" should be answerable without thinking about policy.
+
+**Input history** is up/down, and deliberately does not follow the transcript's
+rule that a line is drawn only once the kernel accepted it: a refused prompt is
+still something the user typed and will want back.
+
+### Syntax highlighting: tried, and not shipped
+
+OpenTUI ships a `<code>` renderable, and it renders headlessly. It does not
+highlight: with a populated `SyntaxStyle` and `filetype="typescript"`,
+`captureSpans` returns **one span, white** -- the tree-sitter parsers are not
+wired, so the machinery runs and produces no colour.
+
+Shipping it would look like highlighting and deliver none, which is worse than
+not shipping it. Recorded here rather than left for someone to rediscover; it
+becomes cheap the moment the parsers are available.
+
+### Still not implemented
+
+- **No scrolling inside the live region.** Finished entries go to the
+  terminal's own scrollback, so history is the terminal's to scroll; what is
+  not reachable is a tool body clipped at twelve lines while it is still in
+  flight. Expanding a clipped body would be worth more than scrolling.
+- **No syntax highlighting**, for the reason above.
+- **No session switching across processes.** The tree is per-run; nothing is
+  persisted between launches, though `NodeStore.keyValue` now exists and would
+  make it a wiring change.
+- SV1-SV4 all hold. SV4's answer is `vendor/opencode/PORTED.md`, which accounts
+  for every upstream file rather than pretending a `diff` would be legible.
 
 ## Invariants
 
