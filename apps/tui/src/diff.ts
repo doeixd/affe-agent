@@ -46,7 +46,31 @@ export interface Diff {
  * 250,000 is a 500x500 edit: far past anything worth reading line by line, and
  * a few megabytes at worst.
  */
-export const BUDGET = 250_000
+export const CELL_BUDGET = 250_000
+
+/**
+ * The most lines either side may have, however they are distributed.
+ *
+ * A cell budget alone has a hole big enough to drive a whole file through:
+ * `left.length * right.length` is **zero** when one side is empty, so creating
+ * or deleting a million-line file passed the check and then built a million
+ * `Line` objects -- bounded matrix, unbounded output. A one-line side had the
+ * same shape, permitting almost a quarter of a million lines.
+ *
+ * The two limits are independent because they bound different resources: cells
+ * bound the alignment, lines bound the result. Neither implies the other.
+ */
+export const LINE_BUDGET = 5_000
+
+/**
+ * The most text either side may carry.
+ *
+ * Lines are not a proxy for size: a minified bundle is one line and several
+ * megabytes, and splitting it costs nothing while rendering it costs
+ * everything. Checked before splitting, because the split is itself the
+ * allocation being avoided.
+ */
+export const BYTE_BUDGET = 2_000_000
 
 /**
  * Longest common subsequence over lines.
@@ -132,6 +156,23 @@ const endsWithNewline = (text: string): boolean => text.endsWith("\n")
  * each one.
  */
 export const of = (before: string, after: string): Diff => {
+  /**
+   * Size first, before anything is split or allocated.
+   *
+   * A summary of two whole files is still the honest answer, and reaching it
+   * without touching the contents is the point of checking here.
+   */
+  if (before.length + after.length > BYTE_BUDGET) {
+    return {
+      lines: [
+        { kind: "removed", text: `${before.length} bytes` },
+        { kind: "added", text: `${after.length} bytes` }
+      ],
+      summarised: true,
+      newlineChange: undefined
+    }
+  }
+
   const left = toLines(before.replaceAll("\r\n", "\n"))
   const right = toLines(after.replaceAll("\r\n", "\n"))
 
@@ -148,9 +189,19 @@ export const of = (before: string, after: string): Diff => {
     ? (endsWithNewline(after) ? "added" as const : "removed" as const)
     : undefined
 
-  if (left.length * right.length > BUDGET) {
-    // Past the ceiling, and the honest answer is what changed in the large
-    // rather than a diff nobody could read anyway.
+  /**
+   * Past either ceiling, and the honest answer is what changed in the large
+   * rather than a diff nobody could read anyway.
+   *
+   * Both limits, because a cell budget alone misses the asymmetric cases --
+   * an empty side makes the product zero. The counts are the real ones, so the
+   * summary says something true rather than standing in for a patch.
+   */
+  if (
+    left.length > LINE_BUDGET ||
+    right.length > LINE_BUDGET ||
+    left.length * right.length > CELL_BUDGET
+  ) {
     return {
       lines: [
         { kind: "removed", text: `${left.length} lines` },

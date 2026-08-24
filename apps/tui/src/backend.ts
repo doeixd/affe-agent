@@ -1,5 +1,5 @@
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
-import { Config, Effect, Layer } from "effect"
+import { Config, Context, Effect, Layer } from "effect"
 import type { Scope } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -90,9 +90,7 @@ export interface Backend {
  * approval flow -- and it is also the reason this is labelled in the footer:
  * a demo that looks like an agent is worse than one that says it is a demo.
  */
-const scriptedModel = Layer.unwrap(
-  Effect.map(
-    TestLanguageModel.script([
+const defaultTurns: ReadonlyArray<TestLanguageModel.Turn> = [
       { toolCalls: [{ id: "t1", name: "list_files", params: {} }] },
       // Chunked, so the streaming path is exercised rather than assumed.
       {
@@ -135,11 +133,27 @@ const scriptedModel = Layer.unwrap(
       // The script is a flat sequence and a rewind does not rewind it, which
       // is a property of this stub rather than of the tree.
       TestLanguageModel.text("Answering from the rewound branch."),
-      TestLanguageModel.text("And again.")
-    ]),
-    ({ layer }) => layer
+  TestLanguageModel.text("And again.")
+]
+
+/**
+ * A scripted backend over a given conversation.
+ *
+ * Exported so a test can script the *exact* sequence it needs -- the same tool
+ * call twice, say -- instead of walking the default script to reach a
+ * situation it happens to contain. A test that has to get through six
+ * unrelated turns first is a test that breaks when any of them changes.
+ */
+export const scriptedWith = (
+  turns: ReadonlyArray<TestLanguageModel.Turn>
+): Backend => ({
+  kind: "scripted",
+  label: "scripted",
+  layer: Layer.mergeAll(
+    Layer.unwrap(Effect.map(TestLanguageModel.script(turns), ({ layer }) => layer)),
+    scriptedSandbox
   )
-)
+})
 
 const scriptedSandbox = Sandbox.currentLayer(Sandbox.workspace("tui")).pipe(
   Layer.provide(
@@ -157,11 +171,7 @@ const scriptedSandbox = Sandbox.currentLayer(Sandbox.workspace("tui")).pipe(
   )
 )
 
-export const scripted: Backend = {
-  kind: "scripted",
-  layer: Layer.mergeAll(scriptedModel, scriptedSandbox),
-  label: "scripted"
-}
+export const scripted: Backend = scriptedWith(defaultTurns)
 
 // ---------------------------------------------------------------------------
 // Live: a real model over a real directory
@@ -213,15 +223,27 @@ export const live = (options: {
    * about -- and so deleting the working copy deletes the transcript with it,
    * which is what someone deleting a throwaway checkout means.
    */
+  /**
+   * `Layer.build`, not `Effect.provide`.
+   *
+   * `Effect.provide(effect, layer)` owns the layer for *that effect only* --
+   * it does not hand it to the caller's scope. So extracting the service and
+   * returning it produced a store closing over something already released, and
+   * the comment claiming it "lives exactly as long as the tree" described the
+   * opposite of what happened. A filesystem store has no meaningful close, so
+   * nothing broke; a pooled or locked provider would have been handed back
+   * shut.
+   *
+   * `Layer.build` requires a `Scope` and keeps the layer alive for it, so the
+   * lifetime is the harness's program scope -- which is what was meant.
+   */
   store: Effect.map(
-    KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
-      Effect.provide(
-        KeyValueStore.layerFileSystem(
-          `${options.workspaceRoot}/.effect-agent/session`
-        ).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
-      )
+    Layer.build(
+      KeyValueStore.layerFileSystem(
+        `${options.workspaceRoot}/.effect-agent/session`
+      ).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
     ),
-    (kv) => NodeStore.keyValue(kv)
+    (context) => NodeStore.keyValue(Context.get(context, KeyValueStore.KeyValueStore))
   ),
   layer: Layer.mergeAll(
     AnthropicLanguageModel.layer({ model: options.model }).pipe(

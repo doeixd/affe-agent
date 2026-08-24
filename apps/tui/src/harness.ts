@@ -54,12 +54,26 @@ const permission = Permission.rules(
   { otherwise: Permission.allow }
 )
 
-const agent = Agent.make({
-  instructions: "You are a terminal coding assistant. Be brief.",
-  toolkit: CodingToolkit.toolkit(),
-  loop: AgentLoop.bounded(10),
-  permission
-})
+/**
+ * Built effectfully, because remembering needs somewhere to remember.
+ *
+ * The approval footer offers `a` for "always", which sends
+ * `{ remember: true }` -- and `ToolExecution` honours that only if the policy
+ * has a `remember`. `Permission.rules` does not, so `a` was doing exactly what
+ * `y` did while promising otherwise: the same lie as a key bound to nothing,
+ * one layer further in.
+ *
+ * `Permission.remembered` holds the grants, so the promise is now true. Its
+ * scope is one session, which is the right scope for it: a grant that outlived
+ * the process would be a persisted permission nobody could see.
+ */
+const makeAgent = Effect.map(Permission.remembered(permission), (remembering) =>
+  Agent.make({
+    instructions: "You are a terminal coding assistant. Be brief.",
+    toolkit: CodingToolkit.toolkit(),
+    loop: AgentLoop.bounded(10),
+    permission: remembering
+  }))
 
 /**
  * What `/` offers.
@@ -443,6 +457,7 @@ export const start = (
     const backend = options?.backend ?? scripted
     sink.setBackend(backend.label)
     const program = Effect.gen(function*() {
+      const agent = yield* makeAgent
       /**
        * A tree, not a session.
        *

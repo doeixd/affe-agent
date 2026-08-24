@@ -3,7 +3,8 @@ import { App } from "./App.tsx"
 import { Effect } from "effect"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as NodeStore from "../../../src/tree/NodeStore.js"
-import { fromArgv } from "./backend.ts"
+import { TestLanguageModel } from "../../../src/testing/index.js"
+import { fromArgv, scriptedWith } from "./backend.ts"
 import * as Diff from "./diff.ts"
 import { project, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
@@ -441,6 +442,67 @@ onResolved({
 onResolved({ _tag: "ElicitationResolved", id: "e2", granted: true } as never)
 const afterAnswering = resolvedStore.footer().type
 
+/**
+ * R109 -- "always" has to mean always.
+ *
+ * The footer offers `a` and the handle sends `{ remember: true }`, but the
+ * agent was wired to `Permission.rules`, which has no `remember` -- so
+ * `ToolExecution` honoured the answer and skipped the persistence, making `a`
+ * behave exactly like `y` while the label promised otherwise. The same shape
+ * as a key bound to nothing, one layer further in.
+ *
+ * Scripted precisely rather than walking the default conversation to find two
+ * matching calls: the same command twice, so the grant key is the same both
+ * times and the second question is the thing under test.
+ */
+const twice: ReadonlyArray<TestLanguageModel.Turn> = [
+  { toolCalls: [{ id: "r1", name: "bash", params: { command: "echo same" } }] },
+  TestLanguageModel.text("once"),
+  { toolCalls: [{ id: "r2", name: "bash", params: { command: "echo same" } }] },
+  TestLanguageModel.text("twice")
+]
+
+const askedEachTime = async (answer: "y" | "a"): Promise<number> => {
+  const run = makeStore()
+  const runHandle = await start(run.sink, { backend: scriptedWith(twice) })
+  let questions = 0
+
+  const summaries = () => run.entries.filter((entry) => entry.kind === "summary").length
+
+  /**
+   * One prompt, answered if it asks.
+   *
+   * Counted from this turn's own baseline. A latch of "a summary exists" is
+   * true from the second turn onwards, so the wait returned immediately and
+   * the second question went unanswered -- the run then hung on an
+   * elicitation nobody replied to.
+   */
+  const runTurn = async (prompt: string) => {
+    const before = summaries()
+    runHandle.submit(prompt)
+    await until(
+      () => run.footer().type === "approval" || summaries() > before,
+      `a question or the end of a turn (${answer})`
+    )
+    const view = run.footer()
+    if (view.type === "approval") {
+      questions++
+      if (answer === "a") runHandle.respond(view.request.id, true, { remember: true })
+      else runHandle.respond(view.request.id, true)
+    }
+    await until(() => summaries() > before, `the turn to end (${answer})`)
+  }
+
+  await runTurn("run it")
+  await runTurn("run it again")
+
+  runHandle.stop()
+  return questions
+}
+
+const askedWithY = await askedEachTime("y")
+const askedWithA = await askedEachTime("a")
+
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
 await flush()
@@ -742,6 +804,26 @@ const hugeOther = Array.from({ length: 1200 }, (_, index) => `other ${index}`).j
 const hugeDiff = Diff.of(huge, hugeOther)
 
 /**
+ * The cases a cell budget alone lets through.
+ *
+ * `left.length * right.length` is **zero** when one side is empty, so
+ * creating or deleting a whole file passed the check and then built a line
+ * object per line -- a bounded matrix and an unbounded result. A one-line
+ * side has the same shape.
+ */
+// Past the line budget, where 1200 deliberately is not: a file that size is
+// still worth lining up, and a fixture that trips every limit proves less.
+const enormous = Array.from({ length: 6000 }, (_, index) => `line ${index}`)
+  .join("\n") + "\n"
+const emptyToHuge = Diff.of("", enormous)
+const hugeToEmpty = Diff.of(enormous, "")
+const oneToHuge = Diff.of("only\n", enormous)
+// A single line can itself be megabytes: a minified bundle is one line, and
+// splitting it is cheap while rendering it is not.
+const oneEnormousLine = Diff.of("x".repeat(3_000_000), "y")
+
+
+/**
  * R129 -- a failed write loses nothing.
  *
  * The batch version removed the whole settled prefix and *then* wrote each
@@ -952,6 +1034,10 @@ checks.push(
   // Bound in the renderer rather than left to SIGINT, which a raw-mode
   // terminal need not deliver.
   ["ctrl+c interrupts from the keyboard", interruptRequests === 1],
+  // R109
+  ["answering once asks again next time", askedWithY === 2],
+  ["answering always does not", askedWithA === 1],
+
   // R99
   ["a long label is cut to fit", fitted.every((text, index) =>
     text.length <= widthPolicy([40, 80, 120][index]!).backendWidth)],
@@ -1025,6 +1111,18 @@ checks.push(
   // was here first and passed with the budget removed: 1200x1200 is fast
   // enough on this machine to hide the thing it was meant to catch.
   ["so the alignment never ran", hugeDiff.lines.length === 2],
+  // R183: an empty side makes the cell product zero, so these reached the
+  // aligner and produced a line object per line of the file.
+  ["creating a whole file is summarised", emptyToHuge.summarised],
+  ["deleting one is too", hugeToEmpty.summarised],
+  ["and so is a one-line side against a file", oneToHuge.summarised],
+  ["a single enormous line is summarised by size",
+    oneEnormousLine.summarised
+      && oneEnormousLine.lines.some((line) => line.text.includes("bytes"))],
+  // The summary says the real counts rather than standing in for a patch.
+  ["and the summary reports the real counts",
+    emptyToHuge.lines[0]?.text === "0 lines"
+      && emptyToHuge.lines[1]?.text === "6000 lines"],
 
   // R108: empty sides and the EOF newline
   ["inserting into an empty file removes nothing",
