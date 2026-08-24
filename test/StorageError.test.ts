@@ -177,9 +177,15 @@ describe("StorageError", () => {
           )
         )
       )
-      assert.isTrue(Exit.isFailure(built))
+      // `assert.isTrue(Exit.isFailure(...))` checks at runtime and narrows
+      // nothing at compile time, so the branch is what makes `cause` reachable.
+      if (!Exit.isFailure(built)) {
+        return assert.fail("building the layer should have failed")
+      }
       const error = Cause.findErrorOption(built.cause)
-      assert.isTrue(Option.isSome(error))
+      if (Option.isNone(error)) {
+        return assert.fail("the failure should carry a typed error")
+      }
       assert.isTrue(isStorageError(error.value))
     })
   )
