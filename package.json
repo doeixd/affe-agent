@@ -67,6 +67,14 @@
       "types": "./dist/coding/index.d.ts",
       "default": "./dist/coding/index.js"
     },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    },
+    "./web/brave": {
+      "types": "./dist/web/brave.d.ts",
+      "default": "./dist/web/brave.js"
+    },
     "./subagent": {
       "types": "./dist/subagent/index.d.ts",
       "default": "./dist/subagent/index.js"

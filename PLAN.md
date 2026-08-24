@@ -3034,7 +3034,342 @@ Convert AgentEvent Stream into a UI protocol.
 
 Read/write/edit/shell tools built outside core.
 
-If any of these require modifying core internals, revisit the extension boundaries.
+## Web battery
+
+### Decision and justification
+
+Add a portable `@doeixd/effect-agent/web` battery after the coding toolkit. It
+is composed with `/coding`; it is not part of `CodingToolkit` and does not
+change the agent core.
+
+```text
+Coding or research agent
+├─ CodingToolkit → Sandbox.Current → filesystem/process provider
+└─ WebToolkit
+   ├─ web_search → WebSearch → search-provider Layer → HttpClient
+   └─ web_fetch  → WebFetch  → guarded-fetch Layer  → HttpClient
+                         │
+                         └─ Permission gates each invocation first
+```
+
+This is an authorised extension seam, not an OpenCode port. It clears the
+public-concept bar for two independent consumers that will be demonstrated in
+examples and inference tests:
+
+1. a coding agent which searches for documentation and fetches a selected
+   source alongside `CodingToolkit`; and
+2. a research/child agent which uses the web battery without filesystem or
+   process authority.
+
+It also contains two independently useful operations. Search is a request to a
+provider-owned, fixed endpoint; fetch is a request to a model-selected URL and
+has a materially stronger security boundary. They share a toolkit namespace,
+schemas and presentation conventions, but **not** one all-or-nothing provider
+service. Applications may provide and compose either capability without
+granting the other.
+
+This section is the design authority for web access and supersedes M6 in
+`docs/plan-opencode-tools-port.md` wherever that earlier proposal differs.
+
+### Responsibility boundaries
+
+The three controls are complementary and must not be described as substitutes:
+
+- **Tools** define the model-facing operation and structured input/output.
+- **Permission** decides whether this particular invocation may proceed. It is
+  semantic policy, not physical isolation.
+- **`WebSearch` / `WebFetch` providers** own physical network behavior. Their
+  Layers capture an abstract Effect `HttpClient`, configuration, rate limits
+  and egress restrictions.
+- **`Sandbox`** owns filesystem and process behavior. Web tools do not depend on
+  it. Saving fetched content remains a separately permissioned `write_file`
+  call rather than a combined network-and-write tool.
+
+The last point matters because one `Permission.Request` projects one action and
+one resource. A compound download-and-write tool would hide two authorities
+behind one decision and is not part of either milestone.
+
+The local sandbox is explicitly not a network security boundary. A coding
+agent with `bash` may still run `curl`, `gh`, a package manager, or another
+networked executable. An application requiring real egress isolation must deny
+or ask for `shell`, use a network-isolated sandbox provider, or enforce egress
+through the host/proxy. Adding `/web` does not change that fact.
+
+The honest invariant is therefore:
+
+> No implementation in `/web` performs network I/O except through its declared
+> web capability and an injected Effect `HttpClient`, and no web tool is
+> available to an agent unless the application explicitly composes it.
+
+This is a local invariant for the `/web` package, not a claim that an arbitrary
+agent has no other route to the network.
+
+### Portable package shape
+
+The portable `./web` entry exports schemas, capability services, ordinary
+Effect AI tools and their handlers. Provider adapters remain separate entry
+points so importing `./web` performs no configuration lookup and acquires no
+network capability.
+
+Planned modules:
+
+```text
+src/web/WebSearch.ts       provider-neutral search service, values and errors
+src/web/WebFetch.ts        provider-neutral guarded-fetch service, values/errors
+src/web/WebToolkit.ts      Search and Fetch tools, handlers and composition values
+src/web/brave.ts           Brave search Layer over HttpClient + Config.redacted
+src/web/http.ts            guarded generic HTTP fetch Layer over HttpClient
+src/web/index.ts           portable public battery
+src/testing/...            deterministic canned web providers
+```
+
+`WebSearch` and `WebFetch` are infrastructure capabilities, so
+`Context.Service` is appropriate. Implementations use `Effect.fn` as the
+function definition, return named error unions, and arrive through Layers. The
+tools declare those services in `dependencies`; the requirements must flow
+through `Agent.toolkit`, `Agent.withTool(s)` and `AgentSession.make` so omitting
+a provider is a compile-time error.
+
+The battery exposes its tool values and handlers separately, as `/coding`
+does, so callers can take search only, fetch only, replace a handler or bind one
+tool without casts. A convenience combined toolkit may be exported only as a
+short spelling of those same values; it must not make both provider services
+mandatory when the caller selected only one tool.
+
+Provider errors are `Schema.TaggedError`s with derived `message` getters. The
+tool failure schema remains `Schema.String` initially and maps service errors
+to short, actionable prose the model can respond to. The public Effect error
+channel must never widen to `unknown`.
+
+### Permission projection and parameter decoding
+
+Search is annotated as:
+
+```text
+action:   net.search
+resource: the exact outbound query
+```
+
+There is no result domain before a search runs, so projecting a domain would
+be fictitious. The query is the sensitive value leaving the application.
+
+Fetch is annotated as:
+
+```text
+action:   net.fetch
+resource: the canonical URL origin (scheme, hostname and effective port)
+```
+
+Neither tool has intrinsic `needsApproval: true`. Explicit composition and
+provider wiring enable the capability; the application Permission policy
+chooses Allow, Ask or Deny. Deployments may therefore allow public searches,
+ask for every fetch, or deny both. The existing intrinsic approval floor still
+applies if an application replaces either tool with a stricter one.
+
+Before `web_fetch` lands, `ToolExecution` must resolve an existing contract
+mismatch. Model tool calls reach the loop with **encoded** parameters (§33.5),
+while Effect AI's dynamic `needsApproval` function and
+`Permission.annotate` projection are typed against decoded
+`Tool.Parameters<T>`. Today the harness calls both before `Toolkit.handle`
+decodes, which is unsound for transformed schemas even though string-only
+tools hide it.
+
+The resolution is to decode with the tool's parameter Schema before invoking
+dynamic approval or the permission projection:
+
+- valid calls project and evaluate permission from the same decoded value the
+  handler will observe;
+- invalid calls invoke neither policy nor provider and become the ordinary
+  tool-parameter validation failure;
+- events, journaling and `Toolkit.handle` retain the encoded model payload
+  where their existing contracts require it; and
+- projection remains total. A throwing projection is still a tool-author
+  defect, never a recoverable policy result.
+
+A transforming-schema test must fail against the old behavior and prove the
+fix before the fetch URL schema relies on canonical decoded data. This change
+must preserve end-user inference without a new erasing cast.
+
+### Milestone W1 — provider-neutral `web_search`
+
+Ship search first. It supplies most immediate coding/research value while the
+model can reach only a provider-owned fixed endpoint, avoiding the arbitrary
+URL and redirect surface of fetch.
+
+The provider-neutral domain is intentionally small:
+
+```ts
+interface SearchOptions {
+  readonly limit?: number
+  readonly freshness?: "day" | "week" | "month" | "year"
+}
+
+interface SearchResult {
+  readonly title: string
+  readonly url: string
+  readonly snippet: string
+}
+```
+
+The tool accepts a query, an optional result limit and optional freshness. The
+default result limit is 8 and the hard maximum is 10. It does not expose
+provider-specific deep-search, automatic mode or other model-selected billing
+multipliers. Results are structured and preserve source URLs; provider content
+is explicitly described to the model as untrusted external text.
+
+The first real adapter is Brave's ordinary Web Search REST API, not its
+provider-specific LLM-context response. It uses no provider SDK. Its Layer:
+
+- loads the API key with `Config.redacted`, never `process.env`;
+- requires Effect's `HttpClient` and captures a restricted client whose base
+  endpoint is fixed by the provider, never by model parameters;
+- sends credentials only in the provider's authentication header and never
+  includes them in errors, events or span attributes;
+- treats the outbound query as sensitive telemetry. If the provider protocol
+  requires it in a URL query string, application trace exporters must be
+  assumed to see it until the existing redacting-tracer work is supplied;
+- decodes the response through Schema and bounds both advertised
+  `Content-Length` and actual streamed bytes to 1 MiB before constructing
+  results;
+- places one 15-second timeout around request plus body consumption, so fiber
+  interruption aborts the underlying request;
+- limits the provider to four concurrent searches; and
+- uses only a bounded retry Schedule: at most one retry for a pre-response
+  transport failure or 429, with `Retry-After` capped at two seconds. It never
+  retries authentication, other 4xx, decode or body-limit failures. No Effect
+  HTTP default that can retry forever is accepted.
+
+The service error union names transport, authentication, rate-limit, provider
+response, decode, response-too-large and timeout failures. The handler maps
+them to guidance such as "misconfigured; do not retry", "quota exhausted;
+retry later", or "timed out; try a narrower query". Defects remain defects.
+
+No HTML conversion dependency is introduced in this milestone.
+
+#### W1 acceptance
+
+- A no-cast/no-annotation example composes `CodingToolkit` with search, and a
+  second example composes search into a research/child agent without Sandbox.
+- Tool parameters, results, service requirements and `PromptError` remain
+  precise and non-`any`; omitting `WebSearch` fails at compile time. Every new
+  inference assertion is deliberately broken once and restored.
+- Without explicit composition, existing agents and toolkits contain no web
+  tool and require no web provider.
+- Allow, Ask and Deny evaluate exactly once; denial never invokes the provider;
+  the Permission request carries `action: "net.search"` and the exact query.
+- A deterministic fake `HttpClient` proves the fixed endpoint, request shape,
+  schema rejection, credential redaction, advertised and actual byte limits,
+  bounded retries, concurrency, timeout and interruption without sleeps.
+- A canned `WebSearch` Layer supports deterministic higher-level tool, durable
+  replay and lifecycle tests. A replayed completed call does not repeat the
+  provider request.
+- Tool events keep their existing exact lifecycle and the TUI's generic tool
+  view renders search without a required TUI change.
+- The provider never annotates spans with the API key, response body or search
+  result snippets. Search queries are ordinary tool parameters and may be
+  visible to a configured tracer under the existing tool-span behavior and in
+  an HTTP URL when the provider requires a query string; that privacy
+  limitation is documented rather than misrepresented as redaction.
+- `npm run check` and packed-entry portability verification pass.
+
+W1 updates `STATUS.md` only after these conditions are built and verified.
+
+### Milestone W2 — guarded `web_fetch`
+
+W2 starts only after W1 is green and the decoded-permission prerequisite above
+is proven. It adds arbitrary HTTP(S) retrieval as a separate `WebFetch`
+capability and `web_fetch` tool; an application can omit it while retaining
+search.
+
+The model supplies a URL only. Initial output is a structured response with
+the final canonical URL, HTTP status, media type, body format
+(`text | html | markdown`) and body. The default portable provider returns
+bounded textual content in its honest format; it does not add a heavy
+HTML-to-Markdown dependency or claim that tag stripping is semantic
+conversion. Rich conversion and PDF/image extraction are later provider
+features, not part of W2.
+
+The guarded provider, not Permission, enforces the network boundary:
+
+- accept only `http` and `https` URLs and reject embedded credentials;
+- canonicalize scheme, hostname and effective port before permission;
+- reject loopback, link-local, private-address, `.local` and known cloud
+  metadata targets whenever the portable runtime can establish them;
+- expose redirects rather than relying on an HTTP client that follows them
+  invisibly;
+- follow at most five same-origin redirects;
+- return a typed cross-origin redirect refusal containing the new URL, so the
+  model must issue a fresh call and trigger a fresh permission decision;
+- accept textual media types only at first (including text, HTML, JSON and
+  XML), rejecting binary, PDF and image bodies;
+- enforce a fixed 1 MiB maximum on actual bytes delivered after decompression,
+  as well as an early `Content-Length` check. The body is streamed and folded
+  under the cap; an unbounded `response.text()` is forbidden;
+- bound request plus redirects plus body consumption with one 20-second
+  timeout; and
+- perform no automatic retry. A fetch is an externally observable request and
+  retry policy belongs to the caller/provider, not an invisible default.
+
+The service names invalid-URL, denied-target, transport, HTTP-response,
+cross-origin-redirect, redirect-limit, unsupported-content-type,
+response-too-large and timeout errors. Each error's encoded form contains only
+the fields needed to diagnose it and its `message` is a getter. The tool maps
+expected failures to actionable model text under the existing tool failure
+policy.
+
+Portable code cannot completely defeat DNS rebinding or prove the resolved
+address used by every `HttpClient`. The portable guard is therefore baseline
+defense, not a strong isolation claim. Environments that require that guarantee
+must supply a `WebFetch` provider backed by an egress proxy or a runtime with
+address-aware policy. Documentation and examples must say so directly.
+
+Fetched bodies are untrusted model input. The result preserves source URL and
+media type, clearly delimits external content, and never treats page text as
+harness instructions. Delimiting reduces accidental confusion but is not
+presented as a complete prompt-injection defense.
+
+#### W2 acceptance
+
+- The transformed URL schema proves decoded permission evaluation; the
+  projection emits the exact canonical origin and never throws.
+- Table-driven tests cover invalid schemes, credentials, loopback, IPv4/IPv6
+  private/link-local literals, metadata hosts, canonical ports and fragments.
+- Redirect tests prove same-origin following, the five-hop cap, cross-origin
+  refusal before the second request, and a fresh permission decision when the
+  model explicitly calls the redirected origin.
+- Deterministic stream tests cover lying/missing `Content-Length`, chunked and
+  decompressed overflow, unsupported media types, malformed text, timeout and
+  interruption. No test uses a sleep.
+- Allow, Ask and Deny gate provider invocation exactly once with
+  `action: "net.fetch"`; denial performs no DNS or HTTP work.
+- A fetched result can be followed by an independently permissioned
+  `write_file`, while no combined fetch-and-write authority is introduced.
+- Durable replay does not repeat a completed fetch, exact lifecycle events are
+  unchanged, API credentials and bodies do not enter provider spans, and the
+  TUI generic fallback remains sufficient.
+- Public examples require no casts or hand annotations, all error channels are
+  named, no erasing cast is added without satisfying the repository inventory,
+  and `npm run check` plus packed-entry portability verification pass.
+
+W2 updates `STATUS.md` only after these conditions are built and verified.
+
+### Explicit non-goals for W1 and W2
+
+- No network capability is added to agent core or `Agent.make`.
+- No automatic inclusion in `CodingToolkit` and no new `Agent.make` type
+  parameter or configuration field.
+- No global claim that Permission or LocalSandbox prevents network access.
+- No combined search/fetch/write/browser tool, browser automation, JavaScript
+  page execution, login/cookie jar, robots-policy engine, crawling, PDF/image
+  extraction or cache.
+- No provider-cost accounting in the model token budget. W1 prevents
+  model-selected expensive modes and bounds calls locally; a shared tool/API
+  cost abstraction waits for two independent consumers.
+- No provider A/B selection or ambient environment-variable probing.
+
+Except for the decoded-parameter correction explicitly authorised above, if a
+web milestone requires modifying core internals, revisit the extension
+boundaries.
 
 ---
 
