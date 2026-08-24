@@ -69,8 +69,14 @@ export const count = (n: number, label: string): string =>
 export interface ToolView {
   /** The entry's one-line header. */
   readonly title?: (params: unknown) => string | undefined
-  /** The structured body drawn beneath it. */
-  readonly body?: (result: unknown) => Body | undefined
+  /**
+   * The structured body drawn beneath it.
+   *
+   * Receives the call's parameters as well as its result, because what a tool
+   * was *asked* to do is often half the story -- `edit_file` returns the text
+   * it replaced and the request holds the text that replaced it.
+   */
+  readonly body?: (result: unknown, params: unknown) => Body | undefined
   /** How the tool is described when it asks for approval. */
   readonly approval?: (request: Approval) => string | undefined
 }
@@ -197,12 +203,14 @@ export const defaultViews: Readonly<Record<string, ToolView>> = {
     },
     // `edit_file` returns a record rather than a sentence, so the change is
     // rendered from fields instead of parsed out of prose.
-    body: (result) => {
+    body: (result, params) => {
       const fields = dict(result)
       const added = num(fields.added)
       const removed = num(fields.removed)
       if (added === undefined || removed === undefined) return undefined
       const strategy = str(fields.strategy)
+      const before = str(fields.matched)
+      const after = str(dict(params).new_string)
       return {
         type: "structured",
         snapshot: {
@@ -212,7 +220,9 @@ export const defaultViews: Readonly<Record<string, ToolView>> = {
           removed,
           // Only when the match was not literal: "simple" is the expected
           // case and saying so every time would be noise.
-          ...(strategy === "" || strategy === "simple" ? {} : { strategy })
+          ...(strategy === "" || strategy === "simple" ? {} : { strategy }),
+          ...(before === "" ? {} : { before }),
+          ...(after === "" ? {} : { after })
         }
       }
     },
@@ -255,8 +265,9 @@ export const titleOf = (
 export const bodyOf = (
   views: Readonly<Record<string, ToolView>>,
   name: string,
-  result: unknown
-): Body => views[name]?.body?.(result) ?? fallbackBody(result)
+  result: unknown,
+  params: unknown = undefined
+): Body => views[name]?.body?.(result, params) ?? fallbackBody(result)
 
 export const approvalOf = (
   views: Readonly<Record<string, ToolView>>,

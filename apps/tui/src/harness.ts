@@ -59,6 +59,18 @@ const modelLayer = Layer.unwrap(
         }]
       },
       TestLanguageModel.text("Renamed it."),
+      {
+        toolCalls: [{
+          id: "t5",
+          name: "edit_file",
+          params: {
+            path: "src/drift.ts",
+            old_string: "const value = 1;\n",
+            new_string: "const value = 2;\n"
+          }
+        }]
+      },
+      TestLanguageModel.text("Bumped it."),
       { toolCalls: [{ id: "t4", name: "bash", params: { command: "rm -rf /" } }] },
       TestLanguageModel.text("I did not run that."),
       TestLanguageModel.text(
@@ -74,7 +86,11 @@ const sandboxLayer = Sandbox.currentLayer(Sandbox.workspace("tui")).pipe(
     MemorySandbox.layer({
       seed: {
         "README.md": "# demo workspace\n\nSeeded so the tools have something to find.\n",
-        "src/index.ts": "export const hello = () => \"hello\"\n"
+        "src/index.ts": "export const hello = () => \"hello\"\n",
+        // Trailing spaces the scripted model will not reproduce, so the
+        // second edit matches fuzzily and `matched` differs from what was
+        // asked for -- which is the case the two-sided body exists to show.
+        "src/drift.ts": "const value = 1;   \n"
       },
       exec: () => Effect.succeed({ exitCode: 0, stdout: "hi\n", stderr: "" })
     })
@@ -119,6 +135,9 @@ const nextId = (prefix: string): string => `${prefix}-${++counter}`
  */
 const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
   let assistant: string | undefined
+  // A call's parameters, kept until its result arrives: a body renderer often
+  // needs both sides, and the success event carries only one.
+  const params = new Map<string, unknown>()
   // Closed over rather than kept in the store: this is bookkeeping for one
   // submission, not something the UI should be able to see half-finished.
   let startedAt = 0
@@ -206,6 +225,7 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
 
       case "ToolCallStarted":
         tools++
+        params.set(event.id, event.params)
         sink.append({
           id: `tool-${event.id}`,
           kind: "tool",
@@ -218,12 +238,14 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
       case "ToolCallSucceeded":
         sink.patch(`tool-${event.id}`, {
           status: "ok",
-          body: bodyOf(views, event.name, event.result)
+          body: bodyOf(views, event.name, event.result, params.get(event.id))
         })
+        params.delete(event.id)
         return
 
       case "ToolCallFailed":
         sink.patch(`tool-${event.id}`, { status: "failed" })
+        params.delete(event.id)
         return
 
       case "SubmissionCompleted":

@@ -43,6 +43,17 @@ export type ToolSnapshot =
     readonly added: number
     readonly removed: number
     readonly strategy?: string
+    /**
+     * The two sides of the edit: the span as it stood, and what replaced it.
+     *
+     * Not a file diff -- just the region that changed. `before` is the text
+     * that was *actually* matched rather than the text requested, which is the
+     * whole point: under any strategy but `simple` those differ, and seeing
+     * the difference is how a reader catches an edit that landed somewhere
+     * slightly other than intended.
+     */
+    readonly before?: string
+    readonly after?: string
   }
   /** `bash` -- a command's result. */
   | {

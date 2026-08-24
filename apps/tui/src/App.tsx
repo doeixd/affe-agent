@@ -40,6 +40,20 @@ const clip = (text: string, limit = BODY_LINES): { lines: Array<string>; hidden:
     : { lines: lines.slice(0, limit), hidden: lines.length - limit }
 }
 
+/**
+ * One side of an edit, as prefixed lines.
+ *
+ * Clipped like any other body: an edit can be large, and the point is to show
+ * *what* changed rather than all of it. A trailing newline is dropped so a
+ * whole-line replacement does not render a blank final row.
+ */
+const sides = (text: string | undefined, marker: string): ReadonlyArray<string> => {
+  if (text === undefined || text === "") return []
+  const { hidden, lines } = clip(text.replace(/\n$/, ""), 6)
+  const shown = lines.map((line) => `  ${marker} ${line}`)
+  return hidden === 0 ? shown : [...shown, `  ${marker} … ${hidden} more lines`]
+}
+
 const Lines = (props: { text: string; fg: ColorInput }) => {
   const clipped = () => clip(props.text)
   return (
@@ -88,13 +102,24 @@ const Snapshot = (props: { snapshot: ToolSnapshot }) => (
 
     <Match when={props.snapshot.kind === "change" ? props.snapshot : undefined}>
       {(snapshot: Accessor<Extract<ToolSnapshot, { kind: "change" }>>) => (
-        // One string: adjacent text nodes paint over one another rather than
-        // laying out side by side. The path is not repeated -- the entry's
-        // title already names the file being edited.
-        <text fg={theme.block.text}>
-          {`  +${snapshot().added} -${snapshot().removed}`
-            + (snapshot().strategy === undefined ? "" : `  (matched by ${snapshot().strategy})`)}
-        </text>
+        <box flexDirection="column">
+          {/* One string per line: adjacent text nodes paint over one another
+              rather than laying out side by side. The path is not repeated --
+              the entry's title already names the file being edited. */}
+          <text fg={theme.block.text}>
+            {`  +${snapshot().added} -${snapshot().removed}`
+              + (snapshot().strategy === undefined ? "" : `  (matched by ${snapshot().strategy})`)}
+          </text>
+          {/* The two sides of the edit. `before` is what was *actually*
+              replaced, so when a fuzzy strategy matched, this is where that
+              shows. */}
+          <For each={sides(snapshot().before, "-")}>
+            {(line) => <text fg={theme.block.diffRemoved}>{line}</text>}
+          </For>
+          <For each={sides(snapshot().after, "+")}>
+            {(line) => <text fg={theme.block.diffAdded}>{line}</text>}
+          </For>
+        </box>
       )}
     </Match>
 

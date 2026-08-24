@@ -137,8 +137,11 @@ empty hid a class of bug, and only a lingering entry exposed it.
 
 ## Not done yet
 
-History navigation, elicitation/approval prompts, session switching and the
-`/`-command palette are all absent, as is syntax highlighting for code
-bodies (opencode uses `CodeRenderable` with tree-sitter; we render plain
-lines). The session tree in
-`docs/plan-session-tree.md` is the natural next thing to hang off this.
+History navigation, session switching and the `/`-command palette are absent,
+as is syntax highlighting for code bodies (opencode uses `CodeRenderable` with
+tree-sitter; we render plain lines). A full-file unified diff is deliberately
+not done -- see `docs/plan-tui-tool-views.md` for why the span-level view was
+the better trade.
+
+The session tree in `docs/plan-session-tree.md` is the natural next thing to
+hang off this.

@@ -90,6 +90,7 @@ const ask = async (text: string) => {
 await ask("what is in this workspace?")
 await ask("now run something")
 await ask("rename the greeting")
+await ask("bump the drifting value")
 
 // V4: a run that pauses on approval. `ask` waits for the submission to end,
 // which never happens while the footer is asking, so drive it explicitly.
@@ -134,6 +135,35 @@ const checks: Array<readonly [string, boolean]> = [
   ["status returned to idle", live.includes("idle")],
 
   // V3
+  // W5: both sides of the edit, from `matched` and `new_string`.
+  ["change shows the replaced text", transcript.includes("- hello")],
+  ["change shows the replacement", transcript.includes("+ greetings")],
+  // The fuzzy case, which is why `matched` is reported at all: the file had
+  // trailing spaces the model did not reproduce, so what was replaced is not
+  // what was asked for -- and the rendered line shows the real text.
+  ["fuzzy match names its strategy", transcript.includes("matched by line-trimmed")],
+  ["fuzzy match carries the real replaced text", (() => {
+    const body = bodyOf(
+      defaultViews,
+      "edit_file",
+      {
+        path: "src/drift.ts",
+        replacements: 1,
+        added: 1,
+        removed: 1,
+        strategy: "line-trimmed",
+        matched: "const value = 1;   \n"
+      },
+      { new_string: "const value = 2;\n" }
+    )
+    if (body.type !== "structured" || body.snapshot.kind !== "change") return false
+    // The trailing spaces the model never typed: this is the whole
+    // reason the library reports `matched` rather than echoing back
+    // `old_string`.
+    return body.snapshot.before === "const value = 1;   \n"
+      && body.snapshot.after === "const value = 2;\n"
+  })()],
+
   // W4: edit_file returns a record, so the change renders from fields.
   ["edit renders a change summary", /\+\d+ -\d+/.test(transcript)],
   ["change names the file", transcript.includes("src/index.ts")],
