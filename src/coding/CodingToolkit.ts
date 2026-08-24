@@ -1,8 +1,15 @@
-import { Effect, Schema } from "effect"
+import { Effect, HashMap, Option, Schema, Semaphore, TxRef } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as Permission from "../Permission.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
+import * as LineEndings from "./internal/lineEndings.js"
+import * as Glob from "./internal/glob.js"
+import * as Prompts from "./internal/prompts.js"
+import * as ReadFormat from "./internal/readFormat.js"
+import * as SearchFormat from "./internal/searchFormat.js"
+import * as Truncate from "./internal/truncate.js"
+import * as Replace from "./internal/replace.js"
 
 /**
  * A coding agent's tools, over the sandbox seam (issue #4 item 2).
@@ -29,6 +36,62 @@ import * as Sandbox from "../sandbox/Sandbox.js"
  * Failures are returned to the model as strings: a bad path, a missing file
  * or an ambiguous edit is something the model can correct on the next turn,
  * so it is a `failure` value rather than a defect that fails the run.
+ *
+ * ## Making it yours
+ *
+ * The battery is a starting point, not a package deal. `tools` and `handlers`
+ * are ordinary values, so the four things an application usually wants are all
+ * ordinary composition -- no casts, and parameters still infer:
+ *
+ * **Replace one implementation**, keeping the rest. An application with its own
+ * index answers `search` itself:
+ *
+ * ```ts
+ * Agent.toolkit(CodingToolkit.tools, {
+ *   ...CodingToolkit.handlers,
+ *   search: ({ pattern }) => myIndex.query(pattern)   // `pattern` is string
+ * })
+ * ```
+ *
+ * Passed inline like this, the parameter position supplies the type. If you
+ * want to name the record first, annotate it -- a bare object literal has no
+ * contextual type, so the override's parameters would otherwise infer as `any`:
+ *
+ * ```ts
+ * const handlers: typeof CodingToolkit.handlers = {
+ *   ...CodingToolkit.handlers,
+ *   search: ({ pattern }) => myIndex.query(pattern)
+ * }
+ * ```
+ *
+ * **Take a subset** -- a read-only agent is a shorter array:
+ *
+ * ```ts
+ * Agent.toolkit([CodingToolkit.ReadFile, CodingToolkit.ListFiles], {
+ *   read_file: CodingToolkit.handlers.read_file,
+ *   list_files: CodingToolkit.handlers.list_files
+ * })
+ * ```
+ *
+ * **Add your own tool** beside them:
+ *
+ * ```ts
+ * Agent.toolkit([...CodingToolkit.tools, Deploy], {
+ *   ...CodingToolkit.handlers,
+ *   deploy: ({ environment }) => ship(environment)
+ * })
+ * ```
+ *
+ * **Use one tool on its own**, bound to its handler:
+ *
+ * ```ts
+ * Agent.tool(CodingToolkit.ReadFile, CodingToolkit.handlers.read_file)
+ * ```
+ *
+ * A replacement tool of your own carries its own `Permission.annotate`, so a
+ * remote `search` can project to `net` on the domain while the shipped one
+ * projects to `read`. `test/CodingComposition.test.ts` exercises all of these,
+ * with compile-time assertions that the inference does not degrade to `any`.
  */
 
 // ---------------------------------------------------------------------------
@@ -38,6 +101,7 @@ import * as Sandbox from "../sandbox/Sandbox.js"
 /** Read a file, optionally a line range, with 1-based line numbers. */
 export const ReadFile = Permission.annotate(
   Tool.make("read_file", {
+    description: Prompts.READ_FILE,
     parameters: Schema.Struct({
       path: Schema.String,
       /** First line to return, 1-based. Omit to start at the top. */
@@ -55,6 +119,7 @@ export const ReadFile = Permission.annotate(
 /** Create or overwrite a file. */
 export const WriteFile = Permission.annotate(
   Tool.make("write_file", {
+    description: Prompts.WRITE_FILE,
     parameters: Schema.Struct({
       path: Schema.String,
       content: Schema.String
@@ -67,12 +132,18 @@ export const WriteFile = Permission.annotate(
 )
 
 /**
- * Replace an exact string in a file. Fails if it is not found, or found more
- * than once and `replace_all` was not set -- an ambiguous edit is a mistake,
- * not a coin flip.
+ * Replace a string in a file, tolerating the ways a model's quotation drifts
+ * from the file (indentation, trailing whitespace, over-escaped `\n`, a
+ * reformatted block middle) without ever guessing.
+ *
+ * Fails if the text is not found, if it is found in more than one place and
+ * `replace_all` was not set, or if the closest match is far larger than what
+ * was asked for -- an ambiguous edit is a mistake, not a coin flip. See
+ * `internal/replace.ts` for how the strategies stay safe.
  */
 export const EditFile = Permission.annotate(
   Tool.make("edit_file", {
+    description: Prompts.EDIT_FILE,
     parameters: Schema.Struct({
       path: Schema.String,
       old_string: Schema.String,
@@ -89,6 +160,7 @@ export const EditFile = Permission.annotate(
 /** List a directory's entries. */
 export const ListFiles = Permission.annotate(
   Tool.make("list_files", {
+    description: Prompts.LIST_FILES,
     parameters: Schema.Struct({
       path: Schema.optional(Schema.String)
     }),
@@ -101,17 +173,23 @@ export const ListFiles = Permission.annotate(
   { action: "read", resource: (params) => params.path ?? "." }
 )
 
-/** Search file contents for a regular expression, walking the tree in process. */
+/**
+ * Search file contents for a regular expression, walking the tree in process.
+ *
+ * Results are grouped by file and bounded: the search stops once it has enough
+ * and says so, rather than returning a wall of matches nobody asked for.
+ */
 export const Search = Permission.annotate(
   Tool.make("search", {
+    description: Prompts.SEARCH,
     parameters: Schema.Struct({
       pattern: Schema.String,
       /** Restrict to this subtree. Omit to search the whole workspace. */
-      path: Schema.optional(Schema.String)
+      path: Schema.optional(Schema.String),
+      /** Only search files whose name matches this glob, e.g. `*.ts`. */
+      include: Schema.optional(Schema.String)
     }),
-    success: Schema.Array(
-      Schema.Struct({ path: Schema.String, line: Schema.Number, text: Schema.String })
-    ),
+    success: Schema.String,
     failure: Schema.String,
     dependencies: [Sandbox.Current]
   }),
@@ -128,6 +206,7 @@ export const Search = Permission.annotate(
  */
 export const Bash = Permission.annotate(
   Tool.make("bash", {
+    description: Prompts.BASH,
     parameters: Schema.Struct({
       command: Schema.String,
       /** Kill the command after this many milliseconds. Provider default otherwise. */
@@ -153,13 +232,198 @@ export const tools = [ReadFile, WriteFile, EditFile, ListFiles, Search, Bash] as
 
 const errorMessage = (error: { readonly message: string }): string => error.message
 
-const numberLines = (text: string, from: number): string =>
-  text.split("\n").map((line, i) => `${from + i}\t${line}`).join("\n")
+/**
+ * One write lock per file, so two edits to the same path cannot interleave.
+ *
+ * An edit is read-modify-write, and the sandbox seam offers no
+ * compare-and-swap: without this, two concurrent edits both read the original
+ * text and the second write silently discards the first edit's change. The
+ * registry is module-level and keyed by workspace and path, so the guarantee
+ * holds across every toolkit instance in the process, not merely within one.
+ *
+ * Keyed with a NUL separator, which no sandbox path may contain, so
+ * `a/b` + `c` cannot collide with `a` + `b/c`.
+ *
+ * **Why the entry carries a holder count.** This registry used to be a plain
+ * `Map` that only ever grew, and the comment here said evicting safely would
+ * need reference counting -- because dropping a lock somebody holds silently
+ * ends the mutual exclusion it exists to provide. That was right about the
+ * hazard and wrong that it was unavoidable. The obvious repair, "remove the
+ * entry when the last holder leaves", is unsafe only because the check and the
+ * removal are two steps: a fibre can arrive between them, find no entry, mint a
+ * second semaphore, and edit the same file under a lock nobody else respects.
+ *
+ * A `TxRef` makes those two steps one transaction. `releaseLock` observes the
+ * holder count and removes the entry in a single atomic commit, so there is no
+ * instant at which a waiter can see an entry that is about to vanish. The count
+ * is incremented *before* the permit is acquired and decremented *after* it is
+ * released, so an entry survives for as long as anyone holds it or is queued
+ * behind it -- which is precisely the invariant that makes removal safe.
+ *
+ * Built with `makeUnsafe` for the same reason the semaphores are: this is
+ * module-level construction with no yield point, so no fibre can observe a
+ * half-initialised registry.
+ */
+interface LockEntry {
+  readonly semaphore: Semaphore.Semaphore
+  /** Fibres holding the permit or queued behind it. Zero means evictable. */
+  readonly holders: number
+}
 
-/** Recursively list every file under a directory, depth-first and deterministic. */
+const editLocks: TxRef.TxRef<HashMap.HashMap<string, LockEntry>> =
+  TxRef.makeUnsafe(HashMap.empty<string, LockEntry>())
+
+const lockKey = (workspace: string, path: string): string =>
+  `${workspace}\u0000${path}`
+
+/**
+ * Join the queue for a path's lock, creating it if this is the first holder.
+ *
+ * Returns the semaphore to wait on. One transaction, so two fibres racing for
+ * an absent key cannot both publish a semaphore -- the loser sees the winner's.
+ */
+const acquireLock = (key: string): Effect.Effect<Semaphore.Semaphore> =>
+  TxRef.modify(editLocks, (map) => {
+    const existing = HashMap.get(map, key)
+    if (Option.isSome(existing)) {
+      const entry = existing.value
+      return [
+        entry.semaphore,
+        HashMap.set(map, key, { ...entry, holders: entry.holders + 1 })
+      ]
+    }
+    const semaphore = Semaphore.makeUnsafe(1)
+    return [semaphore, HashMap.set(map, key, { semaphore, holders: 1 })]
+  })
+
+/** Leave the queue, dropping the entry when nobody is left. */
+const releaseLock = (key: string): Effect.Effect<void> =>
+  TxRef.update(editLocks, (map) => {
+    const existing = HashMap.get(map, key)
+    if (Option.isNone(existing)) return map
+    const holders = existing.value.holders - 1
+    return holders <= 0
+      ? HashMap.remove(map, key)
+      : HashMap.set(map, key, { ...existing.value, holders })
+  })
+
+/**
+ * Run an effect under a path's write lock.
+ *
+ * `acquireUseRelease` rather than a bare `withPermit`, so the holder count is
+ * decremented even when the caller is interrupted while waiting or mid-edit. A
+ * leaked count would pin the entry forever, which is the leak this replaced.
+ */
+const withFileLock = <A, E, R>(
+  workspace: string,
+  path: string,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> => {
+  const key = lockKey(workspace, path)
+  return Effect.acquireUseRelease(
+    acquireLock(key),
+    (semaphore) => semaphore.withPermit(effect),
+    () => releaseLock(key)
+  )
+}
+
+/**
+ * How many paths currently hold a lock entry.
+ *
+ * Exported for the test that asserts the registry drains. The leak this
+ * replaced was invisible from outside, and an invariant nobody can observe is
+ * one nobody can defend.
+ *
+ * @internal
+ */
+export const lockRegistrySize: Effect.Effect<number> = Effect.map(
+  TxRef.get(editLocks),
+  HashMap.size
+)
+
+/**
+ * A file's text with a byte-order mark left intact.
+ *
+ * `TextDecoder` strips a leading BOM unless told not to, so decoding through
+ * the ordinary text helper and writing the result back silently deletes it.
+ * Reading for *display* may drop it; reading in order to write again must not,
+ * which is why the edit path decodes for itself.
+ */
+const readPreservingBom = (
+  sandbox: Sandbox.Sandbox,
+  path: Sandbox.SandboxPath
+): Effect.Effect<string, Sandbox.FileError> =>
+  Effect.map(sandbox.read(path), (bytes) =>
+    new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes))
+
+/**
+ * The message for a file that is not there, naming look-alikes beside it.
+ *
+ * Listing the parent can fail in its own right -- it may not exist either --
+ * and that is not worth reporting over the original miss, so it degrades to a
+ * plain not-found.
+ */
+const suggestFor = (
+  sandbox: Sandbox.Sandbox,
+  path: Sandbox.SandboxPath
+): Effect.Effect<string> =>
+  Effect.gen(function* () {
+    const parent = ReadFormat.dirname(path)
+    const at = parent === undefined
+      ? undefined
+      : yield* Effect.orElseSucceed(Sandbox.path(parent), () => undefined)
+    const entries = yield* Effect.orElseSucceed(sandbox.list(at), () => [])
+    return ReadFormat.notFoundMessage(path, entries.map((entry) => entry.path))
+  })
+
+/**
+ * One stream of a command's output, bounded for the model with the whole of it
+ * kept on disk.
+ *
+ * The saved file is inside the workspace, which is the only place the sandbox
+ * can write -- and the useful place, since `search` and `read_file` can then be
+ * pointed at it. If saving fails (a read-only workspace, say) the output is
+ * still bounded and simply does not promise a file that is not there.
+ */
+const bounded = (
+  sandbox: Sandbox.Sandbox,
+  text: string
+): Effect.Effect<string> =>
+  Effect.gen(function* () {
+    const end = Truncate.tail(text)
+    if (!end.cut) return end.text
+    const saved = yield* Effect.option(
+      Effect.gen(function* () {
+        const at = yield* Sandbox.path(Truncate.nextOutputPath())
+        yield* sandbox.write(at, text)
+        return at
+      })
+    )
+    return Option.isNone(saved)
+      ? Truncate.unsavedNotice() + end.text
+      : Truncate.savedNotice(saved.value) + end.text
+  })
+
+/**
+ * How many lines a span covers.
+ *
+ * Counted the way a reader sees them, so a span that ends with a newline is
+ * not credited with an extra empty line: replacing one whole line reports
+ * `-1`, not `-2`.
+ */
+const lineCount = (text: string): number => ReadFormat.toLines(text).length
+
+/**
+ * Recursively list every file under a directory, depth-first and deterministic.
+ *
+ * `skip` names directories not worth descending into. It applies only to
+ * directories the walk would enter, never to the root it was given, so a search
+ * scoped at an ignored directory still searches it.
+ */
 const walk = (
   sandbox: Sandbox.Sandbox,
-  root: Sandbox.SandboxPath | undefined
+  root: Sandbox.SandboxPath | undefined,
+  skip: ReadonlySet<string> = new Set()
 ): Effect.Effect<ReadonlyArray<Sandbox.SandboxPath>, string> =>
   Effect.gen(function* () {
     const entries = yield* sandbox.list(root).pipe(Effect.mapError(errorMessage))
@@ -167,8 +431,8 @@ const walk = (
     for (const entry of [...entries].sort((a, b) => (a.path < b.path ? -1 : 1))) {
       if (entry.type === "file") {
         files.push(entry.path)
-      } else {
-        files.push(...(yield* walk(sandbox, entry.path)))
+      } else if (!skip.has(ReadFormat.basename(entry.path))) {
+        files.push(...(yield* walk(sandbox, entry.path, skip)))
       }
     }
     return files
@@ -182,15 +446,36 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
   read_file: ({ limit, offset, path: file }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
-      const text = yield* Sandbox.readText(sandbox)(yield* Sandbox.path(file))
-      // 1-based, and clamped: a model that passes 0 (or negative) means the
-      // top, not `slice(-1)`, which would return only the last line.
-      const start = Math.max(1, offset ?? 1)
-      const slice = text
-        .split("\n")
-        .slice(start - 1, limit === undefined ? undefined : start - 1 + limit)
-      return numberLines(slice.join("\n"), start)
-    }).pipe(Effect.mapError(errorMessage)),
+      const sandboxPath = yield* Sandbox.path(file).pipe(Effect.mapError(errorMessage))
+
+      const found = yield* Effect.option(sandbox.stat(sandboxPath))
+      if (Option.isNone(found)) {
+        // A missing file is usually a near miss, so name the neighbours that
+        // look like what was asked for rather than only reporting the failure.
+        return yield* Effect.fail(yield* suggestFor(sandbox, sandboxPath))
+      }
+      if (found.value.type === "directory") {
+        return yield* Effect.fail(
+          `${file} is a directory, not a file. Use list_files to see what it contains.`
+        )
+      }
+
+      const bytes = yield* sandbox.read(sandboxPath).pipe(Effect.mapError(errorMessage))
+      if (ReadFormat.isBinary(sandboxPath, bytes.slice(0, ReadFormat.SAMPLE_BYTES))) {
+        return yield* Effect.fail(`Cannot read binary file: ${file}`)
+      }
+
+      const text = new TextDecoder().decode(bytes)
+      // A non-positive offset means the top, not `slice(-1)`'s last line.
+      const from = Math.max(1, offset ?? 1)
+      const window = ReadFormat.slice(text, from, limit ?? ReadFormat.DEFAULT_LIMIT)
+      if (ReadFormat.offsetOutOfRange(window)) {
+        return yield* Effect.fail(
+          `Offset ${from} is out of range for this file (${window.counted} lines)`
+        )
+      }
+      return ReadFormat.render(file, window)
+    }),
 
   write_file: ({ content, path: file }) =>
     Effect.gen(function* () {
@@ -203,23 +488,73 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
       const sandboxPath = yield* Sandbox.path(file).pipe(Effect.mapError(errorMessage))
-      const text = yield* Sandbox.readText(sandbox)(sandboxPath).pipe(Effect.mapError(errorMessage))
-      const occurrences = old_string === "" ? 0 : text.split(old_string).length - 1
-      if (occurrences === 0) {
-        return yield* Effect.fail(`old_string was not found in ${file}`)
-      }
-      if (occurrences > 1 && replace_all !== true) {
+      if (old_string === "") {
         return yield* Effect.fail(
-          `old_string is not unique in ${file} (${occurrences} matches); pass replace_all or include more context`
+          `old_string cannot be empty when editing ${file}. Provide the exact text to replace, ` +
+            `or use write_file for an intentional full-file replacement.`
         )
       }
-      // Always split/join, never String.replace: `replace` interprets `$&`,
-      // `$1` and friends in the replacement, which would corrupt any new_string
-      // containing a `$`. With replace_all off, occurrences is exactly 1 here,
-      // so join replaces that one occurrence and no other -- literally.
-      const next = text.split(old_string).join(new_string)
-      yield* sandbox.write(sandboxPath, next).pipe(Effect.mapError(errorMessage))
-      return `edited ${file} (${occurrences} replacement${occurrences === 1 ? "" : "s"})`
+      if (old_string === new_string) {
+        return yield* Effect.fail(
+          `old_string and new_string are identical, so this edit would change nothing in ${file}. ` +
+            `Provide the replacement text you actually want.`
+        )
+      }
+      // Read-modify-write is only safe under the file's lock: see `editLocks`.
+      return yield* withFileLock(
+        sandbox.workspace,
+        sandboxPath,
+          Effect.gen(function* () {
+            const text = yield* readPreservingBom(sandbox, sandboxPath).pipe(
+              Effect.mapError(errorMessage)
+            )
+            // The file is matched exactly as it sits on disk; it is the search
+            // strings that are converted to its convention. Nothing outside
+            // the replaced span is ever re-encoded, so line endings and a BOM
+            // survive an edit untouched.
+            const newline = LineEndings.detect(text)
+            const find = LineEndings.convert(old_string, newline)
+            const replacement = LineEndings.convert(new_string, newline)
+
+            const outcome = Replace.replace(text, find, replacement, replace_all === true)
+            switch (outcome._tag) {
+              case "NotFound":
+                return yield* Effect.fail(
+                  `old_string was not found in ${file}. It must match the file exactly, including ` +
+                    `whitespace and indentation. Re-read the file and copy the text you mean to replace.`
+                )
+              case "Ambiguous":
+                return yield* Effect.fail(
+                  `old_string is not unique in ${file}: it matches in more than one place. Include ` +
+                    `more surrounding context so the match is unambiguous, or pass replace_all to ` +
+                    `change every occurrence.`
+                )
+              case "Disproportionate":
+                return yield* Effect.fail(
+                  `Refusing to edit ${file}: the closest match spans ${
+                    lineCount(outcome.matched)
+                  } lines but ` +
+                    `old_string is ${
+                      lineCount(find)
+                    } -- far more than intended would be replaced. Re-read ` +
+                    `the file and provide the exact text to replace.`
+                )
+              case "Replaced": {
+                yield* sandbox.write(sandboxPath, outcome.content).pipe(
+                  Effect.mapError(errorMessage)
+                )
+                const removed = lineCount(outcome.matched) * outcome.count
+                const added = lineCount(replacement) * outcome.count
+                // Name the strategy when the match was not literal: the model
+                // learns its quotation drifted, even though the edit landed.
+                const how = outcome.strategy === "simple" ? "" : `, matched by ${outcome.strategy}`
+                return `edited ${file} (${outcome.count} replacement${
+                  outcome.count === 1 ? "" : "s"
+                }, +${added} -${removed}${how})`
+              }
+            }
+          })
+      )
     }),
 
   list_files: ({ path: dir }) =>
@@ -230,26 +565,34 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
       return entries.map((entry) => ({ path: entry.path, type: entry.type }))
     }).pipe(Effect.mapError(errorMessage)),
 
-  search: ({ path: dir, pattern }) =>
+  search: ({ include, path: dir, pattern }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
       const regex = yield* Effect.try({
         try: () => new RegExp(pattern),
         catch: () => `invalid regular expression: ${pattern}`
       })
-      const at = dir === undefined ? undefined : yield* Sandbox.path(dir).pipe(Effect.mapError(errorMessage))
-      const files = yield* walk(sandbox, at)
-      const hits: Array<{ path: string; line: number; text: string }> = []
+      const at = dir === undefined
+        ? undefined
+        : yield* Sandbox.path(dir).pipe(Effect.mapError(errorMessage))
+      const files = yield* walk(sandbox, at, SearchFormat.IGNORED_DIRECTORIES)
+
+      const matches: Array<SearchFormat.Match> = []
       for (const file of files) {
-        const text = yield* Sandbox.readText(sandbox)(file).pipe(Effect.mapError(errorMessage))
-        const lines = text.split("\n")
+        if (matches.length >= SearchFormat.SEARCH_LIMIT) break
+        if (include !== undefined && !Glob.matches(include, file)) continue
+        const bytes = yield* sandbox.read(file).pipe(Effect.mapError(errorMessage))
+        // A binary file has no lines worth showing, and its bytes would wreck
+        // the output. Skipping is not an error: it is simply not a match.
+        if (ReadFormat.isBinary(file, bytes.slice(0, ReadFormat.SAMPLE_BYTES))) continue
+        const lines = ReadFormat.toLines(new TextDecoder().decode(bytes))
         for (let i = 0; i < lines.length; i++) {
-          if (regex.test(lines[i]!)) {
-            hits.push({ path: file, line: i + 1, text: lines[i]! })
-          }
+          if (matches.length >= SearchFormat.SEARCH_LIMIT) break
+          const text = lines[i] ?? ""
+          if (regex.test(text)) matches.push({ path: file, line: i + 1, text })
         }
       }
-      return hits
+      return SearchFormat.render(matches)
     }),
 
   bash: ({ command, timeout_ms }) =>
@@ -258,13 +601,21 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
       const result = yield* sandbox.exec(
         Sandbox.command("bash", ["-lc", command]),
         timeout_ms === undefined ? undefined : { timeout: timeout_ms }
+      ).pipe(
+        Effect.mapError((error) =>
+          // A timeout is the one failure with an obvious next move, so it says
+          // what that is rather than only reporting the elapsed budget.
+          error instanceof Sandbox.TimeoutError
+            ? Truncate.timedOut(error.timeoutMillis)
+            : errorMessage(error)
+        )
       )
       return {
         exit_code: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr
+        stdout: yield* bounded(sandbox, result.stdout),
+        stderr: yield* bounded(sandbox, result.stderr)
       }
-    }).pipe(Effect.mapError(errorMessage))
+    })
 }
 
 // ---------------------------------------------------------------------------

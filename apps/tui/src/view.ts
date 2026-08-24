@@ -1,0 +1,209 @@
+import type { EntryKind } from "./theme.ts"
+
+/**
+ * The view model: what the renderer draws, and the only vocabulary it knows.
+ *
+ * ---------------------------------------------------------------------------
+ * Shape ported from opencode, `packages/opencode/src/cli/cmd/run/types.ts`,
+ * read at commit 2a6be0a03b93a6734070e10a6c3b56863475f214.
+ * Upstream: https://github.com/sst/opencode -- MIT, see
+ * `vendor/opencode/LICENSE.opencode`.
+ *
+ * Taken: the idea worth taking, which is **separating an entry's kind from its
+ * body**. Their `RunEntryBody` is `none | text | code | markdown | structured`,
+ * so one renderer decides *how* to draw content while the entry decides *what*
+ * it is. That is what makes a tool result and an assistant message share a
+ * renderer instead of each growing their own.
+ *
+ * Not taken: their concrete types. Theirs derive from `OpencodeClient` --
+ * `RunCommand`, `RunProvider`, `PermissionReply` are all `Awaited<ReturnType<...>>`
+ * of SDK calls -- so adopting them would pull opencode's session model into our
+ * UI through the back door. Their `ToolSnapshot` variants are their tools
+ * (task, todo, question); ours are ours.
+ *
+ * The rule this file exists to hold: **port their renderers to our types, never
+ * our types to their renderers.** If a ported renderer needs something absent
+ * here, this file grows -- the renderer does not reach past it to the harness.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Structured tool output, one variant per shape our tools actually return. */
+export type ToolSnapshot =
+  /** `list_files` -- a directory listing. */
+  | {
+    readonly kind: "listing"
+    readonly items: ReadonlyArray<{ readonly path: string; readonly directory: boolean }>
+  }
+  /** `search` -- already grouped by file by the tool itself. */
+  | { readonly kind: "matches"; readonly text: string; readonly truncated: boolean }
+  /** `edit_file` / `write_file` -- a summary of what changed. */
+  | {
+    readonly kind: "change"
+    readonly path: string
+    readonly added: number
+    readonly removed: number
+    readonly strategy?: string
+  }
+  /** `bash` -- a command's result. */
+  | {
+    readonly kind: "command"
+    readonly exitCode: number
+    readonly stdout: string
+    readonly stderr: string
+  }
+  /** `read_file` -- file content, already numbered by the tool. */
+  | { readonly kind: "file"; readonly path: string; readonly content: string }
+
+/**
+ * An entry's content, separate from its kind.
+ *
+ * `none` is not the same as empty text: a tool that is still running has no
+ * body yet, and drawing nothing is different from drawing a blank line.
+ */
+export type Body =
+  | { readonly type: "none" }
+  | { readonly type: "text"; readonly content: string }
+  | { readonly type: "code"; readonly content: string; readonly filetype?: string }
+  | { readonly type: "markdown"; readonly content: string }
+  | { readonly type: "structured"; readonly snapshot: ToolSnapshot }
+
+/** How a tool call is going. */
+export type ToolStatus = "running" | "ok" | "failed"
+
+/**
+ * One line of transcript.
+ *
+ * Mutable on purpose: a Solid store owns these, and streaming appends and
+ * status changes are targeted writes into an existing entry rather than
+ * replacements. `readonly` here would mean rebuilding an entry per token.
+ */
+export interface Entry {
+  id: string
+  kind: EntryKind
+  /** The one-line header: the message text, or the tool's name and arguments. */
+  title: string
+  body: Body
+  /** Present on tool entries only. */
+  status?: ToolStatus
+  /** True while deltas are still arriving. */
+  streaming?: boolean
+}
+
+export type Status = "idle" | "working"
+
+/** How the harness pushes into the view model. */
+export interface Sink {
+  readonly append: (entry: Entry) => void
+  readonly patch: (id: string, change: Partial<Entry>) => void
+  /** Append a streamed chunk to an existing entry's title. */
+  readonly appendTitle: (id: string, delta: string) => void
+  readonly setStatus: (status: Status) => void
+  /** The footer's active surface; `undefined` returns it to the prompt. */
+  readonly setApproval: (request: Approval | undefined) => void
+}
+
+/**
+ * Which interactive surface the footer is showing.
+ *
+ * Ported from opencode's `FooterView` (`vendor/opencode/types.ts`), and their
+ * comment is the design: *"Only one view is active at a time. The reducer
+ * drives transitions: when a permission arrives the view switches to
+ * permission, and when the permission resolves it falls back to prompt."*
+ *
+ * A union rather than a set of booleans, so "asking for approval while also
+ * accepting a prompt" is unrepresentable instead of merely avoided.
+ */
+export type FooterView =
+  | { readonly type: "prompt" }
+  | { readonly type: "approval"; readonly request: Approval }
+
+/** A tool call waiting on a decision. */
+export interface Approval {
+  readonly id: string
+  readonly toolName: string
+  readonly action: string
+  readonly resource: string
+  readonly reason?: string
+}
+
+/** What the UI can ask of the agent. */
+export interface Handle {
+  readonly submit: (text: string) => void
+  readonly interrupt: () => void
+  /** Answer the pending approval. Refusal is an answer, not a failure. */
+  readonly respond: (id: string, granted: boolean) => void
+}
+
+// ---------------------------------------------------------------------------
+// Projections from tool results
+// ---------------------------------------------------------------------------
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+/**
+ * A tool's decoded result as a body.
+ *
+ * Tool results are `unknown` at this boundary by design -- the agent decodes
+ * them against each tool's own schema, and that type does not survive into a
+ * generic event. So this narrows structurally, and anything unrecognised falls
+ * back to text rather than being dropped: an unknown tool should still render.
+ */
+export const bodyOfToolResult = (name: string, result: unknown): Body => {
+  if (name === "list_files" && Array.isArray(result)) {
+    return {
+      type: "structured",
+      snapshot: {
+        kind: "listing",
+        items: result.flatMap((entry) =>
+          isRecord(entry) && typeof entry.path === "string"
+            ? [{ path: entry.path, directory: entry.type === "directory" }]
+            : []
+        )
+      }
+    }
+  }
+
+  if (name === "search" && typeof result === "string") {
+    return {
+      type: "structured",
+      snapshot: {
+        kind: "matches",
+        text: result,
+        truncated: result.includes("Results truncated")
+      }
+    }
+  }
+
+  if (name === "bash" && isRecord(result)) {
+    const { exit_code: exitCode, stderr, stdout } = result
+    if (typeof exitCode === "number") {
+      return {
+        type: "structured",
+        snapshot: {
+          kind: "command",
+          exitCode,
+          stdout: typeof stdout === "string" ? stdout : "",
+          stderr: typeof stderr === "string" ? stderr : ""
+        }
+      }
+    }
+  }
+
+  if (name === "read_file" && typeof result === "string") {
+    return { type: "code", content: result }
+  }
+
+  if (typeof result === "string") return { type: "text", content: result }
+  return { type: "text", content: JSON.stringify(result) ?? "" }
+}
+
+/** A one-line description of a tool call, for the entry's title. */
+export const titleOfToolCall = (name: string, params: unknown): string => {
+  if (!isRecord(params)) return name
+  const path = typeof params.path === "string" ? params.path : undefined
+  const pattern = typeof params.pattern === "string" ? params.pattern : undefined
+  const command = typeof params.command === "string" ? params.command : undefined
+  const detail = command ?? pattern ?? path
+  return detail === undefined ? name : `${name} ${detail}`
+}
