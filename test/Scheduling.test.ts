@@ -192,3 +192,31 @@ describe("Scheduling.queued (queue-backed, durable when the store is)", () => {
     })
   )
 })
+
+describe("Scheduling.worker resilience", () => {
+  // `it.live`: the worker polls on a real interval, so the loop must actually
+  // advance between claims -- which is the whole point being tested.
+  it.live("a hung job does not stall the worker from claiming and running later jobs", () =>
+    Effect.gen(function* () {
+      const startedA = yield* Deferred.make<void>()
+      const startedB = yield* Deferred.make<void>()
+      // Job A hangs at the model forever; job B answers. If the worker awaited
+      // its batch (rather than forking each run), A would wedge it and B would
+      // never run. Forking keeps the loop draining.
+      const { layer: model } = yield* TestLanguageModel.script([
+        { hang: true, started: startedA },
+        { text: "second", started: startedB }
+      ])
+      const store = yield* Scheduling.memoryStore
+
+      yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(Scheduling.worker(Simple, store, { pollInterval: "1 millis" }))
+        yield* Scheduling.dispatch({ input: "a" }).pipe(Effect.provide(Scheduling.queued(store)))
+        yield* Deferred.await(startedA) // A is claimed, running, and now hung
+        yield* Scheduling.dispatch({ input: "b" }).pipe(Effect.provide(Scheduling.queued(store)))
+        // Reaching here means the worker claimed and ran B despite A hanging.
+        yield* Deferred.await(startedB)
+      }).pipe(Effect.provide(model), Effect.scoped)
+    })
+  )
+})

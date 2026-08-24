@@ -96,9 +96,12 @@ export const dispatch = (job: Dispatched): Effect.Effect<void, never, AgentDispa
  * A dispatched job at rest: the input to run, and the wall-clock time it becomes
  * due. `prompt` is a decoded `Prompt`, which carries its own Schema, so a
  * durable store round-trips a multimodal job exactly as a text one.
+ *
+ * Deliberately carries no id: the `JobStore` owns identity (a SQL primary key, a
+ * Redis field), so two dispatchers sharing one store cannot mint colliding ids,
+ * and the worker never needs one — `claimDue` hands back the jobs, not handles.
  */
 export interface PersistedJob {
-  readonly id: string
   readonly prompt: Prompt.Prompt
   readonly runAfterMillis: number
 }
@@ -108,7 +111,8 @@ export interface PersistedJob {
  * makes `queued` outlast the process that dispatched. Bring a durable backend
  * (a SQL table, a Redis list); `memoryStore` is the in-process one for tests and
  * single-node use, the same bring-your-own-store shape `/memory` and `/state`
- * use.
+ * use. The store assigns and tracks each job's identity internally; nothing
+ * outside it needs one.
  *
  * `claimDue` is claim-and-take: it returns the jobs whose time has come and
  * removes them, so no two workers run the same job. Semantics are at-most-once —
@@ -146,28 +150,29 @@ export const memoryStore: Effect.Effect<JobStore> = Effect.map(
  * dispatcher layer is requirement-free.
  */
 export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
-  Layer.effect(
-    AgentDispatcher,
-    Effect.map(Ref.make(0), (counter): AgentDispatcher["Service"] => ({
-      dispatch: (job) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis
-          const seq = yield* Ref.getAndUpdate(counter, (n) => n + 1)
-          const delayMillis = job.delay === undefined ? 0 : Duration.toMillis(job.delay)
-          yield* store.enqueue({
-            id: `${now}-${seq}`,
-            prompt: Prompt.make(job.input),
-            runAfterMillis: now + delayMillis
-          })
+  Layer.succeed(AgentDispatcher, {
+    dispatch: (job) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const delayMillis = job.delay === undefined ? 0 : Duration.toMillis(job.delay)
+        yield* store.enqueue({
+          prompt: Prompt.make(job.input),
+          runAfterMillis: now + delayMillis
         })
-    }))
-  )
+      })
+  })
 
 /**
  * Drain a `JobStore`: claim every due job and run the agent for it, forever.
  * Fork it beside the rest of the program (one or more workers over the same
  * store). Resilient like `recurring`: a run's genuine failure is logged and the
  * worker keeps going; interruption on shutdown stops it without a spurious log.
+ *
+ * Each claimed job runs in a fibre forked into the worker's scope -- as `local`
+ * forks its dispatched runs -- so a slow or hung run never blocks the worker
+ * from claiming the next batch, and every in-flight run is interrupted when the
+ * worker stops. (The trade is `local`'s: no backpressure, so pair a durable
+ * store with bounded producers, or run the loop with a modest `pollInterval`.)
  *
  * ```ts
  * yield* Effect.forkScoped(Scheduling.worker(Assistant, store))
@@ -178,25 +183,29 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R>(
   store: JobStore,
   options?: { readonly pollInterval?: Duration.Input | undefined }
 ): Effect.Effect<never, never, LanguageModel.LanguageModel | R> =>
-  Effect.gen(function* () {
-    const poll = options?.pollInterval ?? Duration.seconds(1)
-    while (true) {
-      const now = yield* Clock.currentTimeMillis
-      const due = yield* store.claimDue(now)
-      yield* Effect.forEach(
-        due,
-        (job) =>
-          Agent.run(agent, job.prompt).pipe(
-            Effect.catchCause((cause): Effect.Effect<void> =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.void
-                : Effect.logError("scheduling: a queued run failed", cause))
-          ),
-        { concurrency: "unbounded", discard: true }
-      )
-      yield* Effect.sleep(poll)
-    }
-  })
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope
+      const poll = options?.pollInterval ?? Duration.seconds(1)
+      while (true) {
+        const now = yield* Clock.currentTimeMillis
+        const due = yield* store.claimDue(now)
+        yield* Effect.forEach(
+          due,
+          (job) =>
+            Agent.run(agent, job.prompt).pipe(
+              Effect.catchCause((cause): Effect.Effect<void> =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : Effect.logError("scheduling: a queued run failed", cause)),
+              Effect.forkIn(scope)
+            ),
+          { discard: true }
+        )
+        yield* Effect.sleep(poll)
+      }
+    })
+  )
 
 /**
  * Run an agent on a schedule, forever, resiliently: each run's failure is
