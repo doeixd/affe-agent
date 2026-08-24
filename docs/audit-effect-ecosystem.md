@@ -14,6 +14,52 @@ their depth?* — and found more actionable defects than round one did, includin
 two that contradict claims we make in our own documentation. Round two also
 records what it checked and found **clean**, so that ground is not re-walked.
 
+## Status: acted on
+
+This is no longer a proposal. Eight of its milestones landed, and the findings
+below carry their outcomes inline — what was built, what was falsified, and
+where a finding turned out to be wrong.
+
+| | Milestone | What it fixed |
+|---|---|---|
+| ✅ | A-0 (E15) | Spans and events used different attribute keys, so a trace could not be joined to the events about the same run |
+| ✅ | A-1 (E7) | The coding toolkit's lock registry leaked an entry per file, and the code said the leak was unfixable |
+| ✅ | A-1b (E14) | Four stores declared *empty* error channels while sitting on a database |
+| ✅ | A-2 (E8, E17) | `/observability` standardised span names and shipped no instruments |
+| ✅ | A-7 (E10) | `/connectors/slack` was host-coupled; it is out of `HOST_MODULES` |
+| ✅ | A-10 (E16) | An unbounded 10ms poll, under a comment saying the wait could be days |
+| ✅ | A-11 (E18) | The documented cast inventory had drifted from 5 to 16 |
+| ✅ | A-13 (E20) | Tool arguments reached any exporter regardless of `RedactionPolicy` |
+| ◑ | A-3 (E1) | Planned in [plan-execution-plan.md](./plan-execution-plan.md); not built |
+| ○ | A-4/5/6/8/9/12 | Open. None blocks anything; several are gated on unbuilt plans |
+
+**The audit was wrong four times, and each correction is recorded next to the
+finding rather than quietly dropped:**
+
+- **E1** claimed `/budget` gains a seam for "step down to a cheaper model".
+  `ExecutionPlan` is failure-driven; budget-driven selection is a decision taken
+  before anything fails.
+- **E7** proposed `Tx*` for `AgentState`'s swap-and-persist. STM commits by
+  retrying, and that critical section contains a store write (**E7b**).
+- **E8** listed token metrics. No event carries usage, so that instrument would
+  have to be invented rather than observed.
+- **E10** said `effect/Crypto` would un-flag the Slack verifier. It has neither
+  HMAC nor a constant-time compare. The goal was reached through Web Crypto's
+  `subtle.verify` instead — which is also a *better* guarantee than the
+  `timingSafeEqual` it replaced.
+
+The pattern is worth naming: every one of those was a finding written from
+knowing a module *exists* rather than from reading what it does. The measurement
+half of this audit held up; the recommendation half needed checking.
+
+**What it cost elsewhere.** Two findings changed public API — `StorageError`
+moved into `Errors.ts` and `AgentState`'s mutations now declare it, which
+reaches user code. The `/state` case was settled the harder way: a first design
+made the error depend on whether persistence was configured, which is more
+precise and makes it impossible to run the same agent ephemerally in development
+and persisted in production. `examples/state.ts` does exactly that, so the
+precise design was reverted.
+
 ## The headline
 
 **The core is used deeply and idiomatically.** `Ref`, `SubscriptionRef`,
