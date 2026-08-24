@@ -58,11 +58,14 @@ is ecosystem polish, not capability:
    the gaps cluster, and most are primitives an unbuilt plan proposes to
    hand-roll. One is a genuine capability gap rather than polish:
    **`ExecutionPlan`** — provider fallback and per-model retry ladders, which
-   every user currently writes themselves and which `/budget` has no seam for.
-   The rest are folded into the plans that should act on them (`Tx*` for the
-   coding toolkit's documented lock leak, `LayerMap`/`RcMap` for the server and
-   the session tree, `Metric` for `/observability`, `Crypto` for the Slack
-   verifier above, `unstable/cli` for the CLI above).
+   every user currently writes themselves. Planned in
+   [docs/plan-execution-plan.md](./docs/plan-execution-plan.md); not yet built.
+   The rest are folded into the plans that should act on them, and several have
+   landed: `Tx*` closed the coding toolkit's lock leak, `Metric` gave
+   `/observability` its instruments, typed `StorageError`s replaced the stores'
+   `orDie`, and `Schedule` gained backoff and jitter. Still open:
+   `LayerMap`/`RcMap` for the server and the session tree, `Crypto` for the
+   Slack verifier above, `unstable/cli` for the CLI above.
 
 ### Small refinements worth folding in
 

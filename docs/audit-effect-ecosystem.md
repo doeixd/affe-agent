@@ -72,18 +72,30 @@ Zero uses, and it is the one gap that is a *missing kernel capability* rather
 than a missing convenience.
 
 Our stated invariant is that the model arrives through the environment and an
-`Agent` never names a provider. `ExecutionPlan` is the ecosystem's answer to the
-question immediately after that one: **which** model, with what retry schedule,
-falling back to what when the first is rate-limited or down. Today every user of
-this kernel who wants provider failover writes it themselves, and `/budget` has
-no principled seam on which to hang "this run has spent enough — step down to a
-cheaper model."
+`Agent` never names a provider. `AgentSession.make` requires
+`LanguageModel.LanguageModel` and gets it from the context it was built in,
+which answers exactly one question: **which** model. It does not answer the one
+immediately after — what to do when that model is rate-limited or down. Today
+the answer is "the run fails", and anyone who wants better writes the ladder
+themselves, outside the harness.
 
 It fits the combinator rule exactly (AGENTS.md §42.1): `withExecutionPlan(plan)`
-unions its own `E`/`R` onto the definition and `Agent.make` grows no tenth type
-parameter.
+returns a definition and `Agent.make` grows no tenth type parameter.
 
-This deserves its own plan. It is not a refinement of an existing one.
+**One claim here was wrong.** This finding said `/budget` gains "a principled
+seam on which to hang *this run has spent enough — step down to a cheaper
+model*." It does not. An `ExecutionPlan` is **failure-driven**: it moves to the
+next step because the current one failed. Budget-driven selection is a policy
+decision taken *before* the call, when nothing has failed, and the `while`
+predicate does not reach it — that decides whether to keep trying after an
+error. The budget case is a `LanguageModel` layer built from an effect that
+reads `Budget`, which is `Layer.unwrap` over ordinary wiring and needs no new
+API at all.
+
+Written up as [plan-execution-plan.md](./plan-execution-plan.md), which also
+records the constraint that decides the design: **a plan must wrap the model
+call and nothing wider**, because a turn is a model call *and its tool calls*,
+and retrying a turn would re-run side effects on the world.
 
 ### E2. `unstable/eventlog` — evaluate before building H5/H6
 
@@ -805,8 +817,12 @@ outrank most of round one.
   nothing has to restate a description to read one. Tokens dropped from the
   original list: no event carries usage, so that instrument would have to be
   invented rather than observed.
-- **A-3 — `ExecutionPlan` combinator (E1).** Needs its own plan; the largest
-  capability gap.
+- **A-3 — `ExecutionPlan` combinator (E1). ◑ Planned.**
+  [plan-execution-plan.md](./plan-execution-plan.md) written: the combinator
+  shape, the model-call-only scope and why, the streaming problem and three
+  options for it, the `/durable` replay interaction, five invariants and P0's
+  two open questions (can `LanguageModel` be discharged without a cast; which
+  streaming policy). Corrects this finding's `/budget` claim. No code yet.
 - **A-4 — `LayerMap` / `RcMap` in the server and the tree (E4).** Folded into
   [plan-agent-server.md](./plan-agent-server.md) S2 and
   [plan-session-tree.md](./plan-session-tree.md) T3.
