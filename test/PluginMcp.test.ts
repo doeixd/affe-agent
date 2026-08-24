@@ -118,6 +118,34 @@ describe("mcp.json decoding", () => {
     })
   )
 
+  it.effect("rejects a url with credentials or a fragment", () =>
+    Effect.gen(function* () {
+      const creds = yield* decode({ s: { type: "streamable-http", url: "https://user:pass@api.example.com/mcp" } })
+      assert.deepStrictEqual(creds.servers, [])
+      assert.include(creds.warnings[0]?.detail ?? "", "credentials")
+
+      const frag = yield* decode({ s: { type: "streamable-http", url: "https://api.example.com/mcp#section" } })
+      assert.deepStrictEqual(frag.servers, [])
+      assert.include(frag.warnings[0]?.detail ?? "", "fragment")
+    })
+  )
+
+  it.effect("expansion is a single pass: a placeholder inside a placeholder value is not re-expanded", () =>
+    Effect.gen(function* () {
+      const { servers } = yield* decode(
+        { s: { type: "stdio", command: "c", args: ["${PLUGIN_ROOT}/x"] } },
+        { allowStdio: true, pluginRoot: "/a${PLUGIN_DATA}b", pluginData: "/data" }
+      )
+      const s = servers[0]
+      if (s?.transport === "stdio") {
+        // The ${PLUGIN_DATA} that came from the root value stays literal.
+        assert.deepStrictEqual(s.args, ["/a${PLUGIN_DATA}b/x"])
+      } else {
+        assert.fail("expected a stdio server")
+      }
+    })
+  )
+
   it.effect("skips a server that references PLUGIN_DATA when none was supplied", () =>
     Effect.gen(function* () {
       const { servers, warnings } = yield* decode(

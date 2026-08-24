@@ -21,7 +21,9 @@ const readResources = (
   dirPath: string
 ): Effect.Effect<Record<string, string>> =>
   Effect.gen(function* () {
-    const refsPath = yield* Effect.orDie(Sandbox.path(`${dirPath}/references`))
+    const refsPathOption = yield* Effect.option(Sandbox.path(`${dirPath}/references`))
+    if (Option.isNone(refsPathOption)) return {}
+    const refsPath = refsPathOption.value
     const stat = yield* Effect.option(sandbox.stat(refsPath))
     if (Option.isNone(stat) || stat.value.type !== "directory") return {}
     const entries = yield* Effect.orElseSucceed(sandbox.list(refsPath), () => [])
@@ -40,7 +42,11 @@ const processSkill = (
 ): Effect.Effect<Outcome> =>
   Effect.gen(function* () {
     const dirName = basename(dirPath)
-    const skillMd = yield* Effect.orDie(Sandbox.path(`${dirPath}/SKILL.md`))
+    const skillMdOption = yield* Effect.option(Sandbox.path(`${dirPath}/SKILL.md`))
+    // An unrepresentable path (e.g. an adversarial `..` directory name) is not a
+    // skill — skip it rather than turning it into a defect.
+    if (Option.isNone(skillMdOption)) return { _tag: "skip" }
+    const skillMd = skillMdOption.value
     const stat = yield* Effect.option(sandbox.stat(skillMd))
     // A directory without a SKILL.md file is simply not a skill — silent, per spec.
     if (Option.isNone(stat) || stat.value.type !== "file") return { _tag: "skip" }

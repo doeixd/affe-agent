@@ -51,8 +51,8 @@ const isIndented = (line: string): boolean => line.length > 0 && (line[0] === " 
  * malformed extras never crash a load.
  */
 export const parse = (text: string): Option.Option<Frontmatter> => {
-  // Tolerate a UTF-8 BOM and CRLF endings; normalise before line work.
-  const normalised = text.replace(/^﻿/, "").replace(/\r\n/g, "\n")
+  // Tolerate a leading UTF-8 BOM (even repeated) and CRLF endings.
+  const normalised = text.replace(/^﻿+/, "").replace(/\r\n/g, "\n")
 
   // The document must open with a `---` fence on its own line.
   if (!normalised.startsWith("---\n") && normalised !== "---") return Option.none()

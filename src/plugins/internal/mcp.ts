@@ -48,8 +48,11 @@ const isStringRecord = (value: unknown): value is Record<string, string> =>
 const expand = (text: string, options: DecodeOptions): Option.Option<string> => {
   if (text.includes("${PLUGIN_ROOT}") && options.pluginRoot === undefined) return Option.none()
   if (text.includes("${PLUGIN_DATA}") && options.pluginData === undefined) return Option.none()
+  // One combined pass over the *original* text, so a placeholder value that
+  // itself contains `${PLUGIN_...}` is inserted literally, never re-expanded.
   return Option.some(
-    text.replaceAll("${PLUGIN_ROOT}", options.pluginRoot ?? "").replaceAll("${PLUGIN_DATA}", options.pluginData ?? "")
+    text.replace(/\$\{PLUGIN_(ROOT|DATA)\}/g, (_match, which) =>
+      which === "ROOT" ? (options.pluginRoot ?? "") : (options.pluginData ?? ""))
   )
 }
 
@@ -111,6 +114,8 @@ const decodeHttp = (name: string, entry: Record<string, unknown>): Decoded => {
     return { warning: `${name}: "url" is not a valid URL` }
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { warning: `${name}: "url" must be http(s)` }
+  if (parsed.username !== "" || parsed.password !== "") return { warning: `${name}: "url" must not contain credentials` }
+  if (parsed.hash !== "") return { warning: `${name}: "url" must not contain a fragment` }
   if (parsed.protocol === "http:" && !LOOPBACK.has(parsed.hostname)) {
     return { warning: `${name}: non-loopback "url" must use HTTPS` }
   }

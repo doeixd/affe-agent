@@ -78,6 +78,12 @@ describe("Frontmatter.parse", () => {
     assert.strictEqual(fm.body, "body\nmore")
   })
 
+  it("tolerates a repeated leading BOM", () => {
+    const fm = get("﻿﻿---\nname: x\ndescription: y\n---\nbody")
+    assert.strictEqual(fm.fields.name, "x")
+    assert.strictEqual(fm.body, "body")
+  })
+
   it("returns None when there is no opening fence", () => {
     assert.isTrue(Option.isNone(Frontmatter.parse("name: x\ndescription: y\n")))
     assert.isTrue(Option.isNone(Frontmatter.parse("# just markdown\n")))
