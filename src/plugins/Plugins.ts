@@ -1,4 +1,6 @@
 import { Effect, Layer, Option } from "effect"
+import * as McpClient from "../mcp/McpClient.js"
+import * as McpToolkit from "../mcp/McpToolkit.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
 import * as Skills from "../skills/Skills.js"
 import { decodeManifest } from "./internal/manifest.js"
@@ -95,3 +97,42 @@ export const load = (options?: LoadOptions): Effect.Effect<LoadedPlugin, PluginE
  */
 export const skillsLayer = (loaded: LoadedPlugin): Layer.Layer<Skills.SkillRegistry> =>
   Skills.layer(loaded.skills)
+
+const connect = (server: McpServer, clientInfo: McpClient.ClientInfo) =>
+  server.transport === "stdio"
+    ? McpClient.stdio({
+      server: {
+        command: server.command,
+        args: [...server.args],
+        env: server.env,
+        ...(server.cwd === undefined ? {} : { cwd: server.cwd })
+      },
+      clientInfo
+    })
+    : McpClient.streamableHttp({ url: new URL(server.url), clientInfo })
+
+/**
+ * Connect the plugin's MCP servers and bind their *discovered* tools into one
+ * toolkit — pass it to `Agent.make({ toolkit })` or merge it in.
+ *
+ * Scoped: the connections are acquired once and closed when the scope ends, so
+ * resolve it at session setup and pass the value (not per turn). Per the spec,
+ * failure is isolated: a server that cannot be reached is logged and skipped;
+ * the toolkit binds whatever connected. Discovered tools are `Tool.dynamic`
+ * (params validated by the server). Custom HTTP headers are not sent — that
+ * needs the richer `/mcp/v2` client.
+ */
+export const mcpToolkit = (
+  loaded: LoadedPlugin,
+  options?: { readonly clientInfo?: McpClient.ClientInfo | undefined }
+) =>
+  Effect.gen(function* () {
+    const clientInfo = options?.clientInfo ?? { name: "@doeixd/effect-agent/plugins", version: "0.0.1" }
+    const connections: Array<McpToolkit.Connection> = []
+    for (const server of loaded.mcpServers) {
+      const connection = yield* Effect.option(connect(server, clientInfo))
+      if (Option.isSome(connection)) connections.push(connection.value)
+      else yield* Effect.logWarning(`plugins: could not connect to MCP server "${server.name}"`)
+    }
+    return yield* McpToolkit.bindDiscovered(connections)
+  })

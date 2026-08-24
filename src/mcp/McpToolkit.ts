@@ -1,5 +1,8 @@
-import { Effect, Schema } from "effect"
+import { Effect, Predicate, Schema } from "effect"
+import type * as JsonSchema from "effect/JsonSchema"
 import { AiError, Tool, Toolkit } from "effect/unstable/ai"
+
+const isObject = Predicate.isObject
 
 /**
  * Using a remote MCP server's tools, with the types inferred.
@@ -143,6 +146,66 @@ const describe = (error: unknown): string =>
   typeof error === "object" && error !== null && "message" in error
     ? String((error as { message: unknown }).message)
     : String(error)
+
+/**
+ * Bind a server's *discovered* tools, without declaring them.
+ *
+ * The counterpart to `bind`: where `bind` verifies a server against local
+ * `Tool.make` declarations and yields typed tools, this lists whatever the
+ * server(s) offer and binds each as a `Tool.dynamic` — parameters `unknown`,
+ * validated by the server on call, results passed through as `unknown`. It is
+ * how a plugin loader, which has server configs but no compile-time tool types,
+ * turns a set of connections into one toolkit.
+ *
+ * Multiple connections are combined into a single toolkit; on a tool-name
+ * collision across servers the first connection to offer the name wins (the
+ * loser is dropped). A server-reported failure reaches the agent as the tool's
+ * failure; a transport or content problem becomes an `AiError`.
+ */
+export const bindDiscovered = (
+  connections: ReadonlyArray<Connection>
+): Effect.Effect<Toolkit.WithHandler<Record<string, Tool.Any>>, McpTransportError> =>
+  Effect.gen(function* () {
+    const listings = yield* Effect.forEach(connections, (connection) =>
+      Effect.map(connection.listTools, (tools) => tools.map((tool) => ({ tool, connection }))))
+
+    const seen = new Set<string>()
+    const unique = listings.flat().filter(({ tool }) => {
+      if (seen.has(tool.name)) return false
+      seen.add(tool.name)
+      return true
+    })
+
+    const tools: Array<Tool.Any> = unique.map(({ tool }) =>
+      Tool.dynamic(tool.name, {
+        ...(tool.description === undefined ? {} : { description: tool.description }),
+        // `inputSchema` is the server's JSON Schema; `unknown` structurally, but
+        // that is exactly what `Tool.dynamic`'s JSON-Schema mode consumes.
+        ...(isObject(tool.inputSchema) ? { parameters: tool.inputSchema as JsonSchema.JsonSchema } : {}),
+        // Unknown, so a server-reported failure can surface as the tool's failure.
+        failure: Schema.Unknown
+      }))
+
+    const built = Toolkit.make(...tools)
+
+    const handlers = Object.fromEntries(
+      unique.map(({ connection, tool }) => [
+        tool.name,
+        (params: unknown) =>
+          connection.callTool(tool.name, params).pipe(
+            Effect.catch((error) =>
+              error._tag === "McpToolError"
+                ? Effect.fail(error.error)
+                : Effect.fail(new AiError.InternalProviderError({ description: error.message }))
+            )
+          )
+      ])
+    )
+
+    return (yield* built.pipe(
+      Effect.provide(built.toLayer(handlers as Toolkit.HandlersFrom<Record<string, Tool.Any>>))
+    )) as Toolkit.WithHandler<Record<string, Tool.Any>>
+  })
 
 /**
  * Bind declared tools to a remote MCP server.
