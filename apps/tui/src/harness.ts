@@ -10,7 +10,7 @@ import * as MemorySandbox from "../../../src/sandbox/memory.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import * as SessionTree from "../../../src/tree/SessionTree.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
-import { bodyOf, defaultViews, titleOf, type ToolView } from "./tools.ts"
+import { bodyOf, defaultViews, titleOf, type Views } from "./tools.ts"
 import { type Approval, type Handle, type Sink } from "./view.ts"
 import { duration } from "./width.ts"
 
@@ -139,7 +139,26 @@ const nextId = (prefix: string): string => `${prefix}-${++counter}`
  * arrive without one: the harness owns that correlation so the renderer does
  * not have to.
  */
-const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
+/**
+ * Exported for the smoke test.
+ *
+ * Some event shapes are impractical to reach through a real run -- an
+ * interrupt landing precisely while a tool is in flight is a race, and a test
+ * that has to win a race is a test that fails for the wrong reason. Driving
+ * the projection directly makes those cases ordinary.
+ */
+export const project = (
+  sink: Sink,
+  views: Views,
+  /**
+   * The text of the submission that is starting, if one was offered.
+   *
+   * The user's line is drawn from `SubmissionStarted` rather than from
+   * `submit`, because only the kernel knows whether it accepted the input. A
+   * prompt refused as busy never starts, so it never draws -- see `submit`.
+   */
+  takeOffered: () => string | undefined = () => undefined
+) => {
   let assistant: string | undefined
   // A call's parameters, kept until its result arrives: a body renderer often
   // needs both sides, and the success event carries only one.
@@ -164,11 +183,22 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
 
   const onEvent = (event: AgentEvent.AgentEventEnvelope["event"]): void => {
     switch (event._tag) {
-      case "SubmissionStarted":
+      case "SubmissionStarted": {
+        // Admitted: now, and only now, is it true that the agent received it.
+        const offered = takeOffered()
+        if (offered !== undefined) {
+          sink.append({
+            id: nextId("user"),
+            kind: "user",
+            title: offered,
+            body: { type: "none" }
+          })
+        }
         startedAt = Date.now()
         tools = 0
         sink.setStatus("working")
         return
+      }
 
       /**
        * Deliberately nothing on `MessageStarted`.
@@ -268,6 +298,24 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
         params.delete(event.id)
         return
 
+      /**
+       * Interruption is terminal, and saying so is load-bearing.
+       *
+       * An entry left `running` is never settled, and `drainSettled` takes a
+       * *prefix* -- so one interrupted tool holds itself and every later entry
+       * out of scrollback for the rest of the session. The transcript stops
+       * growing and the cause is three screens back.
+       *
+       * Marked `failed` rather than given a status of its own: the run went
+       * away, and a reader needs to know the tool did not finish. A distinct
+       * "interrupted" marker would be a nicer story and a wider change to the
+       * view model than this fix should make.
+       */
+      case "ToolCallInterrupted":
+        sink.patch(`tool-${event.id}`, { status: "failed" })
+        params.delete(event.id)
+        return
+
       case "SubmissionCompleted":
       case "SubmissionFailed":
       case "SubmissionInterrupted":
@@ -317,7 +365,7 @@ let disposeFiber: () => void = () => {}
 export const start = (
   sink: Sink,
   /** Rendering rules. An application adds its own tools' rules here. */
-  views: Readonly<Record<string, ToolView>> = defaultViews
+  views: Views = defaultViews
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
     const program = Effect.gen(function*() {
@@ -339,7 +387,15 @@ export const start = (
       })
       const start = yield* tree.commit(root, { cause: "root", label: "start" })
 
-      const projection = project(sink, views)
+      /**
+       * Prompts offered but not yet admitted, oldest first.
+       *
+       * A ticket per call rather than a plain queue of strings, so a rejected
+       * prompt can withdraw *its own* offer. Withdrawing by position would
+       * remove somebody else's when two are outstanding.
+       */
+      const offered: Array<{ readonly text: string }> = []
+      const projection = project(sink, views, () => offered.shift()?.text)
 
       /**
        * Subscribed once, to the tree rather than to a session.
@@ -413,12 +469,17 @@ export const start = (
 
       resolve({
         submit: (text) => {
-          sink.append({
-            id: nextId("user"),
-            kind: "user",
-            title: text,
-            body: { type: "none" }
-          })
+          /**
+           * Offered, not yet shown.
+           *
+           * Drawing the user's line here would claim the agent received input
+           * it may refuse -- a prompt arriving while a submission is running
+           * fails with `AgentBusyError`, and the line would sit in the
+           * transcript describing something that never entered history.
+           * Scrollback is write-once, so it could not be taken back either.
+           */
+          const ticket = { text }
+          offered.push(ticket)
           Effect.runFork(
             // Streamed, so `MessageDelta` arrives and the reply builds up a
             // token at a time. Whether a call streams is the caller's choice,
@@ -427,14 +488,19 @@ export const start = (
             // different branch, and a prompt must go to the one on screen.
             session.prompt(text, { stream: true }).pipe(
               Effect.catchCause((cause) =>
-                Effect.sync(() =>
+                Effect.sync(() => {
+                  // Withdraw the offer if it never started. If it did start,
+                  // the projection already claimed the ticket and the failure
+                  // belongs to a turn the user can see.
+                  const index = offered.indexOf(ticket)
+                  if (index !== -1) offered.splice(index, 1)
                   sink.append({
                     id: nextId("notice"),
                     kind: "notice",
                     title: `prompt failed: ${Cause.pretty(cause)}`,
                     body: { type: "none" }
                   })
-                )
+                })
               ),
               Effect.andThen(publishDepth()),
               Effect.asVoid

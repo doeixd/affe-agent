@@ -1,8 +1,11 @@
 import { testRender } from "@opentui/solid"
 import { App } from "./App.tsx"
-import { start, stop } from "./harness.ts"
+import { project, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
 import type { Sink } from "./view.ts"
+import { Schema } from "effect"
+import { Tool } from "effect/unstable/ai"
+import { CodingToolkit } from "../../../src/coding/index.js"
 import { bodyOf, defaultViews, titleOf, withViews } from "./tools.ts"
 import { duration, widthPolicy } from "./width.ts"
 
@@ -43,7 +46,7 @@ const counting: Sink = {
 
 const handle = await start(counting)
 
-const { captureCharFrame, externalOutput, flush, waitForFrame } = await testRender(
+const { captureCharFrame, externalOutput, flush } = await testRender(
   () => (
     <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} />
   ),
@@ -63,6 +66,33 @@ console.log("--- live region, before any prompt ---")
 console.log(before)
 
 /**
+ * Wait for a condition, yielding to the runtime between checks.
+ *
+ * Not `waitForFrame`, and the difference matters more than it looks.
+ * `waitForFrame` counts render passes, so it only makes progress while the UI
+ * is *painting* -- and the thing being waited for here is an Effect fibre,
+ * which paints nothing until it produces something. When the two disagree the
+ * predicate is polled a few times, the pass budget runs out, and the test
+ * fails having never let the agent run.
+ *
+ * That is not hypothetical: this suite passed for a while only because
+ * `submit` happened to write to the store synchronously, giving the renderer
+ * something to paint on every prompt. Fixing that (a user line must not be
+ * drawn before the kernel accepts it) removed the incidental repaint and every
+ * wait here began timing out.
+ *
+ * `setTimeout` is a macrotask, so the Effect scheduler gets to run between
+ * checks whether or not anything was drawn.
+ */
+const until = async (predicate: () => boolean, what: string): Promise<void> => {
+  for (let attempt = 0; attempt < 4000; attempt++) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error(`timed out waiting for ${what}`)
+}
+
+/**
  * Run one prompt to completion.
  *
  * Waiting for `status() === "idle"` alone is a race: a session is idle *before*
@@ -75,13 +105,13 @@ const ask = async (text: string) => {
   // The policy asks before any shell or write, so a turn that needs approval
   // never completes on its own. Approving here is what a user would do; the
   // refusal path is exercised deliberately further down.
-  await waitForFrame(
+  await until(
     () => {
       const view = footer()
       if (view.type === "approval") handle.respond(view.request.id, true)
       return completed >= target && entries.length === 0
     },
-    { maxPasses: 400 }
+    `"${text}" to complete`
   )
 }
 
@@ -96,7 +126,10 @@ await ask("bump the drifting value")
 // which never happens while the footer is asking, so drive it explicitly.
 const beforeApproval = completed
 handle.submit("delete everything")
-await waitForFrame(() => footer().type === "approval", { maxPasses: 400 })
+await until(() => footer().type === "approval", "the approval footer")
+// A frame, so `captureCharFrame` below shows the footer rather than whatever
+// was painted last.
+await flush()
 const asking = captureCharFrame()
 
 handle.respond(
@@ -105,9 +138,10 @@ handle.respond(
     : "",
   false
 )
-await waitForFrame(() => completed > beforeApproval && entries.length === 0, {
-  maxPasses: 400
-})
+await until(
+  () => completed > beforeApproval && entries.length === 0,
+  "the refused turn to finish"
+)
 
 // V6: rewind. Every turn above was captured as a node by the session tree, so
 // there is somewhere to go back to -- and going back must not disturb the one
@@ -115,7 +149,7 @@ await waitForFrame(() => completed > beforeApproval && entries.length === 0, {
 const depthBefore = rewind().depth
 const rewoundFrom = completed
 handle.rewind()
-await waitForFrame(() => rewind().taken === 1 && entries.length === 0, { maxPasses: 400 })
+await until(() => rewind().taken === 1 && entries.length === 0, "the rewind")
 const depthAfter = rewind().depth
 
 // The branch is live, not a transcript: a prompt reaches it and it answers.
@@ -222,29 +256,127 @@ const checks: Array<readonly [string, boolean]> = [
 
 // W1/W2: the registry. Exercised directly rather than through a render, so a
 // fallback and a user-supplied rule are both provable without a tool existing.
+/**
+ * R4: an interrupted tool is terminal.
+ *
+ * Driven through the projection rather than a real run, because landing an
+ * interrupt precisely while a tool is in flight is a race. The property has
+ * nothing to do with timing: a tool entry that never leaves `running` is never
+ * settled, and `drainSettled` takes a *prefix*, so one of them holds itself
+ * and every later entry out of scrollback for the rest of the session.
+ */
+const interruptStore = makeStore()
+const { onEvent: onInterrupted } = project(interruptStore.sink, defaultViews)
+onInterrupted({ _tag: "ToolCallStarted", id: "x1", name: "bash", params: { command: "sleep 9" } })
+const runningEntries = interruptStore.drainSettled().length
+onInterrupted({ _tag: "ToolCallInterrupted", id: "x1", name: "bash" })
+interruptStore.sink.append({
+  id: "after",
+  kind: "notice",
+  title: "later work",
+  body: { type: "none" }
+})
+const drainedAfterInterrupt = interruptStore.drainSettled().map((entry) => entry.id)
+
+/**
+ * R13: a rejected prompt is not drawn as if it were received.
+ *
+ * The user's line comes from `SubmissionStarted`, so a prompt the kernel never
+ * admitted leaves no trace of having been said. Driven through the projection
+ * because the interesting case is the event that *does not* arrive.
+ */
+const rejectedStore = makeStore()
+const offers: Array<string> = ["accepted"]
+const { onEvent: onAdmitted } = project(
+  rejectedStore.sink,
+  defaultViews,
+  () => offers.shift()
+)
+onAdmitted({ _tag: "SubmissionStarted" })
+const drawnWhenAdmitted = rejectedStore.drainSettled().map((entry) => entry.title)
+// Nothing offered: a submission the user did not type -- and nothing to draw.
+onAdmitted({ _tag: "SubmissionStarted" })
+const drawnWhenNotOffered = rejectedStore.drainSettled().length
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
-// What an application adding its own tool would write.
-const extended = withViews({
+/**
+ * What an application adding its own tool would write.
+ *
+ * A real tool, not a name in a record, because the types are the thing being
+ * tested: `params` below is `deploy`'s own parameters, inferred from the
+ * toolkit passed alongside the rules. The previous version of this example
+ * wrote `(params as { environment: string })` -- a cast, in the code that
+ * advertises the extension point, in a repository whose first rule is that
+ * user code must never need one.
+ */
+const deploy = Tool.make("deploy", {
+  parameters: Schema.Struct({
+    environment: Schema.String,
+    replicas: Schema.Number
+  }),
+  success: Schema.Struct({ url: Schema.String })
+})
+
+const extended = withViews([deploy], {
+  // No narrowing helpers, no cast: `environment` is a string because the
+  // toolkit says so, and `replica` instead of `replicas` would not compile.
   deploy: {
-    title: (params) => `deploy → ${(params as { environment: string }).environment}`,
-    body: () => ({ type: "text", content: "rolled out" }),
+    title: (params) => `deploy → ${params.environment} ×${params.replicas}`,
+    body: (result) => ({ type: "text", content: `rolled out to ${result.url}` }),
     approval: (request) => `deploy to ${request.resource}`
   }
 })
-const customTitle = titleOf(extended, "deploy", { environment: "prod" })
+/**
+ * Compiling is not proof that inference is precise -- `any` compiles too.
+ *
+ * These assert the two sides are the tool's own types and not `unknown`, and
+ * are the reason the cast is gone rather than merely relocated. Break either
+ * `ViewsFor` mapping and one of them stops compiling.
+ */
+type IsAny<T> = 0 extends 1 & T ? true : false
+type Assert<T extends true> = T
+type DeployView = NonNullable<Parameters<typeof withViews<readonly [typeof deploy]>>[1]["deploy"]>
+type DeployParams = Parameters<NonNullable<DeployView["title"]>>[0]
+type DeployResult = Parameters<NonNullable<DeployView["body"]>>[0]
 
-// Replacing one of ours, the way handlers can be replaced.
-const replaced = withViews({ bash: { title: () => "shell" } })
+export type _ParamsAreNotAny = Assert<IsAny<DeployParams> extends true ? false : true>
+export type _ParamsAreTheTool = Assert<
+  DeployParams extends { readonly environment: string; readonly replicas: number } ? true : false
+>
+export type _ResultIsTheTool = Assert<
+  DeployResult extends { readonly url: string } ? true : false
+>
+
+const customTitle = titleOf(extended, "deploy", { environment: "prod", replicas: 3 })
+const customBody = bodyOf(extended, "deploy", { url: "https://example.test" }, {})
+
+// Replacing one of ours, the way handlers can be replaced. Typed against our
+// own toolkit, so this proves the same inference covers the built-in rules.
+const replaced = withViews(CodingToolkit.tools, { bash: { title: () => "shell" } })
 
 checks.push(
   ["unknown tool falls back to a legible title", unknownTitle === "deploy [environment=prod]"],
   ["unknown tool still renders a body", unknownBody.type === "text"],
-  ["an application can register its own tool", customTitle === "deploy → prod"],
+  ["an application can register its own tool", customTitle === "deploy → prod ×3"],
+  // Both sides are typed, and they are typed differently: parameters arrive
+  // as the model encoded them, results as the handler returned them.
+  ["a rule reads its tool's result without narrowing", customBody.type === "text"
+    && customBody.content === "rolled out to https://example.test"],
   ["a registered rule can replace one of ours", titleOf(replaced, "bash", {}) === "shell"],
   ["replacing one rule keeps the others", bodyOf(replaced, "list_files", []).type === "structured"],
-  ["our own titles still apply", titleOf(defaultViews, "edit_file", { path: "a.ts" }) === "edit a.ts"]
+  ["our own titles still apply", titleOf(defaultViews, "edit_file", { path: "a.ts" }) === "edit a.ts"],
+
+  // R4
+  ["a running tool holds back the transcript", runningEntries === 0],
+  ["an interrupted tool settles", drainedAfterInterrupt.includes("tool-x1")],
+  // The point of the fix: it stops blocking everything behind it.
+  ["and stops blocking what follows", drainedAfterInterrupt.includes("after")],
+
+  // R13
+  ["an admitted prompt is drawn", drawnWhenAdmitted.includes("accepted")],
+  ["a prompt the kernel never took is not", drawnWhenNotOffered === 0]
 )
 
 console.log("--- checks ---")

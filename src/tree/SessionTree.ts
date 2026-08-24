@@ -8,6 +8,7 @@ import {
   Ref,
   Schema,
   Scope,
+  Semaphore,
   Stream,
   SubscriptionRef
 } from "effect"
@@ -111,6 +112,23 @@ export class SessionBusy extends Schema.TaggedError<SessionBusy>()(
   }
 }
 
+/**
+ * The session cannot be captured because it is finished.
+ *
+ * Distinct from `SessionBusy`, and the distinction is the whole point: busy
+ * means "try again in a moment", closed means "never". Collapsing them into
+ * one error tells a caller to retry forever against a session that will not
+ * come back.
+ */
+export class SessionClosed extends Schema.TaggedError<SessionClosed>()(
+  "@doeixd/effect-agent/tree/SessionClosed",
+  { sessionId: Schema.String }
+) {
+  override get message() {
+    return `Cannot capture a node from a closed session: ${this.sessionId}`
+  }
+}
+
 export interface CommitOptions {
   readonly cause?: NodeCause | undefined
   readonly label?: string | undefined
@@ -206,7 +224,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
   readonly commit: (
     session: AgentSession.AgentSession<Tools, E>,
     options?: CommitOptions
-  ) => Effect.Effect<Node, SessionBusy>
+  ) => Effect.Effect<Node, SessionBusy | SessionClosed>
 
   /**
    * Start a session from a node.
@@ -354,8 +372,20 @@ interface Held {
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(
   agent: AgentDefinition<Tools, E, R>,
   options?: {
-    /** How branch session ids are named. Defaults to the node's id. */
-    readonly sessionIds?: ((node: Node) => string) | undefined
+    /**
+     * How branch session ids are named.
+     *
+     * The node *and* the branch's ordinal, because the node alone cannot
+     * make a unique name: branching twice from one node calls this twice with
+     * the same argument, so the obvious deterministic implementation returns
+     * one id for two live sessions. The tree keys a session's cursor and lane
+     * by that id, so the two would overwrite each other's position and later
+     * commits would parent onto the wrong branch.
+     *
+     * The ordinal is per tree and monotonic, so `(node, n) => ...${n}` is
+     * unique by construction.
+     */
+    readonly sessionIds?: ((node: Node, ordinal: number) => string) | undefined
     /**
      * How the tree builds the sessions it hands back.
      *
@@ -439,6 +469,20 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       Option.none<Activation<Tools, E>>()
     )
     const currentScope = yield* Ref.make(Option.none<Scope.Closeable>())
+    /**
+     * One activation at a time.
+     *
+     * Switching is read-then-write over `currentScope`, which two concurrent
+     * callers interleave badly: both read the same predecessor, both install
+     * their own, both close that one predecessor -- and the loser's scope
+     * stays alive, still forwarding its branch into the feed. The symptom is
+     * not a missing branch but *two* of them, interleaved on one stream, which
+     * reads as an agent talking over itself.
+     *
+     * A UI produces exactly this: a held Ctrl+R fires rewinds faster than any
+     * of them completes, and each is its own detached fibre.
+     */
+    const activating = yield* Semaphore.make(1)
 
     const nextId = Effect.map(
       Ref.updateAndGet(counter, (n) => n + 1),
@@ -503,7 +547,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
     const commit: SessionTree<Tools, E>["commit"] = (session, commitOptions) =>
       Effect.gen(function*() {
         const captured = yield* AgentSession.snapshot(session).pipe(
-          Effect.mapError(() => new SessionBusy({ sessionId: session.id }))
+          // Preserved rather than flattened: `snapshot` already knows which of
+          // the two it is, and throwing that away leaves a caller retrying a
+          // session that is gone.
+          Effect.mapError((error) =>
+            error._tag === "AgentClosedError"
+              ? new SessionClosed({ sessionId: session.id })
+              : new SessionBusy({ sessionId: session.id })
+          )
         )
         const recorded = yield* record(captured.sessionId, captured.history, commitOptions)
         if (Option.isSome(recorded)) return recorded.value
@@ -545,7 +596,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       Effect.gen(function*() {
         const { history } = yield* find(node.id)
         const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
-        const sessionId = options?.sessionIds?.(node) ?? `${node.id}-branch-${n}`
+        const sessionId = options?.sessionIds?.(node, n) ?? `${node.id}-branch-${n}`
         const session = yield* AgentSession.make(agent, {
           ...options?.session,
           history,
@@ -697,6 +748,23 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         // A scope of the tree's own, so the reference is dropped on the next
         // switch rather than when some caller's scope happens to end.
         const scope = yield* Scope.make()
+        return yield* Effect.onExit(
+          install(node, history, scope),
+          // Anything that is not a completed install leaves this scope
+          // holding a branch reference and two consumers that nobody will
+          // ever close, because nobody else has a handle on it. Interruption
+          // is the realistic case: a UI that switches away mid-switch.
+          (exit) => Exit.isSuccess(exit) ? Effect.void : Scope.close(scope, Exit.void)
+        )
+      }).pipe(Semaphore.withPermit(activating))
+
+    /** The second half of `activate`, once its scope exists. */
+    const install = (
+      node: Node,
+      history: Prompt.Prompt,
+      scope: Scope.Closeable
+    ): Effect.Effect<Activation<Tools, E>, NodeMissing> =>
+      Effect.gen(function*() {
         const session = yield* RcMap.get(branches, node.id).pipe(
           Effect.provideService(Scope.Scope, scope)
         )
@@ -713,6 +781,8 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         )
         yield* consume(session, scope, (envelope) => PubSub.publish(feed, envelope))
 
+        // Serialised by the permit above, so this read-then-write cannot
+        // interleave with another activation's.
         const previous = yield* Ref.get(currentScope)
         yield* Ref.set(currentScope, Option.some(scope))
         const activation: Activation<Tools, E> = { node, session, history }

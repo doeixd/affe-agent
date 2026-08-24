@@ -488,6 +488,79 @@ describe("SessionTree", () => {
     })
   )
 
+  /**
+   * A property, not a regression test.
+   *
+   * This passes with the serialisation removed, and it is recorded here that
+   * it does: between `activate`'s read of the current scope and its write
+   * there is no suspension point, so two fibres cannot interleave there today
+   * and the interleaving a review anticipated is not reachable. The permit is
+   * kept because "no suspension point in these four lines" is a property of
+   * the current body rather than of the design, and one added `yield*` would
+   * make it false silently. What follows asserts the invariant either way.
+   */
+  it.effect("concurrent activations leave exactly one branch forwarding", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk", "left", "right")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const first = yield* tree.commit(session)
+        const left = yield* tree.branch(first, { lane: "left" })
+        yield* left.prompt("left")
+        const second = yield* tree.commit(left)
+
+        // Identity of each envelope, not just its sender. A stranded scope
+        // usually forwards the *same* session -- branches are cached per node,
+        // so activating one twice hands back one session -- and what shows up
+        // is therefore not a foreign id but the same envelope arriving twice.
+        const seen: Array<string> = []
+        yield* Effect.forkScoped(
+          Stream.runForEach(tree.events, (envelope) =>
+            Effect.sync(() => {
+              seen.push(`${envelope.sessionId}#${envelope.sequence}`)
+            }))
+        )
+        yield* Effect.yieldNow
+
+        // What a held Ctrl+R does: several switches in flight at once, each
+        // its own fibre, none waiting for the last.
+        yield* Effect.all(
+          [
+            tree.activate(first),
+            tree.activate(second),
+            tree.activate(first),
+            tree.activate(second)
+          ],
+          { concurrency: "unbounded" }
+        )
+
+        // Whichever won, only it should still be forwarding. A loser whose
+        // scope was never closed keeps pumping its own branch into the same
+        // feed, and the two interleave.
+        const winner = Option.getOrThrow(yield* tree.active)
+        const activation = yield* tree.activate(winner)
+        yield* activation.session.prompt("after")
+        for (let i = 0; i < 40; i++) yield* Effect.yieldNow
+
+        return { seen, live: activation.session.id }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // One pump, so each envelope appears once. Two surviving scopes both
+      // forward into the same feed, and every consumer downstream renders the
+      // turn twice.
+      assert.isAbove(out.seen.length, 0)
+      assert.deepStrictEqual(
+        out.seen.filter((id, index) => out.seen.indexOf(id) !== index),
+        [],
+        "no envelope should be forwarded more than once"
+      )
+      assert.isTrue(out.seen.some((id) => id.startsWith(out.live)))
+    })
+  )
+
   it.effect("a branch the caller still holds survives being switched away from", () =>
     Effect.gen(function*() {
       const { layer } = yield* script("trunk", "left", "right")

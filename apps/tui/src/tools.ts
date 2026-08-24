@@ -1,3 +1,4 @@
+import type { Tool, Toolkit } from "effect/unstable/ai"
 import type { Approval, Body } from "./view.ts"
 
 /**
@@ -63,12 +64,16 @@ export const count = (n: number, label: string): string =>
  * How one tool is presented.
  *
  * Every field is optional: a rule supplies only what it improves on, and the
- * fallback covers the rest. Each receives `unknown` -- see the note above --
- * so a rule narrows with the helpers before reading anything.
+ * fallback covers the rest.
+ *
+ * `Params` and `Result` default to `unknown`, which is what a rule written
+ * against the erased registry gets -- it narrows with the helpers below. A
+ * rule registered through `withViews` against a real toolkit gets that tool's
+ * own types instead, and narrows nothing.
  */
-export interface ToolView {
+export interface ToolView<Params = unknown, Result = unknown> {
   /** The entry's one-line header. */
-  readonly title?: (params: unknown) => string | undefined
+  readonly title?: (params: Params) => string | undefined
   /**
    * The structured body drawn beneath it.
    *
@@ -76,9 +81,31 @@ export interface ToolView {
    * was *asked* to do is often half the story -- `edit_file` returns the text
    * it replaced and the request holds the text that replaced it.
    */
-  readonly body?: (result: unknown, params: unknown) => Body | undefined
+  readonly body?: (result: Result, params: Params) => Body | undefined
   /** How the tool is described when it asks for approval. */
   readonly approval?: (request: Approval) => string | undefined
+}
+
+/** The erased registry the renderer holds: any tool name, any rule. */
+export type Views = Readonly<Record<string, ToolView>>
+
+/**
+ * Rules for a known toolkit, each typed by the tool it renders.
+ *
+ * The two sides are deliberately different, because the events they come from
+ * are different. `ToolCallStarted` carries what the *model* produced, which is
+ * the schema's `Encoded` side -- so a rule reads `old_string`, not whatever
+ * the decoded type happens to call it. `ToolCallSucceeded` carries the handler's
+ * decoded return. Typing both as the decoded `Type` would be the more obvious
+ * choice and would be wrong about the half a rule reads most.
+ *
+ * Optional per key, so a toolkit's tools need not all have rules.
+ */
+export type ViewsFor<Tools> = {
+  readonly [K in keyof Tools & string]?: ToolView<
+    Tool.ParametersEncoded<Tools[K]>,
+    Tool.Success<Tools[K]>
+  >
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +163,7 @@ export const fallbackApproval = (request: Approval): string =>
 // The default rules: our six tools
 // ---------------------------------------------------------------------------
 
-export const defaultViews: Readonly<Record<string, ToolView>> = {
+export const defaultViews: Views = {
   list_files: {
     body: (result) => ({
       type: "structured",
@@ -251,25 +278,52 @@ export const defaultViews: Readonly<Record<string, ToolView>> = {
  * replaced as well as extended -- the same rule `Agent.toolkit` follows for
  * handlers.
  */
-export const withViews = (
-  extra: Readonly<Record<string, ToolView>>,
-  base: Readonly<Record<string, ToolView>> = defaultViews
-): Readonly<Record<string, ToolView>> => ({ ...base, ...extra })
+/**
+ * Register rules for a toolkit's tools, keeping every other rule.
+ *
+ * The tools are passed for their *type*, and that is the whole point of this
+ * signature: a rule for `edit_file` then receives `edit_file`'s parameters,
+ * and a typo in a field name is a compile error rather than a blank line at
+ * runtime. Without it the registry hands out `unknown` and every consumer
+ * writes the cast this exists to remove -- which is exactly what the earlier
+ * version of this file made the extension example do.
+ *
+ * The registry stays *open*. `Tools` comes from whatever is passed, so an
+ * application that adds a tool passes its own tools and its own rules are
+ * typed too. A closed `keyof` union over our six tools would type the rules we
+ * wrote and force a cast on everyone else's, which is the wrong way round.
+ *
+ * Erasure at the boundary is the library's job: `titleOf` and `bodyOf` receive
+ * the same `unknown` they always did, narrowed here, once.
+ */
+export const withViews = <const Tools extends ReadonlyArray<Tool.Any> | Record<string, Tool.Any>>(
+  tools: Tools,
+  extra: ViewsFor<Toolkit.ToolsByName<Tools>>,
+  base: Views = defaultViews
+): Views => ({
+  ...base,
+  // The one narrowing, here rather than in every consumer. A rule typed for
+  // its tool is not assignable to one taking `unknown` -- parameters are
+  // contravariant -- and this is the boundary that erasure is *for*: the
+  // renderer holds a registry keyed by name, so it cannot hold types. Eating
+  // the variance here is what keeps it out of user code.
+  ...(extra as Views)
+})
 
 export const titleOf = (
-  views: Readonly<Record<string, ToolView>>,
+  views: Views,
   name: string,
   params: unknown
 ): string => views[name]?.title?.(params) ?? fallbackTitle(name, params)
 
 export const bodyOf = (
-  views: Readonly<Record<string, ToolView>>,
+  views: Views,
   name: string,
   result: unknown,
   params: unknown = undefined
 ): Body => views[name]?.body?.(result, params) ?? fallbackBody(result)
 
 export const approvalOf = (
-  views: Readonly<Record<string, ToolView>>,
+  views: Views,
   request: Approval
 ): string => views[request.toolName]?.approval?.(request) ?? fallbackApproval(request)

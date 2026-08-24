@@ -442,6 +442,58 @@ answers that fall out of the same comparison.
 Sharing no ancestor is an answer (`None`), not a failure. One tree can hold two
 unrelated roots, because a tree records whatever sessions it is given.
 
+**Review findings addressed (2026-08-24).** From
+[review-recent-commits-2026-08-24.md](./review-recent-commits-2026-08-24.md):
+R12, R4, R6, R7, R8, R13. 19 tree tests, 51 smoke assertions.
+
+**R12 was the one that mattered, because it broke this repository's first
+rule** -- user code must never need a cast -- *in the example that advertises
+the extension point*. `withViews` now takes the tools it is registering rules
+for, so a rule receives that tool's own types. Two details are load-bearing:
+
+- Parameters are typed `ParametersEncoded` and results `Success`, because those
+  are the two different things the events actually carry. `ToolCallStarted`
+  holds what the model produced; `ToolCallSucceeded` holds what the handler
+  returned. Typing both as the decoded `Type` is the obvious choice and is
+  wrong about the half a rule reads most.
+- The registry stays open. A closed `keyof` union over our six tools would type
+  the rules we wrote and force a cast on everyone else's, which is backwards.
+
+The example is now a real `Tool.make`, with type-level assertions that the
+inferred parameters are not `any` -- compiling proves nothing on its own.
+
+**R6 is a fix I could not make fail, and it is recorded as such.** Activation is
+now serialised and closes its own scope on interruption. Neither half of the
+race could be reproduced: between the read of the current scope and the write
+there is no suspension point, so two fibres cannot interleave there today. The
+permit stays because that is a property of the current four lines rather than
+of the design, and one added `yield*` would quietly make it false. The test
+asserts the invariant (no envelope forwarded twice) and passes with the permit
+removed; saying so here is better than implying it is a regression test.
+
+**R13 turned out to be propping up the test suite.** Drawing the user's line in
+`submit` claimed the agent had received input it might refuse -- and scrollback
+is write-once, so it could not be taken back. The line is now drawn from
+`SubmissionStarted`, which is the kernel saying it accepted.
+
+Removing that synchronous store write broke every wait in the smoke test, which
+had been relying on it: `waitForFrame` counts *render passes*, so it only makes
+progress while the UI is painting, and what these waits are actually waiting
+for is an Effect fibre that paints nothing until it produces something. The
+suite had been intermittently flaky for exactly this reason. Waits now yield
+through `setTimeout`, so the runtime runs whether or not anything was drawn.
+
+**R4** -- an interrupted tool kept `status: "running"`, and `drainSettled` takes
+a *prefix*, so one of them held itself and every later entry out of scrollback
+for the rest of the session.
+
+**R7** -- `sessionIds` took only the node, so branching twice from one node
+called it twice with one argument and any deterministic implementation returned
+one id for two live sessions. It now takes the branch ordinal too.
+
+**R8** -- `commit` mapped every snapshot failure to `SessionBusy`. Busy means
+"try again"; closed means "never". There is now a `SessionClosed`.
+
 ### T5 — Persistence
 
 A node store behind an interface, in-memory by default, with a Schema-backed
