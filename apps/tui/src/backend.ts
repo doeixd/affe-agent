@@ -1,6 +1,7 @@
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { Config, Effect, Layer } from "effect"
 import type { Scope } from "effect"
+import type { PlatformError } from "effect/PlatformError"
 import type { LanguageModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
@@ -28,6 +29,18 @@ import * as NodeStore from "../../../src/tree/NodeStore.js"
 
 export type Kind = "scripted" | "live"
 
+/**
+ * What building a backend can fail with.
+ *
+ * Named rather than erased to `unknown`. The seam existed to make a scripted
+ * and a live backend interchangeable, and a widened error channel hides
+ * exactly the difference that matters between them: the live one needs a key
+ * and a directory and can fail to get either. `unknown` also puts this seam
+ * outside the repository's typed-error contract for no gain, since the only
+ * thing downstream did with it was print a pretty cause.
+ */
+export type BackendError = Config.ConfigError | Sandbox.ProviderError
+
 export interface Backend {
   readonly kind: Kind
   /**
@@ -42,7 +55,7 @@ export interface Backend {
    */
   readonly store?: Effect.Effect<
     NodeStore.NodeStore<NodeStore.StoreError>,
-    unknown,
+    PlatformError,
     Scope.Scope
   > | undefined
   /**
@@ -56,7 +69,7 @@ export interface Backend {
    */
   readonly layer: Layer.Layer<
     LanguageModel.LanguageModel | Sandbox.Current,
-    unknown,
+    BackendError,
     Scope.Scope
   >
   /** Shown in the footer, so it is never a guess which one is running. */

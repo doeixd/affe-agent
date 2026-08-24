@@ -12,7 +12,7 @@ import { Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { CodingToolkit } from "../../../src/coding/index.js"
 import { bodyOf, defaultViews, titleOf, withViews } from "./tools.ts"
-import { duration, widthPolicy } from "./width.ts"
+import { duration, fit, widthPolicy } from "./width.ts"
 
 /**
  * A headless smoke test: render the real UI against the real harness, drive
@@ -772,6 +772,57 @@ failStore.commitSettled((entry) => {
   retried.push(entry.id)
 })
 
+/**
+ * R99 -- the backend label obeys the width policy.
+ *
+ * The footer only ever drew a ten-character `scripted` in this suite, so a
+ * live label -- a model name plus a workspace path, wider than some terminals
+ * on its own -- was never rendered at all. These check the fitting directly
+ * and then at three real widths.
+ */
+const longLabel = "claude-opus-4-5 · C:/Users/somebody/projects/a-rather-long-workspace"
+const fitted = [40, 80, 120].map((width) =>
+  fit(longLabel, widthPolicy(width).backendWidth))
+// The middle goes, not the end: both halves identify the backend, and trimming
+// the tail leaves every workspace under one parent looking identical.
+const keepsBothEnds = fitted.every((text) =>
+  text[0] === longLabel[0] && text[text.length - 1] === longLabel[longLabel.length - 1])
+
+const narrowRun = makeStore()
+narrowRun.sink.setBackend(longLabel)
+const narrow = await testRender(
+  () => (
+    <App
+      entries={narrowRun.entries}
+      status={narrowRun.status()}
+      handle={handle}
+      commitSettled={narrowRun.commitSettled}
+      footer={narrowRun.footer()}
+      rewind={narrowRun.rewind()}
+      backend={narrowRun.backend()}
+      dismiss={() => narrowRun.sink.setPalette(undefined)}
+      openPalette={() => narrowRun.sink.setPalette(handle.commands)}
+      quit={() => {}}
+    />
+  ),
+  { width: 40, height: 10 }
+)
+await narrow.flush()
+const narrowFrame = narrow.captureCharFrame()
+/**
+ * Evidence that the label was fitted *before* rendering.
+ *
+ * "the frame does not overflow" cannot fail: OpenTUI clips text to its box, so
+ * a captured line is never wider than the terminal whatever it is given. The
+ * label would simply be silently truncated at the edge, with no ellipsis and
+ * no sign that anything was lost. The ellipsis is the difference between a
+ * label that was cut deliberately and one that ran off the end.
+ */
+// Specific to the label: the input's placeholder contains an ellipsis of its
+// own, so looking for any `…` in the frame passes whatever the footer does.
+const narrowShowsEllipsis = /claude…/.test(narrowFrame)
+const narrowHidesFullPath = !narrowFrame.includes("a-rather-long-workspace")
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
@@ -901,6 +952,15 @@ checks.push(
   // Bound in the renderer rather than left to SIGINT, which a raw-mode
   // terminal need not deliver.
   ["ctrl+c interrupts from the keyboard", interruptRequests === 1],
+  // R99
+  ["a long label is cut to fit", fitted.every((text, index) =>
+    text.length <= widthPolicy([40, 80, 120][index]!).backendWidth)],
+  ["and says it was cut", fitted.every((text) => text.includes("…"))],
+  ["keeping both ends, which are what identify it", keepsBothEnds],
+  // The frame nobody rendered: a live-length label in a narrow terminal.
+  ["a narrow footer cuts the label deliberately", narrowShowsEllipsis],
+  ["rather than letting it run off the edge", narrowHidesFullPath],
+
   // R129
   ["a write failure surfaces", threw],
   ["what was written is gone from the store", !leftAfterFailure.includes("one")],

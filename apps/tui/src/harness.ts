@@ -631,8 +631,24 @@ export const start = (
         const active = yield* tree.active
         const lanes = yield* tree.lanes
         const named = new Map(lanes.map((lane) => [lane.leaf.id, lane.name]))
-        const leaves = yield* Effect.filter(yield* tree.nodes, (node) =>
-          Effect.map(tree.children(node), (children) => children.length === 0))
+        /**
+         * Leaves from one pass over the nodes.
+         *
+         * Was a `children` call per node, which is quadratic in the tree and,
+         * on the persistent store, decodes every conversation to answer a
+         * question about metadata -- so opening a selector read the whole
+         * history of every branch. A node is a leaf when nothing names it as
+         * a parent, and that is one set.
+         *
+         * The remaining half of the cost is the store's: `nodes` decodes each
+         * entry, history included, because a node and its conversation share
+         * one record. Splitting those is a library change, not a UI one.
+         */
+        const all = yield* tree.nodes
+        const parents = new Set(
+          all.flatMap((node) => Option.isSome(node.parent) ? [node.parent.value] : [])
+        )
+        const leaves = all.filter((node) => !parents.has(node.id))
         return yield* Effect.forEach(leaves, (node) =>
           Effect.map(tree.summary(node), (summary): BranchItem => ({
             id: node.id,

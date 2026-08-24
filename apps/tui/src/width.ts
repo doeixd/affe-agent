@@ -31,15 +31,42 @@ export interface WidthPolicy {
   readonly compact: boolean
   readonly hints: boolean
   readonly spacious: boolean
+  /** Cells the backend label may occupy. See `widthPolicy`. */
+  readonly backendWidth: number
 }
 
 export const widthPolicy = (width: number): WidthPolicy => ({
   compact: width < BREAKPOINTS.compact,
   hints: width >= BREAKPOINTS.hints,
-  spacious: width >= BREAKPOINTS.spacious
+  spacious: width >= BREAKPOINTS.spacious,
+  /**
+   * How much of the footer the backend label may take.
+   *
+   * A share rather than a constant, because the label sits on the same row as
+   * the status and the hints -- a fixed budget that fits at 120 columns pushes
+   * the row past the edge at 60. Floored at eight so it never shrinks to just
+   * an ellipsis; below that the label is worth less than the space.
+   */
+  backendWidth: Math.max(8, Math.floor(width / 3))
 })
 
 /** `1.2s`, `340ms`, `2m 05s` -- whichever reads best at that magnitude. */
+/**
+ * Cut a label to fit, with an ellipsis that says it was cut.
+ *
+ * Middles go, not ends: a live backend's label is `model · /some/long/path`,
+ * and both halves identify it. Trimming the tail would leave every workspace
+ * under one parent looking identical.
+ */
+export const fit = (text: string, width: number): string => {
+  if (width <= 1 || text.length <= width) return text
+  const head = Math.ceil((width - 1) / 2)
+  const tail = width - 1 - head
+  return tail === 0
+    ? `${text.slice(0, head)}…`
+    : `${text.slice(0, head)}…${text.slice(text.length - tail)}`
+}
+
 export const duration = (millis: number): string => {
   if (millis < 1000) return `${Math.round(millis)}ms`
   if (millis < 60_000) return `${(millis / 1000).toFixed(1)}s`

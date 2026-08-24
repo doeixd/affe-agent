@@ -21,7 +21,7 @@ import type {
   Status,
   ToolSnapshot
 } from "./view.ts"
-import { widthPolicy } from "./width.ts"
+import { fit, widthPolicy } from "./width.ts"
 
 /**
  * The renderer.
@@ -565,11 +565,16 @@ export const App = (props: {
         </Show>
         {/* Only offered when it would do something. An affordance shown while
             inert teaches the user it does not work. */}
-        {/* Named before the hints, and kept at the narrowest width the
-            footer still draws anything at: which backend is running changes
-            what the transcript above *means*, so it is the last thing to go. */}
+{/* Which backend is running changes what the transcript above *means*,
+            so it survives narrowing longer than the hints do -- but it obeys
+            the same policy rather than ignoring it. A live label carries a
+            model name and a workspace path and can be wider than the terminal
+            on its own, which is how a footer that only ever drew a
+            ten-character `scripted` came to overflow. */}
         <Show when={props.backend !== ""}>
-          <text fg={theme.footer.muted}>{`   ${props.backend}`}</text>
+          <text fg={theme.footer.muted}>
+            {`   ${fit(props.backend, policy().backendWidth)}`}
+          </text>
         </Show>
         <Show when={policy().hints && props.status === "idle" && canRewind()}>
           <text fg={theme.footer.muted}>
