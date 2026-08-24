@@ -115,6 +115,59 @@ Filling this in is the milestone. Empty cells are the backlog, and the `✗` is
 the honest answer until H5 changes it. This single table is what stops a user
 adopting the wrong path, and it is also the outline for the README copy.
 
+**H1: landed (2026-08-24).** The matrix below. Empty cells are the backlog and
+the `✗` is the honest answer until H5 changes it.
+
+| Guarantee | In-process | `/durable` | `/cluster` | HTTP+SSE | Durable client |
+| --- | --- | --- | --- | --- | --- |
+| D1 Accepted work executes or is refused | ✓ `AgentSession.test` | ✓ `DurableAdmission` | ✓ `Cluster` | ✓ `DurableHttpConcurrency` | ✓ `DurableAgentClient` |
+| D2 Resumption never repeats work | n/a | ✓ `Durable` | ✓ `Cluster` | n/a | ✓ `DurableAgentClient` |
+| D3 Resumption never skips accepted work | n/a | ✓ `DurableAgentClient` | ✓ `Cluster` | n/a | ✓ `DurableAgentClient` |
+| D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ `Durable` | ✓ `Cluster` | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
+| D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | **✗ live-only (H5)** | ✓ `DurableAgentClient` |
+| D6 A recorded event is replay-stable | n/a | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` |
+| D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | … | … | … |
+| D8 Every claim names its path | this table | this table | this table | this table | this table |
+
+**The one `✗` is W3, and it is a design defect rather than a documentation
+gap.** A user on the HTTP adapter gets live-only delivery: disconnect and the
+events emitted while away are gone. Until H5, the honest statement is that
+reconnect-from-offset is a property of the durable client, not of the SSE
+transport.
+
+**H2: landed (2026-08-24).** Every invariant with a mechanism was broken once
+and the suite re-run over nine durability test files (121 tests). Results:
+
+| Invariant | Break applied | Verdict |
+| --- | --- | --- |
+| D1 | admit even when already claimed | **bites** (4 fail) |
+| D2 | randomise the tool activity name | **bites** (2 fail) |
+| D2b | make every occurrence look like the first | **bites** (1 fail) |
+| D3 | leave an accepted-but-undispatched claim alone | **bites** (1 fail) |
+| D4 | record an interrupted result as completed | **bites** (4 fail) |
+| D5 | ignore the caller's `after` offset | **bites** (2 fail) |
+| D6 | never notice a duplicate key | **bites** (4 fail) |
+| D7 | *no mechanism to break* | **was not tested** |
+
+**H2 found what the plan predicted it would.** D7 had no test at all.
+`test/StorageError.test.ts` covers the *read* side thoroughly -- a corrupt row
+decodes to a failure rather than a defect -- and nothing anywhere injected a
+store that failed a **write**. Every durability test assumed storage worked,
+which is precisely the assumption "never lost" is not allowed to make.
+
+`test/DurableStorageFaults.test.ts` closes it: a claim that fails leaves no
+half-claim and does not advance the submission counter, a delivery append that
+fails reports rather than swallowing, an event that failed to record is absent
+rather than present-and-broken, and a store failure is a *failure* rather than
+a defect -- the distinction the error channel exists for, since a defect kills
+the fibre under it and a caller who wanted to retry never gets the chance.
+
+One methodological note worth keeping: the harness reverts each edit in a
+`finally`. The first version did not, crashed on an encoding error partway
+through, and left a broken `DurableSessionStore` in the tree -- which then
+looked like four unrelated admission failures. A break-the-invariant harness
+that can leave the tree broken will eventually cost more than it finds.
+
 ### H2 — Break every invariant once
 
 The methodology that worked for the tools: for each of D1–D8, disable the
