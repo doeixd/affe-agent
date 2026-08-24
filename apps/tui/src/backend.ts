@@ -61,6 +61,8 @@ export interface Backend {
   >
   /** Shown in the footer, so it is never a guess which one is running. */
   readonly label: string
+  /** Said once at startup, when there is something a user needs to know. */
+  readonly warning?: string | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -153,17 +155,31 @@ export const scripted: Backend = {
 // ---------------------------------------------------------------------------
 
 /**
- * A real provider, and the working directory it is allowed to touch.
+ * A real provider, and a working directory.
  *
  * `workspaceRoot` rather than a temporary directory, because an agent that
- * edits files nobody can find has not done the work. The sandbox seam still
- * holds the boundary: paths are relative and `..`-free, so "the directory you
- * pointed it at" is the whole of what it can reach.
+ * edits files nobody can find has not done the work.
  *
- * That is a real boundary and not a sufficient one. Everything under that
- * directory is writable and `bash` runs there, so the honest instruction is
- * the one the flag's help gives: point it at a working copy you can throw
- * away, not at your home directory.
+ * ## What that directory does and does not bound
+ *
+ * **File tools are confined to it.** `read_file`, `write_file`, `edit_file`,
+ * `list_files` and `search` go through the sandbox seam, which requires
+ * relative, `..`-free paths and resolves symlinks -- so for those, the
+ * directory really is the whole of what the agent can reach.
+ *
+ * **`bash` is not confined to it, at all.** `LocalSandbox` runs the child with
+ * its `cwd` set to the workspace and nothing else: the process keeps this
+ * program's full privileges. An approved `bash` call can read absolute paths,
+ * write outside the workspace, reach the network, and read credentials. It is
+ * host execution that happens to start in a directory.
+ *
+ * An earlier version of this comment said the sandbox held the boundary "for
+ * the whole of what it can reach", which was true of the file tools and false
+ * of the shell -- the more dangerous half. Saying so precisely matters more
+ * than a shorter sentence, because the sentence is what a reader decides on.
+ *
+ * The policy asks before every shell call, so nothing runs unapproved. That is
+ * the actual protection here; the directory is not.
  */
 export const live = (options: {
   readonly workspaceRoot: string
@@ -171,6 +187,14 @@ export const live = (options: {
 }): Backend => ({
   kind: "live",
   label: `${options.model} · ${options.workspaceRoot}`,
+  /**
+   * Shown once at startup, where a user will see it.
+   *
+   * A warning that lives only in a docstring warns the person who already read
+   * the source.
+   */
+  warning: "live: file tools stay inside the workspace; an approved `bash` runs"
+    + " as you, anywhere on this machine",
   /**
    * Under the workspace, so the conversation travels with the code it is
    * about -- and so deleting the working copy deletes the transcript with it,
@@ -215,7 +239,12 @@ export const fromArgv = (argv: ReadonlyArray<string>): Backend => {
   const workspaceRoot = at === -1 ? undefined : argv[at + 1]
   if (workspaceRoot === undefined || workspaceRoot.startsWith("--")) {
     throw new Error(
-      "--live needs --workspace <dir>: the directory the agent may read and write.\n" +
+      "--live needs --workspace <dir>: where the agent works.\n" +
+        "\n" +
+        "File tools are confined to that directory. An approved `bash` call is\n" +
+        "not: it runs with this program's privileges and can reach anything on\n" +
+        "the machine. Every shell call is asked about first.\n" +
+        "\n" +
         "Point it at a working copy you can throw away."
     )
   }

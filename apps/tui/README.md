@@ -125,10 +125,24 @@ defaulting the workspace to the current directory would make the dangerous case
 the easy one, and inferring "live" from the presence of a key would mean an
 exported variable silently changes what a demo does.
 
-**What `--workspace` means.** The sandbox seam holds a real boundary — paths
-are relative and `..`-free, so that directory is the whole of what the agent
-can reach. It is not a sufficient one: everything under it is writable and
-`bash` runs there. Point it at a working copy you can throw away.
+**What `--workspace` actually bounds.** Two different answers, and the
+difference is the important part.
+
+*File tools are confined to it.* `read_file`, `write_file`, `edit_file`,
+`list_files` and `search` go through the sandbox seam, which requires relative,
+`..`-free paths and resolves symlinks. For those, that directory is the whole
+of what the agent can reach.
+
+*`bash` is not confined to it at all.* The local sandbox runs the child with
+its `cwd` set to the workspace and nothing else — the process keeps this
+program's privileges. An approved `bash` call can read absolute paths, write
+outside the workspace, reach the network and read credentials. It is host
+execution that happens to start in a directory.
+
+What protects you is the approval prompt: every shell call is asked about
+before it runs. The directory is not a sandbox for it. Point `--workspace` at a
+working copy you can throw away, and read the shell commands before allowing
+them.
 
 Swapping in a different provider is a change to `backend.ts` and to nothing
 else.

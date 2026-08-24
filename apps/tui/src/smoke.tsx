@@ -366,6 +366,46 @@ const streamOutcomes = streamCases.map(([name, terminal]) => {
 })
 
 /**
+ * R128 -- a reused tool-call id draws a new row, not over an old one.
+ *
+ * Provider tool-call ids are correlation within one response, not a
+ * session-global identity, so a later turn or another branch may reuse one.
+ * The row id used to *be* that id, and `Sink.patch` takes the first row with a
+ * matching id -- so the second call updated the first call's row, the second
+ * row stayed `running` for ever, and scrollback (a settled *prefix*) stopped
+ * there.
+ *
+ * The setup is deliberate: a streaming assistant entry is left open *first*,
+ * so the first tool row cannot drain and is still present when the id is
+ * reused. That is the arrangement in which the bug is reachable.
+ */
+const reuseStore = makeStore()
+const { onEvent: onReuse } = project(reuseStore.sink, defaultViews)
+onReuse({ _tag: "SubmissionStarted" })
+// Holds everything after it in the live tree.
+onReuse({ _tag: "MessageStarted" })
+onReuse({ _tag: "MessageDelta", kind: "text", delta: "thinking" })
+
+onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "bash", params: { command: "first" } })
+onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "bash", result: { exit_code: 0, stdout: "one", stderr: "" } } as never)
+// The same id again, while the first row is still in the live tree.
+onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "bash", params: { command: "second" } })
+onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "bash", result: { exit_code: 0, stdout: "two", stderr: "" } } as never)
+
+const reuseRows = reuseStore.entries.filter((entry) => entry.kind === "tool")
+const reuseStatuses = reuseRows.map((entry) => entry.status)
+const reuseTitles = reuseRows.map((entry) => entry.title)
+const reuseBodies = reuseRows.map((entry) =>
+  entry.body.type === "structured" && entry.body.snapshot.kind === "command"
+    ? entry.body.snapshot.stdout
+    : "")
+
+// Now let the message finish, and the whole prefix must drain.
+onReuse({ _tag: "MessageCompleted", text: "thinking" } as never)
+const reuseDrained = reuseStore.drainSettled().length
+const reuseLeft = reuseStore.entries.length
+
+/**
  * R25 -- interrupting an approval does not leave a dead question on screen.
  *
  * Core removes the pending elicitation but emits no `ElicitationResolved` for
@@ -590,7 +630,11 @@ interruptStore.sink.append({
   title: "later work",
   body: { type: "none" }
 })
-const drainedAfterInterrupt = interruptStore.drainSettled().map((entry) => entry.id)
+// By kind, not by id: a row's id is now minted per call rather than taken from
+// the provider's tool-call id, because provider ids are correlation within one
+// response and get reused (R128).
+const drainedAfterInterrupt = interruptStore.drainSettled()
+const drainedIds = drainedAfterInterrupt.map((entry) => entry.id)
 
 /**
  * R13: a rejected prompt is not drawn as if it were received.
@@ -621,6 +665,12 @@ const drawnWhenNotOffered = rejectedStore.drainSettled().length
  */
 const defaultBackend = fromArgv([])
 const liveBackend = fromArgv(["--live", "--workspace", "/tmp/work", "--model", "some-model"])
+let helpText = ""
+try {
+  fromArgv(["--live"])
+} catch (error) {
+  helpText = error instanceof Error ? error.message : String(error)
+}
 let refusedWithoutWorkspace = false
 try {
   fromArgv(["--live"])
@@ -719,9 +769,10 @@ checks.push(
 
   // R4
   ["a running tool holds back the transcript", runningEntries === 0],
-  ["an interrupted tool settles", drainedAfterInterrupt.includes("tool-x1")],
+  ["an interrupted tool settles",
+    drainedAfterInterrupt.some((entry) => entry.kind === "tool" && entry.status === "failed")],
   // The point of the fix: it stops blocking everything behind it.
-  ["and stops blocking what follows", drainedAfterInterrupt.includes("after")],
+  ["and stops blocking what follows", drainedIds.includes("after")],
 
   // R13
   ["an admitted prompt is drawn", drawnWhenAdmitted.includes("accepted")],
@@ -792,6 +843,18 @@ checks.push(
       outcome.drained.includes(`after-${outcome.name}`)
     ] as const),
 
+  // R128
+  ["a reused call id draws two rows", reuseRows.length === 2],
+  ["each keeps its own arguments",
+    reuseTitles[0]?.includes("first") === true && reuseTitles[1]?.includes("second") === true],
+  ["each keeps its own result",
+    reuseBodies[0] === "one" && reuseBodies[1] === "two"],
+  // The failure this prevents: the second row never settling, and the
+  // transcript stopping there for the rest of the session.
+  ["both settle", reuseStatuses.every((status) => status === "ok")],
+  ["and the whole prefix drains once the message ends",
+    reuseDrained > 0 && reuseLeft === 0],
+
   // R25
   ["an approval is asked", askedBeforeInterrupt === "approval"],
   ["and interrupting the run takes the question away",
@@ -835,6 +898,17 @@ checks.push(
   // Neither half is defaulted: defaulting the workspace would make the
   // dangerous case the easy one.
   ["--live without a workspace is refused", refusedWithoutWorkspace],
+  // R96: the boundary is described precisely, in both places a user meets it.
+  // An earlier version said the sandbox bounded "the whole of what it can
+  // reach", which was true of the file tools and false of the shell -- the
+  // more dangerous half.
+  ["the help says bash is not confined",
+    helpText.includes("bash") && helpText.includes("anything on")],
+  ["and a live run warns before anything runs",
+    liveBackend.warning !== undefined
+      && liveBackend.warning.includes("runs as you")],
+  ["while a scripted run has nothing to warn about",
+    defaultBackend.warning === undefined],
   ["and a flag is not mistaken for a directory", refusedWhenWorkspaceIsAFlag]
 )
 

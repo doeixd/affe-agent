@@ -113,8 +113,26 @@ export const project = (
   takeOffered: () => string | undefined = () => undefined
 ) => {
   let assistant: string | undefined
+  /**
+   * R128 -- the row a tool call is drawn in, by the call's id.
+   *
+   * The row id used to *be* the provider's tool-call id, which is correlation
+   * within one response and not a session-global identity. A later turn or a
+   * different branch may reuse one, and `Sink.patch` takes the *first* row
+   * with a matching id -- so a reused id updated the older row instead. The
+   * new row then stayed `running` forever, and scrollback drains only a
+   * settled prefix, so the transcript stopped there.
+   *
+   * A fresh view id per `ToolCallStarted`, dropped when the call reaches a
+   * terminal event, so a reused id after that maps to a new row rather than
+   * an old one.
+   */
+  const rows = new Map<string, string>()
+
   // A call's parameters, kept until its result arrives: a body renderer often
-  // needs both sides, and the success event carries only one.
+  // needs both sides, and the success event carries only one. Keyed by view id
+  // for the same reason as `rows` -- two calls sharing a provider id must not
+  // share arguments.
   const params = new Map<string, unknown>()
   // Closed over rather than kept in the store: this is bookkeeping for one
   // submission, not something the UI should be able to see half-finished.
@@ -132,6 +150,7 @@ export const project = (
   const forget = (): void => {
     assistant = undefined
     params.clear()
+    rows.clear()
   }
 
   const onEvent = (event: AgentEvent.AgentEventEnvelope["event"]): void => {
@@ -248,30 +267,41 @@ export const project = (
         }
         return
 
-      case "ToolCallStarted":
+      case "ToolCallStarted": {
         tools++
-        params.set(event.id, event.params)
+        const row = nextId("tool")
+        rows.set(event.id, row)
+        params.set(row, event.params)
         sink.append({
-          id: `tool-${event.id}`,
+          id: row,
           kind: "tool",
           title: titleOf(views, event.name, event.params),
           body: { type: "none" },
           status: "running"
         })
         return
+      }
 
-      case "ToolCallSucceeded":
-        sink.patch(`tool-${event.id}`, {
+      case "ToolCallSucceeded": {
+        const row = rows.get(event.id)
+        if (row === undefined) return
+        sink.patch(row, {
           status: "ok",
-          body: bodyOf(views, event.name, event.result, params.get(event.id))
+          body: bodyOf(views, event.name, event.result, params.get(row))
         })
-        params.delete(event.id)
+        params.delete(row)
+        rows.delete(event.id)
         return
+      }
 
-      case "ToolCallFailed":
-        sink.patch(`tool-${event.id}`, { status: "failed" })
-        params.delete(event.id)
+      case "ToolCallFailed": {
+        const row = rows.get(event.id)
+        if (row === undefined) return
+        sink.patch(row, { status: "failed" })
+        params.delete(row)
+        rows.delete(event.id)
         return
+      }
 
       /**
        * Interruption is terminal, and saying so is load-bearing.
@@ -286,10 +316,14 @@ export const project = (
        * "interrupted" marker would be a nicer story and a wider change to the
        * view model than this fix should make.
        */
-      case "ToolCallInterrupted":
-        sink.patch(`tool-${event.id}`, { status: "failed" })
-        params.delete(event.id)
+      case "ToolCallInterrupted": {
+        const row = rows.get(event.id)
+        if (row === undefined) return
+        sink.patch(row, { status: "failed" })
+        params.delete(row)
+        rows.delete(event.id)
         return
+      }
 
       case "SubmissionCompleted":
       case "SubmissionFailed":
@@ -318,6 +352,17 @@ export const project = (
          */
         if (assistant !== undefined) sink.patch(assistant, { streaming: false })
         assistant = undefined
+
+        /**
+         * Any tool still open belongs to a submission that is over.
+         *
+         * Core reports a terminal event for each call it started, but a row
+         * left running blocks the whole transcript -- so this closes the loop
+         * by construction rather than by trusting that every path emits.
+         */
+        for (const row of rows.values()) sink.patch(row, { status: "failed" })
+        rows.clear()
+        params.clear()
         if (event._tag === "SubmissionInterrupted") {
           sink.append({
             id: nextId("notice"),
@@ -500,6 +545,15 @@ export const start = (
        * events are gone -- see `restore.ts` for why the two are not
        * interchangeable.
        */
+      if (backend.warning !== undefined) {
+        sink.append({
+          id: nextId("notice"),
+          kind: "notice",
+          title: backend.warning,
+          body: { type: "none" }
+        })
+      }
+
       if (Option.isSome(resuming)) {
         for (const entry of entriesOf(opened.history, options?.views ?? defaultViews)) {
           sink.append(entry)
@@ -699,7 +753,7 @@ export const start = (
                 Effect.sync(() => sink.setBranches(items)))
             )
           case "rewind":
-            return Effect.ignore(rewind)
+            return whileIdle("rewind", Effect.ignore(rewind))
           case "export":
             return Effect.catchCause(exportBranch(false), (cause) =>
               notice(`export failed: ${Cause.pretty(cause)}`))
@@ -792,7 +846,19 @@ export const start = (
         // Idle is the ordinary case for a stray Ctrl+C, not a failure.
         interrupt: () => Effect.runFork(Effect.ignore(session.interrupt())),
 
-        rewind: () => Effect.runFork(Effect.ignore(rewind)),
+        /**
+         * Gated here as well as in the view.
+         *
+         * A renderer check is not enough: the palette reaches this through
+         * `command`, and a test or any other caller reaches it directly. The
+         * guard belongs where the state is.
+         *
+         * It is a check-then-act and says so -- a submission admitted between
+         * the read and the switch would still be abandoned. Closing that
+         * needs the session to refuse the switch itself, which is a kernel
+         * change; this removes the reachable cases, not the race.
+         */
+        rewind: () => Effect.runFork(whileIdle("rewind", Effect.ignore(rewind))),
 
         respond: (id, granted, respondOptions) => {
           // `respond` reports `false` for an answer nothing was waiting on --
