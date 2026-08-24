@@ -42,8 +42,18 @@ const Researcher = Agent.make({ instructions: "Research carefully." })
  *
  * The model span and its GenAI attributes come from Effect AI itself; the
  * harness only supplies the structure above it. Effect AI also annotates
- * `ToolExecution.tool` with its own `tool` and `parameters` keys -- note
- * `parameters` is unredacted, so scrub at the exporter if tools see secrets.
+ * `ToolExecution.tool` with its own `tool` and `parameters` keys, and
+ * `parameters` is the tool's raw arguments -- so an agent whose tools see
+ * secrets should wrap its tracer:
+ *
+ * ```ts
+ * program.pipe(
+ *   Effect.provide(Observability.redactingTracer()),
+ *   Effect.provide(TracingLayer)   // still entirely the application's choice
+ * )
+ * ```
+ *
+ * Order matters: the redactor must be provided *inside* the tracer it wraps.
  */
 export const program = Effect.gen(function* () {
   const session = yield* AgentSession.make(Researcher)

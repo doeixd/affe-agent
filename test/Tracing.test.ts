@@ -182,6 +182,10 @@ describe("tracing", () => {
       // moves. Note `parameters` is unredacted; see the note in
       // `Observability.ts` on what that means for the content policy.
       assert.strictEqual(tool.attributes["tool"], "echo")
+      // And the leak itself: raw arguments, on our span, with no policy able
+      // to stop it. `Observability.redactingTracer` is the answer -- see the
+      // test below.
+      assert.isDefined(tool.attributes["parameters"])
 
       // 3. The join itself: an event's record and the span for that same run
       //    agree, by key and by value, with no translation.
@@ -203,6 +207,64 @@ describe("tracing", () => {
         record.attributes[names.toolCallId],
         tool.attributes[names.toolCallId]
       )
+    })
+  )
+
+  /**
+   * The span channel's content leak, closed.
+   *
+   * Effect AI's `Toolkit.handle` annotates the *current* span with
+   * `{ tool, parameters }`, and because `handle` is `Effect.fnUntraced` the
+   * current span is ours. So raw tool arguments reach any configured tracer
+   * whatever `RedactionPolicy` says -- including `metadataOnly`, the default
+   * chosen because it is safe.
+   *
+   * Falsified by removing `redactingTracer` from the pipeline: `parameters`
+   * comes back, which is exactly what the test above pins as the default.
+   */
+  it.effect("redactingTracer drops tool parameters and keeps everything else", () =>
+    Effect.gen(function* () {
+      const seen = yield* Deferred.make<ReadonlyArray<CapturedSpan>>()
+
+      const tracingToolkit = EchoToolkit.pipe(
+        Effect.provide(
+          EchoToolkit.toLayer({
+            echo: ({ value }) =>
+              Effect.gen(function* () {
+                const span = yield* Effect.currentSpan
+                yield* Deferred.succeed(seen, chainFrom(span))
+                return value
+              }).pipe(Effect.orDie)
+          })
+        )
+      )
+
+      yield* withSession(
+        [
+          { toolCalls: [{ id: "t1", name: "echo", params: { value: "secret" } }] },
+          { text: "done" }
+        ],
+        Agent.make({ toolkit: tracingToolkit }),
+        ({ session }) => AgentSession.prompt(session, "go")
+      ).pipe(Effect.provide(Observability.redactingTracer()))
+
+      const spans = yield* Deferred.await(seen)
+      const tool = spanNamed(spans, "ToolExecution.tool")
+      const names = Observability.attributeNames
+
+      // The content is gone.
+      assert.isUndefined(tool.attributes["parameters"])
+      // The dimensions are not: `tool` is a name, not content, and it is what
+      // an operator groups by.
+      assert.strictEqual(tool.attributes["tool"], "echo")
+      assert.strictEqual(tool.attributes[names.toolName], "echo")
+      assert.strictEqual(tool.attributes[names.toolCallId], "t1")
+      // Correlation survives, so a redacted trace is still joinable.
+      assert.isString(tool.attributes[names.session])
+
+      // Spans this redaction does not name are untouched.
+      const run = spanNamed(spans, "AgentRun.execute")
+      assert.isString(run.attributes[names.run])
     })
   )
 })

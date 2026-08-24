@@ -1,4 +1,4 @@
-import { Clock, Effect, Metric, Option, Stream } from "effect"
+import { Clock, Effect, Layer, Metric, Option, Stream, Tracer } from "effect"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as Telemetry from "../internal/telemetry.js"
 
@@ -35,9 +35,10 @@ import * as Telemetry from "../internal/telemetry.js"
  * tool parameters regardless of the policy set here -- the policy governs what
  * *this package* records, and cannot reach an annotation made upstream.
  *
- * Anyone tracing an agent that handles secrets should therefore scrub at the
- * exporter as well. Stated here rather than left to be discovered, because the
- * default reads as safe and is only safe for one of the two channels.
+ * `redactingTracer` closes that, and an agent handling secrets should use it:
+ * it wraps whichever tracer is configured and drops the attribute before it is
+ * exported. Stated here rather than left to be discovered, because the default
+ * reads as safe and is only safe for one of the two channels until you do.
  *
  * ```ts
  * // Fork an observer over a session's events, metadata only (the default):
@@ -426,3 +427,161 @@ export const metrics = (
       }
     })
   })
+
+// ---------------------------------------------------------------------------
+// Redaction for the span tree
+// ---------------------------------------------------------------------------
+
+/**
+ * Scrub attributes off spans before they reach whatever tracer is configured.
+ *
+ * ## Why this exists
+ *
+ * The `RedactionPolicy` above governs what *this package* records from the
+ * event stream, and it cannot reach the other channel. Effect AI's
+ * `Toolkit.handle` annotates the **current span** with `{ tool, parameters }`
+ * (`effect/unstable/ai/Toolkit.ts`), and because `handle` is `Effect.fnUntraced`
+ * the current span there is the harness's own `ToolExecution.tool`. So an
+ * application that wires any tracer exports every tool call's raw arguments,
+ * whatever policy it set here -- including under `metadataOnly`, the default
+ * chosen because it is safe.
+ *
+ * Nothing about that is upstream's bug: annotating a tool call is reasonable,
+ * and `Toolkit` promises no redaction. The defect was ours, in making a promise
+ * broad enough to be read as covering both channels while owning only one.
+ *
+ * ## Why a `Layer` here does not break the harness's rule
+ *
+ * AGENTS.md is explicit that *"tracing export is application wiring, never a
+ * harness dependency"*, and that rule is worth keeping. This does not touch it:
+ *
+ * - it imports no exporter and names no backend;
+ * - it decides nothing about where spans go -- it wraps whichever `Tracer` is
+ *   already in context, including the default one;
+ * - it is opted into, exactly as `RedactionPolicy` is.
+ *
+ * What it is, is a *policy value* about content, which is this package's
+ * subject. An application still chooses its exporter and still chooses whether
+ * to apply this at all.
+ *
+ * ## Using it
+ *
+ * ```ts
+ * program.pipe(
+ *   Effect.provide(Observability.redactingTracer()),
+ *   Effect.provide(myOtlpLayer)          // still entirely the application's
+ * )
+ * ```
+ *
+ * Order matters: this must be provided *inside* the tracer it wraps, so that
+ * the tracer it reads is the real one.
+ */
+export interface SpanRedaction {
+  /**
+   * Attribute keys to drop, by span name.
+   *
+   * Keyed by span rather than applied globally because an application's own
+   * spans may legitimately carry an attribute called `parameters`, and a
+   * redactor that silently ate it would be a different bug.
+   */
+  readonly drop: Readonly<Record<string, ReadonlyArray<string>>>
+  /**
+   * Rewrite an attribute that is not dropped. Applied to every attribute on a
+   * span named in `drop`; return the value unchanged to keep it.
+   */
+  readonly redact?: ((key: string, value: unknown) => unknown) | undefined
+}
+
+/**
+ * The default: the one leak we know about, on the one span it lands on.
+ *
+ * `parameters` is Effect AI's raw tool arguments. `tool` is just the name and
+ * is kept -- it is the dimension you would group by, and it is not content.
+ */
+export const defaultSpanRedaction: SpanRedaction = {
+  drop: { "ToolExecution.tool": ["parameters"] }
+}
+
+/**
+ * A tracer that applies `redaction` and then delegates everything else.
+ *
+ * Written as a delegating object rather than a subclass because `Tracer.Span`
+ * is an interface with live getters -- `status` and `attributes` change as the
+ * span runs, so the wrapper reads through to the underlying span rather than
+ * snapshotting it.
+ */
+const redactSpan = (
+  span: Tracer.Span,
+  redaction: SpanRedaction
+): Tracer.Span => {
+  const dropped = redaction.drop[span.name]
+  if (dropped === undefined) return span
+  const drop = new Set(dropped)
+  const rewrite = redaction.redact
+  return {
+    _tag: "Span",
+    get name() {
+      return span.name
+    },
+    get spanId() {
+      return span.spanId
+    },
+    get traceId() {
+      return span.traceId
+    },
+    get parent() {
+      return span.parent
+    },
+    get annotations() {
+      return span.annotations
+    },
+    get status() {
+      return span.status
+    },
+    get attributes() {
+      return span.attributes
+    },
+    get links() {
+      return span.links
+    },
+    get sampled() {
+      return span.sampled
+    },
+    get kind() {
+      return span.kind
+    },
+    end: (endTime, exit) => span.end(endTime, exit),
+    addLinks: (links) => span.addLinks(links),
+    attribute: (key, value) => {
+      if (drop.has(key)) return
+      span.attribute(key, rewrite === undefined ? value : rewrite(key, value))
+    },
+    event: (name, startTime, attributes) => {
+      if (attributes === undefined) return span.event(name, startTime)
+      const kept: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(attributes)) {
+        if (drop.has(key)) continue
+        kept[key] = rewrite === undefined ? value : rewrite(key, value)
+      }
+      span.event(name, startTime, kept)
+    }
+  }
+}
+
+/**
+ * A `Layer` that scrubs span attributes on the way to the configured tracer.
+ *
+ * Defaults to `defaultSpanRedaction`, which drops the one attribute known to
+ * carry content the event-stream policy would have withheld.
+ */
+export const redactingTracer = (
+  redaction: SpanRedaction = defaultSpanRedaction
+): Layer.Layer<never> =>
+  Layer.effect(
+    Tracer.Tracer,
+    Effect.map(Tracer.Tracer, (underlying) =>
+      Tracer.make({
+        span: (options) => redactSpan(underlying.span(options), redaction)
+      })
+    )
+  )

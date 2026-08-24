@@ -821,10 +821,12 @@ outrank most of round one.
   it, and every kernel span now carries `agent.session.id`. Asserted and
   falsified in `test/Tracing.test.ts`; `examples/tracing.ts` updated, since it
   documented the old keys. Typecheck, 0 Effect diagnostics, 829 tests green.
-- **A-13 — A redacting tracer layer (E20).** The follow-on that fix surfaced,
-  and the one with a real user impact: tool parameters reach any configured
-  exporter regardless of `RedactionPolicy`. Documented as a limit for now;
-  closing it needs the AGENTS.md argument settled first.
+- **A-13 — A redacting tracer layer (E20). ✅ Done.**
+  `Observability.redactingTracer` wraps whichever tracer is configured and drops
+  `parameters` from `ToolExecution.tool` before export. The AGENTS.md rule is
+  respected, not bent: no exporter is imported, no backend named, nothing about
+  where spans go is decided, and it is opt-in -- a policy value, like
+  `RedactionPolicy`. Two tests, falsified twice.
 - **A-1 — `Tx*` for the lock registry (E7). ✅ Done.**
   `CodingToolkit`'s registry is now a `TxRef<HashMap<string, LockEntry>>` with a
   holder count, evicting on the last release inside one commit. Three new tests,
