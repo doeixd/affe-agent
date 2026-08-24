@@ -226,4 +226,11 @@ export interface Handle {
   readonly switchTo: (id: string) => void
   /** The commands the palette offers. Static, so the renderer can filter. */
   readonly commands: ReadonlyArray<Command>
+  /**
+   * Close this harness and its session.
+   *
+   * On the handle rather than only as a module function, so a caller holding
+   * one of several harnesses can close the one it holds.
+   */
+  readonly stop: () => void
 }

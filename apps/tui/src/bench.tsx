@@ -22,7 +22,8 @@ const handle: Handle = {
   rewind: () => {},
   command: () => {},
   switchTo: () => {},
-  commands: []
+  commands: [],
+  stop: () => {}
 }
 
 const { flush } = await testRender(

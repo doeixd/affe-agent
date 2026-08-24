@@ -491,6 +491,35 @@ growing, several screens after the cause.
   nothing in it can prevent it, so the script looks past PATH instead of
   through it.
 
+### Two more of the same class, found by looking (2026-08-24)
+
+R14, R15 and R25 all had one shape -- something transient outliving what it
+belonged to -- so the sensible next step was to look for the shape rather than
+wait for another review. Two more:
+
+**`stop()` closed only the most recently started harness.** The disposer lived
+in a single module-level `let` that every `start` overwrote, so an earlier
+harness kept its fibre, its session and its store for the life of the process.
+One harness per process is the ordinary case, which is exactly why this
+survived: a second only appears in a test, or in a UI that reopens a session.
+There is a registry now, and `Handle.stop` closes the one you hold.
+
+**`switchTo` and `/branch` were not gated on idle** -- R15's defect on the two
+other paths that change which branch is active. `tree.active` points at the
+last *completed* boundary, so moving mid-run abandons the in-flight branch and
+steps somewhere the user was not looking, leaving the abandoned entries
+streaming. Refused with a notice rather than queued: the user asked to be
+somewhere else *now*, and silently doing it later is worse than saying no.
+
+Two things the tests themselves taught, both worth keeping:
+
+- **An approval is the only deterministic way to hold a run open.** The
+  scripted model answers faster than a test can observe `status() === "working"`,
+  but an elicitation waits exactly as long as nobody answers it.
+- **`entries.length === 0` is not a latch outside the App.** Draining is the
+  App's job, so a store with no App renders never drains and the count only
+  reads zero before anything starts. The turn summary is the latch.
+
 ### Still not implemented
 
 - **No scrolling inside the live region.** Finished entries go to the

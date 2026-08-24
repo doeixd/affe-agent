@@ -245,7 +245,30 @@ await until(
   "the first launch to finish a turn"
 )
 const firstTranscript = firstRun.entries.map((entry) => entry.title).join(" | ")
-stop()
+
+/**
+ * Each harness closes its own.
+ *
+ * `stop()` used to keep a single disposer that every `start` overwrote, so it
+ * closed only the most recent harness and every earlier one kept its fibre,
+ * its session and its store. One harness per process is the ordinary case,
+ * which is exactly why that survived -- a second only appears here, or in a UI
+ * that reopens a session.
+ *
+ * The check below is that the *first* harness is genuinely closed. A closed
+ * session refuses work, so the prompt fails -- and the transcript shows that
+ * failure rather than a user line, because a line is drawn only once the
+ * kernel accepts the prompt.
+ */
+firstHandle.stop()
+firstHandle.submit("after stopping")
+for (let attempt = 0; attempt < 60; attempt++) {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+const afterStopping = firstRun.entries.map((entry) => `${entry.kind}:${entry.title}`)
+const ranAfterStopping = afterStopping.some((entry) =>
+  entry.startsWith("user:after stopping"))
+const reportedFailure = afterStopping.some((entry) => entry.includes("prompt failed"))
 
 // A second launch: nothing in common but the store.
 const secondRun = makeStore()
@@ -256,6 +279,46 @@ await until(
 )
 const resumed = secondRun.entries.map((entry) => entry.title).join(" | ")
 const resumedKinds = secondRun.entries.map((entry) => entry.kind)
+
+/**
+ * Moving between lines of work needs an idle session.
+ *
+ * The defect R15 found in ctrl+r, on the two other paths that change which
+ * branch is active: `tree.active` points at the last *completed* boundary, so
+ * moving mid-run abandons the in-flight branch and steps somewhere the user
+ * was not looking -- leaving the abandoned entries streaming, which blocks
+ * scrollback for good.
+ */
+const busyRun = makeStore()
+const busyHandle = await start(busyRun.sink)
+// An approval is the one deterministic way to hold a run open: the scripted
+// model answers faster than any test can observe "working", but a paused
+// elicitation waits exactly as long as nobody answers it.
+busyHandle.submit("what is here?")
+// A summary is appended when a submission ends, so it is the latch. Waiting
+// for `status() === "idle"` alone passes immediately -- a session is idle
+// *before* its submission starts -- and nothing drains this store, because
+// draining is the App's job and this one has no App.
+await until(
+  () => busyRun.entries.some((entry) => entry.kind === "summary"),
+  "the first turn to finish"
+)
+busyHandle.submit("now run something")
+await until(() => busyRun.footer().type === "approval", "a run paused on approval")
+
+busyHandle.command("branch")
+await until(
+  () => busyRun.entries.some((entry) => entry.title.includes("cannot fork")),
+  "the refusal to fork mid-run"
+)
+const refusedFork = busyRun.entries.some((entry) => entry.title.includes("cannot fork"))
+const forkedAnyway = busyRun.entries.some((entry) => entry.title.includes("forked at"))
+
+// Answer it so the harness can close cleanly rather than being killed mid-run.
+const busyFooter = busyRun.footer()
+if (busyFooter.type === "approval") busyHandle.respond(busyFooter.request.id, false)
+busyHandle.stop()
+
 stop()
 
 // And a launch with no store at all starts empty, which is the default.
@@ -628,6 +691,14 @@ checks.push(
   // paints what the conversation contains and nothing else.
   ["and invents no turn summary", !resumedKinds.includes("summary")],
   ["without a store, a launch starts empty", freshCount === 0],
+  // A closed harness stays closed: `stop` used to close only the most recent,
+  // so an earlier one kept running and would have accepted this.
+  ["a stopped harness accepts no more work", !ranAfterStopping],
+  ["and says so rather than going quiet", reportedFailure],
+
+  // Moving branches mid-run
+  ["forking while a turn runs is refused", refusedFork],
+  ["and does not happen anyway", !forkedAnyway],
 
   // R14
   ["a streaming message holds back the transcript",

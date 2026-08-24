@@ -352,7 +352,16 @@ export const project = (
 // Start
 // ---------------------------------------------------------------------------
 
-let disposeFiber: () => void = () => {}
+/**
+ * Every harness started in this process.
+ *
+ * A single `let` here was a leak with a plausible-looking shape: each `start`
+ * overwrote the previous disposer, so `stop` killed only the most recent one
+ * and every earlier harness kept its fibre, its session and its store. One
+ * harness per process is the ordinary case, which is exactly why it survived
+ * -- the second one only appears in a test, or in a UI that reopens a session.
+ */
+const running = new Set<() => void>()
 
 /**
  * Build a session and bridge it to `sink`.
@@ -384,6 +393,8 @@ export const start = (
   }
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
+    // Assigned once the fibre exists; `Handle.stop` closes over the binding.
+    let dispose: () => void = () => {}
     const backend = options?.backend ?? scripted
     sink.setBackend(backend.label)
     const program = Effect.gen(function*() {
@@ -634,6 +645,29 @@ export const start = (
        * The new lane is named after the branch point so it can be found again;
        * `branches` prefers a lane's name over the preview for exactly this.
        */
+      /**
+       * Refuse to move while a turn is in flight.
+       *
+       * The same defect R15 found in ctrl+r, on the two other paths that change
+       * which branch is active. `tree.active` points at the last *completed*
+       * boundary, so moving mid-run abandons the in-flight branch and steps to
+       * a point the user was not looking at -- and the abandoned branch's
+       * entries stay streaming, which blocks scrollback for the rest of the
+       * session.
+       *
+       * Refused with a notice rather than queued: the user asked to be
+       * somewhere else *now*, and silently doing it later is worse than saying
+       * no.
+       */
+      const whileIdle = (
+        what: string,
+        action: Effect.Effect<void>
+      ): Effect.Effect<void> =>
+        Effect.flatMap(session.status, (status) =>
+          status === "idle"
+            ? action
+            : notice(`cannot ${what} while a turn is running — interrupt it first`))
+
       const forkHere = Effect.gen(function*() {
         const node = yield* tree.active
         if (Option.isNone(node)) return yield* notice("nothing to fork yet")
@@ -654,8 +688,11 @@ export const start = (
       const run = (name: string): Effect.Effect<void> => {
         switch (name) {
           case "branch":
-            return Effect.catchCause(forkHere, (cause) =>
-              notice(`fork failed: ${Cause.pretty(cause)}`))
+            return whileIdle(
+              "fork",
+              Effect.catchCause(forkHere, (cause) =>
+                notice(`fork failed: ${Cause.pretty(cause)}`))
+            )
           case "branches":
             return Effect.ignore(
               Effect.flatMap(branchItems, (items) =>
@@ -685,6 +722,8 @@ export const start = (
       resolve({
         commands,
 
+        stop: () => dispose(),
+
         command: (name) => {
           sink.setPalette(undefined)
           Effect.runFork(Effect.ignore(run(name)))
@@ -694,7 +733,7 @@ export const start = (
           sink.setBranches(undefined)
           Effect.runFork(
             Effect.ignore(
-              Effect.gen(function*() {
+              whileIdle("switch", Effect.orDie(Effect.gen(function*() {
                 const found = yield* tree.node(id as never)
                 if (Option.isNone(found)) return yield* notice("that branch is gone")
                 const activation = yield* tree.activate(found.value)
@@ -706,7 +745,7 @@ export const start = (
                   `switched to ${id} · ${activation.history.content.length} messages`
                 )
                 yield* publishDepth()
-              })
+              })))
             )
           )
         },
@@ -788,10 +827,19 @@ export const start = (
       )
     )
 
-    disposeFiber = () => {
+    dispose = () => {
+      running.delete(dispose)
       Effect.runFork(Fiber.interrupt(fiber))
     }
+    running.add(dispose)
   })
 
-/** Stop the harness, closing the session's scope. */
-export const stop = (): void => disposeFiber()
+/**
+ * Stop every harness, closing their scopes and with them their sessions.
+ *
+ * All of them rather than the last, because "stop" from a process shutting
+ * down means all of them, and a caller holding one harness has `Handle.stop`.
+ */
+export const stop = (): void => {
+  for (const dispose of [...running]) dispose()
+}
