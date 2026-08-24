@@ -316,6 +316,45 @@ same problem.
 fetching a snapshot and then subscribing misses the gap between them, and
 subscribing first paints an empty transcript.
 
+**T3, second pass: wired into the TUI (2026-08-24).** Ctrl+R rewinds a turn.
+45 smoke assertions, 14 tree tests.
+
+Giving the tree a second consumer was the point, and it found three things no
+amount of re-reading the tree in isolation would have.
+
+**`tree.active` answered the wrong question.** It returned the node that was
+activated -- where the branch *started* -- and never advanced as turns were
+recorded. Rewind counts back from "where the user is now", so with a stale
+answer it walked to the branch point's parent every time and refused outright
+from the second turn on. The fix routes `active` through the same `at` map that
+`record` advances. Broken once to confirm the test bites.
+
+**The tree dropped the caller's session configuration.** `AgentSession.make`
+takes `elicitation`, and the tree passed none -- so every branch it built
+*refused* any run needing approval rather than asking. Nothing in the types
+said so, and the failure surfaces as a permission denial with no question. The
+tree now takes a `session` option and forwards it, minus `sessionId` and
+`history`, which are its own to decide.
+
+**`Node.parent` is an id, so walking upwards needed `node(id)`.** That is not a
+TUI quirk: an id rather than a reference is what keeps a node serialisable, and
+anything walking the tree has the same need.
+
+**Rewind does not erase the transcript, and should not.** Scrollback is
+write-once -- a committed line cannot be repainted -- so a UI built on it can
+either abandon scrollback or be honest that what was shown was shown. A rewind
+is *marked*, and what follows continues from the earlier point. The log then
+records that a rewind happened, which is both true and what a reader wants.
+Repainting only matters when switching to a branch whose history was never on
+screen, which is a session switcher rather than a rewind.
+
+**One thing tried and reverted.** The transcript's drain effect depends on
+`entries.length`, which misses a `patch` that settles the last entry. Replacing
+that with a write counter fixed the narrow case and stalled the renderer, and
+reading each entry's fields instead makes the effect retrigger itself through
+its own drain. The defect is real but masked -- a turn summary always follows
+the last tool result -- so it stays noted rather than half-fixed.
+
 ### T4 — Metadata and shape queries
 
 `cause`, timestamps, turn counts, labels, auto preview; `commonAncestor`,

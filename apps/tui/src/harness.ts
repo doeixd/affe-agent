@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Layer, Stream } from "effect"
+import { Cause, Effect, Fiber, Layer, Option, Stream } from "effect"
 import * as Agent from "../../../src/Agent.js"
 import * as AgentEvent from "../../../src/AgentEvent.js"
 import * as AgentLoop from "../../../src/AgentLoop.js"
@@ -8,6 +8,7 @@ import * as Permission from "../../../src/Permission.js"
 import { CodingToolkit } from "../../../src/coding/index.js"
 import * as MemorySandbox from "../../../src/sandbox/memory.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
+import * as SessionTree from "../../../src/tree/SessionTree.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
 import { bodyOf, defaultViews, titleOf, type ToolView } from "./tools.ts"
 import { type Approval, type Handle, type Sink } from "./view.ts"
@@ -75,7 +76,12 @@ const modelLayer = Layer.unwrap(
       TestLanguageModel.text("I did not run that."),
       TestLanguageModel.text(
         "I am a scripted model. Edit harness.ts to point at a real provider."
-      )
+      ),
+      // Headroom, so a prompt after a rewind has something to answer with.
+      // The script is a flat sequence and a rewind does not rewind it, which
+      // is a property of this stub rather than of the tree.
+      TestLanguageModel.text("Answering from the rewound branch."),
+      TestLanguageModel.text("And again.")
     ]),
     ({ layer }) => layer
   )
@@ -142,7 +148,21 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
   // submission, not something the UI should be able to see half-finished.
   let startedAt = 0
   let tools = 0
-  return (event: AgentEvent.AgentEventEnvelope["event"]): void => {
+
+  /**
+   * Forget the in-flight correlation.
+   *
+   * Called when the active branch changes. The ids being tracked here belong
+   * to the session that was: a delta arriving for an assistant message on the
+   * old branch must not be appended to an entry on the new one, and a tool
+   * call that never resolves must not leave `params` growing forever.
+   */
+  const forget = (): void => {
+    assistant = undefined
+    params.clear()
+  }
+
+  const onEvent = (event: AgentEvent.AgentEventEnvelope["event"]): void => {
     switch (event._tag) {
       case "SubmissionStarted":
         startedAt = Date.now()
@@ -278,6 +298,8 @@ const project = (sink: Sink, views: Readonly<Record<string, ToolView>>) => {
         return
     }
   }
+
+  return { onEvent, forget }
 }
 
 // ---------------------------------------------------------------------------
@@ -299,16 +321,95 @@ export const start = (
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
     const program = Effect.gen(function*() {
-      const session = yield* AgentSession.make(agent, {
+      /**
+       * A tree, not a session.
+       *
+       * The tree captures a node at every turn boundary, which is what makes
+       * rewind possible at all -- and it hands back a session per branch, so
+       * the rest of this file is unchanged by the fact that there is now more
+       * than one conversation.
+       */
+      const tree = yield* SessionTree.make(agent, {
         // Without this a run needing approval is refused rather than asked.
+        session: { elicitation: Elicitation.memory }
+      })
+
+      const root = yield* AgentSession.make(agent, {
         elicitation: Elicitation.memory
       })
-      const onEvent = project(sink, views)
+      const start = yield* tree.commit(root, { cause: "root", label: "start" })
 
+      const projection = project(sink, views)
+
+      /**
+       * Subscribed once, to the tree rather than to a session.
+       *
+       * This is the part a branch switch would otherwise break. `tree.events`
+       * follows whichever branch is active, so switching does not mean
+       * tearing down a subscription and building another -- and does not mean
+       * a window where events go nowhere.
+       */
       yield* Effect.forkScoped(
-        Stream.runForEach(session.events, (envelope) =>
-          Effect.sync(() => onEvent(envelope.event)))
+        Stream.runForEach(tree.events, (envelope) =>
+          Effect.sync(() => projection.onEvent(envelope.event)))
       )
+
+      // The branch the user starts on. `session` is reassigned on rewind; the
+      // handle closes over this binding rather than over a value.
+      let session = (yield* tree.activate(start)).session
+      let taken = 0
+
+      const publishDepth = () =>
+        Effect.gen(function*() {
+          const node = yield* tree.active
+          const depth = Option.isNone(node) ? 0 : (yield* tree.path(node.value)).length
+          sink.setRewind({ depth, taken })
+        })
+
+      yield* publishDepth()
+
+      /**
+       * Step back one turn boundary and continue from there.
+       *
+       * Rewinding to the *parent* of the active node, so "undo that last
+       * exchange" is what it means. Activation does the rest: the old branch
+       * is released, the new one becomes what `tree.events` follows, and the
+       * projection forgets the correlation it was holding for the old one.
+       */
+      const rewind = Effect.gen(function*() {
+        const node = yield* tree.active
+        if (Option.isNone(node)) return
+        const parent = node.value.parent
+        if (Option.isNone(parent)) {
+          sink.append({
+            id: nextId("notice"),
+            kind: "notice",
+            title: "nothing to rewind to",
+            body: { type: "none" }
+          })
+          return
+        }
+        const target = yield* tree.node(parent.value)
+        if (Option.isNone(target)) return
+
+        const activation = yield* tree.activate(target.value)
+        session = activation.session
+        projection.forget()
+        taken++
+        sink.setStatus("idle")
+        sink.setApproval(undefined)
+        // Marked rather than erased: see `Handle.rewind`. What the user saw is
+        // still what the log says they saw.
+        sink.append({
+          id: nextId("notice"),
+          kind: "notice",
+          title: `rewound to ${
+            Option.getOrElse(target.value.label, () => target.value.id)
+          } · ${activation.history.content.length} messages`,
+          body: { type: "none" }
+        })
+        yield* publishDepth()
+      })
 
       resolve({
         submit: (text) => {
@@ -322,6 +423,8 @@ export const start = (
             // Streamed, so `MessageDelta` arrives and the reply builds up a
             // token at a time. Whether a call streams is the caller's choice,
             // not the agent's -- and a UI is exactly the caller that wants it.
+            // `session`, not a captured value: after a rewind this is a
+            // different branch, and a prompt must go to the one on screen.
             session.prompt(text, { stream: true }).pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() =>
@@ -333,12 +436,15 @@ export const start = (
                   })
                 )
               ),
+              Effect.andThen(publishDepth()),
               Effect.asVoid
             )
           )
         },
         // Idle is the ordinary case for a stray Ctrl+C, not a failure.
         interrupt: () => Effect.runFork(Effect.ignore(session.interrupt())),
+
+        rewind: () => Effect.runFork(Effect.ignore(rewind)),
 
         respond: (id, granted) => {
           // `respond` reports `false` for an answer nothing was waiting on --

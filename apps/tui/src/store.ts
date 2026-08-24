@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
-import type { Approval, Entry, FooterView, Sink, Status } from "./view.ts"
+import type { Approval, Entry, FooterView, Rewind, Sink, Status } from "./view.ts"
 
 /**
  * The reactive state, and the `Sink` the harness writes into.
@@ -31,6 +31,7 @@ export const makeStore = () => {
   // the union, not a pair of booleans: "asking while also prompting" should be
   // unrepresentable rather than merely avoided.
   const [footer, setFooter] = createSignal<FooterView>({ type: "prompt" })
+  const [rewind, setRewind] = createSignal<Rewind>({ depth: 0, taken: 0 })
 
   const indexOf = (id: string): number => entries.findIndex((entry) => entry.id === id)
 
@@ -54,7 +55,9 @@ export const makeStore = () => {
     setStatus,
 
     setApproval: (request: Approval | undefined) =>
-      setFooter(request === undefined ? { type: "prompt" } : { type: "approval", request })
+      setFooter(request === undefined ? { type: "prompt" } : { type: "approval", request }),
+
+    setRewind
   }
 
   /**
@@ -79,5 +82,5 @@ export const makeStore = () => {
     return taken
   }
 
-  return { entries, status, footer, sink, drainSettled }
+  return { entries, status, footer, rewind, sink, drainSettled }
 }

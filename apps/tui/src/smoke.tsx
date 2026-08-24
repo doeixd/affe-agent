@@ -19,7 +19,7 @@ import { duration, widthPolicy } from "./width.ts"
  * instead of printing a stale frame and passing.
  */
 
-const { drainSettled, entries, footer, sink, status } = makeStore()
+const { drainSettled, entries, footer, rewind, sink, status } = makeStore()
 /**
  * Count completed submissions.
  *
@@ -45,7 +45,7 @@ const handle = await start(counting)
 
 const { captureCharFrame, externalOutput, flush, waitForFrame } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} />
+    <App entries={entries} status={status()} handle={handle} drainSettled={drainSettled} footer={footer()} rewind={rewind()} />
   ),
   {
     width: 100,
@@ -108,6 +108,19 @@ handle.respond(
 await waitForFrame(() => completed > beforeApproval && entries.length === 0, {
   maxPasses: 400
 })
+
+// V6: rewind. Every turn above was captured as a node by the session tree, so
+// there is somewhere to go back to -- and going back must not disturb the one
+// subscription this UI has been reading from since it started.
+const depthBefore = rewind().depth
+const rewoundFrom = completed
+handle.rewind()
+await waitForFrame(() => rewind().taken === 1 && entries.length === 0, { maxPasses: 400 })
+const depthAfter = rewind().depth
+
+// The branch is live, not a transcript: a prompt reaches it and it answers.
+await ask("and now?")
+const answeredAfterRewind = completed > rewoundFrom
 
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
@@ -173,6 +186,28 @@ const checks: Array<readonly [string, boolean]> = [
   ["turn summary committed", transcript.includes("▣")],
   ["summary reports a tool count", transcript.includes("1 tool")],
   ["summary reports a duration", /▣ \d+(\.\d+)?(ms|s)/.test(transcript)],
+
+  // V6: rewind, through the session tree.
+  ["turns were captured as nodes", depthBefore > 1],
+  ["rewind stepped back one node", depthAfter === depthBefore - 1],
+  ["rewind is marked, not erased", transcript.includes("rewound to")],
+  // The whole point of not erasing: scrollback is write-once, so the log has
+  // to keep saying what the user actually saw.
+  ["rewind kept the earlier transcript", transcript.includes("That is what the workspace holds.")],
+  ["rewound branch answers prompts", answeredAfterRewind],
+  // This is what `tree.events` bought. The subscription was made once, before
+  // any branch existed, and survived the switch -- a per-session subscription
+  // would have been left listening to the branch that was released.
+  //
+  // The turn summary is the proof rather than the reply text: a summary is
+  // built by the projection from `SubmissionCompleted`, so one appearing after
+  // the rewind marker means events from the *new* branch reached the *old*
+  // subscriber. The user's own message would prove nothing -- `submit` appends
+  // that directly, without going near the event stream.
+  ["one subscription survived the switch", (() => {
+    const marker = transcript.indexOf("rewound to")
+    return marker !== -1 && transcript.indexOf("▣", marker) > marker
+  })()],
   ["hints shown at this width", live.includes("enter send")],
   ["hints hidden when narrow", widthPolicy(50).hints === false],
   ["compact below its breakpoint", widthPolicy(50).compact === true],

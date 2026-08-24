@@ -102,6 +102,19 @@ export interface Entry {
 
 export type Status = "idle" | "working"
 
+/**
+ * How far back the conversation can be taken.
+ *
+ * `depth` is how many turn boundaries have been recorded on this line of work,
+ * so `depth <= 1` is what greys out the affordance -- there is nowhere to
+ * rewind *to*. The footer needs a number, not a tree.
+ */
+export interface Rewind {
+  readonly depth: number
+  /** Non-zero once the user has rewound, so the footer can say so. */
+  readonly taken: number
+}
+
 /** How the harness pushes into the view model. */
 export interface Sink {
   readonly append: (entry: Entry) => void
@@ -111,6 +124,7 @@ export interface Sink {
   readonly setStatus: (status: Status) => void
   /** The footer's active surface; `undefined` returns it to the prompt. */
   readonly setApproval: (request: Approval | undefined) => void
+  readonly setRewind: (rewind: Rewind) => void
 }
 
 /**
@@ -143,4 +157,15 @@ export interface Handle {
   readonly interrupt: () => void
   /** Answer the pending approval. Refusal is an answer, not a failure. */
   readonly respond: (id: string, granted: boolean) => void
+  /**
+   * Take the conversation back one turn and continue from there.
+   *
+   * The transcript above is deliberately *not* erased. Scrollback is
+   * write-once -- a committed line cannot be repainted -- so pretending
+   * otherwise would mean either abandoning scrollback or lying about what the
+   * user saw. A rewind is marked instead, and what follows continues from the
+   * earlier point. The log then records that a rewind happened, which is true
+   * and is also what a reader wants.
+   */
+  readonly rewind: () => void
 }

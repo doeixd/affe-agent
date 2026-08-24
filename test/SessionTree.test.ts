@@ -414,6 +414,51 @@ describe("SessionTree", () => {
     })
   )
 
+  it.effect("the active node advances with the branch, not with the switch", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk", "one", "two")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const start = yield* tree.commit(session)
+
+        const activation = yield* tree.activate(start)
+        const atActivation = yield* tree.active
+
+        yield* activation.session.prompt("one")
+        yield* settle(tree, 2)
+        const afterOne = yield* tree.active
+
+        yield* activation.session.prompt("two")
+        yield* settle(tree, 3)
+        const afterTwo = yield* tree.active
+
+        return {
+          start,
+          atActivation,
+          afterOne,
+          afterTwo,
+          depth: yield* tree.path(Option.getOrThrow(afterTwo))
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(Option.getOrThrow(out.atActivation).id, out.start.id)
+      // The branch point is where this line of work *started*. Answering with
+      // it forever would make "go back one turn" count back from the wrong
+      // place -- and refuse outright from the second turn on, since the branch
+      // point's own parent is where the caller already is.
+      assert.notStrictEqual(Option.getOrThrow(out.afterOne).id, out.start.id)
+      assert.notStrictEqual(
+        Option.getOrThrow(out.afterTwo).id,
+        Option.getOrThrow(out.afterOne).id
+      )
+      // And the chain is walkable, which is what a rewind actually needs.
+      assert.strictEqual(out.depth.length, 3)
+    })
+  )
+
   it.effect("switching branches releases the one it switched away from", () =>
     Effect.gen(function*() {
       const { layer } = yield* script("trunk", "left", "right")

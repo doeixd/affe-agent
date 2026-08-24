@@ -9,7 +9,15 @@ import type { Accessor } from "solid-js"
 import { createEffect, For, Match, Show, Switch } from "solid-js"
 import { marker, theme } from "./theme.ts"
 import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
-import type { Body, Entry, FooterView, Handle, Status, ToolSnapshot } from "./view.ts"
+import type {
+  Body,
+  Entry,
+  FooterView,
+  Handle,
+  Rewind,
+  Status,
+  ToolSnapshot
+} from "./view.ts"
 import { widthPolicy } from "./width.ts"
 
 /**
@@ -250,12 +258,43 @@ export const App = (props: {
   handle: Handle
   drainSettled: () => ReadonlyArray<Entry>
   footer: FooterView
+  rewind: Rewind
   views?: Readonly<Record<string, ToolView>>
 }) => {
   const renderer = useRenderer()
   const views = () => props.views ?? defaultViews
   const dimensions = useTerminalDimensions()
   const policy = () => widthPolicy(dimensions().width)
+
+  /** Nowhere to go back to from the first turn. */
+  const canRewind = () => props.rewind.depth > 1
+
+  /**
+   * Ctrl+R rewinds a turn.
+   *
+   * Bound here rather than in the footer because it is not a footer concern:
+   * the prompt keeps the focus, and rewinding does not change what the user is
+   * typing. Ignored while an approval is up -- the only meaningful answer then
+   * is yes or no, and quietly rewinding out from under a pending question
+   * would leave a run waiting on an answer nobody can give.
+   */
+  useKeyboard((key) => {
+    if (props.footer.type !== "prompt") return
+    if (key.ctrl !== true || String(key.name ?? "").toLowerCase() !== "r") return
+    if (!canRewind()) return
+    props.handle.rewind()
+  })
+
+  /**
+   * Ctrl+R rewinds a turn.
+   *
+   * Bound here rather than in the footer because it is not a footer concern:
+   * the prompt keeps the focus, and rewinding does not change what the user is
+   * typing. Ignored while an approval is up -- the only meaningful answer then
+   * is yes or no, and quietly rewinding out from under a pending question
+   * would leave a run waiting on an answer nobody can give.
+   */
+
 
   // Finished entries are handed to the terminal and leave the reactive tree.
   // The effect tracks `entries` because that is what changes; the drain itself
@@ -299,6 +338,13 @@ export const App = (props: {
         </Show>
         <Show when={policy().spacious && props.entries.length > 0}>
           <text fg={theme.footer.muted}>{`   ${props.entries.length} in flight`}</text>
+        </Show>
+        {/* Only offered when it would do something. An affordance shown while
+            inert teaches the user it does not work. */}
+        <Show when={policy().hints && props.status === "idle" && canRewind()}>
+          <text fg={theme.footer.muted}>
+            {`   ctrl+r rewind${props.rewind.taken === 0 ? "" : ` (${props.rewind.taken}×)`}`}
+          </text>
         </Show>
       </box>
 

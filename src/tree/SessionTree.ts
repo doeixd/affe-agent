@@ -201,8 +201,26 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E> {
     node: Node
   ) => Effect.Effect<Activation<Tools, E>, NodeMissing>
 
-  /** Which branch is in front of the user, if any. */
+  /**
+   * Where the active branch is *now*, if any.
+   *
+   * Not the node that was activated. That node is where the branch started;
+   * every turn since has recorded another, and a caller asking "what is in
+   * front of the user" means the latest -- it is what "go back one turn"
+   * counts back from, and answering with the branch point would make rewind
+   * refuse from the second turn onwards.
+   */
   readonly active: Effect.Effect<Option.Option<Node>>
+
+  /**
+   * The node with this id, if the tree still holds it.
+   *
+   * `Node.parent` is an id rather than a node -- a node holding its parent
+   * would make the tree a graph of objects that cannot be serialised or
+   * shared -- so anything walking upwards needs this. Rewind is the obvious
+   * case: "the turn before this one" is a parent id and nothing else.
+   */
+  readonly node: (id: NodeId) => Effect.Effect<Option.Option<Node>>
 
   /**
    * Every event from whichever branch is active, as one stream.
@@ -262,6 +280,21 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
   options?: {
     /** How branch session ids are named. Defaults to the node's id. */
     readonly sessionIds?: ((node: Node) => string) | undefined
+    /**
+     * How the tree builds the sessions it hands back.
+     *
+     * Without this the tree silently drops the configuration a caller would
+     * have passed to `AgentSession.make` -- and the omission is not
+     * cosmetic. A tree built for an interactive application configures
+     * `elicitation`, and a branch built without it *refuses* a run needing
+     * approval instead of asking. The user sees a permission denial with no
+     * question, and nothing in the types said this would happen.
+     *
+     * `sessionId` and `history` are absent because they are the tree's to
+     * decide: the first is what keeps branches distinct, and the second is
+     * the node being branched from.
+     */
+    readonly session?: Omit<AgentSession.MakeOptions, "sessionId" | "history"> | undefined
   }
 ): Effect.Effect<SessionTree<Tools, E>, never, R | Scope.Scope | LanguageModel.LanguageModel> =>
   Effect.gen(function*() {
@@ -299,6 +332,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
           const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
           const sessionId = `${id}-active-${n}`
           const session = yield* AgentSession.make(agent, {
+            ...options?.session,
             history: found.history,
             sessionId
           }).pipe(Effect.provide(environment))
@@ -436,9 +470,11 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
         const { history } = yield* find(node.id)
         const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
         const sessionId = options?.sessionIds?.(node) ?? `${node.id}-branch-${n}`
-        const session = yield* AgentSession.make(agent, { history, sessionId }).pipe(
-          Effect.provide(environment)
-        )
+        const session = yield* AgentSession.make(agent, {
+          ...options?.session,
+          history,
+          sessionId
+        }).pipe(Effect.provide(environment))
         yield* Ref.update(at, (all) => new Map(all).set(sessionId, node.id))
         if (branchOptions?.lane !== undefined) {
           yield* Ref.update(laneOf, (all) => new Map(all).set(sessionId, branchOptions.lane!))
@@ -552,10 +588,17 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(
       commit,
       track,
       activate,
-      active: Effect.map(
-        SubscriptionRef.get(current),
-        Option.map((activation) => activation.node)
-      ),
+      active: Effect.gen(function*() {
+        const activation = yield* SubscriptionRef.get(current)
+        if (Option.isNone(activation)) return Option.none<Node>()
+        // Through `at`, which is what advances as the branch records turns.
+        const id = (yield* Ref.get(at)).get(activation.value.session.id)
+        const held_ = yield* Ref.get(held)
+        const found = id === undefined ? undefined : held_.get(id)
+        return Option.some(found?.node ?? activation.value.node)
+      }),
+      node: (id) =>
+        Effect.map(Ref.get(held), (all) => Option.fromNullishOr(all.get(id)?.node)),
       events: Stream.fromPubSub(feed),
       status: Stream.switchMap(SubscriptionRef.changes(current), (activation) =>
         Option.isNone(activation)
