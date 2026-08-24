@@ -15,7 +15,14 @@ const { backend, drainSettled, entries, footer, rewind, sink, status } = makeSto
  * message on a normal terminal rather than an exception inside a full-screen
  * UI that has already taken over the display.
  */
-const handle = await start(sink, { backend: fromArgv(process.argv.slice(2)) })
+const backendChoice = fromArgv(process.argv.slice(2))
+
+const handle = await start(sink, {
+  backend: backendChoice,
+  // The *acquisition*, not the store: the harness opens it in its own scope so
+  // it lives exactly as long as the session that reads it.
+  ...(backendChoice.store === undefined ? {} : { store: backendChoice.store })
+})
 
 process.on("SIGINT", () => handle.interrupt())
 

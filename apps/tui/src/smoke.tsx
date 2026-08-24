@@ -1,5 +1,8 @@
 import { testRender } from "@opentui/solid"
 import { App } from "./App.tsx"
+import { Effect } from "effect"
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
+import * as NodeStore from "../../../src/tree/NodeStore.js"
 import { fromArgv } from "./backend.ts"
 import * as Diff from "./diff.ts"
 import { project, start, stop } from "./harness.ts"
@@ -212,6 +215,54 @@ await until(() => entries.length === 0, "the export notice")
 
 // The agent still works afterwards.
 await ask("still there?")
+
+/**
+ * V9: the conversation survives the process.
+ *
+ * A second harness over the *same* store, with its own sink and its own
+ * transcript -- which is what a relaunch is. The first one is the session that
+ * has been running above; this is what someone reopening it would see.
+ *
+ * A memory-backed key-value store rather than a file: what is under test is
+ * that the tree is recovered and repainted, and that is the same code whether
+ * the map is in memory or on disk. `test/NodeStore.test.ts` covers the backing
+ * itself.
+ */
+const persistentKv = await Effect.runPromise(
+  Effect.scoped(
+    KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+      Effect.provide(KeyValueStore.layerMemory)
+    )
+  )
+)
+const persistentStore = Effect.succeed(NodeStore.keyValue(persistentKv))
+
+const firstRun = makeStore()
+const firstHandle = await start(firstRun.sink, { store: persistentStore })
+firstHandle.submit("remember this")
+await until(
+  () => firstRun.entries.some((entry) => entry.kind === "summary"),
+  "the first launch to finish a turn"
+)
+const firstTranscript = firstRun.entries.map((entry) => entry.title).join(" | ")
+stop()
+
+// A second launch: nothing in common but the store.
+const secondRun = makeStore()
+await start(secondRun.sink, { store: persistentStore })
+await until(
+  () => secondRun.entries.some((entry) => entry.title.startsWith("resumed")),
+  "the second launch to resume"
+)
+const resumed = secondRun.entries.map((entry) => entry.title).join(" | ")
+const resumedKinds = secondRun.entries.map((entry) => entry.kind)
+stop()
+
+// And a launch with no store at all starts empty, which is the default.
+const thirdRun = makeStore()
+await start(thirdRun.sink)
+const freshCount = thirdRun.entries.length
+stop()
 
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
@@ -491,6 +542,19 @@ checks.push(
   // the choices afterwards, not something that was undone.
   ["forking adds a line of work", afterFork.length >= branchesBeforeFork],
   ["the fork is the one in use", afterFork.some((item) => item.active)],
+
+  // V9: persistence
+  ["a turn is recorded on the first launch", firstTranscript.includes("remember this")],
+  ["a second launch recovers the conversation", resumed.includes("remember this")],
+  ["and says it resumed rather than started", resumed.includes("resumed")],
+  // Repainted from history, so the user's line and the model's are both there
+  // and are the kinds they were -- not one undifferentiated blob.
+  ["the repaint keeps who said what",
+    resumedKinds.includes("user") && resumedKinds.includes("assistant")],
+  // History carries no timings, so a summary would be invented. `restore.ts`
+  // paints what the conversation contains and nothing else.
+  ["and invents no turn summary", !resumedKinds.includes("summary")],
+  ["without a store, a launch starts empty", freshCount === 0],
 
   // The diff
   ["a replaced line shows as one removal and one addition",

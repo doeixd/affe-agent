@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Layer, Option, Stream } from "effect"
+import { Cause, Effect, Fiber, Layer, Option, Scope, Stream } from "effect"
 import * as Agent from "../../../src/Agent.js"
 import * as AgentEvent from "../../../src/AgentEvent.js"
 import * as AgentLoop from "../../../src/AgentLoop.js"
@@ -9,9 +9,11 @@ import { CodingToolkit } from "../../../src/coding/index.js"
 import * as Export from "../../../src/export/Export.js"
 import * as Redaction from "../../../src/redaction/Redaction.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
+import type * as NodeStore from "../../../src/tree/NodeStore.js"
 import * as SessionTree from "../../../src/tree/SessionTree.js"
 import * as TreeExport from "../../../src/tree/TreeExport.js"
 import { type Backend, scripted } from "./backend.ts"
+import { entriesOf } from "./restore.ts"
 import { bodyOf, defaultViews, titleOf, type Views } from "./tools.ts"
 import { type Approval, type BranchItem, type Command, type Handle, type Sink } from "./view.ts"
 import { duration } from "./width.ts"
@@ -325,6 +327,15 @@ export const start = (
      * runnable with no key and no network -- which every test depends on.
      */
     readonly backend?: Backend | undefined
+    /**
+     * Where the conversation lives between launches.
+     *
+     * In memory by default, which is what makes a run leave nothing behind --
+     * and what keeps the smoke suite from accumulating state across runs. A
+     * persistent store makes the tree survive the process, and the harness
+     * then *resumes* rather than starting empty.
+     */
+    readonly store?: Effect.Effect<NodeStore.NodeStore<any>, unknown, Scope.Scope> | undefined
   }
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
@@ -339,15 +350,48 @@ export const start = (
        * the rest of this file is unchanged by the fact that there is now more
        * than one conversation.
        */
+      /**
+       * Acquired in the program's own scope, so the store lives exactly as
+       * long as the tree that reads it. Building it outside and handing over
+       * the result would mean a finalizer that has already run by the time the
+       * first node is written.
+       */
+      const store = options?.store === undefined
+        ? undefined
+        : yield* Effect.orDie(options.store)
+
       const tree = yield* SessionTree.make(agent, {
         // Without this a run needing approval is refused rather than asked.
-        session: { elicitation: Elicitation.memory }
+        session: { elicitation: Elicitation.memory },
+        ...(store === undefined ? {} : { store })
       })
 
-      const root = yield* AgentSession.make(agent, {
-        elicitation: Elicitation.memory
-      })
-      const start = yield* tree.commit(root, { cause: "root", label: "start" })
+      /**
+       * Where to pick up.
+       *
+       * The newest node by capture time, across every line of work -- which is
+       * where the user was when the process ended, whichever branch they were
+       * on. A leaf would be wrong: after a rewind the tip of the line is not
+       * the newest thing recorded.
+       *
+       * `None` means an empty store, which is a first launch.
+       */
+      const resumeTarget = Effect.map(tree.nodes, (nodes) =>
+        nodes.reduce(
+          (newest: Option.Option<SessionTree.Node>, node) =>
+            Option.isNone(newest) || node.at >= newest.value.at
+              ? Option.some(node)
+              : newest,
+          Option.none<SessionTree.Node>()
+        ))
+
+      const resuming = yield* resumeTarget
+      const start = Option.isSome(resuming)
+        ? resuming.value
+        : yield* tree.commit(
+          yield* AgentSession.make(agent, { elicitation: Elicitation.memory }),
+          { cause: "root", label: "start" }
+        )
 
       /**
        * Prompts offered but not yet admitted, oldest first.
@@ -383,9 +427,35 @@ export const start = (
 
       // The branch the user starts on. `session` is reassigned on rewind; the
       // handle closes over this binding rather than over a value.
-      let session = (yield* tree.activate(start)).session
+      const opened = yield* tree.activate(start)
+      let session = opened.session
       let taken = 0
       let forks = 0
+
+      /**
+       * Repaint a recovered conversation.
+       *
+       * Only on resume, and that asymmetry is deliberate. A rewind leaves the
+       * transcript alone because scrollback is write-once and what the user
+       * saw is still true; a *restart* has nothing above, so painting is the
+       * only way the conversation exists at all.
+       *
+       * Painted from history rather than replayed from events, because the
+       * events are gone -- see `restore.ts` for why the two are not
+       * interchangeable.
+       */
+      if (Option.isSome(resuming)) {
+        for (const entry of entriesOf(opened.history, options?.views ?? defaultViews)) {
+          sink.append(entry)
+        }
+        sink.append({
+          id: nextId("notice"),
+          kind: "notice",
+          title: `resumed ${resuming.value.id}`
+            + ` · ${opened.history.content.length} messages`,
+          body: { type: "none" }
+        })
+      }
 
       const publishDepth = () =>
         Effect.gen(function*() {

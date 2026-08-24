@@ -3,10 +3,13 @@ import { Config, Effect, Layer } from "effect"
 import type { Scope } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as LocalSandbox from "../../../src/sandbox/local.js"
 import * as MemorySandbox from "../../../src/sandbox/memory.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
+import * as NodeStore from "../../../src/tree/NodeStore.js"
 
 /**
  * What the harness runs against: a model and a workspace.
@@ -27,6 +30,21 @@ export type Kind = "scripted" | "live"
 
 export interface Backend {
   readonly kind: Kind
+  /**
+   * Where the conversation lives between launches, if anywhere.
+   *
+   * Part of the backend rather than a separate flag, for the same reason the
+   * model and the workspace are one choice: state that outlives the process
+   * belongs *to* a workspace. Resuming a live session against a different
+   * directory would restore a conversation about files that are not there.
+   *
+   * Absent for the scripted backend, which should leave nothing behind.
+   */
+  readonly store?: Effect.Effect<
+    NodeStore.NodeStore<NodeStore.StoreError>,
+    unknown,
+    Scope.Scope
+  > | undefined
   /**
    * Exactly the two services the harness needs, and no requirement of its own.
    *
@@ -153,6 +171,21 @@ export const live = (options: {
 }): Backend => ({
   kind: "live",
   label: `${options.model} · ${options.workspaceRoot}`,
+  /**
+   * Under the workspace, so the conversation travels with the code it is
+   * about -- and so deleting the working copy deletes the transcript with it,
+   * which is what someone deleting a throwaway checkout means.
+   */
+  store: Effect.map(
+    KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+      Effect.provide(
+        KeyValueStore.layerFileSystem(
+          `${options.workspaceRoot}/.effect-agent/session`
+        ).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
+      )
+    ),
+    (kv) => NodeStore.keyValue(kv)
+  ),
   layer: Layer.mergeAll(
     AnthropicLanguageModel.layer({ model: options.model }).pipe(
       Layer.provide(

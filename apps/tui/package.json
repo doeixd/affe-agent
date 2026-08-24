@@ -12,7 +12,8 @@
     "@opentui/solid": "^0.5.8",
     "solid-js": "1.9.12",
     "@effect/ai-anthropic": "^4.0.0-rc.111",
-    "effect": "^4.0.0-rc.111"
+    "effect": "^4.0.0-rc.111",
+    "@effect/platform-node": "^4.0.0-rc.111"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",
