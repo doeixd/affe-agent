@@ -97,15 +97,8 @@ export interface Options {
  * while the plan is still choosing, so falling back cannot disturb canonical
  * history, the event ordering, or the atomic turn commit.
  *
- * **Batch only, for now.** The streaming path is deliberately not wrapped.
- * `MessageStarted` and `MessageDelta` are emitted *as the stream runs*, so a
- * fallback after partial output would leave an observer holding text the
- * transcript will never contain, and about to see a second `MessageStarted`
- * for the same turn. Choosing between "refuse to fall back once output is
- * observed" and "announce the partial message void first" is a real decision
- * and it is not made here -- see `docs/plan-execution-plan.md`, milestone X2.
- * `withExecutionPlan`'s documentation says so, because a fallback that
- * silently does not apply is worse than one that is honestly absent.
+ * The streaming path has its own version below, `withPlanStream`, because
+ * falling back mid-stream is a different question -- see there.
  */
 const withPlan = <A, E, R>(
   session: Session<any, any, any>,
@@ -114,6 +107,44 @@ const withPlan = <A, E, R>(
   Option.match(session.agent.executionPlan, {
     onNone: () => call,
     onSome: (plan) => Effect.withExecutionPlan(call, plan)
+  })
+
+/**
+ * The same, for the streamed model call.
+ *
+ * Streaming is the hard case: `MessageDelta` is emitted *as the stream runs*,
+ * so a fallback after partial output would leave an observer holding text the
+ * transcript will never contain. `preventFallbackOnPartialStream` is exactly
+ * the policy that forbids it -- once a step has emitted, its failure is final
+ * and the ladder stops. Effect ships the option, so this is a choice we
+ * declare rather than a mechanism we build.
+ *
+ * That is the conservative side of the trade, deliberately. It gives up the
+ * cases where a fallback might have helped -- and a provider that died
+ * halfway through a message is rarely rescued by a retry that starts over,
+ * while a viewer shown two `MessageStarted` events for one turn is a bug in
+ * every case.
+ *
+ * Slightly more conservative than strictly necessary, and worth knowing: the
+ * option counts any emitted *stream part*, while we only emit a `MessageDelta`
+ * for some of them. A part that produced no delta still blocks the fallback.
+ * Erring toward "do not mix partial output with a retry" is the right
+ * direction for a rule whose whole purpose is that.
+ *
+ * `MessageStarted` sits outside this, emitted once before the stream is run,
+ * so a fallback that happens before any part is invisible to an observer --
+ * which is the outcome worth having.
+ */
+const withPlanStream = <A, E, R>(
+  session: Session<any, any, any>,
+  stream: Stream.Stream<A, E, R>
+): Stream.Stream<A, E, R> =>
+  Option.match(session.agent.executionPlan, {
+    onNone: () => stream,
+    onSome: (plan) =>
+      Stream.withExecutionPlan(stream, plan, {
+        preventFallbackOnPartialStream: true
+      })
   })
 
 const streamResponse = <Tools extends Record<string, Tool.Any>>(
@@ -131,11 +162,14 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
     )
 
     const final = yield* Stream.runFoldEffect(
-      LanguageModel.streamText({
-        prompt: context,
-        toolkit: handler,
-        disableToolCallResolution: true
-      }),
+      withPlanStream(
+        session,
+        LanguageModel.streamText({
+          prompt: context,
+          toolkit: handler,
+          disableToolCallResolution: true
+        })
+      ),
       () => Accumulator.empty<Tools>(),
       (state, part: Response.StreamPart<Tools, true>) => {
         const next = Accumulator.step(state, part)

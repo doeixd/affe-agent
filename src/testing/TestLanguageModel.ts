@@ -356,7 +356,15 @@ export const failingAfter = (
         // keeps it, documented and inventoried.
         generateText: ((callOptions: never) =>
           Effect.andThen(gate, inner.generateText(callOptions))) as unknown as
-            LanguageModel.Service["generateText"]
+            LanguageModel.Service["generateText"],
+        // Both entry points, so a streamed run sees the same provider. The
+        // gate runs before any part is emitted, which is the case an
+        // `ExecutionPlan` can still fall back from -- once a stream has
+        // emitted, `preventFallbackOnPartialStream` makes its failure final.
+        streamText: ((callOptions: never) =>
+          Stream.unwrap(
+            Effect.as(gate, inner.streamText(callOptions))
+          )) as unknown as LanguageModel.Service["streamText"]
       }
     })
   ).pipe(Layer.provide(base))

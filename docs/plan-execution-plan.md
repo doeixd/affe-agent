@@ -225,13 +225,27 @@ invariant in those slots, so a real `ExecutionPlan.make(...)`, which infers
 shipped compiling and impossible to call. Being generic over the whole `Types`
 object fixes it.
 
-**2. Which streaming policy? — Deferred, and the code says so.**
+**2. Which streaming policy? — Option 1, and Effect already ships it.**
 
-X1 wraps the batch path only. The streaming path is left alone rather than
-wrapped-and-hoped, because emitting `MessageStarted` and deltas before a
-fallback is the one outcome that is definitely wrong. `withExecutionPlan`'s
-documentation states the limit, so a fallback that does not apply is never
-silent. Settling between options 1 and 2 is X2.
+`Stream.withExecutionPlan` takes **`preventFallbackOnPartialStream`**, whose
+documented behaviour is *"a failing step can fallback even after emitting
+elements; set this to fail instead of mixing partial output with a later
+fallback"* — which is option 1 exactly. So this is a policy we **declare**
+rather than a mechanism we build, and the deferral in X1 lasted one milestone.
+
+Two things about it worth knowing rather than discovering:
+
+- It is **slightly more conservative than strictly necessary**. The option
+  counts any emitted *stream part*, while we emit a `MessageDelta` for only
+  some of them — so a part that produced no delta still blocks the fallback.
+  For a rule whose entire purpose is "do not mix partial output with a retry",
+  erring that way is the right direction.
+- A provider reporting an error **inside a well-formed stream** (an error
+  part, `TestLanguageModel`'s `streamError`) is *not* a fallback trigger. That
+  failure is raised in `AgentTurn`'s fold, downstream of the wrapped stream, so
+  the plan never sees it. Arguably it should — but by the time an error part
+  arrives, output has usually been emitted and the policy above would refuse
+  the fallback anyway. Recorded rather than fixed.
 
 ### X1 — The combinator, non-streaming ✅
 
@@ -251,10 +265,22 @@ code**, so the cast belongs in the one place licensed to hold it rather than in
 the test that wanted it. `test/Casts.test.ts` caught it and refused to pass
 until AGENTS.md recorded it — which is A-11 doing exactly its job.
 
-### X2 — Streaming
+### X2 — Streaming ✅
 
-`Stream.withExecutionPlan` with the P0 policy. Tests X4 explicitly, including
-the case that motivated the question: a stream that fails after two deltas.
+`Stream.withExecutionPlan(plan, { preventFallbackOnPartialStream: true })`
+around the `streamText` stream, inside `streamResponse` — so `MessageStarted`,
+which is emitted once before the stream runs, sits *outside* the plan. A
+fallback before any output is therefore invisible to an observer: one message,
+completed by whichever step answered.
+
+The test asserts that directly (X4): a streamed run whose primary fails falls
+back, and emits **exactly one** `MessageStarted` with deltas following. Two
+would mean a viewer saw a message begin, then begin again. Falsified by
+removing the wrapping.
+
+The after-output case is *forbidden* rather than handled, which is the whole
+point of the flag — so there is no behaviour of ours to test there, only a
+policy to state.
 
 ### X3 — Telemetry
 
