@@ -384,8 +384,21 @@ export const App = (props: {
   const dimensions = useTerminalDimensions()
   const policy = () => widthPolicy(dimensions().width)
 
-  /** Nowhere to go back to from the first turn. */
-  const canRewind = () => props.rewind.depth > 1
+  /**
+   * Nowhere to go back to from the first turn -- and nowhere to go *from*
+   * while a turn is running.
+   *
+   * R15: the footer only ever advertised rewind while idle, but the key was
+   * live regardless. During a submission `tree.active` still points at the
+   * last completed boundary, so ctrl+r abandoned the in-flight branch *and*
+   * stepped back from an older point than the user was looking at -- leaving
+   * the abandoned branch's entries streaming, which blocks scrollback for
+   * good.
+   *
+   * Gated rather than made into an interrupt-and-rewind transaction: the
+   * affordance already said idle-only, so the honest fix is to mean it.
+   */
+  const canRewind = () => props.rewind.depth > 1 && props.status === "idle"
 
   /**
    * What has been typed, newest last, and where in it the user is.

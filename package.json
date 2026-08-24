@@ -198,10 +198,12 @@
     "test": "vitest run",
     "lint": "effect-language-service diagnostics --project tsconfig.json",
     "lint:portability": "node scripts/verify-portability.mjs",
-    "check": "npm run typecheck && npm run lint && npm run lint:portability && npm run test",
+    "check": "npm run typecheck && npm run typecheck:tui && npm run lint && npm run lint:portability && npm run test && npm run smoke:tui",
     "prepublishOnly": "npm run check && npm run build",
     "verify:package": "node scripts/verify-package.mjs",
-    "verify:pack": "node scripts/pack-check.mjs"
+    "verify:pack": "node scripts/pack-check.mjs",
+    "typecheck:tui": "tsc --noEmit --project apps/tui",
+    "smoke:tui": "node scripts/tui-smoke.mjs"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",

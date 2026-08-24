@@ -264,6 +264,79 @@ await start(thirdRun.sink)
 const freshCount = thirdRun.entries.length
 stop()
 
+/**
+ * R14 -- a message that dies mid-stream is still finished.
+ *
+ * Driven through the projection: what is under test is that a terminal message
+ * event settles its entry, and landing a failure precisely between two deltas
+ * of a real run is a race a test should not have to win.
+ *
+ * The property has nothing to do with timing. An entry left `streaming: true`
+ * is never settled, and `drainSettled` takes a *prefix* -- so one of them holds
+ * itself and every later entry out of scrollback for the rest of the session.
+ */
+const streamCases: Array<readonly [string, { readonly _tag: string }]> = [
+  ["failed", { _tag: "MessageFailed" }],
+  ["interrupted", { _tag: "MessageInterrupted" }],
+  // The case core does not report at all: a stream that simply stops because
+  // the submission ended under it.
+  ["abandoned", { _tag: "SubmissionInterrupted" }]
+]
+
+const streamOutcomes = streamCases.map(([name, terminal]) => {
+  const store = makeStore()
+  const { onEvent } = project(store.sink, defaultViews)
+  onEvent({ _tag: "SubmissionStarted" })
+  onEvent({ _tag: "MessageStarted" })
+  onEvent({ _tag: "MessageDelta", kind: "text", delta: "half a th" })
+  const blockedWhileStreaming = store.drainSettled().length
+  onEvent(terminal as never)
+  store.sink.append({
+    id: `after-${name}`,
+    kind: "notice",
+    title: "later work",
+    body: { type: "none" }
+  })
+  const drained = store.drainSettled().map((entry) => entry.id)
+  return { name, blockedWhileStreaming, drained }
+})
+
+/**
+ * R25 -- interrupting an approval does not leave a dead question on screen.
+ *
+ * Core removes the pending elicitation but emits no `ElicitationResolved` for
+ * it, so a footer cleared only on resolution keeps offering a choice that can
+ * no longer be answered.
+ */
+const approvalStore = makeStore()
+const { onEvent: onApproval } = project(approvalStore.sink, defaultViews)
+onApproval({ _tag: "SubmissionStarted" })
+onApproval({
+  _tag: "ElicitationRequested",
+  id: "e1",
+  kind: "tool-approval",
+  detail: { toolName: "bash", action: "shell", resource: "rm -rf /" }
+} as never)
+const askedBeforeInterrupt = approvalStore.footer().type
+onApproval({ _tag: "SubmissionInterrupted" })
+const askedAfterInterrupt = approvalStore.footer().type
+
+// The ordinary path, asserted separately: a question that is *answered* takes
+// the footer back immediately, while the run carries on. Without this the
+// terminal clear above hides a broken resolution path, because the footer
+// eventually returns either way -- just a whole submission too late.
+const resolvedStore = makeStore()
+const { onEvent: onResolved } = project(resolvedStore.sink, defaultViews)
+onResolved({ _tag: "SubmissionStarted" })
+onResolved({
+  _tag: "ElicitationRequested",
+  id: "e2",
+  kind: "tool-approval",
+  detail: { toolName: "bash", action: "shell", resource: "ls" }
+} as never)
+onResolved({ _tag: "ElicitationResolved", id: "e2", granted: true } as never)
+const afterAnswering = resolvedStore.footer().type
+
 // Capture only after a flush: `captureCharFrame` returns the last *painted*
 // frame, so reading it straight after a state change shows the previous one.
 await flush()
@@ -555,6 +628,27 @@ checks.push(
   // paints what the conversation contains and nothing else.
   ["and invents no turn summary", !resumedKinds.includes("summary")],
   ["without a store, a launch starts empty", freshCount === 0],
+
+  // R14
+  ["a streaming message holds back the transcript",
+    streamOutcomes.every((outcome) => outcome.blockedWhileStreaming === 0)],
+  ...streamOutcomes.map((outcome) =>
+    [
+      `a ${outcome.name} message settles`,
+      outcome.drained.some((id) => id.startsWith("assistant"))
+    ] as const),
+  ...streamOutcomes.map((outcome) =>
+    [
+      `and stops blocking what follows it (${outcome.name})`,
+      outcome.drained.includes(`after-${outcome.name}`)
+    ] as const),
+
+  // R25
+  ["an approval is asked", askedBeforeInterrupt === "approval"],
+  ["and interrupting the run takes the question away",
+    askedAfterInterrupt === "prompt"],
+  ["answering takes it away at once, not at the end of the run",
+    afterAnswering === "prompt"],
 
   // The diff
   ["a replaced line shows as one removal and one addition",

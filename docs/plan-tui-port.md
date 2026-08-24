@@ -446,6 +446,51 @@ Shipping it would look like highlighting and deliver none, which is worse than
 not shipping it. Recorded here rather than left for someone to rediscover; it
 becomes cheap the moment the parsers are available.
 
+### Review findings addressed (2026-08-24)
+
+R14, R15, R25 and R30, from
+[review-recent-commits-2026-08-24.md](./review-recent-commits-2026-08-24.md).
+The first three share one root cause and one shape: **a terminal event must
+terminalise everything transient that belonged to it.** `drainSettled` takes a
+*prefix*, so any entry left unsettled holds itself and everything after it out
+of scrollback for the rest of the session -- the transcript simply stops
+growing, several screens after the cause.
+
+- **R14.** `MessageFailed` and `MessageInterrupted` were ignored, so a streamed
+  reply that died after its first delta stayed `streaming: true` forever. Both
+  are handled now, and so is the case core does not report at all: a stream
+  abandoned because the submission ended under it. The text so far is kept
+  rather than blanked -- it is what the user watched arrive, and erasing it
+  would be a different lie from leaving it unfinished.
+- **R25.** Interrupting a run that was waiting for approval left an
+  unanswerable question on screen: core removes the elicitation but emits no
+  `ElicitationResolved`, so a footer cleared only on resolution never cleared.
+  The screen read idle while offering a choice that did nothing -- `respond`
+  returns false and emits nothing, so there was not even a way back to the
+  prompt.
+
+  Testing this found a second gap the suite could not see: with the terminal
+  clear in place, *removing the resolution clear entirely* still passed,
+  because the footer came back either way -- just a whole submission late.
+  There is now an assertion for each path.
+- **R15.** Ctrl+R was live during a running submission although the footer only
+  ever advertised it while idle. `tree.active` points at the last completed
+  boundary, so rewinding mid-run abandoned the in-flight branch *and* stepped
+  back further than the user was looking -- leaving the abandoned branch's
+  entries streaming. Gated on idle rather than turned into an
+  interrupt-and-rewind transaction: the affordance already said idle-only, so
+  the honest fix is to mean it.
+- **R30.** `npm run check` did not verify the TUI at all, so a commit could
+  report the repository green while the app it drives was broken. `check` now
+  runs the TUI's typecheck and its smoke suite.
+
+  The smoke needed `scripts/tui-smoke.mjs` to be runnable from npm. `npm run`
+  prepends every ancestor `node_modules/.bin` to PATH up to the drive root, and
+  a stray `bun.exe` in one of them shadows the real binary -- bun then exits
+  with "failed to remap this bin". Nothing in the repository causes that and
+  nothing in it can prevent it, so the script looks past PATH instead of
+  through it.
+
 ### Still not implemented
 
 - **No scrolling inside the live region.** Finished entries go to the

@@ -178,6 +178,28 @@ export const project = (
         return
       }
 
+      /**
+       * R14 -- a message that failed or was interrupted is still finished.
+       *
+       * The message analogue of `ToolCallInterrupted`. An assistant entry
+       * created by the first delta stays `streaming: true` until something
+       * says otherwise, and `drainSettled` takes a *prefix* -- so one message
+       * that died mid-stream holds itself and every later entry out of
+       * scrollback for the rest of the session. The transcript simply stops
+       * growing, three screens after the cause.
+       *
+       * The text so far is kept rather than cleared: it is what the user
+       * watched arrive, and blanking it would be a different lie from leaving
+       * it unfinished.
+       */
+      case "MessageFailed":
+      case "MessageInterrupted": {
+        if (assistant === undefined) return
+        sink.patch(assistant, { streaming: false })
+        assistant = undefined
+        return
+      }
+
       case "MessageCompleted": {
         // Empty text is a tool-only turn: there is no message to show.
         if (assistant === undefined) {
@@ -272,6 +294,29 @@ export const project = (
       case "SubmissionCompleted":
       case "SubmissionFailed":
       case "SubmissionInterrupted":
+        /**
+         * R25 -- and whatever the footer was asking about is now dead.
+         *
+         * Interrupting a run that is waiting for approval removes the
+         * elicitation, but no `ElicitationResolved` is emitted for it -- so a
+         * footer cleared only on resolution keeps showing a question that can
+         * no longer be answered. The screen reads idle while offering a choice
+         * that does nothing: `respond` returns false and emits nothing, so
+         * there is not even a way back to the prompt.
+         *
+         * A submission ending is the moment every transient surface belonging
+         * to it stops being about anything.
+         */
+        sink.setApproval(undefined)
+
+        /**
+         * R14, again -- a streamed message that never reached a terminal event.
+         *
+         * The cases above cover the ones core reports. This covers the rest by
+         * construction: if the submission is over, nothing will finish this
+         * entry, so leaving it streaming blocks the transcript forever.
+         */
+        if (assistant !== undefined) sink.patch(assistant, { streaming: false })
         assistant = undefined
         if (event._tag === "SubmissionInterrupted") {
           sink.append({
