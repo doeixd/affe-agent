@@ -18,7 +18,7 @@ transforms, steering/follow-ups, interruption, model streaming, elicitation
 
 **Higher-level packages** — `/sandbox` (+local), `/coding`, `/subagent`,
 `/state`, `/skills`, `/memory`, `/evals`, `/observability`, `/data`, `/connectors`,
-`/hooks`, `/scheduling`, `/budget` (token ceiling over the loop seam), and an
+`/hooks`, `/scheduling`, `/budget`, `/plugins` (load an Agent Plugins package over /skills + /mcp), and an
 end-to-end integration proving they compose.
 
 ### Issue #4 priority tier (P0/P1) — shipped

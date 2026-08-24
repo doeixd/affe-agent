@@ -3,9 +3,9 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 648 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 693 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
-imports every published entry point from the packed tarball (30 entries).
+imports every published entry point from the packed tarball (31 entries).
 `verify:package` is the source of truth for the entry-point count; regenerate
 these numbers from `npm run verify:package` and `npm run test` when they change.
 
@@ -2338,6 +2338,27 @@ dedup of a redelivery (one run for two identical deliveries), distinct
 conversations to distinct sessions, a custom session resolver, and an
 unauthenticated delivery refused before anything runs. Falsified by dropping
 the reply. The Slack shape is in `examples/connectors.ts`.
+
+## Agent Plugins
+
+`/plugins` loads an [Agent Plugins](https://agent-plugins.org) 1.0.0 directory
+(`plugin.json` + `skills/<name>/SKILL.md` + `mcp.json`) as an adapter over
+`/skills`, `/mcp`, and `/sandbox` -- portable, no core change, no new host module
+(files are read through the `Sandbox` seam). `Plugins.load` validates the
+manifest imperatively to honour the spec's exact failure split (only a fatal
+`plugin.json` fails; an unknown field or a non-object `extensions` is warned and
+ignored; a bad `SKILL.md` or server entry is skipped while siblings load),
+discovers immediate `skills/` children (no deep recursion) into the
+progressive-disclosure registry with eager Sandbox-backed bodies, and decodes
+`mcp.json` transports (stdio gated by `allowStdio`; streamable-http with the
+loopback-HTTPS rule; reserved `PLUGIN_ROOT`/`PLUGIN_DATA` env keys refused;
+single-pass placeholder expansion in args/env/cwd; sse skipped). `Plugins.mcpToolkit`
+connects the servers and binds their discovered tools as `Tool.dynamic` via a new
+`McpToolkit.bindDiscovered` (connection failures isolated). `Plugins.install`
+bundles it onto an agent. A dependency-free SKILL.md frontmatter parser avoids a
+YAML dep. ~50 tests across the frontmatter parser, manifest, skills, mcp decode,
+`bindDiscovered`, and an end-to-end load→install→advertise→`load_skill` run over a
+`MemorySandbox`. Example in `examples/agent-plugins.ts`.
 
 ## Lifecycle hooks (roadmap #4 §13)
 

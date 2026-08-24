@@ -74,7 +74,7 @@ Core is the default import; everything else is an explicit subpath.
 : `/client` · `/rpc` · `/http` · `/ag-ui` · `/a2a` · `/mcp` (`/mcp/v1`, `/mcp/v2`) · `/durable` · `/cluster` · `/durable-streams` · `/openai`.
 
 **Batteries** (capabilities over a seam)
-: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop.
+: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
 
 **Host & testing**
 : `/sandbox` (portable) + `/sandbox/local` (host) · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
@@ -1732,6 +1732,36 @@ context transforms and canonical history are directly testable.
   follow-up run, and a resilient cron digest, via `@doeixd/effect-agent/scheduling`
 - [`examples/dynamic-capabilities.ts`](./examples/dynamic-capabilities.ts) — a
   per-tenant toolkit resolved per turn from a service in the agent's context
+- [`examples/agent-plugins.ts`](./examples/agent-plugins.ts) — load an Agent
+  Plugins package (skills + MCP servers) into an agent, via
+  `@doeixd/effect-agent/plugins`
+
+## Agent Plugins
+
+[`@doeixd/effect-agent/plugins`](https://agent-plugins.org) loads a portable
+plugin directory — a `plugin.json` manifest, `skills/<name>/SKILL.md` skills, and
+an `mcp.json` of MCP servers — into an agent. The standard is a vendor-neutral
+composition of two things this library already models (Agent Skills → `/skills`,
+MCP servers → `/mcp`), so support is an **adapter over existing seams**, not a new
+capability: it adds nothing to the engine, and reads the plugin through the
+`Sandbox` seam, so it stays portable.
+
+```ts
+const loaded = yield* Plugins.load()                       // reads via Sandbox.Current
+const agent = yield* Agent.make({ instructions: "…" }).pipe(Plugins.install(loaded))
+const session = yield* AgentSession.make(agent).pipe(
+  Effect.provide(Plugins.skillsLayer(loaded))
+)
+// …provide a Sandbox (sandbox/local pointed at the plugin dir, or a MemorySandbox).
+```
+
+The spec's failure model is honoured exactly: only a fatal `plugin.json` fails the
+load; a missing `skills/`/`mcp.json`, a single bad `SKILL.md`, or a bad server
+entry is a `Warning` and the rest of the plugin loads. Skills map onto the
+progressive-disclosure `/skills` registry (metadata advertised, body loaded on
+demand); MCP servers are connected and their discovered tools bound as
+`Tool.dynamic` via `Plugins.mcpToolkit`. Extension namespaces are ignored (spec
+requires clients to skip namespaces they don't implement).
 
 ## Runtimes
 
