@@ -2471,8 +2471,8 @@ requirement assertion was deliberately broken once and produced the expected
 compiler failure before being restored. Both packed `/web` entries import
 under the no-Node-builtins resolution hook.
 
-W2 (`web_fetch`) remains unimplemented and separately gated by the decoded
-permission-parameter prerequisite in `PLAN.md`.
+W2 (`web_fetch`) is implemented below, including its decoded-permission
+prerequisite.
 
 Verification for W1: 872 tests pass; Effect language-service diagnostics are
 zero; portability and build pass; and all 33 packed entry points, including
@@ -2480,3 +2480,61 @@ zero; portability and build pass; and all 33 packed entry points, including
 is currently stopped at typecheck by unrelated concurrent work in
 `SessionTree.ts` and `StorageError.test.ts`; W1 typechecked cleanly before those
 edits landed, and its focused suites remain green.
+
+## Guarded web fetch battery (M6 / W2)
+
+`/web` now also exports the independent `WebFetch` service and `web_fetch`
+tool. `WebToolkit.searchToolkit()`, `fetchToolkit()` and the individual bound
+`search`/`fetch` values keep capability selection honest: choosing fetch does
+not require search, choosing search does not require fetch, and the combined
+`toolkit()` requires both. The tool accepts a transformed `URLFromString`, is
+permissioned as `net.fetch` on its canonical origin, and returns final URL,
+status, media type, honest `text | html | markdown` format, and a body clearly
+delimited as untrusted external content. `TestWebFetch.layer` is the canned
+deterministic provider.
+
+The permission boundary now decodes valid parameters before dynamic
+`needsApproval` and `Permission` projection. Invalid parameters consult neither
+and continue into Effect AI's ordinary handler validation; events, policy
+request payloads, loop state and handler dispatch retain the encoded model
+payload. A transforming Date test proves both decoded consumers, and the fetch
+URL test proves exact canonical origin projection without a cast in user code.
+This also exposed the corresponding durable boundary: `DurableModel` had been
+encoding already-encoded model tool calls through decoded parameter schemas.
+Its journal codec now uses each parameter schema's encoded side, so transformed
+tool calls replay correctly while result codecs remain unchanged.
+
+`/web/http` is the portable default provider over Effect's abstract
+`HttpClient`. It accepts only HTTP(S), strips fragments, rejects embedded
+credentials without echoing them, and blocks lexical localhost, `.local`,
+known metadata hosts, private/link-local/loopback IPv4 and IPv6, CGNAT,
+benchmark and multicast literals. Fetch-backed clients receive
+`redirect: "manual"` and `credentials: "omit"`; the provider follows at most
+five same-origin redirects, validates every target, and returns a typed refusal
+before a cross-origin second request. It accepts bounded textual HTML,
+Markdown, JSON, XML, JavaScript and `text/*`, rejects binary/PDF/image or absent
+media types, checks advertised length, folds the actual delivered stream under
+1 MiB, decodes the declared charset fatally, and puts request, redirects and
+body under one 20-second timeout. It never retries.
+
+This is baseline portable SSRF defense, not physical egress isolation. A DNS
+name can resolve or rebind to a private address outside what a portable
+`HttpClient` exposes, and a non-Fetch client must honor the provider's manual
+redirect contract. Strong deployments still need an address-aware runtime or
+egress proxy. `Permission` remains policy rather than a sandbox, and an allowed
+local `bash` may still reach the network independently.
+
+Deterministic coverage includes transformed and invalid permission parameters,
+canonical ports/fragments, credentials and target tables, same- and
+cross-origin redirects, the five-hop cap, explicit redirected-origin
+re-authorization, supported/unsupported media, advertised and streamed
+overflow, malformed UTF-8, no retry, timeout, caller interruption, provider
+gating and untrusted-content delimiting. A workflow suspends after a completed
+fetch and proves replay does not repeat it.
+
+Verification for W2: `npm run check` is green with 895 tests, 273 Effect files
+produce zero diagnostics, and portability is green. All 34 packed entry points,
+including `/web/http`, import successfully under the portable no-Node-builtins
+hook. `npm run build` currently reports an unrelated concurrent
+`src/connectors/slack.ts` Web Crypto `BufferSource` typing error; package emit
+still completed and packed-entry verification passed.

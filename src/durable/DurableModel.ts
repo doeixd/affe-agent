@@ -93,7 +93,25 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     // are consumed in a fixed order, so their ordinal is exactly that.
     const callIndex = yield* Ref.make(0)
 
-    const partsSchema = Schema.Array(Response.Part(toolkit))
+    // With `disableToolCallResolution`, model responses deliberately carry
+    // tool parameters in their encoded form. `Response.Part(toolkit)` instead
+    // describes a live part whose parameters are decoded and therefore tries
+    // to *encode* them here. That is invisible for strings and wrong for a
+    // transformation such as URLFromString: the journal sees the model's URL
+    // string where the schema expects a URL object. Give only the journalling
+    // codec encoded parameter schemas; result schemas remain unchanged.
+    const livePartSchema = Response.Part(toolkit)
+    const encodedToolkit = Toolkit.make(
+      ...Object.values(toolkit.tools).map((tool) =>
+        tool.setParameters(Schema.toEncoded(tool.parametersSchema)))
+    )
+    const encodedPartSchema = Response.Part(encodedToolkit) as Schema.Codec<
+      Response.Part<Tools, true>,
+      Response.PartEncoded,
+      (typeof livePartSchema)["DecodingServices"],
+      (typeof livePartSchema)["EncodingServices"]
+    >
+    const partsSchema = Schema.Array(encodedPartSchema)
     // A real schema, not `Schema.Unknown`: response parts are class instances
     // that `Unknown` cannot encode, which is how the original parts schema came
     // to exist. The outcome union has to preserve that.

@@ -26,6 +26,14 @@ const normalizedHostname = (url: URL): string =>
     .replace(/\]$/, "")
     .replace(/\.+$/, "")
 
+const safeHref = (url: URL): string => {
+  if (url.username === "" && url.password === "") return url.href
+  const safe = new URL(url.href)
+  safe.username = ""
+  safe.password = ""
+  return safe.href
+}
+
 const ipv4Octets = (host: string): ReadonlyArray<number> | undefined => {
   const parts = host.split(".")
   if (parts.length !== 4) return undefined
@@ -62,7 +70,10 @@ const ipv6Hextets = (host: string): ReadonlyArray<number> | undefined => {
     for (const piece of pieces) {
       const ipv4 = ipv4Octets(piece)
       if (ipv4 !== undefined) {
-        values.push((ipv4[0]! << 8) | ipv4[1]!, (ipv4[2]! << 8) | ipv4[3]!)
+        values.push(
+          ((ipv4[0] ?? 0) << 8) | (ipv4[1] ?? 0),
+          ((ipv4[2] ?? 0) << 8) | (ipv4[3] ?? 0)
+        )
         continue
       }
       if (!/^[0-9a-f]{1,4}$/i.test(piece)) return undefined
@@ -101,7 +112,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return Effect.fail(
       new WebFetch.WebFetchInvalidUrlError({
-        url: url.href,
+        url: safeHref(url),
         reason: "only http and https are supported"
       })
     )
@@ -109,7 +120,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   if (url.username !== "" || url.password !== "") {
     return Effect.fail(
       new WebFetch.WebFetchInvalidUrlError({
-        url: url.href,
+        url: safeHref(url),
         reason: "embedded credentials are not allowed"
       })
     )
@@ -164,13 +175,11 @@ const readBody = Effect.fn("HttpWebFetch.readBody")(function*(
   if (declared !== undefined) {
     const bytes = Number(declared)
     if (Number.isFinite(bytes) && bytes > MAX_RESPONSE_BYTES) {
-      return yield* Effect.fail(
-        new WebFetch.WebFetchResponseTooLargeError({
-          url: url.href,
-          maxBytes: MAX_RESPONSE_BYTES,
-          observedBytes: bytes
-        })
-      )
+      return yield* new WebFetch.WebFetchResponseTooLargeError({
+        url: url.href,
+        maxBytes: MAX_RESPONSE_BYTES,
+        observedBytes: bytes
+      })
     }
   }
 
@@ -262,12 +271,10 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
     if (REDIRECT_STATUSES.has(response.status)) {
       const location = response.headers.location
       if (location === undefined) {
-        return yield* Effect.fail(
-          new WebFetch.WebFetchHttpResponseError({
-            url: current.href,
-            status: response.status
-          })
-        )
+        return yield* new WebFetch.WebFetchHttpResponseError({
+          url: current.href,
+          status: response.status
+        })
       }
       const next = yield* Effect.try({
         try: () => WebFetch.canonicalize(new URL(location, current)),
@@ -277,44 +284,37 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
             reason: "redirect location is not a valid URL"
           })
       })
+      yield* validateTarget(next)
       if (next.origin !== initial.origin) {
-        return yield* Effect.fail(
-          new WebFetch.WebFetchCrossOriginRedirectError({
-            from: current.href,
-            to: next.href
-          })
-        )
+        return yield* new WebFetch.WebFetchCrossOriginRedirectError({
+          from: current.href,
+          to: next.href
+        })
       }
       if (redirects >= MAX_REDIRECTS) {
-        return yield* Effect.fail(
-          new WebFetch.WebFetchRedirectLimitError({
-            url: current.href,
-            maxRedirects: MAX_REDIRECTS
-          })
-        )
+        return yield* new WebFetch.WebFetchRedirectLimitError({
+          url: current.href,
+          maxRedirects: MAX_REDIRECTS
+        })
       }
       return yield* fetchOne(initial, next, redirects + 1)
     }
 
     if (response.status < 200 || response.status >= 300) {
-      return yield* Effect.fail(
-        new WebFetch.WebFetchHttpResponseError({
-          url: current.href,
-          status: response.status
-        })
-      )
+      return yield* new WebFetch.WebFetchHttpResponseError({
+        url: current.href,
+        status: response.status
+      })
     }
 
     const rawContentType = response.headers["content-type"]
     const mediaType = mediaTypeOf(rawContentType)
     const format = mediaType === undefined ? undefined : textualFormat(mediaType)
     if (mediaType === undefined || format === undefined) {
-      return yield* Effect.fail(
-        new WebFetch.WebFetchUnsupportedContentTypeError({
-          url: current.href,
-          contentType: Option.fromNullishOr(rawContentType)
-        })
-      )
+      return yield* new WebFetch.WebFetchUnsupportedContentTypeError({
+        url: current.href,
+        contentType: Option.fromNullishOr(rawContentType)
+      })
     }
 
     const bytes = yield* readBody(response, current)

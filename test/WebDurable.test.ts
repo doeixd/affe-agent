@@ -6,11 +6,14 @@ import * as Agent from "../src/Agent.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
-import { WebSearch, WebToolkit } from "../src/web/index.js"
+import { WebFetch, WebSearch, WebToolkit } from "../src/web/index.js"
 import * as FakeModel from "./FakeModel.js"
 
 const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 const SearchGate = DurableDeferred.make("WebSearchReplayGate", {
+  success: Schema.String
+})
+const FetchGate = DurableDeferred.make("WebFetchReplayGate", {
   success: Schema.String
 })
 
@@ -73,6 +76,77 @@ describe("durable WebToolkit", () => {
         )
         const token = yield* Deferred.await(gateReady)
         yield* DurableDeferred.succeed(SearchGate, { token, value: "continue" })
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      assert.isTrue(Exit.isSuccess(result), JSON.stringify(result))
+      assert.strictEqual(yield* Ref.get(calls), 1)
+    })
+  )
+
+  it.live("replay does not repeat a completed fetch provider call", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const suspendOnce = yield* Ref.make(true)
+      const store = yield* DurableChannels.memoryStore
+      const provider = WebFetch.layer({
+        fetch: (url) => Ref.updateAndGet(calls, (n) => n + 1).pipe(
+          Effect.as({
+            finalUrl: url.href,
+            status: 200,
+            mediaType: "text/plain",
+            format: "text",
+            body: "Effect documentation"
+          })
+        )
+      })
+      const toolkit = yield* WebToolkit.fetchToolkit().pipe(Effect.provide(provider))
+      const gateTurnTwo = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          const shouldSuspend = context.turnIndex === 2 &&
+            (yield* Ref.getAndSet(suspendOnce, false))
+          if (shouldSuspend) {
+            const token = yield* DurableDeferred.token(FetchGate)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(FetchGate)
+          }
+          return context.canonicalPrompt
+        }))
+      const agent = Agent.make({ toolkit, contextTransform: gateTurnTwo })
+      const durable = DurableAgent.workflow("DurableWebFetch", agent, {
+        store,
+        toolkit
+      })
+      const { layer: model } = yield* FakeModel.layer([
+        {
+          toolCalls: [
+            {
+              id: "fetch-1",
+              name: "web_fetch",
+              params: { url: "https://effect.website/" }
+            }
+          ]
+        },
+        { text: "done" }
+      ])
+
+      const result = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(
+          durable,
+          store,
+          "durable-fetch-session",
+          "fetch Effect"
+        )
+        const token = yield* Deferred.await(gateReady)
+        yield* DurableDeferred.succeed(FetchGate, { token, value: "continue" })
         return yield* DurableAgent.result(durable, executionId)
       }).pipe(
         Effect.provide(
