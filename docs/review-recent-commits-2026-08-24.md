@@ -3734,6 +3734,34 @@ Also fixed: a flaky `DurableStreams` test that asserted a timing coincidence —
 two concurrent appends of one event are both told `Appended` only when they
 genuinely overlap, and `Duplicate` is correct when they do not.
 
+**Durable, cluster and state.** R65 (a failed save no longer leaves the live
+value ahead of the stored one; ephemeral state keeps its atomic
+read-modify-write, which the first attempt at this broke). R67 (a delivery-log
+append commits and publishes as one step). R76 (a state tag's id is claimed
+once, so two tags cannot name one service at different types). R170 (the
+cluster client reports a typed transport error after its bounded retry instead
+of dying). R174 (remote errors are validated against a `Schema.Union`, and a
+composite cause is judged by all of its failures rather than the first).
+
+**Tree and turn atomicity.** R6, R111 (the activation commit -- lane names,
+scope swap, publication, closing the predecessor -- is one uninterruptible
+step, after the acquisition). R125 (`branch`'s bookkeeping and hand-over
+likewise; `track` takes its observer before its name). R127 (a turn's history
+commit and the events announcing it are one step, so a committed turn is always
+one the tree saw). R130 (the tree's scope owns the last activation's scope and
+shuts down the feed). R181 (a response naming one call id twice is refused
+rather than aliased into one durable activity).
+
+**TUI.** R101 (`BranchItem` carries a `NodeId`; the selector reads by position,
+so the `as never` is gone, and the smoke narrows rather than asserts). R110
+(leaves, plus named lanes, plus the cursor -- so a fork point survives its first
+child and one row always says where you are). R131 (a checkout pointer, written
+after a successful activation, so a rewind survives a restart). R134 (the
+transcript lives outside the workspace, where the agent cannot list, search,
+edit or commit it, and the path is disclosed). R182 (the drain is triggered by
+the settled prefix rather than the entry count, with a bounded retry for a
+failed write).
+
 ### Open, with what is known
 
 - **R2** needs an entry point in Effect AI's `Toolkit` that takes an
@@ -3759,4 +3787,10 @@ genuinely overlap, and `Duplicate` is correct when they do not.
   can see, and it is documented on `AgentSession.observe`.
 - **R5's window.** The fix is structural; no test here drives the interleaving,
   and the test says so rather than implying coverage it does not have.
+- **Windows that cannot be driven from outside.** R5, R67 and R127 are all
+  fixed structurally, and in each case the test says plainly that it does not
+  reproduce the interleaving and passes without the fix. The gaps are a handful
+  of instructions with no suspension point, so an interrupt or a concurrent
+  call issued from a test lands before or after rather than inside. Driving
+  them would mean adding a seam to production code for a test to hold open.
 - Everything not listed above remains as this review recorded it.
