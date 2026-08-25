@@ -95,18 +95,30 @@ export const environmentSecrets: Rule = pattern(
  * command, and the parameters of the call that produced it -- which is exactly
  * where the interesting copy is.
  *
- * Object keys are left alone. A key is structure, and rewriting one produces a
- * document that no longer decodes -- a redactor that corrupts its output has
- * not protected anything, it has just lost it.
+ * Object keys are left alone **by default**, and that default is about
+ * structure: in a schema-shaped document a key is a field name, and rewriting
+ * one produces something that no longer decodes -- a redactor that corrupts
+ * its output has not protected anything, it has just lost it.
+ *
+ * But a key is not always structure. A tool's parameters or result can be a
+ * record whose keys are user or model text -- an environment map, a header
+ * set, a file listing -- and there the secret is in the key and this walked
+ * straight past it. `keys: true` covers those, and is for values with no
+ * schema to break: span attributes, log annotations. `Export.encode` leaves it
+ * off and verifies its output instead.
  */
-export const deep = (value: unknown, redaction: Redaction): unknown => {
+export const deep = (
+  value: unknown,
+  redaction: Redaction,
+  options?: { readonly keys?: boolean | undefined }
+): unknown => {
   if (typeof value === "string") return redaction.redact(value)
-  if (Array.isArray(value)) return value.map((item) => deep(item, redaction))
+  if (Array.isArray(value)) return value.map((item) => deep(item, redaction, options))
   if (value === null || typeof value !== "object") return value
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
-      key,
-      deep(nested, redaction)
+      options?.keys === true ? redaction.redact(key) : key,
+      deep(nested, redaction, options)
     ])
   )
 }
@@ -119,14 +131,17 @@ export const deep = (value: unknown, redaction: Redaction): unknown => {
  * which is the point of this module existing apart from either.
  */
 export const asHook = (redaction: Redaction): (value: unknown) => unknown =>
-(value) => deep(value, redaction)
+(value) => deep(value, redaction, { keys: true })
 
 /**
- * As the span-redaction hook wants it, ignoring the key.
+ * As the span-redaction hook wants it, ignoring the attribute's own name.
  *
- * The key is not redacted for the reason `deep` gives: it is structure.
+ * The attribute name is chosen by the instrumentation and is not content, so
+ * it is left as it is. Keys *inside* the value are a different matter -- a
+ * record of environment variables is data all the way down -- and a span
+ * attribute has no schema to corrupt, so they are covered.
  */
 export const asSpanHook = (
   redaction: Redaction
 ): (key: string, value: unknown) => unknown =>
-(_key, value) => deep(value, redaction)
+(_key, value) => deep(value, redaction, { keys: true })

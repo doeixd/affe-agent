@@ -75,10 +75,20 @@ export const Provenance = Schema.Struct({
    * it into a bug report.
    */
   cwd: Schema.optional(Schema.String),
-  /** Lineage: the session or node this one continued from. */
+  /**
+   * Lineage: the session or node this one continued from.
+   *
+   * Both halves optional, because lineage can be known either way and often
+   * only one is. A tree export knows the parent *node*; a session that was
+   * forked from another knows the parent *session*. `sessionId` used to be
+   * required, so the tree export filled it with the parent node's id -- which
+   * is not a session id, and is exactly the field a reader lines up against
+   * another export's `sessionId`. Saying nothing is better than saying
+   * something false about the one field whose job is to be trusted.
+   */
   parent: Schema.optional(
     Schema.Struct({
-      sessionId: Schema.String,
+      sessionId: Schema.optional(Schema.String),
       nodeId: Schema.optional(Schema.String)
     })
   )
@@ -214,13 +224,39 @@ export const encode = (
 ): Effect.Effect<string, ExportError> =>
   encodeExport(self).pipe(
     Effect.mapError((error) => new ExportError({ reason: "malformed", detail: error.message })),
-    Effect.map((encoded) =>
-      JSON.stringify(
-        sorted(Redaction.deep(encoded, options?.redact ?? Redaction.none)),
-        null,
-        2
+    Effect.flatMap((encoded) => {
+      const redaction = options?.redact ?? Redaction.none
+      const redacted = Redaction.deep(encoded, redaction)
+      /**
+       * Check that the redaction produced an export, not wreckage.
+       *
+       * `deep` rewrites *every* string, and some of the strings in an encoded
+       * transcript are structure: a message's `"user"` role, a part's
+       * `"text"` type, an `Option`'s tag. A rule as ordinary as
+       * `literal("user")` -- a username is exactly the sort of thing someone
+       * redacts -- rewrote those too, and the result was a file that no
+       * longer parsed. Silently.
+       *
+       * Decoding it back is what turns that into an answer. It costs one
+       * decode on a path that already encodes and stringifies, and it means a
+       * redacted export either round-trips or fails loudly, never neither.
+       *
+       * Structure-aware redaction would be better still -- it would let the
+       * rule apply and keep the document -- but it is a schema walk, and the
+       * property that matters is that nothing corrupt is ever handed back.
+       */
+      return decode(redacted).pipe(
+        Effect.mapError(() =>
+          new ExportError({
+            reason: "malformed",
+            detail: "the redaction rewrote structure, not just content:" +
+              " the redacted transcript no longer decodes." +
+              " Narrow the rule so it cannot match a role, a part type or a tag."
+          })
+        ),
+        Effect.as(JSON.stringify(sorted(redacted), null, 2))
       )
-    )
+    })
   )
 
 /** Recursively order object keys, leaving arrays alone. */

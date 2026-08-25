@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -171,5 +171,79 @@ describe("TreeExport", () => {
       }).pipe(Effect.provide(layer), Effect.scoped)
 
       assert.strictEqual(failure._tag, "@doeixd/effect-agent/tree/NodeMissing")
+    }))
+
+  /**
+   * R84 -- an export's lineage comes from the tree, not from the caller.
+   *
+   * `Node` is a plain value: nothing stops a caller building one with a real
+   * id and a fabricated parent, label or cause. `historyOf` looked the id up
+   * and returned canonical history, and then everything printed *around* that
+   * history came from the argument -- so a forged node exported real
+   * conversation under false ancestry. Lineage is the one thing an export
+   * exists to be trusted about.
+   */
+  it.effect("a forged node cannot rewrite what an export says about it", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("root answer", "left answer")
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("start")
+        const root = yield* tree.commit(session)
+        const left = yield* tree.branch(root)
+        yield* left.prompt("go left")
+        const leftOne = yield* tree.commit(left)
+
+        // Real id, invented ancestry.
+        const forged: SessionTree.Node = {
+          ...leftOne,
+          parent: Option.some("a-node-that-never-existed" as SessionTree.NodeId),
+          label: Option.some("not what this is called"),
+          cause: "manual"
+        }
+        return {
+          honest: yield* TreeExport.path(tree, leftOne, provenance),
+          forgedExport: yield* TreeExport.path(tree, forged, provenance),
+          rootId: root.id
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // Identical: the forgery changed nothing, because nothing it carried
+      // was read.
+      assert.strictEqual(
+        out.forgedExport.provenance.parent?.nodeId,
+        out.rootId
+      )
+      assert.deepStrictEqual(
+        out.forgedExport.provenance.parent,
+        out.honest.provenance.parent
+      )
+      assert.strictEqual(out.forgedExport.session.sessionId, out.honest.session.sessionId)
+    }))
+
+  it.effect("and an id that is not in the tree is refused", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("root answer")
+      const outcome = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("start")
+        yield* tree.commit(session)
+        return yield* Effect.flip(
+          TreeExport.path(
+            tree,
+            {
+              id: "not-here" as SessionTree.NodeId,
+              parent: Option.none(),
+              cause: "root",
+              at: 0,
+              label: Option.none()
+            },
+            provenance
+          )
+        )
+      }).pipe(Effect.provide(layer), Effect.scoped)
+      assert.strictEqual(outcome._tag, "@doeixd/effect-agent/tree/NodeMissing")
     }))
 })

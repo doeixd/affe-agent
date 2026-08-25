@@ -1,6 +1,6 @@
 import { Effect, Option } from "effect"
 import * as Export from "../export/Export.js"
-import { type Node, type NodeMissing, TreeCorrupt } from "./SessionTree.js"
+import { type Node, NodeMissing, TreeCorrupt } from "./SessionTree.js"
 import type { SessionTree } from "./SessionTree.js"
 
 /**
@@ -35,18 +35,38 @@ export const path = <Tools extends Record<string, any>, E, SE>(
   provenance: Export.Provenance
 ): Effect.Effect<Export.Export, NodeMissing | SE> =>
   Effect.gen(function*() {
-    const history = yield* tree.historyOf(node)
+    /**
+     * The tree's node, not the caller's.
+     *
+     * `historyOf` looks a node up by id and returns canonical history, but
+     * everything *around* that history used to come from the argument: its
+     * id, and its parent. A `Node` is a plain value a caller can construct,
+     * so an existing id carrying a fabricated parent exported real
+     * conversation under false lineage -- and lineage is exactly what an
+     * export exists to be trusted about.
+     *
+     * Looked up once and used for both, so there is no version of this where
+     * the history and the metadata describe different nodes.
+     */
+    const found = yield* tree.node(node.id)
+    if (Option.isNone(found)) return yield* new NodeMissing({ id: node.id })
+    const canonical = found.value
+    const history = yield* tree.historyOf(canonical)
     return yield* Export.of(
-      { sessionId: node.id, history },
+      { sessionId: canonical.id, history },
       {
         ...provenance,
-        parent: Option.isNone(node.parent)
+        parent: Option.isNone(canonical.parent)
           ? provenance.parent
-          : // The node's own id is the session id above, so the *parent* is
-            // what this adds. A node with no parent is a root and inherits
-            // whatever lineage the caller supplied, which is how a tree
-            // grown from an imported transcript keeps its ancestry.
-            { sessionId: node.parent.value, nodeId: node.parent.value }
+          : // A node with no parent is a root and inherits whatever lineage
+            // the caller supplied, which is how a tree grown from an imported
+            // transcript keeps its ancestry.
+            //
+            // `nodeId` only: the parent is a node in this tree, and it is not
+            // a session id. Writing it into both fields said something false
+            // about a field a reader is meant to be able to line up against
+            // another export's `sessionId`.
+            { nodeId: canonical.parent.value }
       }
     )
   })

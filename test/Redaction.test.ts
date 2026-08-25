@@ -200,4 +200,33 @@ describe("Export redaction (IE3)", () => {
       // nothing was removed, which is why the default is not a guess at one.
       assert.include(text, SECRET)
     }))
+
+  /**
+   * R79 -- a secret in a record *key* is still a secret.
+   *
+   * `deep` walked values and stepped over keys, and a tool's parameters or
+   * result can perfectly well be a record whose keys are text somebody typed:
+   * an environment map, a header set, a listing. IE3 says "no occurrence
+   * anywhere", and this was an occurrence.
+   */
+  it("covers record keys where there is no schema to break", () => {
+    const secret = "hunter2"
+    const redaction = Redaction.make(Redaction.literal(secret))
+
+    // The default leaves keys alone, because in a schema-shaped document a key
+    // is a field name.
+    const structural = Redaction.deep({ [secret]: secret }, redaction)
+    assert.deepStrictEqual(structural, { [secret]: "[redacted]" })
+
+    // The hooks, which see values with no schema, cover them.
+    const covered = Redaction.asHook(redaction)({ [secret]: secret })
+    assert.deepStrictEqual(covered, { "[redacted]": "[redacted]" })
+    assert.isFalse(JSON.stringify(covered).includes(secret))
+
+    // Nested, and through arrays.
+    const nested = Redaction.asSpanHook(redaction)("attr", {
+      env: [{ [secret]: { inner: secret } }]
+    })
+    assert.isFalse(JSON.stringify(nested).includes(secret))
+  })
 })

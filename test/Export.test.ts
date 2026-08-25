@@ -6,6 +6,7 @@ import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as Export from "../src/export/Export.js"
 import * as Replay from "../src/export/Replay.js"
+import * as Redaction from "../src/redaction/Redaction.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -328,5 +329,64 @@ describe("Replay", () => {
       // provenance names two tools.
       assert.deepStrictEqual(Replay.toolsUsed(out), [])
       assert.isTrue(Option.isNone(Replay.unavailable(out, [])))
+    }))
+
+  /**
+   * R79 -- a redaction that rewrites structure fails instead of shipping.
+   *
+   * `deep` rewrites every string, and some strings in an encoded transcript
+   * are structure: a message's `"user"` role, a part's `"text"` type, an
+   * `Option`'s tag. `literal("user")` is an entirely ordinary rule -- a
+   * username is exactly the sort of thing someone redacts -- and it used to
+   * produce a file that no longer parsed, silently. The old "does not corrupt"
+   * test happened to pick a secret that was not a discriminator.
+   */
+  it.effect("a rule that matches a discriminator is refused, not written", () =>
+    Effect.gen(function*() {
+      const exported = yield* Export.of(
+        {
+          sessionId: "s1",
+          history: Prompt.fromMessages([
+            Prompt.userMessage({ content: [Prompt.textPart({ text: "hello" })] })
+          ])
+        },
+        { harnessVersion: "test" }
+      )
+
+      /**
+       * Every structural literal an encoded transcript might contain.
+       *
+       * The invariant is stated as a disjunction on purpose: some of these do
+       * not appear in this particular transcript, so redacting them is a
+       * no-op and the encode rightly succeeds. What must never happen is the
+       * third case -- a file handed back that does not parse.
+       */
+      for (const structural of ["user", "text", "Some", "None", "assistant"]) {
+        const outcome = yield* Effect.exit(
+          Export.encode(exported, {
+            redact: Redaction.make(Redaction.literal(structural))
+          })
+        )
+        if (outcome._tag === "Success") {
+          // Then it round-trips. Nothing was quietly broken.
+          yield* Export.parse(outcome.value)
+        } else {
+          assert.include(String(outcome.cause), "rewrote structure")
+        }
+      }
+      // And at least one of them really does hit structure, or this loop is
+      // asserting nothing.
+      const roleRedacted = yield* Effect.exit(
+        Export.encode(exported, { redact: Redaction.make(Redaction.literal("user")) })
+      )
+      assert.strictEqual(roleRedacted._tag, "Failure")
+
+      // And an ordinary content rule still works, and round-trips.
+      const text = yield* Export.encode(exported, {
+        redact: Redaction.make(Redaction.literal("hello"))
+      })
+      const back = yield* Export.parse(text)
+      assert.isFalse(text.includes("hello"))
+      assert.strictEqual(back.session.sessionId, "s1")
     }))
 })
