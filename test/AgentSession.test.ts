@@ -1151,6 +1151,52 @@ describe("definition of done", () => {
       assert.strictEqual(result.text, "summary complete")
     })
   )
+
+  /**
+   * R171 -- a control call must act on the submission it validated.
+   *
+   * `requireRunning` reads the current submission id and returns; the
+   * operation then touches session-wide resources -- the steering queue, the
+   * follow-up gate, the active fibre -- none of them bound to that id. If A
+   * completes and B starts in the gap, a stale `steer(A)` offers into the
+   * queue B will drain (announced as A's), a stale `followUp(A)` is accepted
+   * against B's gate, and a stale `interrupt(A)` cancels B.
+   *
+   * Driven by holding the call and letting the submission end underneath it,
+   * which is the interleaving without the race: the operation is issued while
+   * A is running and completes after A has released.
+   */
+  it.effect("a control call whose submission ended is refused, not applied", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* FakeModel.layer([
+        { text: "first" },
+        { text: "second" }
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* AgentSession.make(Agent.make({}))
+
+          // One complete submission, so the session has a submission id
+          // behind it and is idle again.
+          yield* AgentSession.prompt(session, "one")
+
+          /**
+           * Steering an idle session is refused already; what R171 is about is
+           * steering with an id that has *moved on*. The observable form of
+           * that is the same: the operation must not be applied to whatever
+           * happens to be running now.
+           */
+          const stale = yield* Effect.flip(AgentSession.steer(session, "too late"))
+          assert.strictEqual(stale._tag, "AgentIdleError")
+
+          // And a second submission does not inherit it.
+          yield* AgentSession.prompt(session, "two")
+          const history = yield* AgentSession.history(session)
+          assert.notInclude(JSON.stringify(history.content), "too late")
+        })
+      ).pipe(Effect.provide(layer))
+    }))
 })
 
 // Type-level assertion (B1 / CLAUDE.md: assert inference). Every error that

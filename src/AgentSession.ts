@@ -582,6 +582,40 @@ const requireRunning = (
   })
 
 /**
+ * Confirm the submission validated a moment ago is still the active one.
+ *
+ * `requireRunning` reads the current submission id and returns; the operation
+ * then touches session-wide resources -- the steering queue, the follow-up
+ * gate, the active fibre -- none of which is bound to the id that was read. If
+ * A completes and B starts in that gap, a stale `steer(A)` offers into the
+ * queue B will drain, announced as A's; a stale `followUp(A)` is accepted
+ * against B's gate; a stale `interrupt(A)` cancels B.
+ *
+ * Re-reading under the same permit the operation holds is what closes it: the
+ * gate is the thing the submission's own drain and release contend for, so an
+ * id that still matches here is an id that cannot have moved.
+ *
+ * `AgentIdleError` because that is what happened from the caller's point of
+ * view: the submission they addressed is over. Reporting it as success would
+ * mean claiming to have steered a run that had finished.
+ */
+const stillActive = (
+  session: Session<any>,
+  submissionId: SubmissionId | undefined,
+  operation: "steer" | "followUp" | "interrupt"
+): Effect.Effect<void, AgentIdleError | AgentClosedError> =>
+  Effect.flatMap(
+    SubscriptionRef.get(session.state),
+    (current): Effect.Effect<void, AgentIdleError | AgentClosedError> =>
+      current.status === "closed"
+        ? Effect.fail(new AgentClosedError({ sessionId: session.id }))
+        : current.status !== "running" ||
+            Option.getOrUndefined(current.activeSubmissionId) !== submissionId
+        ? Effect.fail(new AgentIdleError({ sessionId: session.id, operation }))
+        : Effect.void
+  )
+
+/**
  * Insert guidance into the active run.
  *
  * Applied at the next turn boundary; it never interrupts work already under
@@ -600,6 +634,9 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
     // (PLAN §27) holds by construction rather than by scheduling luck.
     yield* self.inputGate.withPermits(1)(
       Effect.gen(function* () {
+        // Under the permit, so the submission cannot have changed between the
+        // check and the offer. See `stillActive`.
+        yield* stillActive(self, submissionId, "steer")
         yield* self.steering.offer(Prompt.make(input))
         yield* EventBus.emit(
           self.bus,
@@ -637,6 +674,8 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
     // by construction rather than by scheduling luck.
     yield* self.inputGate.withPermits(1)(
       Effect.gen(function* () {
+        // The same submission, not merely *a* running one. See `stillActive`.
+        yield* stillActive(self, submissionId, "followUp")
         const accepting = (yield* SubscriptionRef.get(self.state))
           .acceptingFollowUps
         if (!accepting) {
@@ -662,11 +701,25 @@ export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
 ) {
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
-    yield* requireRunning(self, "interrupt")
-    const fiber = yield* Ref.get(self.activeFiber)
-    if (Option.isSome(fiber)) {
-      yield* Fiber.interrupt(fiber.value)
-    }
+    const submissionId = yield* requireRunning(self, "interrupt")
+    /**
+     * Confirmed under the input gate, then interrupted.
+     *
+     * `activeFiber` is session-wide: read it after the submission that was
+     * validated has released and its successor has registered, and this
+     * cancels a submission the caller never addressed. The gate is what the
+     * release contends for, so an id that still matches inside it cannot have
+     * moved -- and the fibre read under the same permit is that submission's.
+     */
+    yield* self.inputGate.withPermits(1)(
+      Effect.gen(function* () {
+        yield* stillActive(self, submissionId, "interrupt")
+        const fiber = yield* Ref.get(self.activeFiber)
+        if (Option.isSome(fiber)) {
+          yield* Fiber.interrupt(fiber.value)
+        }
+      })
+    )
   })
 
 /**
