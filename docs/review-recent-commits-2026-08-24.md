@@ -3650,3 +3650,85 @@ than only the two-line summary returned by the symmetric 1200×1200 fixture.
   host entry rather than tested portably (R35). R46 was the earlier stale-dist
   snapshot and is resolved by the current emitted tree.
 - No implementation files were changed by this review.
+
+## Resolution log — 2026-08-25
+
+Written by the session that acted on this review, so the state of each finding
+is recorded beside the finding rather than reconstructed from git log. Every
+entry below was fixed *and* falsified: the fix was reverted once and the test
+that covers it was confirmed to fail. Where a test could not be made to
+discriminate, that is said here and in the test itself.
+
+### Closed
+
+**Build and gates.** R1 (the declaration build has been failing since the Slack
+Web Crypto rewrite; `check` now runs `build`). R142 (the Effect diagnostics gate
+reported "Checked 0 files out of 14" and exited zero; the plugin entry is
+restored and a wrapper fails on incomplete coverage). Turning R142's gate on
+found `NodeStore<any>` in the TUI harness seam, which had made every tree
+operation's error channel `any`.
+
+**Web.** R94, R95, R113 (one bounded-body helper: O(1) chunk append, and every
+early exit releases its response). R114, R26 (`layerFetch` owns its transport;
+the abstract layer's two unenforceable promises are written down rather than
+implied). R116 (an approval shows the whole URL while remembering the origin).
+R117, R120, R143 (one target-redaction policy — origin only — and the client's
+own `url.full`/`url.query` span suppressed in favour of a provider-owned one).
+R154 (a concurrency bound, one permit per logical fetch). R155, R159 (the
+compositional limit of the retry guarantees, stated where the guarantee is
+made). R158 (Brave refuses redirects rather than forwarding its API key).
+R160 (`Retry-After` as delta-seconds *or* HTTP-date, against the clock).
+
+**Permission.** R21 (stateful regex patterns decided by call order). R164
+(grant keys collided across the action/resource boundary; length-prefixed, and
+the tool name is part of the identity). R144 (a service-backed parameter codec,
+proven at the public boundary without a cast).
+
+**Tree and store.** R22 (commits serialised). R42 (node id prefixes from the
+CSPRNG, not a process counter). R43 (atomic memory writes, one writer over a
+key-value backing). R44 (capture absorbs the store's failure and nothing else).
+R77 (a familiar id may change a mark, never ancestry). R78, R85 (cycle
+detection in both directions; index cursors instead of `shift`). R167 (the
+memory store snapshots what it is handed).
+
+**Export and replay.** R79 (record keys covered where there is no schema to
+break; a redaction that rewrites structure fails instead of shipping). R83
+(whole prompts rather than concatenated text, empty turns kept, seed boundary
+stated once). R84 (lineage from the tree, not from the caller's node).
+
+**Coding tools.** R54 (search permission scoped to the subtree). R55
+(`write_file` and `edit_file` share one lock). R56 (an edit refuses a file that
+is not valid UTF-8 rather than rewriting every undecodable byte). R57
+(ambiguity decided by distinct locations, and anchor ties yielded rather than
+dropped). R58, glob half (compiled once; length and brace-nesting caps; a
+refusal is reported).
+
+**Plugins.** R47 (command forms; launch resolved against the plugin root). R48
+(`PLUGIN_ROOT`/`PLUGIN_DATA` injected; stdio declined without them). R50
+(configured headers reach the origin, proven by a recording server).
+
+**TUI.** R148 (one permit across the idle check and the branch change; the
+racing-case assertion is labelled as weaker than it looks). R149 (`stop()` is
+awaitable and idempotent; the store's finalizer is deliberately slow so the
+test can tell an awaited close from a forked one). R150 (the suite exits on any
+throw and the wrapper bounds the child). R31, R74 (handle callbacks fork with
+the program's services and are interrupted by its scope).
+
+Also fixed: a flaky `DurableStreams` test that asserted a timing coincidence —
+two concurrent appends of one event are both told `Appended` only when they
+genuinely overlap, and `Duplicate` is correct when they do not.
+
+### Open, with what is known
+
+- **R2** needs an entry point in Effect AI's `Toolkit` that takes an
+  already-decoded value; until then the codec runs twice per call. The count is
+  pinned by a test and the constraint it implies — a parameter codec used with
+  permission must be deterministic and side-effect-free — is documented where a
+  tool author will read it.
+- **R58, the regex half.** Bounding a model-supplied `RegExp` needs a
+  linear-time engine or a killable worker. A limit does not help: a
+  catastrophic pattern is short.
+- **R83's run boundaries.** A history records messages, not which arrived as a
+  fresh submission and which were steered into a run already going. Reproducing
+  that needs the event log, not the transcript.
+- Everything not listed above remains as this review recorded it.
