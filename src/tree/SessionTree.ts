@@ -552,17 +552,6 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
         Option.isNone(found) ? Effect.fail(new NodeMissing({ id })) : Effect.succeed(found.value))
 
     /**
-     * Record a node from a conversation already known to be at a boundary.
-     *
-     * Shared by `commit`, which reaches a boundary by waiting for idle, and by
-     * `track`, which is told about one by `TurnCompleted`.
-     *
-     * Nothing new since the session's current node means no node: history is
-     * append-only, so an unchanged length is a sound proxy for "this turn
-     * added nothing", and it keeps a manual commit next to an automatic one
-     * from leaving two nodes holding the same conversation.
-     */
-    /**
      * Whether two conversations are the same conversation.
      *
      * **Structurally, not by reference**, and the difference is not academic.
@@ -582,6 +571,16 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
     const sameMessages = (left: Prompt.Prompt, right: Prompt.Prompt): boolean =>
       left.content.length === right.content.length && Equal.equals(left, right)
 
+    /**
+     * Record a node from a conversation already known to be at a boundary.
+     *
+     * Shared by `commit`, which reaches a boundary by waiting for idle, and by
+     * `track`, which is told about one by `TurnCompleted`.
+     *
+     * A conversation that is already the session's current node records
+     * nothing, which keeps a manual commit next to an automatic one from
+     * leaving two nodes holding the same thing. `sameMessages` decides that.
+     */
     const record = (
       sessionId: string,
       history: Prompt.Prompt,
@@ -603,12 +602,10 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
            * shorter or divergent history could be parented onto the wrong
            * lineage the same way.
            *
-           * Message identity, not a deep comparison: prompts are immutable and
-           * a continued conversation shares its prefix by reference, so this
-           * is a pointer walk over the messages rather than a walk over their
-           * contents. A rebuilt-but-equal history is treated as a change,
-           * which is the safe direction -- it records a node nobody needed
-           * rather than silently returning a node about something else.
+           * A rebuilt-but-equal history is therefore *not* a change: it is the
+           * same conversation and must map to the same node, because a
+           * persistent store hands one back on every read (see
+           * `sameMessages`, which is where the comparison lives).
            */
           if (Option.isSome(existing) && sameMessages(existing.value.history, history)) {
             return Option.none()
