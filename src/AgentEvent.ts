@@ -34,10 +34,18 @@ export type Failure = typeof Failure.Type
  * fields.
  */
 const fields = (error: object): string => {
-  const own = Object.entries(error).filter(
-    ([key, value]) =>
-      key !== "_tag" && key !== "message" && key !== "stack" && value !== undefined
-  )
+  // `Object.entries` runs every enumerable getter, and a Proxy can throw from
+  // enumeration itself -- so even listing the keys is a call into code this
+  // module does not own.
+  let own: Array<[string, unknown]>
+  try {
+    own = Object.entries(error).filter(
+      ([key, value]) =>
+        key !== "_tag" && key !== "message" && key !== "stack" && value !== undefined
+    )
+  } catch {
+    return ""
+  }
   if (own.length === 0) return ""
   try {
     return own
@@ -46,25 +54,65 @@ const fields = (error: object): string => {
       )
       .join(", ")
   } catch {
-    // A field held something uncloneable. A partial description still beats
-    // failing to describe the failure at all.
-    return own.map(([key]) => key).join(", ")
+    // A field held something uncloneable, or a `bigint`, which `JSON.stringify`
+    // throws on. A partial description still beats failing to describe the
+    // failure at all.
+    try {
+      return own.map(([key]) => key).join(", ")
+    } catch {
+      return ""
+    }
   }
 }
 
+/**
+ * `String(value)`, for a value that may not want to be one.
+ *
+ * `String` calls `toString`/`Symbol.toPrimitive`, which is arbitrary code, and
+ * a `Symbol` throws outright. Everywhere this module coerces, it is coercing
+ * something a tool, a model provider, a storage adapter or a user-defined
+ * error handed over -- none of which is required to be well behaved.
+ */
+const text = (value: unknown): string => {
+  try {
+    return typeof value === "symbol" ? value.toString() : String(value)
+  } catch {
+    return "<unprintable>"
+  }
+}
+
+/**
+ * Describe a failure, whatever it is.
+ *
+ * Total by construction, and it has to be: this projection is what turns a
+ * failure into the *terminal event*, and a terminal event is what durability
+ * and every UI use to stop waiting. A projection that throws replaces the
+ * original failure with its own and the terminal event is never published --
+ * so the run that failed looks, to everything downstream, like a run still
+ * going.
+ *
+ * Every boundary below is a call into code this module does not own: reading
+ * `_tag` and `message` runs getters, enumerating fields runs more of them, and
+ * coercing to text runs `toString`. Each is guarded separately, so one hostile
+ * member costs its own detail and not the description.
+ */
 const describe = (error: unknown): { tag: string; message: string } => {
   if (typeof error === "object" && error !== null) {
-    const tagged = error as { _tag?: unknown; message?: unknown }
-    const tag = typeof tagged._tag === "string" ? tagged._tag : "Error"
-    const stated =
-      typeof tagged.message === "string" && tagged.message.length > 0
-        ? tagged.message
-        : ""
+    let tag = "Error"
+    let stated = ""
+    try {
+      const tagged = error as { _tag?: unknown; message?: unknown }
+      if (typeof tagged._tag === "string") tag = tagged._tag
+      if (typeof tagged.message === "string") stated = tagged.message
+    } catch {
+      // A throwing getter on `_tag` or `message`. The tag stays "Error" and
+      // the description falls through to the fields.
+    }
     if (stated.length > 0) return { tag, message: stated }
     const described = fields(error)
-    return { tag, message: described.length > 0 ? described : String(error) }
+    return { tag, message: described.length > 0 ? described : text(error) }
   }
-  return { tag: "Error", message: String(error) }
+  return { tag: "Error", message: text(error) }
 }
 
 /** Project a `Cause` onto the wire-safe summary above. */

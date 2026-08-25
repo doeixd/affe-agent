@@ -147,4 +147,85 @@ describe("schema-defined events", () => {
       )
     })
   )
+
+  /**
+   * R166 -- the projection is what turns a failure into a *terminal* event,
+   * and a terminal event is what durability and every UI use to stop waiting.
+   * If describing the failure throws, the original is replaced by that throw
+   * and the terminal event is never published -- so a run that failed looks,
+   * to everything downstream, like a run still going.
+   *
+   * Nothing here is exotic on purpose. A `bigint` field is ordinary and
+   * `JSON.stringify` throws on it; a `Symbol` throws on `String()`; a tagged
+   * error is free to compute its own `message`. None of these is required to
+   * be a well-behaved `Error`, because they come from tools, providers,
+   * storage adapters and user code.
+   */
+  it("describes any failure at all, without throwing", () => {
+    const hostile: ReadonlyArray<readonly [string, unknown]> = [
+      ["a bigint field", Object.assign(new Error(""), { _tag: "Big", size: 10n })],
+      ["a throwing message getter", {
+        _tag: "Nasty",
+        get message(): string {
+          throw new Error("no message for you")
+        }
+      }],
+      ["a throwing field getter", {
+        _tag: "Sneaky",
+        get detail(): string {
+          throw new Error("no detail either")
+        }
+      }],
+      /**
+       * A throwing `toString` on the *prototype*, so the object has no own
+       * enumerable property to describe instead.
+       *
+       * Written as a class deliberately: the obvious object-literal version
+       * puts `toString` in the object's own keys, so the field walk describes
+       * it and the coercion is never reached -- an assertion that looks like
+       * it covers the coercion guard and does not.
+       */
+      ["a throwing toString", new (class {
+        toString(): string {
+          throw new Error("not printable")
+        }
+      })()],
+      ["a symbol", Symbol("secretive")],
+      ["a cyclic object", (() => {
+        const cyclic: Record<string, unknown> = { _tag: "Loop" }
+        cyclic["self"] = cyclic
+        return cyclic
+      })()],
+      ["a proxy that refuses enumeration", new Proxy({}, {
+        ownKeys() {
+          throw new Error("no keys")
+        }
+      })],
+      ["undefined", undefined],
+      ["null", null]
+    ]
+
+    for (const [what, value] of hostile) {
+      const failed = AgentEvent.failureFromCause(Cause.fail(value))
+      assert.isString(failed.tag, `${what}: no tag`)
+      assert.isString(failed.message, `${what}: no message`)
+      assert.isFalse(failed.isDefect, `${what}: a failure is not a defect`)
+
+      // And as a defect, which is the path a broken handler takes.
+      const died = AgentEvent.failureFromCause(Cause.die(value))
+      assert.isString(died.message, `${what}: no message as a defect`)
+      assert.isTrue(died.isDefect, `${what}: a defect is not a failure`)
+    }
+  })
+
+  it("still says something useful about an ordinary tagged error", () => {
+    // The guards must not cost the common case its detail: a tagged error
+    // carrying named fields and no message is the usual shape.
+    const described = AgentEvent.failureFromCause(
+      Cause.fail(Object.assign(new Error(""), { _tag: "Storage", operation: "write", id: "n1" }))
+    )
+    assert.strictEqual(described.tag, "Storage")
+    assert.include(described.message, "operation=write")
+    assert.include(described.message, "id=n1")
+  })
 })

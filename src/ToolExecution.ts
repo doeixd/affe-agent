@@ -81,12 +81,55 @@ const failureResultPart = (
     preliminary: false
   }) as Response.AnyPart
 
-const renderError = (error: unknown): string =>
-  error instanceof Error
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : JSON.stringify(error)
+/**
+ * The failure, as a string the model can read. Never a throw.
+ *
+ * This runs *after* `ToolCallFailed` has announced `returnedToModel: true`, so
+ * a throw here does not merely lose the rendering -- it defects the run that
+ * has already promised the model would get a chance to recover, and leaves
+ * history and events disagreeing about whether the failure was returned.
+ *
+ * `JSON.stringify` is not a total function, and the values it refuses are not
+ * exotic: it throws outright on a `bigint` and on a cycle, and returns
+ * `undefined` -- not a string -- for `undefined`, a symbol or a function. A
+ * tool's declared failure schema can produce any of them.
+ *
+ * The result is also bounded. A failure is a *message to a model*, and a
+ * megabyte of it is both useless and expensive; the tool's real value is
+ * still carried unrendered in `result` for any caller that wants it.
+ */
+const MAX_RENDERED_FAILURE = 4096
+
+const renderError = (error: unknown): string => {
+  if (typeof error === "string") return bounded(error)
+  if (error instanceof Error) {
+    try {
+      if (typeof error.message === "string" && error.message.length > 0) {
+        return bounded(error.message)
+      }
+    } catch {
+      // A subclass computing `message` from something broken.
+    }
+  }
+  try {
+    const rendered = JSON.stringify(error)
+    // `undefined` for a symbol, a function, or `undefined` itself -- and the
+    // part's `encodedResult` must be a string.
+    if (typeof rendered === "string") return bounded(rendered)
+  } catch {
+    // A cycle, a bigint, or a throwing `toJSON`.
+  }
+  try {
+    return bounded(String(error))
+  } catch {
+    return "the tool failed, and its failure could not be rendered"
+  }
+}
+
+const bounded = (text: string): string =>
+  text.length <= MAX_RENDERED_FAILURE
+    ? text
+    : `${text.slice(0, MAX_RENDERED_FAILURE)}… (truncated)`
 
 /**
  * The session pieces a turn's tool calls need. Constant for the life of a

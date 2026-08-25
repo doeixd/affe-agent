@@ -160,6 +160,72 @@ describe("tool safety semantics", () => {
       assert.strictEqual(outcome.value, "guarded")
     })
   )
+
+  /**
+   * R165 -- returning a failure to the model must not defect the run.
+   *
+   * The rendering happens *after* `ToolCallFailed` has announced
+   * `returnedToModel: true`, so a throw here does not merely lose the text: it
+   * defects a run that has already promised the model a chance to recover, and
+   * leaves history and events disagreeing about whether the failure was
+   * returned.
+   *
+   * `JSON.stringify` is not total, and the values it refuses are not exotic.
+   * It throws on a `bigint` and on a cycle; it returns `undefined` -- not a
+   * string -- for `undefined`, a symbol or a function. A tool's declared
+   * failure schema can produce any of them, and the previous coverage used
+   * only a string.
+   */
+  const unrenderable: ReadonlyArray<readonly [string, unknown]> = [
+    ["a bigint", 42n],
+    ["undefined", undefined],
+    ["a symbol", Symbol("failed")],
+    ["a cycle", (() => {
+      const loop: Record<string, unknown> = {}
+      loop["self"] = loop
+      return loop
+    })()],
+    ["a throwing toJSON", {
+      toJSON(): never {
+        throw new Error("will not serialise")
+      }
+    }],
+    ["an object with no printable form", Object.create(null)]
+  ]
+
+  for (const [what, failure] of unrenderable) {
+    it.effect(`a tool failing with ${what} is returned to the model, not defected`, () =>
+      Effect.gen(function* () {
+        const Awkward = Tool.make("awkward", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+          // Deliberately wide: the point is a failure value the renderer has
+          // to cope with, not one the schema would have refused.
+          failure: Schema.Unknown
+        })
+        const toolkit = Agent.toolkit([Awkward], {
+          awkward: () => Effect.fail(failure)
+        })
+
+        const outcome = yield* withSession(
+          [
+            { toolCalls: [{ id: "a1", name: "awkward", params: {} }] },
+            { text: "I see, moving on" }
+          ],
+          Agent.make({ toolkit, toolFailurePolicy: ToolExecution.ReturnToModel }),
+          ({ session }) => Effect.exit(session.prompt("go"))
+        )
+
+        // The run survived, which is the whole promise of ReturnToModel.
+        assert.isTrue(Exit.isSuccess(outcome.value), `${what} defected the run`)
+
+        // And the two records agree: the event said it was returned, and the
+        // transcript contains the tool result that returning it produces.
+        const failed = outcome.events.filter(AgentEvent.is("ToolCallFailed"))
+        assert.strictEqual(failed.length, 1)
+        assert.isTrue(failed[0]!.event.returnedToModel)
+      }))
+  }
 })
 
 /**
