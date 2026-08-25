@@ -220,7 +220,25 @@ export const Search = Permission.annotate(
     failure: Schema.String,
     dependencies: [Sandbox.Current]
   }),
-  { action: "read", resource: (params) => params.pattern }
+  {
+    action: "read",
+    /**
+     * The subtree being read, not the query used to read it.
+     *
+     * This projected `params.pattern`, which is the regular expression -- so
+     * a path-scoped policy could neither authorize nor refuse the directory
+     * whose contents were about to be disclosed, and an approval prompt
+     * showed a regex where the sensitive thing was the location. The
+     * operation reads every eligible file below `path`; that is the resource.
+     */
+    resource: (params) => params.path ?? ".",
+    /**
+     * The question names the query too, because a person deciding wants both:
+     * what is being read, and what is being looked for in it. The *scope* is
+     * still the directory, which is what an "always" would remember.
+     */
+    describe: (params) => `${params.pattern} in ${params.path ?? "."}`
+  }
 )
 
 /**
@@ -369,19 +387,38 @@ export const lockRegistrySize: Effect.Effect<number> = Effect.map(
 )
 
 /**
- * A file's text with a byte-order mark left intact.
+ * A file's text, byte-for-byte recoverable, or a refusal.
+ *
+ * Two things this must not do, both of which it used to.
  *
  * `TextDecoder` strips a leading BOM unless told not to, so decoding through
  * the ordinary text helper and writing the result back silently deletes it.
- * Reading for *display* may drop it; reading in order to write again must not,
- * which is why the edit path decodes for itself.
+ * Reading for *display* may drop it; reading in order to write again must
+ * not, which is why the edit path decodes for itself.
+ *
+ * And the default decoder is *non-fatal*: an invalid byte sequence becomes
+ * U+FFFD. `edit_file` writes the whole decoded string back, so a single
+ * malformed byte anywhere in a file -- a latin-1 name in a comment, a stray
+ * byte in a legacy file -- was replaced by a replacement character, and every
+ * byte around the edit was rewritten. The nearby claim that nothing outside
+ * the replaced span is re-encoded was simply false for such a file, and the
+ * binary heuristic does not catch them: they are text, just not this text.
+ *
+ * `fatal: true` turns that into a refusal. Losing the edit is recoverable;
+ * corrupting the file is not.
  */
 const readPreservingBom = (
   sandbox: Sandbox.Sandbox,
   path: Sandbox.SandboxPath
-): Effect.Effect<string, Sandbox.FileError> =>
-  Effect.map(sandbox.read(path), (bytes) =>
-    new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes))
+): Effect.Effect<string, Sandbox.FileError | string> =>
+  Effect.flatMap(sandbox.read(path), (bytes) =>
+    Effect.try({
+      try: () => new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }).decode(bytes),
+      catch: () =>
+        `Refusing to edit ${path}: it is not valid UTF-8, and rewriting it would` +
+        ` replace every undecodable byte -- including bytes nowhere near the edit.` +
+        ` Convert the file to UTF-8 first, or use write_file to replace it whole.`
+    }))
 
 /**
  * The message for a file that is not there, naming look-alikes beside it.
@@ -507,7 +544,25 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
   write_file: ({ content, path: file }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
-      yield* sandbox.write(yield* Sandbox.path(file), content)
+      const sandboxPath = yield* Sandbox.path(file)
+      /**
+       * Under the same lock `edit_file` takes.
+       *
+       * A whole-file write is one operation, so on its own it needs no lock --
+       * but it is not on its own. `edit_file` is a read-modify-write, and a
+       * write landing between its read and its write was simply overwritten
+       * by a value derived from content that no longer existed. The lock is
+       * per path and per workspace, so this only ever contends with another
+       * mutation of the same file.
+       *
+       * Two writes to one path are also ordered by it, which turns
+       * "whichever finished last" into "whichever started last".
+       */
+      yield* withFileLock(
+        sandbox.workspace,
+        sandboxPath,
+        sandbox.write(sandboxPath, content)
+      )
       return `wrote ${file} (${content.length} bytes)`
     }).pipe(Effect.mapError(errorMessage)),
 
@@ -532,8 +587,11 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
         sandbox.workspace,
         sandboxPath,
           Effect.gen(function* () {
+            // Two failures with one shape: the sandbox's, mapped to prose,
+            // and this module's own refusal, which is already prose.
             const text = yield* readPreservingBom(sandbox, sandboxPath).pipe(
-              Effect.mapError(errorMessage)
+              Effect.mapError((error) =>
+                typeof error === "string" ? error : errorMessage(error))
             )
             // The file is matched exactly as it sits on disk; it is the search
             // strings that are converted to its convention. Nothing outside
@@ -599,6 +657,24 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
         try: () => new RegExp(pattern),
         catch: () => `invalid regular expression: ${pattern}`
       })
+      /**
+       * The filter, compiled once for the whole walk.
+       *
+       * It used to be rebuilt for every file considered, so a search over a
+       * thousand paths compiled a thousand identical regular expressions --
+       * and for an adversarial pattern that multiplied the cost by the size
+       * of the tree.
+       *
+       * A refusal is reported rather than treated as "matches nothing": the
+       * pattern comes from the model, and a filter that silently excludes
+       * everything is indistinguishable from a search that found nothing.
+       */
+      const filter = include === undefined ? undefined : Glob.compile(include)
+      if (filter !== undefined && filter._tag === "Refused") {
+        return yield* Effect.fail(
+          `Refusing to search: ${filter.reason}. Simplify the include pattern.`
+        )
+      }
       const at = dir === undefined
         ? undefined
         : yield* Sandbox.path(dir).pipe(Effect.mapError(errorMessage))
@@ -607,7 +683,7 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
       const matches: Array<SearchFormat.Match> = []
       for (const file of files) {
         if (matches.length >= SearchFormat.SEARCH_LIMIT) break
-        if (include !== undefined && !Glob.matches(include, file)) continue
+        if (filter !== undefined && !filter.matches(file)) continue
         const bytes = yield* sandbox.read(file).pipe(Effect.mapError(errorMessage))
         // A binary file has no lines worth showing, and its bytes would wreck
         // the output. Skipping is not an error: it is simply not a match.

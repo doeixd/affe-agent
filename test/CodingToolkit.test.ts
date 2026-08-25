@@ -673,6 +673,81 @@ describe("CodingToolkit edit_file: the replacer chain", () => {
     })
   )
 
+  /**
+   * R55 -- `write_file` and `edit_file` mutate the same file, so they need
+   * the same lock.
+   *
+   * The concurrency suite covered edit against edit. `write_file` went
+   * straight to the sandbox, so a write landing between an edit's read and
+   * its write was overwritten by a value derived from content that no longer
+   * existed -- and the write reported success.
+   *
+   * The edit is held open on a Deferred after its read, and the write is
+   * released into that window. Under one lock the write cannot start there,
+   * so the file ends up carrying both changes rather than one.
+   */
+  it.effect("a write cannot land inside an edit's read-modify-write", () =>
+    Effect.gen(function* () {
+      const editRead = yield* Deferred.make<void>()
+      const writeDone = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+
+      const gated = (inner: Sandbox.Sandbox): Sandbox.Sandbox => ({
+        ...inner,
+        read: (path) =>
+          Effect.andThen(
+            inner.read(path),
+            (bytes) =>
+              // Announce the read, then stall inside the edit's critical
+              // section for as long as the test wants.
+              Deferred.succeed(editRead, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as(bytes)
+              )
+          )
+      })
+
+      const after = yield* withSandbox(
+        { "f.ts": "alpha\n" },
+        Effect.gen(function* () {
+          const sandbox = yield* Sandbox.Current
+          const edit = yield* Effect.forkChild(
+            H.edit_file({ path: "f.ts", old_string: "alpha", new_string: "ALPHA" }, ctx).pipe(
+              Effect.provideService(Sandbox.Current, gated(sandbox))
+            )
+          )
+          // The edit has read and is holding the lock.
+          yield* Deferred.await(editRead)
+
+          const write = yield* Effect.forkChild(
+            H.write_file({ path: "f.ts", content: "written\n" }, ctx).pipe(
+              Effect.andThen(Deferred.succeed(writeDone, undefined))
+            )
+          )
+          // Give the write every chance to get in: several scheduler passes
+          // while the edit is deliberately stuck.
+          yield* Effect.forEach([1, 2, 3, 4, 5], () => Effect.yieldNow, { discard: true })
+          const wroteInsideTheEdit = yield* Deferred.isDone(writeDone)
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(edit)
+          yield* Fiber.join(write)
+
+          return { wroteInsideTheEdit, text: yield* readRaw("f.ts") }
+        })
+      )
+
+      assert.isFalse(
+        after.wroteInsideTheEdit,
+        "the write completed while the edit held the lock"
+      )
+      // The write went second, so it is what the file says -- and crucially
+      // it was not silently reverted by the edit finishing afterwards.
+      assert.strictEqual(after.text, "written\n")
+      assert.strictEqual(yield* CodingToolkit.lockRegistrySize, 0)
+    })
+  )
+
   it.effect("an interrupted edit does not pin its lock entry", () =>
     Effect.gen(function* () {
       // `acquireUseRelease`, not a bare `withPermit`: a caller interrupted
@@ -877,6 +952,22 @@ describe("CodingToolkit search: bounds, filters and skips", () => {
       assertString(shallow)
       assert.include(shallow, "src/a.ts:")
       assert.notInclude(shallow, "src/deep/c.ts")
+
+      /**
+       * R58 -- a refused filter is said out loud.
+       *
+       * The alternative is a search that matched nothing, which reads exactly
+       * like a search that found nothing -- and the model, which wrote the
+       * pattern, has no way to tell the two apart or to correct it.
+       */
+      const refused = yield* Effect.flip(
+        withSandbox(
+          files,
+          H.search({ pattern: "needle", include: "{a,{b,{c,{d,{e,f}}}}}.ts" }, ctx)
+        )
+      )
+      assert.include(String(refused), "Refusing to search")
+      assert.include(String(refused), "braces")
     })
   )
 
@@ -962,6 +1053,61 @@ describe("glob matching", () => {
       assert.strictEqual(Glob.matches(pattern, path), expected)
     })
   }
+
+  /**
+   * R58 -- an adversarial `include` is refused before it is compiled.
+   *
+   * Nested brace alternations become nested alternation groups, and a modest
+   * pattern can then take seconds to match a single filename; a review
+   * measured roughly three seconds for a 121-character glob. A JavaScript
+   * regular expression runs synchronously and cannot be interrupted, so
+   * neither an Effect timeout nor cancellation helps once matching starts --
+   * the only defence is not to build it.
+   *
+   * Asserted structurally rather than by elapsed time: a timing test on a
+   * fast machine passes with the limit removed, which is the exact failure
+   * mode that makes a test worse than none.
+   */
+  it("refuses a pattern that nests braces too deeply", () => {
+    const nested = "{a,{b,{c,{d,{e,f}}}}}.ts"
+    const refused = Glob.compile(nested)
+    assert.strictEqual(refused._tag, "Refused")
+    if (refused._tag === "Refused") assert.include(refused.reason, "braces")
+
+    // At the limit it still compiles: the bound is above any glob a person
+    // writes, and refusing an ordinary one would be its own defect.
+    const allowed = Glob.compile("src/**/{a,{b,c}}.{ts,tsx}")
+    assert.strictEqual(allowed._tag, "Matcher")
+    if (allowed._tag === "Matcher") {
+      assert.isTrue(allowed.matches("src/deep/b.tsx"))
+      assert.isFalse(allowed.matches("src/deep/z.tsx"))
+    }
+  })
+
+  it("refuses a pattern longer than the cap", () => {
+    const long = `${"a".repeat(Glob.MAX_PATTERN_LENGTH)}.ts`
+    const refused = Glob.compile(long)
+    assert.strictEqual(refused._tag, "Refused")
+    if (refused._tag === "Refused") assert.include(refused.reason, "longer than")
+  })
+
+  /**
+   * And compiling happens once, not once per path.
+   *
+   * `search` filtered with `Glob.matches`, which rebuilds the regular
+   * expression on every call -- so a walk over a thousand files compiled a
+   * thousand identical expressions, multiplying both the ordinary cost and an
+   * adversarial one by the size of the tree.
+   */
+  it("compiles once and matches many", () => {
+    const compiled = Glob.compile("*.ts")
+    assert.strictEqual(compiled._tag, "Matcher")
+    if (compiled._tag === "Matcher") {
+      assert.isTrue(compiled.matches("a.ts"))
+      assert.isTrue(compiled.matches("src/deep/b.ts"))
+      assert.isFalse(compiled.matches("a.js"))
+    }
+  })
 })
 
 describe("CodingToolkit bash: bounded output and honest failures", () => {
@@ -1120,14 +1266,106 @@ describe("CodingToolkit permission projections", () => {
     const list = Permission.projectionOf(CodingToolkit.ListFiles)
     assert.strictEqual(list.action, "read")
     assert.strictEqual(list.resource({}), ".")
+    /**
+     * R54 -- the subtree, not the query.
+     *
+     * This pinned `"foo"`, the regular expression, as the resource. Searching
+     * reads every eligible file below `path`; the regex is what is looked
+     * *for*, not what is disclosed -- so a path-scoped policy could neither
+     * authorize nor refuse the directory, and the approval prompt showed a
+     * pattern where the sensitive thing was the location.
+     */
     const search = Permission.projectionOf(CodingToolkit.Search)
     assert.strictEqual(search.action, "read")
-    assert.strictEqual(search.resource({ pattern: "foo" }), "foo")
+    assert.strictEqual(search.resource({ pattern: "foo" }), ".")
+    assert.strictEqual(search.resource({ pattern: "foo", path: "src/secrets" }), "src/secrets")
+    // The question still names the query: a person deciding wants to know
+    // what is being looked for as well as where.
+    assert.strictEqual(
+      search.describe?.({ pattern: "foo", path: "src/secrets" }),
+      "foo in src/secrets"
+    )
     const bash = Permission.projectionOf(CodingToolkit.Bash)
     assert.strictEqual(bash.action, "shell")
     assert.strictEqual(bash.resource({ command: "git push" }), "git push")
     return Effect.void
   })
+
+  /**
+   * R54, as a policy rather than as a string.
+   *
+   * The projection assertion above says what the resource *is*; this says why
+   * it matters. One rule, one regex, two directories -- and the decision has
+   * to differ, which it cannot if the resource is the pattern both calls
+   * share.
+   */
+  it.effect("a path-scoped policy can allow one subtree and refuse another", () =>
+    Effect.gen(function*() {
+      const policy = Permission.rules(
+        [{ action: "read", resource: /^src\/secrets/, decision: Permission.deny("private") }],
+        { otherwise: Permission.allow }
+      )
+      const projection = Permission.projectionOf(CodingToolkit.Search)
+      const ask = (path: string) =>
+        policy.evaluate({
+          sessionId: "s",
+          toolCallId: "c",
+          tool: { name: "search", params: {} },
+          action: projection.action,
+          resource: projection.resource({ pattern: "password", path }),
+          intrinsicApproval: false,
+          messages: []
+        })
+
+      assert.strictEqual((yield* ask("src/app"))._tag, "Allow")
+      assert.strictEqual((yield* ask("src/secrets"))._tag, "Deny")
+    }))
+
+  /**
+   * R56 -- an edit must not rewrite bytes it never touched.
+   *
+   * The edit path decoded with the default non-fatal decoder, so every
+   * undecodable byte became U+FFFD, and then wrote the whole string back. One
+   * latin-1 byte in a comment at the top of a file therefore corrupted itself
+   * on any edit anywhere in that file -- and the binary heuristic does not
+   * catch these, because they are text, just not this text.
+   *
+   * The fixture puts invalid bytes on both sides of an ASCII target, so a
+   * partial fix that protected only what follows the edit fails too.
+   */
+  it.effect("refuses to edit a file that is not valid UTF-8", () =>
+    Effect.gen(function*() {
+      const before = new Uint8Array([0xff, 0xfe])
+      const middle = new TextEncoder().encode("\nconst value = 1\n")
+      const after = new Uint8Array([0xfd, 0xfc])
+      const original = new Uint8Array([...before, ...middle, ...after])
+
+      const outcome = yield* Effect.gen(function*() {
+        const sandbox = yield* Sandbox.Current
+        const path = yield* Sandbox.path("legacy.ts")
+        yield* sandbox.write(path, original)
+        const failure = yield* Effect.flip(
+          CodingToolkit.handlers.edit_file(
+            {
+              path: "legacy.ts",
+              old_string: "const value = 1",
+              new_string: "const value = 2"
+            },
+            { preliminary: () => Effect.void }
+          )
+        )
+        return { failure, now: yield* sandbox.read(path) }
+      }).pipe(
+        Effect.provide(
+          Sandbox.currentLayer(ws).pipe(Layer.provide(MemorySandbox.layer({})))
+        )
+      )
+
+      assert.include(String(outcome.failure), "not valid UTF-8")
+      // And every byte is exactly as it was. A refusal that still wrote would
+      // be the defect with a better error message.
+      assert.deepStrictEqual([...outcome.now], [...original])
+    }))
 })
 
 describe("CodingToolkit in a session", () => {
