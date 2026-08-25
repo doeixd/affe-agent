@@ -355,8 +355,9 @@ describe("OpenAiAgent over the in-process client", () => {
   it.live("a streaming client that disconnects does not stall the server", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
+      const entered = yield* Deferred.make<void>()
       const { address } = yield* makeServer(Agent.make({ loop: AgentLoop.bounded(2) }), [
-        { text: "long", during: Deferred.await(release) },
+        { text: "long", started: entered, during: Deferred.await(release) },
         TestLanguageModel.text("after")
       ])
       const controller = new AbortController()
@@ -372,7 +373,23 @@ describe("OpenAiAgent over the in-process client", () => {
             .catch(() => "aborted")
         )
       )
-      yield* Effect.sleep("50 millis")
+      /**
+       * Abort once the attempt is genuinely under way, not after a fixed wait.
+       *
+       * These slept 50ms, which only ever meant "long enough for the request
+       * to reach the model" -- the turn blocks on `during` before it emits
+       * anything, so nothing has streamed yet either way. Under a loaded
+       * parallel suite 50ms is not reliably long enough, and the abort then
+       * lands before the attempt exists. The idempotency case below failed
+       * exactly that way during a full run: the retry became the *first*
+       * execution, the model was called once instead of twice, and the test
+       * proved nothing about idempotency while looking like it had.
+       *
+       * `started` fires inside the turn, immediately before it blocks, so
+       * waiting on it is the same instant the sleep was aiming at -- with no
+       * clock involved.
+       */
+      yield* Deferred.await(entered)
       controller.abort()
       assert.strictEqual(yield* Fiber.join(aborted), "aborted")
       yield* Deferred.succeed(release, void 0)
@@ -384,8 +401,9 @@ describe("OpenAiAgent over the in-process client", () => {
   it.live("a stream interrupted mid-generation does not poison its idempotency key with a partial result", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
+      const entered = yield* Deferred.make<void>()
       const { address, recorder } = yield* makeServer(Agent.make({ loop: AgentLoop.bounded(2) }), [
-        { text: "the full and complete answer", chunks: ["the full ", "and complete ", "answer"], during: Deferred.await(release) },
+        { text: "the full and complete answer", chunks: ["the full ", "and complete ", "answer"], started: entered, during: Deferred.await(release) },
         TestLanguageModel.text("re-executed")
       ])
       const headers = { "idempotency-key": "cut-short" }
@@ -402,7 +420,23 @@ describe("OpenAiAgent over the in-process client", () => {
             .catch(() => "aborted")
         )
       )
-      yield* Effect.sleep("50 millis")
+      /**
+       * Abort once the attempt is genuinely under way, not after a fixed wait.
+       *
+       * These slept 50ms, which only ever meant "long enough for the request
+       * to reach the model" -- the turn blocks on `during` before it emits
+       * anything, so nothing has streamed yet either way. Under a loaded
+       * parallel suite 50ms is not reliably long enough, and the abort then
+       * lands before the attempt exists. The idempotency case below failed
+       * exactly that way during a full run: the retry became the *first*
+       * execution, the model was called once instead of twice, and the test
+       * proved nothing about idempotency while looking like it had.
+       *
+       * `started` fires inside the turn, immediately before it blocks, so
+       * waiting on it is the same instant the sleep was aiming at -- with no
+       * clock involved.
+       */
+      yield* Deferred.await(entered)
       controller.abort()
       assert.strictEqual(yield* Fiber.join(aborted), "aborted")
       // The interrupted attempt did not commit a result for the key. A retry
