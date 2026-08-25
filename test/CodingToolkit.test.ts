@@ -1047,13 +1047,58 @@ describe("glob matching", () => {
     ["*.TS", "a.ts", false],
     // A malformed pattern matches nothing rather than throwing: the caller
     // sees an empty result it can correct, not a failed tool.
-    ["unclosed{a", "x", false]
+    ["unclosed{a", "x", false],
+    /**
+     * `**\/` means "any run of directories, **or nothing**" -- and the
+     * "or nothing" is a choice on arriving, not one still available after it
+     * has consumed part of a name. So the trailing separator is mandatory
+     * once the run has begun, and `**\/` alone cannot match `a/b`.
+     *
+     * Found by fuzzing the automaton against the regular expression it
+     * replaced. Collapsing this into one self-looping state passes every
+     * other case in this table and silently turns `**\/` into `**`.
+     */
+    ["**/", "a/", true],
+    ["**/", "a/b/", true],
+    ["**/", "a/b", false],
+    ["**/", "ata/..b.s", false],
+    // The empty branch is what lets `**\/` match at depth zero.
+    ["**/a.ts", "a.ts", true],
+    ["**/a.ts", "x/y/a.ts", true],
+    ["**/a.ts", "x/y/b.ts", false]
   ]
   for (const [pattern, path, expected] of cases) {
     it(`${pattern || "(empty)"} vs ${path} is ${expected}`, () => {
       assert.strictEqual(Glob.matches(pattern, path), expected)
     })
   }
+
+  it("a pattern full of stars cannot be made expensive", () => {
+    /**
+     * `include` is model-supplied, and this used to compile to a native
+     * `RegExp`. A backtracking engine explores every way a run of `*`s can
+     * divide the subject, so the cost is exponential in the number of stars
+     * and *not* in the length of the pattern -- which is why the length cap
+     * did not help: this 24-character pattern took 25 seconds against a
+     * 41-character name, and `search` runs the filter once per file walked.
+     * A JavaScript regular expression cannot be interrupted, so no timeout
+     * upstream could have ended it.
+     *
+     * The matcher is an automaton now, so this is linear. Measured at well
+     * under a millisecond against roughly 25,000; the budget is set far from
+     * both so a slow machine cannot fail it spuriously.
+     *
+     * All-`a` with a final `b` is the shape that matters: every star can
+     * plausibly stop anywhere, and only the last character refutes the match,
+     * so nothing prunes the search early.
+     */
+    const pattern = "*a".repeat(12)
+    assert.isAtMost(pattern.length, Glob.MAX_PATTERN_LENGTH)
+    const started = Date.now()
+    assert.isFalse(Glob.matches(pattern, `${"a".repeat(60)}b`))
+    const elapsed = Date.now() - started
+    assert.isBelow(elapsed, 2000, `matching took ${elapsed}ms`)
+  })
 
   /**
    * R58 -- an adversarial `include` is refused before it is compiled.
