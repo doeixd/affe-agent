@@ -1071,4 +1071,49 @@ describe("SessionTree", () => {
         )
       }).pipe(Effect.provide(layer), Effect.scoped)
     }))
+
+  /**
+   * R34 -- "unchanged" must mean the same conversation, not the same length.
+   *
+   * A session id is chosen by the caller: `AgentSession.make` takes one and
+   * `restore` deliberately reuses it. Two distinct sessions can therefore
+   * share a tree cursor -- and the dedup check compared only
+   * `history.content.length`, so a *different* conversation of the same length
+   * was treated as unchanged and handed back the other session's node.
+   *
+   * Driven by committing two sessions under one id with equal-length,
+   * different histories, which is exactly what a restore into a diverged
+   * conversation looks like.
+   */
+  it.effect("two different conversations of one length are two nodes", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("first answer", "second answer")
+
+      yield* Effect.gen(function*() {
+        const store = yield* NodeStore.memory
+        const tree = yield* SessionTree.make(agent, { store })
+
+        const one = yield* AgentSession.make(agent, { sessionId: "shared" })
+        yield* one.prompt("ask about apples")
+        const first = yield* tree.commit(one)
+
+        // The same id, a different conversation, the same number of messages.
+        const two = yield* AgentSession.make(agent, { sessionId: "shared" })
+        yield* two.prompt("ask about oranges")
+        const second = yield* tree.commit(two)
+
+        assert.notStrictEqual(
+          first.id,
+          second.id,
+          "a different conversation was handed the other session's node"
+        )
+        // And the second is recorded, rather than being silently dropped.
+        assert.strictEqual((yield* store.nodes).length, 2)
+
+        // The histories really were the same length, or this asserts nothing.
+        const left = yield* tree.historyOf(first)
+        const right = yield* tree.historyOf(second)
+        assert.strictEqual(left.content.length, right.content.length)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    }))
 })

@@ -561,6 +561,18 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
      * added nothing", and it keeps a manual commit next to an automatic one
      * from leaving two nodes holding the same conversation.
      */
+    /**
+     * Whether two conversations are the same messages, in the same order.
+     *
+     * By reference per message. Effect AI's prompt messages are immutable
+     * values and a continued conversation keeps its prefix, so this is a
+     * pointer comparison per element rather than a structural walk -- cheap
+     * enough to run on every turn boundary, which is where it runs.
+     */
+    const sameMessages = (left: Prompt.Prompt, right: Prompt.Prompt): boolean =>
+      left.content.length === right.content.length &&
+      left.content.every((message, index) => message === right.content[index])
+
     const record = (
       sessionId: string,
       history: Prompt.Prompt,
@@ -571,10 +583,25 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
         const parent = Option.fromNullishOr(parentId)
         if (parentId !== undefined) {
           const existing = yield* store.get(parentId)
-          if (
-            Option.isSome(existing) &&
-            existing.value.history.content.length === history.content.length
-          ) {
+          /**
+           * Unchanged means *the same conversation*, not the same length.
+           *
+           * Comparing lengths was cheap and wrong. A session id is chosen by
+           * the caller -- `AgentSession.make` takes one, and `restore`
+           * deliberately reuses it -- so two distinct sessions can share a
+           * cursor, and a *different* conversation of the same length was
+           * treated as unchanged and handed back the other one's node. A
+           * shorter or divergent history could be parented onto the wrong
+           * lineage the same way.
+           *
+           * Message identity, not a deep comparison: prompts are immutable and
+           * a continued conversation shares its prefix by reference, so this
+           * is a pointer walk over the messages rather than a walk over their
+           * contents. A rebuilt-but-equal history is treated as a change,
+           * which is the safe direction -- it records a node nobody needed
+           * rather than silently returning a node about something else.
+           */
+          if (Option.isSome(existing) && sameMessages(existing.value.history, history)) {
             return Option.none()
           }
         }
