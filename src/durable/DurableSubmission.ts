@@ -150,6 +150,34 @@ const finishProjection = (
       // `StorageError` is that the workflow can tell infrastructure from the
       // agent. It crosses the journal because it is a `Schema.TaggedError`.
       error: StorageError,
+      /**
+       * R173, and why the order stays as it is.
+       *
+       * These two are grouped in one activity but not one storage
+       * transaction -- they can be different stores -- so one can commit and
+       * the other be lost to a failure or a dying process. Both orders lose
+       * something, and the choice is which:
+       *
+       * - **Clear then finish** (this order): a lost `finish` leaves admission
+       *   closed with the claim still `running`, and nothing reconciles a
+       *   completed workflow into a finished claim -- so later prompts see
+       *   `Busy` permanently.
+       * - **Finish then clear**: a lost clear wipes the admission marker of
+       *   the *next* submission, which another client may already have
+       *   claimed and opened in that gap -- so a running submission refuses
+       *   steering as though it were idle.
+       *
+       * The second is worse: it corrupts work that is happening now, rather
+       * than stranding work that has ended. Reversing this order was tried and
+       * reverted for exactly that reason, and the test below
+       * (`admission is closed before the session goes idle, never after`)
+       * pins it.
+       *
+       * Closing R173 properly needs one of two things this ordering cannot
+       * provide: both writes in one transaction, or reconciliation that
+       * inspects a completed workflow and finishes its claim. Until then the
+       * wedge is a real, recorded limitation rather than a fixed one.
+       */
       execute: Effect.all([
         store.takeAll(DurableChannels.openKey(payload.sessionId)),
         store.takeAll(
@@ -396,9 +424,28 @@ const recordingSink = (
         ? Ref.set(held, Option.some({ key, envelope: projected }))
         : record(key, projected)
     },
-    flushTerminal: Effect.flatMap(Ref.getAndSet(held, Option.none()), (pending) =>
+    /**
+     * Record first, then forget. Not the other way round.
+     *
+     * This was `Ref.getAndSet(held, None)` *before* the append, so an append
+     * that failed left the session idle with its terminal event gone -- and
+     * gone permanently, because nothing holds it any more and no reader can
+     * tell a submission that ended from one whose ending was never recorded.
+     * That is the exact shape D5 forbids.
+     *
+     * Reading without clearing, appending, and clearing only on success means
+     * a failure keeps the event for a retry. The cost is that a *successful*
+     * append whose clear is then lost could append again -- and the delivery
+     * log dedups by key, so a duplicate is a `Duplicate` outcome rather than a
+     * second event. Trading a possible duplicate for a possible loss is the
+     * right direction for a terminal event.
+     */
+    flushTerminal: Effect.flatMap(Ref.get(held), (pending) =>
       Option.isSome(pending)
-        ? record(pending.value.key, pending.value.envelope)
+        ? Effect.andThen(
+          record(pending.value.key, pending.value.envelope),
+          Ref.set(held, Option.none())
+        )
         : Effect.void
     )
   }
