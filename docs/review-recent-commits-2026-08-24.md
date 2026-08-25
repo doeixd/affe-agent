@@ -3707,6 +3707,22 @@ refusal is reported).
 (`PLUGIN_ROOT`/`PLUGIN_DATA` injected; stdio declined without them). R50
 (configured headers reach the origin, proven by a recording server).
 
+**Core session and events.** R3 (a started tool call owes a terminal event
+from the moment it is announced, not from when the handler starts -- the gap
+covered decoding, policy evaluation, and waiting for a person to answer).
+R5 (`snapshot` looks at the state twice, comparing submission count). R20, R156
+(an observer is an observability consumer: its defect is isolated and logged, a
+re-entrant emit is refused rather than deadlocking, and `eventSink` keeps the
+opposite contract on purpose). R165 (a tool failure is rendered totally and
+boundedly, after `returnedToModel` has already been promised). R166 (the
+failure-to-event projection guards every getter, enumeration and coercion it
+performs).
+
+**Execution plan.** R16 (`R` is no longer struck out by a plan applied only
+around the model call). R17 (the plan's error and requirements reach the
+agent's channels). R32 (the model requirement is recomputed from a constant, so
+a replacement plan can restore it).
+
 **TUI.** R148 (one permit across the idle check and the branch change; the
 racing-case assertion is labelled as weaker than it looks). R149 (`stop()` is
 awaitable and idempotent; the store's finalizer is deliberately slow so the
@@ -3731,4 +3747,16 @@ genuinely overlap, and `Duplicate` is correct when they do not.
 - **R83's run boundaries.** A history records messages, not which arrived as a
   fresh submission and which were steered into a run already going. Reproducing
   that needs the event log, not the transcript.
+- **R19, R28, R37.** The rest of the execution-plan cluster. R19 is a wide
+  signature change across every combinator and consumer; R28 needs the plan's
+  `input` constrained to a supertype of the model call's error without
+  destroying inference; R37 is a runtime composition defect where a plan's
+  provider layer shadows `DurableModel`, so a durable agent with fallback can
+  repeat a billed call on replay.
+- **R20's forked re-entry.** The guard compares fibres, so an observer that
+  *forks* a re-entrant call gets a new fibre id, blocks on the permit, and
+  deadlocks exactly as before. That is the boundary of what a fibre comparison
+  can see, and it is documented on `AgentSession.observe`.
+- **R5's window.** The fix is structural; no test here drives the interleaving,
+  and the test says so rather than implying coverage it does not have.
 - Everything not listed above remains as this review recorded it.
