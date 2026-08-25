@@ -1,13 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import {
-  Cron,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Schedule,
-  Schema
-} from "effect"
+import { Cron, Duration, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import {
   ClusterWorkflowEngine,
@@ -28,6 +20,7 @@ import {
 } from "../src/cluster/AgentEntity.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
+import { breakingOfferIfOpen } from "./storageFaults.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -494,6 +487,60 @@ describe("approval across the cluster", () => {
             : Effect.fail("not yet dispatched" as const)),
         { times: 200, schedule: Schedule.spaced(Duration.millis(10)) }
       ).pipe(Effect.provide(runtime))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
+
+  /**
+   * D7 on the `/cluster` path -- a storage failure is reported, not swallowed.
+   *
+   * The entity's storage is the channels store: steering is an offer against a
+   * key gated by the admission marker. If that offer fails, the one outcome
+   * that must not happen is the caller being told the input was accepted --
+   * because it would then wait for an effect on a run that never received it.
+   *
+   * **The entity converts a `StorageError` into a defect deliberately**, and
+   * this test records that rather than pretending otherwise. These handlers
+   * implement an `Rpc` whose error schema declares `AgentIdleError` and nothing
+   * else, so reporting a store failure as a typed error would mean widening
+   * the wire contract -- a decision noted as the open half of E14 and left to
+   * whoever owns the protocol. What the entity must not do meanwhile is *lose*
+   * the failure, and what it must not do is take `AgentIdleError` down with it,
+   * which an earlier `Effect.orDie` did.
+   *
+   * So the claim tested here is the narrow, true one: the caller is told, and
+   * the cluster's own transport-versus-declared-error distinction is what
+   * carries it. That is a weaker D7 than the durable client's typed failure,
+   * and the matrix says so.
+   */
+  it.live("a channels-store failure is reported to a steering caller, not swallowed", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "unused" }])
+      const healthy = yield* DurableChannels.memoryStore
+      const store = breakingOfferIfOpen(healthy, "after")
+      const durable = DurableAgent.workflow("FaultySteer", Agent.make({}), { store })
+      const runtime = durable.layer.pipe(
+        Layer.provideMerge(ClusterWorkflowEngine.layer),
+        Layer.provideMerge(modelLayer)
+      )
+      const handlers = entityLayer(durable, store).pipe(Layer.provideMerge(runtime))
+
+      // Admission open, so this is a store failure and not an idle session --
+      // the two answers must stay distinguishable.
+      yield* DurableAgent.open(healthy, "faulty-steer")
+
+      const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = yield* makeClient("faulty-steer")
+      const outcome = yield* Effect.exit(
+        client.steer({ input: Prompt.make("please stop") })
+      )
+
+      // Told, one way or another. What must never happen is a success for
+      // input that was not accepted.
+      assert.isTrue(Exit.isFailure(outcome), "a failed offer was reported as accepted")
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)

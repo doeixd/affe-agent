@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import {
+  Cause,
   Deferred,
   Duration,
   Effect,
@@ -17,6 +18,7 @@ import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
+import { breakingClaim, detail } from "./storageFaults.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -90,11 +92,22 @@ const fixture = (
   // an agent that suspends on a durable gate (the replay test) needs.
   agent: Agent.AgentDefinition<any, any, any>,
   turns: ReadonlyArray<TestLanguageModel.Turn>,
-  delivery?: DeliveryLog.DeliveryLog
+  delivery?: DeliveryLog.DeliveryLog,
+  /**
+   * Break the session store the clients see, leaving the underlying one
+   * intact. Both clients share the result, so a fault is a property of the
+   * deployment rather than of one handle.
+   */
+  breakSessionStore?: (
+    store: DurableSessionStore.DurableSessionStore
+  ) => DurableSessionStore.DurableSessionStore
 ) =>
   Effect.gen(function* () {
     const store = yield* DurableChannels.memoryStore
-    const sessionStore = yield* DurableSessionStore.memoryStore
+    const healthy = yield* DurableSessionStore.memoryStore
+    const sessionStore = breakSessionStore === undefined
+      ? healthy
+      : breakSessionStore(healthy)
     const log = delivery ?? (yield* DeliveryLog.memoryLog)
     const shared = { store, sessionStore, delivery: log }
     const { layer: model, recorder } = yield* FakeModel.script(turns)
@@ -115,7 +128,7 @@ const fixture = (
     > = DurableAgentClient.layer("SharedAgent", agent, shared).pipe(
       Layer.provideMerge(engine)
     )
-    return { ...shared, recorder, client, another }
+    return { ...shared, healthy, recorder, client, another }
   })
 
 /** Run `use` against the client service of `layer`. */
@@ -1300,6 +1313,103 @@ describe("DurableAgentClient resumable events (H5)", () => {
 
       // Live delivery is still an empty stream; only the resumption refuses.
       assert.isTrue(Exit.isFailure(outcome))
+    })
+  )
+})
+
+/**
+ * D7 at the durable client -- storage failure degrades, it does not corrupt.
+ *
+ * The store's own behaviour under fault is `DurableStorageFaults`. This is the
+ * layer above: what a *caller of the client contract* is told when the storage
+ * beneath it fails, which is a different question and the one an application
+ * actually meets.
+ *
+ * Two things have to hold, and they pull in opposite directions. The caller
+ * must be told -- a failure reported as success is the corruption D7 exists to
+ * rule out -- and it must be told in a form it can act on, which means the
+ * typed error channel rather than a defect. A defect kills the fibre under it
+ * and cannot be caught, so a caller that would have retried or failed over
+ * never gets the chance.
+ */
+describe("D7 at the durable client", () => {
+  const script = [{ text: "done" }] as ReadonlyArray<TestLanguageModel.Turn>
+
+  it.live("a claim that fails is reported as a transport failure, not a defect", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(
+        Agent.make({ loop: AgentLoop.bounded(2) }),
+        script,
+        undefined,
+        (store) => breakingClaim(store, "after")
+      )
+
+      const outcome = yield* using(f.client, (client) =>
+        Effect.exit(
+          Effect.scoped(
+            Effect.flatMap(client.createSession({ sessionId: "faulty" }), (s) =>
+              s.prompt("go")))))
+
+      assert.isTrue(Exit.isFailure(outcome))
+      if (Exit.isFailure(outcome)) {
+        /**
+         * A *failure*, so `Cause.findErrorOption` finds something. Had the
+         * client let the `StorageError` die instead of mapping it, the cause
+         * would carry a defect and this would be `None` -- which is the exact
+         * difference between "degrades" and "takes the caller down with it".
+         */
+        const error = Cause.findErrorOption(outcome.cause)
+        assert.isTrue(Option.isSome(error), "the store failure arrived as a defect")
+        if (Option.isSome(error)) {
+          // Narrowed with a branch rather than asserted: the tag has to be
+          // checked by the compiler for `detail` to be reachable at all, which
+          // is the shape this codebase asks for everywhere else.
+          if (error.value._tag === "AgentTransportError") {
+            assert.include(error.value.detail, detail)
+          } else {
+            assert.fail(`expected a transport failure, got ${error.value._tag}`)
+          }
+        }
+      }
+    })
+  )
+
+  it.live("a session whose claim failed is not left looking like accepted work", () =>
+    Effect.gen(function* () {
+      /**
+       * The second half of D7, and the one a store can get wrong: the caller
+       * was told nothing was accepted, so nothing may be left that a later
+       * reader would read as accepted.
+       *
+       * `breakingClaim(store, "after")` runs the real claim and *then* fails,
+       * which is the partial failure that matters -- the write has landed and
+       * the caller has been told it has not. The memory store's claim is one
+       * atomic step, so the claim is there and carries the caller's key; a
+       * retry under the same key is recognised as the same request rather than
+       * refused as a second one. That is the recovery path, and it is why the
+       * key exists. What must never happen is the third possibility: a claim
+       * with no key, which no retry can ever reconcile.
+       */
+      const f = yield* fixture(
+        Agent.make({ loop: AgentLoop.bounded(2) }),
+        script,
+        undefined,
+        (store) => breakingClaim(store, "after")
+      )
+      yield* using(f.client, (client) =>
+        Effect.ignore(
+          Effect.scoped(
+            Effect.flatMap(client.createSession({ sessionId: "faulty" }), (s) =>
+              s.prompt("go")))))
+
+      const record = yield* f.healthy.get("faulty")
+      assert.isTrue(Option.isSome(record))
+      if (Option.isSome(record) && Option.isSome(record.value.claim)) {
+        // Recoverable, not orphaned: whatever is here can be reconciled by the
+        // ordinary reacquisition path rather than needing a human.
+        assert.strictEqual(record.value.status, "running")
+        assert.isString(record.value.claim.value.submissionId)
+      }
     })
   )
 })

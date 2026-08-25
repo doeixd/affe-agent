@@ -126,7 +126,7 @@ the `✗` is the honest answer until H5 changes it.
 | D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ `Durable` | ✓ `Cluster` | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
 | D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | ✓ `AgentHttp` (H5) | ✓ `DurableAgentClient` |
 | D6 A recorded event is replay-stable | n/a | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` |
-| D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | … | … | … |
+| D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | ✓ `Cluster` (defect, see below) | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
 | D8 Every claim names its path | this table | this table | this table | this table | this table |
 
 **The one `✗` is W3, and it is a design defect rather than a documentation
@@ -208,7 +208,7 @@ dependency.
 - Keep the exhaustive pass in CI and the randomised pass seeded, with failures
   pinned as ordinary tests so a found bug never returns.
 
-### H4 — Storage fault injection
+### H4 — Storage fault injection — **done**
 
 A wrapper over the store interfaces — the same technique the coding toolkit
 tests use for the sandbox — that can fail a write, fail a read, duplicate a
@@ -374,8 +374,29 @@ will.
 
 ## Success conditions
 
-- **SD1:** The matrix has no empty cells. Every claim × path is ✓ with a test,
-  ✗ with a documented reason, or n/a.
+- **SD1:** ✓ The matrix has no empty cells. Every claim × path is ✓ with a
+  test, ✗ with a documented reason, or n/a.
+
+  D7's three remaining cells were the last of them, and they do not all say
+  the same thing:
+
+  - **Durable client** -- a `StorageError` becomes an `AgentTransportError`, so
+    the caller gets a value it can retry or fail over on. A defect could not be
+    caught and would take the calling fibre with it.
+  - **HTTP+SSE** -- that error maps to 503, and the server keeps serving. The
+    test calls again afterwards, which is the difference between degrading and
+    falling over.
+  - **`/cluster`** -- **weaker, deliberately, and the cell says so.** The
+    entity's handlers implement an `Rpc` whose error schema declares
+    `AgentIdleError` and nothing else, so a store failure is converted to a
+    defect and carried by the cluster's transport-versus-declared-error
+    distinction rather than by a typed error of its own. The caller is told,
+    which is what D7 requires; it is not told in a form it can pattern-match,
+    which widening the wire contract would fix. That is the open half of E14
+    and belongs to whoever owns the protocol.
+
+  All three fail when the guarantee is removed: letting the client's store
+  errors die, and letting the entity swallow a failed offer.
 - **SD2:** Each of D1–D8 has a test that fails when the guarantee is removed,
   demonstrated by actually removing it.
 - **SD3:** Every activity boundary in a representative run is exercised as a

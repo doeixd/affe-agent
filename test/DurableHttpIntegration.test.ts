@@ -1,7 +1,7 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Crypto, Duration, Effect, Fiber, Layer, Ref, Schedule, Schema, Stream } from "effect"
+import { Cause, Crypto, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schedule, Schema, Stream } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
@@ -21,6 +21,7 @@ import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import { AgentHttp } from "../src/http/index.js"
 import { BearerHost, bearerHost } from "./helpers.js"
 import * as FakeModel from "./FakeModel.js"
+import { breakingClaim } from "./storageFaults.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 const Host = BearerHost("test/DurableHttpIntegration/host")
@@ -104,15 +105,25 @@ const sessionId = AgentProtocol.SessionId.make("customer-123")
 const process_ = (
   file: string,
   agent: Agent.AgentDefinition<any, any, any>,
-  turns: ReadonlyArray<TestLanguageModel.Turn>
+  turns: ReadonlyArray<TestLanguageModel.Turn>,
+  /**
+   * Break the session store this process sees, leaving the database intact.
+   * The fault is in the deployment, not in the fixture.
+   */
+  breakSessionStore?: (
+    store: DurableSessionStore.DurableSessionStore
+  ) => DurableSessionStore.DurableSessionStore
 ) =>
   Effect.gen(function* () {
     const sql = yield* Layer.build(SqliteClient.layer({ filename: file }))
-    const stores = yield* Effect.all({
+    const built = yield* Effect.all({
       store: DurableChannels.sqlStoreWithTable(),
       sessionStore: DurableSessionStore.sqlStoreWithTables(),
       delivery: DeliveryLog.sqlLogWithTable({ pollInterval: Duration.millis(30) })
     }).pipe(Effect.provide(sql))
+    const stores = breakSessionStore === undefined
+      ? built
+      : { ...built, sessionStore: breakSessionStore(built.sessionStore) }
     const { layer: model, recorder } = yield* FakeModel.script(turns)
 
     const clientRuntime = yield* Layer.build(
@@ -363,5 +374,64 @@ describe("durable client behind the HTTP transport, on SQLite", () => {
         }).pipe(Effect.scoped)
       }).pipe(Effect.scoped, Effect.provide(FetchHttpClient.layer)),
     40_000
+  )
+
+  /**
+   * D7 over HTTP -- a storage failure is a 503, not a 200 and not a hang.
+   *
+   * The durable client already turns a `StorageError` into an
+   * `AgentTransportError`; this is about what survives the wire. The adapter
+   * maps that error to 503, which is the whole claim: a client sees a status
+   * that says "the service could not do this, try again" rather than a success
+   * for work that was never accepted, and the connection is not simply dropped
+   * for it to guess about.
+   *
+   * The server also has to still be there afterwards. A store failure that
+   * killed the request fibre would take the route with it, so the second call
+   * below is not a formality -- it is the difference between degrading and
+   * falling over.
+   */
+  it.live("a storage failure reaches an HTTP caller as 503, and the server survives it", () =>
+    Effect.gen(function* () {
+      const file = yield* tempDatabase
+      const agent = Agent.make({ loop: AgentLoop.bounded(2) })
+      const faultySession = AgentProtocol.SessionId.make("d7-faulty")
+
+      yield* Effect.gen(function* () {
+        const p = yield* process_(file, agent, [{ text: "unreachable" }], (store) =>
+          breakingClaim(store, "after"))
+
+        yield* p.api.sessions.createSession({
+          headers,
+          payload: { requestId: requestId("d7-create"), sessionId: faultySession }
+        })
+
+        const attempt = yield* Effect.exit(
+          p.api.sessions.prompt({
+            params: { id: faultySession },
+            headers,
+            payload: { requestId: requestId("d7-prompt"), input: Prompt.make("go") }
+          })
+        )
+
+        assert.isTrue(Exit.isFailure(attempt), "the prompt reported success")
+        if (Exit.isFailure(attempt)) {
+          const error = Cause.findErrorOption(attempt.cause)
+          assert.isTrue(Option.isSome(error), "the failure arrived as a defect")
+          if (Option.isSome(error) && error.value._tag === "AgentTransportError") {
+            assert.strictEqual(AgentHttp.errorStatus(error.value), 503)
+          } else {
+            assert.fail("expected a transport failure")
+          }
+        }
+
+        // Still serving: the failure was this request's, not the process's.
+        const status = yield* p.api.sessions.status({
+          params: { id: faultySession },
+          headers
+        })
+        assert.isString(status.status)
+      }).pipe(Effect.scoped, Effect.provide(FetchHttpClient.layer))
+    })
   )
 })
