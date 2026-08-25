@@ -127,5 +127,45 @@ export const makeStore = () => {
     }
   }
 
-  return { entries, status, footer, rewind, backend, sink, drainSettled, commitSettled }
+  /**
+   * How many entries at the front have finished, as a reactive value.
+   *
+   * The drain used to be triggered by `entries.length`, which misses the thing
+   * that actually makes an entry drainable. A streamed message or a running
+   * tool is *appended* while unsettled, so the append fires one drain attempt
+   * that correctly stops at that row -- and its later `streaming = false` or
+   * `status = "ok"` is a nested store write that changes no length, so nothing
+   * runs again. The settled row, and everything behind it, stayed in the
+   * reactive tree until some future append happened to move the length. The
+   * last submission of a session could sit there indefinitely.
+   *
+   * A plain derived read, not a `createMemo`. A store is built at module
+   * scope, outside any reactive root, and a memo created there has no owner to
+   * schedule it -- it computes once and never updates, which is worse than the
+   * length dependency it replaces. Reading the store inside the caller's own
+   * effect puts the tracking where an owner exists.
+   *
+   * Not a write counter either, which was the first attempt: a counter changes
+   * on every token, so the drain would run per delta. This reads only
+   * `streaming` and `status` through `settled` -- never `title` -- so a token
+   * arriving mid-stream tracks nothing that changed and wakes nobody, while
+   * the write that settles a row does.
+   */
+  const settledCount = (): number => {
+    let count = 0
+    while (count < entries.length && settled(entries[count]!)) count++
+    return count
+  }
+
+  return {
+    entries,
+    status,
+    footer,
+    rewind,
+    backend,
+    sink,
+    drainSettled,
+    commitSettled,
+    settledCount
+  }
 }

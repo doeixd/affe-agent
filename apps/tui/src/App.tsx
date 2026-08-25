@@ -6,7 +6,7 @@ import {
   writeSolidToScrollback
 } from "@opentui/solid"
 import type { Accessor } from "solid-js"
-import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, For, Match, onCleanup, Show, Switch } from "solid-js"
 import * as Diff from "./diff.ts"
 import { marker, theme } from "./theme.ts"
 import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
@@ -412,6 +412,13 @@ export const App = (props: {
   handle: Handle
   /** Hand settled entries to the terminal, one at a time. See the store. */
   commitSettled: (write: (entry: Entry) => void) => void
+  /**
+   * How many leading entries have finished, as a reactive read.
+   *
+   * A function rather than a value, because the drain has to *track* it: the
+   * whole point is to run when a row settles, which changes no length.
+   */
+  settledCount: () => number
   footer: FooterView
   rewind: Rewind
   /** Which model and workspace are behind this. See `Sink.setBackend`. */
@@ -522,30 +529,73 @@ export const App = (props: {
   // `undefined is not an object` from a row reading an index that no longer
   // exists. Only visible once an entry lingers in the live tree, which is to
   // say once a message streams.
-  createEffect(() => {
-    props.entries.length
-    queueMicrotask(() => {
-      /**
-       * One entry at a time, and each stays in the store until it is written.
-       *
-       * The batch version removed the whole settled prefix first, so a throw
-       * partway -- a disposed renderer, a bad extension view -- lost every
-       * entry after it, and retrying was unsafe because the earlier ones had
-       * already reached the terminal irreversibly.
-       *
-       * The catch is not swallowing the failure so much as bounding it: this
-       * runs in an unowned microtask, so an escaping exception bypasses the
-       * harness's error handling entirely and becomes an unhandled rejection.
-       * What is left in the store is written on the next drain.
-       */
-      try {
-        props.commitSettled((entry) => {
-          writeSolidToScrollback(renderer, () => <EntryView entry={entry} />)
-        })
-      } catch (cause) {
-        console.error("could not write to scrollback:", cause)
+  /**
+   * How many times a failed write is retried before the entries are left.
+   *
+   * A failure changes no reactive value and schedules nothing, so without this
+   * a single transient throw pinned the prefix -- and with it every later
+   * entry -- for the rest of the session. Bounded rather than a retry loop:
+   * the usual cause is a disposed renderer, and a loop against one spins
+   * forever.
+   */
+  const WRITE_ATTEMPTS = 3
+  let disposed = false
+  onCleanup(() => {
+    disposed = true
+  })
+
+  const drain = (attempt: number): void => {
+    if (disposed) return
+    /**
+     * One entry at a time, and each stays in the store until it is written.
+     *
+     * The batch version removed the whole settled prefix first, so a throw
+     * partway -- a disposed renderer, a bad extension view -- lost every
+     * entry after it, and retrying was unsafe because the earlier ones had
+     * already reached the terminal irreversibly.
+     *
+     * The catch is not swallowing the failure so much as bounding it: this
+     * runs in an unowned microtask, so an escaping exception bypasses the
+     * harness's error handling entirely and becomes an unhandled rejection.
+     */
+    try {
+      props.commitSettled((entry) => {
+        writeSolidToScrollback(renderer, () => <EntryView entry={entry} />)
+      })
+    } catch (cause) {
+      if (attempt < WRITE_ATTEMPTS) {
+        queueMicrotask(() => drain(attempt + 1))
+        return
       }
-    })
+      console.error(
+        `could not write to scrollback after ${WRITE_ATTEMPTS} attempts;` +
+          ` ${props.entries.length} entries are held back:`,
+        cause
+      )
+    }
+  }
+
+  /**
+   * Driven by the *settled prefix*, not by the number of entries.
+   *
+   * A length dependency misses the only thing that makes an entry drainable. A
+   * streamed message or a running tool is appended while unsettled, so the
+   * append fires one attempt that correctly stops at that row -- and its later
+   * `streaming = false` or `status = "ok"` is a nested store write that
+   * changes no length, so nothing ran again. The settled row and everything
+   * behind it stayed in the live tree until some future append moved the
+   * length; the last submission of a session could sit there indefinitely.
+   *
+   * The memo in the store notifies only when the *count* changes, so tokens
+   * mid-stream wake nobody and the moment a row settles wakes this once.
+   *
+   * Still deferred to a microtask, and that is load-bearing: the drain splices
+   * the very array `<For>` below is rendering, and doing that inside the
+   * effect that renders it tears the list out from under the row callbacks.
+   */
+  createEffect(() => {
+    props.settledCount()
+    queueMicrotask(() => drain(1))
   })
 
   return (

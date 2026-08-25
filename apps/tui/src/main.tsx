@@ -6,7 +6,8 @@ import { makeStore } from "./store.ts"
 
 /** Entry point: build the state, hand its sink to the harness, render. */
 
-const { backend, commitSettled, drainSettled, entries, footer, rewind, sink, status } = makeStore()
+const { backend, commitSettled, drainSettled, entries, footer, rewind, settledCount, sink, status } =
+  makeStore()
 
 /**
  * Scripted unless `--live --workspace <dir>` says otherwise.
@@ -34,7 +35,7 @@ const handle = await start(sink, {
 process.on("SIGINT", () => handle.interrupt())
 
 await render(
-  () => <App entries={entries} status={status()} handle={handle} commitSettled={commitSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
+  () => <App entries={entries} status={status()} handle={handle} commitSettled={commitSettled} settledCount={settledCount} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
       openPalette={() => sink.setPalette(handle.commands)}
       quit={() => {
         // Awaited, not fired and forgotten: exiting here used to end the

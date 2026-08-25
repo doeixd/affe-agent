@@ -56,7 +56,8 @@ smoke: ${detail}`)
 process.on("uncaughtException", abort)
 process.on("unhandledRejection", abort)
 
-const { backend, commitSettled, drainSettled, entries, footer, rewind, sink, status } = makeStore()
+const { backend, commitSettled, drainSettled, entries, footer, rewind, settledCount, sink, status } =
+  makeStore()
 /**
  * Count completed submissions.
  *
@@ -82,7 +83,7 @@ const handle = await start(counting)
 
 const { captureCharFrame, externalOutput, flush, mockInput } = await testRender(
   () => (
-    <App entries={entries} status={status()} handle={handle} commitSettled={commitSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
+    <App entries={entries} status={status()} handle={handle} commitSettled={commitSettled} settledCount={settledCount} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
       openPalette={() => sink.setPalette(handle.commands)}
       quit={() => {}} />
   ),
@@ -853,6 +854,7 @@ const keyRender = await testRender(
       status={keyRun.status()}
       handle={keyHandle}
       commitSettled={keyRun.commitSettled}
+      settledCount={keyRun.settledCount}
       footer={keyRun.footer()}
       rewind={keyRun.rewind()}
       backend={keyRun.backend()}
@@ -1186,6 +1188,7 @@ const narrow = await testRender(
       status={narrowRun.status()}
       handle={handle}
       commitSettled={narrowRun.commitSettled}
+      settledCount={narrowRun.settledCount}
       footer={narrowRun.footer()}
       rewind={narrowRun.rewind()}
       backend={narrowRun.backend()}
@@ -1211,6 +1214,100 @@ const narrowFrame = narrow.captureCharFrame()
 // own, so looking for any `…` in the frame passes whatever the footer does.
 const narrowShowsEllipsis = /claude…/.test(narrowFrame)
 const narrowHidesFullPath = !narrowFrame.includes("a-rather-long-workspace")
+
+/**
+ * R182 -- a row that settles must leave the live tree, with no later append.
+ *
+ * The drain was triggered by `props.entries.length`. A streamed message or a
+ * running tool is appended while *unsettled*, so the append fires one attempt
+ * that correctly stops at that row -- and the later `streaming = false` or
+ * `status = "ok"` is a nested store write that changes no length, so nothing
+ * runs again. The row and everything behind it stayed in the reactive tree
+ * until some future append happened to move the length; the last submission of
+ * a session could sit there indefinitely.
+ *
+ * Driven through a real renderer, because the defect is in the reactive
+ * dependency rather than in the store: `commitSettled` was always willing to
+ * take the row, and nobody asked it to.
+ */
+const drainRun = makeStore()
+const drainRender = await testRender(
+  () => (
+    <App
+      entries={drainRun.entries}
+      status={drainRun.status()}
+      handle={handle}
+      commitSettled={drainRun.commitSettled}
+      settledCount={drainRun.settledCount}
+      footer={drainRun.footer()}
+      rewind={drainRun.rewind()}
+      backend={drainRun.backend()}
+      dismiss={() => drainRun.sink.setPalette(undefined)}
+      openPalette={() => drainRun.sink.setPalette(handle.commands)}
+      quit={() => {}}
+    />
+  ),
+  // Scrollback needs the split-footer capture mode: without it
+  // `writeSolidToScrollback` throws, which is a fine test of the *retry* and a
+  // useless one of the drain.
+  {
+    width: 80,
+    height: 12,
+    screenMode: "split-footer",
+    externalOutputMode: "capture-stdout"
+  }
+)
+await drainRender.flush()
+
+// A tool row, appended while running. It cannot drain yet, and should not.
+drainRun.sink.append({
+  id: "drain-tool",
+  kind: "tool",
+  title: "bash: echo hi",
+  status: "running",
+  body: { type: "none" }
+})
+await drainRender.flush()
+const heldWhileRunning = drainRun.entries.length === 1
+
+// And one behind it, already settled: the prefix rule means it waits too.
+drainRun.sink.append({
+  id: "drain-after",
+  kind: "notice",
+  title: "queued behind it",
+  body: { type: "none" }
+})
+await drainRender.flush()
+const bothHeld = drainRun.entries.length === 2
+
+/**
+ * The moment under test: the row settles, and *nothing else happens*. No
+ * append, no removal, nothing that changes the array's length.
+ */
+drainRun.sink.patch("drain-tool", { status: "ok" })
+await drainRender.flush()
+// The drain is deferred to a microtask by design -- splicing the array inside
+// the effect that renders it tears the list out from under the row callbacks.
+// So this waits for the outcome rather than counting ticks.
+await until(() => drainRun.entries.length === 0, "the settled prefix to drain")
+const drainedOnSettle = drainRun.entries.length === 0
+
+// The same for a streamed message, whose terminal signal is `streaming`.
+drainRun.sink.append({
+  id: "drain-stream",
+  kind: "assistant",
+  title: "half a sen",
+  streaming: true,
+  body: { type: "none" }
+})
+await drainRender.flush()
+drainRun.sink.appendTitle("drain-stream", "tence")
+await drainRender.flush()
+const streamHeld = drainRun.entries.length === 1
+drainRun.sink.patch("drain-stream", { streaming: false })
+await drainRender.flush()
+await until(() => drainRun.entries.length === 0, "the finished message to drain")
+const streamDrainedOnSettle = drainRun.entries.length === 0
 
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
@@ -1396,6 +1493,14 @@ checks.push(
   // R148
   // Weaker than it looks -- see the comment at the fixture.
   ["a fork racing a submission is decided one way, not both", raceDecidedOnce],
+
+  // R182
+  ["a running row holds the transcript back", heldWhileRunning],
+  ["and holds back what is queued behind it", bothHeld],
+  // The moment under test: it settles, and nothing else happens.
+  ["a row that settles drains with no later append", drainedOnSettle],
+  ["a streaming message holds it back too", streamHeld],
+  ["and drains when the stream ends", streamDrainedOnSettle],
 
   // R131
   ["a rewind survives a restart", rewindSurvivedRestart],
