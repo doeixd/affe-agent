@@ -468,7 +468,17 @@ export const start = (
      * persistent store makes the tree survive the process, and the harness
      * then *resumes* rather than starting empty.
      */
-    readonly store?: Effect.Effect<NodeStore.NodeStore<any>, unknown, Scope.Scope> | undefined
+    /**
+     * `StoreError`, not `any`.
+     *
+     * `NodeStore<any>` was here, and an `any` in a store's failure becomes an
+     * `any` in the error channel of every tree operation the harness runs --
+     * which is how a fallible `publishDepth` came to be handed to a fork that
+     * only accepts infallible effects. The compiler had nothing to object to.
+     */
+    readonly store?:
+      | Effect.Effect<NodeStore.NodeStore<NodeStore.StoreError>, unknown, Scope.Scope>
+      | undefined
   }
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
@@ -821,6 +831,37 @@ export const start = (
         }
       }
 
+      /**
+       * Forking from a callback, with this program's services and lifetime.
+       *
+       * `Effect.runFork` starts a fiber on the default runtime: it carries
+       * none of the services `backend.layer` provided, and nothing interrupts
+       * it when the harness closes. Both were latent rather than broken --
+       * the effects below close over a session and a tree that captured what
+       * they needed -- but "it happens to have captured it" is not a
+       * guarantee, and a fiber outliving its scope is one that can still be
+       * writing to a renderer that has been disposed.
+       *
+       * Every child is tracked and interrupted by the scope's finalizer, so
+       * `stop()` means stopped rather than "asked to stop and left running".
+       */
+      const services = yield* Effect.context<never>()
+      const forkWith = Effect.runForkWith(services)
+      const children = new Set<Fiber.Fiber<void, never>>()
+      const fork = (effect: Effect.Effect<void>): void => {
+        const child = forkWith(effect)
+        // Registered before the observer, and removed by it: a fiber that
+        // finished synchronously is removed here rather than kept forever.
+        children.add(child)
+        child.addObserver(() => {
+          children.delete(child)
+        })
+      }
+      yield* Effect.addFinalizer(() =>
+        Effect.forEach([...children], (child) => Fiber.interrupt(child), {
+          discard: true
+        }))
+
       resolve({
         commands,
 
@@ -828,12 +869,12 @@ export const start = (
 
         command: (name) => {
           sink.setPalette(undefined)
-          Effect.runFork(Effect.ignore(run(name)))
+          fork(Effect.ignore(run(name)))
         },
 
         switchTo: (id) => {
           sink.setBranches(undefined)
-          Effect.runFork(
+          fork(
             Effect.ignore(
               whileIdle("switch", Effect.orDie(Effect.gen(function*() {
                 const found = yield* tree.node(id as never)
@@ -864,7 +905,7 @@ export const start = (
            */
           const ticket = { text }
           offered.push(ticket)
-          Effect.runFork(
+          fork(
             // Streamed, so `MessageDelta` arrives and the reply builds up a
             // token at a time. Whether a call streams is the caller's choice,
             // not the agent's -- and a UI is exactly the caller that wants it.
@@ -886,13 +927,22 @@ export const start = (
                   })
                 })
               ),
-              Effect.andThen(publishDepth()),
+              /**
+               * A store read, so it can fail -- and a failed read of the
+               * rewind depth is not a reason to lose the turn that just
+               * succeeded. Reported where the user can see it, because the
+               * alternative is a footer quietly describing the wrong depth.
+               */
+              Effect.andThen(Effect.catchCause(
+                publishDepth(),
+                (cause) => notice(`could not read the branch depth: ${Cause.pretty(cause)}`)
+              )),
               Effect.asVoid
             )
           )
         },
         // Idle is the ordinary case for a stray Ctrl+C, not a failure.
-        interrupt: () => Effect.runFork(Effect.ignore(session.interrupt())),
+        interrupt: () => fork(Effect.ignore(session.interrupt())),
 
         /**
          * Gated here as well as in the view.
@@ -906,13 +956,13 @@ export const start = (
          * needs the session to refuse the switch itself, which is a kernel
          * change; this removes the reachable cases, not the race.
          */
-        rewind: () => Effect.runFork(whileIdle("rewind", Effect.ignore(rewind))),
+        rewind: () => fork(whileIdle("rewind", Effect.ignore(rewind))),
 
         respond: (id, granted, respondOptions) => {
           // `respond` reports `false` for an answer nothing was waiting on --
           // a late keypress after the run moved on. Not an error, and not
           // worth interrupting the user over.
-          Effect.runFork(
+          fork(
             Effect.ignore(
               AgentSession.respond(session, {
                 id,
@@ -928,7 +978,7 @@ export const start = (
         }
       })
 
-      yield* Effect.never
+      return yield* Effect.never
     })
 
     const fiber = Effect.runFork(

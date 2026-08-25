@@ -59,8 +59,13 @@ const DEFAULT_TOLERANCE_SECONDS = 300
  *
  * Malformed input is a `false` verification, never a throw: the header is
  * attacker-controlled, so every shape it can take has to be an ordinary answer.
+ *
+ * The buffer parameter is written out rather than left as the default
+ * `ArrayBufferLike`, because Web Crypto's `BufferSource` excludes
+ * `SharedArrayBuffer` and the bare `Uint8Array` alias admits it. The value
+ * always was backed by a plain `ArrayBuffer`; only the annotation forgot.
  */
-const signatureBytes = (signature: string): Uint8Array | undefined => {
+const signatureBytes = (signature: string): Uint8Array<ArrayBuffer> | undefined => {
   if (!signature.startsWith("v0=")) return undefined
   const hex = signature.slice(3)
   // An odd length, or anything outside hex, is not a signature.

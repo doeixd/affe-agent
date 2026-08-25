@@ -12,7 +12,11 @@
     "allowImportingTsExtensions": true,
     "jsx": "preserve",
     "jsxImportSource": "@opentui/solid",
-    "types": ["bun-types"]
+    "types": ["bun-types"],
+    // Without this the diagnostics gate reports "Checked 0 files out of 14":
+    // the service reads its configuration from the plugin entry, so a project
+    // that omits it is silently skipped rather than refused.
+    "plugins": [{ "name": "@effect/language-service" }]
   },
   "include": ["src"]
 }
