@@ -127,6 +127,77 @@ const contract = (
     }))
   )
 
+  /**
+   * R92 -- a `StorageError` from `claim` means "unknown", not "did not
+   * happen".
+   *
+   * The write can commit and the acknowledgement be lost: a connection
+   * dropped after the transaction, a process killed between the commit and
+   * the reply. No store can tell the caller which happened. Without a key the
+   * retry is a *second* request -- it finds the first claim in place, is
+   * refused as `Busy`, and the caller believes nothing started while the
+   * session is claimed and will later run work it was told had failed.
+   *
+   * The key makes the retry recognisable as the same request. That is what
+   * turns an indeterminate failure into a safe one.
+   */
+  it.effect("a retry under the same key is the same claim, not a busy session", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const store = yield* makeStore
+      yield* store.getOrCreate("s1", historyWith("system"))
+
+      const first = yield* store.claim("s1", {
+        prompt: Prompt.make("do the thing"),
+        stream: false,
+        key: "request-7"
+      })
+      assert.strictEqual(first._tag, "Claimed")
+
+      // The caller never learned that. It asks again, naming the same request.
+      const retry = yield* store.claim("s1", {
+        prompt: Prompt.make("do the thing"),
+        stream: false,
+        key: "request-7"
+      })
+      assert.strictEqual(retry._tag, "Claimed", "the retry was treated as a second request")
+      if (retry._tag === "Claimed" && first._tag === "Claimed") {
+        // The *same* claim, so the caller resumes where it left off rather
+        // than starting a second submission.
+        assert.deepStrictEqual(retry.claim, first.claim)
+      }
+
+      // And the ordinal did not move: a retry is not a submission.
+      const record = Option.getOrThrow(yield* store.get("s1"))
+      assert.strictEqual(record.submissionCount, 1)
+    })))
+
+  it.effect("a different key on a claimed session is still Busy", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const store = yield* makeStore
+      yield* store.getOrCreate("s1", historyWith("system"))
+
+      yield* store.claim("s1", {
+        prompt: Prompt.make("mine"),
+        stream: false,
+        key: "request-7"
+      })
+      // Somebody else's request, which must not be coalesced into the first.
+      const other = yield* store.claim("s1", {
+        prompt: Prompt.make("theirs"),
+        stream: false,
+        key: "request-8"
+      })
+      assert.strictEqual(other._tag, "Busy")
+
+      // And a caller with no key at all gets the old answer, which is the
+      // documented behaviour rather than an oversight.
+      const keyless = yield* store.claim("s1", {
+        prompt: Prompt.make("anon"),
+        stream: false
+      })
+      assert.strictEqual(keyless._tag, "Busy")
+    })))
+
   it.effect("two concurrent claims produce one Claimed and one Busy", () =>
     Effect.scoped(Effect.gen(function* () {
       const store = yield* makeStore

@@ -117,32 +117,72 @@ describe("D7 -- storage failure degrades, it does not corrupt", () => {
    * that today, so a later prompt sees `Busy` for a submission that will never
    * run.
    *
-   * The assertion is the honest one: the failure is reported (the half of D7
-   * that holds), and the claim survives (the half that does not). Reversing
-   * this test is what closing D7 looks like; until then the durability matrix
-   * says so.
+   * **The write cannot be undone, and that is not the fix.** A store that has
+   * committed has committed; no amount of care on this side reaches back
+   * through a dropped connection. What was missing was a way for the caller to
+   * *find out* -- and that is the idempotency key: a retry naming the same
+   * request is recognised as the same request rather than refused as a second
+   * one, so an indeterminate failure becomes a recoverable one.
+   *
+   * Both halves are asserted below: the claim survives the failure (it must),
+   * and the caller converges on the truth by asking again (it now can).
    */
-  it.effect("a claim that commits before the failure is left behind", () =>
+  it.effect("a claim that commits before the failure is recoverable by retrying", () =>
     Effect.gen(function*() {
       const healthy = yield* DurableSessionStore.memoryStore
       yield* healthy.getOrCreate("stranded", Prompt.fromMessages([]))
 
+      const request = {
+        prompt: Prompt.fromMessages([]),
+        stream: false,
+        key: "request-7"
+      }
       const failed = yield* Effect.result(
-        failingAfter(healthy, "claim").claim("stranded", {
-          prompt: Prompt.fromMessages([]),
-          stream: false
-        })
+        failingAfter(healthy, "claim").claim("stranded", request)
       )
       const after = Option.getOrThrow(yield* healthy.get("stranded"))
 
-      // The caller is told, which is the half that holds.
+      // The caller is told it failed.
       assert.strictEqual(failed._tag, "Failure")
-      // And the claim is there anyway, which is the half that does not.
-      assert.isTrue(
-        Option.isSome(after.claim),
-        "if this now passes as `isNone`, D7 has been closed and this test should"
-          + " become the assertion it was originally written as"
+      // The write landed anyway, which no store can undo.
+      assert.isTrue(Option.isSome(after.claim))
+
+      /**
+       * And the caller, which cannot tell a lost write from a lost reply,
+       * asks again -- and learns what it would have been told the first time
+       * rather than being refused as busy by its own earlier self.
+       */
+      const retried = yield* healthy.claim("stranded", request)
+      assert.strictEqual(
+        retried._tag,
+        "Claimed",
+        "a retry of an indeterminate claim was treated as a second request"
       )
+      if (retried._tag === "Claimed") {
+        assert.deepStrictEqual(retried.claim, Option.getOrThrow(after.claim))
+      }
+      // One submission, not two: the retry did not consume an ordinal.
+      assert.strictEqual(
+        Option.getOrThrow(yield* healthy.get("stranded")).submissionCount,
+        1
+      )
+    }))
+
+  /**
+   * And without a key the old behaviour stands, which is why the key is not
+   * optional in spirit even though it is in the type: a caller that omits it
+   * has no way to recover, and this pins that rather than leaving it implied.
+   */
+  it.effect("a keyless retry cannot recover, and is refused as busy", () =>
+    Effect.gen(function*() {
+      const healthy = yield* DurableSessionStore.memoryStore
+      yield* healthy.getOrCreate("keyless", Prompt.fromMessages([]))
+
+      const request = { prompt: Prompt.fromMessages([]), stream: false }
+      yield* Effect.ignore(failingAfter(healthy, "claim").claim("keyless", request))
+
+      const retried = yield* healthy.claim("keyless", request)
+      assert.strictEqual(retried._tag, "Busy")
     }))
 
   it.effect("a delivery log that cannot append reports it", () =>

@@ -57,7 +57,15 @@ export const Claim = Schema.Struct({
   /** Part of the payload, so replay makes the same choice the original did. */
   stream: Schema.Boolean,
   /** Present once the workflow has been dispatched. */
-  executionId: Schema.optional(Schema.String)
+  executionId: Schema.optional(Schema.String),
+  /**
+   * The caller's own name for this request, if it gave one.
+   *
+   * Stored so a retry can be recognised as the *same* request rather than a
+   * second one. See `claim` for why that matters and why the key has to come
+   * from the caller rather than be derived here.
+   */
+  key: Schema.optional(Schema.String)
 })
 export type Claim = typeof Claim.Type
 
@@ -139,6 +147,31 @@ export interface DurableSessionStore {
     submission: {
       readonly prompt: Prompt.Prompt
       readonly stream: boolean
+      /**
+       * A caller's own name for this request, making a retry safe.
+       *
+       * **A `StorageError` from `claim` means "unknown", not "did not
+       * happen".** The write can commit and the acknowledgement be lost -- a
+       * connection dropped after the transaction, a process killed between the
+       * commit and the reply -- and no store can tell the caller which
+       * occurred. Without a key, a retry is a *second* request: it finds the
+       * first claim in place and is refused as `Busy`, so the caller believes
+       * nothing started while the session is claimed and, once reconciled,
+       * runs work it was told had failed.
+       *
+       * With a key, a repeat is recognised: a claim already held under the
+       * same key returns `Claimed` with that same claim, so retrying is
+       * idempotent and the caller converges on the truth.
+       *
+       * The key has to come from the caller because nothing here can derive
+       * one. The submission id is allocated by the store, so a retrying caller
+       * cannot know it; the execution id is a pure function of the session,
+       * not of the request; and hashing the prompt would coalesce a user who
+       * legitimately asked the same thing twice. Anything stable that already
+       * identifies the request works -- an HTTP request id, a queue message
+       * id, a job id.
+       */
+      readonly key?: string | undefined
     }
   ) => Effect.Effect<ClaimOutcome, StorageError>
 
@@ -350,7 +383,16 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
             const found = all.sessions.get(sessionId)
             if (found === undefined) return [{ _tag: "Missing" }, all]
             if (Option.isSome(found.claim)) {
-              return [{ _tag: "Busy", claim: found.claim.value }, all]
+              // The same request again, not a second one: a caller whose
+              // acknowledgement was lost is told what it would have been told
+              // the first time. See `claim`'s contract.
+              return submission.key !== undefined &&
+                  found.claim.value.key === submission.key
+                ? [
+                  { _tag: "Claimed", claim: found.claim.value, history: found.history },
+                  all
+                ]
+                : [{ _tag: "Busy", claim: found.claim.value }, all]
             }
             // The id derives from the session-local ordinal, which makes it
             // stable across processes — a later reconciliation pass names the
@@ -358,7 +400,8 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
             const claim: Claim = {
               submissionId: `${sessionId}:submission-${found.submissionCount + 1}`,
               prompt: encoded,
-              stream: submission.stream
+              stream: submission.stream,
+              ...(submission.key === undefined ? {} : { key: submission.key })
             }
             const updated: SessionRecord = {
               ...found,
@@ -696,12 +739,23 @@ export const sqlStore = (
                 }
                 const record = found.value
                 if (Option.isSome(record.claim)) {
-                  return { _tag: "Busy", claim: record.claim.value } as const
+                  // The same request again, not a second one. See `claim`'s
+                  // contract: a lost acknowledgement is indistinguishable from
+                  // a lost write, and the key is what tells them apart.
+                  return submission.key !== undefined &&
+                      record.claim.value.key === submission.key
+                    ? ({
+                      _tag: "Claimed",
+                      claim: record.claim.value,
+                      history: record.history
+                    } as const)
+                    : ({ _tag: "Busy", claim: record.claim.value } as const)
                 }
                 const claim: Claim = {
                   submissionId: `${sessionId}:submission-${record.submissionCount + 1}`,
                   prompt: encoded,
-                  stream: submission.stream
+                  stream: submission.stream,
+                  ...(submission.key === undefined ? {} : { key: submission.key })
                 }
                 const claimJson = yield* encodeClaim(claim)
                 // The predicate restates the invariant in the statement, and

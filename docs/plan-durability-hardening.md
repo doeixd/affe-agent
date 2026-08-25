@@ -126,7 +126,7 @@ the `✗` is the honest answer until H5 changes it.
 | D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ `Durable` | ✓ `Cluster` | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
 | D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | **✗ live-only (H5)** | ✓ `DurableAgentClient` |
 | D6 A recorded event is replay-stable | n/a | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` |
-| D7 Storage failure degrades, not corrupts | n/a | **partial** `DurableStorageFaults` | … | … | … |
+| D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | … | … | … |
 | D8 Every claim names its path | this table | this table | this table | this table | this table |
 
 **The one `✗` is W3, and it is a design defect rather than a documentation
@@ -147,7 +147,7 @@ and the suite re-run over nine durability test files (121 tests). Results:
 | D4 | record an interrupted result as completed | **bites** (4 fail) |
 | D5 | ignore the caller's `after` offset | **bites** (2 fail) |
 | D6 | never notice a duplicate key | **bites** (4 fail) |
-| D7 | *no mechanism to break* | **was not tested**; the later suite tested a pre-operation error, not a partial write |
+| D7 | remove the idempotency key from `claim` | **bites** (2 fail) |
 
 **H2 found what the plan predicted it would.** D7 had no test at all.
 `test/StorageError.test.ts` covers the *read* side thoroughly -- a corrupt row
@@ -155,20 +155,25 @@ decodes to a failure rather than a defect -- and nothing anywhere injected a
 store that failed a **write**. Every durability test assumed storage worked,
 which is precisely the assumption "never lost" is not allowed to make.
 
-`test/DurableStorageFaults.test.ts` covers **half** of it, and the honest
-account of which half is worth more than the checkmark it replaced.
+`test/DurableStorageFaults.test.ts` covers it, and the route there is worth
+recording because the first version of the suite established nothing.
 
-The original suite injected faults by replacing an operation with a bare
-`Effect.fail`, so the mutation under test never ran -- and "no claim was left
-behind" was true of a store nothing had touched. Running the operation for
-real and *then* failing, which is what a store that commits and loses its
-acknowledgement actually does, gives a different answer: **the claim is left
-behind.** The caller is told it failed; the session is claimed anyway; nothing
-reconciles the two, so a later prompt sees `Busy` for a submission that will
-never run. That is now a test asserting the real behaviour, with a note saying
-what closing D7 would look like.
+It injected faults by replacing an operation with a bare `Effect.fail`, so the
+mutation under test never ran -- and "no claim was left behind" was true of a
+store nothing had touched. Running the operation for real and *then* failing,
+which is what a store that commits and loses its acknowledgement actually does,
+gave a different answer: **the claim is left behind.** The caller is told it
+failed; the session is claimed anyway.
 
-What *is* established: a failure reaching the store before its transition is
+The write cannot be undone -- a store that has committed has committed, and
+nothing on this side reaches back through a dropped connection. What was
+missing was a way for the caller to *find out*. `claim` now takes an
+idempotency key, so a retry naming the same request is recognised as that
+request rather than refused as a second one, and an indeterminate failure
+becomes a recoverable one. A caller that omits the key gets the old behaviour,
+which is pinned by its own test rather than left implied.
+
+Also established: a failure reaching the store before its transition is
 typed and leaves nothing behind, a delivery append that
 fails reports rather than swallowing, an event that failed to record is absent
 rather than present-and-broken, and a store failure is a *failure* rather than
