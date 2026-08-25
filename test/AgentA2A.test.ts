@@ -300,7 +300,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                 }])
             ),
             status: Effect.succeed("idle" as const),
-            events: Stream.fromQueue(eventQueue)
+            events: () => Stream.fromQueue(eventQueue)
           }
         }),
       session: (id) =>

@@ -124,7 +124,7 @@ the `✗` is the honest answer until H5 changes it.
 | D2 Resumption never repeats work | n/a | ✓ `Durable` | ✓ `Cluster` | n/a | ✓ `DurableAgentClient` |
 | D3 Resumption never skips accepted work | n/a | ✓ `DurableAgentClient` | ✓ `Cluster` | n/a | ✓ `DurableAgentClient` |
 | D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ `Durable` | ✓ `Cluster` | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
-| D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | **✗ live-only (H5)** | ✓ `DurableAgentClient` |
+| D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | ✓ `AgentHttp` (H5) | ✓ `DurableAgentClient` |
 | D6 A recorded event is replay-stable | n/a | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` |
 | D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | … | … | … |
 | D8 Every claim names its path | this table | this table | this table | this table | this table |
@@ -313,15 +313,33 @@ A related, smaller question rides along: `state/AgentState.ts` and
 are fine; the cost is the N backings behind them, which H4's fault injection
 would then only have to be written against one seam.
 
-### H5 — Resumable SSE, closing the reconnect gap
+### H5 — Resumable SSE, closing the reconnect gap — **done**
 
-W3's fix, and it is smaller than it looks because the standard already exists.
-SSE defines `Last-Event-ID`: a reconnecting browser sends the last id it saw.
-We already emit `id` as a session-local sequence, and `DeliveryLog` already
-supports `read({ after })`. Wiring the header to that read turns the live-only
-path into a resumable one **using the mechanism already built**, and makes
-claim 3 true wherever a user connects. Where a session has no delivery log, the
-adapter should say so explicitly rather than appearing to support resumption.
+It was smaller than it looked in one sense and larger in another. The wiring
+was indeed trivial: `Last-Event-ID` is echoed by any `EventSource` without help
+from page code, the ids already were the envelope's sequence, and
+`DeliveryLog.read({ after })` already existed. `AgentClient.events` became a
+function taking `{ after }`, `EventsRequest` carries it, and the HTTP adapter
+reads the header (with `?after=` for callers that cannot set one).
+
+The part that was not trivial is the **join**. A resumption is a read of what
+was missed plus a subscription for what comes next, and an event recorded while
+the read is in flight belongs to neither by default. Subscribing first and
+reading second is the only safe order — it can duplicate, and duplicates are
+removable where gaps are not — but "subscribe" has to *mean* something: a
+`Stream` subscribes when it is first pulled, so handing `live` to a queue only
+forks something that will subscribe eventually, and the read races that fork.
+The first implementation did exactly this and lost events.
+
+`DeliveryLog` therefore grew `subscribe`: a subscription **established before
+the effect returns**. All three logs implement it by their own means — a real
+`PubSub.subscribe` in memory, a captured `MAX(sequence)` cursor in SQL, a
+synced offset in durable-streams — and the client cuts the resulting overlap by
+sequence.
+
+Where a session has no delivery log, resumption fails rather than returning a
+live stream: a caller reconnecting from 41 and silently handed events from 60
+has lost eighteen and cannot find out.
 
 ### H6 — Cross-node live delivery
 
@@ -365,8 +383,12 @@ will.
   untested.
 - **SD4:** The existing durable suites pass under write-failure,
   duplicate-record and reorder faults.
-- **SD5:** A browser `EventSource` reconnect resumes from `Last-Event-ID` with
-  no gap and no duplicate, tested end to end.
+- **SD5:** ✓ A browser `EventSource` reconnect resumes from `Last-Event-ID` with
+  no gap and no duplicate, tested end to end. `AgentHttp.test.ts` covers the
+  header, the `?after=` fallback and an unparseable id; `DurableAgentClient
+  .test.ts` covers the join, driving an append on each side of the catch-up
+  read so one assertion catches both a gap and a duplicate. Both directions
+  fail when the guarantee is removed.
 - **SD6:** No known limit remains unlisted at its boundary: every one is either
   fixed or documented where a user meets it, not only in `STATUS.md`.
 

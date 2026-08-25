@@ -460,7 +460,7 @@ export const serverLayer = (
         Stream.unwrap(
           Effect.gen(function* () {
             const queue = yield* Stream.toQueue(
-              session.events.pipe(Stream.interruptWhen(Deferred.await(shutdown))),
+              session.events().pipe(Stream.interruptWhen(Deferred.await(shutdown))),
               { capacity: "unbounded" }
             )
             const outcome = yield* Deferred.make<void, OpenAiError>()

@@ -3,6 +3,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Option,
@@ -15,6 +16,7 @@ import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
+import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -194,7 +196,7 @@ describe("DurableAgentClient (durability specifics)", () => {
           const session = yield* Effect.scoped(client.createSession({ sessionId: "live" }))
           const observed = yield* Effect.forkChild(
             Stream.runCollect(
-              session.events.pipe(Stream.takeUntil((e) => e.event._tag === "SubmissionCompleted"))
+              session.events().pipe(Stream.takeUntil((e) => e.event._tag === "SubmissionCompleted"))
             )
           )
           yield* Effect.sleep(Duration.millis(50))
@@ -851,7 +853,7 @@ describe("DurableAgentClient (durability specifics)", () => {
         Effect.gen(function* () {
           const session = yield* Effect.scoped(client.createSession({ sessionId: "order" }))
           const watcher = yield* Effect.forkChild(
-            Stream.runForEach(session.events, (envelope) =>
+            Stream.runForEach(session.events(), (envelope) =>
               envelope.event._tag === "SubmissionCompleted"
                 ? Effect.flatMap(
                     Effect.all({ history: session.history, status: session.status }),
@@ -1149,5 +1151,155 @@ describe("DurableAgentClient (durability specifics)", () => {
       assert.strictEqual(tags.filter((t) => t === "SubmissionCompleted").length, 1)
       assert.strictEqual(counts.appended, tags.length)
     }).pipe(Effect.scoped)
+  )
+})
+
+/**
+ * H5/SD5 -- a resumption must not gap and must not duplicate.
+ *
+ * Resuming is a read of what was missed joined to a subscription for what
+ * comes next, and the join is the whole problem: an event recorded while the
+ * read is in flight belongs to neither half by default. Which way it goes
+ * wrong depends entirely on the order, and the window is a few instructions
+ * wide, so nothing external can land in it on purpose.
+ *
+ * This decorator puts an append on *each* side of the read, which is what lets
+ * one assertion catch both failures:
+ *
+ *   - `overlap`, appended before the read, is in the history *and* in the
+ *     subscription. Without a filter at the seam it arrives twice.
+ *   - `afterwards`, appended after the read returns, is in no history any
+ *     resumption will ever produce. The only way it arrives at all is the
+ *     subscription having been established before the read began -- so if the
+ *     subscription is merely a stream handed to a fibre, it is lost.
+ *
+ * `afterwards` also forces the stream past the overlap. An earlier version of
+ * this test took exactly as many events as the history held, so the duplicate
+ * sat unread in the buffer and removing the filter changed nothing. It passed
+ * against a build with no deduplication at all, which is the failure mode this
+ * whole session keeps finding: a test that cannot see what it claims to check.
+ */
+const appendingAroundRead = (
+  underlying: DeliveryLog.DeliveryLog
+): DeliveryLog.DeliveryLog => {
+  let done = false
+  const inject = (key: string) =>
+    Effect.asVoid(underlying.append(injectable.sessionId, key, injectable))
+  return {
+    ...underlying,
+    read: (sessionId, options) =>
+      Effect.suspend(() => {
+        if (done) return underlying.read(sessionId, options)
+        done = true
+        return inject("overlap").pipe(
+          Effect.andThen(underlying.read(sessionId, options)),
+          Effect.tap(() => inject("afterwards"))
+        )
+      })
+  }
+}
+
+/**
+ * An envelope to inject. Its `sequence` is a placeholder: the log numbers
+ * entries itself, so what is written is the next sequence for that session,
+ * not this one.
+ */
+const injectable: AgentEvent.AgentEventEnvelope = {
+  sessionId: AgentEvent.SessionId.make("resume"),
+  submissionId: Option.none(),
+  runId: Option.none(),
+  turn: Option.none(),
+  sequence: 0,
+  event: { _tag: "SessionStarted" }
+}
+
+describe("DurableAgentClient resumable events (H5)", () => {
+  const script = [{ text: "done" }] as ReadonlyArray<TestLanguageModel.Turn>
+
+  /** The sequences a resumed subscription actually delivered. */
+  const resumedFrom = (
+    client: Layer.Layer<AgentClient.AgentClient | WorkflowEngine.WorkflowEngine>,
+    after: number,
+    take: number
+  ) =>
+    using(client, (c) =>
+      Effect.flatMap(c.session("resume"), (session) =>
+        Stream.runCollect(
+          Stream.take(session.events({ after }), take)
+        )))
+
+  const promptOnce = (
+    client: Layer.Layer<AgentClient.AgentClient | WorkflowEngine.WorkflowEngine>
+  ) =>
+    using(client, (c) =>
+      Effect.scoped(
+        Effect.flatMap(c.createSession({ sessionId: "resume" }), (s) =>
+          s.prompt("go"))))
+
+  it.live("delivers exactly the events above the offset", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(2) }), script)
+      yield* promptOnce(f.client)
+
+      const recorded = yield* f.delivery.read("resume")
+      assert.isAbove(recorded.length, 3)
+      // Resume from the middle, which is where a reconnect lands.
+      const after = recorded[1]!.sequence
+      const expected = recorded.filter((e) => e.sequence > after)
+
+      const delivered = yield* resumedFrom(f.client, after, expected.length)
+      assert.deepStrictEqual(
+        delivered.map((e) => e.sequence),
+        expected.map((e) => e.sequence)
+      )
+    })
+  )
+
+  it.live("neither drops nor repeats an event recorded during the catch-up read", () =>
+    Effect.gen(function* () {
+      const base = yield* DeliveryLog.memoryLog
+      const f = yield* fixture(
+        Agent.make({ loop: AgentLoop.bounded(2) }),
+        script,
+        appendingAroundRead(base)
+      )
+      yield* promptOnce(f.client)
+
+      const recorded = yield* base.read("resume")
+      const after = recorded[1]!.sequence
+      // Two more than the log holds now: one appended on each side of the
+      // resumption's own read.
+      const expected = recorded.filter((e) => e.sequence > after).length + 2
+
+      const delivered = yield* resumedFrom(f.client, after, expected)
+      const settled = yield* base.read("resume")
+      assert.deepStrictEqual(
+        delivered.map((e) => e.sequence),
+        settled.filter((e) => e.sequence > after).map((e) => e.sequence),
+        "the resumed stream is not exactly the log's events above the offset"
+      )
+    })
+  )
+
+  it.live("a client with no delivery log refuses to resume rather than pretending", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const { layer: model } = yield* FakeModel.script(script)
+      const runtime = yield* Layer.build(
+        DurableAgentClient.layer(
+          "NoLog",
+          Agent.make({ loop: AgentLoop.bounded(2) }),
+          { store, sessionStore }
+        ).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+      )
+      const outcome = yield* using(Layer.succeedContext(runtime), (client) =>
+        Effect.scoped(
+          Effect.flatMap(client.createSession({ sessionId: "nolog" }), (session) =>
+            Effect.exit(Stream.runCollect(session.events({ after: 3 }))))))
+
+      // Live delivery is still an empty stream; only the resumption refuses.
+      assert.isTrue(Exit.isFailure(outcome))
+    })
   )
 })

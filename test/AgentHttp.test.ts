@@ -130,7 +130,16 @@ const fixture = (options?: {
             ]),
             history: Effect.as(record("history"), Prompt.make("history")),
             status: Effect.as(record("status"), "idle" as const),
-            events
+            /**
+             * Honours `after` the way a delivery log does, so a transport test
+             * can check the wiring without standing up a real one. What the
+             * log itself guarantees at the seam is
+             * `DurableAgentClient.test.ts`'s subject, not this one's.
+             */
+            events: (eventOptions) =>
+              eventOptions?.after === undefined
+                ? events
+                : Stream.filter(events, (e) => e.sequence > eventOptions.after!)
           }
         }),
       session: (id) =>
@@ -154,7 +163,7 @@ const fixture = (options?: {
                 pending: Effect.succeed([]),
                 history: Effect.succeed(Prompt.make("adopted")),
                 status: Effect.succeed("idle" as const),
-                events: Stream.empty
+                events: () => Stream.empty
               } satisfies AgentClient.RemoteSession
             )
           : Effect.fail(
@@ -850,6 +859,115 @@ describe("AgentHttp", () => {
 
       yield* Deferred.await(test.eventStreamReleased)
       assert.strictEqual(yield* Ref.get(test.released), 1)
+    })
+  )
+
+  /**
+   * H5/SD5 -- a reconnecting `EventSource` resumes where it left off.
+   *
+   * The ids this adapter writes are the envelope's sequence, and a browser
+   * echoes the last one it saw back as `Last-Event-ID` with no cooperation
+   * from page code. So the whole of resumption over SSE is: read that header,
+   * hand it to the log as `after`. Before this, the header was ignored and
+   * every reconnect silently restarted from "now" -- which for a client that
+   * dropped mid-run means the events in the gap simply never existed.
+   *
+   * Three cases, because the wrong answer differs in each:
+   *
+   *   - a resume, which must skip what was already delivered and nothing else;
+   *   - `?after=`, for the callers that cannot set a header;
+   *   - a header that is not a sequence, which must fall back to live delivery
+   *     rather than refusing the connection. It is echoed from whatever server
+   *     wrote it, so an unparseable one means the client is resuming against
+   *     something that did not write these ids -- and stranding it would
+   *     punish a reconnect to the wrong place.
+   */
+  const firstEventOf = (
+    baseUrl: string,
+    id: string,
+    init: RequestInit
+  ) =>
+    Effect.gen(function* () {
+      const response = yield* promise(() =>
+        fetch(`${baseUrl}/sessions/${id}/events`, init))
+      assert.strictEqual(response.headers.get("content-type"), "text/event-stream")
+      const body = response.body
+      if (body === null) return yield* Effect.die(new Error("SSE response had no body"))
+      const reader = body.getReader()
+      const decoder = new TextDecoder()
+      const parsed: Array<Sse.Event> = []
+      const parser = Sse.makeParser((event) => {
+        if (event._tag === "Event") parsed.push(event)
+      })
+      while (parsed.length < 1) {
+        const chunk = yield* promise(() => reader.read())
+        if (chunk.done) return yield* Effect.die(new Error("SSE response ended early"))
+        const parseError = parser.feed(decoder.decode(chunk.value))
+        if (parseError !== undefined) return yield* parseError
+      }
+      yield* promise(() => reader.cancel())
+      return parsed[0]!
+    })
+
+  it.effect("a reconnect resumes from Last-Event-ID rather than restarting", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ holdEvents: true })
+      const id = sessionId("sse-resume")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          const baseUrl = HttpServer.formatAddress(httpServer.address)
+          const client = yield* HttpApiClient.make(AgentHttp.Api, { baseUrl })
+          yield* client.sessions.createSession({
+            headers,
+            payload: { requestId: requestId("sse-resume-create"), sessionId: id }
+          })
+          const auth = { authorization: headers.authorization }
+
+          // A fresh connection starts at the beginning.
+          const fresh = yield* firstEventOf(baseUrl, id, { headers: auth })
+          assert.strictEqual(fresh.id, "1")
+
+          // Having seen 1, a reconnect must be handed 2 -- not 1 again, and
+          // not whatever happens to be next.
+          const resumed = yield* firstEventOf(baseUrl, id, {
+            headers: { ...auth, "last-event-id": "1" }
+          })
+          assert.strictEqual(resumed.id, "2")
+
+          // The same, for a caller that cannot set request headers.
+          const byQuery = yield* firstEventOf(baseUrl, id, { headers: auth })
+          assert.strictEqual(byQuery.id, "1")
+          const resumedByQuery = yield* Effect.gen(function* () {
+            const response = yield* promise(() =>
+              fetch(`${baseUrl}/sessions/${id}/events?after=1`, { headers: auth }))
+            const body = response.body
+            if (body === null) return yield* Effect.die(new Error("no body"))
+            const reader = body.getReader()
+            const decoder = new TextDecoder()
+            const parsed: Array<Sse.Event> = []
+            const parser = Sse.makeParser((event) => {
+              if (event._tag === "Event") parsed.push(event)
+            })
+            while (parsed.length < 1) {
+              const chunk = yield* promise(() => reader.read())
+              if (chunk.done) return yield* Effect.die(new Error("ended early"))
+              const parseError = parser.feed(decoder.decode(chunk.value))
+              if (parseError !== undefined) return yield* parseError
+            }
+            yield* promise(() => reader.cancel())
+            return parsed[0]!
+          })
+          assert.strictEqual(resumedByQuery.id, "2")
+
+          // A header that is not a sequence is ignored, not refused.
+          const nonsense = yield* firstEventOf(baseUrl, id, {
+            headers: { ...auth, "last-event-id": "not-a-number" }
+          })
+          assert.strictEqual(nonsense.id, "1")
+        }).pipe(Effect.provide(Layer.merge(FetchHttpClient.layer, test.server)))
+      )
     })
   )
 })

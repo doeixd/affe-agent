@@ -131,7 +131,7 @@ const serverFixture = Effect.fn("McpServerConformance.serverFixture")(
             pending: Effect.succeed([]),
             history: Effect.succeed(Prompt.make([])),
             status: Effect.succeed("idle"),
-            events: Stream.empty
+            events: () => Stream.empty
           }
         }),
       session: (id) =>

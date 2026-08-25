@@ -538,28 +538,104 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
       return found.value.status
     }).pipe(storageAsTransport(sessionId)),
 
-    // Live delivery from the shared log when one is supplied. The stream is
-    // live-only — events recorded after this subscription begins — matching
-    // the HTTP adapter's policy; replay from an offset is `DeliveryLog.read`.
-    events:
-      options.delivery !== undefined
-        ? options.delivery
-            .live(sessionId)
-            // A log that stops being readable mid-stream ends the stream with
-            // a transport failure rather than a defect, so a consumer can
-            // reconnect from its last sequence — which is the whole point of
-            // the log being readable from an offset.
+    events: (eventOptions) => {
+      const delivery = options.delivery
+      if (delivery === undefined) {
+        /**
+         * No log: live delivery is empty, and resumption is refused.
+         *
+         * An empty stream is a defensible answer to "what is happening now"
+         * when nothing records it. It is not a defensible answer to "what did
+         * I miss since 41", which has a real answer this deployment simply
+         * cannot produce -- so it says that instead of returning nothing and
+         * letting the caller read it as "nothing happened".
+         */
+        return eventOptions?.after === undefined
+          ? Stream.fromIterable<AgentEventEnvelope>([])
+          : Stream.fail(
+            new AgentClient.AgentTransportError({
+              sessionId,
+              detail:
+                "this client has no delivery log, so events cannot be resumed from a sequence"
+            })
+          )
+      }
+      /**
+       * A log that stops being readable mid-stream ends the stream with a
+       * transport failure rather than a defect, so a consumer can reconnect
+       * from its last sequence -- which is the whole point of the log being
+       * readable from an offset.
+       */
+      const asTransport = <A>(
+        stream: Stream.Stream<A, StorageError>
+      ): Stream.Stream<A, AgentClient.RemoteError> =>
+        Stream.catchTag(stream, "StorageError", (error) =>
+          Stream.fail(
+            new AgentClient.AgentTransportError({ sessionId, detail: error.message })
+          ))
+
+      const live = asTransport(delivery.live(sessionId))
+      if (eventOptions?.after === undefined) return live
+
+      const after = eventOptions.after
+      /**
+       * Catch up, then continue, with no gap and no duplicate.
+       *
+       * The order is the entire argument, and the obvious order is wrong.
+       * Reading history and *then* subscribing loses everything recorded in
+       * between -- which is precisely the window a reconnecting client is
+       * trying to close, so a resumption built that way drops events exactly
+       * when it is being relied on.
+       *
+       * So the subscription is established first, via `subscribe` rather than
+       * `live`. The difference is not stylistic: a stream subscribes when it
+       * is first *pulled*, and handing `live` to a queue only forks something
+       * that will subscribe eventually. The read then races that fork, and an
+       * event landing in between is in neither half. That version of this was
+       * written, and the gap test below failed against it.
+       *
+       * `subscribe` does not return until the log is already holding events
+       * for this subscriber, so nothing can be lost. What remains is a
+       * *duplicate* -- anything recorded during the read is in both halves --
+       * and duplicates are removable where gaps are not, which is why this is
+       * the safe direction to err in.
+       *
+       * The overlap is then cut by sequence. `highest` is the last sequence
+       * the history actually contained, so buffered events at or below it
+       * have already been delivered. Where the history is empty it falls back
+       * to `after` itself, which is the same statement about a session that
+       * has recorded nothing new.
+       *
+       */
+      return Stream.unwrap(
+        Effect.gen(function* () {
+          const continuing = asTransport(yield* delivery.subscribe(sessionId).pipe(
+            Effect.mapError(
+              (error) =>
+                new AgentClient.AgentTransportError({ sessionId, detail: error.message })
+            )
+          ))
+          const history = yield* delivery
+            .read(sessionId, { after })
             .pipe(
-              Stream.catchTag("StorageError", (error) =>
-                Stream.fail(
+              Effect.mapError(
+                (error) =>
                   new AgentClient.AgentTransportError({
                     sessionId,
                     detail: error.message
                   })
-                )
               )
             )
-        : Stream.fromIterable<AgentEventEnvelope>([])
+          const highest = history.length === 0
+            ? after
+            : history[history.length - 1]!.sequence
+          return Stream.concat(
+            Stream.fromIterable(history),
+            Stream.filter(continuing, (envelope) => envelope.sequence > highest)
+          )
+        })
+      )
+    }
   })
 
   return Layer.effect(

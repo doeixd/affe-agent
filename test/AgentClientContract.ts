@@ -426,7 +426,7 @@ export const run = (harness: Harness): void => {
               const session = yield* client.createSession()
 
               const collected = yield* Effect.forkChild(
-                Stream.runCollect(Stream.take(session.events, 3))
+                Stream.runCollect(Stream.take(session.events(), 3))
               )
               yield* Effect.yieldNow
               yield* session.prompt("go")
@@ -465,7 +465,7 @@ const deltasFor = (
           const session = yield* client.createSession()
           const seen = yield* Ref.make<Array<string>>([])
           const watcher = yield* Effect.forkChild(
-            Stream.runForEach(session.events, (entry) =>
+            Stream.runForEach(session.events(), (entry) =>
               AgentEvent.is("MessageDelta")(entry)
                 ? Ref.update(seen, (all) => [...all, entry.event.delta])
                 : Effect.void

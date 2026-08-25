@@ -266,7 +266,7 @@ describe("session lifetime", () => {
             pending: Effect.succeed([]),
             history: Effect.succeed(Prompt.make([])),
             status: Effect.succeed("idle" as const),
-            events: Stream.empty
+            events: () => Stream.empty
           }
         }),
       session: () =>

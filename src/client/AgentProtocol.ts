@@ -312,7 +312,23 @@ export type StatusRequest = typeof StatusRequest.Type
 export const StatusResponse = Schema.Struct({ status: SessionStatus })
 export type StatusResponse = typeof StatusResponse.Type
 
-export const EventsRequest = Schema.Struct({ sessionId: SessionId })
+/**
+ * Where an event subscription should start.
+ *
+ * `after` is absent for "from now", and carries the last sequence the caller
+ * saw for a resumption -- exclusive, so the first event delivered is the one
+ * above it. That is what SSE's `Last-Event-ID` means and what `DeliveryLog`
+ * means by the same name, so the number travels unchanged from a browser's
+ * reconnect header to the log read.
+ *
+ * Optional rather than a second request type: every transport already carries
+ * this shape, and a parallel `ResumeEventsRequest` would double the surface to
+ * express one number.
+ */
+export const EventsRequest = Schema.Struct({
+  sessionId: SessionId,
+  after: Schema.optional(Schema.Number)
+})
 export type EventsRequest = typeof EventsRequest.Type
 
 /** The existing event envelope is already schema-defined and session ordered. */

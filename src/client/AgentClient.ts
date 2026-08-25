@@ -249,7 +249,33 @@ export interface RemoteSession {
   >
   readonly history: Effect.Effect<Prompt.Prompt, RemoteError>
   readonly status: Effect.Effect<AgentSession.Status, RemoteError>
-  readonly events: Stream.Stream<AgentEventEnvelope, RemoteError>
+  /**
+   * The session's events, live or resumed.
+   *
+   * A function rather than a value because of `after`, and a single function
+   * rather than a second `eventsFrom` because there is one question here --
+   * "where do I start?" -- and two entry points would only invite an adapter
+   * to implement one of them.
+   *
+   * **`after` is a resumption, and an implementation that cannot honour it
+   * must fail rather than quietly returning a live stream.** A caller
+   * reconnecting from sequence 41 and silently handed events from 60 onward
+   * has lost eighteen events and has no way to find out; that is the failure
+   * this parameter exists to prevent, so producing it would be worse than not
+   * offering resumption at all. Only a client with a durable log can answer
+   * the question, and the in-process one says so.
+   */
+  readonly events: (options?: {
+    /**
+     * Resume after this sequence number, rather than from now.
+     *
+     * Exclusive: the first event delivered is the first one *above* this. A
+     * consumer therefore passes the last sequence it actually saw, which is
+     * what SSE's `Last-Event-ID` carries and what `DeliveryLog.read` means by
+     * the same name.
+     */
+    readonly after?: number | undefined
+  }) => Stream.Stream<AgentEventEnvelope, RemoteError>
 }
 
 /** Opens and finds sessions. */
@@ -332,7 +358,26 @@ export const fromSession = (
   pending: AgentSession.pending(session),
   history: session.history,
   status: session.status,
-  events: session.events
+  /**
+   * Live only, and explicit about it.
+   *
+   * An in-process session's events come from a `PubSub` that exists for as
+   * long as the session does and remembers nothing. There is no log to read a
+   * cursor from, so `after` cannot be honoured -- and answering it with a live
+   * stream would hand a reconnecting caller a silent gap. Refusing names the
+   * missing capability instead, which is something a deployment can act on:
+   * the durable client is the one that can do this.
+   */
+  events: (options) =>
+    options?.after === undefined
+      ? session.events
+      : Stream.fail(
+        new AgentTransportError({
+          sessionId: session.id,
+          detail:
+            "this session has no delivery log, so events cannot be resumed from a sequence; use the durable client for resumable delivery"
+        })
+      )
 })
 
 /**

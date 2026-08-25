@@ -471,7 +471,7 @@ describe("DurableAgentClient with Durable Streams delivery", () => {
 
       // Consumer 1 subscribes, sees the run start, then goes away.
       const first = yield* Effect.forkChild(
-        Stream.runCollect(Stream.take(session.events, 3))
+        Stream.runCollect(Stream.take(session.events(), 3))
       )
       yield* Effect.sleep("200 millis")
       const running = yield* Effect.forkChild(session.prompt("what is effect?", { stream: true }))
@@ -543,8 +543,8 @@ describe("DurableAgentClient with Durable Streams delivery", () => {
       const remote = yield* there.session("both")
       const takeUntilDone = (events: Stream.Stream<import("../src/AgentEvent.js").AgentEventEnvelope, unknown>) =>
         Stream.runCollect(events.pipe(Stream.takeUntil((e) => e.event._tag === "SubmissionCompleted")))
-      const local = yield* Effect.forkChild(takeUntilDone(session.events))
-      const far = yield* Effect.forkChild(takeUntilDone(remote.events))
+      const local = yield* Effect.forkChild(takeUntilDone(session.events()))
+      const far = yield* Effect.forkChild(takeUntilDone(remote.events()))
       yield* Effect.sleep("250 millis")
       yield* session.prompt("hi")
       const [a, b] = yield* Effect.all([Fiber.join(local), Fiber.join(far)])

@@ -583,7 +583,7 @@ const serverFixture = (fixtureOptions?: {
         pending: Effect.succeed([]),
         history: Effect.succeed(Prompt.make("")),
         status: Effect.succeed("idle" as const),
-        events: Stream.fromQueue(eventQueue)
+        events: () => Stream.fromQueue(eventQueue)
       }),
     session: (id) =>
       Effect.fail(

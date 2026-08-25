@@ -735,7 +735,12 @@ export const make = <Principal>(
       const sessionId = Option.some(request.sessionId)
       yield* authorize(principal, "events", sessionId)
       const hosted = yield* findSession(request.sessionId)
-      return hosted.session.events
+      // Passed through rather than interpreted: whether this session can be
+      // resumed is the client's question, and only the client knows whether a
+      // log stands behind it.
+      return hosted.session.events(
+        request.after === undefined ? undefined : { after: request.after }
+      )
     })
 
     return {

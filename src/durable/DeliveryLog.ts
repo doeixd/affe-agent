@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
+import { Duration, Effect, Option, PubSub, Ref, Schema, Scope, Stream } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as AgentEvent from "../AgentEvent.js"
 import { isStorageError, StorageError } from "../Errors.js"
@@ -56,6 +56,33 @@ export interface DeliveryLog {
   readonly live: (
     sessionId: string
   ) => Stream.Stream<AgentEvent.AgentEventEnvelope, StorageError>
+
+  /**
+   * As `live`, but **established before this effect returns**.
+   *
+   * The distinction is the whole of resumption. `live` is a stream, and a
+   * stream subscribes when it is first pulled -- which, if it has been handed
+   * to a queue or a fibre, is at some later moment nobody controls. A caller
+   * that reads history and then starts pulling has a window between the two
+   * where an appended event lands in neither, and that window is invisible:
+   * the caller sees a shorter stream and no error.
+   *
+   * Ordering it the other way is what closes it. This effect does not return
+   * until the log is *already* holding events for this subscriber, so a read
+   * issued afterwards cannot miss one. What it can do is repeat one -- an
+   * event arriving during the read is in both halves -- and the caller cuts
+   * that overlap by sequence. Duplicates are removable; gaps are not.
+   *
+   * Scoped, because a subscription is a resource: it accumulates events until
+   * something consumes them and is released with the scope that took it.
+   */
+  readonly subscribe: (
+    sessionId: string
+  ) => Effect.Effect<
+    Stream.Stream<AgentEvent.AgentEventEnvelope, StorageError>,
+    StorageError,
+    Scope.Scope
+  >
 
   /** Everything recorded for the session above `after`, in sequence order. */
   readonly read: (
@@ -180,7 +207,17 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
     const sessions = yield* Ref.make(new Map<string, ReadonlyArray<Entry>>())
     const busFor = yield* makeBuses
 
-
+    /**
+     * `PubSub.subscribe` is the establishing step: it registers the subscriber
+     * before returning, so every later publication is held for it. Compare
+     * `Stream.fromPubSub`, which registers on the first pull.
+     */
+    const subscribe = (sessionId: string) =>
+      Effect.map(
+        Effect.flatMap(busFor(sessionId), PubSub.subscribe),
+        (subscription): Stream.Stream<AgentEvent.AgentEventEnvelope, StorageError> =>
+          Stream.fromSubscription(subscription)
+      )
 
     return {
       append: (sessionId, key, envelope) =>
@@ -234,8 +271,9 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
           Effect.uninterruptible
         ),
 
-      live: (sessionId) =>
-        Stream.unwrap(Effect.map(busFor(sessionId), Stream.fromPubSub)),
+      live: (sessionId) => Stream.unwrap(subscribe(sessionId)),
+
+      subscribe,
 
       read: (sessionId, options) =>
         Effect.map(Ref.get(sessions), (all) => {
@@ -305,6 +343,51 @@ export const sqlLog = (
     const busFor = yield* makeBuses
     const pollInterval = options?.pollInterval ?? Duration.millis(250)
 
+    /**
+     * Establishing a subscription here is capturing the cursor.
+     *
+     * There is no live channel to register with -- delivery is a poll -- so
+     * what has to happen before this returns is fixing the point the poll
+     * starts from. Reading `MAX(sequence)` now means every later row is above
+     * it and will be delivered, so a caller that reads history afterwards
+     * cannot fall into a gap: rows at or below the cursor are in the history,
+     * rows above it come from the poll, and rows written in between appear in
+     * both. The wake channel carries no data for exactly this reason.
+     */
+    const subscribe = (sessionId: string) =>
+      Effect.gen(function* () {
+        const bus = yield* busFor(sessionId)
+        const start = yield* sql<{ readonly max: number | null }>`SELECT MAX(sequence) AS max FROM ${table} WHERE session_id = ${sessionId}`.pipe(
+          storage("live", sessionId),
+          Effect.map((rows) => Number(rows[0]?.max ?? 0))
+        )
+        // Neither wake signal carries data: every delivery comes from the
+        // poll, so nothing is duplicated and nothing depends on the local
+        // publish arriving. The publish just makes the next poll immediate.
+        const wake = Stream.merge(
+          Stream.fromPubSub(bus).pipe(Stream.map(() => undefined)),
+          Stream.tick(pollInterval)
+        )
+        return wake.pipe(
+          Stream.mapAccumEffect(
+            () => start,
+            (cursor: number) =>
+              sql<{ readonly payload: string }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${cursor} ORDER BY sequence`.pipe(
+                storage("live", sessionId),
+                Effect.flatMap((rows) =>
+                  Effect.forEach(rows, (row) =>
+                    decodeEnvelope(row.payload, sessionId)
+                  )
+                ),
+                Effect.map((events): readonly [number, ReadonlyArray<AgentEvent.AgentEventEnvelope>] => [
+                  events.length > 0 ? events[events.length - 1]!.sequence : cursor,
+                  events
+                ])
+              )
+          )
+        )
+      })
+
     return {
       append: (sessionId, key, envelope) =>
         Effect.gen(function* () {
@@ -350,41 +433,9 @@ export const sqlLog = (
           Effect.uninterruptible
         ),
 
-      live: (sessionId) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const bus = yield* busFor(sessionId)
-            const start = yield* sql<{ readonly max: number | null }>`SELECT MAX(sequence) AS max FROM ${table} WHERE session_id = ${sessionId}`.pipe(
-              storage("live", sessionId),
-              Effect.map((rows) => Number(rows[0]?.max ?? 0))
-            )
-            // Neither wake signal carries data: every delivery comes from the
-            // poll, so nothing is duplicated and nothing depends on the local
-            // publish arriving. The publish just makes the next poll immediate.
-            const wake = Stream.merge(
-              Stream.fromPubSub(bus).pipe(Stream.map(() => undefined)),
-              Stream.tick(pollInterval)
-            )
-            return wake.pipe(
-              Stream.mapAccumEffect(
-                () => start,
-                (cursor: number) =>
-                  sql<{ readonly payload: string }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${cursor} ORDER BY sequence`.pipe(
-                    storage("live", sessionId),
-                    Effect.flatMap((rows) =>
-                      Effect.forEach(rows, (row) =>
-                        decodeEnvelope(row.payload, sessionId)
-                      )
-                    ),
-                    Effect.map((events): readonly [number, ReadonlyArray<AgentEvent.AgentEventEnvelope>] => [
-                      events.length > 0 ? events[events.length - 1]!.sequence : cursor,
-                      events
-                    ])
-                  )
-              )
-            )
-          })
-        ),
+      live: (sessionId) => Stream.unwrap(subscribe(sessionId)),
+
+      subscribe,
 
       read: (sessionId, options) =>
         sql<{

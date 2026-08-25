@@ -206,9 +206,14 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
         })
       )
 
-    const live: DeliveryLog.DeliveryLog["live"] = (sessionId) =>
-      Stream.unwrap(
-        withSession(sessionId, (index) => sync(sessionId, index)).pipe(
+    /**
+     * Establishing a subscription here is syncing the index and fixing the
+     * offset to read from -- the same guarantee the other logs make by their
+     * own means: once this effect has returned, nothing appended afterwards
+     * can escape the stream it handed back.
+     */
+    const subscribe: DeliveryLog.DeliveryLog["subscribe"] = (sessionId) =>
+      withSession(sessionId, (index) => sync(sessionId, index)).pipe(
           Effect.map((snapshot) => {
             // A private copy of the index from here on: numbering is
             // deterministic, so counting locally agrees with every other
@@ -230,9 +235,11 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
               )
           })
         )
-      )
 
-    return { append, live, read }
+    const live: DeliveryLog.DeliveryLog["live"] = (sessionId) =>
+      Stream.unwrap(subscribe(sessionId))
+
+    return { append, live, subscribe, read }
   })
 
 /** The sequence of a key's first occurrence, or -1. */

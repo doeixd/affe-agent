@@ -139,7 +139,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
             ]),
             history: Effect.as(record("history"), Prompt.make("history")),
             status: Effect.as(record("status"), "idle" as const),
-            events: Stream.fromIterable(events)
+            events: () => Stream.fromIterable(events)
           }
         }),
       session: (id) =>

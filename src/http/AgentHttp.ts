@@ -2,6 +2,7 @@ import { Cause, Context, Deferred, Effect, Layer, Option, Schema, Stream } from 
 import { Prompt } from "effect/unstable/ai"
 import { Sse } from "effect/unstable/encoding"
 import {
+  Headers,
   HttpClient,
   HttpIncomingMessage,
   HttpRouter,
@@ -362,6 +363,45 @@ const encodeStreamError = (
     Effect.orDie
   )
 
+/**
+ * Where a reconnecting client left off, from the standard SSE header.
+ *
+ * `EventSource` resends the last `id:` it saw as `Last-Event-ID` automatically,
+ * with no cooperation from page code -- which is why the ids this adapter
+ * writes are the envelope's sequence and not something of its own. A browser
+ * that drops its connection therefore resumes correctly by default, and the
+ * only reason it did not before was that nothing read the header back.
+ *
+ * The query parameter is for everything that is not a browser. `EventSource`
+ * cannot set request headers, but neither can a `curl` pipeline resume
+ * conveniently without one, and a client reconnecting through a proxy that
+ * strips unknown headers has no other route.
+ *
+ * **A header that is not a sequence is ignored, not rejected.** `Last-Event-ID`
+ * is echoed from whatever this server previously sent, so a value that will not
+ * parse means the client is resuming against something that did not write these
+ * ids -- a different server, or a cached response. Live delivery is the safe
+ * reading of that: it is what the client would have got had it not tried, and
+ * refusing the connection outright would strand a consumer whose only mistake
+ * was reconnecting to the wrong place. Negative and fractional values are
+ * turned away the same way; `after` counts sequences, and a log read has no
+ * meaning for either.
+ */
+const resumeFrom = (
+  request: HttpServerRequest.HttpServerRequest
+): number | undefined => {
+  const header = Headers.get(request.headers, "last-event-id").pipe(
+    Option.orElse(() =>
+      Option.fromNullishOr(
+        new URL(request.url, "http://localhost").searchParams.get("after")
+      )
+    )
+  )
+  if (Option.isNone(header)) return undefined
+  const parsed = Number(header.value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined
+}
+
 const eventResponse = (
   events: Stream.Stream<
     AgentProtocol.AgentEventEnvelope,
@@ -423,8 +463,12 @@ const eventResponse = (
 /**
  * Register the complete remote-session HTTP API on the current Effect router.
  *
- * The events endpoint is live-only: reconnecting creates a new observation and
- * does not replay a durable cursor. Interrupting an HTTP request or closing an
+ * The events endpoint is resumable: a reconnecting client that sends
+ * `Last-Event-ID` (or `?after=`) is served from that sequence, and a client
+ * that sends neither observes from now. Resumption needs a delivery log behind
+ * the session, and a client without one fails the request rather than quietly
+ * serving live events to a caller that asked to catch up. Interrupting an HTTP
+ * request or closing an
  * SSE connection ends only that observer; host-owned session work remains in
  * its scoped session until explicitly closed or the server scope shuts down.
  */
@@ -638,7 +682,11 @@ export const serverLayer = <Principal>(
           "events",
           Option.some(sessionId)
         )
-        const stream = yield* host.events(identity, { sessionId })
+        const after = resumeFrom(request)
+        const stream = yield* host.events(identity, {
+          sessionId,
+          ...(after === undefined ? {} : { after })
+        })
         return eventResponse(
           stream.pipe(Stream.interruptWhen(Deferred.await(shutdown)))
         )
