@@ -504,6 +504,28 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
       Option.none<Activation<Tools, E>>()
     )
     const currentScope = yield* Ref.make(Option.none<Scope.Closeable>())
+
+    /**
+     * The tree owns whatever it left running.
+     *
+     * An activation's scope comes from `Scope.make`, which is deliberately
+     * caller-managed and *not* a child of the ambient scope. Failed candidates
+     * and superseded activations are closed as they are replaced, but the last
+     * successful one had nothing linking it to the scope that built the tree.
+     * Closing the tree therefore need not release its `RcMap` reference, its
+     * event subscription, its observer registration or its pump fibre -- and
+     * the aggregate feed was never shut down either, so a `tree.events`
+     * consumer in another scope had no terminal signal after the tree was
+     * gone and simply waited.
+     */
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function*() {
+        const last = yield* Ref.get(currentScope)
+        if (Option.isSome(last)) yield* Scope.close(last.value, Exit.void)
+        yield* Ref.set(currentScope, Option.none())
+        yield* PubSub.shutdown(feed)
+      })
+    )
     /**
      * One activation at a time.
      *
@@ -657,14 +679,34 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
           history,
           sessionId
         }).pipe(Effect.provide(environment))
-        yield* Ref.update(at, (all) => new Map(all).set(sessionId, node.id))
-        if (branchOptions?.lane !== undefined) {
-          yield* Ref.update(laneOf, (all) => new Map(all).set(sessionId, branchOptions.lane!))
-          // A new lane starts at the node it branched from, so it points
-          // somewhere real before its first turn completes.
-          yield* Ref.update(lanes, (all) => new Map(all).set(branchOptions.lane!, node.id))
-        }
-        return session
+        /**
+         * Bookkeeping and hand-over, as one uninterruptible step.
+         *
+         * The session is acquired in the *caller's* scope, which is what makes
+         * an interruption here expensive: the caller never receives the
+         * branch, but its finalizer is already registered in a scope that may
+         * live as long as the application -- so the session keeps its
+         * subscriptions, its elicitation state and its captured environment
+         * until the whole tree shuts down. The cursor and lane maps were left
+         * half-written beside it.
+         *
+         * The acquisition itself cannot be moved: `branch` hands the session
+         * to the caller, so the caller's scope is where it belongs. What can
+         * be made atomic is everything after it, so an interruption either
+         * leaves nothing recorded or leaves a branch the caller has.
+         */
+        return yield* Effect.uninterruptible(
+          Effect.gen(function*() {
+            yield* Ref.update(at, (all) => new Map(all).set(sessionId, node.id))
+            if (branchOptions?.lane !== undefined) {
+              yield* Ref.update(laneOf, (all) => new Map(all).set(sessionId, branchOptions.lane!))
+              // A new lane starts at the node it branched from, so it points
+              // somewhere real before its first turn completes.
+              yield* Ref.update(lanes, (all) => new Map(all).set(branchOptions.lane!, node.id))
+            }
+            return session
+          })
+        )
       })
 
     const path: SessionTree<Tools, E, SE>["path"] = (node) =>
@@ -893,31 +935,58 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
         )
         yield* consume(session, scope, (envelope) => PubSub.publish(feed, envelope))
 
-        // Serialised by the permit above, so this read-then-write cannot
-        // interleave with another activation's.
-        if (lane !== undefined) {
-          yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, lane))
-          yield* Ref.update(lanes, (all) => new Map(all).set(lane, node.id))
-        }
-
-        const previous = yield* Ref.get(currentScope)
-        yield* Ref.set(currentScope, Option.some(scope))
         const activation: Activation<Tools, E> = { node, session, history }
-        yield* SubscriptionRef.set(current, Option.some(activation))
-        // Released after the new one is in place: closing first would leave a
-        // window with nothing active, which a renderer would see as a flicker.
-        if (Option.isSome(previous)) {
-          yield* Scope.close(previous.value, Exit.void)
-        }
+
+        /**
+         * The commit: everything that makes this activation the current one,
+         * as one uninterruptible step.
+         *
+         * The pieces used to be spread either side of the acquisition. The
+         * lane names were written *first*, so an interruption before the
+         * activation published left a name pointing at a branch that never
+         * became active -- and if the name already existed, its previous
+         * target had by then been destroyed. And the `currentScope`
+         * read-then-write sat in the interruptible region, so a cancellation
+         * between them stranded the scope this activation had just acquired,
+         * with its `RcMap` reference, its observer and its pump still alive.
+         *
+         * The permit above serialises activations against each other; this is
+         * what makes one activation atomic against interruption. Both are
+         * needed, and neither substitutes for the other.
+         */
+        yield* Effect.uninterruptible(
+          Effect.gen(function*() {
+            // After the acquisition, so a name is only ever attached to a
+            // branch that exists and is about to be published.
+            if (lane !== undefined) {
+              yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, lane))
+              yield* Ref.update(lanes, (all) => new Map(all).set(lane, node.id))
+            }
+            const previous = yield* Ref.get(currentScope)
+            yield* Ref.set(currentScope, Option.some(scope))
+            yield* SubscriptionRef.set(current, Option.some(activation))
+            // Released after the new one is in place: closing first would
+            // leave a window with nothing active, which a renderer would see
+            // as a flicker.
+            if (Option.isSome(previous)) {
+              yield* Scope.close(previous.value, Exit.void)
+            }
+          })
+        )
         return activation
       })
 
     const track: SessionTree<Tools, E, SE>["track"] = (session, trackOptions) =>
       Effect.gen(function*() {
-        if (trackOptions?.lane !== undefined) {
-          yield* Ref.update(laneOf, (all) => new Map(all).set(session.id, trackOptions.lane!))
-        }
+        // The observer first, then the name. Writing the name before the
+        // acquisition completed left a lane pointing at a session nothing was
+        // watching -- the same shape as `branch` above, one size smaller.
         yield* AgentSession.observe(session, capture(session))
+        if (trackOptions?.lane !== undefined) {
+          yield* Effect.uninterruptible(
+            Ref.update(laneOf, (all) => new Map(all).set(session.id, trackOptions.lane!))
+          )
+        }
       })
 
     return {

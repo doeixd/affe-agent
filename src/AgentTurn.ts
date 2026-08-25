@@ -352,17 +352,38 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       History.fromResponseParts(response.content),
       History.fromResponseParts(toolResults)
     )
-    yield* Effect.uninterruptible(History.commit(session.history, committed))
-
+    /**
+     * The commit *and* the events that announce it, as one step.
+     *
+     * The commit alone was uninterruptible, and the two emissions were back in
+     * the interruptible region. `SessionTree.capture` records a node only when
+     * it observes `TurnCompleted`, so an interrupt landing after the history
+     * write but before that event left a real committed turn with *no tree
+     * node* -- and no way to recover the boundary, because a later turn's
+     * capture folds both turns into one snapshot. The submission could also
+     * report itself interrupted while its response was already canonical.
+     *
+     * Neither emission blocks: publication is to an unbounded PubSub, and the
+     * observers under the permit are the tree's capture and whatever the
+     * application attached. Holding interruption off across them costs the
+     * same nothing the commit already cost, and buys the invariant that a
+     * committed turn is always a turn the tree saw.
+     */
     const text = response.text
-    if (text.length > 0) {
-      yield* EventBus.emit(session.bus, correlation, {
-        _tag: "MessageCompleted",
-        text
-      })
-    }
+    yield* Effect.uninterruptible(
+      Effect.gen(function*() {
+        yield* History.commit(session.history, committed)
 
-    yield* EventBus.emit(session.bus, correlation, { _tag: "TurnCompleted" })
+        if (text.length > 0) {
+          yield* EventBus.emit(session.bus, correlation, {
+            _tag: "MessageCompleted",
+            text
+          })
+        }
+
+        yield* EventBus.emit(session.bus, correlation, { _tag: "TurnCompleted" })
+      })
+    )
 
     return { response, toolCalls, text }
   })

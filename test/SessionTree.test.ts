@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Option, Stream } from "effect"
+import { Effect, Fiber, Option, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -1006,6 +1006,69 @@ describe("SessionTree", () => {
         assert.strictEqual(result._tag, "Success")
         // Nothing was recorded, which is the real and lesser loss.
         assert.deepStrictEqual(yield* failing.nodes, [])
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    }))
+
+  /**
+   * R127 -- a committed turn is always a turn the tree saw.
+   *
+   * The history commit was uninterruptible and the two events that announce it
+   * were not. `capture` records a node only when it observes `TurnCompleted`,
+   * so an interrupt landing after the write but before that event left a real
+   * committed turn with no tree node -- and no way to recover the boundary,
+   * because a later turn's capture folds both into one snapshot. The
+   * submission could also report itself interrupted while its response was
+   * already canonical.
+   *
+   * Driven by interrupting repeatedly at every point the scheduler offers.
+   *
+   * **It does not reproduce the window, and passes without the fix.** The gap
+   * is between an uninterruptible commit and the emission that follows it,
+   * which is a handful of instructions; an interrupt issued from outside lands
+   * before or after, not inside. What the test does catch is a coarse
+   * regression -- capture failing, or the turn count and the node count
+   * diverging for any other reason -- and it is labelled so it does not read
+   * as proof of the narrow one.
+   */
+  it.effect("history and the tree never disagree about how many turns happened", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script(
+        ...Array.from({ length: 30 }, (_, index) => `answer ${index}`)
+      )
+
+      yield* Effect.gen(function*() {
+        const store = yield* NodeStore.memory
+        const tree = yield* SessionTree.make(agent, { store })
+        const session = yield* AgentSession.make(agent)
+        yield* tree.track(session)
+
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const running = yield* Effect.forkChild(
+            Effect.exit(session.prompt(`turn ${attempt}`))
+          )
+          // A different number of scheduler passes each time, so the interrupt
+          // lands at a different point in the turn.
+          yield* Effect.forEach(
+            Array.from({ length: attempt }),
+            () => Effect.yieldNow,
+            { discard: true }
+          )
+          yield* session.interrupt().pipe(Effect.ignore)
+          yield* Fiber.join(running)
+        }
+        yield* Effect.yieldNow
+
+        // An assistant message in history is a completed turn.
+        const history = yield* session.history
+        const completed = history.content.filter((message) => message.role === "assistant").length
+        // The root node is not a turn; every other node is one.
+        const nodes = (yield* store.nodes).length
+
+        assert.strictEqual(
+          nodes,
+          completed,
+          "a turn was committed to history without the tree recording a node for it"
+        )
       }).pipe(Effect.provide(layer), Effect.scoped)
     }))
 })
