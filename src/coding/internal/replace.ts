@@ -296,7 +296,16 @@ const BlockAnchorReplacer: Replacer = function*(content, find) {
   }
   if (candidates.length === 0) return
 
-  let best: { readonly start: number; readonly end: number } | undefined
+  /**
+   * Every block that scores best, not the first one that did.
+   *
+   * `score > bestScore` silently discarded ties, so two blocks resembling the
+   * search text equally well were reduced to whichever the scan reached
+   * first -- an edit landing on one of two indistinguishable places, chosen
+   * by position in the file. Ties are yielded together and the driver refuses
+   * them as ambiguous, which is what an editor that will not guess should do.
+   */
+  let best: Array<{ readonly start: number; readonly end: number }> = []
   let bestScore = -1
   for (const candidate of candidates) {
     const size = candidate.end - candidate.start + 1
@@ -318,15 +327,19 @@ const BlockAnchorReplacer: Replacer = function*(content, find) {
     }
     if (score > bestScore) {
       bestScore = score
-      best = candidate
+      best = [candidate]
+    } else if (score === bestScore) {
+      best.push(candidate)
     }
   }
 
-  // Only the single best block is ever offered. Falling back to a worse-scoring
+  // Only best-scoring blocks are ever offered. Falling back to a worse-scoring
   // candidate would let an edit land on a different block that merely happens to
   // share both anchors.
-  if (best !== undefined && bestScore >= ANCHOR_SIMILARITY_THRESHOLD) {
-    yield blockOf(content, lines, best.start, best.end - best.start + 1, whole)
+  if (bestScore >= ANCHOR_SIMILARITY_THRESHOLD) {
+    for (const candidate of best) {
+      yield blockOf(content, lines, candidate.start, candidate.end - candidate.start + 1, whole)
+    }
   }
 }
 
@@ -562,18 +575,51 @@ export const replace = (
   let found = false
 
   for (const [strategy, replacer] of strategies) {
+    /**
+     * Everywhere this strategy says the text is, before deciding anything.
+     *
+     * Candidates used to be judged one at a time: each was accepted if *that
+     * exact string* occurred once in the file. Two candidates that differ only
+     * in whitespace -- `foo  bar` and `foo\tbar`, both matching a requested
+     * `foo bar` -- are each unique as literals, so the first was edited and the
+     * second never considered. The question is not whether a literal is
+     * unique; it is whether the *place* is, and that cannot be answered one
+     * candidate at a time.
+     *
+     * Keyed by position and length, so the same span reached by two candidates
+     * counts once and two spans that happen to share text count twice.
+     */
+    const locations = new Map<string, { readonly index: number; readonly text: string }>()
+    let disproportionate: string | undefined
+
     for (const candidate of replacer(content, find)) {
       if (candidate.length === 0) continue
-      const index = content.indexOf(candidate)
+      // Every occurrence, not just the first: a candidate appearing twice is
+      // two places, which is exactly the ambiguity being looked for.
+      let index = content.indexOf(candidate)
       // A strategy may only point at text that is really there.
       if (index === -1) continue
       found = true
-
-      if (isDisproportionate(candidate, find)) {
-        return { _tag: "Disproportionate", matched: candidate, strategy }
+      if (disproportionate === undefined && isDisproportionate(candidate, find)) {
+        disproportionate = candidate
       }
+      while (index !== -1) {
+        locations.set(`${index}:${candidate.length}`, { index, text: candidate })
+        index = content.indexOf(candidate, index + 1)
+      }
+    }
 
-      if (replaceAll) {
+    if (disproportionate !== undefined) {
+      return { _tag: "Disproportionate", matched: disproportionate, strategy }
+    }
+    if (locations.size === 0) continue
+
+    if (replaceAll) {
+      const texts = new Set([...locations.values()].map((location) => location.text))
+      // "Replace all" of *which* text? Two spellings is not a question this
+      // can answer by picking one, so it is refused like any other ambiguity.
+      if (texts.size === 1) {
+        const candidate = [...texts][0]!
         const parts = content.split(candidate)
         return {
           _tag: "Replaced",
@@ -583,18 +629,23 @@ export const replace = (
           matched: candidate
         }
       }
+      // A stricter strategy may still pin it down, so fall through.
+      continue
+    }
 
-      // Not unique under this strategy: a stricter one may still pin it down,
-      // so fall through rather than picking the first arbitrarily.
-      if (index !== content.lastIndexOf(candidate)) continue
+    // More than one place: fall through rather than choosing between them. A
+    // later, stricter strategy may resolve it; if none does, `found` makes the
+    // answer `Ambiguous` rather than `NotFound`.
+    if (locations.size > 1) continue
 
-      return {
-        _tag: "Replaced",
-        content: content.slice(0, index) + replacement + content.slice(index + candidate.length),
-        strategy,
-        count: 1,
-        matched: candidate
-      }
+    const only = [...locations.values()][0]!
+    return {
+      _tag: "Replaced",
+      content: content.slice(0, only.index) + replacement +
+        content.slice(only.index + only.text.length),
+      strategy,
+      count: 1,
+      matched: only.text
     }
   }
 

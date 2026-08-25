@@ -170,6 +170,62 @@ describe("replace: the three terminal failures", () => {
     assert.strictEqual(Replace.replace("hello", "", "x")._tag, "NotFound")
   })
 
+  /**
+   * R57 -- ambiguity is about places, not about literals.
+   *
+   * Candidates were judged one at a time, each accepted if *that exact string*
+   * occurred once in the file. Two spellings of the same requested text --
+   * differing only in the whitespace between the words -- are each unique as
+   * literals, so the first was edited and the second was never considered. The
+   * model asked to change one thing and one of two indistinguishable places
+   * changed, chosen by position in the file.
+   */
+  it("two whitespace spellings of one request are ambiguous, not a coin flip", () => {
+    const file = "const a = foo  bar\nconst b = foo\tbar\n"
+    const outcome = Replace.replace(file, "foo bar", "baz")
+    assert.strictEqual(outcome._tag, "Ambiguous")
+  })
+
+  it("and the same under different indentation", () => {
+    const file = "if (x) {\n  doThing()\n}\nif (y) {\n    doThing()\n}\n"
+    const outcome = Replace.replace(file, "doThing()", "other()")
+    assert.strictEqual(outcome._tag, "Ambiguous")
+  })
+
+  /**
+   * A tie between two equally good anchor blocks is the same defect one level
+   * down: `score > bestScore` kept the first of them and dropped the rest, so
+   * the driver never saw that there was a choice to refuse.
+   */
+  it("two equally similar anchor blocks are ambiguous", () => {
+    const file = [
+      "function go() {",
+      "  const value = 1",
+      "}",
+      "",
+      "function go() {",
+      "  const value = 1",
+      "}",
+      ""
+    ].join("\n")
+    const outcome = Replace.replace(file, "function go() {\n  const other = 2\n}", "removed")
+    assert.notStrictEqual(outcome._tag, "Replaced")
+  })
+
+  /**
+   * And one unambiguous place still edits. A refusal that fired on ordinary
+   * input would be the more expensive defect.
+   */
+  it("one place is still edited", () => {
+    const file = "const a = foo  bar\nconst b = other\n"
+    const outcome = Replace.replace(file, "foo bar", "baz")
+    assert.strictEqual(outcome._tag, "Replaced")
+    if (outcome._tag === "Replaced") {
+      assert.strictEqual(outcome.content, "const a = baz\nconst b = other\n")
+      assert.strictEqual(outcome.count, 1)
+    }
+  })
+
   it("a runaway span is refused, never applied", () => {
     // Repeating anchors far apart: a block candidate could otherwise swallow
     // forty lines to satisfy a three-line request.
