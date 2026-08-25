@@ -24,6 +24,26 @@ export const canonicalize = (input: URL): URL => {
 /** Canonical permission resource: scheme, hostname and effective port. */
 export const canonicalOrigin = (url: URL): string => canonicalize(url).origin
 
+/**
+ * What a failure, a log line or a span is allowed to say about a target.
+ *
+ * The origin, and nothing after it. A model-selected URL is *content*: a path
+ * segment or a query parameter is where an API key, a session token or a
+ * document id lives, and every one of these errors is serializable and
+ * expected to be logged. `https://example.com/private/<secret>?token=<secret>`
+ * used to be copied whole into a tagged error and its message.
+ *
+ * The origin is what the diagnosis actually needs -- it is the thing the
+ * permission decision was made about, and the thing a reader uses to tell
+ * "the host refused us" from "we refused the host". A redacted path was
+ * considered and rejected: a path segment is as likely to be the secret as a
+ * query value, so keeping a bounded prefix keeps a bounded amount of it.
+ *
+ * The successful result's `finalUrl` is deliberately not this: it is a value
+ * the caller asked for, not a diagnostic emitted on their behalf.
+ */
+export const diagnosticTarget = (url: URL): string => canonicalOrigin(url)
+
 export class WebFetchInvalidUrlError extends
   Schema.TaggedError<WebFetchInvalidUrlError>()(
     "@doeixd/effect-agent/web/WebFetchInvalidUrlError",

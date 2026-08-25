@@ -26,13 +26,6 @@ const normalizedHostname = (url: URL): string =>
     .replace(/\]$/, "")
     .replace(/\.+$/, "")
 
-const safeHref = (url: URL): string => {
-  if (url.username === "" && url.password === "") return url.href
-  const safe = new URL(url.href)
-  safe.username = ""
-  safe.password = ""
-  return safe.href
-}
 
 const ipv4Octets = (host: string): ReadonlyArray<number> | undefined => {
   const parts = host.split(".")
@@ -112,7 +105,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return Effect.fail(
       new WebFetch.WebFetchInvalidUrlError({
-        url: safeHref(url),
+        url: WebFetch.diagnosticTarget(url),
         reason: "only http and https are supported"
       })
     )
@@ -120,7 +113,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   if (url.username !== "" || url.password !== "") {
     return Effect.fail(
       new WebFetch.WebFetchInvalidUrlError({
-        url: safeHref(url),
+        url: WebFetch.diagnosticTarget(url),
         reason: "embedded credentials are not allowed"
       })
     )
@@ -135,7 +128,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   ) {
     return Effect.fail(
       new WebFetch.WebFetchDeniedTargetError({
-        url: url.href,
+        url: WebFetch.diagnosticTarget(url),
         reason: "local and metadata hostnames are not allowed"
       })
     )
@@ -145,7 +138,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   if (ipv4 !== undefined && deniedIpv4(ipv4)) {
     return Effect.fail(
       new WebFetch.WebFetchDeniedTargetError({
-        url: url.href,
+        url: WebFetch.diagnosticTarget(url),
         reason: "non-public IPv4 targets are not allowed"
       })
     )
@@ -154,7 +147,7 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   if (ipv6 !== undefined && deniedIpv6(ipv6)) {
     return Effect.fail(
       new WebFetch.WebFetchDeniedTargetError({
-        url: url.href,
+        url: WebFetch.diagnosticTarget(url),
         reason: "non-public IPv6 targets are not allowed"
       })
     )
@@ -176,7 +169,7 @@ const readBody = Effect.fn("HttpWebFetch.readBody")(function*(
     const bytes = Number(declared)
     if (Number.isFinite(bytes) && bytes > MAX_RESPONSE_BYTES) {
       return yield* new WebFetch.WebFetchResponseTooLargeError({
-        url: url.href,
+        url: WebFetch.diagnosticTarget(url),
         maxBytes: MAX_RESPONSE_BYTES,
         observedBytes: bytes
       })
@@ -191,7 +184,7 @@ const readBody = Effect.fn("HttpWebFetch.readBody")(function*(
       return size > MAX_RESPONSE_BYTES
         ? Effect.fail(
           new WebFetch.WebFetchResponseTooLargeError({
-            url: url.href,
+            url: WebFetch.diagnosticTarget(url),
             maxBytes: MAX_RESPONSE_BYTES,
             observedBytes: size
           })
@@ -202,7 +195,7 @@ const readBody = Effect.fn("HttpWebFetch.readBody")(function*(
     Effect.catchTag("HttpClientError", (error) =>
       Effect.fail(
         new WebFetch.WebFetchTransportError({
-          url: url.href,
+          url: WebFetch.diagnosticTarget(url),
           detail: error.reason._tag
         })
       ))
@@ -259,10 +252,36 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
         redirect: "manual",
         credentials: "omit"
       }),
+      /**
+       * The generic client span is suppressed, and replaced by this one.
+       *
+       * `HttpClient` unconditionally annotates `url.full` and `url.query` on
+       * an `http.client GET` span. Those are the two attributes this package
+       * promises never to export, and no redaction wiring documented for the
+       * tool boundary reaches a nested span. Disabling the tracer for the
+       * execution is what actually prevents the attribute from being written;
+       * anything downstream is a filter that has to be remembered.
+       *
+       * What replaces it carries the origin and the status, which is what a
+       * trace of an outbound fetch is read for.
+       */
+      Effect.withTracerEnabled(false),
+      Effect.tap((response) =>
+        Effect.annotateCurrentSpan({
+          "server.address": WebFetch.diagnosticTarget(current),
+          "http.response.status_code": response.status
+        })),
+      Effect.withSpan("HttpWebFetch.request", {
+        kind: "client",
+        attributes: {
+          "http.request.method": "GET",
+          "server.address": WebFetch.diagnosticTarget(current)
+        }
+      }),
       Effect.catchTag("HttpClientError", (error) =>
         Effect.fail(
           new WebFetch.WebFetchTransportError({
-            url: current.href,
+            url: WebFetch.diagnosticTarget(current),
             detail: error.reason._tag
           })
         ))
@@ -272,7 +291,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
       const location = response.headers.location
       if (location === undefined) {
         return yield* new WebFetch.WebFetchHttpResponseError({
-          url: current.href,
+          url: WebFetch.diagnosticTarget(current),
           status: response.status
         })
       }
@@ -280,20 +299,26 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
         try: () => WebFetch.canonicalize(new URL(location, current)),
         catch: () =>
           new WebFetch.WebFetchInvalidUrlError({
-            url: location,
+            // Named by the origin that sent it, not by the header itself: the
+            // `Location` value is server-controlled text that failed to parse,
+            // so it is neither trustworthy nor safe to copy into a log.
+            url: WebFetch.diagnosticTarget(current),
             reason: "redirect location is not a valid URL"
           })
       })
       yield* validateTarget(next)
       if (next.origin !== initial.origin) {
         return yield* new WebFetch.WebFetchCrossOriginRedirectError({
-          from: current.href,
-          to: next.href
+          // The destination is the capability question the caller asked --
+          // "may I follow this elsewhere" -- so both sides are named by
+          // origin, which is exactly the granularity the answer turns on.
+          from: WebFetch.diagnosticTarget(current),
+          to: WebFetch.diagnosticTarget(next)
         })
       }
       if (redirects >= MAX_REDIRECTS) {
         return yield* new WebFetch.WebFetchRedirectLimitError({
-          url: current.href,
+          url: WebFetch.diagnosticTarget(current),
           maxRedirects: MAX_REDIRECTS
         })
       }
@@ -302,7 +327,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
 
     if (response.status < 200 || response.status >= 300) {
       return yield* new WebFetch.WebFetchHttpResponseError({
-        url: current.href,
+        url: WebFetch.diagnosticTarget(current),
         status: response.status
       })
     }
@@ -312,7 +337,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
     const format = mediaType === undefined ? undefined : textualFormat(mediaType)
     if (mediaType === undefined || format === undefined) {
       return yield* new WebFetch.WebFetchUnsupportedContentTypeError({
-        url: current.href,
+        url: WebFetch.diagnosticTarget(current),
         contentType: Option.fromNullishOr(rawContentType)
       })
     }
@@ -322,7 +347,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
       try: () => new TextDecoder(charsetOf(rawContentType ?? mediaType), { fatal: true }).decode(bytes),
       catch: () =>
         new WebFetch.WebFetchDecodeError({
-          url: current.href,
+          url: WebFetch.diagnosticTarget(current),
           detail: "body was not valid text for its declared charset"
         })
     })
@@ -342,7 +367,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
       Effect.catchTag("TimeoutError", () =>
         Effect.fail(
           new WebFetch.WebFetchTimeoutError({
-            url: url.href,
+            url: WebFetch.diagnosticTarget(url),
             timeoutMillis: TIMEOUT_MILLIS
           })
         ))

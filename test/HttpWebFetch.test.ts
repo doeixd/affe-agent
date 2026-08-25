@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Duration, Effect, Fiber, Layer, Ref } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Option, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import {
   HttpClient,
+  HttpClientError,
   HttpClientRequest,
   HttpClientResponse
 } from "effect/unstable/http"
@@ -25,6 +26,32 @@ const fetchWith = (client: HttpClient.HttpClient, url: string) =>
   Effect.flatMap(WebFetch.WebFetch, (service) => service.fetch(new URL(url))).pipe(
     Effect.provide(provider(client))
   )
+
+
+/**
+ * Every span from the client callback up to the root, with its attributes.
+ *
+ * Captured inside the HttpClient rather than around the fetch, because the
+ * span at issue is the one `HttpClient` creates for itself: an assertion made
+ * outside it never sees the attribute it is looking for.
+ */
+const spanChain = (span: unknown): ReadonlyArray<{
+  readonly name: string
+  readonly attributes: Readonly<Record<string, unknown>>
+}> => {
+  const spans: Array<{ name: string; attributes: Readonly<Record<string, unknown>> }> = []
+  let current: any = span
+  while (current !== undefined) {
+    spans.push({
+      name: current.name,
+      attributes: Object.fromEntries(current.attributes ?? new Map())
+    })
+    current = current.parent !== undefined && Option.isSome(current.parent)
+      ? current.parent.value
+      : undefined
+  }
+  return spans
+}
 
 describe("guarded HTTP web fetch provider", () => {
   it.effect("fetches bounded text and reports its honest canonical representation", () =>
@@ -129,7 +156,12 @@ describe("guarded HTTP web fetch provider", () => {
         "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError"
       )
       if (error._tag === "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError") {
-        assert.strictEqual(error.to, "https://other.example/final")
+        // The origin, not the path. Origin is the granularity the permission
+        // decision is made at, so it is what a caller needs to ask again for
+        // -- and a redirect path is server-controlled text that can carry a
+        // token, which is exactly what these errors must not copy.
+        assert.strictEqual(error.to, "https://other.example")
+        assert.strictEqual(error.from, "https://example.com")
       }
       assert.strictEqual(yield* Ref.get(crossCalls), 1)
     })
@@ -259,6 +291,117 @@ describe("guarded HTTP web fetch provider", () => {
       const observed = yield* Deferred.await(interruptedSignal)
       yield* Fiber.interrupt(interruptedFiber)
       assert.isTrue(observed.aborted)
+    })
+  )
+
+  /**
+   * R143/R120 -- a model-selected URL is content, not metadata.
+   *
+   * The path, the query and the fragment are where an API key, a session
+   * token or a private document id live, and both a tagged error and a trace
+   * are things a caller is expected to keep. This drives one secret through
+   * every failure the provider can raise and scans the encoded error, its
+   * message and the whole span chain for it.
+   *
+   * Falsified by putting `current.href` back in any one error, or by removing
+   * `Effect.withTracerEnabled(false)` around the execution: the client's own
+   * `url.full` attribute reappears with the secret in it.
+   */
+  it.effect("never copies a target's path, query or fragment into an error or a span", () =>
+    Effect.gen(function* () {
+      const SECRET = "s3cr3t-in-the-url"
+      const target =
+        `https://example.com/private/${SECRET}?token=${SECRET}#${SECRET}`
+
+      const seen = yield* Ref.make<ReadonlyArray<{
+        readonly name: string
+        readonly attributes: Readonly<Record<string, unknown>>
+      }>>([])
+
+      const respondWith = (
+        init: ResponseInit,
+        content: string | Uint8Array | null = "body"
+      ) =>
+        HttpClient.make((request) =>
+          Effect.flatMap(Effect.currentSpan, (span) =>
+            Ref.set(seen, spanChain(span)).pipe(
+              Effect.as(response(request, content, init))
+            )).pipe(Effect.orDie))
+
+      // One per failure path that names a target.
+      const failures = [
+        // An HTTP status.
+        yield* Effect.flip(fetchWith(respondWith({ status: 500 }), target)),
+        // A redirect with no destination.
+        yield* Effect.flip(fetchWith(
+          respondWith({ status: 302 }),
+          target
+        )),
+        // A destination that does not parse.
+        yield* Effect.flip(fetchWith(
+          respondWith({ status: 302, headers: { location: "http://[::" } }),
+          target
+        )),
+        // A content type that is not text.
+        yield* Effect.flip(fetchWith(
+          respondWith({ status: 200, headers: { "content-type": "image/png" } }),
+          target
+        )),
+        // A body larger than the cap admits.
+        yield* Effect.flip(fetchWith(
+          respondWith({
+            status: 200,
+            headers: { "content-type": "text/plain", "content-length": "999999999" }
+          }),
+          target
+        )),
+        // A body that is not text for its declared charset.
+        yield* Effect.flip(fetchWith(
+          respondWith(
+            { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
+            new Uint8Array([0xff, 0xfe, 0xfd])
+          ),
+          target
+        )),
+        // A transport-level failure.
+        yield* Effect.flip(fetchWith(
+          HttpClient.make((request) =>
+            Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({
+                  request,
+                  description: "no route"
+                })
+              })
+            )),
+          target
+        ))
+      ]
+
+      for (const failure of failures) {
+        const rendered = JSON.stringify(failure, Object.getOwnPropertyNames(Object(failure)))
+        assert.isFalse(
+          rendered.includes(SECRET),
+          `a failure carried the secret: ${rendered}`
+        )
+        assert.isFalse(
+          String((failure as { message?: unknown }).message ?? "").includes(SECRET)
+        )
+      }
+
+      // And the trace. `url.full` is the attribute the HTTP client writes
+      // unconditionally; the assertion is over every attribute of every span,
+      // because naming one is a filter that the next release can outgrow.
+      const chain = yield* Ref.get(seen)
+      assert.isAbove(chain.length, 0, "no span was captured")
+      for (const span of chain) {
+        for (const [key, value] of Object.entries(span.attributes)) {
+          assert.isFalse(
+            JSON.stringify(value ?? null).includes(SECRET),
+            `span ${span.name} leaked the secret through ${key}`
+          )
+        }
+      }
     })
   )
 })
