@@ -3784,6 +3784,19 @@ immediately showed that a store committing *before* it fails leaves a claim
 behind -- so the D7 row now reads "partial" and the test asserts the real
 behaviour with a note saying what closing it looks like).
 
+**Closed before this session, verified here.** R14, R15, R25 (a stream that
+dies mid-flight still settles its entry; ctrl+r and the branch paths are gated;
+an interrupted approval clears). R96 (the help and the startup warning say that
+`bash` is not confined). R100 (exports record the library version and the
+agent's tools, not the renderer's views). R104 (`whileIdle` gates every
+branch-changing command, including through the palette). R107, R183 (the diff
+is bounded by three independent budgets). R109 ("always" is a policy that
+remembers). R128 (a tool row is keyed by a minted view id, not a reused
+provider id). R132 (a repaint reads status from `isFailure` and matches results
+within the turn). R139 (`Layer.build`, so the store outlives the effect that
+built it). Each was checked against the mechanism in the code rather than
+assumed from a commit message.
+
 ### Open, with what is known
 
 - **R2** needs an entry point in Effect AI's `Toolkit` that takes an
