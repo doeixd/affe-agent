@@ -419,6 +419,8 @@ export const App = (props: {
    * whole point is to run when a row settles, which changes no length.
    */
   settledCount: () => number
+  /** Test seam: counts how often the drain effect is woken. */
+  onDrainScheduled?: () => void
   footer: FooterView
   rewind: Rewind
   /** Which model and workspace are behind this. See `Sink.setBackend`. */
@@ -595,6 +597,7 @@ export const App = (props: {
    */
   createEffect(() => {
     props.settledCount()
+    props.onDrainScheduled?.()
     queueMicrotask(() => drain(1))
   })
 

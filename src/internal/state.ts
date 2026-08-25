@@ -118,7 +118,22 @@ export interface Session<
    * Defaults to `Effect.void`.
    */
   readonly beforeClose: Effect.Effect<void>
-  readonly activeFiber: Ref.Ref<Option.Option<Fiber.Fiber<any, any>>>
+  /**
+   * The running submission's fibre, *with the submission it belongs to*.
+   *
+   * Paired rather than bare, because `interrupt` has to know that the fibre it
+   * is about to cancel is the one it validated. A session-wide `Fiber` alone
+   * cannot say: read it after the validated submission released and its
+   * successor registered, and the cancellation lands on a submission the
+   * caller never addressed. One `Ref` read answers both questions at once,
+   * which is what makes the check atomic without a lock.
+   */
+  readonly activeFiber: Ref.Ref<
+    Option.Option<{
+      readonly submissionId: SubmissionId
+      readonly fiber: Fiber.Fiber<any, any>
+    }>
+  >
   readonly scope: Scope.Scope
   /**
    * The environment captured when the session was constructed, so that the

@@ -1116,4 +1116,57 @@ describe("SessionTree", () => {
         assert.strictEqual(left.content.length, right.content.length)
       }).pipe(Effect.provide(layer), Effect.scoped)
     }))
+
+  /**
+   * R34's fix, against *both* stores.
+   *
+   * The first version of that fix compared messages by reference, which is
+   * sound only for the in-memory store: a persistent one round-trips history
+   * through JSON, so every read produces fresh objects and no message is ever
+   * pointer-equal to the one it came from. Dedup then never fires and every
+   * commit records a duplicate node -- a regression the whole `SessionTree`
+   * suite missed, because it builds trees on the memory store.
+   *
+   * So the dedup contract is asserted against both, and this is the test that
+   * would have caught it.
+   */
+  const dedupContract = (
+    label: string,
+    makeStore: Effect.Effect<NodeStore.NodeStore<any>>
+  ) =>
+    it.effect(`an unchanged commit is the same node (${label})`, () =>
+      Effect.gen(function*() {
+        const { layer } = yield* script("an answer", "another answer")
+        yield* Effect.gen(function*() {
+          const store = yield* makeStore
+          const tree = yield* SessionTree.make(agent, { store })
+          const session = yield* AgentSession.make(agent)
+
+          yield* session.prompt("hello")
+          const first = yield* tree.commit(session)
+          const again = yield* tree.commit(session)
+
+          // Nothing happened in between, so there is nothing new to record.
+          assert.strictEqual(first.id, again.id)
+          assert.strictEqual((yield* store.nodes).length, 1)
+
+          // And a turn that *did* happen is a second node, so the dedup is not
+          // simply swallowing everything.
+          yield* session.prompt("more")
+          const second = yield* tree.commit(session)
+          assert.notStrictEqual(second.id, first.id)
+          assert.strictEqual((yield* store.nodes).length, 2)
+        }).pipe(Effect.provide(layer), Effect.scoped)
+      }))
+
+  dedupContract("memory", NodeStore.memory)
+  dedupContract(
+    "key-value",
+    Effect.map(
+      KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+        Effect.provide(KeyValueStore.layerMemory)
+      ),
+      (kv) => NodeStore.keyValue(kv)
+    )
+  )
 })

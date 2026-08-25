@@ -1,6 +1,7 @@
 import {
   Clock,
   Effect,
+  Equal,
   Exit,
   Option,
   RcMap,
@@ -562,16 +563,24 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
      * from leaving two nodes holding the same conversation.
      */
     /**
-     * Whether two conversations are the same messages, in the same order.
+     * Whether two conversations are the same conversation.
      *
-     * By reference per message. Effect AI's prompt messages are immutable
-     * values and a continued conversation keeps its prefix, so this is a
-     * pointer comparison per element rather than a structural walk -- cheap
-     * enough to run on every turn boundary, which is where it runs.
+     * **Structurally, not by reference**, and the difference is not academic.
+     * A reference comparison was tried and is wrong for every persistent
+     * store: history there is JSON on the way in and out, so each read
+     * produces fresh message objects and no message is ever pointer-equal to
+     * the one it round-tripped from. Dedup then never fires, and *every*
+     * commit records a duplicate node. The in-memory store keeps identity, so
+     * a suite built on it sees none of that -- which is exactly how the
+     * mistake survived until it was checked against `keyValue`.
+     *
+     * The length check is a short-circuit rather than the comparison. It is
+     * the common case at a turn boundary, where a turn has added messages, so
+     * the structural walk runs only when the two are the same size -- which is
+     * the case R34 is about and the one worth paying for.
      */
     const sameMessages = (left: Prompt.Prompt, right: Prompt.Prompt): boolean =>
-      left.content.length === right.content.length &&
-      left.content.every((message, index) => message === right.content[index])
+      left.content.length === right.content.length && Equal.equals(left, right)
 
     const record = (
       sessionId: string,

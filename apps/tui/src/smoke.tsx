@@ -1265,6 +1265,7 @@ const narrowHidesFullPath = !narrowFrame.includes("a-rather-long-workspace")
  * dependency rather than in the store: `commitSettled` was always willing to
  * take the row, and nobody asked it to.
  */
+let drainRuns = 0
 const drainRun = makeStore()
 const drainRender = await testRender(
   () => (
@@ -1274,6 +1275,7 @@ const drainRender = await testRender(
       handle={handle}
       commitSettled={drainRun.commitSettled}
       settledCount={drainRun.settledCount}
+      onDrainScheduled={() => { drainRuns++ }}
       footer={drainRun.footer()}
       rewind={drainRun.rewind()}
       backend={drainRun.backend()}
@@ -1336,9 +1338,21 @@ drainRun.sink.append({
   body: { type: "none" }
 })
 await drainRender.flush()
-drainRun.sink.appendTitle("drain-stream", "tence")
+const beforeTokens = drainRuns
+drainRun.sink.appendTitle("drain-stream", "ten")
+await drainRender.flush()
+drainRun.sink.appendTitle("drain-stream", "ce")
 await drainRender.flush()
 const streamHeld = drainRun.entries.length === 1
+/**
+ * And the tokens did not each wake the drain.
+ *
+ * A write counter was the first attempt at this dependency and changes on
+ * every delta, so the whole drain ran per token. The settled-prefix read
+ * touches only `streaming` and `status`, never `title`, so a token tracks
+ * nothing that changed.
+ */
+const drainQuietDuringStream = drainRuns === beforeTokens
 drainRun.sink.patch("drain-stream", { streaming: false })
 await drainRender.flush()
 await until(() => drainRun.entries.length === 0, "the finished message to drain")
@@ -1599,6 +1613,7 @@ checks.push(
   ["a row that settles drains with no later append", drainedOnSettle],
   ["a streaming message holds it back too", streamHeld],
   ["and drains when the stream ends", streamDrainedOnSettle],
+  ["while tokens mid-stream wake nobody", drainQuietDuringStream],
 
   // R131
   ["a rewind survives a restart", rewindSurvivedRestart],

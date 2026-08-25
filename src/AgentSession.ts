@@ -261,7 +261,12 @@ export const make = <
     const steering = yield* channels.make(id, "steering")
     const followUps = yield* channels.make(id, "followUps")
     const inputGate = yield* Semaphore.make(1)
-    const activeFiber = yield* Ref.make<Option.Option<Fiber.Fiber<any, any>>>(
+    const activeFiber = yield* Ref.make<
+      Option.Option<{
+        readonly submissionId: SubmissionId
+        readonly fiber: Fiber.Fiber<any, any>
+      }>
+    >(
       Option.none()
     )
     // Live progress of the active submission, so an interrupt can still report
@@ -305,7 +310,7 @@ export const make = <
     yield* Effect.addFinalizer(() =>
       Effect.flatMap(Ref.get(activeFiber), (active) =>
         Option.isSome(active)
-          ? Effect.asVoid(Fiber.interrupt(active.value))
+          ? Effect.asVoid(Fiber.interrupt(active.value.fiber))
           : Effect.void
       ).pipe(
         Effect.andThen(
@@ -520,7 +525,7 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
           ),
           Effect.forkIn(self.scope)
         )
-        yield* Ref.set(self.activeFiber, Option.some(fiber))
+        yield* Ref.set(self.activeFiber, Option.some({ submissionId, fiber }))
 
         // The finalizer runs however this ends, including when the *caller*
         // is interrupted by a timeout or a lost race. Without it the
@@ -702,24 +707,31 @@ export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
     const submissionId = yield* requireRunning(self, "interrupt")
+    const active = yield* Ref.get(self.activeFiber)
     /**
-     * Confirmed under the input gate, then interrupted.
+     * One read answers both questions: which fibre, and whose.
      *
-     * `activeFiber` is session-wide: read it after the submission that was
-     * validated has released and its successor has registered, and this
-     * cancels a submission the caller never addressed. The gate is what the
-     * release contends for, so an id that still matches inside it cannot have
-     * moved -- and the fibre read under the same permit is that submission's.
+     * The pairing is what makes this atomic. Checking the state and *then*
+     * reading a session-wide fibre is two reads with a gap, so a submission
+     * that released in between hands this its successor's fibre -- cancelling
+     * a submission the caller never addressed.
+     *
+     * Taking the input gate was tried first and is worse for two reasons: it
+     * is not actually atomic against the release (the release does not hold
+     * that gate), and it puts `interrupt` behind a lock that the turn boundary
+     * holds while emitting -- so a slow event observer delays a cancellation
+     * the user has already asked for. A single `Ref` read has neither problem.
+     *
+     * What this does *not* rescue is calling `interrupt` from inside an event
+     * observer: `Fiber.interrupt` awaits the fibre's exit, and that fibre is
+     * waiting for the observer to return. That is the re-entrancy
+     * `AgentSession.observe` already forbids, and it is inherent rather than
+     * anything a lock choice here changes.
      */
-    yield* self.inputGate.withPermits(1)(
-      Effect.gen(function* () {
-        yield* stillActive(self, submissionId, "interrupt")
-        const fiber = yield* Ref.get(self.activeFiber)
-        if (Option.isSome(fiber)) {
-          yield* Fiber.interrupt(fiber.value)
-        }
-      })
-    )
+    if (Option.isNone(active) || active.value.submissionId !== submissionId) {
+      return yield* new AgentIdleError({ sessionId: self.id, operation: "interrupt" })
+    }
+    yield* Fiber.interrupt(active.value.fiber)
   })
 
 /**

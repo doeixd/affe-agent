@@ -198,6 +198,32 @@ const contract = (
       assert.strictEqual(keyless._tag, "Busy")
     })))
 
+  /**
+   * And the key's window is the claim's lifetime, which is a boundary rather
+   * than an oversight.
+   *
+   * `finish` takes the key with the claim it belonged to, so a key reused long
+   * afterwards cannot coalesce into a submission that has ended. The cost is
+   * that a retry arriving after completion is a new request -- pinned here so
+   * the guarantee is not read as broader than it is.
+   */
+  it.effect("a key reused after its submission finished starts a new one", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const store = yield* makeStore
+      yield* store.getOrCreate("s1", historyWith("system"))
+      const request = { prompt: Prompt.make("go"), stream: false, key: "k1" }
+
+      const first = yield* store.claim("s1", request)
+      assert.strictEqual(first._tag, "Claimed")
+      if (first._tag !== "Claimed") return
+      yield* store.finish("s1", first.claim.submissionId, historyWith("system"))
+
+      const again = yield* store.claim("s1", request)
+      assert.strictEqual(again._tag, "Claimed")
+      if (again._tag !== "Claimed") return
+      assert.notStrictEqual(again.claim.submissionId, first.claim.submissionId)
+    })))
+
   it.effect("two concurrent claims produce one Claimed and one Busy", () =>
     Effect.scoped(Effect.gen(function* () {
       const store = yield* makeStore

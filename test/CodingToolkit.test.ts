@@ -1100,6 +1100,29 @@ describe("glob matching", () => {
    * thousand identical expressions, multiplying both the ordinary cost and an
    * adversarial one by the size of the tree.
    */
+  /**
+   * The sweep that matters for a conservative check: it must not refuse the
+   * patterns a model writes while doing ordinary work. Over-refusal is the
+   * cost of the guard being syntactic, so the bound on that cost is pinned
+   * rather than assumed.
+   */
+  const realistic = [
+    "TODO", "function \w+", "import .* from", "class [A-Z]\w+",
+    "export const \w+ =", "\bconsole\.log\b", "^\s*//",
+    "interface \w+ \{", "async function", "\.test\.ts$",
+    "throw new \w+Error", "@deprecated", "useState<[^>]+>",
+    "return\s+null", "catch \(\w+\)", "[A-Z_]{3,}",
+    "\$\{[^}]*\}", "<[a-z]+ [^>]*/>", "\d{4}-\d{2}-\d{2}",
+    "(get|set)[A-Z]\w*", "(?:foo|bar)Baz", "https?://\S+"
+  ]
+
+  for (const pattern of realistic) {
+    it(`does not refuse the ordinary pattern ${pattern}`, () => {
+      const refused = RegexSafety.refuse(pattern)
+      assert.isUndefined(refused, `refused an ordinary pattern: ${refused}`)
+    })
+  }
+
   it("compiles once and matches many", () => {
     const compiled = Glob.compile("*.ts")
     assert.strictEqual(compiled._tag, "Matcher")

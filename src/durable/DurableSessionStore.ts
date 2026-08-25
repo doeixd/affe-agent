@@ -170,6 +170,15 @@ export interface DurableSessionStore {
        * legitimately asked the same thing twice. Anything stable that already
        * identifies the request works -- an HTTP request id, a queue message
        * id, a job id.
+       *
+       * **The window is the claim's lifetime, not forever.** The key lives on
+       * the claim, so `finish` takes it away with the claim it belonged to --
+       * which is what stops a key reused much later from coalescing into a
+       * submission that has long since ended. The cost is the other side of
+       * the same coin: a retry arriving *after* the submission completed is a
+       * new request and starts one. A caller whose retries can outlive a whole
+       * submission needs a dedup table with its own retention policy, which is
+       * a larger mechanism than a field on the claim.
        */
       readonly key?: string | undefined
     }
