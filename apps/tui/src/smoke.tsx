@@ -1344,6 +1344,64 @@ await drainRender.flush()
 await until(() => drainRun.entries.length === 0, "the finished message to drain")
 const streamDrainedOnSettle = drainRun.entries.length === 0
 
+
+/**
+ * R39 -- the line drawn is the line that entered history.
+ *
+ * `SubmissionStarted` carries no reference to the input that caused it, so the
+ * projection draws whichever ticket is at the front of the queue. Two racing
+ * `submit` calls both pushed one, and the second could win admission while the
+ * projection shifted the *first* -- so the transcript said prompt A entered
+ * history when B actually did, and the rejected one's cleanup could not
+ * recover a ticket already shifted.
+ *
+ * Both are issued with nothing awaited between them, which is as close to
+ * simultaneous as this harness can be driven. A session admits one submission
+ * at a time, so exactly one of them runs.
+ *
+ * **This passes without the ticket guard**, and the reason is worth writing
+ * down: R148's admission permit already made the pushes and the admissions
+ * happen in the same order, so through *this* handle the first submit is
+ * always the admitted one and its ticket is always the one shifted. What the
+ * guard adds is that a submission which will be refused never enqueues a line
+ * at all, so its ticket cannot be shifted later by an unrelated start event --
+ * a narrowing this test cannot distinguish.
+ *
+ * What it does establish is the observable contract: one line, that line is an
+ * admitted prompt's text, and the refusal is reported rather than swallowed.
+ */
+const raceRun = makeStore()
+const raceHandle = await start(raceRun.sink)
+raceHandle.submit("alpha prompt")
+raceHandle.submit("beta prompt")
+await until(
+  () => raceRun.entries.some((entry) => entry.kind === "summary"),
+  "the admitted prompt to finish"
+)
+await until(
+  () => {
+    const view = raceRun.footer()
+    if (view.type === "approval") raceHandle.respond(view.request.id, true)
+    return raceRun.footer().type !== "approval"
+  },
+  "the racing turn to settle"
+)
+const drawnUserLines = raceRun.entries
+  .filter((entry) => entry.kind === "user")
+  .map((entry) => entry.title)
+const raceNotices = raceRun.entries
+  .filter((entry) => entry.title.includes("prompt failed"))
+  .length
+await raceHandle.stop()
+
+// One line, for the one submission that was admitted -- never both, and never
+// the refused one's text standing in for the admitted one's.
+const drewOneLine = drawnUserLines.length === 1
+const drewAnAdmittedLine = drawnUserLines[0] === "alpha prompt" ||
+  drawnUserLines[0] === "beta prompt"
+// And the refusal was reported rather than swallowed.
+const reportedTheRefusal = raceNotices === 1
+
 const unknownTitle = titleOf(defaultViews, "deploy", { environment: "prod" })
 const unknownBody = bodyOf(defaultViews, "deploy", "shipped")
 
@@ -1528,6 +1586,11 @@ checks.push(
   // R148
   // Weaker than it looks -- see the comment at the fixture.
   ["a fork racing a submission is decided one way, not both", raceDecidedOnce],
+
+  // R39
+  ["a racing submit draws one line", drewOneLine],
+  ["and it is the admitted one's text", drewAnAdmittedLine],
+  ["while the refusal is reported", reportedTheRefusal],
 
   // R182
   ["a running row holds the transcript back", heldWhileRunning],

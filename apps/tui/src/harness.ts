@@ -1018,7 +1018,25 @@ export const start = (
              */
             changing.withPermit(Effect.sync(() => {
               admitted = admitted + 1
-              offered.push(ticket)
+              /**
+               * At most one ticket outstanding, because there is at most one
+               * submission.
+               *
+               * `SubmissionStarted` carries no reference to the input that
+               * caused it, so the projection draws whichever ticket is at the
+               * front. With two racing submits both pushing, the second could
+               * win admission while the projection shifted the *first*
+               * ticket -- so the transcript said prompt A entered history when
+               * B actually did, the rejected A's cleanup could not recover a
+               * ticket already shifted, and B's was stranded.
+               *
+               * A session admits one submission at a time, so a `submit`
+               * arriving while one is in flight is going to be refused as
+               * busy. Not drawing a line for it is what keeps the queue and
+               * the kernel's admissions in step: one ticket, one start event,
+               * the same text.
+               */
+              if (admitted === 1) offered.push(ticket)
             })).pipe(
               Effect.andThen(
                 // Streamed, so `MessageDelta` arrives and the reply builds up a
