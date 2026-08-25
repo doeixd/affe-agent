@@ -331,24 +331,80 @@ export const layer = <A, I>(
         ? (effect) => effect
         : (effect) => lock.withPermits(1)(effect)
 
-      return {
+      /**
+       * Write first, then publish. A failed write changes nothing.
+       *
+       * The order used to be the other way round: swap the ref, then persist.
+       * On the exact failure path the typed storage errors were added to
+       * expose, the operation reported `StorageError` while `get` returned the
+       * new value and `changes` had already published it -- with the store
+       * still holding the old one. A restart then silently rolled the value
+       * back, and any in-process update in between built on something that had
+       * never become durable. The comment above claimed the permit kept the
+       * two from diverging; the permit orders writers, it does not make one
+       * writer's two steps one step.
+       *
+       * Uninterruptible across the pair, so a cancellation cannot land between
+       * a committed write and the publication that tells everyone about it.
+       *
+       * What this does *not* give is atomicity against a store that succeeds
+       * and then loses the write: the value is durable and published, and
+       * nothing here can know otherwise. What it gives is the direction that
+       * matters -- the live value never runs ahead of the stored one.
+       */
+      const persistThenPublish = <T>(
+        next: A,
+        result: T
+      ): Effect.Effect<T, StorageError> =>
+        Effect.uninterruptible(
+          Effect.andThen(persist(next), Effect.as(SubscriptionRef.set(ref, next), result))
+        )
+
+      /**
+       * Ephemeral state keeps `SubscriptionRef.modify`, and must.
+       *
+       * The persisted form reads, writes the store, then publishes -- three
+       * steps made safe by the permit that only exists when there *is* a
+       * store. Using that shape without a store would turn an atomic
+       * read-modify-write into a read and a later write with nothing
+       * serialising them, so two concurrent updates could lose one. The
+       * ordering fix is for the failure path of a store; where there is no
+       * store there is no failure path to fix.
+       */
+      const ephemeral: AgentState<A> = {
         get: SubscriptionRef.get(ref),
-        set: (value) => atomically(Effect.flatMap(SubscriptionRef.set(ref, value), () => persist(value))),
+        set: (value) => SubscriptionRef.set(ref, value),
+        update: (f) =>
+          SubscriptionRef.modify(ref, (current) => {
+            const next = f(current)
+            return [undefined as void, next]
+          }),
+        modify: (f) =>
+          SubscriptionRef.modify(ref, (current) => {
+            const [result, next] = f(current)
+            return [result, next]
+          }),
+        changes: SubscriptionRef.changes(ref)
+      }
+
+      const persisted: AgentState<A> = {
+        get: SubscriptionRef.get(ref),
+        set: (value) => atomically(persistThenPublish(value, undefined as void)),
         update: (f) =>
           atomically(
-            SubscriptionRef.modify(ref, (current) => {
-              const next = f(current)
-              return [next, next]
-            }).pipe(Effect.flatMap(persist))
+            Effect.flatMap(SubscriptionRef.get(ref), (current) =>
+              persistThenPublish(f(current), undefined as void))
           ),
         modify: (f) =>
           atomically(
-            SubscriptionRef.modify(ref, (current) => {
+            Effect.flatMap(SubscriptionRef.get(ref), (current) => {
               const [result, next] = f(current)
-              return [[result, next] as const, next]
-            }).pipe(Effect.flatMap(([result, next]) => Effect.as(persist(next), result)))
+              return persistThenPublish(next, result)
+            })
           ),
         changes: SubscriptionRef.changes(ref)
-      } satisfies AgentState<A>
+      }
+
+      return p === undefined ? ephemeral : persisted
     })
   )

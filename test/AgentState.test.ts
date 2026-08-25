@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
+import { StorageError } from "../src/Errors.js"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -184,6 +185,109 @@ describe("AgentState in a session", () => {
       // The second session started from the first's persisted 1, and bumped to 2.
       assert.strictEqual(afterFirst, 1)
       assert.strictEqual(afterSecond, 2)
+    })
+  )
+})
+
+/**
+ * R65 -- a failed save must not leave the live value ahead of the stored one.
+ *
+ * Every persisted mutation used to swap the `SubscriptionRef` and *then* call
+ * the store. On the exact failure path the typed storage errors were added to
+ * expose, the operation reported `StorageError` while `get` returned the new
+ * value and `changes` had already published it -- with the store still holding
+ * the old one. A restart then silently rolled the value back, and any update
+ * in between built on something that had never become durable.
+ *
+ * The permit that the comment credited with keeping them in step orders
+ * *writers*; it does not make one writer's two steps into one step.
+ */
+describe("AgentState under a failing store", () => {
+  const refusing = (allow: (key: string, value: string) => boolean): AgentState.Store => ({
+    load: () => Effect.succeed(Option.none()),
+    save: (key, value) =>
+      allow(key, value)
+        ? Effect.void
+        : Effect.fail(new StorageError({ operation: "save", detail: "the disk is full" }))
+  })
+
+  it.effect("a refused save leaves get, changes and the store agreeing", () =>
+    Effect.gen(function* () {
+      const persistence = {
+        schema: Schema.Number,
+        store: refusing(() => false),
+        key: "counter:refused"
+      } as const
+
+      yield* Effect.gen(function* () {
+        const published: Array<number> = []
+        yield* Effect.forkScoped(
+          Stream.runForEach(AgentState.changes(Counter), (value) =>
+            Effect.sync(() => {
+              published.push(value)
+            }))
+        )
+        yield* Effect.yieldNow
+
+        const failed = yield* Effect.flip(AgentState.set(Counter, 7))
+        assert.strictEqual(failed._tag, "StorageError")
+
+        // The value never moved, so nothing downstream was told it had.
+        assert.strictEqual(yield* AgentState.get(Counter), 1)
+        assert.isFalse(
+          published.includes(7),
+          "a value the store refused was published to observers"
+        )
+
+        // And the same for the read-modify-write forms.
+        assert.strictEqual((yield* Effect.flip(AgentState.update(Counter, (n) => n + 1)))._tag, "StorageError")
+        assert.strictEqual(yield* AgentState.get(Counter), 1)
+        assert.strictEqual(
+          (yield* Effect.flip(AgentState.modify(Counter, (n) => ["x", n + 1] as const)))._tag,
+          "StorageError"
+        )
+        assert.strictEqual(yield* AgentState.get(Counter), 1)
+      }).pipe(
+        Effect.provide(AgentState.layer(Counter, { initial: 1, persistence })),
+        Effect.scoped
+      )
+    })
+  )
+
+  it.effect("a save that succeeds still publishes and still stores", () =>
+    Effect.gen(function* () {
+      // The risk of writing first: refusing, or failing to publish, a change
+      // that did land.
+      const store = yield* AgentState.memoryStore
+      const persistence = { schema: Schema.Number, store, key: "counter:ok" } as const
+
+      const published = yield* Effect.gen(function* () {
+        const seen: Array<number> = []
+        yield* Effect.forkScoped(
+          Stream.runForEach(AgentState.changes(Counter), (value) =>
+            Effect.sync(() => {
+              seen.push(value)
+            }))
+        )
+        yield* Effect.yieldNow
+        yield* AgentState.set(Counter, 7)
+        yield* AgentState.update(Counter, (n) => n + 1)
+        yield* Effect.yieldNow
+        assert.strictEqual(yield* AgentState.get(Counter), 8)
+        return seen
+      }).pipe(
+        Effect.provide(AgentState.layer(Counter, { initial: 1, persistence })),
+        Effect.scoped
+      )
+
+      assert.include(published, 7)
+      assert.include(published, 8)
+
+      // And a fresh layer over the same store reads what was written.
+      const reloaded = yield* AgentState.get(Counter).pipe(
+        Effect.provide(AgentState.layer(Counter, { initial: 0, persistence }))
+      )
+      assert.strictEqual(reloaded, 8)
     })
   )
 })

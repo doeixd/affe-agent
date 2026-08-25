@@ -284,6 +284,42 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       (call) => call.providerExecuted !== true
     )
 
+    /**
+     * A response must not name one call id twice.
+     *
+     * The whole correlation story rests on this: a tool result is matched to
+     * its call by id, `internal/toolActivity.ts` states outright that provider
+     * call ids are unique within one response, and `DurableToolkit` and
+     * `DurablePermission` key replay identity on `(tool name, call id,
+     * occurrence)`. Nothing checked it.
+     *
+     * Two concurrent calls sharing an id both read occurrence zero before
+     * either updates its wrapper-local counter, so they ask for the same
+     * workflow activity -- which can replay one sibling's result into the
+     * other, suppress one side effect entirely, or conflict depending on the
+     * engine's semantics. Outside durability the same response is still
+     * ambiguous: a UI patches the wrong row, and history cannot say which
+     * result belonged to which call.
+     *
+     * Refused rather than deduplicated. Dropping one of two calls silently
+     * decides that the model meant one thing when it said two, and a provider
+     * emitting this is malformed in a way the run should stop for -- not one
+     * the model can be asked to correct, since it did not choose the ids.
+     */
+    const seenIds = new Set<string>()
+    for (const call of toolCalls) {
+      if (seenIds.has(call.id)) {
+        return yield* Effect.die(
+          new Error(
+            `The model's response contains two tool calls with the id ${call.id}.` +
+              ` Call ids identify a result, a permission decision and a durable` +
+              ` activity, so two calls sharing one cannot be told apart.`
+          )
+        )
+      }
+      seenIds.add(call.id)
+    }
+
     let toolResults: ReadonlyArray<Response.AnyPart> = []
     if (toolCalls.length > 0) {
       toolResults = yield* ToolExecution.execute(handler, toolCalls, {

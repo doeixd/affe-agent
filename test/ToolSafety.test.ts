@@ -262,3 +262,81 @@ const Guarded = Tool.make("guardedCheck", {
 const _promptCoversExecution: Covers<{ readonly guardedCheck: typeof Guarded }> =
   true
 void _promptCoversExecution
+
+/**
+ * R181 -- two calls in one response cannot share an id.
+ *
+ * `internal/toolActivity.ts` states the premise outright, and `DurableToolkit`
+ * and `DurablePermission` key replay identity on `(tool name, call id,
+ * occurrence)`. Nothing checked it. Two concurrent calls with one id both read
+ * occurrence zero before either updates its counter, so they request the same
+ * workflow activity -- replaying one sibling's result into the other, or
+ * suppressing a side effect, depending on the engine.
+ *
+ * It is ambiguous outside durability too: a result is matched to its call by
+ * id, so history cannot say which output belonged to which call.
+ */
+describe("tool call identity", () => {
+  it.effect("a response naming one id twice is refused, not guessed at", () =>
+    Effect.gen(function* () {
+      const ran = yield* Ref.make(0)
+      const Echo = Tool.make("echo", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String
+      })
+      const toolkit = Agent.toolkit([Echo], {
+        echo: ({ value }) => Ref.update(ran, (n) => n + 1).pipe(Effect.as(value))
+      })
+
+      const outcome = yield* withSession(
+        [
+          {
+            toolCalls: [
+              { id: "same", name: "echo", params: { value: "first" } },
+              { id: "same", name: "echo", params: { value: "second" } }
+            ]
+          },
+          { text: "unreachable" }
+        ],
+        Agent.make({ toolkit }),
+        ({ session }) => Effect.exit(session.prompt("go"))
+      )
+
+      assert.isTrue(Exit.isFailure(outcome.value))
+      assert.include(String(outcome.value), "two tool calls with the id same")
+      // And neither ran: refusing after half the work would be worse than not
+      // checking at all.
+      assert.strictEqual(yield* Ref.get(ran), 0)
+    })
+  )
+
+  it.effect("two calls with distinct ids are ordinary", () =>
+    Effect.gen(function* () {
+      const ran = yield* Ref.make<Array<string>>([])
+      const Echo = Tool.make("echo", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String
+      })
+      const toolkit = Agent.toolkit([Echo], {
+        echo: ({ value }) => Ref.update(ran, (all) => [...all, value]).pipe(Effect.as(value))
+      })
+
+      const outcome = yield* withSession(
+        [
+          {
+            toolCalls: [
+              { id: "a", name: "echo", params: { value: "first" } },
+              { id: "b", name: "echo", params: { value: "second" } }
+            ]
+          },
+          { text: "done" }
+        ],
+        Agent.make({ toolkit }),
+        ({ session }) => Effect.exit(session.prompt("go"))
+      )
+
+      assert.isTrue(Exit.isSuccess(outcome.value))
+      assert.deepStrictEqual((yield* Ref.get(ran)).sort(), ["first", "second"])
+    })
+  )
+})
