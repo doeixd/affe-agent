@@ -342,3 +342,84 @@ export type _ReplacementRestoresTheModel = Assert<
     LanguageModel.LanguageModel
   >
 >
+
+/**
+ * R19 -- applying a plan first or last must give the same agent.
+ *
+ * Every other combinator took and returned `AgentDefinition<Tools, E, R>`,
+ * whose fourth parameter defaults to `LanguageModel`. So
+ * `withInstructions(withExecutionPlan(agent))` *regained* the ambient model
+ * requirement that the plan had just discharged, while applying the plan last
+ * removed it -- two runtime definitions carrying the same plan, with different
+ * public types. Order is not something a combinator chain should encode.
+ *
+ * A type-level assertion, because that is where the defect lives: both
+ * spellings run identically.
+ */
+const ordered = () => {
+  const base = Agent.make({ loop: AgentLoop.bounded(2) })
+  const planLast = base.pipe(
+    Agent.withInstructions("be brief"),
+    Agent.withExecutionPlan(fallible)
+  )
+  const planFirst = base.pipe(
+    Agent.withExecutionPlan(fallible),
+    Agent.withInstructions("be brief")
+  )
+  return { planLast, planFirst }
+}
+
+type PlanLast = ReturnType<typeof ordered>["planLast"]
+type PlanFirst = ReturnType<typeof ordered>["planFirst"]
+
+type ModelOf<T> = T extends Agent.AgentDefinition<infer _T, infer _E, infer _R, infer M> ? M
+  : "notmatched"
+
+export type _OrderDoesNotChangeTheModelRequirement = Assert<
+  Equals<ModelOf<PlanLast>, ModelOf<PlanFirst>>
+>
+
+/** And both discharged it, rather than both keeping it. */
+export type _BothDischargeTheModel = Assert<Equals<ModelOf<PlanFirst>, never>>
+
+/**
+ * R28 -- a plan's `while` and schedules are handed the *model call's*
+ * failures.
+ *
+ * `Effect.withExecutionPlan` requires the wrapped effect's error to extend the
+ * plan's `input`. This combinator accepted any `input` at all and then applied
+ * the plan to `LanguageModel.generateText`, so a plan whose predicate assumed
+ * some narrower, unrelated error shape was handed an `AiError` at runtime with
+ * the callback's static type insisting otherwise.
+ *
+ * The positive case is every other test in this file: an ordinary
+ * `ExecutionPlan.make(...)` infers `input: unknown`, which accepts anything.
+ * The negative one is here, and it is a *type* assertion because that is where
+ * the rejection happens.
+ */
+declare const narrowInput: ExecutionPlan.ExecutionPlan<{
+  provides: LanguageModel.LanguageModel
+  input: { readonly _tag: "SomethingElse" }
+  error: never
+  requirements: never
+}>
+
+const refused = () =>
+  Agent.make({ loop: AgentLoop.bounded(2) }).pipe(
+    Agent.withExecutionPlan(narrowInput)
+  )
+
+/**
+ * The combinator returns an explanatory string type rather than an agent, so
+ * anything that tries to *use* the result stops compiling. Asserting on the
+ * shape here keeps the message itself pinned: if it silently became an agent
+ * again, this fails.
+ */
+export type _ANarrowPlanInputIsRefused = Assert<
+  ReturnType<typeof refused> extends string ? true : false
+>
+
+/** And a plan whose input is `unknown` -- the ordinary case -- is accepted. */
+export type _AnOrdinaryPlanIsAccepted = Assert<
+  PlanFirst extends string ? false : true
+>

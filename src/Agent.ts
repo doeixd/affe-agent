@@ -3,7 +3,7 @@ import type * as ExecutionPlan from "effect/ExecutionPlan"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
 import { Toolkit } from "effect/unstable/ai"
-import type { LanguageModel, Prompt } from "effect/unstable/ai"
+import type { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
 import * as AgentSession from "./AgentSession.js"
@@ -438,9 +438,9 @@ const resolveToolkit = <Tools extends Record<string, Tool.Any>, E, R>(
 /** Replace the instructions. */
 export const withInstructions =
   (instructions: string) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E, R> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<Tools, E, R, Model> =>
     definition({ ...agent, instructions: Option.some(instructions) })
 
 /**
@@ -468,9 +468,9 @@ export const withToolkit =
  */
 export const withTools =
   <const Bound extends ReadonlyArray<BoundTool<Tool.Any>>>(...bound: Bound) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>> => {
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>, Model> => {
     const added = boundToolkit(bound)
     const merged: Effect.Effect<
       Toolkit.WithHandler<Tools & ToolsOf<Bound>>,
@@ -493,15 +493,15 @@ export const withTools =
 export const withTool: {
   <T extends Tool.Any>(
     bound: BoundTool<T>
-  ): <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>>
+  ): <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>, Model>
   <T extends Tool.Any>(
     tool: T,
     handler: Handler<T>
-  ): <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>>
+  ): <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>, Model>
 } = <T extends Tool.Any>(first: BoundTool<T> | T, handler?: Handler<T>) => {
   if (isBound(first)) return withTools(first)
   if (handler === undefined) {
@@ -525,10 +525,10 @@ export const withContextTransform =
           context: ContextTransform.Context
         ) => Effect.Effect<Prompt.Prompt, TE, TR>)
   ) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E | TE, R | TR> =>
-    definition<Tools, E | TE, R | TR>({
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<Tools, E | TE, R | TR, Model> =>
+    definition<Tools, E | TE, R | TR, Model>({
       ...agent,
       contextTransform:
         typeof transform === "function"
@@ -542,13 +542,13 @@ export const withContextTransform =
  * `withContextTransform` replaces; this composes, and says so.
  */
 export const updateContextTransform =
-  <Tools extends Record<string, Tool.Any>, E, R, TE = never, TR = never>(
+  <Tools extends Record<string, Tool.Any>, E, R, Model, TE = never, TR = never>(
     update: (
       current: ContextTransform.ContextTransform<E, R>
     ) => ContextTransform.ContextTransform<TE, TR>
   ) =>
-  (agent: AgentDefinition<Tools, E, R>): AgentDefinition<Tools, E | TE, R | TR> =>
-    definition<Tools, E | TE, R | TR>({
+  (agent: AgentDefinition<Tools, E, R, Model>): AgentDefinition<Tools, E | TE, R | TR, Model> =>
+    definition<Tools, E | TE, R | TR, Model>({
       ...agent,
       contextTransform: update(agent.contextTransform)
     })
@@ -581,28 +581,28 @@ export const withLoop =
  * `withLoop` replaces; this combines, and says so.
  */
 export const updateLoop =
-  <Tools extends Record<string, Tool.Any>, E, R, LE = never, LR = never>(
+  <Tools extends Record<string, Tool.Any>, E, R, Model, LE = never, LR = never>(
     update: (
       current: AgentLoop.AgentLoop<E, R, Tools>
     ) => AgentLoop.AgentLoop<LE, LR, Tools>
   ) =>
-  (agent: AgentDefinition<Tools, E, R>): AgentDefinition<Tools, E | LE, R | LR> =>
-    definition<Tools, E | LE, R | LR>({ ...agent, loop: update(agent.loop) })
+  (agent: AgentDefinition<Tools, E, R, Model>): AgentDefinition<Tools, E | LE, R | LR, Model> =>
+    definition<Tools, E | LE, R | LR, Model>({ ...agent, loop: update(agent.loop) })
 
 /** Replace the tool execution strategy. */
 export const withToolExecution =
   (strategy: ToolExecution.Strategy) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E, R> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<Tools, E, R, Model> =>
     definition({ ...agent, toolExecution: strategy })
 
 /** Replace the tool failure policy. */
 export const withToolFailurePolicy =
   (policy: ToolExecution.FailurePolicy) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E, R> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<Tools, E, R, Model> =>
     definition({ ...agent, toolFailurePolicy: policy })
 
 /**
@@ -666,7 +666,7 @@ export const withExecutionPlan =
   ) =>
   <Tools extends Record<string, Tool.Any>, E, R, Model>(
     agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<
+  ): AiError.AiError extends Types["input"] ? AgentDefinition<
     Tools,
     /**
      * The plan's own failures are the agent's failures.
@@ -705,15 +705,33 @@ export const withExecutionPlan =
      * so the answer can be recomputed from that constant every time.
      */
     Exclude<LanguageModel.LanguageModel, Types["provides"]>
-  > =>
-    definition({ ...agent, executionPlan: Option.some(plan) })
+  >
+    /**
+     * R28 -- the plan's predicates are handed the *model call's* failures.
+     *
+     * `Effect.withExecutionPlan` requires the wrapped effect's error to extend
+     * the plan's `input`, because that is what `while` and the schedules
+     * receive. This combinator accepted any `input` at all and then applied
+     * the plan to `LanguageModel.generateText`, so a plan whose `while`
+     * assumed some narrower, unrelated error shape was handed an `AiError` at
+     * runtime with the callback's static type insisting otherwise.
+     *
+     * Stated as a conditional on the *return* type rather than a constraint on
+     * the parameter, because a constraint there destroys the inference that
+     * makes `ExecutionPlan.make(...)` assignable at all -- and the message a
+     * caller gets is the one below, at the point of use, rather than a
+     * mismatch buried in the plan's type.
+     */
+    : "This execution plan's `input` does not accept the model call's AiError,"
+      & "so its `while` and schedules would be handed a failure they do not describe." =>
+    definition({ ...agent, executionPlan: Option.some(plan) }) as never
 
 /** Replace what a denied or refused call does to the run. */
 export const withToolDenialPolicy =
   (policy: ToolExecution.FailurePolicy) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E, R> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model>(
+    agent: AgentDefinition<Tools, E, R, Model>
+  ): AgentDefinition<Tools, E, R, Model> =>
     definition({ ...agent, toolDenialPolicy: policy })
 
 // ---------------------------------------------------------------------------
