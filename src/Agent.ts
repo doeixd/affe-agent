@@ -668,9 +668,43 @@ export const withExecutionPlan =
     agent: AgentDefinition<Tools, E, R, Model>
   ): AgentDefinition<
     Tools,
-    E,
-    Exclude<R, Types["provides"]>,
-    Exclude<Model, Types["provides"]>
+    /**
+     * The plan's own failures are the agent's failures.
+     *
+     * `Effect.withExecutionPlan` adds the plan's error channel to whatever it
+     * wraps -- a provider layer that can fail to build says so there -- and
+     * this combinator used to add neither that nor the requirements below. A
+     * plan whose layer reads configuration was advertised as infallible and
+     * self-contained, and the erasure held only because the plan is stored as
+     * `ExecutionPlan<any>`.
+     */
+    E | Types["error"],
+    /**
+     * `R` is untouched, plus whatever the plan itself needs.
+     *
+     * It used to be `Exclude<R, Types["provides"]>`, which is unsound: the
+     * plan is applied around `LanguageModel.generateText` and nothing wider,
+     * while toolkit resolution, context transforms, permission evaluation and
+     * tool handlers all run outside it. A service the plan's layer happens to
+     * provide was struck from the session's requirement even though it is not
+     * available where the rest of the agent uses it.
+     */
+    R | Types["requirements"],
+    /**
+     * Recomputed from the model requirement itself, not subtracted from the
+     * residual.
+     *
+     * `Exclude<Model, provides>` compounds: a first plan providing
+     * `LanguageModel` makes `Model` `never`, and a *second* plan that provides
+     * no model then computes `Exclude<never, ...>`, which is still `never`.
+     * The agent then requires no ambient model and its plan supplies none, so
+     * the call fails at runtime with the types saying everything is fine.
+     *
+     * A plan is a replacement rather than an accumulation, and the requirement
+     * before any plan is always the same thing -- an ambient `LanguageModel` --
+     * so the answer can be recomputed from that constant every time.
+     */
+    Exclude<LanguageModel.LanguageModel, Types["provides"]>
   > =>
     definition({ ...agent, executionPlan: Option.some(plan) })
 

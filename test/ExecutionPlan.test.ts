@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, ExecutionPlan, Metric, Ref, Schema } from "effect"
-import { Tool } from "effect/unstable/ai"
+import { Context, Effect, ExecutionPlan, Metric, Ref, Schema } from "effect"
+import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -232,3 +232,113 @@ describe("Agent.withExecutionPlan", () => {
     })
   )
 })
+
+// ---------------------------------------------------------------------------
+// What the combinator says about the agent it returns.
+//
+// Compile-time, because these are claims about *types*: a runtime test cannot
+// see a requirement that was wrongly struck out or an error channel that was
+// quietly dropped. Each assertion below is broken once in the commit that
+// introduced it, which is the only way to know it is load-bearing.
+// ---------------------------------------------------------------------------
+
+type Assert<T extends true> = T
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false
+
+/** A service the plan's layer needs, and one it provides beside the model. */
+class PlanConfig extends Context.Service<PlanConfig, { readonly url: string }>()(
+  "test/ExecutionPlan/PlanConfig"
+) {}
+class Sidecar extends Context.Service<Sidecar, { readonly name: string }>()(
+  "test/ExecutionPlan/Sidecar"
+) {}
+/** A service the *agent* needs, which the plan's layer happens to also provide. */
+class Shared extends Context.Service<Shared, { readonly value: number }>()(
+  "test/ExecutionPlan/Shared"
+) {}
+
+declare const fallible: ExecutionPlan.ExecutionPlan<{
+  provides: LanguageModel.LanguageModel | Shared
+  input: unknown
+  error: { readonly _tag: "PlanBroke" }
+  requirements: PlanConfig
+}>
+
+declare const modelless: ExecutionPlan.ExecutionPlan<{
+  provides: Sidecar
+  input: unknown
+  error: never
+  requirements: never
+}>
+
+declare const agentNeedingShared: Agent.AgentDefinition<
+  Record<string, never>,
+  "AgentError",
+  Shared
+>
+
+/**
+ * Never called: its body exists so TypeScript infers the two agent types, and
+ * `declare const` erases at runtime -- evaluating this at module scope threw a
+ * `ReferenceError` and took the whole suite with it.
+ */
+const probe = () => {
+  const planned = agentNeedingShared.pipe(Agent.withExecutionPlan(fallible))
+  const replanned = planned.pipe(Agent.withExecutionPlan(modelless))
+  return { planned, replanned }
+}
+
+type Planned = ReturnType<typeof probe>["planned"]
+type Replanned = ReturnType<typeof probe>["replanned"]
+
+/**
+ * R17 -- the plan's own error is the agent's error. A provider layer that can
+ * fail to build says so here, or the agent is advertised as infallible.
+ */
+export type _PlanErrorIsCarried = Assert<
+  Equals<
+    Planned extends Agent.AgentDefinition<infer _T, infer E, infer _R, infer _M> ? E : never,
+    "AgentError" | { readonly _tag: "PlanBroke" }
+  >
+>
+
+/**
+ * R16 -- `Shared` survives. The plan's layer provides it, but the plan is
+ * applied around the model call alone, and the agent needs `Shared` in its
+ * toolkit resolution, its context transforms and its tool handlers -- none of
+ * which run inside that scope. Striking it out promised a service that is not
+ * there where it is used.
+ *
+ * `PlanConfig` is added, because the plan genuinely needs it.
+ */
+export type _AgentRequirementsSurvive = Assert<
+  Equals<
+    Planned extends Agent.AgentDefinition<infer _T, infer _E, infer R, infer _M> ? R : never,
+    Shared | PlanConfig
+  >
+>
+
+/** A plan providing the model discharges the ambient model requirement. */
+export type _ModelIsDischarged = Assert<
+  Equals<
+    Planned extends Agent.AgentDefinition<infer _T, infer _E, infer _R, infer M> ? M : never,
+    never
+  >
+>
+
+/**
+ * R32 -- and a *replacement* plan that provides no model brings the
+ * requirement back.
+ *
+ * Computed from the model requirement itself rather than from the residual:
+ * subtracting from `never` is still `never`, so the second plan left an agent
+ * requiring no ambient model while supplying none -- a runtime failure with
+ * the types insisting everything was fine.
+ */
+export type _ReplacementRestoresTheModel = Assert<
+  Equals<
+    Replanned extends Agent.AgentDefinition<infer _T, infer _E, infer _R, infer M> ? M : never,
+    LanguageModel.LanguageModel
+  >
+>
