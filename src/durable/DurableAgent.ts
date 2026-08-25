@@ -154,6 +154,36 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       // toolkit was the cause. The old signature required passing the toolkit
       // *twice*, to `Agent.make` and again here, and every existing test
       // happened to do so, which is why it went unnoticed.
+      /**
+       * R37 -- a plan and durability cannot both own the model call.
+       *
+       * `DurableModel` wraps the ambient `LanguageModel` so a completed call
+       * is journalled and a replay returns the recorded response instead of
+       * calling the provider again. An `ExecutionPlan` step *provides its own*
+       * `LanguageModel`, and `AgentTurn` applies the plan directly around the
+       * model call -- so the plan's layer shadows the wrapper, the provider is
+       * reached outside the journal, and a replay repeats a call that has
+       * already been made and billed. That is the one side effect
+       * `DurableModel` exists to prevent.
+       *
+       * Refused rather than run. There is no way to wrap the steps of a plan
+       * built elsewhere, so the alternatives are a silent loss of the
+       * durability guarantee or a loud refusal, and only one of those is
+       * something an operator can act on. A durable agent that needs provider
+       * fallback wants it *inside* the layer it hands to `DurableAgent`, where
+       * the journal is still outermost.
+       */
+      if (Option.isSome(agent.executionPlan)) {
+        return yield* Effect.die(
+          new Error(
+            "A durable agent cannot carry an ExecutionPlan: the plan's steps" +
+              " provide their own LanguageModel, which shadows DurableModel," +
+              " so completed provider calls would be repeated on replay." +
+              " Put the fallback inside the model layer instead."
+          )
+        )
+      }
+
       const toolkit = options.toolkit ?? (yield* resolveToolkit(agent.toolkit))
       const durableTools = yield* DurableToolkit.wrap(toolkit)
       const modelLayer = yield* DurableModel.wrap(durableTools)

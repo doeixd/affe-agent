@@ -9,6 +9,7 @@ import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import { Compaction } from "../src/compaction/index.js"
+import { ExecutionPlan } from "effect"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableElicitation from "../src/durable/DurableElicitation.js"
@@ -949,6 +950,55 @@ describe("compaction under durability", () => {
         last.content.some((message) => message.role === "system"),
         "the compacted projection never reached the model"
       )
+    })
+  )
+
+  /**
+   * R37 -- a plan and durability cannot both own the model call.
+   *
+   * `DurableModel` wraps the ambient `LanguageModel` so a completed call is
+   * journalled and a replay returns the recorded response rather than calling
+   * the provider again. An `ExecutionPlan` step *provides its own*
+   * `LanguageModel`, and `AgentTurn` applies the plan directly around the
+   * model call -- so the plan's layer shadows the wrapper, the provider is
+   * reached outside the journal, and a replay repeats a call that has already
+   * been made and billed.
+   *
+   * There is no way to wrap the steps of a plan built elsewhere, so the
+   * choice is between silently losing the durability guarantee and refusing
+   * loudly. Only one of those is something an operator can act on.
+   */
+  it.live("a durable agent carrying an execution plan is refused", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const store = yield* DurableChannels.memoryStore
+      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
+
+      const Planned = Agent.make({ instructions: "Be brief." }).pipe(
+        Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
+      )
+      const durable = DurableAgent.workflow("Planned", Planned, { store })
+
+      const outcome = yield* Effect.exit(
+        Effect.gen(function* () {
+          const executionId = yield* DurableAgent.submit(durable, store, "planned-1", "hello")
+          return yield* DurableAgent.result(durable, executionId)
+        }).pipe(
+          Effect.provide(
+            durable.layer.pipe(
+              Layer.provideMerge(Engine),
+              Layer.provideMerge(modelLayer)
+            )
+          )
+        )
+      )
+
+      // However the workflow surfaces it, the run does not quietly succeed
+      // with the journal bypassed.
+      const reported = Exit.isFailure(outcome)
+        ? String(outcome.cause)
+        : String(outcome.value)
+      assert.include(reported, "ExecutionPlan")
     })
   )
 })
