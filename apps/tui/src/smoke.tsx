@@ -198,11 +198,43 @@ const answeredAfterRewind = completed > rewoundFrom
 // Driven through the handle rather than through keystrokes: what is under test
 // is that the commands do something, and a `<select>`'s own arrow handling is
 // OpenTUI's to test, not ours.
+/**
+ * R105 -- wait for the command's *output*, not for the state it started in.
+ *
+ * These waits were `until(() => entries.length === 0)`, which is the state
+ * *before* the detached command fibre appends anything -- so `until` returned
+ * on its first check, having observed nothing. Whether the test meant anything
+ * came down to whether the fork happened to reach its synchronous append
+ * before the JavaScript continuation ran.
+ *
+ * A command's notice drains to scrollback, and `takeText` *drains* the buffer,
+ * so polling it directly would eat the transcript the later assertions read.
+ * This accumulates instead: every poll appends what arrived, and the text is
+ * kept for whoever wants it.
+ */
+let collected = ""
+const awaitOutput = async (phrase: string, what: string): Promise<void> => {
+  await until(
+    () => {
+      collected += externalOutput.takeText()
+      return collected.includes(phrase)
+    },
+    what
+  )
+}
+
 handle.command("help")
+// Positive: the help text itself, drawn by the command rather than assumed.
+await awaitOutput("/branches", "the help notices")
 await until(() => entries.length === 0, "the help notices to settle")
-// `takeText` *drains*, so what is read here would otherwise be missing from
-// the final transcript. Read early to assert on it early, and keep it.
-const transcriptSoFar = externalOutput.takeText()
+// Everything drained so far, plus whatever is still buffered. `awaitOutput`
+// polls with `takeText`, which empties the buffer, so anything it consumed has
+// to come back through `collected` or the later assertions read a transcript
+// with holes in it.
+const transcriptSoFar = (() => {
+  collected += externalOutput.takeText()
+  return collected
+})()
 
 // `/branches` fills the footer from the tree.
 handle.command("branches")
@@ -269,11 +301,13 @@ const exactlyOneActive = afterChild.filter((item) => item.active).length === 1
 
 // An unknown command is reported rather than ignored.
 handle.command("nonsense")
-await until(() => entries.length === 0, "the unknown-command notice")
+await awaitOutput("no such command: /nonsense", "the unknown-command notice")
+await until(() => entries.length === 0, "the unknown-command notice to settle")
 
 // Export writes a real file through the sandbox seam.
 handle.command("export")
-await until(() => entries.length === 0, "the export notice")
+await awaitOutput(".effect-agent/export-", "the export notice")
+await until(() => entries.length === 0, "the export notice to settle")
 
 /**
  * R100 -- and what it claims has to be true.
@@ -818,7 +852,8 @@ await flush()
 // result depends on everything that ran after it.
 const footerAtEnd = footer().type
 
-const transcript = transcriptSoFar + externalOutput.takeText()
+collected += externalOutput.takeText()
+const transcript = collected
 const live = captureCharFrame()
 
 console.log("--- committed to terminal scrollback ---")
