@@ -22,6 +22,7 @@ import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
+import type { AgentTransportError } from "../src/client/AgentClient.js"
 import * as EntityClient from "../src/cluster/EntityClient.js"
 import {
   AgentEntity,
@@ -259,17 +260,30 @@ describe("agent client", () => {
       const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
       const client = EntityClient.wrap(yield* makeRaw("never-submitted"))
 
-      // `steer` is typed as failing with `AgentIdleError` and nothing else:
-      // the cluster's own transport failures are retried and then died on,
-      // rather than being pushed into every call site's error handling.
-      const error: AgentIdleError = yield* Effect.flip(client.steer("too late"))
+      /**
+       * R170 -- `steer` fails with the domain answer *or* a transport failure.
+       *
+       * The transport half used to be `Effect.die` after a bounded retry, on
+       * the reasoning that a caller has no recovery for a broken transport.
+       * A shard outage, mailbox pressure, a persistence failure and a runner
+       * going away are all things an application answers by retrying later,
+       * routing elsewhere, or returning a 503 -- and none of those is
+       * available to a caller handed a defect.
+       *
+       * The annotations are the assertion. Narrowing either back to
+       * `AgentIdleError` alone, or `submit` back to `never`, stops this
+       * compiling.
+       */
+      const error: AgentIdleError | AgentTransportError = yield* Effect.flip(
+        client.steer("too late")
+      )
       assert.strictEqual(error._tag, "AgentIdleError")
-      assert.strictEqual(error.operation, "steer")
+      if (error._tag === "AgentIdleError") {
+        assert.strictEqual(error.operation, "steer")
+      }
 
-      // And `submit` has no error channel at all, so a caller writes no
-      // handling for it.
-      const noFailure: Effect.Effect<string, never> = client.submit("go")
-      void noFailure
+      const submitting: Effect.Effect<string, AgentTransportError> = client.submit("go")
+      void submitting
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)

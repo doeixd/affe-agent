@@ -88,9 +88,43 @@ export interface AgentState<A> {
  */
 export type Tag<A> = Context.Service<AgentState<A>, AgentState<A>>
 
-/** Make a state tag. Two tags with the same string are the same service. */
-export const Tag = <A>(id: string): Tag<A> =>
-  Context.Service<AgentState<A>, AgentState<A>>(id)
+/**
+ * Every id that has been made into a tag, and the tag it became.
+ *
+ * A `Context` key is a string, so `Tag<number>("same")` and `Tag<string>("same")`
+ * are two values naming one service. Merging their layers typechecks, and
+ * reading the number tag can then hand back the string service -- without a
+ * cast anywhere, which is the part that makes it a library defect rather than
+ * caller error. Nothing in the types can prove the two `A`s agree, because the
+ * only thing carried across is the text.
+ *
+ * So identity is made once and remembered. A second tag under a familiar id is
+ * a programming error reported where it happens, rather than a value that
+ * works until the day two layers are merged.
+ */
+const claimedIds = new Map<string, Tag<any>>()
+
+/**
+ * Make a state tag. The id is its identity, so make it once and export it.
+ *
+ * Creating two tags with one id is refused rather than allowed to alias. It
+ * costs nothing when tags are module-level values, which is how they are meant
+ * to be used and how every example writes them.
+ */
+export const Tag = <A>(id: string): Tag<A> => {
+  const existing = claimedIds.get(id)
+  if (existing !== undefined) {
+    throw new Error(
+      `AgentState.Tag("${id}") already exists. A tag's id is its runtime` +
+        ` identity, and a second tag under the same id would name the same` +
+        ` service at a possibly different type -- so reading one could return` +
+        ` the other. Create the tag once and export it.`
+    )
+  }
+  const tag = Context.Service<AgentState<A>, AgentState<A>>(id)
+  claimedIds.set(id, tag)
+  return tag
+}
 
 // ---------------------------------------------------------------------------
 // Free accessors, so a tool handler need not yield the service first

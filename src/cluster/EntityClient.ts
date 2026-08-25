@@ -2,7 +2,9 @@ import { Duration, Effect, Schedule } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import type * as Elicitation from "../Elicitation.js"
 import { AgentIdleError } from "../Errors.js"
+import { AgentTransportError } from "../client/AgentClient.js"
 import { AgentEntity } from "./AgentEntity.js"
+import { detailOf } from "../internal/detail.js"
 import * as Schedules from "../internal/schedules.js"
 
 /**
@@ -28,18 +30,30 @@ import * as Schedules from "../internal/schedules.js"
  * generated client.
  */
 export interface EntityClient {
-  /** Start a submission. Resolves to its execution id. */
-  readonly submit: (input: Prompt.RawInput) => Effect.Effect<string>
+  /**
+   * Start a submission. Resolves to its execution id.
+   *
+   * `AgentTransportError` is a cluster failure that outlived a bounded retry:
+   * a shard outage, mailbox pressure, a persistence failure, a runner going
+   * away. These used to be `Effect.die` on the reasoning that a caller has no
+   * recovery for a broken transport -- which is not true of the callers this
+   * surface has. Retrying later, routing elsewhere and returning a 503 are all
+   * ordinary answers, and none of them is available to a caller handed a
+   * defect.
+   */
+  readonly submit: (
+    input: Prompt.RawInput
+  ) => Effect.Effect<string, AgentTransportError>
   /** Queue steering, applied at the next turn boundary. */
   readonly steer: (
     input: Prompt.RawInput
-  ) => Effect.Effect<void, AgentIdleError>
+  ) => Effect.Effect<void, AgentIdleError | AgentTransportError>
   /** Queue a follow-up, extending the submission rather than the run. */
   readonly followUp: (
     input: Prompt.RawInput
-  ) => Effect.Effect<void, AgentIdleError>
+  ) => Effect.Effect<void, AgentIdleError | AgentTransportError>
   /** Interrupt the session's submission, if it has one. */
-  readonly interrupt: Effect.Effect<void>
+  readonly interrupt: Effect.Effect<void, AgentTransportError>
   /**
    * Answer a run paused for approval or other external input.
    *
@@ -48,7 +62,7 @@ export interface EntityClient {
    */
   readonly respond: (
     response: Elicitation.Response
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, AgentTransportError>
 }
 
 /**
@@ -124,14 +138,34 @@ const retryTransient = <A, E, R>(
   })
 
 /**
- * Nothing here is a domain failure, so anything that survives the retry is a
- * defect. Dying is the honest outcome: a caller has no recovery for a broken
- * transport that it would not also have for a broken process.
+ * Retry a transient cluster failure, then say so rather than dying.
+ *
+ * This used to end in `Effect.die`, on the reasoning that a caller has no
+ * recovery for a broken transport. That is not true of the callers this
+ * surface has: a shard outage, mailbox pressure, a persistence failure or a
+ * runner going away are all things an application answers by retrying later,
+ * routing elsewhere, or returning a 503. Reporting them as programmer defects
+ * after roughly a minute of retrying makes every one of those impossible, and
+ * contradicts both the repository's rule that a public error channel names
+ * what can go wrong and the protocol-neutral `AgentClient`, which has exposed
+ * `AgentTransportError` all along.
+ *
+ * The bounded retry stays: most of these clear on their own, and a caller
+ * should not have to reimplement that. What changes is what is left when it
+ * does not.
  */
 const infrastructural = <A, E, R>(
   effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, never, R> =>
-  Effect.catch(retryTransient(effect), (error: E) => Effect.die(error))
+): Effect.Effect<A, AgentTransportError, R> =>
+  Effect.catch(retryTransient(effect), (error: E) =>
+    Effect.fail(transportError(error)))
+
+/** The cluster's failure, in the vocabulary the rest of the library uses. */
+const transportError = (error: unknown): AgentTransportError =>
+  new AgentTransportError({
+    sessionId: "",
+    detail: `${tagOf(error) ?? "cluster"}: ${detailOf(error)}`
+  })
 
 /**
  * As above, but `AgentIdleError` is a real answer and passes through.
@@ -144,7 +178,7 @@ const infrastructural = <A, E, R>(
  */
 const admitting = <A, E, R>(
   effect: Effect.Effect<A, AgentIdleError | E, R>
-): Effect.Effect<void, AgentIdleError, R> =>
+): Effect.Effect<void, AgentIdleError | AgentTransportError, R> =>
   Effect.retry(effect, {
     while: (error) =>
       isTransient(error) && tagOf(error) !== "AlreadyProcessingMessage",
@@ -152,12 +186,14 @@ const admitting = <A, E, R>(
     schedule: Schedules.steady(Duration.millis(100))
   }).pipe(
     Effect.asVoid,
-    Effect.catch((error: AgentIdleError | E) =>
+    Effect.catch((
+      error: AgentIdleError | E
+    ): Effect.Effect<void, AgentIdleError | AgentTransportError> =>
       isIdle(error)
         ? Effect.fail(error)
         : tagOf(error) === "AlreadyProcessingMessage"
           ? Effect.void
-          : Effect.die(error)
+          : Effect.fail(transportError(error))
     )
   )
 

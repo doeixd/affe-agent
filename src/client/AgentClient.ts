@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Ref, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Option, Ref, Schema, Scope, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -134,25 +134,50 @@ export type RemoteError =
   | AgentExecutionError
   | AgentTransportError
 
-const remoteTags = [
-  "AgentBusyError",
-  "AgentIdleError",
-  "AgentClosedError",
-  "AgentSessionNotFoundError",
-  "AgentExecutionError",
-  "AgentTransportError"
-]
+/**
+ * The wire contract, as a schema rather than as six strings.
+ *
+ * Recognising a `_tag` was not recognition: a tool or a context transform may
+ * legally fail with `{ _tag: "AgentBusyError" }`, or with the right tag and
+ * malformed fields, and `prompt` then declined to wrap it as an
+ * `AgentExecutionError` -- so a value that is not a `RemoteError` was carried
+ * under the whole `RemoteError` type, and the RPC or HTTP encoding failed
+ * later instead of the agent failure being reported at all.
+ *
+ * Validating the value is what makes the guard mean what its name says.
+ */
+const RemoteErrorSchema = Schema.Union([
+  AgentBusyError,
+  AgentIdleError,
+  AgentClosedError,
+  AgentSessionNotFoundError,
+  AgentExecutionError,
+  AgentTransportError
+])
 
+const decodeRemote = Schema.decodeUnknownOption(RemoteErrorSchema)
+
+/**
+ * Whether *everything* in this cause is a remote error.
+ *
+ * `Cause.findErrorOption` returns the first failure, so a composite cause --
+ * two parallel tool calls failing together, say -- was judged by whichever one
+ * happened to come first, and unrelated failures travelled beside it under a
+ * type that did not describe them.
+ */
 const isRemoteCause = (cause: Cause.Cause<unknown>): boolean => {
-  const error = Cause.findErrorOption(cause)
-  return error._tag === "Some" && isRemote(error.value)
+  const failures = cause.reasons.flatMap((reason) =>
+    reason._tag === "Fail" ? [reason.error] : [])
+  // Every reason must be a failure, and every failure a remote one: a defect
+  // or an interruption travelling beside one is not something the wire
+  // contract describes either.
+  return failures.length === cause.reasons.length &&
+    failures.length > 0 &&
+    failures.every(isRemote)
 }
 
 const isRemote = (error: unknown): error is RemoteError =>
-  typeof error === "object" &&
-  error !== null &&
-  typeof (error as { _tag?: unknown })._tag === "string" &&
-  remoteTags.includes((error as { _tag: string })._tag)
+  Option.isSome(decodeRemote(error))
 
 /**
  * Projects a cause the same way `AgentEvent.Failure` does, so the wire and the

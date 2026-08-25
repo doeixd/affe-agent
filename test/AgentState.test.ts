@@ -291,3 +291,35 @@ describe("AgentState under a failing store", () => {
     })
   )
 })
+
+/**
+ * R76 -- a tag's id is its identity, and two tags cannot share one.
+ *
+ * A `Context` key is a string, so `Tag<number>("same")` and `Tag<string>("same")`
+ * were two values naming one service. Merging their layers typechecked, and
+ * reading the number tag could hand back the string service -- with no cast
+ * anywhere, which is what made it a library defect rather than caller error.
+ * Nothing in the types can prove the two `A`s agree, because the only thing
+ * carried across is the text.
+ *
+ * Refused at construction instead: the mistake is reported where it is made,
+ * rather than becoming a value that works until two layers meet.
+ */
+describe("AgentState tag identity", () => {
+  it("refuses a second tag under an id already claimed", () => {
+    const id = `test/AgentState/unique-${Math.random()}`
+    const first = AgentState.Tag<number>(id)
+    assert.isDefined(first)
+
+    assert.throws(
+      () => AgentState.Tag<string>(id),
+      /already exists/
+    )
+  })
+
+  it("a different id is an ordinary tag", () => {
+    const one = AgentState.Tag<number>(`test/AgentState/one-${Math.random()}`)
+    const two = AgentState.Tag<number>(`test/AgentState/two-${Math.random()}`)
+    assert.notStrictEqual(one, two)
+  })
+})
