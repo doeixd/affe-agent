@@ -11,6 +11,7 @@ import * as MemorySandbox from "../../../src/sandbox/memory.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
 import * as NodeStore from "../../../src/tree/NodeStore.js"
+import * as Checkout from "./checkout.ts"
 
 /**
  * What the harness runs against: a model and a workspace.
@@ -53,8 +54,18 @@ export interface Backend {
    *
    * Absent for the scripted backend, which should leave nothing behind.
    */
+  /**
+   * The nodes, and the pointer saying which of them the user was on.
+   *
+   * Together because they are one persistence decision and share one backing:
+   * a conversation and the place it was left in belong to the same workspace,
+   * and deleting the directory should forget both.
+   */
   readonly store?: Effect.Effect<
-    NodeStore.NodeStore<NodeStore.StoreError>,
+    {
+      readonly nodes: NodeStore.NodeStore<NodeStore.StoreError>
+      readonly checkout: Checkout.Checkout
+    },
     PlatformError,
     Scope.Scope
   > | undefined
@@ -292,7 +303,10 @@ export const live = (options: {
       KeyValueStore.layerFileSystem(sessionDirectory(options.workspaceRoot))
         .pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
     ),
-    (context) => NodeStore.keyValue(Context.get(context, KeyValueStore.KeyValueStore))
+    (context) => {
+      const kv = Context.get(context, KeyValueStore.KeyValueStore)
+      return { nodes: NodeStore.keyValue(kv), checkout: Checkout.keyValue(kv) }
+    }
   ),
   layer: Layer.mergeAll(
     AnthropicLanguageModel.layer({ model: options.model }).pipe(

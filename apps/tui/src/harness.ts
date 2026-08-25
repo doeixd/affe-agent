@@ -12,6 +12,7 @@ import * as Redaction from "../../../src/redaction/Redaction.js"
 import * as Sandbox from "../../../src/sandbox/Sandbox.js"
 import type * as NodeStore from "../../../src/tree/NodeStore.js"
 import * as SessionTree from "../../../src/tree/SessionTree.js"
+import * as Checkout from "./checkout.ts"
 import * as TreeExport from "../../../src/tree/TreeExport.js"
 import { type Backend, scripted } from "./backend.ts"
 import { entriesOf } from "./restore.ts"
@@ -478,7 +479,14 @@ export const start = (
      * only accepts infallible effects. The compiler had nothing to object to.
      */
     readonly store?:
-      | Effect.Effect<NodeStore.NodeStore<NodeStore.StoreError>, unknown, Scope.Scope>
+      | Effect.Effect<
+        {
+          readonly nodes: NodeStore.NodeStore<NodeStore.StoreError>
+          readonly checkout: Checkout.Checkout
+        },
+        unknown,
+        Scope.Scope
+      >
       | undefined
   }
 ): Promise<Handle> =>
@@ -503,9 +511,11 @@ export const start = (
        * the result would mean a finalizer that has already run by the time the
        * first node is written.
        */
-      const store = options?.store === undefined
+      const persistence = options?.store === undefined
         ? undefined
         : yield* Effect.orDie(options.store)
+      const store = persistence?.nodes
+      const checkout = persistence?.checkout ?? Checkout.none
 
       const tree = yield* SessionTree.make(agent, {
         // Without this a run needing approval is refused rather than asked.
@@ -523,7 +533,7 @@ export const start = (
        *
        * `None` means an empty store, which is a first launch.
        */
-      const resumeTarget = Effect.map(tree.nodes, (nodes) =>
+      const newestCapture = Effect.map(tree.nodes, (nodes) =>
         nodes.reduce(
           (newest: Option.Option<SessionTree.Node>, node) =>
             Option.isNone(newest) || node.at >= newest.value.at
@@ -532,7 +542,27 @@ export const start = (
           Option.none<SessionTree.Node>()
         ))
 
-      const resuming = yield* resumeTarget
+      /**
+       * The pointer if there is one, the newest capture otherwise.
+       *
+       * Capture time alone was wrong, and quietly. Rewinding moves the cursor
+       * to an older node and *creates nothing*, and so does switching
+       * branches -- so exiting after either left the tip holding the newest
+       * capture, and the next launch silently undid the rewind. Millisecond
+       * ties and a clock that moves backwards make the ordering weaker still.
+       *
+       * The fallback stays for two cases that are not failures: a store
+       * written before this pointer existed, and a pointer naming a node that
+       * is no longer there.
+       */
+      const resuming = yield* Effect.flatMap(checkout.read, (pointer) =>
+        Option.isNone(pointer)
+          ? newestCapture
+          : Effect.flatMap(
+            Effect.orElseSucceed(tree.node(pointer.value), () =>
+              Option.none<SessionTree.Node>()),
+            (found) => Option.isSome(found) ? Effect.succeed(found) : newestCapture
+          ))
       const start = Option.isSome(resuming)
         ? resuming.value
         : yield* tree.commit(
@@ -575,6 +605,10 @@ export const start = (
       // The branch the user starts on. `session` is reassigned on rewind; the
       // handle closes over this binding rather than over a value.
       const opened = yield* tree.activate(start)
+      // Recorded on the way in too, so a launch that resumes and then exits
+      // without doing anything still leaves the pointer describing where the
+      // user actually was.
+      yield* checkout.write(start.id)
       let session = opened.session
       let taken = 0
       let forks = 0
@@ -618,6 +652,10 @@ export const start = (
           const node = yield* tree.active
           const depth = Option.isNone(node) ? 0 : (yield* tree.path(node.value)).length
           sink.setRewind({ depth, taken })
+          // A completed turn advances the cursor without an activation, so the
+          // pointer follows it here: this runs after every submission, which
+          // is exactly when the tree's idea of "where you are" moves.
+          if (Option.isSome(node)) yield* checkout.write(node.value.id)
         })
 
       yield* publishDepth()
@@ -648,6 +686,9 @@ export const start = (
 
         const activation = yield* tree.activate(target.value)
         session = activation.session
+        // Written after the activation succeeded, never before: a pointer to a
+        // branch nobody managed to open is worse than no pointer at all.
+        yield* checkout.write(target.value.id)
         projection.forget()
         taken++
         sink.setStatus("idle")
@@ -840,6 +881,9 @@ export const start = (
         // and then be discarded, since activation makes its own.
         const activation = yield* tree.activate(node.value, { lane })
         session = activation.session
+        // Written after the activation succeeded, never before: a pointer to a
+        // branch nobody managed to open is worse than no pointer at all.
+        yield* checkout.write(node.value.id)
         projection.forget()
         sink.setStatus("idle")
         yield* notice(
@@ -932,6 +976,10 @@ export const start = (
                 if (Option.isNone(found)) return yield* notice("that branch is gone")
                 const activation = yield* tree.activate(found.value)
                 session = activation.session
+                // Written after the activation succeeded, never before: a
+                // pointer to a branch nobody managed to open is worse than no
+                // pointer at all.
+                yield* checkout.write(found.value.id)
                 projection.forget()
                 sink.setStatus("idle")
                 sink.setApproval(undefined)

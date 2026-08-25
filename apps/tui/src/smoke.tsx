@@ -3,6 +3,7 @@ import { App } from "./App.tsx"
 import { Effect } from "effect"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as NodeStore from "../../../src/tree/NodeStore.js"
+import * as Checkout from "./checkout.ts"
 import { Prompt } from "effect/unstable/ai"
 import { TestLanguageModel } from "../../../src/testing/index.js"
 import { entriesOf } from "./restore.ts"
@@ -334,7 +335,13 @@ const persistentStore = Effect.andThen(
         released = released + 1
       })
     )),
-  Effect.succeed(NodeStore.keyValue(persistentKv))
+  // The nodes *and* the checkout pointer, over one backing -- the same shape
+  // the live backend builds, so this exercises the resume path rather than a
+  // simplified version of it.
+  Effect.succeed({
+    nodes: NodeStore.keyValue(persistentKv),
+    checkout: Checkout.keyValue(persistentKv)
+  })
 )
 
 const firstRun = makeStore()
@@ -399,6 +406,66 @@ await until(
 )
 const resumed = secondRun.entries.map((entry) => entry.title).join(" | ")
 const resumedKinds = secondRun.entries.map((entry) => entry.kind)
+
+/**
+ * R131 -- a resume lands where the user left, not at the newest capture.
+ *
+ * Startup used to pick the node with the greatest capture time. That is "the
+ * most recent thing that happened", which is not the same as "where the user
+ * was": rewinding moves the cursor to an older node and *creates nothing*, so
+ * exiting straight after left the tip holding the newest capture and the next
+ * launch silently undid the rewind.
+ *
+ * Driven exactly that way: a second turn, a rewind, an immediate close, then
+ * a fresh launch over the same store.
+ */
+const rewoundKv = await Effect.runPromise(
+  Effect.scoped(
+    KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+      Effect.provide(KeyValueStore.layerMemory)
+    )
+  )
+)
+const rewoundStore = Effect.succeed({
+  nodes: NodeStore.keyValue(rewoundKv),
+  checkout: Checkout.keyValue(rewoundKv)
+})
+
+const beforeExit = makeStore()
+const beforeHandle = await start(beforeExit.sink, { store: rewoundStore })
+const askOn = async (run: ReturnType<typeof makeStore>, handle: Handle, text: string) => {
+  const before = run.entries.filter((entry) => entry.kind === "summary").length
+  handle.submit(text)
+  await until(
+    () => {
+      const view = run.footer()
+      if (view.type === "approval") handle.respond(view.request.id, true)
+      return run.entries.filter((entry) => entry.kind === "summary").length > before
+    },
+    `a turn on the resume fixture (${text})`
+  )
+}
+await askOn(beforeExit, beforeHandle, "first turn")
+await askOn(beforeExit, beforeHandle, "second turn")
+const depthAtTip = beforeExit.rewind().depth
+beforeHandle.rewind()
+await until(() => beforeExit.rewind().taken > 0, "the rewind to be taken")
+const depthAfterRewind = beforeExit.rewind().depth
+await beforeHandle.stop()
+
+const afterExit = makeStore()
+const resumedHandle = await start(afterExit.sink, { store: rewoundStore })
+await until(
+  () => afterExit.entries.some((entry) => entry.title.startsWith("resumed")),
+  "the relaunch to resume"
+)
+const depthOnResume = afterExit.rewind().depth
+await resumedHandle.stop()
+
+// The rewind moved the cursor back one boundary, and the relaunch found it
+// there rather than at the tip it had rewound away from.
+const rewindSurvivedRestart = depthAfterRewind < depthAtTip &&
+  depthOnResume === depthAfterRewind
 
 /**
  * Moving between lines of work needs an idle session.
@@ -1329,6 +1396,9 @@ checks.push(
   // R148
   // Weaker than it looks -- see the comment at the fixture.
   ["a fork racing a submission is decided one way, not both", raceDecidedOnce],
+
+  // R131
+  ["a rewind survives a restart", rewindSurvivedRestart],
 
   // R149
   ["stop resolves only once the harness has closed", releasedOnStop],
