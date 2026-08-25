@@ -54,7 +54,27 @@ export const Fetch = Permission.annotate(
   }),
   {
     action: "net.fetch",
-    resource: ({ url }) => WebFetch.canonicalOrigin(url)
+    /**
+     * The origin, because that is the scope an answer should apply to:
+     * "allow example.com" is a decision a person can hold in their head, and
+     * a per-URL grant would ask again for every page of the same site.
+     */
+    resource: ({ url }) => WebFetch.canonicalOrigin(url),
+    /**
+     * But the question names the whole URL.
+     *
+     * `https://example.com/upload?token=<secret>` was shown as
+     * `https://example.com`, so the prompt concealed exactly the part that
+     * says what is about to leave the machine. Credentials are stripped: a
+     * `user:password@` in the URL is not something to print, and the target
+     * check refuses it anyway.
+     */
+    describe: ({ url }) => {
+      const shown = new URL(url.href)
+      shown.username = ""
+      shown.password = ""
+      return shown.href
+    }
   }
 )
 

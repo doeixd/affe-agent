@@ -187,7 +187,17 @@ export interface Approval {
   readonly id: string
   readonly toolName: string
   readonly action: string
+  /** The scope an answer applies to -- and what "always" would remember. */
   readonly resource: string
+  /**
+   * The invocation itself, when it is narrower than the scope.
+   *
+   * `web_fetch` is scoped to an origin so that "always" means a site rather
+   * than a URL, which left the question showing `https://example.com` for a
+   * call that was about to send a secret in the query string. A view that
+   * renders a question should say this, and remember the resource.
+   */
+  readonly subject?: string
   readonly reason?: string
 }
 

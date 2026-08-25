@@ -1,4 +1,4 @@
-import { Duration, Effect, Layer, Option, Stream } from "effect"
+import { Duration, Effect, Layer, Option, Semaphore, Stream } from "effect"
 import {
   FetchHttpClient,
   HttpClient,
@@ -10,6 +10,22 @@ import * as WebFetch from "./WebFetch.js"
 
 export const MAX_RESPONSE_BYTES = 1024 * 1024
 export const MAX_REDIRECTS = 5
+/**
+ * How many fetches this provider will have in flight at once.
+ *
+ * A model response can contain many `web_fetch` calls, and the default tool
+ * execution strategy runs a response's calls in parallel with no bound -- so
+ * every one of them used to open a request immediately and hold up to a
+ * megabyte of body plus its redirect chain for the whole timeout. An "allow"
+ * policy is a permission decision, not a resource limit, and an "ask" policy
+ * only moves the burst to just after the approval.
+ *
+ * Four, matching the search provider, because these are a *tool's* requests:
+ * the bound is there to keep one model turn from behaving like a crawler,
+ * not to make throughput.
+ */
+export const MAX_CONCURRENT = 4
+
 export const TIMEOUT_MILLIS = 20_000
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
@@ -210,6 +226,7 @@ const charsetOf = (contentType: string): string => {
 /** Construct the portable guarded fetch service from an abstract HttpClient. */
 export const make = Effect.fn("HttpWebFetch.make")(function*() {
   const client = yield* HttpClient.HttpClient
+  const concurrent = yield* Semaphore.make(MAX_CONCURRENT)
 
   const fetchOne = Effect.fn("HttpWebFetch.fetchOne")(function*(
     initial: URL,
@@ -343,7 +360,17 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
 
   const fetch = Effect.fn("HttpWebFetch.fetch")(function*(input: URL) {
     const url = WebFetch.canonicalize(input)
-    return yield* fetchOne(url, url, 0).pipe(
+    /**
+     * One permit for the whole logical fetch, redirects included.
+     *
+     * Taken outside the timeout so a waiting fibre's clock starts when its
+     * request does, and released by the permit's own finalizer, so a typed
+     * failure, a timeout and an interruption all give it back. Inside the
+     * permit rather than around `fetchOne` per hop, because a redirect chain
+     * is one fetch: releasing between hops would let the bound drift up to
+     * the number of hops in flight.
+     */
+    return yield* concurrent.withPermit(fetchOne(url, url, 0)).pipe(
       Effect.timeout(Duration.millis(TIMEOUT_MILLIS)),
       Effect.catchTag("TimeoutError", () =>
         Effect.fail(
@@ -358,9 +385,43 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
   return { fetch }
 })
 
-/** Portable guarded HTTP provider. Redirect visibility depends on HttpClient honoring manual mode. */
+/**
+ * The guarded provider over a client the application supplies.
+ *
+ * What this layer enforces on its own: the target checks, the redirect chain
+ * length, the byte cap, the timeout, the concurrency bound, and the fact that
+ * nothing it builds carries a credential.
+ *
+ * What it cannot enforce, because both depend on behaviour that is not part
+ * of the `HttpClient` contract:
+ *
+ * - **Redirect visibility.** `FetchHttpClient.RequestInit { redirect:
+ *   "manual" }` is honoured by the Fetch-backed implementation. A conforming
+ *   client is free to ignore it and follow redirects internally, and then the
+ *   provider never sees the 3xx, never validates the destination, and the
+ *   second origin is fetched without a fresh permission decision.
+ * - **Ambient credentials.** The request is built with `Accept` and nothing
+ *   else, but middleware on the supplied client can add `Authorization`, a
+ *   cookie or proxy credentials to a *model-selected* origin. `credentials:
+ *   "omit"` governs Fetch-managed credentials only.
+ *
+ * So: do not pass your application's general authenticated client here. Pass
+ * a transport, or use {@link layerFetch}, which owns one.
+ */
 export const layer: Layer.Layer<
   WebFetch.WebFetch,
   never,
   HttpClient.HttpClient
 > = Layer.effect(WebFetch.WebFetch, make())
+
+/**
+ * The guarded provider over a transport it owns.
+ *
+ * The recommended production wiring, and the only one where the redirect and
+ * credential guarantees above are properties of the layer rather than of the
+ * client someone passed. Its requirement channel is `never`, which is the
+ * point: there is no seam for an authenticated client to arrive through.
+ */
+export const layerFetch: Layer.Layer<WebFetch.WebFetch> = layer.pipe(
+  Layer.provide(FetchHttpClient.layer)
+)

@@ -155,9 +155,15 @@ export const fallbackBody = (result: unknown): Body =>
     ? { type: "text", content: result }
     : { type: "text", content: JSON.stringify(result) ?? "" }
 
-/** How a tool with no rule is described when asking for approval. */
+/**
+ * How a tool with no rule is described when asking for approval.
+ *
+ * The subject when there is one, because that is the specific thing about to
+ * happen; the resource is the scope the answer will be remembered under, and
+ * showing only that hid a URL's path and query behind its origin.
+ */
 export const fallbackApproval = (request: Approval): string =>
-  `${request.toolName} wants to ${request.action}: ${request.resource}`
+  `${request.toolName} wants to ${request.action}: ${request.subject ?? request.resource}`
 
 // ---------------------------------------------------------------------------
 // The default rules: our six tools

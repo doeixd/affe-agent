@@ -404,4 +404,168 @@ describe("guarded HTTP web fetch provider", () => {
       }
     })
   )
+
+  /**
+   * R154 -- an "allow" policy is a permission decision, not a resource limit.
+   *
+   * The default tool strategy runs a model response's calls in parallel with
+   * no bound, so twenty `web_fetch` calls used to open twenty requests at
+   * once, each holding a megabyte of body budget and its redirect chain for
+   * the whole timeout.
+   *
+   * The latch is what makes this an assertion rather than a race: every
+   * request blocks until it is opened, so the peak concurrency observed is
+   * the provider's bound and not a scheduling accident.
+   */
+  it.effect("admits no more fetches at once than its bound", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>()
+      const live = yield* Ref.make(0)
+      const peak = yield* Ref.make(0)
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          const now = yield* Ref.updateAndGet(live, (n) => n + 1)
+          yield* Ref.update(peak, (high) => Math.max(high, now))
+          yield* Deferred.await(gate)
+          yield* Ref.update(live, (n) => n - 1)
+          return response(request, "ok", {
+            status: 200,
+            headers: { "content-type": "text/plain" }
+          })
+        }))
+
+      const all = yield* Effect.forkChild(
+        Effect.all(
+          Array.from({ length: 20 }, (_, index) =>
+            Effect.flatMap(WebFetch.WebFetch, (service) =>
+              service.fetch(new URL(`https://example.com/${index}`)))),
+          { concurrency: "unbounded" }
+        ).pipe(Effect.provide(provider(client)))
+      )
+
+      // Let every admitted request reach the client and stop there.
+      yield* Effect.yieldNow
+      yield* Effect.yieldNow
+      assert.strictEqual(yield* Ref.get(live), HttpWebFetch.MAX_CONCURRENT)
+
+      yield* Deferred.succeed(gate, undefined)
+      const results = yield* Fiber.join(all)
+      assert.strictEqual(results.length, 20)
+      assert.strictEqual(
+        yield* Ref.get(peak),
+        HttpWebFetch.MAX_CONCURRENT,
+        "more requests were in flight than the bound allows"
+      )
+    })
+  )
+
+  /**
+   * And the permit comes back however the fetch ends. A permit leaked on a
+   * failure path is worse than no bound at all: the provider works until the
+   * fourth failure and then stops answering forever.
+   *
+   * One client and one provider throughout -- a fresh `provider(...)` per
+   * phase would build a fresh semaphore, and the test would pass however
+   * badly permits leaked. Behaviour is chosen by path instead.
+   */
+  it.effect("returns its permit after a failure, and after an interruption", () =>
+    Effect.gen(function* () {
+      const stuck = yield* Deferred.make<void>()
+      const client = HttpClient.make((request, url) => {
+        if (url.pathname.startsWith("/fail")) {
+          return Effect.succeed(response(request, "", { status: 500 }))
+        }
+        if (url.pathname.startsWith("/held")) {
+          return Effect.as(
+            Deferred.await(stuck),
+            response(request, "", { status: 200 })
+          )
+        }
+        return Effect.succeed(response(request, "fine", {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        }))
+      })
+
+      yield* Effect.gen(function* () {
+        const service = yield* WebFetch.WebFetch
+        const each = Array.from(
+          { length: HttpWebFetch.MAX_CONCURRENT },
+          (_, index) => index
+        )
+
+        // Exactly the bound in failures: a permit lost per failure exhausts it.
+        yield* Effect.forEach(
+          each,
+          (index) => Effect.flip(service.fetch(new URL(`https://example.com/fail/${index}`))),
+          { discard: true }
+        )
+
+        // And the bound again in fetches interrupted while holding a permit.
+        const held = yield* Effect.forkChild(
+          Effect.all(
+            each.map((index) => service.fetch(new URL(`https://example.com/held/${index}`))),
+            { concurrency: "unbounded" }
+          )
+        )
+        yield* Effect.yieldNow
+        yield* Fiber.interrupt(held)
+
+        // Still serving. If any of those eight permits were lost, this hangs.
+        const after = yield* service.fetch(new URL("https://example.com/after"))
+        assert.strictEqual(after.body, "fine")
+      }).pipe(Effect.provide(provider(client)))
+    })
+  )
+
+  /**
+   * R114/R26 -- what the abstract layer can and cannot promise.
+   *
+   * Two properties depend on behaviour that is not in the `HttpClient`
+   * contract: that a redirect is *visible* to the provider, and that no
+   * ambient credential is attached to a model-selected origin. A supplied
+   * client can break both, and no amount of care inside the provider changes
+   * that -- so the fix is a wiring that owns its transport, and a test that
+   * states which layer carries which guarantee.
+   *
+   * This is deliberately a demonstration of the gap, not a claim that it is
+   * closed: it is what stops the documentation from drifting back into
+   * claiming `layer` is a boundary against your own client.
+   */
+  it.effect("an authenticated client reaches the target through the abstract layer", () =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make<Record<string, string>>({})
+      const injecting = HttpClient.mapRequest(
+        HttpClient.make((request) =>
+          Ref.set(sent, { ...request.headers }).pipe(
+            Effect.as(response(request, "ok", {
+              status: 200,
+              headers: { "content-type": "text/plain" }
+            }))
+          )),
+        HttpClientRequest.setHeader("authorization", "Bearer ambient-token")
+      )
+
+      yield* fetchWith(injecting, "https://example.com/page")
+      // The provider builds a request with `accept` and nothing else; the
+      // header is the client's, and it went out.
+      assert.strictEqual(
+        (yield* Ref.get(sent))["authorization"],
+        "Bearer ambient-token"
+      )
+    })
+  )
+
+  it.effect("the transport-owning layer has no seam for one to arrive through", () => {
+    /**
+     * A type-level assertion, because that is where this guarantee lives:
+     * `layerFetch` requires nothing, so there is no `HttpClient` an
+     * application could substitute. A value assertion would need the network.
+     */
+    const owned: Layer.Layer<WebFetch.WebFetch, never, never> =
+      HttpWebFetch.layerFetch
+    return Effect.sync(() => {
+      assert.isDefined(owned)
+    })
+  })
 })

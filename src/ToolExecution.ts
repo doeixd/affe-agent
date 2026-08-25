@@ -234,12 +234,30 @@ export const decide = Effect.fn("ToolExecution.decide")(function* <
       new Error(`permission projection for tool ${call.name} returned a non-string resource`)
     )
   }
+  /**
+   * What a person will be shown, when it is narrower than the scope.
+   *
+   * Computed under the same rules as `resource`: a `describe` that throws is
+   * the tool author's bug. Omitted when it would repeat the resource, so a
+   * renderer can treat its presence as "there is more to say here".
+   */
+  const described = projection.describe === undefined
+    ? undefined
+    : yield* Effect.sync(() => {
+      try {
+        const value = projection.describe!(decoded.value)
+        return typeof value === "string" ? value : undefined
+      } catch (cause) {
+        throw new Error(`permission description for tool ${call.name} threw`, { cause })
+      }
+    })
   const request: Permission.Request = {
     sessionId: options.sessionId,
     toolCallId: call.id,
     tool: { name: call.name, params: call.params },
     action: projection.action,
     resource,
+    ...(described === undefined || described === resource ? {} : { subject: described }),
     intrinsicApproval: intrinsic,
     messages: options.messages
   }
@@ -334,6 +352,9 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         toolCallId: call.id,
         action: outcome.request.action,
         resource: outcome.request.resource,
+        ...(outcome.request.subject === undefined
+          ? {}
+          : { subject: outcome.request.subject }),
         ...(outcome.decision.reason === undefined
           ? {}
           : { reason: outcome.decision.reason })

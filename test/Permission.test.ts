@@ -235,6 +235,27 @@ const Bash = Permission.annotate(
   { action: "shell", resource: ({ command }) => command }
 )
 
+
+/**
+ * A tool whose scope is deliberately coarser than its invocation.
+ *
+ * The shape `web_fetch` has: an answer is remembered per *origin*, so
+ * "always" means a site rather than a URL -- and the question therefore
+ * showed `https://example.com` for a call about to send a secret in the
+ * query string.
+ */
+const Fetch = Permission.annotate(
+  Tool.make("web_fetch", {
+    parameters: Schema.Struct({ url: Schema.String }),
+    success: Schema.String
+  }),
+  {
+    action: "net.fetch",
+    resource: ({ url }) => new URL(url).origin,
+    describe: ({ url }) => url
+  }
+)
+
 /** One session with a recording bash handler. */
 const fixture = <PR = never>(
   turns: ReadonlyArray<TestLanguageModel.Turn>,
@@ -941,6 +962,85 @@ describe("Permission enforcement", () => {
       ).pipe(Effect.provide(layer))
       assert.strictEqual(error._tag, "ToolPermissionDeniedError")
       assert.deepStrictEqual(yield* Ref.get(ran), [])
+    })
+  )
+
+  /**
+   * R116 -- the question is specific, the memory is coarse.
+   *
+   * These are two different strings and used to be one. A remembered grant
+   * keyed per URL would ask again for every page of a site, so the scope is
+   * the origin; but showing only the scope meant the approval concealed the
+   * data the call was about to send.
+   */
+  it.effect("an approval shows the invocation while remembering the scope", () =>
+    Effect.gen(function* () {
+      const secret = "https://example.com/upload?token=s3cr3t"
+      const ran = yield* Ref.make<Array<string>>([])
+      const toolkit = yield* Agent.toolkit([Fetch], {
+        web_fetch: ({ url }) => Ref.update(ran, (all) => [...all, url]).pipe(Effect.as("ok"))
+      })
+      const { layer } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "c1", name: "web_fetch", params: { url: secret } }] },
+        { toolCalls: [{ id: "c2", name: "web_fetch", params: { url: "https://example.com/other" } }] },
+        TestLanguageModel.text("done")
+      ])
+      const agent = Agent.make({
+        toolkit,
+        loop: AgentLoop.bounded(6),
+        permission: yield* Permission.remembered(Permission.askAll)
+      })
+
+      const asked = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent, { elicitation: Elicitation.memory })
+          const running = yield* Effect.forkChild(Effect.exit(session.prompt("go")))
+
+          const first = yield* nextAsk(session)
+          // The whole URL, so a person can see what is leaving.
+          assert.strictEqual(first.detail.subject, secret)
+          // And the origin, which is what "always" will apply to.
+          assert.strictEqual(first.detail.resource, "https://example.com")
+          yield* AgentSession.respond(session, {
+            id: first.id,
+            granted: true,
+            value: { remember: true }
+          })
+
+          yield* Fiber.join(running)
+          return first
+        })
+      ).pipe(Effect.provide(layer))
+
+      void asked
+      // Both calls ran: the second was covered by the origin-wide grant and
+      // was never asked about. A per-URL scope would have asked twice.
+      assert.deepStrictEqual(yield* Ref.get(ran), [
+        secret,
+        "https://example.com/other"
+      ])
+    })
+  )
+
+  it.effect("a tool whose scope is its invocation carries no separate subject", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture([call("c1", "rm -rf /"), TestLanguageModel.text("no")], {
+        permission: Permission.askAll
+      })
+      const detail = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(f.agent, { elicitation: Elicitation.memory })
+          yield* Effect.forkChild(Effect.exit(session.prompt("go")))
+          const ask = yield* nextAsk(session)
+          yield* AgentSession.respond(session, { id: ask.id, granted: false })
+          return ask.detail
+        })
+      ).pipe(Effect.provide(f.layer))
+
+      // Absent, not equal-to-resource: its presence is the signal that there
+      // is something more specific to say.
+      assert.isUndefined(detail.subject)
+      assert.strictEqual(detail.resource, "rm -rf /")
     })
   )
 })

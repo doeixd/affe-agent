@@ -347,12 +347,29 @@ describe("DurableStreamsDeliveryLog across processes", () => {
         ],
         { concurrency: "unbounded" }
       )
-      // Same event: both Appended at sequence 1 (the payload matches, so
-      // neither is a conflict).
-      assert.deepStrictEqual([first, second].map((o) => o._tag).sort(), ["Appended", "Appended"])
+      /**
+       * Neither is a conflict, and neither invents a second offset.
+       *
+       * Both being told `Appended` was asserted here, and it is only true
+       * when the two calls genuinely overlap: if the first finishes before
+       * the second syncs, the second sees the key already present and is
+       * correctly told `Duplicate`. That is the same answer -- your event is
+       * in the log, once -- and the test used to fail whenever a loaded
+       * machine let the race resolve cleanly.
+       *
+       * What must hold either way is that nobody is told the payload
+       * disagrees, and nobody is given an offset other than 1.
+       */
       for (const outcome of [first, second]) {
+        assert.notStrictEqual(outcome._tag, "Conflict")
         if (outcome._tag === "Appended") assert.strictEqual(outcome.sequence, 1)
       }
+      // And somebody wrote it: two duplicates would mean the event came from
+      // nowhere.
+      assert.isTrue(
+        [first, second].some((outcome) => outcome._tag === "Appended"),
+        "neither recorder claims to have written the event"
+      )
       // One event in the log, numbered 1, from either reader.
       assert.deepStrictEqual((yield* a.read("race")).map((e) => e.sequence), [1])
       assert.deepStrictEqual((yield* b.read("race")).map((e) => e.sequence), [1])

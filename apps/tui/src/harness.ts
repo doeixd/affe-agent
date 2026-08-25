@@ -284,6 +284,7 @@ export const project = (
           toolName: String(fields.toolName ?? "tool"),
           action: String(fields.action ?? ""),
           resource: String(fields.resource ?? ""),
+          ...(typeof fields.subject === "string" ? { subject: fields.subject } : {}),
           ...(typeof fields.reason === "string" ? { reason: fields.reason } : {})
         })
         return

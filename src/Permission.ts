@@ -89,6 +89,14 @@ export interface Request {
    * harness applies it as a floor regardless of what the policy returns.
    */
   readonly intrinsicApproval: boolean
+  /**
+   * The invocation as a person should see it, when narrower than `resource`.
+   *
+   * Present only when the tool's projection says the two differ. A policy is
+   * free to ignore it -- it exists so the *question* can be specific while
+   * the remembered answer stays coarse.
+   */
+  readonly subject?: string | undefined
   /** The conversation leading up to the call. */
   readonly messages: ReadonlyArray<Prompt.Message>
 }
@@ -111,6 +119,21 @@ export interface Request {
 export interface Projection<Params = unknown> {
   readonly action: string
   readonly resource: (params: Params) => string
+  /**
+   * What to *show* a person being asked, when that differs from the scope.
+   *
+   * `resource` is the key an answer is remembered under, and a good key is
+   * often deliberately coarse: `web_fetch` keys on the origin so that "allow
+   * example.com" means what it says. But coarse is exactly wrong for the
+   * question itself -- `https://example.com/upload?token=<secret>` was shown
+   * as `https://example.com`, so the approval concealed the data it was
+   * approving.
+   *
+   * Optional, and defaulted to `resource`: for a tool whose scope already is
+   * the thing being done -- `bash` on a command -- the two are the same
+   * string and there is nothing to separate.
+   */
+  readonly describe?: ((params: Params) => string) | undefined
 }
 
 /** The annotation key. */
@@ -355,7 +378,16 @@ export const ApprovalDetail = Schema.Struct({
   toolName: Schema.String,
   toolCallId: Schema.String,
   action: Schema.String,
+  /** The scope an answer applies to, and the key a remembered grant uses. */
   resource: Schema.String,
+  /**
+   * The invocation itself, when it is narrower than the scope.
+   *
+   * Absent when it would repeat `resource`. A caller rendering a question
+   * should prefer this and fall back to `resource`; see `Projection.describe`
+   * for why the two are not the same string.
+   */
+  subject: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String)
 })
 export type ApprovalDetail = typeof ApprovalDetail.Type
