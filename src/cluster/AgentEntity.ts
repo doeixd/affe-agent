@@ -95,6 +95,30 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             // `DurableAgentClient` for a conversation that continues across
             // submissions.
             yield* DurableAgent.open(store, sessionId)
+            /**
+             * R173's sibling, R172: this acknowledgement runs ahead of the
+             * work, and the fork is why -- and why it cannot simply be
+             * awaited.
+             *
+             * The caller is handed an execution id the instant admission
+             * opens, before anything durable exists. Process loss in that
+             * window loses the submission outright and leaves the admission
+             * marker open with no execution behind it, so steering and
+             * follow-ups are accepted into channels nothing will ever drain.
+             * An in-process dispatch failure is only logged, after the caller
+             * has already been told the submission started.
+             *
+             * Awaiting the dispatch instead was tried and deadlocks:
+             * `execute` routes back through *this* runner, so the handler
+             * would be waiting on work only the handler can process. The
+             * comment above about polling the engine from inside the entity
+             * is the same fact from the other side.
+             *
+             * Closing this needs a persisted claim -- an outbox row written
+             * before the reply and drained by a reconciler -- which is a new
+             * mechanism rather than a reordering. Until it exists, the window
+             * is real and recorded here rather than only in a review.
+             */
             yield* Effect.forkDetach(
               DurableAgent.throughShardReassignment(
                 agent.definition.execute({ sessionId, prompt }, { discard: true })

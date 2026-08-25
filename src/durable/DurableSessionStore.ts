@@ -575,6 +575,31 @@ const rowToRecord = (row: SessionRow): Effect.Effect<SessionRecord, StorageError
  * Any deployment already has a `SqlClient`, because `ClusterWorkflowEngine`
  * needs one for its journal. `sqlStoreWithTables` creates the tables; a
  * deployment managing its own schema uses `sqlStore` over existing ones.
+ *
+ * ## What "one transaction" does and does not guarantee (R66)
+ *
+ * A transaction gives atomicity and rollback. It does **not**, by itself, give
+ * serialisability: under the read-committed isolation that most engines
+ * default to, two transactions can each `SELECT`, each see the same absence,
+ * and each `INSERT`. The transitions here are written as select-then-write, so
+ * on such an engine:
+ *
+ * - `getOrCreate` can race into a uniqueness violation rather than one caller
+ *   creating and the other reading;
+ * - a claim decided from a prior read can be admitted twice, with the loser
+ *   surfacing as a `StorageError` rather than the busy answer it should be.
+ *
+ * The suite runs against SQLite, which serialises writers at the file level
+ * and therefore cannot exhibit either -- so passing tests are not evidence for
+ * the portable claim, which is exactly why this paragraph exists rather than a
+ * checkmark.
+ *
+ * A deployment on Postgres, MySQL or anything else with row-level concurrency
+ * should either run these transitions at `SERIALIZABLE`, or replace them with
+ * conditional statements that encode the precondition in the mutation --
+ * `INSERT … ON CONFLICT DO NOTHING`, `UPDATE … WHERE status = 'idle'` --
+ * rather than in a preceding read. Both are engine-specific, which is why this
+ * portable module states the requirement instead of guessing at the dialect.
  */
 export const sqlStore = (
   options?: {

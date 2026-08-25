@@ -3762,6 +3762,28 @@ edit or commit it, and the path is disclosed). R182 (the drain is triggered by
 the settled prefix rather than the entry count, with a bounded retry for a
 failed write).
 
+**Core control and identity.** R34 (a tree cursor's "unchanged" is the same
+conversation, not the same length -- the old check handed one session another's
+node, which the falsification demonstrated). R39 (a submission that will be
+refused never enqueues a transcript line). R58's regex half (a conservative
+refusal for the patterns that stop the event loop, explicitly not a decision
+procedure). R105 (the command smoke waits for what a command produced rather
+than for the state it began in). R171 (`steer`, `followUp` and `interrupt`
+re-check their submission id under the input gate that the release contends
+for).
+
+**Execution plan, continued.** R19 (`Model` threaded through every combinator,
+so applying a plan first or last gives the same agent). R28 (the plan's `input`
+must accept the model call's `AiError`, stated as a conditional return type
+because a parameter constraint destroys the inference). R37 (a durable agent
+carrying a plan is refused, because the plan's layer shadows `DurableModel` and
+a replay would repeat a billed call).
+
+**Fault injection.** R92, R93 (faults injected where the mutation is, which
+immediately showed that a store committing *before* it fails leaves a claim
+behind -- so the D7 row now reads "partial" and the test asserts the real
+behaviour with a note saying what closing it looks like).
+
 ### Open, with what is known
 
 - **R2** needs an entry point in Effect AI's `Toolkit` that takes an
@@ -3793,4 +3815,26 @@ failed write).
   of instructions with no suspension point, so an interrupt or a concurrent
   call issued from a test lands before or after rather than inside. Driving
   them would mean adding a seam to production code for a test to hold open.
+- **R66.** A transaction gives atomicity, not serialisability, and these
+  transitions are select-then-write. The suite runs against SQLite, which
+  serialises writers at the file level and therefore cannot exhibit the race --
+  so passing tests are not evidence for the portable claim. The requirement is
+  now stated on `sqlStore` itself: run at `SERIALIZABLE`, or encode the
+  precondition in the mutation. Both are engine-specific, which is why a
+  portable module states it rather than guessing at a dialect.
+- **R172.** The entity acknowledges a submission before anything durable
+  exists. Awaiting the dispatch instead was tried and deadlocks: `execute`
+  routes back through the same runner, so the handler would wait on work only
+  the handler can process. Closing it needs a persisted claim drained by a
+  reconciler -- a new mechanism, not a reordering. The window is now recorded
+  in the code.
+- **R173.** Half fixed: a terminal event is recorded before it is forgotten.
+  The other half is an ordering with no safe choice -- clearing before
+  `finish` can strand a claim, finishing before clearing can wipe the *next*
+  submission's admission marker, and the second corrupts work happening now.
+  The reversal was tried and reverted when the existing ordering test caught
+  it. Closing it needs one transaction or reconciliation.
+- **R36.** Durable permission replay journals the policy answer but recomputes
+  the projection and `needsApproval`, which Effect AI allows to be effectful.
+  The same class of problem as R2 and with the same shape of fix.
 - Everything not listed above remains as this review recorded it.
