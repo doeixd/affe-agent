@@ -387,9 +387,18 @@ const BranchesView = (props: {
             value: item.id
           }))}
           showDescription
-          onSelect={(_index: number, option: { value?: unknown } | null) => {
-            const id = option?.value
-            if (typeof id === "string") props.handle.switchTo(id)
+          /**
+           * Selected by position, not by the option's `value`.
+           *
+           * OpenTUI hands `value` back as `unknown`, so reading the id out of
+           * it meant narrowing to `string` and then converting to a `NodeId`
+           * with a cast -- in application code, which this repository forbids.
+           * The index addresses the very list that was just rendered, so the
+           * item it finds is the item that was drawn, brand and all.
+           */
+          onSelect={(index: number) => {
+            const item = props.items[index]
+            if (item !== undefined) props.handle.switchTo(item.id)
           }}
         />
       </Show>

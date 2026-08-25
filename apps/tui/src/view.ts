@@ -1,3 +1,4 @@
+import type * as NodeStore from "../../../src/tree/NodeStore.js"
 import type { EntryKind } from "./theme.ts"
 
 /**
@@ -173,7 +174,19 @@ export interface Command {
  * strings and one flag whatever the tree underneath looks like.
  */
 export interface BranchItem {
-  readonly id: string
+  /**
+   * The node's own id, branded, not a bare string.
+   *
+   * It was flattened to `string`, which meant `switchTo` had to convert it
+   * back with `id as never` before handing it to `tree.node` -- a cast in
+   * application code, which this repository forbids outright, and one that let
+   * any string at all enter a branded identity API without validation.
+   *
+   * A `NodeId` *is* a string as far as rendering is concerned, so nothing in
+   * the view has to know what it is. Carrying the brand costs the renderer
+   * nothing and removes the only reason to lie about the type.
+   */
+  readonly id: NodeStore.NodeId
   /** The lane's name, or the words that started this line of work. */
   readonly label: string
   /** `3 turns · 12 messages`, or similar. */
@@ -233,7 +246,7 @@ export interface Handle {
   /** Run a palette command by name. Unknown names are reported, not ignored. */
   readonly command: (name: string) => void
   /** Switch to a branch by id. */
-  readonly switchTo: (id: string) => void
+  readonly switchTo: (id: NodeStore.NodeId) => void
   /** The commands the palette offers. Static, so the renderer can filter. */
   readonly commands: ReadonlyArray<Command>
   /**

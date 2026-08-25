@@ -695,7 +695,33 @@ export const start = (
           all.flatMap((node) => Option.isSome(node.parent) ? [node.parent.value] : [])
         )
         const leaves = all.filter((node) => !parents.has(node.id))
-        return yield* Effect.forEach(leaves, (node) =>
+
+        /**
+         * Leaves, plus every node a lane names, plus wherever the user is.
+         *
+         * Leaves alone was wrong in two ways that both made the selector lie
+         * about what it offers.
+         *
+         * `/branch` forks at the current node and says "the other line is
+         * still there" -- and it was, until the forked session committed its
+         * first turn. The fork point then stopped being a leaf and vanished
+         * from the list, so the only way back was a rewind: the exact
+         * operation `/branch` exists to avoid. A named lane is a line of work
+         * somebody chose to name, and it stays listed whether or not it has
+         * grown children since.
+         *
+         * And immediately after a rewind the active cursor is an internal
+         * node with descendants, so *no* listed leaf was marked active --
+         * a selector whose contract is "one row is where you are" showing
+         * none.
+         */
+        const shown = new Map(leaves.map((node) => [node.id, node]))
+        for (const lane of lanes) shown.set(lane.leaf.id, lane.leaf)
+        for (const node of all) {
+          if (Option.isSome(active) && active.value.id === node.id) shown.set(node.id, node)
+        }
+
+        return yield* Effect.forEach([...shown.values()], (node) =>
           Effect.map(tree.summary(node), (summary): BranchItem => ({
             id: node.id,
             label: named.get(node.id)
@@ -902,7 +928,7 @@ export const start = (
           fork(
             Effect.ignore(
               whileIdle("switch", Effect.orDie(Effect.gen(function*() {
-                const found = yield* tree.node(id as never)
+                const found = yield* tree.node(id)
                 if (Option.isNone(found)) return yield* notice("that branch is gone")
                 const activation = yield* tree.activate(found.value)
                 session = activation.session

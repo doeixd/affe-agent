@@ -205,9 +205,16 @@ const transcriptSoFar = externalOutput.takeText()
 // `/branches` fills the footer from the tree.
 handle.command("branches")
 await until(() => footer().type === "branches", "the branch selector")
-const listed = footer().type === "branches"
-  ? (footer() as { type: "branches"; items: ReadonlyArray<{ id: string; label: string; detail: string; active: boolean }> }).items
-  : []
+/**
+ * Narrowed, not asserted.
+ *
+ * This read the footer twice and cast the second read to a hand-written shape
+ * -- which is a cast in test code, and test code counts. Binding the value
+ * once lets the union narrow on its own, and the items come back as real
+ * `BranchItem`s, node-id brand included.
+ */
+const branchesView = footer()
+const listed = branchesView.type === "branches" ? branchesView.items : []
 
 // Switching to the branch already active is the identity case, and has to
 // leave a working prompt behind rather than a footer nobody dismissed.
@@ -223,16 +230,40 @@ handle.command("branch")
 await until(() => entries.length === 0, "the fork notice")
 handle.command("branches")
 await until(() => footer().type === "branches", "the selector after forking")
-const afterFork = footer().type === "branches"
-  ? (footer() as {
-    type: "branches"
-    items: ReadonlyArray<{ id: string; label: string; detail: string; active: boolean }>
-  }).items
-  : []
+const forkedView = footer()
+const afterFork = forkedView.type === "branches" ? forkedView.items : []
+const forkPointId = afterFork.find((item) => item.active)?.id
 handle.command("branch")  // dismisses nothing; the selector is still open
 await until(() => entries.length === 0, "the second fork notice")
 sink.setBranches(undefined)
 await until(() => footer().type === "prompt", "the footer to return")
+
+/**
+ * R110 -- the line a fork forked *from* must stay reachable.
+ *
+ * `/branch` says "the other line is still there", and it was, until the forked
+ * session committed its first turn: the fork point stopped being a leaf and
+ * vanished from the selector, leaving a rewind as the only way back -- the
+ * exact operation `/branch` exists to avoid.
+ *
+ * The old assertion here was `afterFork.length >= branchesBeforeFork`,
+ * measured *before* any prompt created a child. At that moment activating the
+ * same endpoint need not change the leaf count at all, so it held whether or
+ * not the fork point survived. This runs a turn first, which is what makes the
+ * fork point stop being a leaf.
+ */
+await ask("something on the forked line")
+handle.command("branches")
+await until(() => footer().type === "branches", "the selector after a forked turn")
+const afterChildView = footer()
+const afterChild = afterChildView.type === "branches" ? afterChildView.items : []
+sink.setBranches(undefined)
+await until(() => footer().type === "prompt", "the footer to return again")
+
+const forkPointStillListed = forkPointId !== undefined &&
+  afterChild.some((item) => item.id === forkPointId)
+// And exactly one row says where the user is, which is the selector's contract.
+const exactlyOneActive = afterChild.filter((item) => item.active).length === 1
 
 // An unknown command is reported rather than ignored.
 handle.command("nonsense")
@@ -1215,6 +1246,12 @@ checks.push(
   // The point of a fork rather than a rewind: the line forked from is one of
   // the choices afterwards, not something that was undone.
   ["forking adds a line of work", afterFork.length >= branchesBeforeFork],
+  // R110 -- and the line it forked *from* is still selectable after the new
+  // line has grown a turn, which is when it stops being a leaf.
+  ["the fork point survives its first child", forkPointStillListed],
+  // R101 -- one row, and only one, says where the user is. After a rewind the
+  // cursor is an internal node, and a leaves-only list marked none of them.
+  ["the selector always says where you are", exactlyOneActive],
   ["the fork is the one in use", afterFork.some((item) => item.active)],
 
   // V9: persistence
