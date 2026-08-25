@@ -10,6 +10,7 @@ import * as SearchFormat from "../src/coding/internal/searchFormat.js"
 import * as Truncate from "../src/coding/internal/truncate.js"
 import * as Permission from "../src/Permission.js"
 import * as MemorySandbox from "../src/sandbox/memory.js"
+import * as RegexSafety from "../src/coding/internal/regexSafety.js"
 import * as Sandbox from "../src/sandbox/Sandbox.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -1442,4 +1443,83 @@ describe("CodingToolkit in a session", () => {
       assert.include(JSON.stringify(write), "read-only session")
     })
   )
+})
+
+/**
+ * R58, the regex half -- a model-supplied pattern can stop the process.
+ *
+ * `search` compiles `pattern` into a native `RegExp` and runs it over every
+ * line of every eligible file. JavaScript's engine backtracks, so a quantifier
+ * applied to something itself quantified or ambiguously alternated takes time
+ * exponential in the line length -- and matching runs synchronously to
+ * completion, so an `Effect.timeout` cannot preempt it, an interruption cannot
+ * preempt it, and the event loop is gone for as long as it takes.
+ *
+ * The refusal is a *conservative syntactic check*, not a decision procedure,
+ * and these tests are written to say so: they pin the shapes that are refused,
+ * the ordinary patterns that are not, and -- explicitly -- that a safe pattern
+ * matching the refused shape is refused too.
+ *
+ * Structural rather than timed. A timing test for this passes on a fast
+ * machine with the check removed, which is the failure mode that makes a test
+ * worse than none.
+ */
+describe("search pattern safety", () => {
+  const refused: ReadonlyArray<readonly [string, string]> = [
+    ["(a+)+$", "another repetition"],
+    ["(a*)*b", "another repetition"],
+    ["(a|a)*$", "an alternation"],
+    ["(\d+|\w+)*x", "another repetition"],
+    ["(x|y){2,}", "an alternation"]
+  ]
+
+  for (const [pattern, because] of refused) {
+    it(`refuses ${pattern}`, () => {
+      const reason = RegexSafety.refuse(pattern)
+      assert.isDefined(reason, `${pattern} should have been refused`)
+      assert.include(reason ?? "", because)
+    })
+  }
+
+  const allowed = [
+    "needle",
+    "^const \w+ = ",
+    "foo|bar",
+    "a+b+c+",
+    "(abc)+",
+    "[a-z]{2,4}",
+    "\((a|b)\)",
+    "(?:literal)+"
+  ]
+
+  for (const pattern of allowed) {
+    it(`allows ${pattern}`, () => {
+      assert.isUndefined(
+        RegexSafety.refuse(pattern),
+        `${pattern} is ordinary and must not be refused`
+      )
+    })
+  }
+
+  /**
+   * The honest limit, pinned so nobody reads the check as a decision
+   * procedure: `(ab)+` is perfectly safe and `(a|b)+` is refused, because
+   * telling them apart needs to know whether the alternatives can match the
+   * same text -- which a syntactic scan cannot.
+   */
+  it("refuses some patterns that are in fact safe", () => {
+    assert.isDefined(RegexSafety.refuse("(a|b)+"))
+    // And the model is told why, so it can write the version that is allowed.
+    assert.include(RegexSafety.refuse("(a|b)+") ?? "", "exponential")
+  })
+
+  it("reports the refusal through the tool rather than searching anyway", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(
+          withSandbox({ "a.ts": "aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, H.search({ pattern: "(a+)+$" }, ctx))
+        )
+        assert.include(String(failure), "Refusing to search with this pattern")
+      })
+    ))
 })

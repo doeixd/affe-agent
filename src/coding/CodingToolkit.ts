@@ -5,6 +5,7 @@ import * as Permission from "../Permission.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
 import * as LineEndings from "./internal/lineEndings.js"
 import * as Glob from "./internal/glob.js"
+import * as RegexSafety from "./internal/regexSafety.js"
 import * as Prompts from "./internal/prompts.js"
 import * as ReadFormat from "./internal/readFormat.js"
 import * as SearchFormat from "./internal/searchFormat.js"
@@ -653,6 +654,24 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
   search: ({ include, path: dir, pattern }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
+      /**
+       * Refused before it is compiled, where refusing is still possible.
+       *
+       * A JavaScript regular expression runs synchronously to completion, so
+       * once matching has begun neither an `Effect.timeout` nor an interrupt
+       * can stop it -- the event loop is simply gone for as long as it takes.
+       * `RegexSafety.refuse` is a conservative syntactic check rather than a
+       * decision procedure; see that module for exactly what it does and does
+       * not promise.
+       */
+      const unsafe = RegexSafety.refuse(pattern)
+      if (unsafe !== undefined) {
+        return yield* Effect.fail(
+          `Refusing to search with this pattern: ${unsafe}.` +
+            ` Rewrite it without the nested repetition, or search for a` +
+            ` simpler pattern and filter the results.`
+        )
+      }
       const regex = yield* Effect.try({
         try: () => new RegExp(pattern),
         catch: () => `invalid regular expression: ${pattern}`
