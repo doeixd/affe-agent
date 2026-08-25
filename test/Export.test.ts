@@ -272,13 +272,26 @@ describe("Replay", () => {
       const replayed = yield* Effect.gen(function*() {
         const { layer } = yield* TestLanguageModel.script(turns)
         return yield* Effect.gen(function*() {
-          const session = yield* AgentSession.make(agent)
+          // Seeded with what came before the model first spoke, then given
+          // the prompts that came after. The two partition the user's side
+          // exactly, which is what stops the opening prompt being submitted
+          // twice -- `seedOf` used to keep only the first message of the
+          // whole conversation and `promptsOf` re-sent it.
+          const session = yield* AgentSession.make(agent, {
+            history: Replay.seedOf(recorded)
+          })
           for (const prompt of prompts) yield* session.prompt(prompt)
           return yield* session.history
         }).pipe(Effect.provide(layer), Effect.scoped)
       })
 
-      assert.deepStrictEqual(prompts, ["first question", "second question"])
+      // Both prompts, each as a whole message -- and the seed holds the
+      // system context they were asked against, so nothing is sent twice.
+      assert.strictEqual(prompts.length, 2)
+      assert.include(textOf(prompts[0]!), "first question")
+      assert.include(textOf(prompts[1]!), "second question")
+      assert.include(textOf(Replay.seedOf(recorded)), "You answer briefly")
+      assert.notInclude(textOf(Replay.seedOf(recorded)), "first question")
       assert.strictEqual(turns.length, 2)
       // The conversation came out the same, which is the whole claim: a
       // session that hit a bug can be committed as a fixture that reproduces
@@ -388,5 +401,67 @@ describe("Replay", () => {
       const back = yield* Export.parse(text)
       assert.isFalse(text.includes("hello"))
       assert.strictEqual(back.session.sessionId, "s1")
+    }))
+
+  /**
+   * R83 -- what the extraction used to drop on the floor.
+   *
+   * Three losses, each silent:
+   *
+   * - `promptsOf` concatenated the text parts of a user message, so a prompt
+   *   carrying a file or an image came back as its caption -- and a prompt
+   *   with no text at all came back as nothing, taking its position in the
+   *   sequence with it.
+   * - An assistant message with neither text nor tool calls was dropped, so
+   *   every later turn moved up one and the script answered the wrong prompt
+   *   from that point on.
+   * - `seedOf` kept the first message of the conversation, so a run that
+   *   opened with a prompt had that prompt replayed twice.
+   *
+   * Built as a literal transcript: these are precisely the shapes a scripted
+   * run does not produce.
+   */
+  it.effect("keeps non-text prompts, empty turns, and the seed boundary", () =>
+    Effect.gen(function*() {
+      const exported = yield* Export.of(
+        {
+          sessionId: "s1",
+          history: Prompt.fromMessages([
+            Prompt.systemMessage({ content: "be brief" }),
+            Prompt.userMessage({
+              content: [
+                Prompt.textPart({ text: "look at this" }),
+                Prompt.filePart({
+                  mediaType: "text/plain",
+                  data: new Uint8Array([1, 2, 3])
+                })
+              ]
+            }),
+            // A turn where the model said nothing at all.
+            Prompt.assistantMessage({ content: [] }),
+            Prompt.userMessage({ content: [Prompt.textPart({ text: "and now?" })] }),
+            Prompt.assistantMessage({ content: [Prompt.textPart({ text: "done" })] })
+          ])
+        },
+        { harnessVersion: "test" }
+      )
+
+      const prompts = Replay.promptsOf(exported)
+      assert.strictEqual(prompts.length, 2)
+      // The file survived: the prompt is the message, not its caption.
+      const first = prompts[0]!.content[0]!
+      assert.strictEqual(first.role, "user")
+      if (first.role === "user") assert.strictEqual(first.content.length, 2)
+
+      // The empty turn is still a turn, so the second answer stays second.
+      const turns = Replay.turnsOf(exported)
+      assert.strictEqual(turns.length, 2)
+      assert.strictEqual(turns[0]?.text, "")
+      assert.strictEqual(turns[1]?.text, "done")
+
+      // The seed is the system message and nothing else: no prompt is in both.
+      const seed = Replay.seedOf(exported)
+      assert.strictEqual(seed.content.length, 1)
+      assert.strictEqual(seed.content[0]?.role, "system")
     }))
 })

@@ -18,8 +18,22 @@ import type * as Export from "./Export.js"
  *   drift from what models actually emit.
  * - **CI that cannot flake**, because there is nothing non-deterministic left.
  *
- * The honest limit is written into `turnsOf` below: a replay reproduces what
- * the *model* said, not what the *tools* did.
+ * The honest limits, both of them:
+ *
+ * - A replay reproduces what the *model* said, not what the *tools* did --
+ *   see `turnsOf`.
+ * - It reproduces the *conversation*, not the run's control flow. A history
+ *   records messages; it does not record which of them arrived as a fresh
+ *   submission and which were steered or queued into a submission already
+ *   running. Those look identical afterwards, so a replay submits each of them
+ *   as its own prompt. The model sees the same messages in the same order; the
+ *   *run boundaries* differ, and with them permission timing and the loop's
+ *   view of where a turn began. Reproducing that would need the event log, not
+ *   the transcript.
+ *
+ * Neither is a defect to be fixed here; they are what a transcript can and
+ * cannot say, written down so nobody has to rediscover them from a fixture
+ * that does not reproduce.
  */
 
 /** The shape `TestLanguageModel.script` consumes. */
@@ -68,7 +82,11 @@ export const turnsOf = (self: Export.Export): ReadonlyArray<Turn> =>
         ...(part.providerExecuted === true ? { providerExecuted: true } : {})
       }))
 
-    if (text === "" && toolCalls.length === 0) return []
+    // An assistant message with nothing in it is still a turn the model took.
+    // Dropping it used to shift every later turn up by one, so a script
+    // replayed the wrong answer to every subsequent prompt -- a silent
+    // off-by-one in the middle of a fixture.
+    if (text === "" && toolCalls.length === 0) return [{ text: "" }]
     return [{
       ...(text === "" ? {} : { text }),
       ...(toolCalls.length === 0 ? {} : { toolCalls })
@@ -76,21 +94,41 @@ export const turnsOf = (self: Export.Export): ReadonlyArray<Turn> =>
   })
 
 /**
- * What the user said, in order.
+ * Where the user first speaks, which is where the seed ends.
+ *
+ * The boundary is the first *user* message, not the first assistant one. A
+ * seed containing an unanswered prompt would be replayed as context that
+ * nobody responded to, and the script's first turn would then answer the
+ * second question -- every later answer landing one prompt early.
+ *
+ * `-1` when the user never speaks: a transcript with no prompt in it is all
+ * seed, and cannot be replayed at all.
+ */
+const firstPrompt = (self: Export.Export): number =>
+  self.session.history.content.findIndex((message) => message.role === "user")
+
+/**
+ * What the user said after the conversation started, in order.
  *
  * A replay needs prompting: the script supplies the model's side, and these
- * are the inputs that draw them out. Without this a caller has to invent
- * prompts, and the run stops being a reproduction.
+ * are the inputs that draw them out.
+ *
+ * One prompt per user message, not one string. Concatenating the text parts
+ * and discarding everything else meant an image, a file or an audio prompt
+ * simply vanished -- and a message with no text at all vanished entirely,
+ * taking its position in the sequence with it. A `Prompt` is what
+ * `session.prompt` accepts directly, so each of these is submitted as it
+ * stands, whatever it contains.
+ *
+ * Partitioned against {@link seedOf} at the first user message: the seed is
+ * the context that was in place before anyone asked anything, and these are
+ * the asks. Together they cover the user's side exactly once, which is what
+ * stops a replay submitting the opening prompt twice.
  */
-export const promptsOf = (self: Export.Export): ReadonlyArray<string> =>
-  self.session.history.content.flatMap((message) => {
-    if (message.role !== "user") return []
-    const text = message.content
-      .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-      .map((part) => part.text)
-      .join("")
-    return text === "" ? [] : [text]
-  })
+export const promptsOf = (self: Export.Export): ReadonlyArray<Prompt.Prompt> =>
+  self.session.history.content
+    .filter((message) => message.role === "user")
+    .map((message) => Prompt.fromMessages([message]))
 
 /**
  * Every tool the transcript calls.
@@ -112,19 +150,27 @@ export const toolsUsed = (self: Export.Export): ReadonlyArray<string> => {
 }
 
 /**
- * The conversation with the assistant's side removed.
+ * Everything that was in place before the first prompt.
  *
- * The starting point for a replay that should reproduce a run rather than
- * continue one: seed a session with this and the script produces the rest. An
- * empty result means the transcript opened with the model, which a replay
- * cannot reproduce because nothing prompted it.
+ * The starting point for a replay that reproduces a run rather than continuing
+ * one: seed a session with this and the script produces the rest. An empty
+ * result means the transcript opened with the model, which a replay cannot
+ * reproduce because nothing prompted it.
+ *
+ * This used to say "the assistant's side removed" and then keep only the
+ * *first* message of what was left -- so a run that opened with a prompt
+ * seeded that prompt and then had it submitted a second time by `promptsOf`.
+ * The boundary is stated once, here, and `promptsOf` reads the other side of
+ * it.
  */
-export const seedOf = (self: Export.Export): Prompt.Prompt =>
-  Prompt.fromMessages(
-    self.session.history.content.filter((message) =>
-      message.role === "system" || message.role === "user"
-    ).slice(0, 1)
+export const seedOf = (self: Export.Export): Prompt.Prompt => {
+  const boundary = firstPrompt(self)
+  return Prompt.fromMessages(
+    boundary === -1
+      ? [...self.session.history.content]
+      : self.session.history.content.slice(0, boundary)
   )
+}
 
 /**
  * Whether a replay can run here.
