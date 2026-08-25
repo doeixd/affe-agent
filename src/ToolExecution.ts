@@ -328,6 +328,28 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       params: call.params
     })
 
+    /**
+     * `ToolCallStarted` owes a terminal event, whatever happens next.
+     *
+     * Interruption is announced from a finalizer rather than from the code
+     * below, because once the fiber is interrupted the generator never
+     * resumes. The finalizer used to be installed around the *handler* only,
+     * so a submission interrupted while decoding parameters, evaluating the
+     * policy, or -- most likely of all -- waiting for a person to answer an
+     * approval left `ToolCallStarted` with nothing after it: observability
+     * bookkeeping never closed, and every projection free to show the call as
+     * running for the rest of the session.
+     *
+     * Each awaiting step below carries it. They are mutually exclusive -- a
+     * fiber is interrupted in exactly one of them -- so the event is emitted
+     * once.
+     */
+    const announceInterrupted = EventBus.emit(session.bus, correlation, {
+      _tag: "ToolCallInterrupted",
+      id: call.id,
+      name: call.name
+    })
+
     // Permission first, and only then the handler. `decide` folds the tool's
     // own `needsApproval` and the application's policy into one of three
     // answers. The tool not being in the toolkit is a bug upstream: the
@@ -344,11 +366,11 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     // Parameter decoding services are one constituent of HandlerServices, but
     // TypeScript cannot reduce that conditional type after the indexed tool
     // lookup. Widen only the requirement channel to the public handler union.
-    const outcome = yield* decisionEffect as Effect.Effect<
+    const outcome = yield* (decisionEffect as Effect.Effect<
       Effect.Success<typeof decisionEffect>,
       Effect.Error<typeof decisionEffect>,
       R | Tool.HandlerServices<Tools[keyof Tools]>
-    >
+    >).pipe(Effect.onInterrupt(() => announceInterrupted))
 
     // A refusal, from the policy or from the person asked. The call never
     // runs; `denialPolicy` decides whether the model hears about it.
@@ -407,6 +429,8 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         kind: "tool-approval",
         detail: Schema.encodeSync(approvalDetailJson)(detail)
       }
+      // The longest wait in the whole call, and the one most likely to be
+      // interrupted: a person is being asked a question.
       const answer = yield* session.elicitation.elicit(
         elicitationRequest,
         EventBus.emit(session.bus, correlation, {
@@ -415,7 +439,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
           kind: elicitationRequest.kind,
           detail: elicitationRequest.detail
         })
-      )
+      ).pipe(Effect.onInterrupt(() => announceInterrupted))
       yield* EventBus.emit(session.bus, correlation, {
         _tag: "ElicitationResolved",
         id,
@@ -493,13 +517,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
           // A finalizer, not an uninterruptible block: once the fiber is
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.
-          Effect.onInterrupt(() =>
-            EventBus.emit(session.bus, correlation, {
-              _tag: "ToolCallInterrupted",
-              id: call.id,
-              name: call.name
-            })
-          )
+          Effect.onInterrupt(() => announceInterrupted)
         ) as Effect.Effect<
         Option.Option<Tool.HandlerResult<Tools[keyof Tools]>>,
         Tool.HandlerError<Tools[keyof Tools]>,

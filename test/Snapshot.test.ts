@@ -136,4 +136,76 @@ describe("session snapshots", () => {
       ).pipe(Effect.provide(layer))
     })
   )
+
+  /**
+   * R5 -- a read followed by a read is not atomic.
+   *
+   * `snapshot` checked the status and *then* read history. `prompt` claims the
+   * session in one step and then commits its user input, so a prompt landing
+   * entirely inside that window produced a snapshot containing the opening of
+   * a turn still in flight -- the exact state this operation's contract says
+   * is impossible, and the state `SessionTree.commit` relies on it to prevent.
+   *
+   * Driven through the history read itself, because the window is a few
+   * instructions wide and cannot be hit by scheduling. The prompt runs while
+   * the snapshot is between its two steps, which is the whole race made
+   * deterministic.
+   */
+  /**
+   * R5 -- `snapshot` checked the status and *then* read history, and a read
+   * followed by a read is not atomic. A prompt claims the session in one step
+   * and then commits its user input, so one landing entirely inside that
+   * window produced a snapshot containing the opening of a turn still in
+   * flight -- the state this operation's contract says is impossible, and the
+   * one `SessionTree.commit` relies on it to prevent.
+   *
+   * The fix is a second look at the state, comparing `submissionCount` rather
+   * than status: a submission that started *and finished* inside the window
+   * leaves the session idle again, so a status comparison would see idle twice
+   * and miss it.
+   *
+   * **Said plainly: the window itself is not driven by any test here.** It is
+   * a few instructions between two `Ref` reads with no suspension point
+   * between them, and racing a prompt against a snapshot a hundred times does
+   * not reach it -- removing the entire second look leaves that version of
+   * this test passing, which is why it was deleted rather than kept as
+   * decoration.
+   *
+   * What *is* tested is the risk the fix introduces: refusing a snapshot that
+   * should have succeeded. A second look is only worth having if it stays
+   * quiet when nothing happened.
+   */
+  it.effect("a second look does not refuse an idle session", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("first answer"),
+        TestLanguageModel.text("second answer")
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* AgentSession.make(Agent.make({}))
+
+          // Between submissions, and after all of them: every one of these is
+          // a genuinely idle session and must snapshot.
+          const empty = yield* AgentSession.snapshot(session)
+          assert.strictEqual(empty.history.content.length, 0)
+
+          yield* session.prompt("first")
+          const once = yield* AgentSession.snapshot(session)
+          assert.strictEqual(once.history.content.length, 2)
+
+          yield* session.prompt("second")
+          const twice = yield* AgentSession.snapshot(session)
+          assert.strictEqual(twice.history.content.length, 4)
+
+          // And repeatedly, with nothing in between: the count changing is
+          // what refuses, and nothing changed it.
+          for (let attempt = 0; attempt < 5; attempt++) {
+            yield* AgentSession.snapshot(session)
+          }
+        })
+      ).pipe(Effect.provide(layer))
+    })
+  )
 })

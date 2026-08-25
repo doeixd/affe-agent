@@ -15,6 +15,8 @@ import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
+import * as Elicitation from "../src/Elicitation.js"
+import * as Permission from "../src/Permission.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import * as FakeModel from "./FakeModel.js"
 import {
@@ -883,6 +885,84 @@ describe("interruption", () => {
       ])
     })
   )
+
+  /**
+   * R3 -- `ToolCallStarted` owes a terminal event from the moment it is
+   * emitted, not from the moment the handler starts.
+   *
+   * The interruption finalizer was installed around the handler only, so a
+   * submission interrupted while decoding parameters, evaluating the policy,
+   * or waiting for a person to answer an approval left `ToolCallStarted` with
+   * nothing after it -- and every projection free to show the call as running
+   * for the rest of the session. Waiting on an approval is not the rare case
+   * here; it is the one a person is most likely to interrupt, because they are
+   * the one being waited on.
+   *
+   * The existing test above covers interruption *inside* the handler, which is
+   * the half that already worked.
+   */
+  it.effect("interrupting a call parked on approval still ends the call", () =>
+    Effect.gen(function*() {
+      const asked = yield* Deferred.make<void>()
+
+      const toolkit = EchoToolkit.pipe(
+        Effect.provide(
+          EchoToolkit.toLayer({ echo: () => Effect.succeed("never runs") })
+        )
+      )
+
+      const { layer } = yield* FakeModel.layer([
+        { text: "assistant text", toolCalls: [callEcho("t1")] }
+      ])
+      const agent = Agent.make({
+        toolkit,
+        // Every call is asked about, and nothing ever answers.
+        permission: Permission.askAll
+      })
+
+      const events = yield* Effect.scoped(
+        Effect.gen(function*() {
+          // `Elicitation.memory` is what makes the run *park*. The default
+          // elicitor answers "no" immediately, so a session without one
+          // refuses the call and there is no wait to interrupt -- which is
+          // how a version of this test can look right and exercise nothing.
+          const session = yield* AgentSession.make(agent, {
+            elicitation: Elicitation.memory
+          })
+          const collected: Array<AgentEvent.AgentEventEnvelope> = []
+          yield* Effect.forkScoped(
+            Stream.runForEach(AgentSession.events(session), (envelope) => {
+              collected.push(envelope)
+              return envelope.event._tag === "ElicitationRequested"
+                ? Deferred.succeed(asked, undefined)
+                : Effect.void
+            })
+          )
+          yield* Effect.yieldNow
+
+          const fiber = yield* Effect.forkChild(
+            Effect.exit(AgentSession.prompt(session, "go"))
+          )
+          // Wait for the question rather than for a timer: the run is parked
+          // exactly when the elicitation has been announced.
+          yield* Deferred.await(asked)
+          yield* AgentSession.interrupt(session)
+          yield* Fiber.join(fiber)
+          yield* Effect.yieldNow
+          return collected
+        })
+      ).pipe(Effect.provide(layer))
+
+      const started = events.filter(AgentEvent.is("ToolCallStarted"))
+      const interrupted = events.filter(AgentEvent.is("ToolCallInterrupted"))
+      assert.strictEqual(started.length, 1)
+      assert.strictEqual(
+        interrupted.length,
+        1,
+        "a call announced and then interrupted never reached a terminal event"
+      )
+      assert.strictEqual(interrupted[0]!.event.id, "t1")
+    }))
 
   it.effect("interrupt during tool execution commits no partial turn", () =>
     Effect.gen(function* () {

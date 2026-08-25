@@ -753,17 +753,41 @@ export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
 ) {
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
-    const current = yield* SubscriptionRef.get(self.state)
-    if (current.status === "closed") {
+    const before = yield* SubscriptionRef.get(self.state)
+    if (before.status === "closed") {
       return yield* new AgentClosedError({ sessionId: self.id })
     }
-    if (current.status !== "idle") {
+    if (before.status !== "idle") {
       return yield* new AgentBusyError({ sessionId: self.id })
     }
-    return {
-      sessionId: self.id,
-      history: yield* historyOf(self)
-    } satisfies Snapshot
+    const history = yield* historyOf(self)
+    /**
+     * Read the state again, and insist nothing moved.
+     *
+     * A read followed by a read is not atomic. `prompt` claims the session in
+     * one `SubscriptionRef.modify` and then commits its user input, so a
+     * concurrent prompt could land entirely between the idle check above and
+     * this history read -- and the snapshot would contain the opening of a
+     * turn that was still in flight, which is exactly the state this
+     * operation's contract says is impossible.
+     *
+     * `submissionCount` is what makes the second look decisive rather than
+     * merely reassuring: it is incremented by the claim itself, so a
+     * submission that started *and finished* inside the window still shows.
+     * A status comparison alone would see idle both times and miss it.
+     *
+     * Refused rather than retried. "Wait for quiescence" is already this
+     * operation's contract, and a snapshot taken at the exact instant a
+     * submission began is a caller who has not waited.
+     */
+    const after = yield* SubscriptionRef.get(self.state)
+    if (after.status === "closed") {
+      return yield* new AgentClosedError({ sessionId: self.id })
+    }
+    if (after.status !== "idle" || after.submissionCount !== before.submissionCount) {
+      return yield* new AgentBusyError({ sessionId: self.id })
+    }
+    return { sessionId: self.id, history } satisfies Snapshot
   })
 
 /**
