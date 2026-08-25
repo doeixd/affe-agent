@@ -5,6 +5,7 @@ import {
   HttpClientRequest,
   type HttpClientResponse
 } from "effect/unstable/http"
+import * as Body from "./internal/body.js"
 import * as WebFetch from "./WebFetch.js"
 
 export const MAX_RESPONSE_BYTES = 1024 * 1024
@@ -155,60 +156,24 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
   return Effect.void
 }
 
-interface BodyState {
-  readonly chunks: ReadonlyArray<Uint8Array>
-  readonly size: number
-}
-
-const readBody = Effect.fn("HttpWebFetch.readBody")(function*(
+const readBody = (
   response: HttpClientResponse.HttpClientResponse,
   url: URL
-) {
-  const declared = response.headers["content-length"]
-  if (declared !== undefined) {
-    const bytes = Number(declared)
-    if (Number.isFinite(bytes) && bytes > MAX_RESPONSE_BYTES) {
-      return yield* new WebFetch.WebFetchResponseTooLargeError({
+) =>
+  Body.readBounded<WebFetch.WebFetchError>(response, {
+    maxBytes: MAX_RESPONSE_BYTES,
+    tooLarge: (observedBytes) =>
+      new WebFetch.WebFetchResponseTooLargeError({
         url: WebFetch.diagnosticTarget(url),
         maxBytes: MAX_RESPONSE_BYTES,
-        observedBytes: bytes
+        observedBytes
+      }),
+    transport: (detail) =>
+      new WebFetch.WebFetchTransportError({
+        url: WebFetch.diagnosticTarget(url),
+        detail
       })
-    }
-  }
-
-  const state = yield* Stream.runFoldEffect(
-    response.stream,
-    (): BodyState => ({ chunks: [], size: 0 }),
-    (current, chunk) => {
-      const size = current.size + chunk.byteLength
-      return size > MAX_RESPONSE_BYTES
-        ? Effect.fail(
-          new WebFetch.WebFetchResponseTooLargeError({
-            url: WebFetch.diagnosticTarget(url),
-            maxBytes: MAX_RESPONSE_BYTES,
-            observedBytes: size
-          })
-        )
-        : Effect.succeed({ chunks: [...current.chunks, chunk], size })
-    }
-  ).pipe(
-    Effect.catchTag("HttpClientError", (error) =>
-      Effect.fail(
-        new WebFetch.WebFetchTransportError({
-          url: WebFetch.diagnosticTarget(url),
-          detail: error.reason._tag
-        })
-      ))
-  )
-
-  const bytes = new Uint8Array(state.size)
-  let offset = 0
-  for (const chunk of state.chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return bytes
-})
+  })
 
 const mediaTypeOf = (contentType: string | undefined): string | undefined =>
   contentType?.split(";", 1)[0]?.trim().toLowerCase()
@@ -232,6 +197,16 @@ const charsetOf = (contentType: string): string => {
   return charset?.trim() ?? "utf-8"
 }
 
+/**
+ * The same compositional caveat as the search adapter's retry bound.
+ *
+ * The timeout, the byte cap and the redirect policy are enforced here, but
+ * every one of them is enforced *around* a supplied `HttpClient`. Middleware
+ * on that client can retry underneath a single `execute`, so "no automatic
+ * retry" is a property of this provider's own control flow and of the client
+ * the application chooses to pass, not something the Layer can establish on
+ * its own.
+ */
 /** Construct the portable guarded fetch service from an abstract HttpClient. */
 export const make = Effect.fn("HttpWebFetch.make")(function*() {
   const client = yield* HttpClient.HttpClient
@@ -290,11 +265,15 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
     if (REDIRECT_STATUSES.has(response.status)) {
       const location = response.headers.location
       if (location === undefined) {
+        yield* Body.release(response)
         return yield* new WebFetch.WebFetchHttpResponseError({
           url: WebFetch.diagnosticTarget(current),
           status: response.status
         })
       }
+      // Let the redirect's own body go before following it: a chain of hops
+      // otherwise holds every connection it has been through.
+      yield* Body.release(response)
       const next = yield* Effect.try({
         try: () => WebFetch.canonicalize(new URL(location, current)),
         catch: () =>
@@ -326,6 +305,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
     }
 
     if (response.status < 200 || response.status >= 300) {
+      yield* Body.release(response)
       return yield* new WebFetch.WebFetchHttpResponseError({
         url: WebFetch.diagnosticTarget(current),
         status: response.status
@@ -336,6 +316,7 @@ export const make = Effect.fn("HttpWebFetch.make")(function*() {
     const mediaType = mediaTypeOf(rawContentType)
     const format = mediaType === undefined ? undefined : textualFormat(mediaType)
     if (mediaType === undefined || format === undefined) {
+      yield* Body.release(response)
       return yield* new WebFetch.WebFetchUnsupportedContentTypeError({
         url: WebFetch.diagnosticTarget(current),
         contentType: Option.fromNullishOr(rawContentType)

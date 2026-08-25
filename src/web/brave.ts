@@ -11,11 +11,13 @@ import {
   Stream
 } from "effect"
 import {
+  FetchHttpClient,
   Headers,
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse
 } from "effect/unstable/http"
+import * as Body from "./internal/body.js"
 import * as WebSearch from "./WebSearch.js"
 
 const ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
@@ -63,80 +65,81 @@ const withRedactedHeaders = Effect.updateService(
 const transportError = (detail: string): WebSearch.WebSearchTransportError =>
   new WebSearch.WebSearchTransportError({ detail })
 
-interface BodyState {
-  readonly chunks: ReadonlyArray<Uint8Array>
-  readonly size: number
-}
-
 /** Consume the response incrementally; neither `.text` nor `.json` is bounded. */
-const readBody = Effect.fn("BraveWebSearch.readBody")(function*(
-  response: HttpClientResponse.HttpClientResponse
-) {
-  const declared = response.headers["content-length"]
-  if (declared !== undefined) {
-    const bytes = Number(declared)
-    if (Number.isFinite(bytes) && bytes > MAX_RESPONSE_BYTES) {
-      return yield* new WebSearch.WebSearchResponseTooLargeError({
+const readBody = (response: HttpClientResponse.HttpClientResponse) =>
+  Body.readBounded<WebSearch.WebSearchError>(response, {
+    maxBytes: MAX_RESPONSE_BYTES,
+    tooLarge: (observedBytes) =>
+      new WebSearch.WebSearchResponseTooLargeError({
         maxBytes: MAX_RESPONSE_BYTES,
-        observedBytes: bytes
-      })
-    }
-  }
-
-  const state = yield* Stream.runFoldEffect(
-    response.stream,
-    (): BodyState => ({ chunks: [], size: 0 }),
-    (current, chunk) => {
-      const size = current.size + chunk.byteLength
-      return size > MAX_RESPONSE_BYTES
-        ? Effect.fail(
-          new WebSearch.WebSearchResponseTooLargeError({
-            maxBytes: MAX_RESPONSE_BYTES,
-            observedBytes: size
-          })
-        )
-        : Effect.succeed({
-          chunks: [...current.chunks, chunk],
-          size
-        })
-    }
-  ).pipe(
-    Effect.catchTag("HttpClientError", (error) =>
-      Effect.fail(transportError(error.reason._tag)))
-  )
-
-  const bytes = new Uint8Array(state.size)
-  let offset = 0
-  for (const chunk of state.chunks) {
-    bytes.set(chunk, offset)
-    offset = offset + chunk.byteLength
-  }
-  return bytes
-})
+        observedBytes
+      }),
+    transport: transportError
+  })
 
 const retryable = (error: WebSearch.WebSearchError): boolean =>
   error._tag === "@doeixd/effect-agent/web/WebSearchTransportError" ||
   error._tag === "@doeixd/effect-agent/web/WebSearchRateLimitedError"
 
-const retryDelay = (error: WebSearch.WebSearchError): Duration.Duration => {
+/**
+ * How long to wait before the single retry.
+ *
+ * `Retry-After` is either delta-seconds or an HTTP-date; only the first was
+ * parsed, so *every* valid date fell through to the non-finite branch and
+ * waited exactly two seconds -- including a date already in the past. Both
+ * forms are read here, and the date form is resolved against Effect's clock
+ * rather than wall time so a test can state what "now" is.
+ *
+ * Clamped to at most two seconds either way. The header is a server's request,
+ * not an instruction: honouring a five-minute value would spend the caller's
+ * whole timeout budget waiting, and this retry exists to ride out a blip.
+ */
+const retryDelay = (
+  error: WebSearch.WebSearchError
+): Effect.Effect<Duration.Duration> => {
   if (error._tag !== "@doeixd/effect-agent/web/WebSearchRateLimitedError") {
-    return Duration.millis(100)
+    return Effect.succeed(Duration.millis(100))
   }
   return Option.match(error.retryAfter, {
-    onNone: () => Duration.seconds(1),
-    onSome: (value) => {
-      const seconds = Number(value)
-      return Duration.seconds(
-        Number.isFinite(seconds) ? Math.min(2, Math.max(0, seconds)) : 2
-      )
-    }
+    onNone: () => Effect.succeed(Duration.seconds(1)),
+    onSome: (value) =>
+      Effect.map(Effect.clockWith((clock) => clock.currentTimeMillis), (now) => {
+        const seconds = Number(value)
+        if (Number.isFinite(seconds)) return clamped(seconds)
+        const at = Date.parse(value)
+        // An unparseable header is a server saying something this client does
+        // not understand. Two seconds is the deliberate fallback: long enough
+        // to be a pause, short enough to stay inside the budget.
+        if (Number.isNaN(at)) return Duration.seconds(2)
+        return clamped((at - now) / 1000)
+      })
   })
 }
 
+const clamped = (seconds: number): Duration.Duration =>
+  Duration.seconds(Math.min(2, Math.max(0, seconds)))
+
 const retrySchedule = Schedule.identity<WebSearch.WebSearchError>().pipe(
-  Schedule.modifyDelay(({ input }) => Effect.succeed(retryDelay(input)))
+  Schedule.modifyDelay(({ input }) => retryDelay(input))
 )
 
+/**
+ * What "at most one retry" does and does not guarantee.
+ *
+ * This wrapper makes at most two *logical* attempts, and it will not accept a
+ * failure it has already retried. Each attempt calls the `HttpClient` it was
+ * given, which is a composed value: middleware on it can retry a transport
+ * failure or a status any number of times before `execute` returns. So the
+ * bound established here is "this adapter invokes the supplied client at most
+ * twice", not "at most two requests reach the network".
+ *
+ * That distinction matters for a search provider in particular, where every
+ * hidden physical request is billed and resends both the query and the key.
+ * Supplying a client with a bounded -- ideally absent -- retry policy is the
+ * application's part of the contract; the `test/BraveWebSearch.test.ts` case
+ * "bounds its own attempts, not a supplied client's" is what keeps this
+ * paragraph honest rather than aspirational.
+ */
 /** Construct a Brave-backed service from explicit, redacted configuration. */
 export const make = Effect.fn("BraveWebSearch.make")(function*(options: Options) {
   const client = yield* HttpClient.HttpClient
@@ -166,21 +169,51 @@ export const make = Effect.fn("BraveWebSearch.make")(function*(options: Options)
 
     const attempt = Effect.gen(function* () {
       const response = yield* client.execute(request).pipe(
+        /**
+         * Redirects are handled here, not by whatever client was injected.
+         *
+         * The request carries `x-subscription-token`. Effect's documented
+         * production wiring is `FetchHttpClient`, which follows redirects
+         * through `globalThis.fetch` -- and fetch strips only a small standard
+         * set of sensitive headers across origins, which this
+         * provider-specific one is not in. A redirect from the endpoint, a
+         * proxy, or a compromised host therefore *sent the API key onward*.
+         * Redacting the header changes what a log shows, not what is
+         * transmitted.
+         *
+         * There is no allowed destination: the endpoint is a constant, so a
+         * redirect away from it is not something this adapter has any reason
+         * to follow.
+         */
+        Effect.provideService(FetchHttpClient.RequestInit, {
+          redirect: "manual",
+          credentials: "omit"
+        }),
         Effect.catchTag("HttpClientError", (error) =>
           Effect.fail(transportError(error.reason._tag)))
       )
 
+      if (response.status >= 300 && response.status < 400) {
+        yield* Body.release(response)
+        return yield* new WebSearch.WebSearchResponseError({
+          status: response.status
+        })
+      }
+
       if (response.status === 401 || response.status === 403) {
+        yield* Body.release(response)
         return yield* new WebSearch.WebSearchAuthenticationError({
           status: response.status
         })
       }
       if (response.status === 429) {
+        yield* Body.release(response)
         return yield* new WebSearch.WebSearchRateLimitedError({
           retryAfter: Option.fromNullishOr(response.headers["retry-after"])
         })
       }
       if (response.status < 200 || response.status >= 300) {
+        yield* Body.release(response)
         return yield* new WebSearch.WebSearchResponseError({
           status: response.status
         })

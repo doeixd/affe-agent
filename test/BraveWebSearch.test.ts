@@ -5,11 +5,13 @@ import {
   Effect,
   Fiber,
   Layer,
+  Option,
   Redacted,
   Ref
 } from "effect"
 import { TestClock } from "effect/testing"
 import {
+  FetchHttpClient,
   HttpClient,
   HttpClientRequest,
   HttpClientResponse
@@ -266,6 +268,176 @@ describe("Brave web search provider", () => {
       assert.strictEqual(yield* Ref.get(entered), 5)
       assert.strictEqual(yield* Ref.get(peak), 4)
       assert.strictEqual(yield* Ref.get(active), 0)
+    })
+  )
+
+  /**
+   * R158 -- a redirect must not carry the API key onward.
+   *
+   * The adapter used to delegate redirect policy to whatever client was
+   * injected. The documented production wiring follows redirects through
+   * `globalThis.fetch`, which strips a small standard set of sensitive headers
+   * across origins and leaves provider-specific ones like
+   * `x-subscription-token` in place -- so a redirect sent the key to the
+   * destination.
+   *
+   * The client here counts *physical* requests and records every host it was
+   * asked to talk to, which is the only way to see a hop that a
+   * redirect-following client would make invisibly.
+   */
+  it.effect("asks for manual redirects, and refuses the redirect it gets", () =>
+    Effect.gen(function* () {
+      const contacted = yield* Ref.make<ReadonlyArray<string>>([])
+      const init = yield* Ref.make<Option.Option<RequestInit>>(Option.none())
+      const client = HttpClient.make((request, url) =>
+        Effect.gen(function* () {
+          yield* Ref.update(contacted, (all) => [...all, url.origin])
+          yield* Ref.set(init, yield* Effect.serviceOption(FetchHttpClient.RequestInit))
+          return response(request, "", {
+            status: 302,
+            headers: { location: "https://evil.example/search" }
+          })
+        }))
+
+      const error = yield* Effect.flip(searchWith(client, "Effect"))
+      assert.strictEqual(
+        error._tag,
+        "@doeixd/effect-agent/web/WebSearchResponseError"
+      )
+
+      /**
+       * The policy, not just the outcome.
+       *
+       * A mock client never follows a redirect, so "the second origin was not
+       * contacted" holds whether or not the adapter asked for anything -- it
+       * cannot tell a fixed provider from a broken one. What actually stops
+       * the real transport is this service reaching `globalThis.fetch`, so
+       * that is what is asserted.
+       */
+      const requested = yield* Ref.get(init)
+      assert.isTrue(Option.isSome(requested), "no RequestInit was provided")
+      if (Option.isSome(requested)) {
+        assert.strictEqual(requested.value.redirect, "manual")
+        assert.strictEqual(requested.value.credentials, "omit")
+      }
+      assert.deepStrictEqual(
+        yield* Ref.get(contacted),
+        ["https://api.search.brave.com"]
+      )
+    })
+  )
+
+  /**
+   * R160 -- `Retry-After` is delta-seconds *or* an HTTP-date.
+   *
+   * Only the first form was parsed, so every valid date took the
+   * "unparseable" branch and waited exactly two seconds -- including a date
+   * already in the past, which asks for no wait at all. Driven with
+   * `TestClock` so the assertion is about the delay chosen, not about how long
+   * the test took.
+   */
+  const retryAfter = (header: string) =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const client = HttpClient.make((request) =>
+        Effect.flatMap(
+          Ref.updateAndGet(attempts, (count) => count + 1),
+          (count) =>
+            Effect.succeed(
+              count === 1
+                ? response(request, "", {
+                  status: 429,
+                  headers: { "retry-after": header }
+                })
+                : response(request, body(), {
+                  status: 200,
+                  headers: { "content-type": "application/json" }
+                })
+            )
+        ))
+
+      const fiber = yield* Effect.forkChild(searchWith(client, "Effect"))
+      // Enough for the first attempt to run and be refused. Whether the
+      // *second* has also happened by now is the thing each test is about, so
+      // it is not asserted here.
+      yield* TestClock.adjust(Duration.millis(1))
+      return { fiber, attempts }
+    })
+
+  it.effect("waits no time at all for a Retry-After date already in the past", () =>
+    Effect.gen(function* () {
+      const { attempts, fiber } = yield* retryAfter(new Date(0).toUTCString())
+      // Both attempts inside the first millisecond: a date that has passed
+      // asks for no wait at all. Two seconds used to be spent here.
+      assert.strictEqual(yield* Ref.get(attempts), 2)
+      yield* Fiber.join(fiber)
+    })
+  )
+
+  it.effect("honours a Retry-After date in the near future", () =>
+    Effect.gen(function* () {
+      const at = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const { attempts, fiber } = yield* retryAfter(
+        new Date(at + 1_000).toUTCString()
+      )
+      // The header asked for a second; a second is not yet up.
+      yield* TestClock.adjust(Duration.millis(900))
+      assert.strictEqual(yield* Ref.get(attempts), 1)
+      yield* TestClock.adjust(Duration.millis(200))
+      assert.strictEqual(yield* Ref.get(attempts), 2)
+      yield* Fiber.join(fiber)
+    })
+  )
+
+  it.effect("clamps a far-future Retry-After date to the two-second ceiling", () =>
+    Effect.gen(function* () {
+      const at = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const { attempts, fiber } = yield* retryAfter(
+        new Date(at + 5 * 60_000).toUTCString()
+      )
+      yield* TestClock.adjust(Duration.seconds(2))
+      assert.strictEqual(yield* Ref.get(attempts), 2)
+      yield* Fiber.join(fiber)
+    })
+  )
+
+  /**
+   * R159 -- what "at most one retry" actually guarantees.
+   *
+   * The wrapper retries once. It calls an already-composed `HttpClient`, so
+   * middleware on that client can retry underneath and multiply the physical
+   * requests -- each one resending the query and the key. This pins the real
+   * contract rather than the one the plan claimed: two *logical* attempts, and
+   * as many physical requests as the supplied client chooses to make.
+   *
+   * The narrower contract is stated on `make`; this is the test that keeps the
+   * statement honest.
+   */
+  it.effect("bounds its own attempts, not a supplied client's", () =>
+    Effect.gen(function* () {
+      const physical = yield* Ref.make(0)
+      const failing = HttpClient.make((request) =>
+        Ref.update(physical, (count) => count + 1).pipe(
+          Effect.as(response(request, "", { status: 503 }))
+        ))
+      // A client that retries twice underneath, as ordinary middleware might.
+      // Middleware that talks to the server more than once per logical
+      // request -- a retry policy, a mirror, a probe. A 503 is a *response*,
+      // not an Effect failure, so this is written as repetition rather than
+      // `Effect.retry`, which would have nothing to retry.
+      const retrying = HttpClient.transformResponse(
+        failing,
+        (execute) => Effect.flatMap(execute, () => Effect.flatMap(execute, () => execute))
+      )
+
+      const error = yield* Effect.flip(searchWith(retrying, "Effect"))
+      assert.strictEqual(
+        error._tag,
+        "@doeixd/effect-agent/web/WebSearchResponseError"
+      )
+      // Two logical attempts from the wrapper. The physical count is the
+      // client's business, and it is larger.
+      assert.isAbove(yield* Ref.get(physical), 2)
     })
   )
 })
