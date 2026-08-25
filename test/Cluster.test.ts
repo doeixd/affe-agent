@@ -374,4 +374,75 @@ describe("approval across the cluster", () => {
       "respond"
     )
   })
+
+  /**
+   * R172 -- an acknowledged submission is written down before it is
+   * acknowledged.
+   *
+   * The entity hands back an execution id and dispatches on a detached fibre,
+   * because dispatch routes back through the runner executing the handler and
+   * awaiting it deadlocks. Nothing durable used to record the submission
+   * before that reply, so process loss in the window lost it outright and left
+   * the admission marker open with no execution behind it.
+   *
+   * The outbox row is what closes it. This test plants one directly -- which
+   * is exactly the state a process that died after replying leaves behind --
+   * and asserts the next submit carries it forward rather than ignoring it.
+   */
+  it.live("a submission recorded but never dispatched is carried forward", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([
+        { text: "recovered" },
+        { text: "and the new one" }
+      ])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("Recovered", Agent.make({}), { store })
+      const runtime = durable.layer.pipe(
+        Layer.provideMerge(ClusterWorkflowEngine.layer),
+        Layer.provideMerge(modelLayer)
+      )
+      const handlers = entityLayer(durable, store).pipe(Layer.provideMerge(runtime))
+
+      // What a process that replied and then died leaves behind.
+      yield* DurableChannels.recordPendingDispatch(
+        store,
+        "session-lost",
+        Prompt.make("the lost submission")
+      )
+      assert.strictEqual(
+        yield* store.size(DurableChannels.dispatchKey("session-lost")),
+        1
+      )
+
+      const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = yield* makeClient("session-lost")
+      yield* client.submit({ input: Prompt.make("a later submission") })
+
+      /**
+       * The assertion is what the *model* saw, not that the row is gone.
+       *
+       * The row disappears either way -- the new submission's own success
+       * path drains the whole key -- so "no rows left" passes against a build
+       * that ignores the leftover entirely. That is the shape of a test that
+       * looks like coverage and is not, so what is checked is the thing only
+       * the recovery can produce: the lost submission's prompt reaching a run.
+       *
+       * The entity derives one execution id per session, so the recovered
+       * dispatch and the new one resolve to a single execution -- the earlier
+       * accepted submission is the one that runs, which is the behaviour a
+       * caller already told "this started" is owed.
+       */
+      yield* Effect.retry(
+        Effect.flatMap(recorder.prompts, (seen) =>
+          seen.some((prompt) => FakeModel.userTexts(prompt).includes("the lost submission"))
+            ? Effect.void
+            : Effect.fail("not yet dispatched" as const)),
+        { times: 200, schedule: Schedule.spaced(Duration.millis(10)) }
+      ).pipe(Effect.provide(runtime))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
 })

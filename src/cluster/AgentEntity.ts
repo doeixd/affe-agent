@@ -79,6 +79,55 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
         // gets it synchronously.
         submit: ({ payload }) =>
           Effect.gen(function* () {
+            /**
+             * Carry forward anything a previous attempt was acknowledged for
+             * and never dispatched.
+             *
+             * Here rather than in a background sweep because an entity's
+             * handlers for one session are serialised by its mailbox, and the
+             * entity id *is* the session -- so this is the one place where a
+             * leftover row can be examined with nothing else touching it. A
+             * sweeper would need that exclusion built from scratch.
+             *
+             * Re-dispatching is safe: the execution id is a pure function of
+             * the session, so the engine answers a repeat with the execution
+             * it already holds rather than starting a second one. A row that
+             * was in fact dispatched before the process died therefore costs a
+             * no-op, and one that was not gets its submission.
+             *
+             * **The limit, stated rather than implied: recovery happens on
+             * the next submit to this session and nowhere else.** A submission
+             * lost to process death is carried forward the moment anybody
+             * submits again; if nobody ever does, the row sits there. Closing
+             * that needs a sweeper with its own exclusion story, and the
+             * durable client -- which reconciles on every session acquisition
+             * -- is the path that already has one.
+             *
+             * The same derived id also means a recovered submission and a new
+             * one resolve to a single execution: the earlier, already
+             * acknowledged one runs. That follows from the entity's
+             * one-execution-per-session model noted below, and is the right
+             * way round -- a caller told "this started" is owed that, not the
+             * submission that displaced it.
+             */
+            const owed = yield* DurableChannels.takePendingDispatches(store, sessionId)
+            yield* Effect.forEach(owed, (pending) =>
+              Effect.forkDetach(
+                Effect.catchCause(
+                  DurableAgent.throughShardReassignment(
+                    agent.definition.execute(
+                      { sessionId, prompt: pending },
+                      { discard: true }
+                    )
+                  ),
+                  (cause) =>
+                    Effect.logError("a recorded submission failed to dispatch", {
+                      sessionId,
+                      cause
+                    })
+                )
+              ), { discard: true })
+
             const prompt = payload.input
             const executionId = yield* agent.definition.executionId({
               sessionId,
@@ -114,16 +163,25 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
              * comment above about polling the engine from inside the entity
              * is the same fact from the other side.
              *
-             * Closing this needs a persisted claim -- an outbox row written
-             * before the reply and drained by a reconciler -- which is a new
-             * mechanism rather than a reordering. Until it exists, the window
-             * is real and recorded here rather than only in a review.
+             * The outbox row below closes it: written before the caller is
+             * told anything, cleared once dispatch has landed, and carried
+             * forward by the drain at the top of this handler. The row is what
+             * makes the acknowledgement honest -- dispatch is still forked,
+             * because it must be, but it is no longer the only record that a
+             * submission exists.
              */
+            yield* DurableChannels.recordPendingDispatch(store, sessionId, prompt)
             yield* Effect.forkDetach(
               DurableAgent.throughShardReassignment(
                 agent.definition.execute({ sessionId, prompt }, { discard: true })
               )
                 .pipe(
+                  // Dispatch landed, so the outbox row has done its job. A row
+                  // surviving this is a dispatch that never happened, which is
+                  // exactly what the drain above looks for.
+                  Effect.andThen(
+                    Effect.asVoid(store.takeAll(DurableChannels.dispatchKey(sessionId)))
+                  ),
                   // The caller already has its execution id, so a dispatch
                   // failure cannot be returned to it. Log rather than discard:
                   // a silently dropped submission is the worst outcome here.
@@ -131,6 +189,11 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
                     // And admission closes again: an open marker with no
                     // execution behind it would accept steering and
                     // follow-ups into channels nothing will ever drain.
+                    //
+                    // The outbox row is deliberately *left* -- an in-process
+                    // failure and a dead process are the same thing from the
+                    // row's point of view, and the next submit carries it
+                    // forward either way.
                     Effect.logError("agent submission failed to dispatch", {
                       sessionId,
                       cause

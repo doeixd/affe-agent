@@ -3828,6 +3828,16 @@ assumed from a commit message.
   of instructions with no suspension point, so an interrupt or a concurrent
   call issued from a test lands before or after rather than inside. Driving
   them would mean adding a seam to production code for a test to hold open.
+- **R2 and R36 -- reclassified.** These are *not* blocked upstream, which is
+  what an earlier note here said. `tool.id` is public, `Tool.Handler` exposes
+  `.handler` and `.context`, and the handlers live in a `Context` keyed by that
+  id -- which is how `Toolkit.handle` finds them. The harness can own the
+  dispatch and call the handler with the value `decide` already decoded. The
+  cost is reimplementing what `handle` does around the call (the handler
+  context and its preliminary-results queue, result encoding, `AiError`
+  wrapping) and tracking it against upstream. A real trade, not an
+  impossibility.
+
 - **R66.** A transaction gives atomicity, not serialisability, and these
   transitions are select-then-write. The suite runs against SQLite, which
   serialises writers at the file level and therefore cannot exhibit the race --
@@ -3835,12 +3845,14 @@ assumed from a commit message.
   now stated on `sqlStore` itself: run at `SERIALIZABLE`, or encode the
   precondition in the mutation. Both are engine-specific, which is why a
   portable module states it rather than guessing at a dialect.
-- **R172.** The entity acknowledges a submission before anything durable
-  exists. Awaiting the dispatch instead was tried and deadlocks: `execute`
-  routes back through the same runner, so the handler would wait on work only
-  the handler can process. Closing it needs a persisted claim drained by a
-  reconciler -- a new mechanism, not a reordering. The window is now recorded
-  in the code.
+- **R172, mostly closed.** The entity now writes an outbox row before it
+  acknowledges, and drains any leftover at the top of the next submit --
+  dispatch stays forked, because awaiting it deadlocks against the runner
+  executing the handler. What remains is the *trigger*: recovery happens on a
+  subsequent submit to that session and nowhere else, so a lost submission with
+  no successor sits in the outbox. A sweeper needs its own exclusion story; the
+  durable client, which reconciles on every session acquisition, is the path
+  that already has one.
 - **R173.** Half fixed: a terminal event is recorded before it is forgotten.
   The other half is an ordering with no safe choice -- clearing before
   `finish` can strand a claim, finishing before clearing can wipe the *next*

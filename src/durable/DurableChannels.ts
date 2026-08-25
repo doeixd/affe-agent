@@ -113,6 +113,48 @@ const inputs = Schema.Array(Schema.String)
 export const openKey = (sessionId: string): string => `${sessionId}:open`
 
 /**
+ * Where a submission that has been acknowledged but not yet dispatched waits.
+ *
+ * An outbox, in the ordinary sense. A caller that has been handed an execution
+ * id believes work has started, and the entity cannot make that true
+ * synchronously -- dispatch routes back through the runner that is executing
+ * the handler, so awaiting it deadlocks. Writing the intent here *before*
+ * replying is what makes the acknowledgement honest: whatever happens to the
+ * process afterwards, the submission is recorded somewhere durable and a later
+ * pass can carry it forward.
+ *
+ * Cleared once dispatch has landed. A row still here after that is a dispatch
+ * that never happened, not one in flight -- see `AgentEntity.submit`.
+ */
+export const dispatchKey = (sessionId: string): string => `${sessionId}:dispatch`
+
+/** Record a submission owed a dispatch. Durable before the caller is told. */
+export const recordPendingDispatch = (
+  store: Store,
+  sessionId: string,
+  input: Prompt.RawInput
+): Effect.Effect<void, StorageError> =>
+  Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
+    store.offer(dispatchKey(sessionId), encoded))
+
+/**
+ * Take everything owed a dispatch, oldest first.
+ *
+ * Draining rather than peeking: whoever takes these owes the dispatch, and
+ * leaving them in place would let two passes carry the same submission
+ * forward. Dispatch is idempotent -- the execution id is derived from the
+ * session, so the engine answers a repeat with the execution it already has --
+ * so taking them and then failing costs at most a submission that a later
+ * caller re-records, which is the direction to be wrong in.
+ */
+export const takePendingDispatches = (
+  store: Store,
+  sessionId: string
+): Effect.Effect<ReadonlyArray<Prompt.Prompt>, StorageError> =>
+  Effect.flatMap(store.takeAll(dispatchKey(sessionId)), (encoded) =>
+    Effect.forEach(encoded, decodePrompt))
+
+/**
  * Offer input from outside the workflow.
  *
  * Out-of-band senders must use this rather than writing to the store directly,
