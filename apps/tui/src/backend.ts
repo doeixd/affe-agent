@@ -215,6 +215,29 @@ export const scripted: Backend = scriptedWith(defaultTurns)
  * The policy asks before every shell call, so nothing runs unapproved. That is
  * the actual protection here; the directory is not.
  */
+/**
+ * Where a live session's transcript is kept, per user and per workspace.
+ *
+ * Keyed by a hash of the workspace path rather than by the path itself: a
+ * path contains a username and a project name, and this directory listing
+ * should not be a list of what someone is working on. The hash is FNV-1a --
+ * not a security property, just a short stable name -- and collisions would
+ * merely share a directory, which two checkouts of the same project arguably
+ * should anyway.
+ *
+ * `HOME`/`USERPROFILE` rather than a platform state API because this is the
+ * TUI, which already depends on a host; the library itself stays portable.
+ */
+export const sessionDirectory = (workspaceRoot: string): string => {
+  let hash = 2166136261
+  for (let i = 0; i < workspaceRoot.length; i++) {
+    hash = Math.imul(hash ^ workspaceRoot.charCodeAt(i), 16777619)
+  }
+  const name = (hash >>> 0).toString(16).padStart(8, "0")
+  const home = process.env["HOME"] ?? process.env["USERPROFILE"] ?? "."
+  return `${home}/.effect-agent/sessions/${name}`
+}
+
 export const live = (options: {
   readonly workspaceRoot: string
   readonly model: string
@@ -229,11 +252,26 @@ export const live = (options: {
    * the source.
    */
   warning: "live: file tools stay inside the workspace; an approved `bash` runs"
-    + " as you, anywhere on this machine",
+    + " as you, anywhere on this machine."
+    + ` This conversation is written unencrypted to ${sessionDirectory(options.workspaceRoot)}`,
   /**
-   * Under the workspace, so the conversation travels with the code it is
-   * about -- and so deleting the working copy deletes the transcript with it,
-   * which is what someone deleting a throwaway checkout means.
+   * Outside the workspace, and said out loud.
+   *
+   * It used to live at `<workspace>/.effect-agent/session`, which put complete
+   * unredacted transcripts -- prompts, file contents, shell output, tool
+   * arguments and results, fetched text -- inside the directory the agent
+   * itself can read, write, search and delete. That is three separate
+   * problems: `list_files` and `search` surface it and can feed it back into
+   * the model's context, it is in no `.gitignore` so it can be committed, and
+   * `write_file`, `edit_file` or an approved shell command can rewrite or
+   * destroy the agent's own history and indexes. Workspace authority became
+   * authority over the persistence metadata.
+   *
+   * A per-user state directory keyed by the workspace keeps the "one
+   * conversation per checkout" behaviour that made the original choice
+   * attractive, without handing the agent its own transcript. What is lost is
+   * that deleting a throwaway checkout no longer deletes its transcript; the
+   * path is printed at startup so it can be deleted deliberately.
    */
   /**
    * `Layer.build`, not `Effect.provide`.
@@ -251,9 +289,8 @@ export const live = (options: {
    */
   store: Effect.map(
     Layer.build(
-      KeyValueStore.layerFileSystem(
-        `${options.workspaceRoot}/.effect-agent/session`
-      ).pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
+      KeyValueStore.layerFileSystem(sessionDirectory(options.workspaceRoot))
+        .pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
     ),
     (context) => NodeStore.keyValue(Context.get(context, KeyValueStore.KeyValueStore))
   ),
@@ -291,6 +328,10 @@ export const fromArgv = (argv: ReadonlyArray<string>): Backend => {
         "File tools are confined to that directory. An approved `bash` call is\n" +
         "not: it runs with this program's privileges and can reach anything on\n" +
         "the machine. Every shell call is asked about first.\n" +
+        "\n" +
+        "The conversation is written unencrypted under ~/.effect-agent/sessions,\n" +
+        "outside the workspace so the agent cannot read, search or delete its\n" +
+        "own transcript. It contains whatever the conversation contained.\n" +
         "\n" +
         "Point it at a working copy you can throw away."
     )

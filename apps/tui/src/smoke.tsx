@@ -7,7 +7,7 @@ import { Prompt } from "effect/unstable/ai"
 import { TestLanguageModel } from "../../../src/testing/index.js"
 import { entriesOf } from "./restore.ts"
 import { VERSION } from "./version.ts"
-import { fromArgv, scripted, scriptedWith } from "./backend.ts"
+import { fromArgv, scripted, scriptedWith, sessionDirectory } from "./backend.ts"
 import * as Diff from "./diff.ts"
 import { project, provenanceOf, start, stop } from "./harness.ts"
 import { makeStore } from "./store.ts"
@@ -1490,7 +1490,32 @@ checks.push(
       && liveBackend.warning.includes("runs as you")],
   ["while a scripted run has nothing to warn about",
     defaultBackend.warning === undefined],
-  ["and a flag is not mistaken for a directory", refusedWhenWorkspaceIsAFlag]
+  ["and a flag is not mistaken for a directory", refusedWhenWorkspaceIsAFlag],
+
+  /**
+   * R134 -- the transcript is not written where the agent can reach it.
+   *
+   * It used to go to `<workspace>/.effect-agent/session`: complete unredacted
+   * conversation -- prompts, file contents, shell output, tool arguments and
+   * results -- inside the directory the agent can list, search, edit, commit
+   * and delete. Workspace authority became authority over the persistence
+   * metadata.
+   */
+  ["a live transcript is kept outside the workspace",
+    !sessionDirectory("/tmp/work").startsWith("/tmp/work")],
+  // Per workspace, so two checkouts do not share a conversation.
+  ["and one directory per workspace",
+    sessionDirectory("/tmp/one") !== sessionDirectory("/tmp/two")],
+  // The same workspace always resolves to the same place, or resuming would
+  // silently start over.
+  ["and the same one every time",
+    sessionDirectory("/tmp/work") === sessionDirectory("/tmp/work")],
+  // Said where a user meets it, not only in a docstring.
+  ["a live run says where the conversation is written",
+    liveBackend.warning !== undefined
+      && liveBackend.warning.includes("unencrypted")],
+  ["and the refusal message says so too",
+    helpText.includes("unencrypted") && helpText.includes("outside the workspace")]
 )
 
 console.log("--- checks ---")
