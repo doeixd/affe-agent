@@ -213,8 +213,26 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
           if (outcome._tag !== "Pending") return outcome
           const bus = yield* busFor(sessionId)
           yield* PubSub.publish(bus, outcome.stored)
-          return { _tag: "Appended", sequence: outcome.sequence }
-        }),
+          return { _tag: "Appended", sequence: outcome.sequence } as const
+        }).pipe(
+          /**
+           * Committing and publishing are one step, or neither.
+           *
+           * The commit happens inside `Ref.modify` and the publication after
+           * it. An interruption in that gap left `read` holding the event
+           * while every existing `live` subscriber never saw it -- and
+           * retrying returns `Duplicate` without republishing, so the gap was
+           * permanent for this implementation. (The SQL one polls, which
+           * happens to heal it; that is luck rather than design, and it is
+           * made uninterruptible too.)
+           *
+           * Uninterruptible rather than restructured around a cursor: the
+           * span is a `Ref` update and a publish to an unbounded PubSub,
+           * neither of which blocks, so atomicity costs nothing here and gives
+           * up no cancellation a caller could notice.
+           */
+          Effect.uninterruptible
+        ),
 
       live: (sessionId) =>
         Stream.unwrap(Effect.map(busFor(sessionId), Stream.fromPubSub)),
@@ -322,8 +340,15 @@ export const sqlLog = (
           if (outcome._tag !== "Pending") return outcome
           const bus = yield* busFor(sessionId)
           yield* PubSub.publish(bus, outcome.stored)
-          return { _tag: "Appended", sequence: outcome.sequence }
-        }),
+          return { _tag: "Appended", sequence: outcome.sequence } as const
+        }).pipe(
+          // The same commit-and-publish atomicity as the memory log above.
+          // Polling readers recover from a missed publication here, but a
+          // `live` subscriber attached before the append does not, and
+          // "another mechanism happens to cover it" is not the guarantee to
+          // rely on.
+          Effect.uninterruptible
+        ),
 
       live: (sessionId) =>
         Stream.unwrap(
