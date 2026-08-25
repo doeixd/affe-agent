@@ -871,6 +871,30 @@ export const events = (
  * The cost is the mirror image: an observer runs *inside* publication, so a
  * slow one slows the agent loop. Keep it short, and reach for `subscribe`
  * whenever lag is merely cosmetic.
+ *
+ * ## Two rules, and the reasons
+ *
+ * **An observer must not call back into the session.** Publication holds a
+ * one-permit lock across the observer, so any session operation that emits --
+ * `prompt`, `close`, or anything awaiting either -- waits for a permit only
+ * this observer can release. That is a deadlock, not slowness. It is detected
+ * and refused as a defect rather than left to hang, because a hang with no
+ * diagnostic is the worst way to learn a contract. The detection compares
+ * fibres, so an observer that *forks* the re-entrant call is not caught: it
+ * blocks on the permit like any other emitter and deadlocks the same way.
+ *
+ * **An observer is an observability consumer, not a participant.** A defect in
+ * one is logged and the publication continues; later observers still run, and
+ * the agent operation that was announcing the event is unaffected. This is a
+ * decision rather than an accident: an observer whose storage is full must not
+ * take the agent down with it, and the alternative -- every observer wrapping
+ * itself defensively -- puts the coupling the wrong way round. Interruption is
+ * not absorbed, because that is the fibre being cancelled rather than the
+ * observer misbehaving.
+ *
+ * If you need a participant whose failure *is* the agent's failure -- an event
+ * log a restart depends on -- that is `MakeOptions.eventSink`, which is
+ * deliberately a different seam with the opposite coupling.
  */
 export const observe = (
   session: AgentSession<any, any>,

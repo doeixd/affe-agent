@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, PubSub, Stream } from "effect"
+import { Effect, PubSub, Ref, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as EventBus from "../src/internal/eventBus.js"
+import { SessionId } from "../src/internal/ids.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -149,6 +151,128 @@ describe("AgentSession.observe", () => {
       // was -- including the first event of the run.
       assert.strictEqual(out[0], "SubmissionStarted")
       assert.include(out, "TurnCompleted")
+    }))
+
+  /**
+   * R156 -- a broken observer loses its own notification and nothing else.
+   *
+   * An observer's typed error channel is `never`, but a defect still escaped
+   * the callback and failed `emit` -- which failed the model call, tool call
+   * or submission that was in the middle of announcing what it had done.
+   * Subscribers had already received the envelope and later observers were
+   * skipped, so the session's account of itself depended on which event
+   * happened to break.
+   *
+   * `SessionTree.capture` wrapping its own storage write was the tell: if
+   * every observer has to defend itself, the coupling is the wrong way round.
+   */
+  it.effect("a defecting observer does not fail the agent, or its neighbours", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("an answer")
+      ])
+
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        const survivor: Array<string> = []
+
+        yield* AgentSession.observe(session, () =>
+          Effect.die(new Error("this observer is broken")))
+        // Attached after the broken one, so "later observers are skipped" is
+        // what this would show.
+        yield* AgentSession.observe(session, (envelope) =>
+          Effect.sync(() => {
+            survivor.push(envelope.event._tag)
+          }))
+
+        const result = yield* Effect.exit(session.prompt("go"))
+        return { result, survivor }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // The run finished. That is the whole claim.
+      assert.strictEqual(out.result._tag, "Success")
+      // And the observer standing behind the broken one still saw everything.
+      assert.include(out.survivor, "SubmissionStarted")
+      assert.include(out.survivor, "SubmissionCompleted")
+    }))
+
+  /**
+   * R20 -- re-entry is a deadlock, and used to be an undiagnosed hang.
+   *
+   * Publication holds a one-permit lock across the observer, so a session
+   * operation that emits waits for a permit only that observer can release.
+   * The documentation warned that a slow observer slows the loop; it did not
+   * say that a re-entrant one stops it forever.
+   *
+   * Refused as a defect instead. A test that asserted the *hang* would have to
+   * be a timeout, which is a test that passes on a slow machine for the wrong
+   * reason.
+   */
+  it.effect("an observer that emits on its own fibre is refused, not hung", () =>
+    Effect.gen(function*() {
+      const bus = yield* EventBus.make(SessionId.make("session-reentry"))
+      const correlation = { submissionId: undefined, runId: undefined, turn: undefined }
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          yield* EventBus.observe(bus, () =>
+            // The re-entrant call, on the observer's own fibre.
+            EventBus.emit(bus, correlation, { _tag: "SessionClosed" }))
+
+          const result = yield* Effect.exit(
+            EventBus.emit(bus, correlation, { _tag: "SessionStarted" })
+          )
+
+          /**
+           * It ends, which is the point. And it *succeeds*: the re-entrant
+           * call is a defect in the observer, so the isolation above catches
+           * it, logs it, and leaves the agent's own operation alone. Two
+           * defences composing, each doing its own job.
+           */
+          assert.strictEqual(result._tag, "Success")
+
+          /**
+           * And the re-entrant emit never happened. The sequence counter is
+           * allocated *inside* the guard, so one published envelope means one
+           * emit got through -- if the guard had missed, the nested
+           * `SessionClosed` would have taken sequence 2 before deadlocking on
+           * the permit, and this test would hang rather than fail.
+           */
+          assert.strictEqual(yield* Ref.get(bus.sequence), 1)
+        })
+      )
+    }))
+
+  /**
+   * And ordinary contention is untouched: a *different* fibre emitting while
+   * one holds the permit must wait, which is the entire purpose of the permit.
+   * A guard that could not tell the two apart would serialise nothing.
+   */
+  it.effect("a second fibre emitting concurrently is not mistaken for re-entry", () =>
+    Effect.gen(function*() {
+      const bus = yield* EventBus.make(SessionId.make("session-contention"))
+      const correlation = { submissionId: undefined, runId: undefined, turn: undefined }
+      const seen: Array<number> = []
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          yield* EventBus.observe(bus, (envelope) =>
+            // Yield inside the observer, so the permit is genuinely held
+            // across a suspension and the other fibre really does contend.
+            Effect.andThen(Effect.yieldNow, Effect.sync(() => {
+              seen.push(envelope.sequence)
+            })))
+
+          yield* Effect.all(
+            Array.from({ length: 5 }, () =>
+              EventBus.emit(bus, correlation, { _tag: "SessionStarted" })),
+            { concurrency: "unbounded" }
+          )
+        })
+      )
+
+      // All five, in sequence order.
+      assert.deepStrictEqual(seen, [1, 2, 3, 4, 5])
     }))
 })
 
