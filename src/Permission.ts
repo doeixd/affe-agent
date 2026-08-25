@@ -115,6 +115,20 @@ export interface Request {
  * `resource` is a pure function of the decoded parameters. A projection that
  * throws is a bug in the tool, and the call dies rather than being evaluated
  * against a resource nobody computed.
+ *
+ * A constraint that comes with deciding on *decoded* parameters: the tool's
+ * parameter codec is run twice for one call -- once here, to authorize, and
+ * once by `Toolkit.handle`, which has no entry point taking a value that has
+ * already been decoded. Schema decoding is an Effect with a requirement
+ * channel, so a codec backed by a service or by mutable state can return one
+ * value to the policy and a different one to the handler, and the permission
+ * decision would then be about something that never ran.
+ *
+ * So a parameter codec used with permission must be a deterministic,
+ * side-effect-free function of its input. Requiring a service to *read* is
+ * fine and is tested; requiring one whose answer can change between two
+ * evaluations of the same input is not. `test/PermissionDecodingServices.test.ts`
+ * pins the count at two so this cannot quietly become a different number.
  */
 export interface Projection<Params = unknown> {
   readonly action: string
@@ -215,14 +229,29 @@ export const all = <R = never>(...policies: ReadonlyArray<Policy<R>>): Policy<R>
 /** How a rule matches an action, a resource or a tool name. */
 export type Matcher = string | RegExp | ((value: string) => boolean)
 
+/**
+ * Does this matcher accept this value -- the same answer every time?
+ *
+ * A `RegExp` with `g` or `y` carries `lastIndex` between calls, so
+ * `/secret/g.test(x)` alternates true and false for the same `x`. A deny rule
+ * written that way denied the first call and let the second through, which
+ * with an allow default is a permission decision made by call order. Tested
+ * against a fresh expression rather than by resetting the caller's: a policy
+ * is not entitled to mutate the rules it was handed.
+ */
 const matches = (matcher: Matcher | undefined, value: string): boolean =>
   matcher === undefined
     ? true
     : typeof matcher === "string"
       ? matcher === value
       : matcher instanceof RegExp
-        ? matcher.test(value)
+        ? stateless(matcher).test(value)
         : matcher(value)
+
+const stateless = (pattern: RegExp): RegExp =>
+  pattern.global || pattern.sticky
+    ? new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""))
+    : pattern
 
 /**
  * One rule. Every matcher given must match; an omitted one matches anything.
@@ -326,9 +355,26 @@ export const except = <R>(
 // Remembered grants
 // ---------------------------------------------------------------------------
 
-/** How a remembered grant is keyed: the exact action and resource. */
+/**
+ * How a remembered grant is keyed: the exact tool, action and resource.
+ *
+ * Length-prefixed rather than delimited. A NUL separator was here, and
+ * neither field forbids one: `{ action: "a", resource: "b c" }` and
+ * `{ action: "a b", resource: "c" }` produce the same key, and a resource is
+ * frequently model-controlled text. Any single delimiter has that defect --
+ * NUL only makes the colliding input unusual, not impossible. A length prefix
+ * has no such input.
+ *
+ * The tool name is part of the identity, deliberately. Actions are a shared
+ * vocabulary: two tools can both project `net.fetch` on an origin, and a
+ * grant given while approving one is not an answer about the other. The cost
+ * is that a grant does not transfer between tools that genuinely mean the
+ * same thing, which is the safe direction to be wrong in.
+ */
 export const grantKey = (request: Request): string =>
-  `${request.action} ${request.resource}`
+  [request.tool.name, request.action, request.resource]
+    .map((part) => `${part.length}:${part}`)
+    .join("")
 
 /**
  * "Allow always", kept in memory for the life of the policy.

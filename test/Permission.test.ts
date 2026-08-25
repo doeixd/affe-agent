@@ -1043,4 +1043,111 @@ describe("Permission enforcement", () => {
       assert.strictEqual(detail.resource, "rm -rf /")
     })
   )
+
+  /**
+   * R21 -- a permission decision cannot depend on how many times it was made.
+   *
+   * `g` and `y` make a regular expression carry `lastIndex` between calls, so
+   * the *same* rule against the *same* resource alternates. With an allow
+   * default that turns the second identical call into an allowed one purely
+   * because the first one ran.
+   */
+  it.effect("a stateful rule pattern decides the same way every time", () => {
+    const policy = Permission.rules(
+      [{ action: "shell", resource: /secret/g, decision: Permission.deny("no secrets") }],
+      { otherwise: Permission.allow }
+    )
+    const ask = (n: number) =>
+      policy.evaluate({
+        sessionId: "s",
+        toolCallId: `c${n}`,
+        tool: { name: "bash", params: {} },
+        action: "shell",
+        resource: "echo secret",
+        intrinsicApproval: false,
+        messages: []
+      })
+    return Effect.gen(function* () {
+      const decisions = yield* Effect.forEach([1, 2, 3, 4], ask)
+      assert.deepStrictEqual(
+        decisions.map((decision) => decision._tag),
+        ["Deny", "Deny", "Deny", "Deny"]
+      )
+    })
+  })
+
+  it.effect("and the caller's own expression is left alone", () => {
+    const pattern = /secret/g
+    const policy = Permission.rules(
+      [{ action: "shell", resource: pattern, decision: Permission.deny("no") }],
+      { otherwise: Permission.allow }
+    )
+    return Effect.gen(function* () {
+      yield* policy.evaluate({
+        sessionId: "s",
+        toolCallId: "c1",
+        tool: { name: "bash", params: {} },
+        action: "shell",
+        resource: "echo secret",
+        intrinsicApproval: false,
+        messages: []
+      })
+      // Evaluating a policy is not a reason to move somebody else's cursor.
+      assert.strictEqual(pattern.lastIndex, 0)
+    })
+  })
+
+  /**
+   * R164 -- a grant key made by concatenation collides.
+   *
+   * The separator was a NUL, and neither an action nor a resource forbids
+   * one, so `("a", "b c")` and `("a b", "c")` were the same grant. A
+   * resource is often model-controlled text, which makes that a reachable
+   * way to be authorised for something nobody approved.
+   */
+  it.effect("grant keys do not collide across the action/resource boundary", () => {
+    const key = (tool: string, action: string, resource: string) =>
+      Permission.grantKey({
+        sessionId: "s",
+        toolCallId: "c",
+        tool: { name: tool, params: {} },
+        action,
+        resource,
+        intrinsicApproval: false,
+        messages: []
+      })
+
+    return Effect.sync(() => {
+      // The historical collision.
+      assert.notStrictEqual(key("t", "a", "b c"), key("t", "a b", "c"))
+      // And the same shape with an ordinary separator, in case one is ever
+      // reintroduced.
+      assert.notStrictEqual(key("t", "a", "b c"), key("t", "a b", "c"))
+      assert.notStrictEqual(key("t", "a:b", "c"), key("t", "a", "b:c"))
+      // The tool boundary too: a shared action vocabulary is not a shared
+      // grant.
+      assert.notStrictEqual(key("one", "net.fetch", "x"), key("two", "net.fetch", "x"))
+      // And the same call is still the same key.
+      assert.strictEqual(key("t", "a", "b"), key("t", "a", "b"))
+    })
+  })
+
+  it.effect("a grant for one tool does not answer for another", () =>
+    Effect.gen(function* () {
+      const policy = yield* Permission.remembered(Permission.askAll)
+      const request = (tool: string) => ({
+        sessionId: "s",
+        toolCallId: "c",
+        tool: { name: tool, params: {} },
+        action: "net.fetch",
+        resource: "https://example.com",
+        intrinsicApproval: false,
+        messages: []
+      })
+      yield* policy.remember!(request("web_fetch"))
+      assert.strictEqual((yield* policy.evaluate(request("web_fetch")))._tag, "Allow")
+      // Same action, same resource, different tool: still a question.
+      assert.strictEqual((yield* policy.evaluate(request("other_fetch")))._tag, "Ask")
+    })
+  )
 })

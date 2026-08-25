@@ -1,0 +1,2175 @@
+Yes. After looking more closely at Effect v4, I would **revise the previous plan fairly substantially**.
+
+The central correction is:
+
+> We should not build a general background-task runtime, process runtime, worker runtime, queue runtime, or scheduler runtime. Effect v4 already has almost all of those computational semantics.
+
+What effect-agent actually needs to add is the **agent-specific glue between those primitives**:
+
+* stable managed identities for things an agent starts,
+* workspace ownership,
+* permission boundaries,
+* durable session-directed “ping back,”
+* management/read models,
+* and a small amount of lifecycle/event vocabulary.
+
+The resulting architecture is cleaner than the previous plan.
+
+---
+
+# Updated architecture
+
+There are several fundamentally different kinds of “background work,” and we should **not pretend they are one executor**:
+
+| Need                            | Effect primitive                       | effect-agent abstraction              |
+| ------------------------------- | -------------------------------------- | ------------------------------------- |
+| Local background Effect         | `Fiber` / `FiberMap`                   | usually none                          |
+| Trusted isolated JS computation | `Worker` / `WorkerRunner`              | usually none                          |
+| External command / daemon       | `ChildProcess` / `ChildProcessSpawner` | `ProcessManager`                      |
+| Retryable durable job           | `PersistedQueue`                       | thin dispatcher/inbox                 |
+| Workflow delegates and waits    | `DurableQueue`                         | usually none                          |
+| Durable external operation      | `Activity`                             | usually none                          |
+| Durable sleep/check loop        | `Workflow` + `DurableClock`            | optional monitor sugar                |
+| Cluster-wide recurrence         | `ClusterCron`                          | existing scheduling battery           |
+| Resume an agent later           | —                                      | **`SessionInbox`**                    |
+| Query what's happening          | SQL/read models                        | `SessionDirectory`, process directory |
+| Live server events              | `Stream` + `PubSub` + `FiberMap`       | host-wide events                      |
+
+Effect's `ChildProcessSpawner` already provides scoped child-process handles with stdin, stdout/stderr streams, process status, exit waiting, killing, and `unref`.  Effect Workers already provide a portable message-based Worker/WorkerRunner abstraction across worker-like environments.   And `FiberMap` already implements exactly the “background fibers indexed by stable IDs and owned by a scope” mechanism we'd otherwise write ourselves.
+
+So the overall picture should become:
+
+```text
+                                 AGENT EXECUTION
+
+Agent → AgentSession → AgentClient → AgentSessionHost
+                               │
+                               ├── session events
+                               └── SessionInbox
+                                      ↑
+                                      │ ping back
+
+
+                              BACKGROUND WORK
+
+                  ┌──────────────┼────────────────┐
+                  │              │                │
+              FiberMap       Effect Worker    ProcessManager
+                  │              │                │
+           local Effects    trusted JS      ChildProcessSpawner
+                                               / remote backend
+
+                  ┌───────────────────────────────┐
+                  │         DURABLE WORK          │
+                  │                               │
+            PersistedQueue                  Workflow
+                  │                    ┌──────┼────────┐
+             workers/jobs          Activity  │    DurableQueue
+                                           Clock
+
+
+                                 WORKSPACE
+
+                          WorkspaceManager
+                          (LayerMap / RcMap)
+                                │
+                         workspace runtime
+                         ┌──────┴──────┐
+                      Sandbox     process backend
+
+
+                              MANAGEMENT
+
+      SessionDirectory        ProcessDirectory
+              ↑                      ↑
+      SessionProjection        process events
+              ↑
+       host/session events
+```
+
+That is the architecture I would give the implementation agent.
+
+---
+
+# 1. The biggest missing semantic: `SessionInbox`
+
+This is more important than ProcessManager.
+
+Suppose an agent says:
+
+> Run this test suite in the background and tell me when it's done.
+
+Or:
+
+> Check this deployment every five minutes and come back when it becomes healthy.
+
+Or:
+
+> Watch this build process and tell me if it fails.
+
+The background operation isn't the hard part.
+
+The hard part is:
+
+> **How does something that finishes two hours later reliably cause the original logical agent session to do something?**
+
+Current primitives don't quite cover that.
+
+`steer` means:
+
+> modify an already-running run at the next turn boundary.
+
+`followUp` means:
+
+> append work to the currently-running submission.
+
+But a monitor may finish when the session has been idle for an hour.
+
+And current `AgentDispatcher` starts independent future `Agent.run(...)` work; it doesn't address an existing logical session.
+
+So add:
+
+```text
+@s/doeixd/effect-agent/sessions
+    SessionDirectory
+    SessionProjection
+    SessionInbox
+```
+
+## `SessionInbox`
+
+Conceptually:
+
+```ts
+interface SessionInbox {
+  readonly enqueue: (
+    item: SessionInbox.Item
+  ) => Effect.Effect<void, InboxError>
+}
+```
+
+with a Schema-defined item:
+
+```ts
+const Item = Schema.Struct({
+  id: Schema.String,
+
+  sessionId: SessionId,
+
+  input: Prompt.Prompt,
+
+  source: Schema.Struct({
+    kind: Schema.String,
+    id: Schema.optional(Schema.String)
+  }),
+
+  createdAt: Schema.Number
+})
+```
+
+The important thing is:
+
+```ts
+id
+```
+
+is an **idempotency key**.
+
+Examples:
+
+```text
+process:proc-123:exit
+monitor:deploy-health:healthy
+job:invoice-import:completed
+```
+
+If the same completion is observed twice, the agent gets pinged once.
+
+---
+
+# 2. Use Effect `PersistedQueue` for the inbox
+
+We should not build another queue store.
+
+Effect v4's `PersistedQueue` already provides:
+
+* Schema encoding,
+* stable IDs,
+* duplicate suppression,
+* processing acknowledgement,
+* retry on failure,
+* processing leases/scopes,
+* multiple workers,
+* memory storage,
+* SQL storage,
+* Redis storage.
+
+That's almost exactly what a persistent session inbox needs.
+
+So:
+
+```ts
+const inbox = yield* PersistedQueue.make({
+  name: "effect-agent/session-inbox",
+  schema: SessionInbox.Item
+})
+```
+
+Ping:
+
+```ts
+yield* inbox.offer(item, {
+  id: item.id
+})
+```
+
+Worker:
+
+```ts
+yield* inbox.take((item) =>
+  SessionInbox.deliver(item)
+)
+```
+
+No custom:
+
+```text
+InboxQueue
+InboxLease
+InboxRetry
+InboxSqlStore
+InboxRedisStore
+```
+
+Effect already did that.
+
+---
+
+# 3. We need one small AgentClient improvement: asynchronous submission admission
+
+There is an important problem with implementing the inbox against:
+
+```ts
+session.prompt(...)
+```
+
+`prompt` waits until the entire submission is finished.
+
+That can mean:
+
+```text
+inbox worker
+   ↓
+session.prompt(...)
+   ↓
+agent asks human for approval
+   ↓
+waits 2 days
+   ↓
+queue item remains leased for 2 days
+```
+
+Wrong lifecycle.
+
+The inbox only needs to know:
+
+> **Was this new submission successfully admitted?**
+
+Once admitted, normal agent execution owns it.
+
+So I would add an asynchronous data-plane operation:
+
+```ts
+session.submit(input, options?)
+```
+
+returning:
+
+```ts
+interface SubmissionReceipt {
+  readonly submissionId: SubmissionId
+}
+```
+
+Semantics:
+
+```text
+submit()
+  ↓
+claim session
+  ↓
+persist / establish accepted work
+  ↓
+start submission
+  ↓
+RETURN RECEIPT
+
+                 submission continues independently
+                               ↓
+                         normal AgentEvents
+```
+
+Whereas:
+
+```ts
+prompt(input)
+```
+
+remains:
+
+```text
+submit
+  ↓
+await terminal result
+```
+
+Conceptually.
+
+This is not control-plane bloat. `AgentSubmission` is already a core execution noun; we're merely exposing the distinction between:
+
+```text
+accepted
+```
+
+and:
+
+```text
+finished
+```
+
+which background work makes unavoidable.
+
+---
+
+# 4. `submit` also needs idempotency
+
+Suppose:
+
+```text
+Inbox worker
+    ↓
+session.submit(...)
+    ↓
+submission accepted
+    ↓
+process crashes BEFORE queue ACK
+```
+
+The inbox retries.
+
+Without idempotent admission:
+
+```text
+submission A
+submission B
+```
+
+Both happen.
+
+Therefore:
+
+```ts
+session.submit(input, {
+  requestId: item.id
+})
+```
+
+should mean:
+
+> Within this logical session, this request ID identifies one submission admission.
+
+Same ID + same payload:
+
+```text
+return same receipt
+```
+
+Same ID + different payload:
+
+```text
+AgentRequestConflictError
+```
+
+This is the same semantic the transport host already implements for request IDs. We should push that invariant down far enough that **background delivery does not depend on one HTTP server process remembering the request**.
+
+For durable sessions this belongs in durable session storage.
+
+For local sessions a bounded in-memory table is sufficient.
+
+This is a real architectural improvement revealed by the ping-back use case.
+
+---
+
+# 5. Inbox delivery should normally wait for idle and create a new submission
+
+I would **not automatically turn background completion into `followUp`**.
+
+Suppose:
+
+```text
+submission A:
+  "research competitors"
+
+starts background task X
+
+then user starts:
+submission B:
+  "actually let's work on payroll"
+
+X finishes
+```
+
+If the ping automatically becomes a follow-up to whatever happens to be running, you can attach competitor research to payroll.
+
+Bad.
+
+So default inbox semantics should be:
+
+```text
+background result
+       ↓
+SessionInbox
+       ↓
+target session currently running?
+       │
+       ├ yes → leave/retry inbox item
+       │
+       └ no  → submit new submission
+```
+
+In other words:
+
+> **A ping-back is future session input, not implicitly a follow-up.**
+
+If later we want:
+
+```text
+attach to original submission iff that exact submission is still running
+```
+
+we can store:
+
+```ts
+originSubmissionId
+```
+
+and implement that explicitly.
+
+Don't make timing determine semantics.
+
+---
+
+# 6. What a ping-back actually looks like
+
+Suppose the agent starts:
+
+```text
+process-42 = npm test -- --watch=false
+```
+
+The process eventually exits.
+
+That produces:
+
+```ts
+ProcessExited({
+  processId: "process-42",
+  exitCode: 1
+})
+```
+
+A composition layer decides that this should resume the agent:
+
+```ts
+yield* SessionInbox.enqueue({
+  id: "process:process-42:exit",
+  sessionId,
+  input: Prompt.make(`
+    Background process process-42 finished with exit code 1.
+
+    Review its output and decide what to do next.
+  `),
+  source: {
+    kind: "process",
+    id: "process-42"
+  },
+  createdAt: ...
+})
+```
+
+Then:
+
+```text
+ProcessManager
+     │
+     │ ProcessExited
+     ▼
+background policy/helper
+     │
+     ▼
+SessionInbox
+     │
+     │ persistent/idempotent
+     ▼
+target AgentSession
+     │
+     ▼
+new submission
+```
+
+Crucially:
+
+> **ProcessManager should not know AgentSession exists.**
+
+Otherwise every background-capable battery starts depending on the agent runtime.
+
+Ping-back is composition.
+
+---
+
+# 7. Don't make every completion ping the model
+
+There are two different outcomes:
+
+```text
+background work finished
+        │
+        ├── OBSERVE
+        │      ↓
+        │ process/global event
+        │ UI shows "build succeeded"
+        │
+        └── RESUME AGENT
+               ↓
+          SessionInbox
+               ↓
+          new submission
+```
+
+Often the model doesn't need another turn.
+
+For example:
+
+```text
+webpack dev server started
+```
+
+might just update the UI.
+
+But:
+
+```text
+deployment changed from pending → failed
+```
+
+might deserve a model turn.
+
+Don't force background lifecycle events into canonical conversation history.
+
+That's the same observational/canonical distinction the rest of the harness already keeps.
+
+---
+
+# 8. Delegated scripts: use `ProcessManager`, but build it over Effect's process module
+
+This changes my previous ProcessManager design.
+
+We **should not invent our own low-level process abstraction**.
+
+Effect already has:
+
+```ts
+ChildProcess.Command
+ChildProcessSpawner
+ChildProcessHandle
+```
+
+and the handle already gives us:
+
+```text
+pid
+isRunning
+exitCode
+kill
+stdin Sink
+stdout Stream
+stderr Stream
+combined output Stream
+unref
+```
+
+Therefore `ProcessManager` earns its existence only for semantics Effect can't provide:
+
+```text
+stable effect-agent ProcessId
+persistent metadata
+listing
+reacquisition
+output history/cursors
+ownership beyond caller scope
+provider-independent identity
+Lost state
+```
+
+So:
+
+```text
+ProcessManager
+      ↓
+Effect ChildProcessSpawner
+```
+
+for the local backend.
+
+Not:
+
+```text
+ProcessManager
+      ↓
+our own clone of ChildProcessSpawner
+      ↓
+node:child_process
+```
+
+---
+
+# 9. Revised ProcessManager
+
+Something like:
+
+```ts
+interface ProcessManager {
+  readonly start: (
+    request: ProcessRequest
+  ) => Effect.Effect<ManagedProcess, ProcessError>
+
+  readonly get: (
+    id: ProcessId
+  ) => Effect.Effect<ManagedProcess, ProcessNotFound>
+
+  readonly list: (
+    query?: ProcessQuery
+  ) => Effect.Effect<ProcessPage, ProcessError>
+
+  readonly events:
+    Stream.Stream<ProcessEvent>
+}
+```
+
+and:
+
+```ts
+interface ManagedProcess {
+  readonly id: ProcessId
+
+  readonly info:
+    Effect.Effect<ProcessInfo, ProcessError>
+
+  readonly write: (
+    data: Uint8Array | string
+  ) => Effect.Effect<void, ProcessError>
+
+  readonly terminate: (
+    options?: TerminateOptions
+  ) => Effect.Effect<void, ProcessError>
+
+  readonly wait:
+    Effect.Effect<ProcessExit, ProcessError>
+
+  readonly output: (
+    options?: { after?: number }
+  ) => Stream.Stream<ProcessOutput, ProcessError>
+}
+```
+
+The local implementation internally holds:
+
+```ts
+ChildProcessSpawner.ChildProcessHandle
+```
+
+instead of exposing it.
+
+That lets a remote E2B/Daytona/container backend implement the **same ProcessManager contract** without pretending its remote process has a local Effect `ChildProcessHandle`.
+
+---
+
+# 10. Use `FiberMap<ProcessId>` internally
+
+Don't manually maintain:
+
+```ts
+Map<ProcessId, Fiber>
+```
+
+Effect already has the exact abstraction.
+
+A local manager should have something like:
+
+```ts
+const processes =
+  yield* FiberMap.make<ProcessId>()
+```
+
+and supervise:
+
+```text
+process-1 → output/exit pump
+process-2 → output/exit pump
+process-3 → output/exit pump
+```
+
+The manager's Scope owns the FiberMap.
+
+Closing the ProcessManager layer:
+
+```text
+interrupt pumps
+terminate local processes
+release resources
+```
+
+Closing an individual request's scope:
+
+```text
+nothing
+```
+
+because a temporary handle does not own the managed process.
+
+That ownership distinction is important.
+
+`FiberMap` is explicitly intended for keyed background effects that are cleaned up with a parent scope.
+
+---
+
+# 11. One spike before replacing the existing sandbox process implementation
+
+There is one place where effect-agent currently does something more specific than generic Effect process management.
+
+`sandbox/local` manually handles:
+
+* POSIX process groups,
+* Windows `taskkill /T`,
+* killing descendants,
+* TERM → KILL escalation,
+* hard deadlines,
+* descendants holding stdio open,
+* interruption cleanup.
+
+Those are good semantics.
+
+So don't blindly replace it.
+
+First write conformance tests:
+
+```text
+child spawns grandchild
+child exits but grandchild keeps stdio
+timeout kills entire tree
+Effect interruption kills entire tree
+Windows equivalent
+```
+
+Then implement the same cases using Effect's:
+
+```ts
+ChildProcess.make(...)
+ChildProcessSpawner.spawn(...)
+handle.kill(...)
+```
+
+If Effect preserves all those guarantees:
+
+> delete the custom Node process plumbing.
+
+If it doesn't:
+
+> retain exactly one narrow host-specific `ProcessTree` adapter for recursive termination, while using Effect ChildProcess for everything else.
+
+This is how I would approach all “Effect already does this” refactors: preserve the semantic contract, not the implementation.
+
+---
+
+# 12. Workspaces become more important once processes outlive tool calls
+
+There's another issue exposed by background processes.
+
+The current portable abstraction says:
+
+```ts
+SandboxProvider.acquire(workspace)
+```
+
+but the local provider creates a temporary directory **per acquisition** unless an existing root is configured.
+
+That was fine when:
+
+```text
+tool scope
+  ↓
+sandbox
+  ↓
+bounded command
+  ↓
+everything ends
+```
+
+It is no longer enough for:
+
+```text
+session starts workspace
+        ↓
+tool starts dev server
+        ↓
+session/tool scope ends
+        ↓
+dev server should keep same workspace
+        ↓
+later tool reads modified files
+```
+
+We need stable workspace lifetimes.
+
+---
+
+# 13. Use `LayerMap` / `RcMap` for workspace runtimes
+
+This is a place where Effect v4 has exactly the right primitive.
+
+`LayerMap` caches layer-built resources by key, reference-counts them via `RcMap`, and can release them after they become unused.
+
+That's ideal for:
+
+```text
+WorkspaceId
+     ↓
+workspace resource context
+     ├ Sandbox.Current
+     ├ local/remote process backend
+     ├ maybe MCP workspace connection
+     └ future VCS service
+```
+
+Conceptually:
+
+```ts
+const workspaces = yield* LayerMap.make(
+  (workspace: Workspace) =>
+    WorkspaceBackend.layer(workspace),
+  {
+    idleTimeToLive: "5 minutes"
+  }
+)
+```
+
+Then an agent session can hold:
+
+```text
+workspace A ref
+```
+
+and ProcessManager can independently hold:
+
+```text
+workspace A ref
+```
+
+As long as either exists, the workspace remains alive.
+
+When both release:
+
+```text
+idle TTL
+   ↓
+workspace provider released
+```
+
+This is an excellent use for reference counting.
+
+### But not for processes themselves
+
+Do **not** use `RcMap` to own ProcessManager processes.
+
+Why?
+
+If:
+
+```text
+last ManagedProcess handle disappears
+```
+
+we explicitly do **not** want:
+
+```text
+kill the process
+```
+
+A process is managed because it outlives handles.
+
+So:
+
+```text
+LayerMap / RcMap
+    good for workspace/runtime resources
+
+FiberMap + ProcessStore
+    good for ProcessManager-owned processes
+```
+
+---
+
+# 14. Watchers aren't all the same thing
+
+I would explicitly document four kinds.
+
+## A. Process watcher
+
+Examples:
+
+```text
+npm test --watch
+vite
+tail -f logfile
+tsc --watch
+```
+
+That is just:
+
+```text
+ProcessManager
+    ↓
+process output/events
+```
+
+No Monitor abstraction necessary.
+
+You observe:
+
+```ts
+process.output()
+```
+
+or:
+
+```ts
+ProcessManager.events
+```
+
+and derive whatever signal you want.
+
+---
+
+## B. Local Effect monitor
+
+Example:
+
+> Check localhost every second until it returns 200.
+
+Just write:
+
+```ts
+check.pipe(
+  Effect.repeat(
+    Schedule.spaced("1 second")
+  )
+)
+```
+
+and if we need to manage many such monitors by identity:
+
+```ts
+FiberMap<MonitorId>
+```
+
+No custom scheduler.
+
+No worker runtime.
+
+No SQL.
+
+If the process dies, the monitor dies.
+
+That's the contract.
+
+---
+
+# 15. Effect Workers: what they are actually for
+
+Workers should **not** become the default background-task system.
+
+Effect's Worker abstraction is message based:
+
+```ts
+worker.send(message)
+
+worker.run((output) =>
+  ...
+)
+```
+
+with platform-specific Worker spawning and scoped cleanup.
+
+Use that for:
+
+```text
+trusted CPU-heavy parsing
+index construction
+diff computation
+embeddings preprocessing
+syntax analysis
+large JSON processing
+trusted plugin computation
+```
+
+Things where you want:
+
+```text
+event-loop isolation
++
+message passing
+```
+
+Do **not** use it as a sandbox for model-generated JavaScript.
+
+A Worker is:
+
+```text
+compute isolation
+```
+
+not:
+
+```text
+security isolation
+```
+
+And it is not durable:
+
+```text
+host dies
+→ Worker dies
+```
+
+So:
+
+```text
+arbitrary agent script
+    → Sandbox / ProcessManager
+
+trusted CPU computation
+    → Worker
+
+durable background task
+    → Workflow / PersistedQueue
+```
+
+That should be an explicit design rule.
+
+---
+
+# 16. Durable finite monitors should be Workflows, not processes or queue pollers
+
+Suppose the user asks:
+
+> Check the deployment until it becomes healthy, then tell me.
+
+The right durable implementation is:
+
+```text
+Workflow
+  │
+  ├ Activity(check deployment)
+  │
+  ├ healthy?
+  │     │
+  │     ├ yes ──→ SessionInbox.enqueue(...)
+  │     │
+  │     └ no
+  │
+  ├ DurableClock.sleep(30 sec)
+  │
+  └ repeat
+```
+
+Why these primitives?
+
+External checking:
+
+```ts
+Activity.make(...)
+```
+
+means the result is journalled and replay does not accidentally repeat an already-completed external operation. Effect Activities are explicitly named, Schema'd durable effects whose result can be replayed by Workflow.
+
+Waiting:
+
+```ts
+DurableClock.sleep(...)
+```
+
+means no process or timer fiber must stay alive for 30 seconds, 6 hours, or a week. Effect's durable clock schedules longer sleeps through the Workflow engine and resumes via a durable deferred.
+
+Then the terminal action is:
+
+```ts
+SessionInbox.enqueue(...)
+```
+
+which wakes the logical agent.
+
+That's a very clean stack.
+
+---
+
+# 17. Don't run infinite monitors as infinite Workflows
+
+Different case:
+
+> Check this endpoint every five minutes forever.
+
+An endlessly growing workflow history is not necessarily what we want.
+
+For perpetual recurrence:
+
+```text
+ClusterCron / Scheduling
+        ↓
+run one finite check
+        ↓
+read previous monitor state
+        ↓
+compare
+        ↓
+changed?
+   yes /    \ no
+      /      \
+SessionInbox  done
+      ↓
+persist new state
+```
+
+Effect Cluster already has `ClusterCron`, and effect-agent already wraps cluster scheduling concepts. Effect Cluster also has scheduled-delivery support through `DeliverAt`.
+
+So the rule should be:
+
+```text
+finite "wait until X"
+    → Workflow + DurableClock
+
+perpetual "every N forever"
+    → ClusterCron / scheduler + persistent state
+```
+
+---
+
+# 18. Durable delegated work that the Workflow waits for: use `DurableQueue`
+
+This is another Effect primitive we should absolutely not recreate.
+
+Suppose a durable agent/workflow needs:
+
+> Send this expensive job to a worker pool and continue once somebody processes it.
+
+Effect `DurableQueue` already does:
+
+```text
+Workflow
+   ↓
+DurableQueue.process(payload)
+   ↓
+PersistedQueue
+   ↓
+worker
+   ↓
+typed Exit
+   ↓
+DurableDeferred
+   ↓
+Workflow resumes
+```
+
+That's literally its purpose.
+
+So don't create:
+
+```text
+BackgroundTaskDeferred
+AgentWorkerToken
+TaskResultQueue
+TaskResumeProtocol
+```
+
+Use `DurableQueue`.
+
+---
+
+# 19. `PersistedQueue` versus `DurableQueue`
+
+This distinction should go directly into project docs:
+
+```text
+PersistedQueue
+────────────────────────────────
+"I need this work to reach a worker."
+
+Producer does NOT inherently wait.
+
+Good for:
+- SessionInbox
+- notifications
+- background jobs
+- outbox delivery
+- detached work
+
+
+DurableQueue
+────────────────────────────────
+"My Workflow delegates this work
+and must resume with its result."
+
+Good for:
+- durable parent waiting on worker
+- typed distributed activities
+- external worker pools
+```
+
+`DurableQueue` itself is built over `PersistedQueue` + `DurableDeferred`.
+
+---
+
+# 20. Current `/scheduling` should be modernized
+
+This is one concrete place the repo is now re-deriving Effect.
+
+Current scheduling defines its own:
+
+```ts
+interface JobStore {
+  enqueue(...)
+  claimDue(...)
+}
+```
+
+and its own memory queue and polling worker.
+
+Effect v4 now has a much stronger generic primitive in `PersistedQueue`, including memory, SQL, Redis, dedupe, retry, and multi-worker processing.
+
+So I would refactor `/scheduling`.
+
+Do **not** blindly jam delayed jobs into `PersistedQueue`, though.
+
+A queue is not a timer.
+
+Use:
+
+```text
+immediate durable handoff
+    → PersistedQueue
+
+local delay
+    → Effect.delay / Schedule
+
+delay inside durable workflow
+    → DurableClock
+
+cluster recurrence
+    → ClusterCron
+
+cluster delayed delivery
+    → DeliverAt where appropriate
+```
+
+If there remains a real requirement for arbitrary durable delayed jobs outside Workflow/Cluster, then a tiny due-time store may still be justified.
+
+But only after proving Effect's existing timing primitives don't cover the actual call site.
+
+---
+
+# 21. Background process permissions
+
+The permission model already has the right architecture: semantic action/resource policy, `Allow | Ask | Deny`, intrinsic approval floor, and separate sandbox enforcement.
+
+For processes, define Permission projections like:
+
+```text
+action: process.start
+resource: "npm run dev"
+
+action: process.write
+resource: process-123
+
+action: process.signal
+resource: process-123:SIGTERM
+
+action: process.stop
+resource: process-123
+```
+
+So:
+
+```text
+model requests start_process
+        ↓
+Permission
+        ↓
+Ask
+        ↓
+Elicitation
+        ↓
+user approves
+        ↓
+ProcessManager.start
+        ↓
+workspace/sandbox authority
+        ↓
+ChildProcessSpawner
+```
+
+Approval does not widen environmental authority.
+
+---
+
+# 22. How repeated monitors interact with permission
+
+This deserves a firm rule.
+
+Suppose a user approves:
+
+> Watch github.com/foo every minute and tell me when CI passes.
+
+We should **not ask the user again every minute**.
+
+The permissioned side effect is:
+
+```text
+CREATE this persistent monitor
+```
+
+So the tool call creating it might project:
+
+```text
+action: monitor.create
+resource:
+  "github-ci:repo=foo:interval=60s"
+```
+
+Once approved, the monitor runtime may perform exactly the checks encoded by that approved monitor definition.
+
+Its authority does not grow merely because it runs repeatedly.
+
+If the agent later wants to change:
+
+```text
+github.com/foo
+```
+
+to:
+
+```text
+production database
+```
+
+that is a new monitor/update operation and permission is evaluated again.
+
+This is much cleaner than rerunning an interactive agent permission prompt from a background worker.
+
+---
+
+# 23. Same principle for delegated processes
+
+The user approves:
+
+```text
+start `npm test`
+```
+
+The process then runs.
+
+We don't re-ask permission for every byte it emits.
+
+But if the agent later requests:
+
+```text
+send "yes" to stdin
+```
+
+or:
+
+```text
+SIGKILL it
+```
+
+those are separate model-initiated operations and can have separate policy.
+
+Runtime-controlled actions such as:
+
+```text
+kill after configured timeout
+```
+
+do not need another approval—they are part of the already-approved execution contract.
+
+---
+
+# 24. Sandbox still provides the hard boundary
+
+The hierarchy should remain:
+
+```text
+Permission
+   "should the agent be allowed?"
+
+Elicitation
+   "ask somebody if needed"
+
+ProcessManager
+   "manage this process as a logical resource"
+
+Workspace/Sandbox
+   "what environment does it actually have?"
+
+Effect ChildProcess / remote provider
+   "perform the operation"
+```
+
+The current local sandbox explicitly warns that it isn't a real security boundary because local processes run with the host process's authority despite path precautions.
+
+Keep saying that.
+
+For untrusted arbitrary execution, users need a provider backed by:
+
+```text
+container
+VM
+E2B
+Daytona
+Cloudflare Sandbox
+etc.
+```
+
+not Worker Threads and not a temp directory.
+
+---
+
+# 25. Synchronous subagents stay synchronous
+
+Do not modify current `Subagent.tool`.
+
+It deliberately means:
+
+```text
+parent tool call
+    ↓
+child Agent.run
+    ↓
+parent waits
+```
+
+and structured concurrency correctly means parent interruption interrupts child.
+
+That's good.
+
+A **detached subagent** is different.
+
+Eventually:
+
+```ts
+Subagent.dispatchTool(...)
+```
+
+could mean:
+
+```text
+parent
+  ↓
+enqueue child agent job
+  ↓
+return TaskId immediately
+
+child runs elsewhere
+  ↓
+SessionInbox ping to parent
+```
+
+That should be built over the same durable background primitives.
+
+Don't weaken normal `Subagent.tool` by making its lifetime ambiguous.
+
+---
+
+# 26. SessionDirectory still belongs in the plan
+
+The previous plan's `SessionDirectory` remains correct.
+
+```text
+AgentClient
+    does work
+
+SessionDirectory
+    discovers/manages sessions
+```
+
+So:
+
+```ts
+interface SessionDirectory {
+  get(id)
+  list(query)
+  active(query)
+  stats(id)
+  rename(id, name)
+  move(id, namespace)
+  annotate(id, attributes)
+}
+```
+
+with pagination from day one.
+
+The durable logical session store should remain separate: it contains the minimal execution-critical state necessary to continue a durable session.
+
+```text
+DurableSessionStore
+    correctness of execution
+
+SessionDirectory
+    management/query model
+```
+
+Don't merge them.
+
+---
+
+# 27. SessionProjection remains a pure reducer
+
+Still:
+
+```ts
+reduce(
+  state: SessionProjection,
+  envelope: AgentEventEnvelope
+): SessionProjection
+```
+
+with:
+
+```text
+sequence <= lastSequence
+    duplicate → ignore
+
+sequence === lastSequence + 1
+    apply
+
+sequence > lastSequence + 1
+    projection gap
+```
+
+Durable repair uses:
+
+```ts
+DeliveryLog.read(sessionId, {
+  after: lastSequence
+})
+```
+
+The durable delivery log already exists specifically to give clients session-wide cursor replay separate from workflow history.
+
+Don't duplicate it.
+
+---
+
+# 28. Add normalized model usage to AgentEvent
+
+This recommendation still stands and becomes even more valuable for `SessionStats`.
+
+Current observability explicitly cannot report token counts because the event vocabulary doesn't expose them.
+
+Add something like:
+
+```ts
+ModelCallCompleted {
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+  }
+
+  finishReason?: string
+}
+```
+
+Emitted immediately after the provider returns successfully.
+
+Not after tools.
+
+Otherwise:
+
+```text
+model succeeds
+→ spends 10k tokens
+→ tool fails
+```
+
+would lose the usage.
+
+Don't expose raw provider responses and don't compute dollar cost in core.
+
+---
+
+# 29. Improve host-wide events using `FiberMap`
+
+My previous plan suggested one session-event pump per hosted session.
+
+Effect gives us the ideal supervisor:
+
+```ts
+FiberMap<SessionId>
+```
+
+So `AgentSessionHost` can effectively maintain:
+
+```text
+session-1 → event forwarding fiber
+session-2 → event forwarding fiber
+session-3 → event forwarding fiber
+```
+
+When a session is adopted:
+
+```text
+eagerly subscribe
+→ install pump in FiberMap
+→ publish SessionHosted
+→ expose session
+```
+
+When unhosted:
+
+```text
+remove pump
+→ publish SessionUnhosted
+```
+
+The host-wide stream remains observational:
+
+```ts
+host.events: Stream<HostEventEnvelope>
+```
+
+with:
+
+```ts
+type HostEvent =
+  | SessionHosted
+  | SessionUnhosted
+  | AgentEvent
+```
+
+The inner AgentEvent retains its session sequence.
+
+The outer host event may have its own process-local sequence.
+
+And still:
+
+> `SessionUnhosted` does not mean logical `SessionClosed`.
+
+Especially for durable sessions.
+
+---
+
+# 30. Global events from the whole server should be an application projection
+
+Once we also have:
+
+```ts
+ProcessManager.events
+```
+
+and potentially:
+
+```ts
+MonitorManager.events
+```
+
+do not shove those into `AgentSessionHost`.
+
+A server product can simply build:
+
+```ts
+const serverEvents = Stream.mergeAll([
+  host.events,
+  processManager.events,
+  ...
+])
+```
+
+and project them into:
+
+```ts
+ServerEvent
+```
+
+for:
+
+```text
+GET /events
+```
+
+The host should only know hosted-agent events.
+
+---
+
+# 31. Don't reuse `AgentData` for lifecycle events
+
+`AgentData` is intentionally typed observational data produced by agent/tool code for clients/UI.
+
+That's useful for:
+
+```text
+order-created UI card
+chart values
+table row
+```
+
+But:
+
+```text
+process exited
+monitor fired
+session hosted
+```
+
+are runtime lifecycle events.
+
+Keep those separate.
+
+---
+
+# 32. What should SQL actually store?
+
+SQL is useful, but not as the answer to every durability question.
+
+I would assign storage responsibilities like this:
+
+| Data                              | Storage mechanism                               |
+| --------------------------------- | ----------------------------------------------- |
+| Canonical durable session         | existing `DurableSessionStore`                  |
+| Workflow replay                   | Workflow journal                                |
+| Durable client event replay       | existing `DeliveryLog`                          |
+| Background handoff                | Effect `PersistedQueue`                         |
+| Workflow→worker result            | Effect `DurableQueue`                           |
+| Session list/name/namespace/stats | SQL `SessionDirectory`                          |
+| Process metadata/status           | SQL `ProcessStore`                              |
+| Process output history            | SQL/object/log backend if persistence required  |
+| Monitor definitions/current state | SQL, if dynamic monitors are added              |
+| Long sleep in Workflow            | `DurableClock`, **not SQL polling**             |
+| Pending human answer in Workflow  | `DurableDeferred`, existing durable elicitation |
+| Worker thread state               | nowhere durable by default                      |
+
+That's a much cleaner division.
+
+---
+
+# 33. Don't introduce a generic `Monitor` abstraction yet
+
+After thinking through the actual mechanisms, I would **not immediately build**:
+
+```ts
+Monitor<A, E, R>
+TaskRunner
+BackgroundExecutor
+WatcherRuntime
+```
+
+because we'd mostly be wrapping:
+
+```text
+Effect
+Stream
+Schedule
+FiberMap
+Worker
+ChildProcess
+Workflow
+```
+
+Instead document recipes.
+
+Only add `MonitorDefinition` / `MonitorManager` once we have several concrete persisted dynamic-monitor use cases and can identify the semantics that aren't already Effect.
+
+The likely genuinely missing monitor-specific semantics would eventually be:
+
+```text
+stable MonitorId
+stored monitor parameters
+target session
+enabled/paused/completed state
+last observation
+```
+
+Those are **management semantics**, not execution semantics.
+
+---
+
+# 34. Effect EventLog: evaluate, don't immediately adopt
+
+Effect v4 now also has a substantial `EventLog` subsystem with typed event groups, journals, SQL persistence, remote replication, handlers, and reactivity.
+
+That deserves an audit.
+
+But I would **not replace `DeliveryLog` with it just because it exists**.
+
+Our `DeliveryLog` has very specific semantics:
+
+```text
+semantic event-key dedupe
+duplicate-content conflict detection
+session-wide delivery cursor
+wire projection
+read(after)
+live(session)
+```
+
+and explicitly represents **client delivery**, separate from workflow/canonical state.
+
+Effect EventLog may eventually eliminate some custom storage code, but only if it preserves those invariants.
+
+Run a spike; don't rewrite first.
+
+---
+
+# 35. Specific Effect-v4 modernization work I would add to the plan
+
+This audit has uncovered several places worth revisiting:
+
+| Current project code             | Prefer                                 |
+| -------------------------------- | -------------------------------------- |
+| custom scheduling `JobStore`     | `PersistedQueue` where semantics match |
+| custom queued worker retry logic | `PersistedQueue.take`                  |
+| durable worker/result handshake  | `DurableQueue`                         |
+| long durable waits               | `DurableClock`                         |
+| durable external check           | `Activity`                             |
+| keyed background fibers          | `FiberMap`                             |
+| keyed scoped workspaces/clients  | `LayerMap` / `RcMap`                   |
+| local child-process plumbing     | `ChildProcess` / `ChildProcessSpawner` |
+| trusted JS background compute    | `Worker` / `WorkerRunner`              |
+| recurrence                       | `Schedule` / `ClusterCron`             |
+| SQL implementations              | abstract `SqlClient`                   |
+| custom durable deferred concepts | existing `DurableDeferred`             |
+| generic retry loops              | `Schedule`                             |
+| custom queue backend matrix      | Effect Persistence memory/SQL/Redis    |
+
+The design criterion should literally be:
+
+> Before adding an implementation primitive, search Effect v4 for it.
+
+---
+
+# 36. Revised package architecture
+
+I would aim for this:
+
+```text
+CORE
+────────────────────────────────────
+Agent
+AgentSession
+AgentSubmission
+AgentEvent
+AgentLoop
+ContextTransform
+Permission
+Elicitation
+InputChannel
+
+
+EXECUTION TRANSPORT
+────────────────────────────────────
+/client
+/http
+/rpc
+/ag-ui
+/a2a
+/openai
+/mcp
+
+
+MANAGEMENT
+────────────────────────────────────
+/sessions
+  SessionDirectory
+  SessionProjection
+  SessionInbox
+
+/process
+  ProcessManager
+  ProcessStore
+  ProcessOutputLog
+
+/workspace             ← probably worth adding
+  WorkspaceManager
+  LayerMap-backed workspace lifetime
+
+
+DURABILITY
+────────────────────────────────────
+/durable
+  existing workflow interpreter
+  DeliveryLog
+  DurableSessionStore
+
+Effect Workflow
+  Activity
+  DurableClock
+  DurableQueue
+  DurableDeferred
+
+Effect Persistence
+  PersistedQueue
+
+
+CAPABILITIES
+────────────────────────────────────
+/sandbox
+/coding
+/web
+/skills
+/state
+/memory
+...
+
+
+HOST IMPLEMENTATIONS
+────────────────────────────────────
+/sandbox/local
+/process/local
+```
+
+And `/process/local` should be mostly adaptation around:
+
+```text
+Effect ChildProcessSpawner
+```
+
+not another implementation of Node child processes.
+
+---
+
+# 37. Revised execution examples
+
+### “Run tests in the background and tell me”
+
+```text
+Agent tool
+   ↓ Permission(process.start, npm test)
+ProcessManager.start
+   ↓
+returns ProcessId immediately
+   ↓
+agent can continue/respond
+
+Process exits later
+   ↓
+ProcessExited event
+   ↓
+SessionInbox.enqueue(
+  id = process:id:exit
+)
+   ↓
+session becomes idle
+   ↓
+submit new agent submission
+```
+
+### “Watch deployment until healthy”
+
+```text
+create-monitor tool
+   ↓ Permission(monitor.create, deployment X)
+durable Workflow
+   ↓
+Activity(check deployment)
+   ↓
+not healthy
+   ↓
+DurableClock.sleep
+   ↓
+Activity(check deployment)
+   ↓
+healthy
+   ↓
+SessionInbox.enqueue(...)
+   ↓
+Workflow completes
+```
+
+### “Check this forever and tell me whenever it changes”
+
+```text
+ClusterCron
+   ↓
+finite check
+   ↓
+SQL: previous observation
+   ↓
+compare
+   ↓
+changed?
+  yes ──→ SessionInbox
+   ↓
+persist newest observation
+```
+
+### “Run trusted CPU-heavy parser without blocking main runtime”
+
+```text
+Effect Worker
+   ↓ send request
+worker thread
+   ↓ compute
+   ↓ send result
+main Effect
+```
+
+### “Parent Workflow sends work to worker pool and needs result”
+
+```text
+DurableQueue.process
+   ↓
+PersistedQueue
+   ↓
+worker pool
+   ↓
+typed result
+   ↓
+DurableDeferred
+   ↓
+parent Workflow resumes
+```
+
+Those are five different execution patterns because they have five different semantics.
+
+That is a feature, not something to abstract away.
+
+---
+
+# 38. Revised implementation order for the agent
+
+I would hand off work in this order:
+
+| Phase  | Work                                                                                                                          |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| **0**  | Write Effect-v4 substitution spikes: ChildProcess tree semantics, PersistedQueue vs current JobStore, EventLog vs DeliveryLog |
+| **1**  | Add normalized `ModelCallCompleted` usage event                                                                               |
+| **2**  | Add idempotent asynchronous `session.submit()` admission                                                                      |
+| **3**  | Build `SessionInbox` over Effect `PersistedQueue`                                                                             |
+| **4**  | Add `AgentSessionHost.events`, supervised with `FiberMap<SessionId>`                                                          |
+| **5**  | Build pure `SessionProjection` + memory `SessionDirectory`                                                                    |
+| **6**  | SQL SessionDirectory + durable DeliveryLog reconciliation                                                                     |
+| **7**  | Introduce stable workspace lifetime using `LayerMap`/`RcMap`                                                                  |
+| **8**  | Build `ProcessManager` over Effect `ChildProcessSpawner`                                                                      |
+| **9**  | Add process metadata/output persistence + local provider                                                                      |
+| **10** | Compose process-exit → SessionInbox example/helper                                                                            |
+| **11** | Refactor Scheduling's custom queue path onto `PersistedQueue` where semantics match                                           |
+| **12** | Add management HTTP routes + host/global SSE projection                                                                       |
+| **13** | Add documented recipes for local monitors, Workflow monitors, ClusterCron monitors, Workers                                   |
+| **14** | Only then decide whether repeated usage has earned `/monitor`                                                                 |
+
+This order is important: don't build a general Monitor abstraction and then force all these primitives underneath it.
+
+---
+
+# 39. Additional invariants to add to the previous test plan
+
+The previous process/session tests still apply. Add these:
+
+| Invariant              | Required behavior                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------- |
+| Ping idempotency       | same inbox ID can never create two submissions                                           |
+| Crash after admission  | retry returns same submission receipt                                                    |
+| Busy session           | inbox item remains pending; it is not attached to unrelated running submission           |
+| Canonical history      | observational background completion alone changes nothing                                |
+| Queue lifetime         | inbox worker ACKs after admission, not after agent completion                            |
+| Durable HITL           | an inbox-triggered submission can suspend for days without holding a queue lease         |
+| Workspace lifetime     | process holding workspace keeps it alive after originating session/tool scope ends       |
+| Worker safety          | Worker backend is never advertised as security isolation                                 |
+| Permission             | approved monitor cannot change its target/action without a new permissioned mutation     |
+| Process permission     | process start approval does not implicitly approve future agent-driven stdin/signals     |
+| Process replay         | durable retry of “start process” cannot silently spawn duplicates                        |
+| Scheduling             | no custom queue retry mechanism remains where `PersistedQueue` already supplies it       |
+| Process implementation | local ProcessManager does not directly reimplement generic ChildProcess mechanics        |
+| Tree cleanup           | Effect ChildProcess migration preserves existing descendant-kill/interruption guarantees |
+| Durable polling        | long monitor sleeps consume no polling fiber/process                                     |
+| Perpetual monitor      | infinite recurrence does not produce unbounded Workflow history                          |
+| Host events            | exactly one event pump exists per hosted session                                         |
+| Projection             | durable process loss is repaired from DeliveryLog without double-counting                |
+
+---
+
+# The key conceptual upgrade
+
+I think the best way to explain the improved design to the other agent is:
+
+> **Background work is not an execution model in effect-agent. It is composition among Effect's execution models.**
+
+Effect already gives us:
+
+```text
+Fiber
+Worker
+ChildProcess
+Schedule
+PersistedQueue
+Workflow
+Activity
+DurableClock
+DurableQueue
+DurableDeferred
+ClusterCron
+LayerMap
+RcMap
+Stream
+SQL
+```
+
+effect-agent should add the semantics Effect cannot possibly know:
+
+```text
+Which logical agent session should this result return to?
+
+What counts as an accepted submission?
+
+What process did the agent start?
+
+Which workspace does it belong to?
+
+What permissions authorized it?
+
+What sessions/processes exist?
+
+How do clients query them?
+
+How do lifecycle events correlate back to sessions?
+```
+
+That's the right abstraction boundary.
+
+And the most important new primitive in this entire revised plan is probably not `ProcessManager`.
+
+It's:
+
+```text
+SessionInbox
+```
+
+plus idempotent asynchronous:
+
+```text
+session.submit(...)
+```
+
+because that creates a **universal return path** from Processes, Workflows, PersistedQueue workers, ClusterCron, Workers, external webhooks, scheduled jobs, and future integrations back into a persistent agent conversation.
+
+Once that exists, “go do something elsewhere and come back when something happens” becomes a normal composition pattern rather than a special feature every subsystem has to reinvent.
+
+
