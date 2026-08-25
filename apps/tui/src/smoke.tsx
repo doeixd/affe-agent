@@ -31,6 +31,30 @@ import { duration, fit, widthPolicy } from "./width.ts"
  * instead of printing a stale frame and passing.
  */
 
+/**
+ * Any throw ends the process, having stopped what it started.
+ *
+ * The suite runs at module top level, so a failed `until` rejects a top-level
+ * await -- and by then a renderer and one or more harnesses are alive, holding
+ * the loop open. The useful error was printed and the process then sat there
+ * until something outside killed it, which happened twice during review.
+ * `scripts/tui-smoke.mjs` now bounds the child as a backstop; this is the
+ * suite exiting on its own, with its own message and its own cleanup.
+ */
+const abort = (cause: unknown): void => {
+  const detail = cause instanceof Error ? cause.stack ?? cause.message : String(cause)
+  console.error(`
+smoke: ${detail}`)
+  try {
+    stop()
+  } catch {
+    // Already broken; a failure to clean up must not replace the real error.
+  }
+  process.exit(1)
+}
+process.on("uncaughtException", abort)
+process.on("unhandledRejection", abort)
+
 const { backend, commitSettled, drainSettled, entries, footer, rewind, sink, status } = makeStore()
 /**
  * Count completed submissions.
@@ -257,7 +281,30 @@ const persistentKv = await Effect.runPromise(
     )
   )
 )
-const persistentStore = Effect.succeed(NodeStore.keyValue(persistentKv))
+/**
+ * The store, plus a finalizer that says when it was let go.
+ *
+ * `stop()` promises the harness's scope has closed, and the only way to check
+ * that from outside is to watch something inside it be released. Everything
+ * else -- "the next prompt was refused", "sixty timers went by" -- is a
+ * consequence that also happens on its own a moment later, so it cannot tell
+ * an awaited close from a forked one.
+ */
+let released = 0
+const persistentStore = Effect.andThen(
+  Effect.addFinalizer(() =>
+    // Deliberately slow. A finalizer that completes within a microtask cannot
+    // tell an awaited close from a forked one -- both look finished by the
+    // time anyone looks. This one takes long enough that only actually
+    // waiting for it succeeds.
+    Effect.andThen(
+      Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 50))),
+      Effect.sync(() => {
+        released = released + 1
+      })
+    )),
+  Effect.succeed(NodeStore.keyValue(persistentKv))
+)
 
 const firstRun = makeStore()
 const firstHandle = await start(firstRun.sink, { store: persistentStore })
@@ -282,15 +329,35 @@ const firstTranscript = firstRun.entries.map((entry) => entry.title).join(" | ")
  * failure rather than a user line, because a line is drawn only once the
  * kernel accepts the prompt.
  */
-firstHandle.stop()
+/**
+ * Awaited, because that is now the postcondition.
+ *
+ * This used to fire the close and then wait sixty zero-delay timers before
+ * looking, so whether the next prompt was refused came down to the scheduler
+ * rather than to anything `stop` promised. `stop()` resolves when the fibre
+ * has exited and its finalizers have run, so afterwards the session is
+ * closed -- there is nothing left to wait for.
+ */
+await firstHandle.stop()
+// Checked with no waiting whatsoever: the finalizer has already run by the
+// time the promise resolves, which is the whole claim.
+const releasedOnStop = released === 1
+// Twice, from two places: a second close is the same completion, not a
+// forgotten disposer and an early return.
+await Promise.all([firstHandle.stop(), firstHandle.stop()])
 firstHandle.submit("after stopping")
-for (let attempt = 0; attempt < 60; attempt++) {
-  await new Promise((resolve) => setTimeout(resolve, 0))
-}
+await until(
+  () =>
+    firstRun.entries.some((entry) => entry.title.includes("prompt failed"))
+    || firstRun.entries.some((entry) => entry.title.startsWith("after stopping")),
+  "the prompt after stopping to be answered"
+)
 const afterStopping = firstRun.entries.map((entry) => `${entry.kind}:${entry.title}`)
 const ranAfterStopping = afterStopping.some((entry) =>
   entry.startsWith("user:after stopping"))
 const reportedFailure = afterStopping.some((entry) => entry.includes("prompt failed"))
+// And closing again did not close it again.
+const releasedOnce = released === 1
 
 // A second launch: nothing in common but the store.
 const secondRun = makeStore()
@@ -336,10 +403,64 @@ await until(
 const refusedFork = busyRun.entries.some((entry) => entry.title.includes("cannot fork"))
 const forkedAnyway = busyRun.entries.some((entry) => entry.title.includes("forked at"))
 
-// Answer it so the harness can close cleanly rather than being killed mid-run.
-const busyFooter = busyRun.footer()
-if (busyFooter.type === "approval") busyHandle.respond(busyFooter.request.id, false)
-busyHandle.stop()
+/**
+ * R148 -- a fork and a submission issued in the same breath.
+ *
+ * The case above had the run already paused when the fork was asked for,
+ * which any status check catches. This one issues both with nothing awaited
+ * between them.
+ *
+ * Said plainly: **this assertion passes against the check-then-act version
+ * too.** The defect it belongs to is an interleaving -- a prompt admitted
+ * between a branch command's status read and its activation -- and driving
+ * the harness from outside cannot place a submission inside that window:
+ * whichever of the two is issued first wins the scheduler by enough that the
+ * second always sees a settled state. The fix is therefore structural (one
+ * permit held across the check and the change, and taken by admission too),
+ * and what is kept here is the weaker property that is observable: exactly
+ * one of the two outcomes happens.
+ *
+ * Recorded rather than dressed up, because an assertion that cannot fail is
+ * worse than no assertion -- it reads as coverage.
+ */
+const busyFooterFirst = busyRun.footer()
+if (busyFooterFirst.type === "approval") {
+  busyHandle.respond(busyFooterFirst.request.id, false)
+}
+await until(() => busyRun.footer().type !== "approval", "the refusal to be taken")
+
+const forksBefore = busyRun.entries.filter((entry) =>
+  entry.title.includes("forked at")).length
+// The fork *first*: it reads the status while the session is genuinely idle,
+// and the submission lands during the activation that follows. That ordering
+// is the gap -- with the fork second, the status read already sees a running
+// session and any check catches it.
+busyHandle.command("branch")
+busyHandle.submit("race the fork")
+await until(
+  () =>
+    busyRun.entries.some((entry) => entry.title.includes("cannot fork"))
+    || busyRun.entries.filter((entry) => entry.title.includes("forked at")).length
+      > forksBefore,
+  "the racing fork to be decided"
+)
+// Let the turn -- admitted or refused -- reach an answer.
+await until(
+  () => {
+    const view = busyRun.footer()
+    if (view.type === "approval") busyHandle.respond(view.request.id, false)
+    return busyRun.footer().type !== "approval"
+  },
+  "the racing turn to settle"
+)
+const racedFork = busyRun.entries.filter((entry) =>
+  entry.title.includes("forked at")).length > forksBefore
+const racedRefusal = busyRun.entries.filter((entry) =>
+  entry.title.includes("cannot fork")).length > 1
+// Exactly one of the two, never both and never neither.
+const raceDecidedOnce = racedFork !== racedRefusal
+
+await busyHandle.stop()
 
 stop()
 
@@ -1167,6 +1288,14 @@ checks.push(
     mismatchedRestore.some((entry) => entry.kind === "tool" && entry.status === "failed")],
   ["an unfinished call is terminal, not running",
     unfinishedRestore.every((entry) => entry.status !== "running")],
+
+  // R148
+  // Weaker than it looks -- see the comment at the fixture.
+  ["a fork racing a submission is decided one way, not both", raceDecidedOnce],
+
+  // R149
+  ["stop resolves only once the harness has closed", releasedOnStop],
+  ["and closing twice is the same completion, not a second close", releasedOnce],
 
   // R109
   ["answering once asks again next time", askedWithY === 2],

@@ -37,8 +37,13 @@ await render(
   () => <App entries={entries} status={status()} handle={handle} commitSettled={commitSettled} footer={footer()} rewind={rewind()} backend={backend()} dismiss={() => sink.setPalette(undefined)}
       openPalette={() => sink.setPalette(handle.commands)}
       quit={() => {
-        stop()
-        process.exit(0)
+        // Awaited, not fired and forgotten: exiting here used to end the
+        // runtime before the session tree and the persistent store had
+        // closed, so a graceful-looking Ctrl+D skipped cleanup by
+        // construction.
+        void stop().then(() => {
+          process.exit(0)
+        })
       }} />,
   // Finished entries are committed to the terminal's own scrollback, which
   // needs the live UI pinned to a footer region below it.

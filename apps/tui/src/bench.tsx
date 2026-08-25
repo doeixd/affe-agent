@@ -23,7 +23,7 @@ const handle: Handle = {
   command: () => {},
   switchTo: () => {},
   commands: [],
-  stop: () => {}
+  stop: () => Promise.resolve()
 }
 
 const { flush } = await testRender(

@@ -241,6 +241,11 @@ export interface Handle {
    *
    * On the handle rather than only as a module function, so a caller holding
    * one of several harnesses can close the one it holds.
+   *
+   * Resolves when the session, its tree and its store have actually closed.
+   * Ignoring the promise is the old behaviour and is fine for a signal
+   * handler; anything that exits the process afterwards must await it, or the
+   * finalizers never run.
    */
-  readonly stop: () => void
+  readonly stop: () => Promise<void>
 }

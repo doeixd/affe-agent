@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Layer, Option, Scope, Stream } from "effect"
+import { Cause, Effect, Fiber, Layer, Option, Scope, Semaphore, Stream } from "effect"
 import * as Agent from "../../../src/Agent.js"
 import * as AgentEvent from "../../../src/AgentEvent.js"
 import * as AgentLoop from "../../../src/AgentLoop.js"
@@ -441,7 +441,7 @@ export const project = (
  * harness per process is the ordinary case, which is exactly why it survived
  * -- the second one only appears in a test, or in a UI that reopens a session.
  */
-const running = new Set<() => void>()
+const running = new Set<() => Promise<void>>()
 
 /**
  * Build a session and bridge it to `sink`.
@@ -484,7 +484,7 @@ export const start = (
 ): Promise<Handle> =>
   new Promise<Handle>((resolve, reject) => {
     // Assigned once the fibre exists; `Handle.stop` closes over the binding.
-    let dispose: () => void = () => {}
+    let dispose: () => Promise<void> = () => Promise.resolve()
     const backend = options?.backend ?? scripted
     sink.setBackend(backend.label)
     const program = Effect.gen(function*() {
@@ -772,14 +772,38 @@ export const start = (
        * somewhere else *now*, and silently doing it later is worse than saying
        * no.
        */
+      /**
+       * One gate, held across the check *and* the change.
+       *
+       * Reading `session.status` and then activating is a check-then-act:
+       * submissions, commands and switches are each forked separately, so a
+       * prompt could be admitted between the read and the activation and the
+       * branch would move out from under a run that had just started. The
+       * status read alone made the reachable cases rare, not impossible.
+       *
+       * `admitted` counts submissions this harness has let through and has
+       * not yet seen finish. It is only correct because every increment
+       * happens inside this permit, which is also the only place a branch
+       * change can begin -- so "no submission is in flight" is decided and
+       * acted on without a gap.
+       *
+       * The session's own status is still consulted: work can start from
+       * somewhere other than `submit` -- a steer, a follow-up, a caller
+       * holding the session -- and none of that passes through here.
+       */
+      const changing = yield* Semaphore.make(1)
+      let admitted = 0
+
       const whileIdle = (
         what: string,
         action: Effect.Effect<void>
       ): Effect.Effect<void> =>
-        Effect.flatMap(session.status, (status) =>
-          status === "idle"
-            ? action
-            : notice(`cannot ${what} while a turn is running — interrupt it first`))
+        changing.withPermit(
+          Effect.flatMap(session.status, (status) =>
+            status === "idle" && admitted === 0
+              ? action
+              : notice(`cannot ${what} while a turn is running — interrupt it first`))
+        )
 
       const forkHere = Effect.gen(function*() {
         const node = yield* tree.active
@@ -905,14 +929,37 @@ export const start = (
            * Scrollback is write-once, so it could not be taken back either.
            */
           const ticket = { text }
-          offered.push(ticket)
           fork(
-            // Streamed, so `MessageDelta` arrives and the reply builds up a
-            // token at a time. Whether a call streams is the caller's choice,
-            // not the agent's -- and a UI is exactly the caller that wants it.
-            // `session`, not a captured value: after a rewind this is a
-            // different branch, and a prompt must go to the one on screen.
-            session.prompt(text, { stream: true }).pipe(
+            /**
+             * Admitted under the same permit a branch change takes.
+             *
+             * This is what makes the gate above an invariant rather than a
+             * likely-enough guess: a branch change in progress holds the
+             * permit, so this waits; and once this has incremented
+             * `admitted`, a branch change that arrives next sees it.
+             *
+             * The ticket is pushed here too, so the transcript's record of an
+             * offered line and the kernel's record of an admitted submission
+             * are made in the same breath.
+             */
+            changing.withPermit(Effect.sync(() => {
+              admitted = admitted + 1
+              offered.push(ticket)
+            })).pipe(
+              Effect.andThen(
+                // Streamed, so `MessageDelta` arrives and the reply builds up a
+                // token at a time. Whether a call streams is the caller's choice,
+                // not the agent's -- and a UI is exactly the caller that wants it.
+                // `session`, not a captured value: after a rewind this is a
+                // different branch, and a prompt must go to the one on screen.
+                session.prompt(text, { stream: true })
+              ),
+              // However it ends -- success, failure, interruption -- this
+              // submission is no longer in flight. A leak here wedges every
+              // branch operation for the life of the process.
+              Effect.ensuring(Effect.sync(() => {
+                admitted = admitted - 1
+              })),
               Effect.catchCause((cause) =>
                 Effect.sync(() => {
                   // Withdraw the offer if it never started. If it did start,
@@ -992,9 +1039,35 @@ export const start = (
       )
     )
 
+    /**
+     * Close this harness, and resolve when it is actually closed.
+     *
+     * `stop` used to fork the interrupt and return immediately, so a caller
+     * could submit again, or start a replacement over the same persistent
+     * store, while this session's finalizers were still running. The Ctrl+D
+     * path made that terminal: `stop(); process.exit(0)` gave the runtime no
+     * chance to close the tree or the store at all.
+     *
+     * Idempotent, and the second call awaits the same completion as the
+     * first: the disposer stays registered until the fibre has exited, so
+     * `stop()` twice cannot mean "forget it and return".
+     */
+    let closing: Promise<void> | undefined
     dispose = () => {
-      running.delete(dispose)
-      Effect.runFork(Fiber.interrupt(fiber))
+      if (closing === undefined) {
+        closing = Effect.runPromise(Fiber.interrupt(fiber)).then(
+          () => {
+            running.delete(dispose)
+          },
+          () => {
+            // An interrupt does not fail, but a broken finalizer can. The
+            // harness is no less closed for it, and swallowing here keeps a
+            // shutdown from turning into an unhandled rejection.
+            running.delete(dispose)
+          }
+        )
+      }
+      return closing
     }
     running.add(dispose)
   })
@@ -1004,7 +1077,10 @@ export const start = (
  *
  * All of them rather than the last, because "stop" from a process shutting
  * down means all of them, and a caller holding one harness has `Handle.stop`.
+ *
+ * Awaitable, and a caller that ignores the promise gets exactly the old
+ * behaviour -- which is the right default for a signal handler and the wrong
+ * one for anything that exits the process afterwards.
  */
-export const stop = (): void => {
-  for (const dispose of [...running]) dispose()
-}
+export const stop = (): Promise<void> =>
+  Promise.all([...running].map((dispose) => dispose())).then(() => {})
