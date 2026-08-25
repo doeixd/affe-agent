@@ -21,6 +21,16 @@ export interface ClientInfo {
 export interface StreamableHttpOptions {
   readonly url: URL
   readonly clientInfo: ClientInfo
+  /**
+   * Sent with every request to the server.
+   *
+   * The reason this exists on the neutral surface rather than only on `/mcp/v2`:
+   * an MCP server behind authentication is the ordinary case, and a plugin that
+   * configures `headers` and has them silently dropped validates, loads, and
+   * then fails to connect for a reason nothing reports. Carrying them here is
+   * what makes the declared HTTP capability true.
+   */
+  readonly headers?: Record<string, string> | undefined
 }
 
 /**
@@ -29,7 +39,16 @@ export interface StreamableHttpOptions {
  */
 export const streamableHttp = Effect.fn("McpClient.streamableHttp")(
   function* (options: StreamableHttpOptions) {
-    return yield* McpClientV2.streamableHttp(options)
+    return yield* McpClientV2.streamableHttp({
+      url: options.url,
+      clientInfo: options.clientInfo,
+      // `requestInit` is where the SDK's transport takes per-request headers.
+      // Omitted entirely when there are none, so the transport's own defaults
+      // are not replaced by an empty object.
+      ...(options.headers === undefined
+        ? {}
+        : { transportOptions: { requestInit: { headers: options.headers } } })
+    })
   }
 )
 

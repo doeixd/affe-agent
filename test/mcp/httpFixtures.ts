@@ -205,6 +205,37 @@ export const v2Http = Effect.fn("McpHttpFixture.v2Http")(function* () {
   } satisfies V2HttpFixture
 })
 
+/**
+ * A modern server that records the headers of every request it receives.
+ *
+ * For the header-forwarding question specifically: configured headers were
+ * decoded, validated and then dropped, so a plugin naming an authenticated
+ * server loaded cleanly and failed to connect. The only way to know they
+ * arrive is to be the server and look.
+ */
+export const v2HeaderRecordingHttp = Effect.fn(
+  "McpHttpFixture.v2HeaderRecordingHttp"
+)(function* () {
+  const received: Array<Record<string, string>> = []
+  const slowStarted = yield* Deferred.make<void>()
+  const slowCancelled = yield* Deferred.make<void>()
+  const handler = createMcpHandler(() => makeV2Server(slowStarted, slowCancelled))
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => handler.close()).pipe(Effect.ignore)
+  )
+  const url = yield* listen(
+    getRequestListener((request) => {
+      const headers: Record<string, string> = {}
+      request.headers.forEach((value, key) => {
+        headers[key.toLowerCase()] = value
+      })
+      received.push(headers)
+      return handler.fetch(request)
+    })
+  )
+  return { url, received }
+})
+
 /** A modern low-level server whose tools/list response spans two pages. */
 export const v2PaginatedHttp = Effect.fn(
   "McpHttpFixture.v2PaginatedHttp"

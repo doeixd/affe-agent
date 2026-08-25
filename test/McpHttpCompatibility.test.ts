@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Option, Stream } from "effect"
+import * as McpClient from "../src/mcp/McpClient.js"
 import { McpClientV1 } from "../src/mcp/v1/index.js"
 import { McpClientV2 } from "../src/mcp/v2/index.js"
 import * as McpHttpFixture from "./mcp/httpFixtures.js"
@@ -84,6 +85,38 @@ describe("MCP Streamable HTTP compatibility", () => {
           metadata.protocolVersion,
           Option.some("2025-11-25")
         )
+      })
+    )
+  )
+
+  /**
+   * R50 -- configured headers reach the origin.
+   *
+   * `decodeHttp` retained `headers` and the connect path built the transport
+   * with only a URL and a client identity, so an authenticated server
+   * validated and loaded and then received a materially different request. The
+   * implementation comment admitted it while the declared HTTP capability said
+   * otherwise.
+   *
+   * Asserted by being the server: anything short of that checks that we
+   * *intended* to send them.
+   */
+  it.effect("sends configured headers with every request", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* McpHttpFixture.v2HeaderRecordingHttp()
+        const connection = yield* McpClient.streamableHttp({
+          url: fixture.url,
+          clientInfo,
+          headers: { authorization: "Bearer plugin-secret", "x-tenant": "acme" }
+        })
+        yield* connection.listTools
+
+        assert.isAbove(fixture.received.length, 0, "the server saw no requests")
+        for (const headers of fixture.received) {
+          assert.strictEqual(headers["authorization"], "Bearer plugin-secret")
+          assert.strictEqual(headers["x-tenant"], "acme")
+        }
       })
     )
   )

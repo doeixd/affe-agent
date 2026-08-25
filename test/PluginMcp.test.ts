@@ -27,9 +27,17 @@ describe("mcp.json decoding", () => {
       assert.deepStrictEqual(stdio, {
         name: "local",
         transport: "stdio",
+        // A bare name is left alone: it is meant to be found the way any
+        // command is.
         command: "my-server",
         args: ["--port", "3000"],
-        env: {}
+        // The reserved variables the specification requires on every stdio
+        // launch. They were never supplied, so a server was told where to
+        // find nothing.
+        env: { PLUGIN_ROOT: "/root", PLUGIN_DATA: "/data" },
+        // An omitted cwd means the plugin root, not the host process's
+        // directory -- which is what a relative launch would have used.
+        cwd: "/root"
       })
     })
   )
@@ -96,12 +104,12 @@ describe("mcp.json decoding", () => {
     })
   )
 
-  it.effect("expands placeholders in args/env/cwd only, single-pass, and never in command", () =>
+  it.effect("expands placeholders in args/env/cwd only, single-pass", () =>
     Effect.gen(function* () {
       const { servers } = yield* decode({
         s: {
           type: "stdio",
-          command: "${PLUGIN_ROOT}/bin", // command is NOT expanded
+          command: "./bin/server",
           args: ["--config", "${PLUGIN_ROOT}/config.json", "--unknown", "${FOO}"],
           env: { DATA: "${PLUGIN_DATA}/db" },
           cwd: "${PLUGIN_ROOT}"
@@ -110,11 +118,80 @@ describe("mcp.json decoding", () => {
       const s = servers[0]
       assert.strictEqual(s?.transport, "stdio")
       if (s?.transport === "stdio") {
-        assert.strictEqual(s.command, "${PLUGIN_ROOT}/bin") // literal
         assert.deepStrictEqual(s.args, ["--config", "/root/config.json", "--unknown", "${FOO}"]) // unknown literal
-        assert.deepStrictEqual(s.env, { DATA: "/data/db" })
+        // The configured environment, plus the reserved pair the
+        // specification requires on every launch.
+        assert.deepStrictEqual(s.env, {
+          DATA: "/data/db",
+          PLUGIN_ROOT: "/root",
+          PLUGIN_DATA: "/data"
+        })
         assert.strictEqual(s.cwd, "/root")
       }
+    })
+  )
+
+  /**
+   * R47 -- a command is a bare name or a `./`-relative path, and nothing else.
+   *
+   * `command` is deliberately not placeholder-expanded, which meant
+   * `${PLUGIN_ROOT}/bin` was carried through literally and handed to a
+   * spawner as the name of a program to run. That can only fail, so it is
+   * refused rather than passed on.
+   *
+   * The other three shapes were all accepted by a `/`-only `..` counter: an
+   * absolute path has no `..` at all, a bare `bin/server` resolves against
+   * nothing in particular, and `..\up\server` escapes through a separator the
+   * scanner never looked at.
+   */
+  it.effect("refuses command forms that cannot mean what they say", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<readonly [command: string, expected: string]> = [
+        ["${PLUGIN_ROOT}/bin", "must start with ./"],
+        ["/usr/bin/server", "not an absolute one"],
+        ["C:/tools/server.exe", "not an absolute one"],
+        ["bin/server", "must start with ./"],
+        ["..\\up\\server", "backslash"],
+        ["./../escape/server", "escapes the plugin root"]
+      ]
+      for (const [command, expected] of cases) {
+        const { servers, warnings } = yield* decode({ s: { type: "stdio", command } })
+        assert.deepStrictEqual(servers, [], `${command} should not have decoded`)
+        assert.include(warnings[0]?.detail ?? "", expected)
+      }
+
+      // And the two legal forms still are.
+      const bare = yield* decode({ s: { type: "stdio", command: "server" } })
+      assert.strictEqual(bare.servers.length, 1)
+      const relative = yield* decode({ s: { type: "stdio", command: "./bin/server" } })
+      assert.strictEqual(relative.servers.length, 1)
+    })
+  )
+
+  /**
+   * R48 -- without a resolved root there is nothing to resolve against.
+   *
+   * A `./`-relative command handed to a spawner is relative to whatever
+   * directory the host application was started in, and the specification
+   * requires `PLUGIN_ROOT`/`PLUGIN_DATA` on every launch. Refusing is the
+   * honest answer; launching produces a nonconformant plugin that appears to
+   * work whenever the host's cwd happens to match.
+   */
+  it.effect("refuses stdio without a resolved root and data directory", () =>
+    Effect.gen(function* () {
+      const noRoot = yield* decode(
+        { s: { type: "stdio", command: "./bin/server" } },
+        { allowStdio: true, pluginData: "/data" }
+      )
+      assert.deepStrictEqual(noRoot.servers, [])
+      assert.include(noRoot.warnings[0]?.detail ?? "", "resolved pluginRoot")
+
+      const relativeRoot = yield* decode(
+        { s: { type: "stdio", command: "./bin/server" } },
+        { allowStdio: true, pluginRoot: "plugins/mine", pluginData: "/data" }
+      )
+      assert.deepStrictEqual(relativeRoot.servers, [])
+      assert.include(relativeRoot.warnings[0]?.detail ?? "", "absolute")
     })
   )
 
@@ -164,19 +241,42 @@ describe("mcp.json decoding", () => {
         s: { type: "stdio", command: "./bin/server", cwd: "${PLUGIN_ROOT}/work" }
       })
       const s = servers[0]
-      assert.strictEqual(s?.transport === "stdio" ? s.command : undefined, "./bin/server")
+      // Resolved against the root, not left relative: `./bin/server` handed to
+      // a spawner is relative to wherever the host application was started.
+      assert.strictEqual(s?.transport === "stdio" ? s.command : undefined, "/root/bin/server")
       assert.strictEqual(s?.transport === "stdio" ? s.cwd : undefined, "/root/work")
     })
   )
 
-  it.effect("skips a server that references PLUGIN_DATA when none was supplied", () =>
+  it.effect("skips a stdio server when PLUGIN_DATA was never supplied", () =>
     Effect.gen(function* () {
       const { servers, warnings } = yield* decode(
         { s: { type: "stdio", command: "c", args: ["${PLUGIN_DATA}/x"] } },
         { allowStdio: true, pluginRoot: "/root" } // no pluginData
       )
       assert.deepStrictEqual(servers, [])
-      assert.include(warnings[0]?.detail ?? "", "placeholder")
+      // The reason moved: an unresolvable placeholder used to be the first
+      // thing noticed, and now the missing data directory is refused before
+      // any entry is read, because *every* stdio launch needs it -- not only
+      // one that happens to mention it.
+      assert.include(warnings[0]?.detail ?? "", "pluginData")
+    })
+  )
+
+  /**
+   * An `${PLUGIN_DATA}` placeholder in an *http* server's headers still has
+   * nothing to expand to, and that path is unchanged.
+   */
+  it.effect("still reports an unresolvable placeholder where one can occur", () =>
+    Effect.gen(function* () {
+      const { servers, warnings } = yield* decode(
+        { s: { type: "stdio", command: "c", args: ["${FOO}/x"] } },
+        { allowStdio: true, pluginRoot: "/root", pluginData: "/data" }
+      )
+      // `${FOO}` is not a reserved placeholder, so it is literal text and the
+      // server decodes.
+      assert.strictEqual(servers.length, 1)
+      assert.deepStrictEqual(warnings, [])
     })
   )
 })

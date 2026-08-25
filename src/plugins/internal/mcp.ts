@@ -1,4 +1,5 @@
 import { Effect, Option, Predicate } from "effect"
+import * as Paths from "./paths.js"
 import { warn } from "./types.js"
 import type { Warning } from "./types.js"
 
@@ -80,6 +81,39 @@ const staysWithin = (relPath: string): boolean => {
 }
 
 /**
+ * Why this command is not one a plugin may name, or `undefined` if it is.
+ *
+ * Two forms are allowed, and no others: a bare executable name, resolved by
+ * the host the way any command is, and a `./`-relative path inside the plugin
+ * root.
+ *
+ * `staysWithin` alone was doing this job, and it counts `..` segments against
+ * a depth -- which says nothing about the three shapes that matter here.
+ * `/usr/bin/server` has no `..` at all and passed; `bin/server` passed and is
+ * neither a bare name nor `./`-prefixed, so what it resolves against was
+ * anyone's guess; and `..\up\server` passed because a backslash is not a `/`,
+ * so the escape was invisible to a `/`-only scanner.
+ *
+ * Backslashes are refused outright rather than interpreted: a manifest's paths
+ * are `/`-separated by specification, so one that arrives with a backslash is
+ * either mistaken or trying to be read differently by different platforms.
+ */
+const commandFault = (command: string): string | undefined => {
+  if (command.includes("\\")) {
+    return "must use / as its separator, not a backslash"
+  }
+  if (Paths.isAbsolute(command)) {
+    return "must be a bare executable name or a ./-relative path, not an absolute one"
+  }
+  if (!command.includes("/")) return undefined
+  if (!command.startsWith("./")) {
+    return "must start with ./ when it names a path inside the plugin"
+  }
+  if (!staysWithin(command)) return "escapes the plugin root"
+  return undefined
+}
+
+/**
  * The plugin-relative part of a valid `cwd`, or `undefined` if `cwd` is not one
  * of the allowed forms (`./…`, `${PLUGIN_ROOT}[/…]`, `${PLUGIN_DATA}[/…]`).
  */
@@ -96,10 +130,34 @@ type Decoded = { readonly server: McpServer } | { readonly warning: string }
 
 const decodeStdio = (name: string, entry: Record<string, unknown>, options: DecodeOptions): Decoded => {
   if (!options.allowStdio) return { warning: `${name}: stdio servers are disabled` }
+  /**
+   * No root, no subprocess.
+   *
+   * The specification requires `PLUGIN_ROOT` and `PLUGIN_DATA` on every stdio
+   * launch, absolute and resolved, and a `./`-relative command means nothing
+   * without a root to resolve it against -- it would be resolved against the
+   * *host process* cwd, which is wherever the application happens to have been
+   * started. Refusing is the honest answer: launching anyway produces a
+   * nonconformant plugin that appears to work until the cwd differs.
+   */
+  if (options.pluginRoot === undefined || options.pluginData === undefined) {
+    return {
+      warning:
+        `${name}: stdio servers need a resolved pluginRoot and pluginData;` +
+        ` pass both to Plugins.load`
+    }
+  }
+  if (!Paths.isAbsolute(options.pluginRoot) || !Paths.isAbsolute(options.pluginData)) {
+    return {
+      warning:
+        `${name}: pluginRoot and pluginData must be absolute paths,` +
+        ` because a subprocess does not inherit this process's idea of "here"`
+    }
+  }
   const command = entry["command"]
   if (!Predicate.isString(command) || command === "") return { warning: `${name}: stdio "command" is required` }
-  // A plugin-relative command must not escape the plugin root.
-  if (!staysWithin(command)) return { warning: `${name}: stdio "command" escapes the plugin root` }
+  const commandProblem = commandFault(command)
+  if (commandProblem !== undefined) return { warning: `${name}: stdio "command" ${commandProblem}` }
 
   const rawArgs = entry["args"] ?? []
   if (!Array.isArray(rawArgs) || !rawArgs.every(Predicate.isString)) return { warning: `${name}: "args" must be strings` }
@@ -129,11 +187,40 @@ const decodeStdio = (name: string, entry: Record<string, unknown>, options: Deco
     if (!staysWithin(relative)) return { warning: `${name}: "cwd" escapes its root` }
     const expanded = expand(rawCwd, options)
     if (Option.isNone(expanded)) return { warning: `${name}: unresolved placeholder in "cwd"` }
-    cwd = expanded.value
+    // A `./`-relative cwd has no placeholder to expand, so it is still
+    // relative here and would be resolved against the host process cwd.
+    cwd = rawCwd.startsWith("./") ? Paths.join(options.pluginRoot, rawCwd) : expanded.value
   }
 
   return {
-    server: { name, transport: "stdio", command, args: args.value, env, ...(cwd === undefined ? {} : { cwd }) }
+    server: {
+      name,
+      transport: "stdio",
+      /**
+       * Resolved against the plugin root, not left relative.
+       *
+       * `./bin/server` handed to a subprocess spawner is relative to whatever
+       * directory the *host application* was started in. That is almost never
+       * the plugin root, and when it accidentally is, the bug is invisible.
+       * A bare name is left alone: it is meant to be found the way any
+       * command is.
+       */
+      command: command.startsWith("./") ? Paths.join(options.pluginRoot, command) : command,
+      args: args.value,
+      /**
+       * The reserved variables, injected after the configured overlay.
+       *
+       * Required on every stdio launch by the specification, and never
+       * supplied: a server was told where to find nothing. Written last so
+       * they win, which is also why `env` naming either of them was refused
+       * further up -- a plugin cannot quietly redirect its own root.
+       */
+      env: { ...env, PLUGIN_ROOT: options.pluginRoot, PLUGIN_DATA: options.pluginData },
+      // No cwd configured means the plugin root, which is what the
+      // specification says and is not what an omitted cwd would otherwise
+      // mean: the host process's directory.
+      cwd: cwd ?? options.pluginRoot
+    }
   }
 }
 

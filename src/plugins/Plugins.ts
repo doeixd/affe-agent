@@ -112,7 +112,16 @@ const connect = (server: McpServer, clientInfo: McpClient.ClientInfo) =>
       },
       clientInfo
     })
-    : McpClient.streamableHttp({ url: new URL(server.url), clientInfo })
+    : McpClient.streamableHttp({
+      url: new URL(server.url),
+      clientInfo,
+      // Configured headers reach the origin. They were decoded, validated and
+      // then dropped, so a plugin naming an authenticated server loaded
+      // cleanly and then failed to connect for a reason nothing reported.
+      ...(Object.keys(server.headers).length === 0
+        ? {}
+        : { headers: { ...server.headers } })
+    })
 
 /**
  * Connect the plugin's MCP servers and bind their *discovered* tools into one
@@ -122,8 +131,8 @@ const connect = (server: McpServer, clientInfo: McpClient.ClientInfo) =>
  * resolve it at session setup and pass the value (not per turn). Per the spec,
  * failure is isolated: a server that cannot be reached is logged and skipped;
  * the toolkit binds whatever connected. Discovered tools are `Tool.dynamic`
- * (params validated by the server). Custom HTTP headers are not sent — that
- * needs the richer `/mcp/v2` client.
+ * (params validated by the server). Configured HTTP headers are sent with
+ * every request, which is what makes an authenticated server usable.
  */
 export const mcpToolkit = (
   loaded: LoadedPlugin,
