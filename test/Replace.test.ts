@@ -262,6 +262,29 @@ describe("replace: the proportionality guard itself", () => {
 })
 
 describe("replace: safety properties", () => {
+  it("an ordinary large file does not take quadratic time", () => {
+    /**
+     * A complexity guard, not a benchmark, which is why the budget is so
+     * slack. The line-oriented strategies offer one candidate per line, and
+     * every one of them occurs on every line, so a driver that walks all
+     * occurrences does N-squared work: this input measured at 172 seconds
+     * before the location scan was bounded, against about 30ms after. Any
+     * threshold between those two catches the regression, and five seconds
+     * sits far enough from both that a slow machine cannot produce a false
+     * failure.
+     *
+     * 16,000 lines is not a pathological size -- it is a large source file.
+     * The find string being a single character is what makes every line a
+     * match, which is the condition, not the size.
+     */
+    const content = "a\n".repeat(16_000)
+    const started = Date.now()
+    const out = Replace.replace(content, "a", "b")
+    const elapsed = Date.now() - started
+    // Ambiguous is the right answer here; the point is arriving at it at all.
+    assert.strictEqual(out._tag, "Ambiguous")
+    assert.isBelow(elapsed, 5000, `replace took ${elapsed}ms on a 16,000-line file`)
+  })
   it("splices literally -- dollar patterns in the replacement are text", () => {
     assert.strictEqual(replaced("price = OLD", "OLD", "$&{amount}").content, "price = $&{amount}")
     assert.strictEqual(replaced("A A", "A", "$'", true).content, "$' $'")

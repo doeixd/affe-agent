@@ -588,22 +588,40 @@ export const replace = (
      *
      * Keyed by position and length, so the same span reached by two candidates
      * counts once and two spans that happen to share text count twice.
+     *
+     * **Stops at two.** Nothing downstream wants a count -- the questions are
+     * "nowhere", "exactly here", and "more than one place", and the third is
+     * settled by the second entry. Collecting the rest is not merely wasted,
+     * it is quadratic: a line-oriented strategy offers one candidate per line
+     * and each occurs once per line, so a plain scan of an 8,000-line file
+     * builds 64 million keys and takes 23 seconds. Measured, not feared -- the
+     * first cut of this loop did exactly that, and 16,000 lines took 172s.
      */
     const locations = new Map<string, { readonly index: number; readonly text: string }>()
+    /**
+     * The distinct spellings that are really present, which is what "replace
+     * all of *which* text?" needs. Kept apart from `locations` rather than
+     * derived from it, because `locations` stops early and would under-report.
+     * One entry per candidate, so this stays linear.
+     */
+    const texts = new Set<string>()
     let disproportionate: string | undefined
 
     for (const candidate of replacer(content, find)) {
       if (candidate.length === 0) continue
-      // Every occurrence, not just the first: a candidate appearing twice is
-      // two places, which is exactly the ambiguity being looked for.
       let index = content.indexOf(candidate)
       // A strategy may only point at text that is really there.
       if (index === -1) continue
       found = true
+      texts.add(candidate)
       if (disproportionate === undefined && isDisproportionate(candidate, find)) {
         disproportionate = candidate
       }
-      while (index !== -1) {
+      // Every occurrence, not just the first: a candidate appearing twice is
+      // two places, which is exactly the ambiguity being looked for. Once two
+      // are known there is nothing left to learn, so later candidates are
+      // still checked for presence and proportionality but not walked.
+      while (index !== -1 && locations.size < 2) {
         locations.set(`${index}:${candidate.length}`, { index, text: candidate })
         index = content.indexOf(candidate, index + 1)
       }
@@ -615,7 +633,6 @@ export const replace = (
     if (locations.size === 0) continue
 
     if (replaceAll) {
-      const texts = new Set([...locations.values()].map((location) => location.text))
       // "Replace all" of *which* text? Two spellings is not a question this
       // can answer by picking one, so it is refused like any other ambiguity.
       if (texts.size === 1) {
