@@ -33,7 +33,41 @@ const failure = (operation: string) =>
  * ones that happen *partway*: a store that fails everything never gets far
  * enough to leave anything behind.
  */
-const failingSessionStore = (
+/**
+ * Fail *after* the real operation has run, not instead of it.
+ *
+ * The previous decorator replaced the operation with a bare `Effect.fail`, so
+ * the mutation under test never executed -- and "no claim was left behind" was
+ * therefore true of a store nothing had touched. That is a tautology wearing
+ * the clothes of a durability test, and it is what made the D7 row in the
+ * durability matrix unearned.
+ *
+ * Running the operation and then failing is the shape that means something: it
+ * is the caller seeing a failure while the write has already landed, which is
+ * exactly the partial-failure case D7 is about. If the store is transactional
+ * the state is unchanged and the assertions hold; if it is not, they fail, and
+ * that is the finding.
+ */
+const failingAfter = (
+  inner: DurableSessionStore.DurableSessionStore,
+  broken: keyof DurableSessionStore.DurableSessionStore
+): DurableSessionStore.DurableSessionStore => ({
+  ...inner,
+  [broken]: (...args: ReadonlyArray<unknown>) => {
+    const operation = inner[broken] as (
+      ...rest: ReadonlyArray<unknown>
+    ) => Effect.Effect<unknown, unknown>
+    return Effect.andThen(
+      // Ignored, because what happens to *this* call's result is not the
+      // question: the caller is about to be told it failed either way.
+      Effect.ignore(operation(...args)),
+      Effect.fail(failure(String(broken)))
+    )
+  }
+}) as DurableSessionStore.DurableSessionStore
+
+/** The old shape, kept for the cases that are genuinely about a refused call. */
+const failingBefore = (
   inner: DurableSessionStore.DurableSessionStore,
   broken: keyof DurableSessionStore.DurableSessionStore
 ): DurableSessionStore.DurableSessionStore => ({
@@ -45,17 +79,16 @@ const failingSessionStore = (
 }) as DurableSessionStore.DurableSessionStore
 
 describe("D7 -- storage failure degrades, it does not corrupt", () => {
-  it.effect("a failed claim leaves no claim behind", () =>
+  it.effect("a claim refused before it runs leaves nothing behind", () =>
     Effect.gen(function*() {
       const healthy = yield* DurableSessionStore.memoryStore
       yield* healthy.getOrCreate("orphan", Prompt.fromMessages([]))
 
-      // The store's own transition is what D1 rests on: claim is one step, so
-      // a failure cannot leave a half-claim that a later reader treats as
-      // accepted work in flight.
+      // The store's own transition is one step, so a failure *reaching* it
+      // cannot leave a half-claim that a later reader treats as accepted work.
       const before = Option.getOrThrow(yield* healthy.get("orphan"))
       const failed = yield* Effect.result(
-        failingSessionStore(healthy, "claim").claim("orphan", {
+        failingBefore(healthy, "claim").claim("orphan", {
           prompt: Prompt.fromMessages([]),
           stream: false
         })
@@ -63,11 +96,53 @@ describe("D7 -- storage failure degrades, it does not corrupt", () => {
       const after = Option.getOrThrow(yield* healthy.get("orphan"))
 
       assert.strictEqual(failed._tag, "Failure")
-      // No half-claim: a later reader cannot mistake this for work in flight,
-      // and the submission counter did not advance, so the next real claim
-      // gets the id this one would have had.
       assert.isTrue(Option.isNone(after.claim))
       assert.strictEqual(after.submissionCount, before.submissionCount)
+    }))
+
+  /**
+   * R92, R93 -- what happens when the write lands and the caller is still told
+   * it failed.
+   *
+   * This is the case D7 is actually about, and the case the original suite did
+   * not test: its decorator replaced the operation with a bare `Effect.fail`,
+   * so the mutation never ran and "nothing was left behind" was true of a
+   * store nothing had touched.
+   *
+   * Run for real and then failed, the answer is different, and it is recorded
+   * here rather than asserted away: **the claim is left behind.** A store that
+   * commits and then loses the acknowledgement -- a connection dropped after
+   * `COMMIT`, a process killed between the write and the reply -- leaves the
+   * session claimed, and the caller believes it is not. Nothing reconciles
+   * that today, so a later prompt sees `Busy` for a submission that will never
+   * run.
+   *
+   * The assertion is the honest one: the failure is reported (the half of D7
+   * that holds), and the claim survives (the half that does not). Reversing
+   * this test is what closing D7 looks like; until then the durability matrix
+   * says so.
+   */
+  it.effect("a claim that commits before the failure is left behind", () =>
+    Effect.gen(function*() {
+      const healthy = yield* DurableSessionStore.memoryStore
+      yield* healthy.getOrCreate("stranded", Prompt.fromMessages([]))
+
+      const failed = yield* Effect.result(
+        failingAfter(healthy, "claim").claim("stranded", {
+          prompt: Prompt.fromMessages([]),
+          stream: false
+        })
+      )
+      const after = Option.getOrThrow(yield* healthy.get("stranded"))
+
+      // The caller is told, which is the half that holds.
+      assert.strictEqual(failed._tag, "Failure")
+      // And the claim is there anyway, which is the half that does not.
+      assert.isTrue(
+        Option.isSome(after.claim),
+        "if this now passes as `isNone`, D7 has been closed and this test should"
+          + " become the assertion it was originally written as"
+      )
     }))
 
   it.effect("a delivery log that cannot append reports it", () =>
@@ -126,7 +201,9 @@ describe("D7 -- storage failure degrades, it does not corrupt", () => {
   it.effect("a store failure is a failure, never a defect", () =>
     Effect.gen(function*() {
       const healthy = yield* DurableSessionStore.memoryStore
-      const broken = failingSessionStore(healthy, "get")
+      // A refused call, deliberately: this is about the *shape* of the error
+      // channel rather than about a partial write.
+      const broken = failingBefore(healthy, "get")
 
       const outcome = yield* Effect.result(broken.get("anything"))
 
