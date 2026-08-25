@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"

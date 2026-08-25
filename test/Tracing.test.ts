@@ -3,7 +3,7 @@ import { Deferred, Effect, Option } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentSession from "../src/AgentSession.js"
 import { Observability } from "../src/observability/index.js"
-import { Echo, EchoToolkit, withSession } from "./helpers.js"
+import { EchoToolkit, withSession } from "./helpers.js"
 
 /** The span chain from a point, innermost first, with each span's attributes. */
 interface CapturedSpan {

@@ -1138,14 +1138,6 @@ describe("glob matching", () => {
   })
 
   /**
-   * And compiling happens once, not once per path.
-   *
-   * `search` filtered with `Glob.matches`, which rebuilds the regular
-   * expression on every call -- so a walk over a thousand files compiled a
-   * thousand identical expressions, multiplying both the ordinary cost and an
-   * adversarial one by the size of the tree.
-   */
-  /**
    * The sweep that matters for a conservative check: it must not refuse the
    * patterns a model writes while doing ordinary work. Over-refusal is the
    * cost of the guard being syntactic, so the bound on that cost is pinned
@@ -1168,6 +1160,14 @@ describe("glob matching", () => {
     })
   }
 
+  /**
+   * And compiling happens once, not once per path.
+   *
+   * `search` filtered with `Glob.matches`, which rebuilds the matcher on
+   * every call -- so a walk over a thousand files built a
+   * thousand identical matchers, multiplying both the ordinary cost and an
+   * adversarial one by the size of the tree.
+   */
   it("compiles once and matches many", () => {
     const compiled = Glob.compile("*.ts")
     assert.strictEqual(compiled._tag, "Matcher")

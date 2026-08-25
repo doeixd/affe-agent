@@ -138,20 +138,6 @@ describe("session snapshots", () => {
   )
 
   /**
-   * R5 -- a read followed by a read is not atomic.
-   *
-   * `snapshot` checked the status and *then* read history. `prompt` claims the
-   * session in one step and then commits its user input, so a prompt landing
-   * entirely inside that window produced a snapshot containing the opening of
-   * a turn still in flight -- the exact state this operation's contract says
-   * is impossible, and the state `SessionTree.commit` relies on it to prevent.
-   *
-   * Driven through the history read itself, because the window is a few
-   * instructions wide and cannot be hit by scheduling. The prompt runs while
-   * the snapshot is between its two steps, which is the whole race made
-   * deterministic.
-   */
-  /**
    * R5 -- `snapshot` checked the status and *then* read history, and a read
    * followed by a read is not atomic. A prompt claims the session in one step
    * and then commits its user input, so one landing entirely inside that

@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { Crypto, Deferred, Duration, Effect, Exit, Layer, Ref } from "effect"
-import { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
+import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
 import { Schema } from "effect"

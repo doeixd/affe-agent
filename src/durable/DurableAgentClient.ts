@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, Exit, Layer, Option, Schedule, Stream } from "effect"
+import { Cause, Duration, Effect, Exit, Layer, Option, Stream } from "effect"
 import type { Context } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"

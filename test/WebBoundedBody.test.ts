@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Layer, Ref } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import {
   HttpClient,
   HttpClientRequest,

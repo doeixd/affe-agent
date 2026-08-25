@@ -1,6 +1,6 @@
 import { AgentProtocol, AgentSessionHost } from "../src/client/index.js"
-import { Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Queue, Schema, Stream } from "effect"
+import { Tool, Toolkit } from "effect/unstable/ai"
 import type { AgentDefinition } from "../src/Agent.js"
 import type { AgentEventEnvelope } from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"

@@ -1,4 +1,4 @@
-import { Duration, Effect, Layer, Option, Semaphore, Stream } from "effect"
+import { Duration, Effect, Layer, Option, Semaphore } from "effect"
 import {
   FetchHttpClient,
   HttpClient,
@@ -214,7 +214,9 @@ const charsetOf = (contentType: string): string => {
 }
 
 /**
- * The same compositional caveat as the search adapter's retry bound.
+ * Construct the portable guarded fetch service from an abstract HttpClient.
+ *
+ * **The same compositional caveat as the search adapter's retry bound.**
  *
  * The timeout, the byte cap and the redirect policy are enforced here, but
  * every one of them is enforced *around* a supplied `HttpClient`. Middleware
@@ -223,7 +225,6 @@ const charsetOf = (contentType: string): string => {
  * the application chooses to pass, not something the Layer can establish on
  * its own.
  */
-/** Construct the portable guarded fetch service from an abstract HttpClient. */
 export const make = Effect.fn("HttpWebFetch.make")(function*() {
   const client = yield* HttpClient.HttpClient
   const concurrent = yield* Semaphore.make(MAX_CONCURRENT)

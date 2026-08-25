@@ -18,7 +18,7 @@ import {
   type RequestContext
 } from "@a2a-js/sdk/server"
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Schema, Stream } from "effect"
 import { createServer, type Server } from "node:http"
 import { AgentA2A } from "../src/a2a/index.js"
 

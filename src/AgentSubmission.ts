@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit, Option, Ref, SubscriptionRef } from "effect"
-import type { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
+import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as AgentRun from "./AgentRun.js"

@@ -6,7 +6,6 @@ import {
   RpcClientError,
   RpcGroup
 } from "effect/unstable/rpc"
-import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 

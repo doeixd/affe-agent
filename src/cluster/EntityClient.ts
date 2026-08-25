@@ -1,4 +1,4 @@
-import { Duration, Effect, Schedule } from "effect"
+import { Duration, Effect } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import type * as Elicitation from "../Elicitation.js"
 import { AgentIdleError } from "../Errors.js"

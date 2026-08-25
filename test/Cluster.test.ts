@@ -5,11 +5,10 @@ import {
   Effect,
   Layer,
   Option,
-  Ref,
   Schedule,
   Schema
 } from "effect"
-import { Prompt, Tool } from "effect/unstable/ai"
+import { Prompt } from "effect/unstable/ai"
 import {
   ClusterWorkflowEngine,
   Entity,
@@ -19,7 +18,6 @@ import {
 import type { Sharding } from "effect/unstable/cluster"
 import type { WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
-import * as AgentLoop from "../src/AgentLoop.js"
 import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
 import type { AgentTransportError } from "../src/client/AgentClient.js"

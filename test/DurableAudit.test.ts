@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { Tool, Toolkit } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"

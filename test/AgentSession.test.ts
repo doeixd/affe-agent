@@ -20,7 +20,6 @@ import * as Permission from "../src/Permission.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import * as FakeModel from "./FakeModel.js"
 import {
-  Echo,
   EchoToolkit,
   echoToolkit,
   tags,

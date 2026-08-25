@@ -7,8 +7,7 @@ import {
   Redacted,
   Schedule,
   Schema,
-  Semaphore,
-  Stream
+  Semaphore
 } from "effect"
 import {
   FetchHttpClient,
@@ -124,7 +123,9 @@ const retrySchedule = Schedule.identity<WebSearch.WebSearchError>().pipe(
 )
 
 /**
- * What "at most one retry" does and does not guarantee.
+ * Construct a Brave-backed service from explicit, redacted configuration.
+ *
+ * **What "at most one retry" does and does not guarantee.**
  *
  * This wrapper makes at most two *logical* attempts, and it will not accept a
  * failure it has already retried. Each attempt calls the `HttpClient` it was
@@ -140,7 +141,6 @@ const retrySchedule = Schedule.identity<WebSearch.WebSearchError>().pipe(
  * "bounds its own attempts, not a supplied client's" is what keeps this
  * paragraph honest rather than aspirational.
  */
-/** Construct a Brave-backed service from explicit, redacted configuration. */
 export const make = Effect.fn("BraveWebSearch.make")(function*(options: Options) {
   const client = yield* HttpClient.HttpClient
   const concurrent = yield* Semaphore.make(MAX_CONCURRENT)

@@ -19,7 +19,6 @@ import {
 } from "effect/unstable/http"
 import { AgentClosedError } from "../Errors.js"
 import * as AgentEvent from "../AgentEvent.js"
-import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 

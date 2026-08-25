@@ -47,13 +47,11 @@ import {
 } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import {
-  Headers,
   HttpIncomingMessage,
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse
 } from "effect/unstable/http"
-import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import { is as isEvent } from "../AgentEvent.js"

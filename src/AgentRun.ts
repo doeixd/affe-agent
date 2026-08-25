@@ -1,5 +1,5 @@
 import { Effect, Option, Ref, SubscriptionRef } from "effect"
-import type { AiError, LanguageModel, Tool } from "effect/unstable/ai"
+import type { LanguageModel, Tool } from "effect/unstable/ai"
 import type { Correlation } from "./AgentEvent.js"
 import * as AgentTurn from "./AgentTurn.js"
 import * as EventBus from "./internal/eventBus.js"

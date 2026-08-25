@@ -2,7 +2,6 @@ import { Cause, Context, Deferred, Effect, Layer, Option, Schema, Stream } from 
 import { Prompt } from "effect/unstable/ai"
 import { Sse } from "effect/unstable/encoding"
 import {
-  Headers,
   HttpClient,
   HttpIncomingMessage,
   HttpRouter,

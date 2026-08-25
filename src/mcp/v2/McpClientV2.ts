@@ -8,7 +8,6 @@ import {
 } from "@modelcontextprotocol/client"
 import type { StdioServerParameters } from "@modelcontextprotocol/client/stdio"
 import { Effect, Option, PubSub, Ref, Stream } from "effect"
-import * as McpClient from "../McpClient.js"
 import * as McpToolkit from "../McpToolkit.js"
 import type * as ClientPort from "../internal/clientPort.js"
 import * as Connection from "../internal/connection.js"

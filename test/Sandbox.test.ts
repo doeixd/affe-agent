@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
@@ -509,23 +509,36 @@ describe("local sandbox", () => {
       const fixture = yield* makeFixture()
       yield* Effect.gen(function* () {
         const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
-        // The command starts a grandchild that inherits stdout and outlives
-        // it, then exits itself. Waiting for the streams to close would wait
-        // on the grandchild; the command is over when the child is. (The
-        // grandchild is given a short life of its own: on POSIX the sandbox
-        // ends the process group, but Windows cannot reach an orphan through
-        // its dead parent, and the fixture's cleanup needs the directory
-        // back.)
+        /**
+         * The command starts a grandchild that inherits stdout and outlives
+         * it, then exits itself. Waiting for the streams to close would wait
+         * on the grandchild; the command is over when the child is.
+         *
+         * The margin between the grandchild's life and the budget is the whole
+         * assertion, so it is generous on purpose. It used to be a 1,500ms
+         * grandchild against a 1,200ms budget, which failed this suite at
+         * 1,476ms -- and the alarming part is not the failure but how it
+         * nearly passed: 24ms from reporting success while the command had in
+         * fact waited almost the full lifetime. Spawning node under a loaded
+         * parallel suite costs most of a second by itself, so a threshold that
+         * close measures the machine rather than the behaviour.
+         *
+         * The grandchild's cwd is the OS temp directory, not the workspace.
+         * That is what lets it outlive the command by a wide margin: on POSIX
+         * the sandbox ends the process group, but Windows cannot reach an
+         * orphan through its dead parent, and an orphan sitting in the
+         * fixture's directory would hold it open against cleanup.
+         */
         const began = Date.now()
         const result = yield* sandbox.exec(
           node(
-            "const { spawn } = require('child_process'); spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: 'inherit', detached: true }).unref(); console.log('parent done')"
+            "const { spawn } = require('child_process'); spawn(process.execPath, ['-e', 'setTimeout(() => {}, 6000)'], { stdio: 'inherit', detached: true, cwd: require('os').tmpdir() }).unref(); console.log('parent done')"
           ),
           { timeout: "5 seconds" }
         )
         assert.strictEqual(result.exitCode, 0)
         assert.include(result.stdout, "parent done")
-        assert.isBelow(Date.now() - began, 1200, "waited on the grandchild")
+        assert.isBelow(Date.now() - began, 3000, "waited on the grandchild")
       }).pipe(Effect.provide(fixture.layer), Effect.scoped)
     })
   )
@@ -677,10 +690,25 @@ describe("sandbox composition", () => {
       >
         ? R
         : never
-      // Forgetting to provide the workspace cannot compile: the tool's
-      // dependency is carried into the session's requirements.
+      /**
+       * Forgetting to provide the workspace cannot compile: the tool's
+       * dependency is carried into the session's requirements.
+       *
+       * The `Equal` guard is not decoration. `X extends any` is `true`, so had
+       * inference collapsed `Requirements` to `any` this assertion would have
+       * passed while proving nothing -- which is the whole reason the codebase
+       * insists that compiling is not evidence. `Equal` is mutual
+       * assignability, and only `any` is mutually assignable with `any`, so
+       * asking for it first turns the vacuous pass into a failure.
+       *
+       * Equality with `Sandbox.Current` is deliberately *not* asserted:
+       * `Requirements` legitimately carries the model service too, so the
+       * claim being made is containment, and containment is all it says.
+       */
       const required: Assert<
-        Sandbox.Current extends Requirements ? true : false
+        Equal<Requirements, any> extends true ? false
+          : Sandbox.Current extends Requirements ? true
+          : false
       > = true
       void required
 
