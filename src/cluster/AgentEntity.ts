@@ -71,6 +71,60 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
       const address = yield* Entity.CurrentAddress
       const sessionId = address.entityId
 
+      /**
+       * Carry forward anything a previous attempt was acknowledged for and
+       * never dispatched.
+       *
+       * In an entity handler rather than a background sweep because an
+       * entity's handlers for one session are serialised by its mailbox, and
+       * the entity id *is* the session -- so this is the one place where a
+       * leftover row can be examined with nothing else touching it. A sweeper
+       * would need that exclusion built from scratch.
+       *
+       * Re-dispatching is safe: the execution id is a pure function of the
+       * session, so the engine answers a repeat with the execution it already
+       * holds rather than starting a second one. A row that was in fact
+       * dispatched before the process died therefore costs a no-op, and one
+       * that was not gets its submission.
+       *
+       * **Run from every handler, not only `submit` (R172).** The recovery
+       * used to happen on the next submission and nowhere else, so a lost
+       * submission whose caller went on to steer, interrupt, or answer an
+       * elicitation -- rather than submit again -- sat in the outbox with a
+       * live client talking to it. Any message to the session now carries it
+       * forward, which is as wide as this exclusion reaches. **What it still
+       * does not cover: a session nobody ever contacts again.** Closing that
+       * needs a sweeper with an exclusion story of its own.
+       *
+       * Best-effort on purpose. This is opportunistic recovery of work from a
+       * previous process, and it must not be able to fail the operation that
+       * triggered it: an `interrupt` has nothing to do with an old outbox row
+       * and should not become a defect because reading one failed.
+       */
+      const carryForward = Effect.gen(function* () {
+        const owed = yield* DurableChannels.takePendingDispatches(store, sessionId)
+        yield* Effect.forEach(owed, (pending) =>
+          Effect.forkDetach(
+            Effect.catchCause(
+              DurableAgent.throughShardReassignment(
+                agent.definition.execute(
+                  { sessionId, prompt: pending },
+                  { discard: true }
+                )
+              ),
+              (cause) =>
+                Effect.logError("a recorded submission failed to dispatch", {
+                  sessionId,
+                  cause
+                })
+            )
+          ), { discard: true })
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("could not read the dispatch outbox", { sessionId, cause })
+        )
+      )
+
       return {
         // Forked deliberately. An entity handler occupies the session's
         // mailbox while it runs, and starting a workflow routes back through
@@ -79,54 +133,7 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
         // gets it synchronously.
         submit: ({ payload }) =>
           Effect.gen(function* () {
-            /**
-             * Carry forward anything a previous attempt was acknowledged for
-             * and never dispatched.
-             *
-             * Here rather than in a background sweep because an entity's
-             * handlers for one session are serialised by its mailbox, and the
-             * entity id *is* the session -- so this is the one place where a
-             * leftover row can be examined with nothing else touching it. A
-             * sweeper would need that exclusion built from scratch.
-             *
-             * Re-dispatching is safe: the execution id is a pure function of
-             * the session, so the engine answers a repeat with the execution
-             * it already holds rather than starting a second one. A row that
-             * was in fact dispatched before the process died therefore costs a
-             * no-op, and one that was not gets its submission.
-             *
-             * **The limit, stated rather than implied: recovery happens on
-             * the next submit to this session and nowhere else.** A submission
-             * lost to process death is carried forward the moment anybody
-             * submits again; if nobody ever does, the row sits there. Closing
-             * that needs a sweeper with its own exclusion story, and the
-             * durable client -- which reconciles on every session acquisition
-             * -- is the path that already has one.
-             *
-             * The same derived id also means a recovered submission and a new
-             * one resolve to a single execution: the earlier, already
-             * acknowledged one runs. That follows from the entity's
-             * one-execution-per-session model noted below, and is the right
-             * way round -- a caller told "this started" is owed that, not the
-             * submission that displaced it.
-             */
-            const owed = yield* DurableChannels.takePendingDispatches(store, sessionId)
-            yield* Effect.forEach(owed, (pending) =>
-              Effect.forkDetach(
-                Effect.catchCause(
-                  DurableAgent.throughShardReassignment(
-                    agent.definition.execute(
-                      { sessionId, prompt: pending },
-                      { discard: true }
-                    )
-                  ),
-                  (cause) =>
-                    Effect.logError("a recorded submission failed to dispatch", {
-                      sessionId,
-                      cause
-                    })
-                )
-              ), { discard: true })
+            yield* carryForward
 
             const prompt = payload.input
             const executionId = yield* agent.definition.executionId({
@@ -229,17 +236,20 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
         // Recorded as the open half of E14: widening the entity's error schema
         // is the better answer, and it belongs with whoever owns the wire.
         steer: ({ payload }) =>
-          DurableAgent.steer(store, sessionId, payload.input).pipe(
+          carryForward.pipe(
+            Effect.andThen(DurableAgent.steer(store, sessionId, payload.input)),
             Effect.catchTag("StorageError", (error) => Effect.die(error))
           ),
         followUp: ({ payload }) =>
-          DurableAgent.followUp(store, sessionId, payload.input).pipe(
+          carryForward.pipe(
+            Effect.andThen(DurableAgent.followUp(store, sessionId, payload.input)),
             Effect.catchTag("StorageError", (error) => Effect.die(error))
           ),
         // Routed to the session's own execution, so a caller needs only the
         // session id it already used to submit.
         respond: ({ payload }) =>
-          DurableAgent.executionIdFor(agent, sessionId).pipe(
+          carryForward.pipe(
+            Effect.andThen(DurableAgent.executionIdFor(agent, sessionId)),
             Effect.flatMap((executionId) =>
               DurableAgent.throughShardReassignment(
                 DurableElicitation.respond({
@@ -252,7 +262,8 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             Effect.asVoid
           ),
         interrupt: () =>
-          DurableAgent.executionIdFor(agent, sessionId).pipe(
+          carryForward.pipe(
+            Effect.andThen(DurableAgent.executionIdFor(agent, sessionId)),
             Effect.flatMap((executionId) =>
               DurableAgent.throughShardReassignment(
                 agent.definition.interrupt(executionId)

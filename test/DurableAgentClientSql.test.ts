@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Crypto, Duration, Effect, Layer, Ref, Schedule, Schema } from "effect"
+import { Crypto, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import * as NodeCrypto from "node:crypto"
@@ -8,6 +8,7 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import * as Agent from "../src/Agent.js"
+import { StorageError } from "../src/Errors.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentClient } from "../src/client/index.js"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
@@ -91,15 +92,27 @@ const tempDatabase = Effect.acquireRelease(
 const process_ = (
   file: string,
   agent: Agent.AgentDefinition<any, any, any>,
-  turns: ReadonlyArray<TestLanguageModel.Turn>
+  turns: ReadonlyArray<TestLanguageModel.Turn>,
+  /**
+   * Break the session store this process sees, leaving the shared database
+   * intact. The next process reads the same rows through a healthy store,
+   * which is what makes a fault here a *partial* failure rather than a broken
+   * fixture.
+   */
+  breakSessionStore?: (
+    store: DurableSessionStore.DurableSessionStore
+  ) => DurableSessionStore.DurableSessionStore
 ) =>
   Effect.gen(function* () {
     const sql = yield* Layer.build(SqliteClient.layer({ filename: file }))
-    const stores = yield* Effect.all({
+    const built = yield* Effect.all({
       store: DurableChannels.sqlStoreWithTable(),
       sessionStore: DurableSessionStore.sqlStoreWithTables(),
       delivery: DeliveryLog.sqlLogWithTable()
     }).pipe(Effect.provide(sql))
+    const stores = breakSessionStore === undefined
+      ? built
+      : { ...built, sessionStore: breakSessionStore(built.sessionStore) }
     const { layer: model, recorder } = yield* FakeModel.script(turns)
     const runtime = yield* Layer.build(
       DurableAgentClient.layer("SqlAgent", agent, {
@@ -377,5 +390,77 @@ describe("DurableAgentClient on SQL storage", () => {
         assert.strictEqual(record._tag === "Some" ? record.value.submissionCount : 0, 1)
       }).pipe(Effect.scoped),
     30_000
+  )
+
+  it.live("a claim whose execution ended without its finish is freed on reacquisition (R173)", () =>
+    Effect.gen(function* () {
+      const file = yield* tempDatabase
+      const agent = Agent.make({
+        toolkit: Agent.toolkit([], {}),
+        loop: AgentLoop.bounded(2)
+      })
+
+      /**
+       * R173 -- the wedge, and why it had no exit.
+       *
+       * `finishProjection` clears the admission and interrupt channels and
+       * then finishes the claim. Those are two stores, so they are one
+       * `Activity` but not one transaction. Here the clear succeeds and the
+       * finish cannot: the catch path retries it, fails the same way, and the
+       * workflow ends terminally with the claim still `running`.
+       *
+       * Admission is closed and nothing is executing, so every later prompt
+       * was refused as `Busy` -- forever. Reconciliation looked only for a
+       * claim that had never been dispatched, and this one had.
+       *
+       * The failure is injected into *this process's* view of the store, not
+       * into the database, so process B below reads the same rows through a
+       * healthy store. That is what makes this a partial failure rather than
+       * a broken fixture.
+       */
+      yield* Effect.gen(function* () {
+        const a = yield* process_(file, agent, [{ text: "done" }], (store) => ({
+          ...store,
+          finish: () =>
+            Effect.fail(
+              new StorageError({ operation: "finish", detail: "the disk is on fire" })
+            )
+        }))
+        const session = yield* Effect.scoped(
+          a.client.createSession({ sessionId: "wedged" })
+        )
+        // The prompt fails: the caller is told, which is the other half of
+        // D7. `exit` rather than `ignore`, because a `StorageError` escaping
+        // the workflow body cannot be encoded as the declared
+        // `DurableAgentFailure` and reaches the caller as a defect.
+        const attempt = yield* Effect.exit(session.prompt("go"))
+        assert.isTrue(Exit.isFailure(attempt))
+
+        // The claim is stranded -- running, dispatched, and nothing to run it.
+        const stranded = yield* until(
+          a.sessionStore.get("wedged"),
+          (found) =>
+            Option.isSome(found) &&
+            Option.isSome(found.value.claim) &&
+            found.value.claim.value.executionId !== undefined
+        )
+        assert.isTrue(Option.isSome(stranded))
+        if (Option.isSome(stranded)) {
+          assert.strictEqual(stranded.value.status, "running")
+        }
+      }).pipe(Effect.scoped)
+
+      // ---- Process B: a healthy store over the same database --------------
+      yield* Effect.gen(function* () {
+        const b = yield* process_(file, agent, [{ text: "second" }])
+        // Acquiring reconciles: the execution is over, so the claim is freed.
+        const session = yield* b.client.session("wedged")
+        assert.strictEqual(yield* session.status, "idle")
+
+        // And the session is usable again, which is the point of freeing it.
+        const answer = yield* session.prompt("again")
+        assert.strictEqual(answer.text, "second")
+      }).pipe(Effect.scoped)
+    })
   )
 })

@@ -443,4 +443,61 @@ describe("approval across the cluster", () => {
       )
     )
   )
+
+  /**
+   * R172's trigger -- recovery is no longer tied to submitting again.
+   *
+   * The outbox row above is only useful if something looks at it, and for a
+   * while the only thing that did was the next `submit` to that session. A
+   * caller whose submission was lost to process death and who then *steered*
+   * -- or interrupted, or answered an elicitation -- was talking to a live
+   * session with its work sitting in an outbox nobody read.
+   *
+   * Every entity handler carries it forward now. They share the exclusion
+   * that made this safe in the first place: an entity's handlers for one
+   * session are serialised by its mailbox, and the entity id is the session.
+   *
+   * `steer` itself is expected to fail here, and the test says so rather than
+   * arranging for it to succeed: admission is opened by the recovered
+   * submission on a detached fibre, so whether it is open yet is a race. The
+   * claim under test is that the drain happened, not that the steer landed.
+   */
+  it.live("a lost submission is carried forward by a handler that is not submit", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([
+        { text: "recovered" }
+      ])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("RecoveredBySteer", Agent.make({}), { store })
+      const runtime = durable.layer.pipe(
+        Layer.provideMerge(ClusterWorkflowEngine.layer),
+        Layer.provideMerge(modelLayer)
+      )
+      const handlers = entityLayer(durable, store).pipe(Layer.provideMerge(runtime))
+
+      yield* DurableChannels.recordPendingDispatch(
+        store,
+        "session-steered",
+        Prompt.make("the lost submission")
+      )
+
+      const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
+      const client = yield* makeClient("session-steered")
+      // Nobody submits again. The only message this session ever receives is
+      // a steer, which is the whole point.
+      yield* Effect.exit(client.steer({ input: Prompt.make("some steering") }))
+
+      yield* Effect.retry(
+        Effect.flatMap(recorder.prompts, (seen) =>
+          seen.some((prompt) => FakeModel.userTexts(prompt).includes("the lost submission"))
+            ? Effect.void
+            : Effect.fail("not yet dispatched" as const)),
+        { times: 200, schedule: Schedule.spaced(Duration.millis(10)) }
+      ).pipe(Effect.provide(runtime))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
 })

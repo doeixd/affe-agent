@@ -632,26 +632,33 @@ const rowToRecord = (row: SessionRow): Effect.Effect<SessionRecord, StorageError
  *
  * A transaction gives atomicity and rollback. It does **not**, by itself, give
  * serialisability: under the read-committed isolation that most engines
- * default to, two transactions can each `SELECT`, each see the same absence,
- * and each `INSERT`. The transitions here are written as select-then-write, so
- * on such an engine:
+ * default to, another transaction may commit between this one's `SELECT` and
+ * its `UPDATE`. Anything decided from the read is stale by the time the write
+ * lands. These transitions were all written as select-then-write, so on such
+ * an engine `getOrCreate` raced into a uniqueness violation, a second answer
+ * to one elicitation silently replaced the first, and -- worst -- a `finish`
+ * could clear a claim belonging to a submission that had started after its
+ * read and was executing at that moment.
  *
- * - `getOrCreate` can race into a uniqueness violation rather than one caller
- *   creating and the other reading;
- * - a claim decided from a prior read can be admitted twice, with the loser
- *   surfacing as a `StorageError` rather than the busy answer it should be.
+ * **Every guarded transition now carries its precondition in the statement**,
+ * not in a preceding read: `INSERT … SELECT … WHERE NOT EXISTS` for the two
+ * creations, `UPDATE … WHERE claim = <the exact text I read>` for the claim
+ * transitions, `AND state = 'pending'` for the elicitation ones. Where the
+ * outcome is something the caller acts on, the row is read back afterwards so
+ * the answer describes what actually happened rather than what was intended.
+ * All of it is ordinary SQL, so no dialect is guessed at and no isolation
+ * level has to be demanded of the deployment.
+ *
+ * The remaining gap is named where it lives, on `takeAnswer`: two concurrent
+ * takers cannot be told apart without `RETURNING` or an affected-row count.
  *
  * The suite runs against SQLite, which serialises writers at the file level
- * and therefore cannot exhibit either -- so passing tests are not evidence for
- * the portable claim, which is exactly why this paragraph exists rather than a
- * checkmark.
- *
- * A deployment on Postgres, MySQL or anything else with row-level concurrency
- * should either run these transitions at `SERIALIZABLE`, or replace them with
- * conditional statements that encode the precondition in the mutation --
- * `INSERT … ON CONFLICT DO NOTHING`, `UPDATE … WHERE status = 'idle'` --
- * rather than in a preceding read. Both are engine-specific, which is why this
- * portable module states the requirement instead of guessing at the dialect.
+ * and therefore cannot produce the interleaving at all -- so passing tests
+ * there were never evidence for the portable claim. `DurableSessionStore
+ * (interleaved writes)` supplies the evidence instead: a `SqlClient` that
+ * commits an injected statement between a transition's read and its write,
+ * which is precisely what read-committed permits. Both tests fail against the
+ * unconditional writes they replaced.
  */
 export const sqlStore = (
   options?: {
@@ -715,23 +722,37 @@ export const sqlStore = (
           sql
             .withTransaction(
               Effect.gen(function* () {
+                /**
+                 * The precondition is in the statement, not in a read before
+                 * it (R66).
+                 *
+                 * `SELECT`-then-`INSERT` is only safe if nothing can commit in
+                 * between, which read-committed -- the default nearly
+                 * everywhere but SQLite -- explicitly permits. Two callers
+                 * both saw the absence and both inserted, and the loser got a
+                 * primary-key violation surfaced as a `StorageError`: a
+                 * spurious failure for an operation whose entire contract is
+                 * "make sure this exists".
+                 *
+                 * `INSERT … SELECT … WHERE NOT EXISTS` re-checks the absence
+                 * as part of the write, so the engine settles it under
+                 * whatever locking it already has. Preferred over catching the
+                 * violation and re-reading, which cannot work here: on
+                 * PostgreSQL a failed statement poisons the surrounding
+                 * transaction, so there is no "carry on and re-read" to do.
+                 * Preferred over `ON CONFLICT DO NOTHING` because that is a
+                 * dialect this portable module would have to guess at.
+                 */
+                yield* sql`INSERT INTO ${sessions} (session_id, status, submission_count, claim, history) SELECT ${sessionId}, 'idle', 0, NULL, ${encoded} WHERE NOT EXISTS (SELECT 1 FROM ${sessions} WHERE session_id = ${sessionId})`
+                // Ours or theirs -- the contract does not distinguish, and
+                // reading back is what makes that true rather than assumed.
                 const found = yield* readRecord(sessionId)
                 if (Option.isSome(found)) return found.value
-                yield* sql`INSERT INTO ${sessions} ${sql.insert({
-                  session_id: sessionId,
-                  status: "idle",
-                  submission_count: 0,
-                  claim: null,
-                  history: encoded
-                })}`
-                const created: SessionRecord = {
+                return yield* new StorageError({
+                  operation: "getOrCreate",
                   sessionId,
-                  status: "idle",
-                  submissionCount: 0,
-                  claim: Option.none(),
-                  history: encoded
-                }
-                return created
+                  detail: "the row was absent immediately after a conditional insert"
+                })
               })
             )
             .pipe(storage("getOrCreate", sessionId))
@@ -800,19 +821,22 @@ export const sqlStore = (
         sql
           .withTransaction(
             Effect.gen(function* () {
-              const found = yield* readRecord(sessionId)
-              if (
-                Option.isNone(found) ||
-                Option.isNone(found.value.claim) ||
-                found.value.claim.value.submissionId !== submissionId
-              ) {
-                return
-              }
-              const claimJson = yield* encodeClaim({
-                ...found.value.claim.value,
-                executionId
-              })
-              yield* sql`UPDATE ${sessions} SET claim = ${claimJson} WHERE session_id = ${sessionId}`
+              const row = yield* readRow(sessionId)
+              if (Option.isNone(row) || row.value.claim === null) return
+              const held = yield* decodeClaim(row.value.claim)
+              if (held.submissionId !== submissionId) return
+              const claimJson = yield* encodeClaim({ ...held, executionId })
+              /**
+               * Conditional for the reason `finish` gives (R66): writing this
+               * unconditionally would stamp an execution id onto whatever
+               * claim happened to be there, which after a concurrent
+               * finish-and-reclaim is a *different* submission's.
+               *
+               * No read-back, because there is nothing to report. Attaching an
+               * execution id to a claim that has already moved on is not a
+               * failure, it is a no-op -- the submission it described is over.
+               */
+              yield* sql`UPDATE ${sessions} SET claim = ${claimJson} WHERE session_id = ${sessionId} AND claim = ${row.value.claim}`
             })
           )
           .pipe(storage("attachExecution", sessionId)),
@@ -822,15 +846,47 @@ export const sqlStore = (
           sql
             .withTransaction(
               Effect.gen(function* () {
-                const found = yield* readRecord(sessionId)
-                if (
-                  Option.isNone(found) ||
-                  Option.isNone(found.value.claim) ||
-                  found.value.claim.value.submissionId !== submissionId
-                ) {
-                  return false
-                }
-                yield* sql`UPDATE ${sessions} SET status = 'idle', claim = NULL, history = ${encoded} WHERE session_id = ${sessionId}`
+                /**
+                 * Read the row, not the record: the claim's stored text is the
+                 * precondition (R66).
+                 *
+                 * Deciding from the read and then writing unconditionally is
+                 * the one transition here where losing the race *corrupts*
+                 * rather than merely failing. Two finishers both read claim
+                 * S1; the first commits and leaves the session idle; a fresh
+                 * `claim` admits S2 and the session is running again; the
+                 * second finisher's unconditional `UPDATE` then sets `claim =
+                 * NULL` and wipes a claim belonging to a submission that is
+                 * executing right now. The session goes idle underneath a
+                 * running turn, and the next claimer is admitted alongside it.
+                 *
+                 * Comparing the claim's exact stored text turns that into a
+                 * statement that matches nothing. It is the row's own version
+                 * stamp: any transition through `claim` or `finish` rewrites
+                 * the column, so "unchanged text" is precisely "no transition
+                 * since I looked".
+                 */
+                const row = yield* readRow(sessionId)
+                if (Option.isNone(row) || row.value.claim === null) return false
+                const held = yield* decodeClaim(row.value.claim)
+                if (held.submissionId !== submissionId) return false
+                yield* sql`UPDATE ${sessions} SET status = 'idle', claim = NULL, history = ${encoded} WHERE session_id = ${sessionId} AND claim = ${row.value.claim}`
+                /**
+                 * Read back to learn whether *this* finish landed.
+                 *
+                 * A superseded claim reads as non-null and the answer is a
+                 * truthful `false`. The one case this cannot separate is a
+                 * concurrent finisher of the *same* submission: both see a
+                 * null claim afterwards. That is why the history is compared
+                 * too -- a duplicate finish of one submission writes the same
+                 * history and is benign, while a different history means the
+                 * write that survived was not ours.
+                 */
+                const after = yield* readRow(sessionId)
+                const landed = Option.isSome(after) &&
+                  after.value.claim === null &&
+                  after.value.history === encoded
+                if (!landed) return false
                 yield* sql`DELETE FROM ${requests} WHERE session_id = ${sessionId}`
                 return true
               })
@@ -841,22 +897,23 @@ export const sqlStore = (
       addPendingRequest: (sessionId, request) =>
         Effect.flatMap(encodeRequest(request), (encoded) =>
           sql
+            /**
+             * Idempotent: a replayed run asks under the same id, and an
+             * already-answered one keeps its answer.
+             *
+             * The absence is re-checked as part of the insert rather than in a
+             * read before it, for the reason `getOrCreate` gives (R66) -- and
+             * here the row carries `UNIQUE (session_id, request_id)`, so the
+             * losing writer of a select-then-insert got a constraint violation
+             * rather than the silent no-op this operation promises.
+             *
+             * One statement, so the transaction that used to wrap a read and a
+             * write has nothing left to group.
+             */
             .withTransaction(
-              Effect.gen(function* () {
-                // Idempotent: a replayed run asks under the same id, and an
-                // already-answered one keeps its answer. Anything else under
-                // this id is stale and is replaced.
-                const existing = yield* sql<{
-                  readonly state: string
-                }>`SELECT state FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${request.id}`
-                if (existing.length > 0) return
-                yield* sql`INSERT INTO ${requests} ${sql.insert({
-                  session_id: sessionId,
-                  request_id: request.id,
-                  state: "pending",
-                  payload: encoded
-                })}`
-              })
+              Effect.asVoid(
+                sql`INSERT INTO ${requests} (session_id, request_id, state, payload) SELECT ${sessionId}, ${request.id}, 'pending', ${encoded} WHERE NOT EXISTS (SELECT 1 FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${request.id})`
+              )
             )
             .pipe(storage("addPendingRequest", sessionId))
         ),
@@ -880,8 +937,19 @@ export const sqlStore = (
                   readonly id: number
                 }>`SELECT id FROM ${requests} WHERE session_id = ${sessionId} AND request_id = ${response.id} AND state = 'pending'`
                 if (waiting.length === 0) return false
-                yield* sql`UPDATE ${requests} SET state = 'answered', payload = ${encoded} WHERE id = ${waiting[0]!.id}`
-                return true
+                const id = waiting[0]!.id
+                /**
+                 * `AND state = 'pending'` is the precondition restated in the
+                 * write (R66). Without it, two answers to one request both
+                 * matched and the second overwrote the first -- an answer
+                 * accepted, reported as accepted, and then silently replaced.
+                 */
+                yield* sql`UPDATE ${requests} SET state = 'answered', payload = ${encoded} WHERE id = ${id} AND state = 'pending'`
+                // Whose answer survived: reported honestly rather than assumed.
+                const after = yield* sql<{
+                  readonly payload: string
+                }>`SELECT payload FROM ${requests} WHERE id = ${id} AND state = 'answered'`
+                return after.length > 0 && after[0]!.payload === encoded
               })
             )
             .pipe(storage("answerRequest", sessionId))
@@ -898,7 +966,21 @@ export const sqlStore = (
               if (answered.length === 0) {
                 return Option.none<Elicitation.Response>()
               }
-              yield* sql`DELETE FROM ${requests} WHERE id = ${answered[0]!.id}`
+              /**
+               * `AND state = 'answered'` for the reason the others give (R66):
+               * without it this deletes whatever occupies the row, including a
+               * request re-asked and still pending under the same id.
+               *
+               * **What this does not settle**: two concurrent takers both see
+               * the row gone afterwards, so both return the answer. Telling
+               * them apart needs the deleted row back from the statement --
+               * `DELETE … RETURNING`, or a driver-reported affected-row count
+               * -- and neither is available portably here. Recorded rather
+               * than papered over; the operation is called once per submission
+               * on the elicitation path, so the second taker needs a duplicate
+               * runner for that same submission to exist at all.
+               */
+              yield* sql`DELETE FROM ${requests} WHERE id = ${answered[0]!.id} AND state = 'answered'`
               return Option.some(yield* decodeResponse(answered[0]!.payload))
             })
           )

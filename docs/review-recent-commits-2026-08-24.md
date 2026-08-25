@@ -3838,27 +3838,48 @@ assumed from a commit message.
   wrapping) and tracking it against upstream. A real trade, not an
   impossibility.
 
-- **R66.** A transaction gives atomicity, not serialisability, and these
-  transitions are select-then-write. The suite runs against SQLite, which
-  serialises writers at the file level and therefore cannot exhibit the race --
-  so passing tests are not evidence for the portable claim. The requirement is
-  now stated on `sqlStore` itself: run at `SERIALIZABLE`, or encode the
-  precondition in the mutation. Both are engine-specific, which is why a
-  portable module states it rather than guessing at a dialect.
-- **R172, mostly closed.** The entity now writes an outbox row before it
-  acknowledges, and drains any leftover at the top of the next submit --
-  dispatch stays forked, because awaiting it deadlocks against the runner
-  executing the handler. What remains is the *trigger*: recovery happens on a
-  subsequent submit to that session and nowhere else, so a lost submission with
-  no successor sits in the outbox. A sweeper needs its own exclusion story; the
-  durable client, which reconciles on every session acquisition, is the path
-  that already has one.
-- **R173.** Half fixed: a terminal event is recorded before it is forgotten.
-  The other half is an ordering with no safe choice -- clearing before
-  `finish` can strand a claim, finishing before clearing can wipe the *next*
-  submission's admission marker, and the second corrupts work happening now.
-  The reversal was tried and reverted when the existing ordering test caught
-  it. Closing it needs one transaction or reconciliation.
+- **R66 -- closed.** Every guarded transition now carries its precondition in
+  the statement rather than in a preceding read: `INSERT … SELECT … WHERE NOT
+  EXISTS` for the two creations, `UPDATE … WHERE claim = <the text I read>` for
+  the claim transitions, `AND state = 'pending'` for the elicitation ones, with
+  a read-back wherever the caller acts on the outcome. All ordinary SQL, so no
+  dialect is guessed at and no isolation level is demanded of the deployment.
+  The worst of the races was `finish`: two finishers reading the same claim
+  could have the second clear a claim belonging to a submission admitted after
+  its read and executing at that moment.
+  SQLite serialises writers and cannot produce the interleaving, so the
+  evidence is a `SqlClient` that commits an injected statement between a
+  transition's read and its write -- exactly what read-committed permits.
+  `DurableSessionStore (interleaved writes)`; both tests fail against the
+  unconditional writes. The one gap left is named on `takeAnswer`: two
+  concurrent takers need `DELETE … RETURNING` or an affected-row count to tell
+  apart, and neither is portable here.
+- **R172 -- closed to the limit of the entity's exclusion.** The entity writes
+  an outbox row before it acknowledges, and dispatch stays forked because
+  awaiting it deadlocks against the runner executing the handler. The trigger
+  is no longer tied to submitting again: *every* entity handler carries the
+  outbox forward, so a caller whose submission was lost and who then steers,
+  interrupts, or answers an elicitation recovers it. They share the exclusion
+  that made the drain safe -- an entity's handlers for one session are
+  serialised by its mailbox, and the entity id is the session -- so this is as
+  wide as recovery goes without building an exclusion story from scratch. It is
+  best-effort: opportunistic recovery must not fail the operation that
+  triggered it. **Still not covered: a session nobody ever contacts again.**
+- **R173 -- closed by reconciliation.** The ordering stays as it was, and the
+  reason is better than "the lesser evil": clearing admission before finishing
+  is what *leaves evidence*. A claim still held while the admission marker is
+  gone means `finishProjection` got as far as the clear and no further, which
+  is the wedge exactly. Reconciliation reads that and frees the claim, so a
+  session whose finish failed is no longer `Busy` forever.
+  Asked of the admission marker rather than `Workflow.poll`, because
+  `DurableAgent` already establishes that poll cannot distinguish a suspended
+  execution from a finished one. Safe against a `finishProjection` still in
+  flight because R66's conditional `finish` matches only an unchanged claim.
+  What is not recovered is the conversation that submission produced -- the
+  write that would have committed it is the one that failed -- so history stays
+  where the submission began. Proven by failing the finish in one process and
+  reacquiring in another; without the reconciliation the session stays
+  `running`.
 - **R36.** Durable permission replay journals the policy answer but recomputes
   the projection and `needsApproval`, which Effect AI allows to be effectful.
   The same class of problem as R2 and with the same shape of fix.
