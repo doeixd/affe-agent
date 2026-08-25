@@ -131,6 +131,97 @@ export const contract = <E>(
         assert.strictEqual(found.node.cause, "manual")
       }))
 
+
+    /**
+     * R77 -- a familiar id must not be a way to move an ancestor.
+     *
+     * `put` accepts an id it has already seen because `commit` uses it to
+     * apply a label or a cause. It used to accept anything else too: a
+     * different parent, or a different conversation, overwrote the node while
+     * the root/order/children indexes -- written once, at insertion -- went on
+     * describing the node that used to be there.
+     *
+     * A defect rather than a typed failure: it is not a condition a caller
+     * encounters, it is two pieces of code disagreeing about what an id names.
+     */
+    it.effect("re-storing an id may change its mark, never its ancestry", () =>
+      Effect.gen(function*() {
+        const store = yield* makeStore
+        yield* store.put(node("a"), history("one"))
+        yield* store.put(node("b", "a"), history("one", "two"))
+
+        // Legal: the same node, marked. Already covered above, restated here
+        // so the boundary is visible in one place.
+        yield* store.put(node("b", "a", { label: "kept" }), history("one", "two"))
+
+        // Illegal: a different parent under a familiar id.
+        const reparented = yield* Effect.exit(
+          store.put(node("b"), history("one", "two"))
+        )
+        assert.strictEqual(reparented._tag, "Failure")
+
+        // Illegal: a different conversation under a familiar id.
+        const rewritten = yield* Effect.exit(
+          store.put(node("b", "a"), history("one", "different"))
+        )
+        assert.strictEqual(rewritten._tag, "Failure")
+
+        // And nothing was damaged on the way through.
+        assert.deepStrictEqual((yield* store.nodes).map((found) => found.id), ["a", "b"])
+        assert.deepStrictEqual(
+          (yield* store.children("a" as NodeStore.NodeId)).map((child) => child.id),
+          ["b"]
+        )
+        const found = Option.getOrThrow(yield* store.get("b" as NodeStore.NodeId))
+        assert.strictEqual(Option.getOrThrow(found.node.label), "kept")
+        assert.strictEqual(textOf(found.history), textOf(history("one", "two")))
+      }))
+
+    /**
+     * R43 -- concurrent writes leave one consistent store.
+     *
+     * The memory store read "does this id exist" and then appended to a
+     * separate order `Ref`, so two puts of one id could both see absence and
+     * both append. The key-value adapter's index append is a
+     * read-modify-write with no lock, so two puts of *different* nodes could
+     * each read the same list and each write back only their own id -- a node
+     * still stored and no longer reachable.
+     *
+     * Twenty at once, half of them the same id: an id appears once, every
+     * distinct node is listed, and the indexes agree with `get`.
+     */
+    it.effect("concurrent puts leave every node listed exactly once", () =>
+      Effect.gen(function*() {
+        const store = yield* makeStore
+        yield* store.put(node("root"), history("root"))
+
+        const writes = Array.from({ length: 10 }, (_, index) => index).flatMap(
+          (index) => [
+            store.put(node(`n${index}`, "root"), history("root", `n${index}`)),
+            // The same node again, as a mark: a re-put must not duplicate it.
+            store.put(
+              node(`n${index}`, "root", { label: `l${index}` }),
+              history("root", `n${index}`)
+            )
+          ]
+        )
+        yield* Effect.all(writes, { concurrency: "unbounded" })
+
+        const all = yield* store.nodes
+        const ids = all.map((found) => found.id)
+        assert.strictEqual(new Set(ids).size, ids.length, "an id was listed twice")
+        assert.strictEqual(ids.length, 11, "a node was lost from the order index")
+
+        const children = (yield* store.children("root" as NodeStore.NodeId)).map((c) => c.id)
+        assert.strictEqual(new Set(children).size, children.length)
+        assert.strictEqual(children.length, 10, "a node was lost from the children index")
+
+        // Every listed node is really there.
+        for (const id of ids) {
+          assert.isTrue(Option.isSome(yield* store.get(id)), `${id} is indexed but not stored`)
+        }
+      }))
+
     it.effect("an empty store answers rather than failing", () =>
       Effect.gen(function*() {
         const store = yield* makeStore

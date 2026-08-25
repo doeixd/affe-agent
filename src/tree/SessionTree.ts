@@ -66,12 +66,43 @@ const nodeId = (value: string): NodeId => value as NodeId
  * Distinguishes one tree's nodes from another's.
  *
  * Without it every tree starts counting at one, so two trees mint the same
- * ids and `historyOf` happily answers for a node that belongs to a different
- * tree -- returning the wrong conversation rather than refusing. Ids are
- * unique per process, which is all an in-memory tree needs; a persisted tree
- * gets its separation from the store's namespace instead.
+ * ids and `historyOf` happily answers for a node belonging to a different
+ * tree -- returning the wrong conversation rather than refusing.
+ *
+ * Random rather than a process counter, which is what this was. A counter
+ * resets when the process does, so reopening a persistent store and
+ * committing produced `t1-node-1` again: the same id as an existing ancestor,
+ * whose history it would then overwrite while the indexes went on describing
+ * the old one. "Unique per process" is exactly the wrong scope for a store
+ * that outlives the process, and a test that rebuilds a tree in *one* process
+ * cannot show it, because the counter has moved on by then.
+ *
+ * Sixteen hex digits from the platform's CSPRNG: a tree is created at most a
+ * few times per process, so the collision probability is not a number worth
+ * writing down, and the value stays short enough to read in a log.
  */
-let trees = 0
+const treePrefix = (): string => {
+  const bytes = new Uint8Array(8)
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+/**
+ * The stored tree is not a tree.
+ *
+ * Distinct from `NodeMissing`, which is an ordinary answer about an id that
+ * is not here. This says the structure itself is wrong -- a node reachable
+ * from its own ancestry -- which no sequence of legal operations can produce
+ * and which a walk cannot recover from by continuing.
+ */
+export class TreeCorrupt extends Schema.TaggedError<TreeCorrupt>()(
+  "@doeixd/effect-agent/tree/TreeCorrupt",
+  { id: Schema.String, detail: Schema.String }
+) {
+  override get message() {
+    return `Session tree is corrupt at node ${this.id}: ${this.detail}`
+  }
+}
 
 /** The node is not in this tree. */
 export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
@@ -242,7 +273,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
    * See `Summary`: this exists so a selector can list twenty branch points
    * without materialising twenty conversations.
    */
-  readonly summary: (node: Node) => Effect.Effect<Summary, NodeMissing | SE>
+  readonly summary: (node: Node) => Effect.Effect<Summary, NodeMissing | TreeCorrupt | SE>
 
   /**
    * The deepest node both descend from.
@@ -254,7 +285,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
   readonly commonAncestor: (
     a: Node,
     b: Node
-  ) => Effect.Effect<Option.Option<Node>, NodeMissing | SE>
+  ) => Effect.Effect<Option.Option<Node>, NodeMissing | TreeCorrupt | SE>
 
   /**
    * Where two branches parted, and what each did after.
@@ -263,7 +294,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
    * then walking again: the fork and the two suffixes all fall out of the same
    * two paths.
    */
-  readonly divergence: (a: Node, b: Node) => Effect.Effect<Divergence, NodeMissing | SE>
+  readonly divergence: (a: Node, b: Node) => Effect.Effect<Divergence, NodeMissing | TreeCorrupt | SE>
 
   /** Every named leaf, in the order the lanes were first named. */
   readonly lanes: Effect.Effect<ReadonlyArray<Lane>, SE>
@@ -336,8 +367,14 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
   /** A node's conversation. For rendering; `branch` does not need it. */
   readonly historyOf: (node: Node) => Effect.Effect<Prompt.Prompt, NodeMissing | SE>
 
-  /** From the root down to this node. */
-  readonly path: (node: Node) => Effect.Effect<ReadonlyArray<Node>, NodeMissing | SE>
+  /**
+   * From the root down to this node.
+   *
+   * `TreeCorrupt` because this follows parent pointers through a store the
+   * caller may have supplied: a node that is its own ancestor is refused
+   * rather than walked forever.
+   */
+  readonly path: (node: Node) => Effect.Effect<ReadonlyArray<Node>, NodeMissing | TreeCorrupt | SE>
 
   readonly children: (node: Node) => Effect.Effect<ReadonlyArray<Node>, SE>
 
@@ -403,7 +440,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
 > =>
   Effect.gen(function*() {
     const environment = yield* Effect.context<R>()
-    const prefix = `t${++trees}`
+    const prefix = `t${treePrefix()}`
     const store: NodeStore.NodeStore<SE> = options?.store ??
       ((yield* NodeStore.memory) as NodeStore.NodeStore<SE>)
     // Where each live session sits in the tree: its branch point, then its own
@@ -541,6 +578,26 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
         return Option.some(node)
       })
 
+    /**
+     * One commit at a time.
+     *
+     * Recording a node reads where the session sits, decides whether the
+     * conversation actually moved, allocates an id, writes the node, and then
+     * updates `at` and possibly `lanes` -- five steps over three pieces of
+     * state. Two commits for one idle session could both pass the
+     * "has anything changed" check, create sibling nodes holding the same
+     * conversation, and race over which became the tip; the loser stayed in
+     * the store, reachable only as an orphan.
+     *
+     * A permit rather than one transactional state value, because the state
+     * being coordinated includes the *store*, which is an interface with no
+     * transaction to offer. Held across the whole decision, so the check and
+     * the write cannot be separated.
+     *
+     * Uncontended in the ordinary case: commits happen at turn boundaries.
+     */
+    const committing = yield* Semaphore.make(1)
+
     const commit: SessionTree<Tools, E, SE>["commit"] = (session, commitOptions) =>
       Effect.gen(function*() {
         const captured = yield* AgentSession.snapshot(session).pipe(
@@ -588,7 +645,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
           record(captured.sessionId, captured.history, { ...commitOptions, cause: "root" }),
           Option.getOrThrow
         )
-      })
+      }).pipe(Semaphore.withPermit(committing))
 
     const branch: SessionTree<Tools, E, SE>["branch"] = (node, branchOptions) =>
       Effect.gen(function*() {
@@ -613,8 +670,29 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
     const path: SessionTree<Tools, E, SE>["path"] = (node) =>
       Effect.gen(function*() {
         const walked: Array<Node> = []
+        /**
+         * Where we have already been.
+         *
+         * A tree cannot contain a cycle -- a node's parent is fixed when it is
+         * inserted and every node is inserted below an existing one -- but
+         * `NodeStore` is a public seam, and a custom or damaged store can
+         * hand back a node that is its own ancestor. Without this the walk
+         * never ends: not an error, not a wrong answer, a hang, with every
+         * caller of `summary`, `commonAncestor` and `divergence` behind it.
+         *
+         * Reported as corruption rather than by stopping quietly, because a
+         * truncated path is a wrong answer that looks like a right one.
+         */
+        const seen = new Set<string>()
         let current: Option.Option<NodeId> = Option.some(node.id)
         while (Option.isSome(current)) {
+          if (seen.has(current.value)) {
+            return yield* new TreeCorrupt({
+              id: current.value,
+              detail: "a node is its own ancestor"
+            })
+          }
+          seen.add(current.value)
           const found = yield* store.get(current.value)
           if (Option.isNone(found)) return yield* new NodeMissing({ id: current.value })
           walked.push(found.value.node)
@@ -677,7 +755,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
       b: Node
     ): Effect.Effect<
       { at: Option.Option<Node>; left: ReadonlyArray<Node>; right: ReadonlyArray<Node> },
-      NodeMissing | SE
+      NodeMissing | TreeCorrupt | SE
     > =>
       Effect.gen(function*() {
         const left = yield* path(a)
@@ -749,9 +827,18 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
              *
              * `commit` is the path that reports storage failure to a caller,
              * because there a caller asked and is waiting for an answer.
+             *
+             * `catch`, not `catchCause`. The wider form also swallowed
+             * *interruption* -- so closing a tracking scope while a write was
+             * in flight turned a cancellation into a successful log line and
+             * the observer carried on -- and every defect from the tree, a
+             * codec or the store, which then read as an ordinary missed
+             * snapshot rather than as the programming error it is. Only the
+             * store's declared failure is a condition this is entitled to
+             * absorb.
              */
-            Effect.catchCause((cause) =>
-              Effect.logError("Failed to capture a node at a turn boundary", cause).pipe(
+            Effect.catch((error: SE) =>
+              Effect.logError("Failed to capture a node at a turn boundary", error).pipe(
                 Effect.annotateLogs({ sessionId: session.id })
               ))
           )

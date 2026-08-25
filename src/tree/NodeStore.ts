@@ -1,4 +1,4 @@
-import { Effect, Option, Ref, Schema } from "effect"
+import { Effect, Equal, Option, Ref, Schema, Semaphore } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 
@@ -140,33 +140,103 @@ export interface NodeStore<E = never> {
  * through a JSON codec would deep-copy every conversation on every write and
  * throw the sharing away, to persist into a map that dies with the process.
  */
-export const memory: Effect.Effect<NodeStore> = Effect.gen(function*() {
-  const held = yield* Ref.make(new Map<string, Held>())
-  // Insertion order, kept separately: a `Map` preserves it, but relying on
-  // that would make the order an accident of the implementation rather than
-  // something the interface promises.
-  const order = yield* Ref.make<ReadonlyArray<string>>([])
+/**
+ * What a re-`put` of an existing id is allowed to change.
+ *
+ * `commit` re-puts a node to apply a label or a cause, which is why this seam
+ * accepts an id it has already seen. What it must not accept is a *different
+ * node* under a familiar id: changing a parent or a history rewrites an
+ * ancestor, and the root/order/children indexes -- written once, at insertion
+ * -- are left describing the node that used to be there.
+ *
+ * A violation is a defect rather than a typed failure. It is not a condition a
+ * caller can encounter and handle: it means two pieces of code disagree about
+ * what a node id names, and continuing would corrupt a structure whose whole
+ * value is that ancestors do not move.
+ */
+const rejectRewrite = (existing: Held, node: Node, history: Prompt.Prompt): void => {
+  const parentOf = (value: Node) => Option.getOrElse(value.parent, () => "")
+  if (parentOf(existing.node) !== parentOf(node)) {
+    throw new Error(
+      `NodeStore: node ${node.id} already exists with a different parent.` +
+        ` A node's ancestry is immutable; only a label or cause may be re-put.`
+    )
+  }
+  // By value, not by reference: `commit` hands back the same object, but a
+  // caller rebuilding an identical conversation is re-putting the same node,
+  // not rewriting it.
+  if (!Equal.equals(existing.history, history)) {
+    throw new Error(
+      `NodeStore: node ${node.id} already exists with a different history.` +
+        ` A node's conversation is immutable; only a label or cause may be re-put.`
+    )
+  }
+}
 
-  const listing = Effect.gen(function*() {
-    const all = yield* Ref.get(held)
-    return (yield* Ref.get(order)).flatMap((id) => {
-      const found = all.get(id)
+/**
+ * A copy deep enough that the indexes cannot be rewritten from outside.
+ *
+ * `readonly` is a compile-time claim, not a frozen object: a caller can build
+ * an ordinary mutable object structurally assignable to `Node`, put it, and
+ * then change its `parent` -- and this store, which held the very object it
+ * was handed, would start answering `children` differently with no second
+ * `put`. The key-value adapter encodes on write and so never had the problem,
+ * which is how a suite against the default store could pass while the
+ * persistent one behaved differently.
+ *
+ * The node is copied, and the message *list* with it. The messages themselves
+ * are shared: they are immutable values produced by Effect AI's prompt
+ * builders, copying every conversation on every write is the exact cost this
+ * store exists to avoid, and a caller that reaches inside one is past the
+ * point where a store can help.
+ */
+const snapshot = (node: Node, history: Prompt.Prompt): Held => ({
+  node: { ...node },
+  history: Prompt.fromMessages([...history.content])
+})
+
+export const memory: Effect.Effect<NodeStore> = Effect.gen(function*() {
+  /**
+   * One `Ref`, not two.
+   *
+   * The map and the insertion order are one invariant -- every id in `order`
+   * has an entry, exactly once -- and they used to be updated through separate
+   * effects after a separate read. Two concurrent puts of the same id could
+   * both observe absence and both append, so the id appeared twice in every
+   * listing. `Ref.update` over one value makes the transition atomic, which is
+   * what this repository asks of any state that carries an invariant.
+   */
+  const state = yield* Ref.make<{
+    readonly held: ReadonlyMap<string, Held>
+    readonly order: ReadonlyArray<string>
+  }>({ held: new Map(), order: [] })
+
+  const listing = Effect.map(Ref.get(state), (current) =>
+    current.order.flatMap((id) => {
+      const found = current.held.get(id)
       return found === undefined ? [] : [found.node]
-    })
-  })
+    }))
 
   return {
     put: (node, history) =>
-      Effect.gen(function*() {
-        const existed = (yield* Ref.get(held)).has(node.id)
-        yield* Ref.update(held, (all) => new Map(all).set(node.id, { node, history }))
-        // A re-`put` of the same id is a mark being applied to a node already
-        // there, not a new node -- see `commit`'s dedup. It must not appear
-        // twice in the order.
-        if (!existed) yield* Ref.update(order, (ids) => [...ids, node.id])
-      }),
+      Effect.sync(() => snapshot(node, history)).pipe(
+        Effect.flatMap((held) =>
+          Ref.update(state, (current) => {
+            const existing = current.held.get(node.id)
+            if (existing !== undefined) rejectRewrite(existing, node, history)
+            const next = new Map(current.held).set(node.id, held)
+            return {
+              held: next,
+              // A re-put is a mark on a node already here, not a new node: it
+              // must not appear twice in the order.
+              order: existing === undefined ? [...current.order, node.id] : current.order
+            }
+          })
+        )
+      ),
 
-    get: (id) => Effect.map(Ref.get(held), (all) => Option.fromNullishOr(all.get(id))),
+    get: (id) =>
+      Effect.map(Ref.get(state), (current) => Option.fromNullishOr(current.held.get(id))),
 
     children: (id) =>
       Effect.map(listing, (all) =>
@@ -283,20 +353,53 @@ export const keyValue = (
       )
     )
 
+  /**
+   * One writer at a time.
+   *
+   * A `KeyValueStore` offers `get` and `set` and no transaction, so every
+   * index update here is a read-modify-write. Two concurrent puts of
+   * *different* nodes could each read the same order list and each write it
+   * back with only their own id, losing the other from every listing -- a
+   * node still stored, and no longer reachable.
+   *
+   * A permit does not make the write durable: an interruption or a crash
+   * between the node and its indexes still leaves an unindexed node, which
+   * `nodes` cannot find. That needs a transactional backing and is a change of
+   * store, not of lock. What the permit removes is the concurrent case, which
+   * is the one this process can actually cause.
+   */
+  // `runSync` because this constructor is a plain function and a semaphore is
+  // just a Ref -- there is nothing to await. The permit belongs to *this*
+  // adapter: two adapters built over one backing serialise separately, which
+  // is the same limit the memory store has and worth knowing before sharing a
+  // namespace between processes.
+  const writing = Effect.runSync(Semaphore.make(1))
+
   return {
     put: (node, history) =>
-      entries.set(nodeKey(node.id), { node, history }).pipe(
-        Effect.mapError(fail("write", node.id)),
+      Effect.gen(function*() {
+        // Read under the permit, so the check and the write are one step.
+        const existing = yield* entries.get(nodeKey(node.id)).pipe(
+          Effect.mapError(fail("read", node.id))
+        )
+        if (Option.isSome(existing)) {
+          rejectRewrite(
+            { node: existing.value.node, history: existing.value.history },
+            node,
+            history
+          )
+        }
+        yield* entries.set(nodeKey(node.id), { node, history }).pipe(
+          Effect.mapError(fail("write", node.id))
+        )
         // The node first, then the indexes. The other order can leave an index
         // pointing at a node that was never written, which reads as corruption
         // rather than as an interrupted write.
-        Effect.andThen(append(ORDER, node.id)),
-        Effect.andThen(
-          Option.isSome(node.parent)
-            ? append(childrenKey(node.parent.value), node.id)
-            : append(ROOTS, node.id)
-        )
-      ),
+        yield* append(ORDER, node.id)
+        yield* Option.isSome(node.parent)
+          ? append(childrenKey(node.parent.value), node.id)
+          : append(ROOTS, node.id)
+      }).pipe(Semaphore.withPermit(writing)),
 
     get: (id) =>
       entries.get(nodeKey(id)).pipe(

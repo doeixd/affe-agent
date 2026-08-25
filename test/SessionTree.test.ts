@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Option, Stream } from "effect"
+import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -881,4 +882,130 @@ describe("SessionTree", () => {
       assert.strictEqual(out.named.id, out.plain.id)
     })
   )
+
+  /**
+   * R78 -- a walk through a store the caller supplied must terminate.
+   *
+   * `NodeStore` is public: an application can write its own, and a persistent
+   * one can be damaged. Neither can produce a cycle through the tree's own
+   * operations -- a parent is fixed at insertion and every node is inserted
+   * below an existing one -- but `path` followed parent pointers with no
+   * memory, so a node that is its own ancestor was not a wrong answer, it was
+   * a hang, with `summary`, `commonAncestor` and `divergence` behind it.
+   *
+   * The fixture is a store, not a tree: this is precisely the state the tree
+   * cannot reach on its own.
+   */
+  it.effect("a cyclic store is refused rather than walked forever", () =>
+    Effect.gen(function*() {
+      // Nothing is asked of the model here; the tree just needs one to exist.
+      const { layer } = yield* script("unused")
+      const node = (id: string, parent: string): SessionTree.Node => ({
+        id: id as SessionTree.NodeId,
+        parent: Option.some(parent as SessionTree.NodeId),
+        cause: "prompt",
+        at: 0,
+        label: Option.none()
+      })
+      const empty = Prompt.fromMessages([])
+
+      const store = yield* NodeStore.memory
+      // Its own parent.
+      yield* store.put(node("self", "self"), empty)
+      // And a two-node ring, because a self-loop is the easy case and a
+      // visited set that only compared against the starting node would pass it.
+      yield* store.put(node("a", "b"), empty)
+      yield* store.put(node("b", "a"), empty)
+
+      const tree = yield* SessionTree.make(agent, { store }).pipe(Effect.provide(layer))
+
+      for (const id of ["self", "a", "b"]) {
+        const found = Option.getOrThrow(yield* store.get(id as SessionTree.NodeId))
+        const outcome = yield* Effect.flip(tree.path(found.node))
+        assert.strictEqual(outcome._tag, "@doeixd/effect-agent/tree/TreeCorrupt")
+        // And everything built on the walk answers the same way rather than
+        // inheriting the hang.
+        const summarised = yield* Effect.flip(tree.summary(found.node))
+        assert.strictEqual(summarised._tag, "@doeixd/effect-agent/tree/TreeCorrupt")
+      }
+    }).pipe(Effect.scoped))
+
+  /**
+   * R22 -- two commits of one session are not two nodes.
+   *
+   * `record` reads where the session sits, decides whether the conversation
+   * moved, allocates an id, writes, and then updates two more maps. Run twice
+   * concurrently for one idle session, both used to pass the "has anything
+   * changed" check and create sibling nodes holding the same conversation --
+   * with one of them reachable only as an orphan, because only one could win
+   * the race to become the tip.
+   */
+  it.effect("concurrent commits of one session record one node", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("an answer")
+      yield* Effect.gen(function*() {
+        const inner = yield* NodeStore.memory
+        /**
+         * A store that yields before answering.
+         *
+         * With a synchronous store the two commits simply run one after the
+         * other and the test cannot fail however the tree is written. Any
+         * real store -- a file, a socket, a database -- suspends, and that is
+         * where the second commit gets in between the first one's check and
+         * its write.
+         */
+        const store: NodeStore.NodeStore = {
+          ...inner,
+          get: (id) => Effect.andThen(Effect.yieldNow, inner.get(id)),
+          put: (node, history) => Effect.andThen(Effect.yieldNow, inner.put(node, history))
+        }
+        const tree = yield* SessionTree.make(agent, { store })
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("say something")
+
+        const both = yield* Effect.all(
+          [tree.commit(session), tree.commit(session)],
+          { concurrency: "unbounded" }
+        )
+
+        // The same node, twice -- not two siblings holding one conversation.
+        assert.strictEqual(both[0].id, both[1].id)
+        assert.strictEqual((yield* inner.nodes).length, 1)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    }))
+
+  /**
+   * R44 -- capture absorbs a store failure, and nothing else.
+   *
+   * It ran under `catchCause`, which also swallowed interruption: closing a
+   * tracking scope while a write was in flight turned the cancellation into a
+   * log line and left the observer running. A defect from the tree, a codec
+   * or the store read the same way -- as an ordinary missed snapshot.
+   *
+   * The store here fails every write with its declared error, which must be
+   * absorbed: a full disk cannot be allowed to kill the agent mid-turn.
+   */
+  it.effect("a failing store does not take the agent down with it", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("an answer")
+      yield* Effect.gen(function*() {
+        const memory = yield* NodeStore.memory
+        const failing: NodeStore.NodeStore<NodeStore.StoreError> = {
+          ...memory,
+          put: () =>
+            Effect.fail(
+              new NodeStore.StoreError({ operation: "write", detail: "the disk is full" })
+            )
+        }
+        const tree = yield* SessionTree.make(agent, { store: failing })
+        const session = yield* AgentSession.make(agent)
+        yield* tree.track(session)
+
+        // The turn completes: the capture failed, and said so, and that is all.
+        const result = yield* Effect.exit(session.prompt("say something"))
+        assert.strictEqual(result._tag, "Success")
+        // Nothing was recorded, which is the real and lesser loss.
+        assert.deepStrictEqual(yield* failing.nodes, [])
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    }))
 })

@@ -1,6 +1,6 @@
 import { Effect, Option } from "effect"
 import * as Export from "../export/Export.js"
-import type { Node, NodeMissing } from "./SessionTree.js"
+import { type Node, type NodeMissing, TreeCorrupt } from "./SessionTree.js"
 import type { SessionTree } from "./SessionTree.js"
 
 /**
@@ -68,15 +68,29 @@ export const subtree = <Tools extends Record<string, any>, E, SE>(
   tree: SessionTree<Tools, E, SE>,
   node: Node,
   provenance: Export.Provenance
-): Effect.Effect<ReadonlyArray<Export.Export>, NodeMissing | SE> =>
+): Effect.Effect<ReadonlyArray<Export.Export>, NodeMissing | TreeCorrupt | SE> =>
   Effect.gen(function*() {
     const exports: Array<Export.Export> = []
     // Breadth-first, so the ordering of the files matches the shape of what
     // they describe. Iterative rather than recursive: a long branch is a deep
     // tree, and a conversation is exactly the sort of thing that gets long.
+    //
+    // A read cursor rather than `shift`, which re-indexes the whole queue on
+    // every step and made walking a wide tree quadratic in its own bookkeeping.
     const queue: Array<Node> = [node]
-    while (queue.length > 0) {
-      const current = queue.shift()!
+    const seen = new Set<string>()
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head]!
+      // A node reached twice means the store is not describing a tree. Left
+      // undetected this loops forever on a custom or damaged store; caught
+      // here it is an answer.
+      if (seen.has(current.id)) {
+        return yield* new TreeCorrupt({
+          id: current.id,
+          detail: "a node appears twice below one root"
+        })
+      }
+      seen.add(current.id)
       exports.push(yield* path(tree, current, provenance))
       queue.push(...(yield* tree.children(current)))
     }
@@ -94,12 +108,20 @@ export const leaves = <Tools extends Record<string, any>, E, SE>(
   tree: SessionTree<Tools, E, SE>,
   node: Node,
   provenance: Export.Provenance
-): Effect.Effect<ReadonlyArray<Export.Export>, NodeMissing | SE> =>
+): Effect.Effect<ReadonlyArray<Export.Export>, NodeMissing | TreeCorrupt | SE> =>
   Effect.gen(function*() {
     const found: Array<Node> = []
     const queue: Array<Node> = [node]
-    while (queue.length > 0) {
-      const current = queue.shift()!
+    const seen = new Set<string>()
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head]!
+      if (seen.has(current.id)) {
+        return yield* new TreeCorrupt({
+          id: current.id,
+          detail: "a node appears twice below one root"
+        })
+      }
+      seen.add(current.id)
       const children = yield* tree.children(current)
       if (children.length === 0) found.push(current)
       else queue.push(...children)

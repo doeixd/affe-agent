@@ -43,16 +43,75 @@ describe("NodeStore, in memory", () => {
       )
       const found = Option.getOrThrow(yield* store.get("a" as NodeStore.NodeId))
 
-      // Identity, not equality. This is the whole reason a separate in-memory
-      // store exists rather than pointing the key-value one at a map: a prompt
-      // shares its message objects with its parent's, so keeping the reference
-      // costs a pointer where encoding would deep-copy every conversation on
-      // every write and throw the sharing away.
-      assert.strictEqual(found.history, history)
+      /**
+       * The *messages* by identity, which is the property that matters.
+       *
+       * This is the whole reason a separate in-memory store exists rather
+       * than pointing the key-value one at a map: a prompt shares its message
+       * objects with its parent's, so keeping those references costs a
+       * pointer where encoding would deep-copy every conversation on every
+       * write and throw the sharing away.
+       *
+       * The prompt *wrapper* is deliberately a new object: the store holds
+       * its own message list so that a caller mutating the array it handed
+       * over cannot rewrite a stored conversation. One array per node is not
+       * the cost this store exists to avoid.
+       */
+      assert.strictEqual(found.history.content[0], history.content[0])
+      assert.notStrictEqual(found.history.content, history.content)
     }))
 })
 
 describe("NodeStore, key-value", () => {
+
+  /**
+   * R43 -- the index append is a read-modify-write, so it needs a writer.
+   *
+   * The contract suite's concurrent case cannot show this: a memory-backed
+   * `KeyValueStore` answers synchronously, so `Effect.all` runs the puts one
+   * after another and there is no interleaving to lose anything in. Here every
+   * read and write yields first, which is what any real backing does -- a
+   * file, a socket, a database -- and two unserialised puts then read the same
+   * order list and write back over each other.
+   *
+   * Falsified by removing the permit from `keyValue.put`: the second node
+   * disappears from `nodes` while remaining perfectly retrievable by id, which
+   * is the shape of the defect.
+   */
+  it.effect("interleaved writes do not lose a node from the index", () =>
+    Effect.gen(function*() {
+      const inner = yield* freshKv
+      const slow = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.andThen(Effect.yieldNow, effect)
+      const kv: KeyValueStore.KeyValueStore = {
+        ...inner,
+        get: (key) => slow(inner.get(key)),
+        set: (key, value) => slow(inner.set(key, value))
+      }
+      const store = NodeStore.keyValue(kv)
+
+      const node = (id: string): NodeStore.Node => ({
+        id: id as NodeStore.NodeId,
+        parent: Option.none(),
+        cause: "root",
+        at: 0,
+        label: Option.none()
+      })
+      const history = Prompt.fromMessages([
+        Prompt.userMessage({ content: [Prompt.textPart({ text: "x" })] })
+      ])
+
+      yield* Effect.all(
+        [store.put(node("one"), history), store.put(node("two"), history)],
+        { concurrency: "unbounded" }
+      )
+
+      const listed = (yield* store.nodes).map((found) => found.id).sort()
+      assert.deepStrictEqual(listed, ["one", "two"])
+      const roots = (yield* store.roots).map((found) => found.id).sort()
+      assert.deepStrictEqual(roots, ["one", "two"])
+    }))
+
   it.effect("namespaces let two trees share one backing", () =>
     Effect.gen(function*() {
       const kv = yield* freshKv

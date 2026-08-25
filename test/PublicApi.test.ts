@@ -237,6 +237,9 @@ describe("durable and cluster surfaces", () => {
       "SessionBusy",
       "SessionClosed",
       "StoreError",
+      // A traversal walks a store the caller may have supplied, so "this is
+      // not a tree" is an answer callers have to be able to name.
+      "TreeCorrupt",
       "make"
     ])
   })
