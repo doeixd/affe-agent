@@ -307,6 +307,20 @@ Note that E4's premise has shifted -- T5 landed a `NodeStore` over
 change to one module rather than a new one. Suggestion 7 (`bash` output files
 referenced but not carried) is still undecided.
 
+**E4: landed (2026-08-26).** `encodeJsonl` / `parseJsonl` / `headerOf` / `append`
+on the existing `/export` module. H4b's EventLog verdict stands: this is not a
+second log runtime, it is the envelope as an append-only file. A header line
+carries version, `exportedAt`, `sessionId` and provenance; each following line
+is one encoded `Prompt.Message`. A picker calls `headerOf` and never parses the
+conversation -- a truncated file whose first line is intact still answers.
+`append` extends a log without rewriting the header. IE1 and IE2 hold on the
+JSONL path; two encodings of one session are byte-identical. Delta storage for
+`NodeStore` remains deferred, as T5 decided: swapping it in later changes that
+module and nothing here.
+
+Suggestion 7 (`bash` output files referenced but not carried) was already
+settled above: leave it.
+
 ## Risks and open questions
 
 - **Format gravity.** An export format is a promise. E1 should ship the smallest

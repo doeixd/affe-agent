@@ -247,6 +247,184 @@ describe("Export", () => {
     }))
 })
 
+describe("JSONL commit log", () => {
+  it.effect("round-trips a conversation unchanged (IE1)", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("the answer")
+      ])
+
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("the question")
+        const exported = yield* Export.ofSession(session, provenance)
+        const jsonl = yield* Export.encodeJsonl(exported)
+        const restored = yield* Export.parseJsonl(jsonl)
+        return { exported, jsonl, restored }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(
+        textOf(Export.historyOf(out.restored)),
+        textOf(Export.historyOf(out.exported))
+      )
+      assert.strictEqual(out.restored.session.sessionId, out.exported.session.sessionId)
+      assert.strictEqual(out.restored.exportedAt, out.exported.exportedAt)
+      assert.deepStrictEqual(out.restored.provenance, out.exported.provenance)
+      // JSONL is one value per line: a message containing a newline still
+      // occupies one line, so a picker can split on "\n" without a parser.
+      const lines = out.jsonl.trimEnd().split("\n")
+      assert.isAtLeast(lines.length, 2)
+      for (const line of lines) JSON.parse(line)
+    }))
+
+  it.effect("JSONL and JSON restore the same conversation", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCalls([{
+          id: "call-1",
+          name: "read_file",
+          params: { path: "README.md" }
+        }]),
+        TestLanguageModel.text("it is a readme")
+      ])
+
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(withTool)
+        yield* session.prompt("what is in README.md?")
+        const exported = yield* Export.ofSession(session, provenance)
+        const fromJson = yield* Effect.flatMap(Export.encode(exported), Export.parse)
+        const fromJsonl = yield* Effect.flatMap(Export.encodeJsonl(exported), Export.parseJsonl)
+        return { fromJson, fromJsonl }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(
+        textOf(Export.historyOf(out.fromJsonl)),
+        textOf(Export.historyOf(out.fromJson))
+      )
+    }))
+
+  it.effect("two JSONL encodings of one session are byte-identical", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("hi")])
+
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("hello")
+        const snapshot = yield* AgentSession.snapshot(session)
+        const one = yield* Effect.flatMap(Export.of(snapshot, provenance), Export.encodeJsonl)
+        const two = yield* Effect.flatMap(Export.of(snapshot, provenance), Export.encodeJsonl)
+        return { one, two }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(out.one, out.two)
+    }))
+
+  it.effect("a picker reads only the first line", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("hi")])
+
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("hello")
+        const exported = yield* Export.ofSession(session, provenance)
+        const jsonl = yield* Export.encodeJsonl(exported)
+        const first = jsonl.split("\n")[0] ?? ""
+        // The rest of the file is truncated mid-message. A picker that parsed
+        // the conversation would fail; one that reads the header does not.
+        const truncated = `${first}\n{"role":"user"`
+        return {
+          full: yield* Export.headerOf(jsonl),
+          firstLine: yield* Export.headerOf(first),
+          truncated: yield* Export.headerOf(truncated),
+          truncatedParse: yield* Effect.flip(Export.parseJsonl(truncated))
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.deepStrictEqual(out.firstLine, out.full)
+      assert.deepStrictEqual(out.truncated, out.full)
+      assert.strictEqual(out.truncatedParse.reason, "malformed")
+      assert.strictEqual(out.full.version, Export.VERSION)
+      assert.strictEqual(out.full.provenance.harnessVersion, provenance.harnessVersion)
+    }))
+
+  it.effect("refuses a JSONL version it does not know, by name (IE2)", () =>
+    Effect.gen(function*() {
+      const line = JSON.stringify({
+        version: 99,
+        exportedAt: 0,
+        sessionId: "s",
+        provenance: { harnessVersion: "x" },
+        whatever: true
+      })
+      const failure = yield* Effect.flip(Export.headerOf(`${line}\n`))
+      assert.strictEqual(failure.reason, "unsupported-version")
+      assert.strictEqual(failure.found, 99)
+      assert.include(failure.message, "99")
+      assert.include(failure.message, String(Export.VERSION))
+    }))
+
+  it.effect("an empty file is not a JSONL export", () =>
+    Effect.gen(function*() {
+      const failure = yield* Effect.flip(Export.headerOf(""))
+      assert.strictEqual(failure.reason, "malformed")
+      assert.include(failure.message, "empty")
+    }))
+
+  it.effect("a header-only file is an empty conversation, not a malformation", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("hi")])
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("hello")
+        const jsonl = yield* Effect.flatMap(
+          Export.ofSession(session, provenance),
+          Export.encodeJsonl
+        )
+        // Strip every commit, leave the header. A picker created this file
+        // and nothing has been said yet -- that is an empty conversation,
+        // not a malformation.
+        const header = (jsonl.split("\n")[0] ?? "") + "\n"
+        return { restored: yield* Export.parseJsonl(header) }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.strictEqual(Export.historyOf(out.restored).content.length, 0)
+    }))
+
+  it.effect("append adds messages without rewriting the header", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("hi")])
+
+      const out = yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("hello")
+        const exported = yield* Export.ofSession(session, provenance)
+        const jsonl = yield* Export.encodeJsonl(exported)
+        const extra = Prompt.fromMessages([
+          Prompt.userMessage({ content: [Prompt.textPart({ text: "and another thing" })] })
+        ])
+        const extended = yield* Export.append(jsonl, extra)
+        return {
+          before: yield* Export.headerOf(jsonl),
+          after: yield* Export.headerOf(extended),
+          restored: yield* Export.parseJsonl(extended)
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.deepStrictEqual(out.after, out.before)
+      assert.include(textOf(Export.historyOf(out.restored)), "hello")
+      assert.include(textOf(Export.historyOf(out.restored)), "and another thing")
+    }))
+
+  it.effect("append refuses a file whose header is unreadable", () =>
+    Effect.gen(function*() {
+      const extra = Prompt.fromMessages([
+        Prompt.userMessage({ content: [Prompt.textPart({ text: "x" })] })
+      ])
+      const failure = yield* Effect.flip(Export.append("not json\n", extra))
+      assert.strictEqual(failure.reason, "malformed")
+    }))
+})
+
 describe("Replay", () => {
   it.effect("an exported transcript replays without a provider", () =>
     Effect.gen(function*() {
