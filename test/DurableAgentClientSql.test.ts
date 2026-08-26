@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Crypto, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
+import { Crypto, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { WorkflowEngine } from "effect/unstable/workflow"
@@ -494,4 +494,5 @@ describe("DurableAgentClient on SQL storage", () => {
       }).pipe(Effect.scoped)
     })
   )
+
 })

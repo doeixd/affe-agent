@@ -348,6 +348,13 @@ claims are actually tested, so this closes the honest gap over `read({ after })`
 as `STATUS.md` already anticipates. Runs the existing `DeliveryLogContract`
 plus the cross-process tests against a multi-node fixture.
 
+**SD3 now depends on this too.** A runner that dies mid-activity is not
+recovered under `SingleRunner`, whose runner health checks are no-ops by
+documentation -- so the crash-point sweep has no reachable scenario until a
+fixture exists with real runner health (`HttpRunner` + `RunnerHealth.layerPing`).
+That makes H6 the unblocking milestone for two success conditions rather than
+one, and raises it above H7 and H9 in order.
+
 ### H7 — Time-dependent paths, on `TestClock`
 
 Shard leases hold for 35s; a real-time test is unaffordable and therefore
@@ -436,11 +443,35 @@ will.
   mid-activity and waits for the execution to be picked back up.
 
   So D2 and D4 are ✓ for what they test, and what they test is narrower than
-  "resume after process loss" sounds. Whether the gap is in the product or in
-  the fixture -- `SingleRunner` may simply not reassign a dead runner's shards
-  -- is exactly the open question, and it is a bigger one than a missing test.
-  It should be settled before the sweep is attempted again, because the sweep
-  is unwritable until it is.
+  "resume after process loss" sounds.
+
+  **Settled: it is the topology, and the mechanism is identifiable.**
+  `ClusterWorkflowEngine.resume` looks up the reply for the execution's `run`
+  request and filters it to `Suspended`; with no such reply it returns without
+  doing anything. A runner that parked recorded one -- which is why every
+  suspension test recovers -- and a runner that died mid-activity recorded
+  none, so `resume` is a no-op for precisely the case the word describes.
+
+  Recovering a crashed in-flight request therefore means *redelivering* it,
+  which means the cluster noticing that its runner is gone. `SingleRunner`
+  documents no-op runner health checks: it is a single-node layer, so it has no
+  peers to check on and never concludes one has died. Two processes sharing its
+  database is not a topology it claims to support, and the second cannot take
+  over the first's in-flight work.
+
+  Two things were tried and neither helped, which is what makes this a
+  conclusion rather than a guess: waiting 75 seconds (well past the one-second
+  shard lease), and re-dispatching from `reconcile` under the same execution id
+  -- the engine deduplicates that against the stuck request rather than
+  starting a replacement. The re-dispatch branch was written and then removed:
+  it could not do what its comment claimed.
+
+  **The consequence for a deployer is worth stating plainly:** parked work
+  survives a process dying and is picked up by another; in-flight work on a
+  single-runner topology is not. Whether a real multi-node cluster
+  (`HttpRunner` with `RunnerHealth.layerPing`) recovers it is untested here and
+  is what H6's fixture is for. SD3's sweep should wait for that fixture, since
+  it is the thing that makes the scenario reachable at all.
 - **SD4:** The existing durable suites pass under write-failure,
   duplicate-record and reorder faults.
 - **SD5:** ✓ A browser `EventSource` reconnect resumes from `Last-Event-ID` with
