@@ -476,14 +476,20 @@ unaffordable. Measuring first dissolved most of it:
 - **The 25ms interrupt poll is already tested**, by four cases across
   `Durable.test.ts` and `DurableAgentClient.test.ts`, and they run in 627ms
   together. There was no expensive test here to make cheap.
-- **The durable suites are not slow.** 2.6s (`Cluster`), 2.8s (`Durable`),
-  3.2s (`DurableAgentClient`), 11.9s (`DurableAgentClientSql`), 11.3s
-  (`DurableHttpIntegration`) -- and the two slow ones spend it on deliberate
-  `sleep`s for shard leases, not on polling.
-- **Lease expiry and reassignment are genuinely untested, and not because of
-  time.** They need a second runner to reassign *to*. `SingleRunner` has no-op
-  runner health checks, so it never concludes a peer has died and never moves a
-  shard; the scenario cannot occur at any speed. That is H6.
+- **The durable suites are not slow.** Re-measured after H6 landed: 2.0s
+  (`Cluster`), 3.2s (`Durable`), 3.8s (`DurableAgentClient`), 11.9s
+  (`DurableAgentClientSql`), 8.0s (`DurableHttpIntegration`) -- and the slow
+  ones spend it on deliberate `sleep`s for shard leases, not on polling.
+- **Lease expiry and reassignment were untested, and not because of time.**
+  They need a second runner to reassign *to*, and `SingleRunner` has no-op
+  runner health checks -- it never concludes a peer has died and never moves a
+  shard, so the scenario could not occur at any speed.
+
+  **H6 has since closed this**, and the answer it gave is the one that
+  mattered: in a real topology a peer *does* take over a submission whose owner
+  is lost mid-activity. The single-runner behaviour measured here -- 75 seconds
+  of nothing -- was the topology and not the product, which was the open
+  question at the time this was written.
 
 What survived was the piece H6 stood on, pinned by
 `DurableVirtualTime.test.ts`: **the cluster's timing goes through Effect's
@@ -493,9 +499,15 @@ submission completes in ~86ms of virtual time, which is what makes a multi-node
 fixture viable -- one that had to wait out real 35-second leases per
 observation would not be a test anyone runs.
 
-The test is deliberately small. It is a load-bearing assumption for the next
+The test is deliberately small. It was a load-bearing assumption for the next
 milestone, and an assumption earns a test exactly when something is about to be
 built on it.
+
+**What is left of H7 is a cost question, not a coverage one.**
+`ClusterMultiNode.test.ts` runs in real time at ~15s for three tests, which is
+the most expensive file in the suite. Driving it on the `TestClock` this
+section pinned would shrink that, and is worth doing if the multi-node fixture
+grows -- but nothing is untested for want of it.
 
 ### H8 — Settle the delta-chunking conflict — **done**
 

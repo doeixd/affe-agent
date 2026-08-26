@@ -21,22 +21,22 @@ import * as FakeModel from "./FakeModel.js"
  * with the slowest spent on deliberate `sleep`s rather than on polling. There
  * was no expensive test waiting to be made cheap.
  *
- * What is genuinely untested is lease expiry and reassignment, and those are
- * not blocked on time. They are blocked on there being a second runner to
- * reassign *to*: `SingleRunner` has no-op runner health checks, so it never
- * concludes a peer has died and never moves a shard. That is H6's fixture, and
- * until it exists the scenario cannot occur at any speed.
+ * Lease expiry and reassignment were untested, and not for want of time: they
+ * need a second runner to reassign *to*, and `SingleRunner` has no-op runner
+ * health checks, so it never concludes a peer has died and never moves a
+ * shard. **`ClusterMultiNode.test.ts` has since closed that**, and a peer does
+ * take over a submission whose owner is lost mid-activity.
  *
- * So this file makes the one claim H7 can still support, because H6 will
- * depend on it: **the cluster's own timing goes through Effect's `Clock`, so a
- * `TestClock` drives it.** `Sharding` reads `clock.currentTimeMillisUnsafe()`
- * rather than `Date.now()`, which is what makes lease timing controllable at
- * all -- and a multi-node fixture that had to wait out real 35-second leases
- * per observation would not be a test anyone runs.
+ * So this file makes the claim that fixture stands on: **the cluster's own
+ * timing goes through Effect's `Clock`, so a `TestClock` drives it.**
+ * `Sharding` reads `clock.currentTimeMillisUnsafe()` rather than `Date.now()`,
+ * which is what makes lease timing controllable at all -- a multi-node fixture
+ * that had to wait out real 35-second leases per observation would not be a
+ * test anyone runs.
  *
- * Kept small deliberately. It is a load-bearing assumption for the next
- * milestone, and an assumption is worth a test precisely when something is
- * about to be built on it.
+ * It stays because the assumption stays load-bearing: `ClusterMultiNode` is
+ * the most expensive file in the suite at ~15s of real time, and moving it
+ * onto virtual time is the obvious next economy if it grows.
  */
 
 const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
