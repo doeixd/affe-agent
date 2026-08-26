@@ -348,6 +348,23 @@ claims are actually tested, so this closes the honest gap over `read({ after })`
 as `STATUS.md` already anticipates. Runs the existing `DeliveryLogContract`
 plus the cross-process tests against a multi-node fixture.
 
+**Started, and stuck at a named point.** `test/ClusterMultiNode.test.ts` has
+the fixture: `HttpRunner.layerHttp` for a real transport, `RunnerHealth
+.layerPing` for a real opinion on liveness, shared SQL message and runner
+storage. The layer archaeology is done and written down there -- the
+health/runners cycle and how `layerHttpClientOnly` breaks it, the engine's own
+`MessageStorage` requirement, the fact that every node must register the
+workflow, and `result`'s six-second poll being too short for a cluster to
+settle.
+
+It does not work yet, and the test is skipped rather than failing. The server
+binds and nothing runs: a submission stays `pending` through 30 seconds. It is
+**not** a peering problem -- one runner alone on this wiring reproduces it,
+while `SingleRunner` executes the same work immediately. Shards are
+self-acquired from `RunnerStorage` and there is no shard-manager role to be
+missing, so the next step is to establish whether acquisition happens and, if
+so, why the entity message is not delivered.
+
 **SD3 now depends on this too.** A runner that dies mid-activity is not
 recovered under `SingleRunner`, whose runner health checks are no-ops by
 documentation -- so the crash-point sweep has no reachable scenario until a
