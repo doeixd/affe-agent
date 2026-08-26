@@ -878,7 +878,8 @@ outrank most of round one.
   holder count, evicting on the last release inside one commit. Three new tests,
   falsified twice. Closes a leak the code documented as unfixable, and satisfies
   [plan-pi-toolkit.md](./plan-pi-toolkit.md) P1's cleanup half — P1's remaining
-  work is canonical-path keying, which needs a sandbox seam and is unrelated.
+  work was canonical-path keying; that landed 2026-08-26 via `Sandbox.canonical`
+  (see plan-pi-toolkit.md P1).
   **The `AgentState` half was withdrawn**: STM retries, so a critical section
   containing a store write cannot be a transaction (E7b).
 - **A-1b — Triage the 58 `orDie` sites (E14). ◑ `DurableSessionStore` done.**

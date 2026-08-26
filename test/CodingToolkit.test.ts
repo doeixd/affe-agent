@@ -1,5 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect"
+import * as fs from "node:fs/promises"
+import * as os from "node:os"
+import * as path from "node:path"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -9,6 +12,7 @@ import * as ReadFormat from "../src/coding/internal/readFormat.js"
 import * as SearchFormat from "../src/coding/internal/searchFormat.js"
 import * as Truncate from "../src/coding/internal/truncate.js"
 import * as Permission from "../src/Permission.js"
+import * as LocalSandbox from "../src/sandbox/local.js"
 import * as MemorySandbox from "../src/sandbox/memory.js"
 import * as RegexSafety from "../src/coding/internal/regexSafety.js"
 import * as Sandbox from "../src/sandbox/Sandbox.js"
@@ -675,6 +679,62 @@ describe("CodingToolkit edit_file: the replacer chain", () => {
   )
 
   /**
+   * P1 of the Pi plan -- the lock is keyed on the file, not its spelling.
+   *
+   * A symlink inside the workspace is a second name for the same bytes. Keyed
+   * on the sandbox path, the two names would take two locks and their
+   * read-modify-writes could interleave; keyed on `Sandbox.canonical` they
+   * take one. The recording shows the pairs never crossed.
+   */
+  it.effect("two names for one file take the same lock", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "coding-lock-")))
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+      )
+      yield* Effect.promise(() => fs.writeFile(path.join(root, "real.ts"), "alpha\nbeta\n"))
+      const linked = yield* Effect.exit(
+        Effect.promise(() => fs.symlink(path.join(root, "real.ts"), path.join(root, "link.ts"), "file"))
+      )
+      if (Exit.isFailure(linked)) {
+        // Creating symlinks needs privileges on some platforms; the identity
+        // is still covered wherever they exist. Say so instead of pretending.
+        return
+      }
+      // Every write yields before it lands. Under one lock the second edit
+      // is queued behind the permit and cannot read in that window; under
+      // two, it reads the stale file and one change is lost.
+      const ops = yield* Ref.make<ReadonlyArray<string>>([])
+      const recording = (inner: Sandbox.Sandbox): Sandbox.Sandbox => ({
+        ...inner,
+        read: (target) =>
+          Ref.update(ops, (all) => [...all, "read"]).pipe(Effect.andThen(inner.read(target))),
+        write: (target, content) =>
+          Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow).pipe(
+            Effect.andThen(Ref.update(ops, (all) => [...all, "write"])),
+            Effect.andThen(inner.write(target, content))
+          )
+      })
+      const after = yield* Effect.gen(function* () {
+        const gated = recording(yield* Sandbox.Current)
+        yield* Effect.all(
+          [
+            H.edit_file({ path: "real.ts", old_string: "alpha", new_string: "ALPHA" }, ctx),
+            H.edit_file({ path: "link.ts", old_string: "beta", new_string: "BETA" }, ctx)
+          ],
+          { concurrency: "unbounded" }
+        ).pipe(Effect.provideService(Sandbox.Current, gated))
+        return yield* readRaw("real.ts")
+      }).pipe(
+        Effect.provide(Layer.provideMerge(Sandbox.currentLayer(ws), LocalSandbox.layer({ workspaceRoot: root })))
+      )
+      assert.strictEqual(after, "ALPHA\nBETA\n")
+      assert.deepStrictEqual(yield* Ref.get(ops), ["read", "write", "read", "write"])
+      assert.strictEqual(yield* CodingToolkit.lockRegistrySize, 0)
+    }).pipe(Effect.scoped)
+  )
+
+  /**
    * R55 -- `write_file` and `edit_file` mutate the same file, so they need
    * the same lock.
    *
@@ -1216,7 +1276,8 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
       )
       assert.include(out.result.stdout, "FATAL: the thing broke")
       assert.notInclude(out.result.stdout, "step 0\n")
-      assert.include(out.result.stdout, "...output truncated...")
+      assert.include(out.result.stdout, "output truncated")
+      assert.include(out.result.stdout, "2000 lines limit")
       assert.include(out.result.stdout, "Full output saved to: ")
       // Exactly one file, named in the message, holding the complete output --
       // including the beginning that the bounded view dropped.
@@ -1231,7 +1292,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
     Effect.gen(function* () {
       const noisy = Array.from({ length: 4000 }, (_, i) => `warn ${i}`).join("\n")
       const out = yield* withSandbox({}, H.bash({ command: "x" }, ctx), emitting("", noisy))
-      assert.include(out.stderr, "...output truncated...")
+      assert.include(out.stderr, "output truncated")
       assert.include(out.stderr, `warn ${4000 - 1}`)
     })
   )
@@ -1270,7 +1331,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
         emitting(noise)
       )
       // Bounded, and honest: it does not name a file that was never written.
-      assert.include(out.stdout, "...output truncated...")
+      assert.include(out.stdout, "output truncated")
       assert.notInclude(out.stdout, "Full output saved to")
       assert.include(out.stdout, `line ${5000 - 1}`)
     })
@@ -1318,6 +1379,16 @@ describe("output truncation", () => {
     const out = Truncate.tail("aa\nbb\ncc", 10, 7)
     assert.isTrue(out.cut)
     assert.strictEqual(out.text, "bb\ncc")
+  })
+
+  it("head keeps the start, and names which limit fired", () => {
+    const text = Array.from({ length: 10 }, (_, i) => `l${i}`).join("\n")
+    const out = Truncate.head(text, 3, Truncate.MAX_BYTES)
+    assert.isTrue(out.cut)
+    assert.strictEqual(out.text, "l0\nl1\nl2")
+    assert.strictEqual(Truncate.firedLimit(text, 3, Truncate.MAX_BYTES), "3 lines")
+    assert.strictEqual(Truncate.firedLimit("x".repeat(100), 10, 50), Truncate.formatSize(50))
+    assert.strictEqual(Truncate.formatSize(50 * 1024), "50.0KB")
   })
 })
 

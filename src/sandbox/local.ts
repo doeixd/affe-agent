@@ -454,6 +454,9 @@ export const layer = (options?: {
                 })
               )
             ),
+          // `resolveWithin` already is the canonical name: the real path of
+          // the deepest existing ancestor plus whatever does not exist yet.
+          canonical: (target) => resolveWithin(target, "stat"),
           exec: runProcess(root)
         }
       }

@@ -236,6 +236,18 @@ export interface Sandbox {
   ) => Effect.Effect<ReadonlyArray<Entry>, FileError>
   readonly stat: (path: SandboxPath) => Effect.Effect<Entry, FileError>
   /**
+   * A string that is equal for every name of the same file, and different for
+   * different files -- the identity a lock should key on.
+   *
+   * On a real filesystem two spellings can reach one file (a symlink, a
+   * differently-cased path, an 8.3 short name), and a lock keyed on the
+   * spelling lets them race. The path need not exist: a name that is about
+   * to be created resolves through its deepest existing ancestor, so a write
+   * can take the lock before the file does. The result is opaque -- compare
+   * it, never parse it.
+   */
+  readonly canonical: (path: SandboxPath) => Effect.Effect<string, FileError>
+  /**
    * Run a command inside the workspace. A non-zero exit is an ordinary
    * result; use `execChecked` when it must be an error instead.
    */

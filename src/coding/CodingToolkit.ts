@@ -1,8 +1,10 @@
-import { Effect, HashMap, Option, Schema, Semaphore, TxRef } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as Permission from "../Permission.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
+import * as Shell from "../shell/Shell.js"
+import * as FileLock from "./internal/fileLock.js"
 import * as LineEndings from "./internal/lineEndings.js"
 import * as Glob from "./internal/glob.js"
 import * as RegexSafety from "./internal/regexSafety.js"
@@ -279,113 +281,12 @@ export const tools = [ReadFile, WriteFile, EditFile, ListFiles, Search, Bash] as
 const errorMessage = (error: { readonly message: string }): string => error.message
 
 /**
- * One write lock per file, so two edits to the same path cannot interleave.
+ * The per-file write lock, shared with `/pi`: see `internal/fileLock.ts`.
  *
- * An edit is read-modify-write, and the sandbox seam offers no
- * compare-and-swap: without this, two concurrent edits both read the original
- * text and the second write silently discards the first edit's change. The
- * registry is module-level and keyed by workspace and path, so the guarantee
- * holds across every toolkit instance in the process, not merely within one.
- *
- * Keyed with a NUL separator, which no sandbox path may contain, so
- * `a/b` + `c` cannot collide with `a` + `b/c`.
- *
- * **Why the entry carries a holder count.** This registry used to be a plain
- * `Map` that only ever grew, and the comment here said evicting safely would
- * need reference counting -- because dropping a lock somebody holds silently
- * ends the mutual exclusion it exists to provide. That was right about the
- * hazard and wrong that it was unavoidable. The obvious repair, "remove the
- * entry when the last holder leaves", is unsafe only because the check and the
- * removal are two steps: a fibre can arrive between them, find no entry, mint a
- * second semaphore, and edit the same file under a lock nobody else respects.
- *
- * A `TxRef` makes those two steps one transaction. `releaseLock` observes the
- * holder count and removes the entry in a single atomic commit, so there is no
- * instant at which a waiter can see an entry that is about to vanish. The count
- * is incremented *before* the permit is acquired and decremented *after* it is
- * released, so an entry survives for as long as anyone holds it or is queued
- * behind it -- which is precisely the invariant that makes removal safe.
- *
- * Built with `makeUnsafe` for the same reason the semaphores are: this is
- * module-level construction with no yield point, so no fibre can observe a
- * half-initialised registry.
- */
-interface LockEntry {
-  readonly semaphore: Semaphore.Semaphore
-  /** Fibres holding the permit or queued behind it. Zero means evictable. */
-  readonly holders: number
-}
-
-const editLocks: TxRef.TxRef<HashMap.HashMap<string, LockEntry>> =
-  TxRef.makeUnsafe(HashMap.empty<string, LockEntry>())
-
-const lockKey = (workspace: string, path: string): string =>
-  `${workspace}\u0000${path}`
-
-/**
- * Join the queue for a path's lock, creating it if this is the first holder.
- *
- * Returns the semaphore to wait on. One transaction, so two fibres racing for
- * an absent key cannot both publish a semaphore -- the loser sees the winner's.
- */
-const acquireLock = (key: string): Effect.Effect<Semaphore.Semaphore> =>
-  TxRef.modify(editLocks, (map) => {
-    const existing = HashMap.get(map, key)
-    if (Option.isSome(existing)) {
-      const entry = existing.value
-      return [
-        entry.semaphore,
-        HashMap.set(map, key, { ...entry, holders: entry.holders + 1 })
-      ]
-    }
-    const semaphore = Semaphore.makeUnsafe(1)
-    return [semaphore, HashMap.set(map, key, { semaphore, holders: 1 })]
-  })
-
-/** Leave the queue, dropping the entry when nobody is left. */
-const releaseLock = (key: string): Effect.Effect<void> =>
-  TxRef.update(editLocks, (map) => {
-    const existing = HashMap.get(map, key)
-    if (Option.isNone(existing)) return map
-    const holders = existing.value.holders - 1
-    return holders <= 0
-      ? HashMap.remove(map, key)
-      : HashMap.set(map, key, { ...existing.value, holders })
-  })
-
-/**
- * Run an effect under a path's write lock.
- *
- * `acquireUseRelease` rather than a bare `withPermit`, so the holder count is
- * decremented even when the caller is interrupted while waiting or mid-edit. A
- * leaked count would pin the entry forever, which is the leak this replaced.
- */
-const withFileLock = <A, E, R>(
-  workspace: string,
-  path: string,
-  effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> => {
-  const key = lockKey(workspace, path)
-  return Effect.acquireUseRelease(
-    acquireLock(key),
-    (semaphore) => semaphore.withPermit(effect),
-    () => releaseLock(key)
-  )
-}
-
-/**
- * How many paths currently hold a lock entry.
- *
- * Exported for the test that asserts the registry drains. The leak this
- * replaced was invisible from outside, and an invariant nobody can observe is
- * one nobody can defend.
- *
+ * Re-exported so the test that asserts the registry drains can observe it.
  * @internal
  */
-export const lockRegistrySize: Effect.Effect<number> = Effect.map(
-  TxRef.get(editLocks),
-  HashMap.size
-)
+export const lockRegistrySize = FileLock.lockRegistrySize
 
 /**
  * A file's text, byte-for-byte recoverable, or a refusal.
@@ -457,6 +358,7 @@ const bounded = (
   Effect.gen(function* () {
     const end = Truncate.tail(text)
     if (!end.cut) return end.text
+    const limit = Truncate.firedLimit(text)
     const saved = yield* Effect.option(
       Effect.gen(function* () {
         const at = yield* Sandbox.path(Truncate.nextOutputPath())
@@ -465,8 +367,8 @@ const bounded = (
       })
     )
     return Option.isNone(saved)
-      ? Truncate.unsavedNotice() + end.text
-      : Truncate.savedNotice(saved.value) + end.text
+      ? Truncate.unsavedNotice(limit) + end.text
+      : Truncate.savedNotice(saved.value, limit) + end.text
   })
 
 /**
@@ -559,9 +461,7 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
        * Two writes to one path are also ordered by it, which turns
        * "whichever finished last" into "whichever started last".
        */
-      yield* withFileLock(
-        sandbox.workspace,
-        sandboxPath,
+      yield* FileLock.withFileLock(sandbox, sandboxPath,
         sandbox.write(sandboxPath, content)
       )
       return `wrote ${file} (${content.length} bytes)`
@@ -583,10 +483,8 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
             `Provide the replacement text you actually want.`
         )
       }
-      // Read-modify-write is only safe under the file's lock: see `editLocks`.
-      return yield* withFileLock(
-        sandbox.workspace,
-        sandboxPath,
+      // Read-modify-write is only safe under the file's lock: see `internal/fileLock.ts`.
+      return yield* FileLock.withFileLock(sandbox, sandboxPath,
           Effect.gen(function* () {
             // Two failures with one shape: the sandbox's, mapped to prose,
             // and this module's own refusal, which is already prose.
@@ -720,13 +618,12 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
   bash: ({ command, timeout_ms }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
+      const shell = yield* Shell.current()
       const result = yield* sandbox.exec(
-        Sandbox.command("bash", ["-lc", command]),
+        shell.toCommand(command),
         timeout_ms === undefined ? undefined : { timeout: timeout_ms }
       ).pipe(
         Effect.mapError((error) =>
-          // A timeout is the one failure with an obvious next move, so it says
-          // what that is rather than only reporting the elapsed budget.
           error instanceof Sandbox.TimeoutError
             ? Truncate.timedOut(error.timeoutMillis)
             : errorMessage(error)

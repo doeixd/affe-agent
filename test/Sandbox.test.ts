@@ -469,6 +469,32 @@ describe("local sandbox", () => {
     })
   )
 
+  it.effect("canonical: one identity per file, whatever it is called", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.promise(() => fs.writeFile(path.join(fixture.managed, "real.txt"), "x"))
+      const linked = yield* Effect.exit(Effect.promise(() =>
+        fs.symlink(path.join(fixture.managed, "real.txt"), path.join(fixture.managed, "link.txt"), "file")
+      ))
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        const real = yield* sandbox.canonical(p("real.txt"))
+        // A spelling that differs only in redundant segments is the same file.
+        assert.strictEqual(yield* sandbox.canonical(p("./real.txt")), real)
+        // A different file is a different identity.
+        assert.notStrictEqual(yield* sandbox.canonical(p("other.txt")), real)
+        // A file that does not exist yet still has one, so a write can lock it.
+        assert.strictEqual(
+          yield* sandbox.canonical(p("new/deep/file.txt")),
+          yield* sandbox.canonical(p("new/deep/file.txt"))
+        )
+        if (Exit.isSuccess(linked)) {
+          assert.strictEqual(yield* sandbox.canonical(p("link.txt")), real)
+        }
+      }).pipe(Effect.provide(LocalSandbox.layer({ workspaceRoot: fixture.managed })))
+    })
+  )
+
   it.effect("refuses reads that resolve outside the workspace", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture()

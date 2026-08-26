@@ -166,6 +166,9 @@ export const layer = (options?: {
                 : Effect.succeed(found)
             })
           ),
+        // The world is a map keyed on the normalised path with no links and
+        // no case folding, so the path is its own identity.
+        canonical: (path) => Effect.succeed(`${workspace}\u0000${path}`),
         exec: options?.exec ?? ((input) =>
           Effect.fail(new Sandbox.ProviderError({
             detail:
