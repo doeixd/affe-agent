@@ -159,6 +159,10 @@
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
     },
+    "./shell": {
+      "types": "./dist/shell/index.d.ts",
+      "default": "./dist/shell/index.js"
+    },
     "./sandbox": {
       "types": "./dist/sandbox/index.d.ts",
       "default": "./dist/sandbox/index.js"
@@ -174,6 +178,10 @@
     "./mcp/v2": {
       "types": "./dist/mcp/v2/index.d.ts",
       "default": "./dist/mcp/v2/index.js"
+    },
+    "./pi": {
+      "types": "./dist/pi/index.d.ts",
+      "default": "./dist/pi/index.js"
     },
     "./package.json": "./package.json"
   },

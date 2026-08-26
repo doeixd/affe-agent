@@ -29,6 +29,32 @@ const decoder = new TextDecoder()
 
 const byteLength = (text: string): number => encoder.encode(text).length
 
+/**
+ * A size the model can read: `50.0KB`, not `51200`.
+ *
+ * From Pi (`formatSize`), so a truncation banner can name the limit that
+ * fired rather than only that one did.
+ */
+export const formatSize = (bytes: number): string => {
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${bytes}B`
+}
+
+/**
+ * Which budget actually ran out, for the truncation banner.
+ *
+ * Bytes first: a few huge lines fail the byte cap before the line cap, and
+ * naming the line cap would be a lie. Called only when `tail`/`head` cut.
+ */
+export const firedLimit = (
+  text: string,
+  maxLines: number = MAX_LINES,
+  maxBytes: number = MAX_BYTES
+): string => {
+  if (byteLength(text) > maxBytes) return formatSize(maxBytes)
+  return `${maxLines} lines`
+}
+
 export interface Tail {
   /** The kept text: the whole of it when nothing was over budget. */
   readonly text: string
@@ -79,6 +105,50 @@ export const tail = (
   return { text: out.join("\n"), cut: true }
 }
 
+export interface Head {
+  readonly text: string
+  readonly cut: boolean
+}
+
+/**
+ * The first `maxLines` lines of `text`, within `maxBytes`.
+ *
+ * The counterpart of `tail`. A log whose failure is at the *start* -- a
+ * compiler that prints the error and then a wall of notes -- needs the head.
+ * Same byte accounting and UTF-8 repair as `tail`, from the other end.
+ *
+ * From Pi (`truncateHead`), commit dcd461925db2edf69a43c8135db1180d418afd54.
+ */
+export const head = (
+  text: string,
+  maxLines: number = MAX_LINES,
+  maxBytes: number = MAX_BYTES
+): Head => {
+  const lines = text.split("\n")
+  if (lines.length <= maxLines && byteLength(text) <= maxBytes) {
+    return { text, cut: false }
+  }
+
+  const out: Array<string> = []
+  let bytes = 0
+  for (let i = 0; i < lines.length && out.length < maxLines; i++) {
+    const line = lines[i] ?? ""
+    const size = byteLength(line) + (out.length > 0 ? 1 : 0)
+    if (bytes + size > maxBytes) {
+      if (out.length === 0) {
+        const encoded = encoder.encode(line)
+        let end = maxBytes
+        while (end > 0 && end < encoded.length && ((encoded[end] ?? 0) & 0xc0) === 0x80) end--
+        out.push(decoder.decode(encoded.subarray(0, end)))
+      }
+      break
+    }
+    out.push(line)
+    bytes += size
+  }
+  return { text: out.join("\n"), cut: true }
+}
+
 /** Where a truncated command's full output is kept, relative to the workspace. */
 export const OUTPUT_DIR = ".effect-agent/tool-output"
 
@@ -96,17 +166,21 @@ export const nextOutputPath = (): string => {
   return `${OUTPUT_DIR}/tool_${String(counter).padStart(4, "0")}`
 }
 
-/** The banner naming where the full output went. */
-export const savedNotice = (path: string): string =>
-  `...output truncated...\n\nFull output saved to: ${path}\n\n`
+/** The banner naming where the full output went, and which budget fired. */
+export const savedNotice = (path: string, limit: string): string =>
+  `...output truncated (tail, ${limit} limit)...\n\nFull output saved to: ${path}\n\n`
 
 /**
  * The banner used when the output was cut but could not be saved -- a
  * read-only workspace, say. Saying so is better than naming a file that is not
  * there.
  */
-export const unsavedNotice = (): string =>
-  `...output truncated...\n\n`
+export const unsavedNotice = (limit: string): string =>
+  `...output truncated (tail, ${limit} limit)...\n\n`
+
+/** Same shape as `unsavedNotice`, for a head cut. */
+export const headNotice = (limit: string): string =>
+  `...output truncated (head, ${limit} limit)...\n\n`
 
 /**
  * What a command that outran its time budget is told.
