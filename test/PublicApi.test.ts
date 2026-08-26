@@ -251,15 +251,20 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(exported.Export).sort(), [
       "Export",
       "ExportError",
+      "Header",
       "Provenance",
       "VERSION",
+      "append",
       "decode",
       "encode",
+      "encodeJsonl",
+      "headerOf",
       "historyOf",
       "missingTools",
       "of",
       "ofSession",
-      "parse"
+      "parse",
+      "parseJsonl"
     ])
 
     assert.deepStrictEqual(Object.keys(exported.Replay).sort(), [
@@ -346,14 +351,67 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  it("exports the pi vocabulary and nothing beyond it", async () => {
+    const pi = await import("../src/pi/index.js")
+    assert.deepStrictEqual(Object.keys(pi).sort(), ["PiToolkit"])
+    assert.deepStrictEqual(Object.keys(pi.PiToolkit).sort(), [
+      "Bash",
+      "EditFile",
+      "GREP_MAX_LINE_LENGTH",
+      "LS_LIMIT",
+      "ListFiles",
+      "MAX_BYTES",
+      "MAX_BYTES_LABEL",
+      "MAX_LINES",
+      "ReadFile",
+      "Search",
+      "WriteFile",
+      "formatSize",
+      "handlers",
+      "handlersFor",
+      "head",
+      "headNotice",
+      "lockRegistrySize",
+      "tailNotice",
+      "toolkit",
+      "tools"
+    ])
+  })
+
+  it("exports the shell vocabulary and nothing beyond it", async () => {
+    const shell = await import("../src/shell/index.js")
+    assert.deepStrictEqual(Object.keys(shell).sort(), ["Shell"])
+    assert.deepStrictEqual(Object.keys(shell.Shell).sort(), [
+      "Shell",
+      "bash",
+      "current",
+      "fish",
+      "fromKind",
+      "layer",
+      "make",
+      "nushell",
+      "powershell",
+      "pwsh",
+      "sh",
+      "zsh"
+    ])
+  })
+
   it("exports the http vocabulary and nothing beyond it", async () => {
     const http = await import("../src/http/index.js")
-    assert.deepStrictEqual(Object.keys(http).sort(), ["AgentHttp"])
+    assert.deepStrictEqual(Object.keys(http).sort(), ["AgentHttp", "AgentServer"])
     assert.deepStrictEqual(Object.keys(http.AgentHttp).sort(), [
       "Api",
       "Client",
+      "api",
       "clientLayer",
       "errorStatus",
+      "serverLayer"
+    ])
+    assert.deepStrictEqual(Object.keys(http.AgentServer).sort(), [
+      "DuplicateMountError",
+      "make",
+      "mount",
       "serverLayer"
     ])
   })

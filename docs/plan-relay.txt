@@ -1,0 +1,1683 @@
+Yes. I think this is a **very natural next transport layer for the project**, and the existing architecture is unusually well-positioned for it.
+
+The key is to define the feature correctly:
+
+> **Relay is not an agent runtime. It is a secure, addressable transport that lets Effect services running on machines behind NAT/firewalls communicate through one public endpoint.**
+
+Your laptop, desktop, VPS, Raspberry Pi, etc. each maintain an **outbound** encrypted connection to the relay. Nothing needs to expose an inbound port.
+
+```text
+                    relay.example.com
+                    HTTPS / WSS / TLS
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+           laptop       desktop        VPS
+          outbound      outbound      outbound
+             WSS           WSS          WSS
+              │            │            │
+           agents        agents       agents
+           sessions      processes    workflows
+           sandbox       workspace    services
+```
+
+Then from the application's perspective:
+
+```text
+local AgentClient
+remote AgentClient
+```
+
+can look essentially the same.
+
+And there is a particularly nice Effect-v4 way to build this.
+
+---
+
+# First: SSL vs TLS vs end-to-end encryption
+
+What you're thinking of as SSL should nowadays be **TLS**.
+
+If a machine connects to:
+
+```text
+wss://relay.example.com/relay
+```
+
+that's WebSocket over HTTPS/TLS.
+
+So traffic is encrypted:
+
+```text
+Computer A
+    ═════ TLS ═════>
+        Relay
+    <═════ TLS ═════
+Computer B
+```
+
+But note what that means:
+
+```text
+A ── encrypted ── Relay ── encrypted ── B
+                     ↑
+                 can see data
+```
+
+If you run and trust the relay, that's completely reasonable.
+
+We can later optionally add **end-to-end encryption**:
+
+```text
+A ═════════ ciphertext ═════════ B
+             │
+           Relay
+      cannot decrypt payload
+```
+
+I would **not make E2EE a prerequisite for V1**. TLS + strong machine authentication + authorization is already a secure architecture for a self-hosted relay.
+
+And we should absolutely not invent cryptographic primitives ourselves.
+
+---
+
+# The most important discovery: our existing RPC architecture is already designed for this
+
+Current `AgentRpc` deliberately stops at Effect RPC's protocol boundary. Its client requires an `RpcClient.Protocol`, and the documentation explicitly says applications can supply HTTP, WebSocket, socket, worker **or a custom protocol**.
+
+That's almost exactly what a relay is.
+
+Even better, Effect v4 exposes decoded-message boundaries on both sides:
+
+```ts
+RpcClient.makeNoSerialization(...)
+RpcServer.makeNoSerialization(...)
+```
+
+The client constructor lets a custom transport take outgoing decoded RPC messages and feed server responses back in.
+
+The server equivalent accepts decoded client messages and gives us decoded server responses to send back.
+
+Therefore we do **not** need:
+
+```text
+RelayAgentProtocol
+RelayPrompt
+RelayToolCall
+RelaySession
+RelayStreamingProtocol
+```
+
+We can make Relay into an Effect RPC **transport**.
+
+That's much better.
+
+---
+
+# The architecture I would aim for
+
+```text
+                       APPLICATION
+
+                       AgentClient
+                           │
+                       AgentRpc
+                           │
+                    Effect RpcClient
+                           │
+                           ▼
+                 RelayRpc Protocol Layer
+                           │
+                           ▼
+                       RelayClient
+                           │
+                     Effect RPC
+                           │
+                 WebSocket / WSS / TLS
+                           │
+                           ▼
+
+                    ┌─────────────┐
+                    │ RelayServer │
+                    └──────┬──────┘
+                           │
+                    route by PeerId
+                           │
+                           ▼
+
+                 WebSocket / WSS / TLS
+                           │
+                       RelayNode
+                           │
+                 RelayRpc dispatcher
+                           │
+                    Effect RpcServer
+                           │
+                       AgentRpc
+                           │
+                  AgentSessionHost
+                           │
+                       AgentClient
+                           │
+                         Agent
+```
+
+The relay doesn't know how an agent works.
+
+It knows:
+
+```text
+source peer
+destination peer
+endpoint
+message
+```
+
+That's it.
+
+---
+
+# `HttpApi` and RPC should have different jobs
+
+I would use both.
+
+**Effect `HttpApi`** should define the normal request/response **control plane**:
+
+```text
+POST /enroll
+GET  /peers
+GET  /peers/:id
+POST /credentials/rotate
+DELETE /peers/:id
+GET  /health
+```
+
+Effect v4 has a dedicated HttpApi stack plus security abstractions such as `HttpApiSecurity`.
+
+But don't make the live tunnel an ordinary REST API.
+
+For that use:
+
+```text
+Effect RPC
+    ↓
+WebSocket
+    ↓
+TLS
+```
+
+Effect v4 already directly supports RPC over WebSockets, and its own tests show a streaming RPC coexisting with other in-flight RPC calls over one WebSocket connection.
+
+That's precisely what we need.
+
+---
+
+# The public relay protocol can be tiny
+
+Something conceptually like:
+
+```ts
+const RelayProtocol = RpcGroup.make(
+
+  Rpc.make("listen", {
+    payload: RelayRegistration,
+    success: RelayEnvelope,
+    error: RelayError,
+    stream: true
+  }),
+
+  Rpc.make("send", {
+    payload: RelayEnvelope.Outbound,
+    success: Schema.Void,
+    error: RelayError
+  }),
+
+  Rpc.make("heartbeat", {
+    success: RelayHeartbeat,
+    error: RelayError
+  })
+
+)
+```
+
+A node opens one:
+
+```ts
+relay.listen(...)
+```
+
+stream and leaves it open.
+
+That stream is the relay → machine path.
+
+Meanwhile the same RPC/WebSocket connection can make:
+
+```ts
+relay.send(...)
+relay.heartbeat(...)
+```
+
+calls.
+
+Effect RPC already multiplexes effects and streams over the connection, so we should let it do that rather than invent request IDs, stream multiplexing, cancellation, acknowledgement and sibling-call isolation ourselves.
+
+---
+
+# Relay identity
+
+Introduce a small domain:
+
+```ts
+const PeerId = Schema.String.pipe(
+  Schema.brand("@doeixd/effect-agent/relay/PeerId")
+)
+
+const EndpointId = Schema.String.pipe(
+  Schema.brand("@doeixd/effect-agent/relay/EndpointId")
+)
+```
+
+Conceptually:
+
+```ts
+interface RelayAddress {
+  readonly peer: PeerId
+  readonly endpoint: EndpointId
+}
+```
+
+A peer means:
+
+> one authenticated running node/device identity.
+
+For example:
+
+```text
+patrick-desktop
+patrick-laptop
+production-vps
+```
+
+The relay should never accept:
+
+```ts
+from: PeerId
+```
+
+from an untrusted caller as authoritative.
+
+The authenticated connection determines the source.
+
+---
+
+# But I wouldn't make users work with endpoint strings
+
+We can apply the same type-witness style we've been leaning toward elsewhere.
+
+Something like:
+
+```ts
+const AgentEndpoint =
+  RelayRpc.endpoint(
+    "effect-agent/agent",
+    AgentRpc.Protocol
+  )
+```
+
+That value knows:
+
+```text
+endpoint identity
++
+RpcGroup type
+```
+
+Then:
+
+```ts
+RelayRpc.client(
+  AgentEndpoint,
+  Desktop
+)
+```
+
+is fully inferred.
+
+Likewise:
+
+```ts
+const ControlEndpoint =
+  RelayRpc.endpoint(
+    "effect-agent/control",
+    ControlProtocol
+  )
+
+const A2AEndpoint =
+  RelayRpc.endpoint(
+    "effect-agent/a2a",
+    A2A.Protocol
+  )
+```
+
+The wire necessarily contains an endpoint identifier.
+
+The application's API doesn't need magic strings.
+
+---
+
+# And then existing `AgentRpc` should run unchanged
+
+This is the beautiful part.
+
+Today:
+
+```ts
+AgentRpc.clientLayer
+```
+
+needs:
+
+```ts
+RpcClient.Protocol
+```
+
+So Relay can provide one:
+
+```ts
+const DesktopAgent =
+  AgentRpc.clientLayer.pipe(
+    Layer.provide(
+      RelayRpc.clientProtocol({
+        peer: Desktop,
+        endpoint: AgentEndpoint
+      })
+    ),
+    Layer.provide(RelayClient.layer(...))
+  )
+```
+
+Conceptually.
+
+Then:
+
+```ts
+const client = yield* AgentRpc.Client
+
+const session =
+  yield* client.createSession(...)
+```
+
+could transparently hit your desktop from a VPS through the relay.
+
+`AgentRpc` doesn't know.
+
+`AgentClient` doesn't know.
+
+`Agent` definitely doesn't know.
+
+Exactly the architecture we want.
+
+---
+
+# On the remote computer
+
+The node process would do the inverse.
+
+Something conceptually like:
+
+```ts
+RelayRpc.serve(
+  AgentEndpoint,
+  AgentRpc.Protocol
+).pipe(
+  Layer.provide(
+    AgentRpc.serverLayer({
+      host: Host
+    })
+  )
+)
+```
+
+Internally `RelayRpc` can adapt routed relay messages into:
+
+```ts
+RpcServer.makeNoSerialization(...)
+```
+
+Effect's server already handles request tracking, streaming chunks, interruption, acknowledgements and concurrency at this decoded boundary.
+
+So Relay only handles:
+
+```text
+message arrived for endpoint X
+       ↓
+give it to X's RPC server
+
+RPC server emitted response
+       ↓
+send response to originating peer
+```
+
+---
+
+# Authentication should happen at two layers
+
+Do not rely only on TLS.
+
+TLS tells the node:
+
+> I'm talking securely to `relay.example.com`.
+
+It doesn't inherently tell us:
+
+> this socket belongs to Patrick's desktop.
+
+So I'd have:
+
+```text
+TLS
+ ↓
+device authentication
+ ↓
+relay routing authorization
+ ↓
+target application authorization
+ ↓
+agent Permission
+ ↓
+Sandbox
+```
+
+These layers solve different problems.
+
+Our current `AgentSessionHost` already centralizes request authentication and per-operation authorization across HTTP/RPC/etc.
+
+The relay should preserve that architecture.
+
+---
+
+# V1 device authentication
+
+I would not start with mTLS.
+
+It's strong, but now we have to operate:
+
+```text
+certificate authority
+client cert issuance
+cert rotation
+revocation
+renewal
+```
+
+which is more infrastructure than we need.
+
+For V1:
+
+```text
+1. relay generates one-time enrollment token
+
+2. new machine runs:
+   effect-agent relay enroll ...
+
+3. machine receives/generates:
+   PeerId
+   high-entropy device credential
+
+4. relay stores only secure verifier/hash
+
+5. WSS handshake sends:
+   Authorization: Bearer <device credential>
+
+6. credential can be:
+   listed
+   rotated
+   revoked
+```
+
+The credential should be stored locally through an OS secret store when available, otherwise an appropriately permissioned configuration file.
+
+Not plain text in random application SQL.
+
+---
+
+# A better eventual enrollment scheme
+
+Longer-term, I'd prefer device keys:
+
+```text
+machine generates keypair locally
+
+private key
+    never leaves machine
+
+public key
+    registered with relay
+```
+
+Then enrollment merely authorizes:
+
+```text
+PeerId ↔ public key
+```
+
+A connection proves possession of the private key.
+
+That becomes especially useful if we add E2EE later.
+
+But I wouldn't hold up Relay V1 on it.
+
+---
+
+# Relay authorization
+
+Suppose this happens:
+
+```text
+Alice's laptop
+      ↓
+send
+      ↓
+Bob's workstation
+```
+
+Authentication alone isn't enough.
+
+The relay needs a coarse authorization rule:
+
+```ts
+interface RelayAuthorization {
+  authorize({
+    principal,
+    targetPeer,
+    endpoint
+  }): Effect<void, RelayForbidden>
+}
+```
+
+Typical default:
+
+```text
+same account
+    → allow
+
+different account
+    → deny
+```
+
+Later sharing can explicitly allow:
+
+```text
+Peer A
+can invoke
+Endpoint X
+on Peer B
+```
+
+Don't start with a complicated ACL language.
+
+---
+
+# The target should still authenticate/authorize the RPC
+
+This is important.
+
+Relay authorization means:
+
+> You may send traffic to this endpoint.
+
+It does **not** necessarily mean:
+
+> You may prompt session X, interrupt it, read its history, etc.
+
+That remains:
+
+```text
+AgentSessionHost
+```
+
+which already understands:
+
+```text
+operation
+sessionId
+principal
+authorization
+```
+
+The Relay RPC adapter can inject trusted transport identity into the RPC request context/headers.
+
+For example, internally:
+
+```text
+authenticated source = peer-123
+```
+
+gets represented as a reserved transport header or context value.
+
+The adapter must strip any caller-supplied reserved relay identity first.
+
+Then:
+
+```text
+AgentSessionHost principal resolver
+```
+
+can map:
+
+```text
+relay peer-123
+→ Patrick/device/workload principal
+```
+
+No transport bypass.
+
+---
+
+# This also means relay access never bypasses agent permissions
+
+Suppose remote Agent A asks Agent B:
+
+> delete everything in the workspace.
+
+The path remains:
+
+```text
+Relay
+  ↓
+AgentRpc
+  ↓
+AgentSessionHost authorization
+  ↓
+Agent
+  ↓
+Tool
+  ↓
+PermissionPolicy
+  ↓
+Ask / Allow / Deny
+  ↓
+Elicitation
+  ↓
+Sandbox
+```
+
+The relay is only transport.
+
+It must never become:
+
+```text
+remote connection
+→ arbitrary shell on computer
+```
+
+That would undo the entire security model.
+
+---
+
+# Live traffic and durable traffic should be different
+
+This is another important design decision.
+
+Suppose laptop B is offline.
+
+Should:
+
+```text
+read process output
+```
+
+be queued until tomorrow?
+
+Absolutely not.
+
+But:
+
+```text
+"background deployment completed,
+tell session X when it reconnects"
+```
+
+should probably survive.
+
+So Relay needs two different semantics:
+
+```text
+LIVE
+──────────────────────────
+RPC / Stream
+
+target offline
+→ PeerOffline
+
+connection disappears
+→ call fails
+
+examples:
+prompt
+status
+events
+process output
+filesystem read
+
+
+DURABLE
+──────────────────────────
+Mailbox message
+
+target offline
+→ persist
+
+reconnect
+→ deliver
+
+examples:
+SessionInbox ping
+notification
+delegated job result
+monitor result
+```
+
+Do not add:
+
+```ts
+durable: true
+```
+
+to arbitrary RPC and pretend every operation can safely be delayed.
+
+That is dangerous.
+
+---
+
+# Durable relay mailbox
+
+Effect v4 already gives us most of this through `PersistedQueue`.
+
+The relay can conceptually maintain:
+
+```text
+mailbox:<PeerId>
+```
+
+using Effect Persistence.
+
+When:
+
+```ts
+RelayMailbox.send({
+  id,
+  target,
+  payload
+})
+```
+
+happens:
+
+```text
+PersistedQueue.offer(id)
+```
+
+When target reconnects:
+
+```text
+PersistedQueue.take(...)
+        ↓
+send to target
+        ↓
+target ACKs durable acceptance
+        ↓
+take succeeds
+        ↓
+queue item removed
+```
+
+If the socket dies before ACK:
+
+```text
+take interrupted
+      ↓
+PersistedQueue requeues
+```
+
+This maps extremely well onto Effect v4's persistent queue semantics.
+
+And then our previously-designed:
+
+```text
+SessionInbox
+```
+
+becomes a perfect client.
+
+---
+
+# Cross-machine ping-back becomes straightforward
+
+Imagine:
+
+```text
+Desktop:
+  agent starts process
+
+process completes 2 hours later
+
+target conversation lives on VPS
+```
+
+Then:
+
+```text
+Desktop ProcessManager
+        ↓
+ProcessExited
+        ↓
+SessionInbox
+        ↓
+remote SessionInbox transport
+        ↓
+RelayMailbox
+        ↓
+VPS reconnect / already online
+        ↓
+VPS SessionInbox
+        ↓
+session.submit(...)
+        ↓
+agent wakes up
+```
+
+This gives background delegation a **network-transparent return path**.
+
+That's a major capability.
+
+---
+
+# Agents on different computers could communicate the same way
+
+There are actually multiple higher-level protocols we could carry:
+
+```text
+AgentRpc
+    remote control of an agent/session
+
+A2A
+    agent-to-agent semantic communication
+
+ControlRpc
+    manage processes/workspaces/etc.
+
+SessionInbox
+    durable future agent input
+
+MCP
+    potentially remote capabilities
+```
+
+All could ride:
+
+```text
+RelayRpc
+```
+
+without Relay knowing their semantics.
+
+That's exactly why I prefer endpoint-based transport.
+
+---
+
+# Could MCP go through it?
+
+Potentially yes.
+
+For example:
+
+```text
+Desktop
+  has local filesystem MCP server
+
+Laptop Agent
+  ↓
+Relay
+  ↓
+Desktop MCP adapter
+```
+
+But I wouldn't immediately build special MCP-over-relay semantics.
+
+We already have MCP transport machinery.
+
+First prove Relay can transport generic Effect RPC correctly.
+
+Then determine whether:
+
+```text
+MCP → Relay
+```
+
+is best implemented as an RPC adapter, raw byte stream, or higher-level connector.
+
+---
+
+# Presence / peer discovery
+
+Relay should maintain a small `PeerDirectory`.
+
+Something like:
+
+```ts
+interface PeerInfo {
+  readonly id: PeerId
+
+  readonly name: string
+
+  readonly status:
+    | "online"
+    | "offline"
+
+  readonly connectedAt?: number
+  readonly lastSeenAt: number
+
+  readonly endpoints:
+    ReadonlyArray<EndpointInfo>
+}
+```
+
+Then your UI can show:
+
+```text
+Machines
+
+● Patrick Desktop
+    agent
+    workspace
+    process
+
+● Laptop
+    agent
+
+○ Home Server
+    last seen 14m ago
+```
+
+The live connection registry should live in memory.
+
+Don't put sockets in SQL.
+
+---
+
+# What SQL should store
+
+Something like:
+
+| State                       | Where                                     |
+| --------------------------- | ----------------------------------------- |
+| Active WebSocket connection | memory                                    |
+| Connection fibers           | `FiberMap<PeerId>`                        |
+| Peer metadata               | SQL                                       |
+| Device credential verifier  | credential/auth store                     |
+| Enrollment token metadata   | SQL                                       |
+| Endpoint metadata           | SQL or reconstructed on connect           |
+| Current online presence     | memory + timestamps                       |
+| Durable messages            | Effect `PersistedQueue` SQL/Redis backend |
+| Relay audit trail           | SQL / possibly Effect EventLog later      |
+| Agent conversation          | **not relay's responsibility**            |
+| Process state               | owning node's ProcessStore                |
+| Session state               | owning node's session storage             |
+
+The relay should not gradually become the database for every subsystem.
+
+---
+
+# `FiberMap` is again a good fit
+
+Relay server:
+
+```text
+PeerId → connection fiber
+```
+
+is exactly keyed background work.
+
+So internally:
+
+```ts
+FiberMap<PeerId>
+```
+
+can own connection supervisors.
+
+When a new connection for the same PeerId arrives, we need an explicit policy.
+
+I'd choose:
+
+> newest successfully-authenticated connection wins.
+
+The old one receives:
+
+```text
+Superseded
+```
+
+and closes.
+
+Otherwise stale laptop connections can remain half-open and create ambiguous routing.
+
+---
+
+# Reconnection
+
+The node runtime should hide reconnection.
+
+Conceptually:
+
+```ts
+RelayClient.layer({
+  url,
+  credential
+})
+```
+
+creates:
+
+```text
+connect
+ ↓
+authenticate
+ ↓
+register endpoints
+ ↓
+listen
+ ↓
+connection lost
+ ↓
+Schedule.exponential(...)
+ ↓
+reconnect
+ ↓
+register again
+```
+
+The application shouldn't wrap every agent operation in reconnect logic.
+
+But live RPC calls that were active when the connection disappeared should fail.
+
+Don't magically replay arbitrary commands.
+
+Caller can retry if its semantics allow it.
+
+---
+
+# Heartbeats and leases
+
+WebSocket close detection isn't enough for every broken-network case.
+
+Use a small presence lease:
+
+```text
+heartbeat every ~30 sec
+lease ~90 sec
+```
+
+Conceptually.
+
+If no heartbeat:
+
+```text
+peer = offline
+```
+
+The exact timing can be configurable.
+
+Use ordinary:
+
+```ts
+Schedule
+```
+
+and a supervised Fiber.
+
+No custom timer subsystem.
+
+---
+
+# Backpressure and limits
+
+A public relay absolutely needs bounds.
+
+At minimum:
+
+```text
+max frame size
+max concurrent streams per peer
+max messages/sec
+max outbound buffered bytes
+max durable mailbox bytes/messages
+max peers/account
+```
+
+Use Effect primitives:
+
+```text
+Queue
+Semaphore
+RateLimiter
+Stream backpressure
+```
+
+rather than unbounded arrays.
+
+If a slow client stops reading:
+
+```text
+do not allow its queue to consume all relay RAM
+```
+
+Disconnect or backpressure at a documented bound.
+
+---
+
+# Streaming
+
+Streaming matters a lot for us:
+
+```text
+Agent events
+model tokens
+process output
+PTY eventually
+```
+
+Effect RPC already supports streaming RPC success values.
+
+And again, Effect's WebSocket RPC tests explicitly cover an in-flight stream surviving an unrelated RPC failure on the same connection.
+
+That makes it much more suitable than designing:
+
+```text
+streamOpen
+streamData
+streamError
+streamClose
+```
+
+ourselves.
+
+---
+
+# Large files are different
+
+I would not send multi-gigabyte artifacts as one relay RPC value.
+
+Eventually distinguish:
+
+```text
+small structured traffic
+    → RPC
+
+long streaming traffic
+    → streamed RPC / socket stream
+
+large durable artifact
+    → object/blob storage + reference
+```
+
+For example:
+
+```text
+agent on Desktop creates 2 GB build artifact
+
+relay message:
+{
+  artifactRef: ...
+}
+```
+
+rather than buffering the whole file at Relay.
+
+Not a V1 concern, but worth preserving architecturally.
+
+---
+
+# E2EE can fit without redesigning Relay
+
+This is why I'd make Relay route opaque endpoint payloads.
+
+Today:
+
+```text
+RelayEnvelope.payload
+    = encoded RPC frame
+```
+
+Later:
+
+```text
+RelayEnvelope.payload
+    = encrypted(encoded RPC frame)
+```
+
+The relay still only sees:
+
+```text
+source
+target
+endpoint
+ciphertext
+```
+
+A future encryption adapter could sit here:
+
+```text
+AgentRpc
+    ↓
+RelayRpc
+    ↓
+RelayCrypto
+    ↓
+RelayClient
+```
+
+Use established implementations of:
+
+```text
+X25519 / equivalent key agreement
+HKDF
+AEAD such as ChaCha20-Poly1305 or AES-GCM
+```
+
+through audited platform/library implementations.
+
+Do not write crypto.
+
+---
+
+# What E2EE changes
+
+There is a tradeoff.
+
+With TLS-only:
+
+```text
+Relay can:
+  inspect
+  audit
+  enforce fine-grained content policy
+```
+
+With E2EE:
+
+```text
+Relay can:
+  authenticate endpoints
+  route
+  rate-limit
+  enforce coarse ACLs
+
+Relay cannot:
+  inspect operation payload
+```
+
+The target peer then becomes responsible for fine-grained authorization.
+
+Our architecture already supports that through `AgentSessionHost`, so E2EE is feasible.
+
+---
+
+# I would probably create a `/relay` battery
+
+Something approximately:
+
+```text
+src/relay/
+  Relay.ts
+      PeerId
+      EndpointId
+      Address
+      Envelope
+
+  RelayProtocol.ts
+      outer Effect RPC protocol
+
+  RelayClient.ts
+      persistent connection
+      reconnect
+      presence
+      live send
+
+  RelayServer.ts
+      route table
+      connection ownership
+      auth
+
+  RelayDirectory.ts
+      known peers
+      online/offline metadata
+
+  RelayMailbox.ts
+      explicit durable delivery
+
+  RelayRpc.ts
+      Effect RpcClient/RpcServer
+      protocol adapter
+
+  RelayAuth.ts
+      enrollment / credentials / principal
+
+  index.ts
+```
+
+Possibly host-specific server wiring separately.
+
+The important public nouns are probably only:
+
+```text
+RelayClient
+RelayServer
+RelayRpc
+RelayMailbox
+PeerId
+Endpoint
+```
+
+Don't expose every internal queue and connection object.
+
+---
+
+# A very nice target DX
+
+Machine hosting an agent:
+
+```ts
+const AgentEndpoint =
+  RelayRpc.endpoint(
+    "effect-agent",
+    AgentRpc.Protocol
+  )
+
+const NodeLive =
+  RelayNode.layer({
+    relay: "wss://relay.example.com",
+    credential: Config.redacted("RELAY_TOKEN")
+  }).pipe(
+    Layer.provide(
+      RelayRpc.serve(
+        AgentEndpoint,
+        AgentRpc.serverLayer({
+          host: Host
+        })
+      )
+    )
+  )
+```
+
+Then another machine:
+
+```ts
+const RemoteDesktop =
+  AgentRpc.clientLayer.pipe(
+    Layer.provide(
+      RelayRpc.clientProtocol({
+        peer: Desktop,
+        endpoint: AgentEndpoint
+      })
+    ),
+    Layer.provide(RelayClient.layer)
+  )
+```
+
+And usage remains:
+
+```ts
+const agent = yield* AgentRpc.Client
+
+const remote =
+  yield* AgentRpc.acquireSession({
+    requestId: ...,
+    sessionId: ...
+  })
+```
+
+No:
+
+```ts
+relay.sendJson(...)
+relay.openStream(...)
+relay.decodeAgentResponse(...)
+```
+
+at application level.
+
+---
+
+# This could later become even more elegant
+
+If we end up with the control-plane catalogs discussed earlier, peer discovery can expose registered services:
+
+```text
+Desktop
+├ AgentEndpoint
+├ ControlEndpoint
+├ A2AEndpoint
+└ WorkspaceEndpoint
+
+Laptop
+├ AgentEndpoint
+└ A2AEndpoint
+```
+
+Then:
+
+```ts
+const peer =
+  yield* PeerDirectory.get(Desktop)
+
+const client =
+  yield* RelayRpc.client(peer, AgentEndpoint)
+```
+
+All typed.
+
+---
+
+# This should not change `Agent`
+
+Absolutely none of this belongs here:
+
+```ts
+Agent.make({
+  relay: ...
+})
+```
+
+No.
+
+Likewise:
+
+```ts
+Agent.withRelay(...)
+```
+
+No.
+
+The hierarchy stays:
+
+```text
+Agent
+    pure computational definition
+
+AgentSession
+    local runtime execution
+
+AgentClient / AgentRpc
+    remote execution semantics
+
+RelayRpc
+    routed transport
+
+Relay
+    network connection
+
+TLS
+    network security
+```
+
+Each layer solves one thing.
+
+---
+
+# It also shouldn't replace direct transports
+
+If both processes are on the same host:
+
+```text
+AgentClient.local
+```
+
+If they can directly reach each other:
+
+```text
+AgentRpc + HTTP/WebSocket
+```
+
+If they're behind NAT:
+
+```text
+AgentRpc + RelayRpc
+```
+
+Same agent protocol.
+
+Different Layer.
+
+That's exactly the portability story we want.
+
+---
+
+# Implementation plan
+
+I would implement this after the session/background plan, roughly in this sequence:
+
+| Phase  | Work                                                                                     |
+| ------ | ---------------------------------------------------------------------------------------- |
+| **0**  | Spike Effect RPC-over-WebSocket reconnect and custom `makeNoSerialization` client/server |
+| **1**  | Define `PeerId`, typed `Endpoint`, addresses and relay error schemas                     |
+| **2**  | Implement minimal `RelayProtocol`: listen/send/heartbeat                                 |
+| **3**  | Implement single-node RelayServer using `FiberMap<PeerId>`                               |
+| **4**  | Implement RelayClient with reconnect/backoff and registration                            |
+| **5**  | Add HTTPS/WSS deployment and TLS documentation                                           |
+| **6**  | Add device enrollment, credential rotation/revocation                                    |
+| **7**  | Add coarse RelayAuthorization and peer directory                                         |
+| **8**  | Implement `RelayRpc` custom Effect RPC protocol adapter                                  |
+| **9**  | Run the existing `AgentRpc.Protocol` over RelayRpc unchanged                             |
+| **10** | Add disconnect/cancellation/backpressure/concurrency tests                               |
+| **11** | Add `RelayMailbox` using Effect `PersistedQueue`                                         |
+| **12** | Connect remote `SessionInbox` ping-back to RelayMailbox                                  |
+| **13** | Add management `HttpApi` for peers/enrollment/status                                     |
+| **14** | Add audit/metrics/rate limits                                                            |
+| **15** | Optional E2EE spike                                                                      |
+| **16** | Only later consider multi-relay-node clustering                                          |
+
+---
+
+# The killer integration test
+
+I would make this the acceptance test for the project.
+
+```text
+Home Desktop
+────────────────────────
+behind NAT
+no inbound ports
+
+runs:
+  CoderAgent
+  Workspace
+  ProcessManager
+
+opens:
+  outbound WSS → Relay
+
+
+Cloud VPS
+────────────────────────
+runs:
+  orchestration agent
+
+opens:
+  outbound WSS → Relay
+
+
+1. VPS obtains Remote Desktop AgentClient.
+
+2. VPS creates / resumes a session on Desktop.
+
+3. Prompt crosses relay.
+
+4. Desktop agent streams events back.
+
+5. Desktop agent asks permission to start process.
+
+6. Approval crosses relay.
+
+7. Desktop ProcessManager starts process.
+
+8. User disconnects from VPS UI.
+
+9. Process continues.
+
+10. Desktop's network disconnects temporarily.
+
+11. Relay marks Desktop offline.
+
+12. Desktop reconnects.
+
+13. Process finishes.
+
+14. Completion creates durable SessionInbox message.
+
+15. RelayMailbox delivers exactly once/idempotently.
+
+16. Target session.submit() wakes the agent.
+
+17. Agent continues.
+
+18. Another laptop connects to Relay and observes the session.
+
+19. At no point was an inbound port opened on a home computer.
+```
+
+If that works, we have something significantly more general than an OpenCode-style single-server API.
+
+We would essentially have the beginnings of an **Effect-native agent mesh**:
+
+```text
+Agent
+  can live anywhere
+
+Session
+  can live anywhere
+
+Process
+  can live anywhere
+
+Workspace
+  can live anywhere
+
+Client
+  addresses them remotely
+
+Relay
+  gets traffic there
+
+Workflow / Queue
+  keeps work durable
+
+SessionInbox
+  gets results back
+
+Permission + Sandbox
+  preserve authority boundaries
+```
+
+And critically, almost none of that requires expanding the core agent abstraction. The relay is another example of the project's central design working: **the semantics live in the narrowest layer that actually owns them.**

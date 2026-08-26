@@ -1,0 +1,910 @@
+Not completely. The **core is already multimodal in the right way**, but I would not call effect-agent end-to-end multimodal yet.
+
+The good news is we do **not** need a new image system. Effect AI already gives us the correct typed primitive: `Prompt.FilePart`. It represents images, PDFs, and other files with `mediaType`, optional `fileName`, and data as a string, `Uint8Array`, or `URL`.  Effect's response model likewise has a first-class `FilePart`, including in streaming responses.
+
+The gaps are mostly in **wire encoding, large-object storage, and protocol projections**.
+
+## Current state
+
+| Area                                |  State | Assessment                                                |
+| ----------------------------------- | -----: | --------------------------------------------------------- |
+| Local image input                   |      ✅ | Good                                                      |
+| Type-safe image/file representation |      ✅ | Effect `Prompt.FilePart`                                  |
+| Model receives multimodal prompt    |      ✅ | Good                                                      |
+| Canonical session history           |      ✅ | Preserves response parts                                  |
+| Model-produced files/images         |     🟨 | Stored, but poorly exposed remotely                       |
+| RPC transport                       |     🟨 | Correct schema shape; binary conformance needs hardening  |
+| HTTP transport                      |     🟨 | Correct shape, but JSON/binary needs explicit codec/tests |
+| Durable session persistence         |     🟨 | Prompt stored, but blobs inline + JSON concerns           |
+| Event stream                        |      ❌ | `MessageCompleted` is text-only                           |
+| `RemoteResult`                      |      ❌ | Explicitly text-only                                      |
+| A2A                                 |      ❌ | Current adapter deliberately accepts text only            |
+| AG-UI                               |   ❌/🟨 | Current input is `Unknown`, projection is text-centric    |
+| OpenAI-compatible endpoint          |      ❌ | Explicitly text-only                                      |
+| Large images/files                  |      ❌ | No blob/artifact storage strategy                         |
+| Relay                               | future | Needs blob-aware transport design                         |
+
+### Local core is actually quite good
+
+This already works conceptually:
+
+```ts
+const image = Prompt.filePart({
+  mediaType: "image/png",
+  fileName: "screenshot.png",
+  data: bytes
+})
+
+yield* session.prompt([
+  Prompt.textPart({
+    text: "What's wrong with this UI?"
+  }),
+  image
+])
+```
+
+`AgentSession.prompt` accepts `Prompt.RawInput`, and the remote protocol normalizes inputs to `Prompt.Prompt`. More importantly, the canonical remote protocol uses the actual `Prompt.Prompt` Schema for `prompt`, `steer`, `followUp`, and history responses rather than inventing a text-only request shape.
+
+That's the right foundation.
+
+## Canonical history preserves multimodal output too
+
+`AgentTurn` doesn't reduce a model response to text when committing it.
+
+It does:
+
+```ts
+History.fromResponseParts(response.content)
+```
+
+and commits that complete prompt plus tool results atomically. So a provider-generated `Response.FilePart` can become part of canonical history.
+
+That's important.
+
+The architecture is:
+
+```text
+model response
+  ├ text
+  ├ reasoning
+  ├ files/images
+  ├ tool calls
+  └ metadata
+        ↓
+History.fromResponseParts
+        ↓
+canonical Prompt
+```
+
+not:
+
+```text
+model response
+        ↓
+response.text
+        ↓
+canonical history
+```
+
+So we got that part right.
+
+---
+
+# Where it currently breaks down
+
+The biggest immediate problem is the **observation/remote projection**.
+
+`RemoteResult` deliberately returns only:
+
+```ts
+{
+  submissionId,
+  status,
+  runs,
+  turns,
+  text
+}
+```
+
+The comment explicitly says the full `GenerateTextResponse`, including typed content parts, is dropped at the remote boundary.
+
+Similarly:
+
+```ts
+MessageCompleted {
+  text: string
+}
+```
+
+and streaming deltas only support:
+
+```ts
+kind: "text" | "reasoning"
+```
+
+even though Effect's stream itself may contain `FilePart`.
+
+So right now this can happen:
+
+```text
+MODEL RETURNS
+─────────────
+text
+image
+file
+
+        ↓
+
+CANONICAL HISTORY
+─────────────
+text       ✅
+image      ✅
+file       ✅
+
+        ↓
+
+REMOTE RESULT / EVENTS
+─────────────
+text       ✅
+image      ❌
+file       ❌
+```
+
+That's the first thing I'd fix.
+
+---
+
+# A2A is definitely text-only today
+
+The current A2A adapter explicitly iterates A2A message parts, accepts only:
+
+```text
+text
+```
+
+and rejects anything else as unsupported. Its response/artifact builder also creates text parts only.
+
+So A2A currently cannot faithfully bridge:
+
+```text
+image
+PDF
+binary artifact
+```
+
+even though A2A itself has richer `Part` / `Artifact` concepts.
+
+That's an adapter limitation, not a core limitation.
+
+---
+
+# OpenAI compatibility is also explicitly text-only
+
+Current schema:
+
+```ts
+const TextContentPart = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String
+})
+
+MessageContent =
+  string |
+  TextContentPart[] |
+  null
+```
+
+There is no `image_url`, image input, file input, etc.
+
+So this needs expanding if we want genuinely OpenAI-compatible multimodal clients.
+
+---
+
+# AG-UI isn't where I'd want it either
+
+The current AG-UI adapter declares:
+
+```ts
+content: Schema.Unknown
+```
+
+and even comments that it accepts the protocol's general shape before narrowing it to what the harness adapter can faithfully convert. Its outgoing event vocabulary is primarily text/tool oriented.
+
+That's pragmatic, but not the endpoint we want.
+
+For multimodal support, it should have explicit conversion cases rather than:
+
+```text
+unknown content
+    ↓
+hopefully text
+```
+
+---
+
+# Durable storage needs more attention
+
+The durable session store does preserve canonical `Prompt.Prompt`, which is good.
+
+But it currently does:
+
+```ts
+Schema.encodeEffect(Prompt.Prompt)(prompt)
+    ↓
+JSON.stringify(...)
+```
+
+and stores the resulting JSON string.
+
+There are two issues.
+
+First, I would add hard conformance tests before claiming that every `FilePart.data` variant round-trips correctly:
+
+```text
+string/base64
+data URL
+URL
+Uint8Array
+```
+
+particularly through:
+
+```text
+Prompt.Prompt
+→ Schema.encode
+→ JSON.stringify
+→ JSON.parse
+→ Schema.decode
+```
+
+There are explicit Effect Schema transformations for binary/base64 representation, so we should use an intentionally **JSON-safe codec**, not rely on incidental serialization behavior.
+
+Second, even if it round-trips perfectly:
+
+> **Putting a 25 MB PNG as base64 inside the session-history SQL row is the wrong storage model.**
+
+So we need a second phase.
+
+---
+
+# I would make this a dedicated multimodal hardening plan
+
+The design principle should be:
+
+> **Effect `Prompt.FilePart` remains the semantic media primitive. effect-agent adds only transport/storage semantics that Effect AI cannot know.**
+
+Do not create:
+
+```text
+AgentImage
+AgentDocument
+AgentMedia
+AgentFilePart
+```
+
+We already have those semantics through `Prompt.FilePart`.
+
+## Phase 1 — make inline multimodality actually correct
+
+Add a transport codec, conceptually:
+
+```ts
+PromptWire
+```
+
+It is **not a new prompt type**.
+
+It is a codec:
+
+```text
+Prompt.Prompt
+     ↕
+stable process-boundary representation
+```
+
+The only tricky portion is `FilePart.data`.
+
+I would encode its runtime variant explicitly:
+
+```ts
+type FileDataWire =
+  | {
+      readonly _tag: "String"
+      readonly value: string
+    }
+
+  | {
+      readonly _tag: "Bytes"
+      readonly base64: string
+    }
+
+  | {
+      readonly _tag: "Url"
+      readonly value: string
+    }
+```
+
+Then:
+
+```text
+Prompt.FilePart
+data: Uint8Array
+        ↓
+Bytes(base64)
+
+Prompt.FilePart
+data: URL
+        ↓
+Url(string)
+
+Prompt.FilePart
+data: string
+        ↓
+String(string)
+```
+
+On decode, we reconstruct the exact Effect type.
+
+That means no ambiguity and no reliance on JavaScript's `JSON.stringify(Uint8Array)` behavior.
+
+Use this codec everywhere a `Prompt` crosses a JSON/durable boundary:
+
+```text
+HTTP
+RPC JSON serialization
+DurableSessionStore
+session export/import
+relay mailbox
+future Control API
+```
+
+For Effect RPC's binary protocol we can later optimize actual bytes, but **the semantic wire codec remains one definition**.
+
+---
+
+# Phase 2 — expose non-text output remotely
+
+Change the remote result from:
+
+```ts
+RemoteResult {
+  ...
+  text
+}
+```
+
+toward:
+
+```ts
+RemoteResult {
+  ...
+  text
+
+  content:
+    ReadonlyArray<RemoteContentPart>
+}
+```
+
+But don't expose raw provider-specific `GenerateTextResponse`.
+
+The existing decision to avoid that was correct.
+
+Instead expose provider-neutral content.
+
+Potentially the cleanest representation is simply the final assistant message's `Prompt.Part` representation:
+
+```ts
+content: Schema.Array(Prompt.Part)
+```
+
+through the new wire codec.
+
+So:
+
+```ts
+const result =
+  yield* remote.prompt(...)
+
+result.text
+
+for (const part of result.content) {
+  switch (part.type) {
+    case "text":
+      ...
+      break
+
+    case "file":
+      ...
+      break
+  }
+}
+```
+
+fully discriminated and type-safe.
+
+---
+
+# Phase 3 — fix `AgentEvent`
+
+I would enrich:
+
+```ts
+MessageCompleted
+```
+
+from:
+
+```ts
+{
+  text: string
+}
+```
+
+to something like:
+
+```ts
+{
+  text: string,
+  content: ReadonlyArray<MessageContent>
+}
+```
+
+or add a separate:
+
+```ts
+MessageContentCompleted
+```
+
+event if compatibility makes that preferable.
+
+Then a UI can receive:
+
+```text
+assistant:
+  "Here's the generated diagram"
+
+  [image/png]
+```
+
+without querying history after every turn.
+
+For streaming, don't invent fake image deltas.
+
+Effect's response protocol already distinguishes normal stream parts, and files are often complete atomic parts.
+
+So:
+
+```text
+TextDelta
+ReasoningDelta
+FilePart
+```
+
+should project differently:
+
+```text
+text/reasoning
+    → MessageDelta
+
+file
+    → MessagePartCompleted
+```
+
+Something like:
+
+```ts
+MessagePartCompleted {
+  part: RemoteContentPart
+}
+```
+
+would probably be cleaner than stuffing binary into a text delta.
+
+---
+
+# Phase 4 — multimodal transport adapters
+
+Then fix each adapter independently.
+
+### A2A
+
+Map:
+
+```text
+A2A text part
+    ↔ Prompt.TextPart
+
+A2A file part
+    ↔ Prompt.FilePart
+
+A2A artifact
+    ↔ provider-neutral output artifact
+```
+
+Do not treat every A2A message as one text string.
+
+This immediately makes the Claude/OpenCode A2A bridge idea more powerful too:
+
+```text
+effect-agent
+    ↓ image + instruction
+A2A
+    ↓
+Claude Code / OpenCode
+```
+
+and they can return screenshots/files/artifacts.
+
+### OpenAI
+
+Implement the relevant multimodal Chat Completions/request content forms:
+
+```text
+text
+image_url
+possibly file-style inputs supported by chosen compatibility target
+```
+
+and translate them to `Prompt.FilePart`.
+
+Again:
+
+```text
+OpenAI image URL
+       ↓ adapter
+Prompt.FilePart
+```
+
+No OpenAI content shape should escape `/openai`.
+
+### AG-UI
+
+Replace important media portions of:
+
+```ts
+Schema.Unknown
+```
+
+with actual protocol schemas where AG-UI defines them, and map them to/from Prompt parts.
+
+Unknown should remain only where AG-UI itself genuinely has extensibility.
+
+---
+
+# Phase 5 — add a Blob/Artifact store
+
+This is what makes the system serious.
+
+Inline content is fine for:
+
+```text
+12 KB PNG
+small PDF
+tiny screenshots
+```
+
+It is bad for:
+
+```text
+50 MB video
+20 MB PDF
+500 screenshots
+build artifacts
+```
+
+So add a narrow storage capability.
+
+I'd call the infrastructure abstraction something boring like:
+
+```ts
+BlobStore
+```
+
+rather than `MediaManager`.
+
+Something approximately:
+
+```ts
+interface BlobStore {
+  put(
+    content: Stream<Uint8Array>,
+    metadata: BlobMetadata
+  ): Effect<BlobRef, BlobError>
+
+  get(
+    ref: BlobRef
+  ): Stream<Uint8Array, BlobError>
+
+  stat(
+    ref: BlobRef
+  ): Effect<BlobInfo, BlobError>
+
+  remove(
+    ref: BlobRef
+  ): Effect<void, BlobError>
+}
+```
+
+with:
+
+```ts
+const BlobRef = Schema.Struct({
+  id: BlobId,
+  mediaType: Schema.String,
+  byteLength: Schema.Number,
+  sha256: Schema.String,
+  fileName: Schema.optional(Schema.String)
+})
+```
+
+Implementations later:
+
+```text
+memory
+filesystem
+S3/R2
+object storage
+```
+
+This service doesn't know anything about agents.
+
+---
+
+# Then the wire can externalize large file parts
+
+At the model-facing/runtime layer:
+
+```ts
+Prompt.FilePart {
+  mediaType: "image/png",
+  data: Uint8Array(...)
+}
+```
+
+At a remote/durable boundary, the codec can choose:
+
+```text
+small file
+  ↓
+inline base64
+
+large file
+  ↓
+BlobStore
+  ↓
+BlobRef
+```
+
+So the remote form becomes:
+
+```ts
+type WireFileData =
+  | InlineString
+  | InlineBytes
+  | Url
+  | BlobRef
+```
+
+Receiver resolves `BlobRef` when it actually needs the bytes.
+
+This also solves the relay problem we were just discussing.
+
+You do **not** want:
+
+```text
+30 MB image
+  ↓
+base64 (+33%)
+  ↓
+Relay RPC frame
+  ↓
+SQL history
+  ↓
+event stream
+```
+
+five times.
+
+Instead:
+
+```text
+Desktop
+   ↓
+BlobStore.put(image)
+
+BlobRef
+   ↓
+Relay
+   ↓
+Laptop
+
+Laptop
+   ↓ only if needed
+BlobStore.get(ref)
+```
+
+---
+
+# Content-addressing is particularly attractive
+
+I'd make `BlobId` derive from content hash where practical:
+
+```text
+sha256(bytes)
+```
+
+Then the same screenshot sent three times naturally deduplicates.
+
+And session history can safely refer to immutable content.
+
+```text
+BlobRef:
+  hash = abc123
+  mediaType = image/png
+  size = 812321
+```
+
+The data never changes underneath historical conversation state.
+
+That's exactly what we want.
+
+---
+
+# Security needs explicit rules
+
+Files introduce some security boundaries we don't currently have to care much about with text.
+
+I would require:
+
+* Maximum inline bytes.
+* Maximum accepted file bytes.
+* MIME type allow/deny policy where appropriate.
+* Never trust `fileName` as a filesystem path.
+* Never automatically write attachments into a workspace using their supplied name.
+* Remote URLs should **not automatically be fetched by the relay**.
+* URL fetching should go through the appropriate network/sandbox capability.
+* Blob references must be authorized by principal/session ownership.
+* Signed blob URLs should be short-lived if used.
+* Hash content when persisted.
+* Do not execute files merely because the model received them.
+
+And maintain the existing distinction:
+
+```text
+attachment availability
+        ≠
+agent permission to manipulate workspace
+```
+
+An uploaded image does not give the agent permission to write arbitrary files.
+
+---
+
+# Type safety can be very good
+
+This should eventually work:
+
+```ts
+const input = Prompt.make([
+  Prompt.userMessage({
+    content: [
+      Prompt.textPart({
+        text: "Compare these screenshots"
+      }),
+
+      Prompt.filePart({
+        mediaType: "image/png",
+        fileName: "before.png",
+        data: before
+      }),
+
+      Prompt.filePart({
+        mediaType: "image/png",
+        fileName: "after.png",
+        data: after
+      })
+    ]
+  })
+])
+
+yield* session.prompt(input)
+```
+
+And remotely:
+
+```ts
+const history =
+  yield* remote.history
+
+for (const message of history.content) {
+  if (message.role !== "user")
+    continue
+
+  for (const part of message.content) {
+    if (part.type === "file") {
+      part.mediaType // string
+      part.fileName  // string | undefined
+      part.data      // string | Uint8Array | URL
+    }
+  }
+}
+```
+
+No:
+
+```ts
+attachment: any
+image: unknown
+```
+
+needed.
+
+Effect has already solved the important domain typing for us.
+
+---
+
+# I would add a serious multimodal conformance suite
+
+Before saying the project “supports multimodal,” require these to pass:
+
+| Test              | Requirement                                                     |
+| ----------------- | --------------------------------------------------------------- |
+| local input       | PNG reaches LanguageModel unchanged                             |
+| multiple files    | text + 2 images retain order                                    |
+| URL file          | URL round-trips                                                 |
+| byte file         | `Uint8Array` round-trips byte-identically                       |
+| data URI          | string round-trips exactly                                      |
+| model file output | `Response.FilePart` becomes canonical history                   |
+| interruption      | partial file generation never creates corrupt canonical history |
+| HTTP              | prompt file survives client → server                            |
+| HTTP history      | file survives server → client                                   |
+| RPC JSON          | same                                                            |
+| RPC binary        | same                                                            |
+| durable           | image survives process restart                                  |
+| export/import     | attachments survive                                             |
+| session tree      | branch snapshot preserves attachments                           |
+| compaction        | serializer handles file parts intentionally                     |
+| A2A               | image input/output maps correctly                               |
+| AG-UI             | supported media round-trips                                     |
+| OpenAI            | image inputs map correctly                                      |
+| relay             | BlobRef crosses nodes                                           |
+| auth              | unauthorized peer cannot fetch BlobRef                          |
+| size limits       | oversized inline payload rejected cleanly                       |
+| dedupe            | same blob produces same content address                         |
+
+---
+
+## So I would characterize the project today as
+
+```text
+MULTIMODAL DOMAIN MODEL        ✅ excellent
+LOCAL AGENT SEMANTICS          ✅ basically correct
+CANONICAL HISTORY              ✅ correct
+SCHEMA/TYPING FOUNDATION       ✅ correct
+
+WIRE HARDENING                 🟨
+DURABLE BINARY STORAGE         🟨
+REMOTE RESULT                  ❌ text-only
+EVENT OBSERVATION              ❌ text-only
+A2A                            ❌ text-only
+AG-UI                          🟨 text-centric
+OPENAI COMPAT                  ❌ text-only
+LARGE OBJECT STORAGE           ❌
+RELAY MEDIA                    ❌ not built yet
+```
+
+So this is **not a foundational redesign**. It's exactly the kind of gap I'd want to find: the core chose `Prompt.Prompt` rather than inventing a text-only conversation type, which means the hard semantic decision was already correct.
+
+The plan should be:
+
+```text
+1. PromptWire JSON-safe codec
+2. multimodal conformance tests
+3. remote result/content events
+4. A2A / AG-UI / OpenAI projections
+5. BlobStore + BlobRef
+6. automatic inline-vs-reference transport
+7. relay integration
+```
+
+After that, images, PDFs, generated files, screenshots from browser tools, artifacts from remote coding agents, and files passed between machines can all use the **same typed content path** rather than becoming five unrelated attachment systems.

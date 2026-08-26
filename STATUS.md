@@ -3,9 +3,9 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 843 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 1193 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
-imports every published entry point from the packed tarball (31 entries).
+imports every published entry point from the packed tarball (39 entries).
 `verify:package` is the source of truth for the entry-point count; regenerate
 these numbers from `npm run verify:package` and `npm run test` when they change.
 
@@ -50,6 +50,7 @@ src/
 │  batteries — each a package over a seam, no core change:
 ├ sandbox/             scoped filesystem + process         (/sandbox)
 ├ coding/              a coding-agent tool battery         (/coding)
+├ pi/                  Pi-contract coding tools            (/pi)
 ├ subagent/            a tool that opens a child session   (/subagent)
 ├ state/               persistent typed agent state        (/state)
 ├ skills/              on-demand skills, loaded lazily     (/skills)
@@ -280,8 +281,12 @@ sharded submit/steer/follow-up. Phase 5 runs on `SingleRunner` with a SQLite
 journal on disk: a submission suspends and resumes against real SQL storage,
 replaying turn 1 rather than re-issuing it.
 
-**Process loss is now covered too**, and closing it found two real bugs. First,
-`Workflow.suspend` signals by setting a flag on the `WorkflowInstance` and
+**Process loss while durably suspended is covered**, and closing it found two
+real bugs. Recovery from a runner dying mid-activity is not covered by this
+test: `SingleRunner` has no real health checks or peer to take over its shard,
+and the multi-node fixture in `test/ClusterMultiNode.test.ts` is still skipped.
+The parked-recovery work found two real bugs. First, `Workflow.suspend` signals
+by setting a flag on the `WorkflowInstance` and
 interrupting the fiber — and a session absorbs interruption by design, so the
 workflow body returned normally and committed `Success("")`. Losing a runner
 *finalised* the submission instead of leaving it resumable. The body now checks
@@ -660,6 +665,13 @@ Snapshots are refused for a running session. A turn commits its assistant
 message and its tool results as one unit, so a snapshot taken between them would
 record a conversation that never existed. Waiting for quiescence is the caller's
 job, and `AgentBusyError` is how they find out they have not.
+
+**JSONL commit log (export E4).** The envelope is also an append-only file:
+a header line (version, `exportedAt`, session id, provenance) and then one
+encoded message per line. `headerOf` is the session picker — it reads the first
+line only, so a truncated file whose header survived still lists. `append`
+extends a log without rewriting the header. EventLog was not adopted; H4b
+already recorded why. Canonical history is unchanged.
 
 `MakeOptions.history` is the mechanism, and it *replaces* the agent's
 instructions rather than being prepended: a restored transcript already contains
@@ -2195,6 +2207,17 @@ projection (files to read/write on the path, bash to shell on the command), so a
 policy gates them without knowing their shapes. Failures reach the model as
 strings it can act on. 134 tests (`test/CodingToolkit.test.ts`,
 `test/Replace.test.ts`, `test/CodingPrompts.test.ts`).
+
+**`/pi` -- Pi-shaped coding tools, a second toolkit.** Same sandbox and
+permission projections as `/coding`, different contracts: `edit_file` takes
+a batch of `edits[]` and applies them atomically against the original file
+(overlaps refused, failures named `edits[i] of n`); `list_files` is rendered
+text with a `/` suffix, alphabetical order and a 500-entry cap; `bash` can
+be PowerShell. Truncation banners name the limit that fired. P0 in
+`docs/plan-pi-toolkit.md` settled this as a separate export rather than
+absorbing Pi into `/coding`. Both toolkits share one per-file write lock
+(`coding/internal/fileLock.ts`), keyed on `Sandbox.canonical` so a symlink
+and its target serialise (P1).
 
 The tool internals are ported from opencode v2 (MIT), verified line by line
 against commit `2a6be0a`; `docs/plan-opencode-tools-port.md` records the method,

@@ -1,0 +1,1031 @@
+Yes. And I think there are **two distinct features worth supporting**, because they solve different problems:
+
+```text
+1. Claude Code / OpenCode AS A MODEL
+   our AgentLoop + our tools + our permissions
+   external CLI supplies the next model response
+
+2. Claude Code / OpenCode AS AN AGENT
+   their loop + their tools + their session machinery
+   effect-agent delegates a task to them
+```
+
+The second one is where **A2A fits extremely well**.
+
+## 1. CLI as an Effect `LanguageModel`
+
+Technically this is very possible.
+
+Claude Code already has a non-interactive mode:
+
+```bash
+claude -p "..."
+```
+
+with `json` and `stream-json` output, session IDs/resumption, system prompts, max-turn limits, permission settings, and streaming input. ([Claude Platform Docs][1])
+
+So we could provide:
+
+```ts
+const ClaudeCode = ClaudeCodeLanguageModel.layer({
+  command: "claude",
+  model: "sonnet"
+})
+
+const agent = Agent.make().pipe(
+  Agent.withInstructions(...),
+  Agent.withTool(...),
+  Agent.withTool(...)
+)
+
+yield* Agent.run(agent, input).pipe(
+  Effect.provide(ClaudeCode)
+)
+```
+
+Internally:
+
+```text
+Effect AI LanguageModel.generateText
+              │
+              ▼
+      serialize Prompt
+              │
+              ▼
+      ChildProcessSpawner
+              │
+              ▼
+ claude -p --output-format json
+              │
+              ▼
+      parse response
+              │
+              ▼
+GenerateTextResponse
+```
+
+And streaming:
+
+```text
+LanguageModel.streamText
+        ↓
+claude --output-format stream-json
+        ↓
+Stream<Response.Part>
+```
+
+That would be a legitimate provider.
+
+### But there's a semantic problem
+
+Claude Code is not really a model.
+
+It is already:
+
+```text
+model
++
+agent loop
++
+tools
++
+filesystem
++
+shell
++
+permissions
++
+session state
++
+context management
+```
+
+If we put that behind:
+
+```ts
+LanguageModel
+```
+
+while also letting it use its own tools, we'd accidentally get:
+
+```text
+effect-agent AgentLoop
+        ↓
+Claude Code AgentLoop
+        ↓
+Claude's tools
+```
+
+An agent inside an agent masquerading as a model.
+
+That's conceptually wrong.
+
+So the `LanguageModel` adapter should have a strict **model-like mode**:
+
+```text
+one invocation
+no autonomous tool loop
+no hidden workspace mutation
+return model response
+```
+
+If we cannot reliably make a CLI satisfy those semantics, we should **not claim it is a faithful `LanguageModel` provider**.
+
+It can still be offered as a best-effort adapter.
+
+---
+
+# 2. The much more interesting design: CLI as an A2A agent
+
+This feels architecturally right.
+
+```text
+effect-agent
+     │
+     │ A2A
+     ▼
+┌─────────────────────┐
+│ Claude Code Adapter │
+│                     │
+│ A2A ↔ Claude CLI    │
+└──────────┬──────────┘
+           │
+        claude
+```
+
+And:
+
+```text
+effect-agent
+     │
+     │ A2A
+     ▼
+┌─────────────────────┐
+│ OpenCode Adapter    │
+│                     │
+│ A2A ↔ OpenCode API  │
+└──────────┬──────────┘
+           │
+      opencode serve
+```
+
+Our `/a2a` package already exposes real A2A v1 Agent Cards, JSON-RPC, streaming, tasks, cancellation, session resolution, and `INPUT_REQUIRED` handling over `AgentSessionHost`.
+
+So we already believe:
+
+> **A2A is the semantic boundary for an agent talking to another autonomous agent.**
+
+That's exactly what Claude Code and OpenCode are.
+
+---
+
+# OpenCode is particularly easy
+
+I would **not actually shell out to `opencode run` for the serious implementation**.
+
+OpenCode now explicitly supports:
+
+```bash
+opencode serve
+```
+
+as a headless server with a full HTTP API, and its architecture is already server/client based. ([OpenCode][2])
+
+It also supports:
+
+```bash
+opencode run --format json
+```
+
+for raw event output, and can attach to an already-running server. ([OpenCode][3])
+
+So:
+
+```text
+                effect-agent
+
+                    A2A
+                     │
+                     ▼
+              OpenCodeBridge
+                     │
+              OpenCode HTTP API
+                     │
+                     ▼
+              opencode serve
+```
+
+is much better than:
+
+```text
+spawn opencode
+parse stdout
+kill
+repeat
+```
+
+We get their native:
+
+```text
+sessions
+events
+permissions
+interrupt
+models
+agents
+filesystem
+tools
+etc.
+```
+
+And the API you pasted earlier is almost absurdly rich for this purpose.
+
+---
+
+# OpenCode also has ACP
+
+OpenCode currently exposes:
+
+```bash
+opencode acp
+```
+
+which starts an **Agent Client Protocol** server over stdin/stdout NDJSON. ([OpenCode][4])
+
+So there are actually three possible adapters:
+
+```text
+OpenCode CLI JSON
+     easiest
+
+OpenCode ACP
+     agent-protocol integration
+
+OpenCode HTTP Server
+     richest / probably best
+```
+
+I would choose:
+
+> **OpenCode HTTP Server as primary. ACP as an optional adapter experiment.**
+
+A2A and ACP shouldn't be conflated. We can translate ACP → our agent semantics/A2A if useful, but they're different protocols.
+
+---
+
+# Claude Code is a little different
+
+Claude gives us an excellent CLI automation interface:
+
+```bash
+claude -p
+  --output-format stream-json
+  --input-format stream-json
+```
+
+and produces structured lifecycle output including a session ID. ([Claude Platform Docs][1])
+
+So a bridge can do:
+
+```text
+A2A message
+   ↓
+ClaudeCodeBridge
+   ↓
+ChildProcessSpawner
+   ↓
+claude -p --output-format stream-json
+   ↓
+parse stream
+   ↓
+A2A task updates/artifacts
+```
+
+Then retain:
+
+```text
+A2A context
+      ↕
+Claude session_id
+```
+
+so the next A2A message can use:
+
+```bash
+claude --resume <session-id>
+```
+
+Claude explicitly supports session resumption. ([Claude Platform Docs][1])
+
+Eventually I'd probably use Anthropic's programmatic Claude Code SDK underneath instead of the executable where that gives us cleaner lifecycle control, but that should be an **implementation substitution**, not an architectural change.
+
+---
+
+# This suggests a nice new battery
+
+Maybe:
+
+```text
+/external
+```
+
+or, more narrowly:
+
+```text
+/a2a/claude-code
+/a2a/opencode
+```
+
+I prefer the latter initially because it avoids inventing an `ExternalAgentRuntime` abstraction before we need one.
+
+For example:
+
+```ts
+const ClaudeCode = ClaudeCodeA2A.layer({
+  workspace,
+  command: "claude"
+})
+
+const OpenCode = OpenCodeA2A.layer({
+  baseUrl: "http://127.0.0.1:4096"
+})
+```
+
+Both expose the **same A2A-facing semantics**, despite wildly different implementations.
+
+---
+
+# Then they become ordinary subagents
+
+This is where it gets fun.
+
+We could adapt an A2A agent into an Effect tool:
+
+```ts
+const ClaudeCoder = A2A.tool({
+  agent: ClaudeCode,
+  name: "claude_coder",
+  description:
+    "Delegate a coding task to Claude Code."
+})
+
+const Manager = Agent.make().pipe(
+  Agent.withTool(ClaudeCoder),
+  Agent.withTool(OpenCodeCoder)
+)
+```
+
+Now your effect-agent agent can decide:
+
+```text
+"I'll ask Claude Code to implement this."
+```
+
+and:
+
+```text
+effect-agent parent
+       │
+       │ tool invocation
+       ▼
+ A2A client
+       │
+       ▼
+ Claude Code
+       │
+       ├ reads repo
+       ├ runs tests
+       ├ edits files
+       └ returns result
+       │
+       ▼
+ parent agent continues
+```
+
+That's a powerful multi-agent composition story without inventing a proprietary subagent protocol.
+
+---
+
+# Or launch several concurrently
+
+Because they're just Effects:
+
+```ts
+const results = yield* Effect.all(
+  {
+    claude: ClaudeCoder.run(task),
+    opencode: OpenCodeCoder.run(task),
+    ours: Agent.run(LocalCoder, task)
+  },
+  { concurrency: "unbounded" }
+)
+```
+
+Then another agent can compare the results.
+
+No special:
+
+```text
+MultiAgentOrchestrator
+Swarm
+Crew
+DelegationRuntime
+```
+
+needed.
+
+Just Effects.
+
+---
+
+# It also fits the relay perfectly
+
+This becomes substantially more interesting with the relay we just discussed.
+
+Imagine:
+
+```text
+                    RELAY
+
+          ┌──────────┼──────────┐
+          │          │          │
+       Desktop     Laptop      VPS
+          │          │          │
+     Claude Code  OpenCode  effect-agent
+```
+
+Your VPS agent could say:
+
+```text
+delegate task to:
+  patrick-desktop/claude-code
+```
+
+and the path becomes:
+
+```text
+Manager Agent
+     ↓
+A2A
+     ↓
+RelayRpc
+     ↓
+Desktop
+     ↓
+ClaudeCodeA2A
+     ↓
+Claude CLI
+```
+
+Now we've effectively created an agent mesh where **existing agent runtimes become addressable workers**.
+
+That is much more compelling than only supporting our own Agent runtime.
+
+---
+
+# Permissions require care
+
+This is perhaps the most important part.
+
+If we invoke:
+
+```bash
+claude --dangerously-skip-permissions
+```
+
+against your actual filesystem, we've bypassed all the carefully designed permission semantics in effect-agent.
+
+Don't do that by default.
+
+There are two complementary boundaries.
+
+### Physical boundary
+
+Run the external coding agent in:
+
+```text
+Workspace
+   ↓
+Sandbox
+   ↓
+Claude/OpenCode
+```
+
+So even if the external agent internally says:
+
+```text
+rm -rf /
+```
+
+the environment prevents it from affecting anything outside its assigned authority.
+
+This is the strongest boundary.
+
+### Human/policy boundary
+
+Ideally map the external runtime's permission requests into ours:
+
+```text
+Claude/OpenCode permission request
+              ↓
+      adapter normalizes
+              ↓
+       PermissionPolicy
+              ↓
+       Allow / Ask / Deny
+              ↓
+         Elicitation
+              ↓
+     response to external agent
+```
+
+---
+
+# Claude has a particularly nice hook for this
+
+Claude Code exposes:
+
+```bash
+--permission-prompt-tool
+```
+
+which lets non-interactive mode send permission prompts to an MCP tool. ([Claude Platform Docs][1])
+
+That's almost tailor-made for us.
+
+We could create a tiny MCP permission bridge:
+
+```text
+Claude Code
+    │
+ permission needed
+    │
+    ▼
+effect-agent MCP permission tool
+    │
+    ▼
+Permission.evaluate(...)
+    │
+  ┌─┴──────┐
+Allow     Ask
+           │
+      Elicitation
+           │
+         user
+```
+
+This could make Claude Code's native tool execution obey the **same application-level human approval policy** as our own agents.
+
+That's extremely nice.
+
+---
+
+# OpenCode can be even tighter
+
+OpenCode's server API already has first-class permission requests and replies—the endpoints from the API you pasted:
+
+```text
+GET  pending permissions
+GET  session permissions
+POST permission
+POST permission reply
+```
+
+So `OpenCodeA2A` could monitor OpenCode permission requests and translate them directly into:
+
+```text
+effect-agent Permission / Elicitation
+```
+
+Then answer OpenCode once our policy/human responds.
+
+So both external agents can effectively participate in the same authorization architecture.
+
+---
+
+# There are three levels of integration
+
+I would explicitly design and document them like this:
+
+| Integration               | Semantics                          | Best use                            |
+| ------------------------- | ---------------------------------- | ----------------------------------- |
+| `ClaudeCodeLanguageModel` | CLI pretends to be model inference | Run our Agent loop using CLI access |
+| `ClaudeCodeA2A`           | Claude Code is an autonomous agent | Delegate coding tasks               |
+| `OpenCodeA2A`             | OpenCode is an autonomous agent    | Delegate coding tasks               |
+| `OpenCodeLanguageModel`   | OpenCode pretends to be inference  | Possible, but least natural         |
+
+My strongest recommendation is:
+
+> **Treat full coding CLIs as agents first and model providers second.**
+
+---
+
+# Could we still make the LanguageModel adapter ergonomic?
+
+Absolutely.
+
+Something like:
+
+```ts
+import { ClaudeCode } from "@doeixd/effect-agent/claude-code"
+
+const Claude = ClaudeCode.languageModel({
+  model: "sonnet"
+})
+
+const Researcher = Agent.make().pipe(
+  Agent.withInstructions("Research carefully.")
+)
+
+const result =
+  yield* Agent.run(Researcher, question).pipe(
+    Effect.provide(Claude)
+  )
+```
+
+Internally, it should force a configuration as close to model semantics as possible.
+
+For example conceptually:
+
+```text
+claude -p
+--output-format stream-json
+--max-turns 1
+...
+```
+
+and restrict autonomous tool behavior.
+
+If the external CLI cannot obey a requested Effect AI feature, fail explicitly.
+
+For example:
+
+```text
+our LanguageModel request contains
+Effect AI toolkit
+        ↓
+CLI adapter cannot expose those tools
+        ↓
+UnsupportedLanguageModelFeature
+```
+
+Do **not silently ignore tools**.
+
+---
+
+# The important capability negotiation
+
+A raw provider adapter needs to admit that it may not support everything:
+
+```ts
+interface Capabilities {
+  readonly streaming: boolean
+  readonly toolCalling: boolean
+  readonly structuredOutput: boolean
+  readonly reasoning: boolean
+  readonly usage: boolean
+}
+```
+
+However, before adding a new effect-agent `ModelCapabilities` abstraction, check whether Effect AI already has enough provider capability vocabulary.
+
+Same rule as always.
+
+---
+
+# Sessions are different at the two levels
+
+If used as `LanguageModel`:
+
+```text
+OUR AgentSession
+owns conversation
+
+Claude/OpenCode
+is effectively stateless inference
+```
+
+We should normally not let Claude Code's session be canonical.
+
+Our `Prompt` is canonical.
+
+If used as A2A agent:
+
+```text
+Claude/OpenCode
+owns its own conversation/session
+
+A2A contextId/task
+maps to external session ID
+```
+
+For Claude:
+
+```text
+A2A context abc
+      ↕
+Claude session abc123
+```
+
+For OpenCode:
+
+```text
+A2A context abc
+      ↕
+OpenCode session ses_xyz
+```
+
+That's an important distinction.
+
+---
+
+# Persistence mapping
+
+Use ordinary Effect persistence:
+
+```ts
+ExternalSessionStore
+```
+
+conceptually:
+
+```text
+(adapter, contextId)
+        ↓
+externalSessionId
+```
+
+But I'd probably initially keep this private to each adapter rather than inventing a shared public store.
+
+Claude adapter:
+
+```text
+claude:a2a-context-X → session_id abc
+```
+
+OpenCode adapter:
+
+```text
+opencode:a2a-context-X → session_id xyz
+```
+
+Back it with Effect `KeyValueStore` if persistence is desired.
+
+No custom SQL abstraction.
+
+---
+
+# Cancellation maps naturally
+
+A2A:
+
+```text
+cancel task
+```
+
+Claude CLI:
+
+```text
+interrupt ChildProcess
+```
+
+OpenCode:
+
+```text
+POST session/{id}/interrupt
+```
+
+So:
+
+```text
+A2A CancelTask
+      ↓
+adapter
+      ├ Claude → process interruption
+      └ OpenCode → API interrupt
+```
+
+Our existing A2A implementation already has cancellation/task semantics, so this is a very natural mapping.
+
+---
+
+# `INPUT_REQUIRED` maps naturally too
+
+This gets surprisingly elegant:
+
+```text
+Claude/OpenCode
+      ↓
+asks permission / question
+      ↓
+A2A adapter
+      ↓
+task state = INPUT_REQUIRED
+      ↓
+caller/user answers
+      ↓
+adapter resumes external runtime
+```
+
+Our A2A implementation already explicitly supports paused tasks and `INPUT_REQUIRED`, including resuming the underlying session after an external answer.
+
+So the semantics are already there.
+
+---
+
+# Output/event mapping
+
+Claude's `stream-json` gives us structured stream events and a terminal result with session metadata. ([Claude Platform Docs][5])
+
+OpenCode's:
+
+```bash
+opencode run --format json
+```
+
+emits raw JSON events, and its server exposes even richer session/event APIs. ([OpenCode][3])
+
+Map those to A2A:
+
+```text
+external text/deltas
+      ↓
+A2A task/artifact stream
+
+permission/question
+      ↓
+INPUT_REQUIRED
+
+finished
+      ↓
+COMPLETED
+
+failure
+      ↓
+FAILED
+
+interrupt
+      ↓
+CANCELED
+```
+
+Don't try to convert every foreign event into our `AgentEvent`.
+
+They are not our runtime events.
+
+A2A is the normalization boundary.
+
+---
+
+# This is another reason A2A is valuable
+
+Without it, we might be tempted to invent:
+
+```ts
+interface ForeignAgent {
+  start()
+  prompt()
+  resume()
+  cancel()
+  events()
+  question()
+  result()
+}
+```
+
+But... that's basically what an agent protocol like A2A already exists to describe.
+
+So in this case I'd actually say:
+
+> **Don't invent `ExternalAgent`. Normalize external autonomous runtimes to A2A.**
+
+That keeps the number of concepts down.
+
+---
+
+# Proposed packages
+
+I think the clean target might be:
+
+```text
+@doeixd/effect-agent/claude-code
+    languageModel(...)
+    a2a(...)
+
+@doeixd/effect-agent/opencode
+    languageModel(...)      // perhaps later
+    a2a(...)
+```
+
+Or if package exports should emphasize protocol:
+
+```text
+/claude-code
+/opencode
+```
+
+with:
+
+```ts
+ClaudeCode.languageModel(...)
+ClaudeCode.a2a(...)
+
+OpenCode.a2a(...)
+OpenCode.languageModel(...)
+```
+
+That's actually very readable.
+
+---
+
+# Example
+
+You could eventually write something like:
+
+```ts
+const ClaudeCoder =
+  ClaudeCode.a2a({
+    workspace,
+    model: "sonnet"
+  })
+
+const OpenCodeCoder =
+  OpenCode.a2a({
+    workspace,
+    agent: "build"
+  })
+
+const Manager = Agent.make().pipe(
+  Agent.withInstructions(`
+    You coordinate coding work.
+    Delegate when useful.
+  `),
+
+  Agent.withTool(
+    A2A.tool("claude", ClaudeCoder)
+  ),
+
+  Agent.withTool(
+    A2A.tool("opencode", OpenCodeCoder)
+  )
+)
+```
+
+Or remotely:
+
+```ts
+const ClaudeCoder =
+  A2A.client({
+    transport: Relay.peer(
+      Desktop,
+      ClaudeCodeEndpoint
+    )
+  })
+```
+
+and the manager doesn't know Claude is running on another physical machine.
+
+---
+
+# I would implement it in this order
+
+1. **Claude Code A2A bridge first.** Spawn through Effect `ChildProcessSpawner`; parse `stream-json`; persist Claude session ID; map interruption and errors; run it inside our Workspace/Sandbox boundary.
+
+2. **Permission MCP bridge for Claude Code.** Use Claude's `--permission-prompt-tool` to translate its permission requests into our `Permission → Elicitation` path. ([Claude Platform Docs][1])
+
+3. **OpenCode A2A bridge using `opencode serve`.** Don't parse terminal text. Use its native HTTP/session/event/permission APIs. ([OpenCode][2])
+
+4. **Create `A2A.tool(...)` if we don't already have an equivalent.** An A2A agent becomes a normal Effect AI tool, so any effect-agent Agent can delegate to it.
+
+5. **Make both bridges work over Relay.** At that point local vs remote becomes transport selection.
+
+6. **Then experiment with `ClaudeCode.languageModel`.** Verify we can reliably suppress autonomous agent behavior and faithfully implement Effect AI `LanguageModel` semantics.
+
+7. **Only then decide whether `OpenCode.languageModel` is worth shipping.** OpenCode is so clearly an agent/server that treating it as a raw model may offer little benefit.
+
+So: **yes, absolutely possible.** But your A2A instinct points toward the stronger architecture.
+
+A CLI-based coding system should normally enter effect-agent as:
+
+```text
+                  A2A Agent
+                     ▲
+                     │
+            ┌────────┴────────┐
+            │                 │
+      Claude Code          OpenCode
+```
+
+rather than pretending:
+
+```text
+Claude Code == LanguageModel
+```
+
+And then, where useful, we can additionally offer the latter as a convenience adapter. That would let the project orchestrate not only agents built with effect-agent, but essentially **any existing agent runtime we can bridge to A2A**.
+
+[1]: https://docs.anthropic.com/en/docs/claude-code/cli-usage?utm_source=chatgpt.com "CLI reference - Anthropic"
+[2]: https://dev.opencode.ai/docs/server/?utm_source=chatgpt.com "Server | OpenCode"
+[3]: https://dev.opencode.ai/docs/cli?utm_source=chatgpt.com "CLI | OpenCode"
+[4]: https://dev.opencode.ai/docs/cli/?utm_source=chatgpt.com "CLI | OpenCode"
+[5]: https://docs.anthropic.com/fr/docs/claude-code/sdk?utm_source=chatgpt.com "SDK Claude Code - Anthropic"

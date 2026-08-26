@@ -74,7 +74,7 @@ Core is the default import; everything else is an explicit subpath.
 : `/client` · `/rpc` · `/http` · `/ag-ui` · `/a2a` · `/mcp` (`/mcp/v1`, `/mcp/v2`) · `/durable` · `/cluster` · `/durable-streams` · `/openai`.
 
 **Batteries** (capabilities over a seam)
-: `/coding` — file/shell tools over a sandbox · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
+: `/coding` — file/shell tools over a sandbox · `/pi` — the same seam with Pi's tool contracts (batch edits, rendered listings, PowerShell) · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
 
 **Host & testing**
 : `/sandbox` (portable) + `/sandbox/local` (host) · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
@@ -581,9 +581,12 @@ const exit = yield* DurableAgent.result(durable, executionId)
 
 Model calls and tool calls become `Activity`s, so a resumed submission returns
 persisted results rather than re-issuing them — the refund does not go out
-twice, including when the runner that started it is lost and another takes its
-shards over. Journals to SQLite via `SingleRunner`, or runs in memory for tests.
-Canonical history is not stored: it is rebuilt from replayed activity results.
+twice. A SQLite-backed submission also survives losing the process while it is
+durably parked and resumes when another process answers the outstanding wait.
+Recovery from a runner dying mid-activity requires a real multi-node cluster;
+that path is not yet validated, and `SingleRunner` cannot reassign its in-flight
+work. Canonical history is not stored: it is rebuilt from replayed activity
+results.
 
 `result` yields an `Exit`, because a failed submission is still a *completed*
 workflow. Its failure crosses as a typed `DurableAgentFailure` carrying the
@@ -687,7 +690,9 @@ a fiber. See [`examples/durable-client.ts`](./examples/durable-client.ts).
 
 The local and durable implementations pass the same conformance suite
 (`test/AgentClientContract.ts`); the durable one is additionally proven across a
-real runner loss on SQLite (`test/DurableAgentClientSql.test.ts`).
+process loss while the workflow is parked for approval on SQLite
+(`test/DurableAgentClientSql.test.ts`). Mid-activity runner takeover remains an
+open multi-node test in `test/ClusterMultiNode.test.ts`.
 
 `@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
 session id is the routing key and out-of-band input reaches the owning node.
