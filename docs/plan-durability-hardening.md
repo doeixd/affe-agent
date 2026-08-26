@@ -355,12 +355,34 @@ fixture exists with real runner health (`HttpRunner` + `RunnerHealth.layerPing`)
 That makes H6 the unblocking milestone for two success conditions rather than
 one, and raises it above H7 and H9 in order.
 
-### H7 — Time-dependent paths, on `TestClock`
+### H7 — Time-dependent paths, on `TestClock` — **mostly moot; capability pinned**
 
-Shard leases hold for 35s; a real-time test is unaffordable and therefore
-absent. `TestClock` is already used in `Scheduling.test.ts`. Bring lease
-expiry, reassignment-during-call, and the 25ms interrupt poll under virtual
-time so those paths are tested in milliseconds and deterministically.
+The premise was that these paths are absent because a real-time test is
+unaffordable. Measuring first dissolved most of it:
+
+- **The 25ms interrupt poll is already tested**, by four cases across
+  `Durable.test.ts` and `DurableAgentClient.test.ts`, and they run in 627ms
+  together. There was no expensive test here to make cheap.
+- **The durable suites are not slow.** 2.6s (`Cluster`), 2.8s (`Durable`),
+  3.2s (`DurableAgentClient`), 11.9s (`DurableAgentClientSql`), 11.3s
+  (`DurableHttpIntegration`) -- and the two slow ones spend it on deliberate
+  `sleep`s for shard leases, not on polling.
+- **Lease expiry and reassignment are genuinely untested, and not because of
+  time.** They need a second runner to reassign *to*. `SingleRunner` has no-op
+  runner health checks, so it never concludes a peer has died and never moves a
+  shard; the scenario cannot occur at any speed. That is H6.
+
+What survives is the piece H6 will stand on, and it is now pinned by
+`DurableVirtualTime.test.ts`: **the cluster's timing goes through Effect's
+`Clock`**, so a `TestClock` drives it. `Sharding` reads
+`clock.currentTimeMillisUnsafe()` rather than `Date.now()`. A full durable
+submission completes in ~86ms of virtual time, which is what makes a multi-node
+fixture viable -- one that had to wait out real 35-second leases per
+observation would not be a test anyone runs.
+
+The test is deliberately small. It is a load-bearing assumption for the next
+milestone, and an assumption earns a test exactly when something is about to be
+built on it.
 
 ### H8 — Settle the delta-chunking conflict — **done**
 
