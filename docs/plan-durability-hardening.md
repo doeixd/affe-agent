@@ -355,15 +355,17 @@ absent. `TestClock` is already used in `Scheduling.test.ts`. Bring lease
 expiry, reassignment-during-call, and the 25ms interrupt poll under virtual
 time so those paths are tested in milliseconds and deterministically.
 
-### H8 — Settle the delta-chunking conflict
+### H8 — Settle the delta-chunking conflict — **done**
 
-A replayed streamed submission re-offers deltas whose chunking the journal does
-not preserve; the log reports a conflict and warns. That is a **known false
-positive**, and false positives train people to ignore the alarm that matters
-(D6). Decide deliberately: make replay re-chunk deterministically, exclude
-deltas from conflict detection by keying them differently, or keep the warning
-and document it as expected. Any of the three is fine; leaving it ambiguous is
-not.
+Settled by the second option: `DurableSubmission`'s recorder warns on a
+conflict only when the event is *not* a `MessageDelta`. The first run streams
+the provider's chunks live and a replay re-expresses the journalled text as one
+chunk, so the payloads differ under the same key -- expected, and the log keeps
+the first either way. A conflict on any other event is a recorder disagreeing
+with itself about a lifecycle fact, which is what the warning is for.
+
+Recorded here because the milestone was written as though the decision were
+still open; the code had already made it.
 
 ### H9 — Soak
 
@@ -399,9 +401,25 @@ will.
   errors die, and letting the entity swallow a failed offer.
 - **SD2:** Each of D1–D8 has a test that fails when the guarantee is removed,
   demonstrated by actually removing it.
-- **SD3:** Every activity boundary in a representative run is exercised as a
-  crash point, and the count is asserted so new activities cannot silently go
-  untested.
+- **SD3:** Partly. **The census is done and is the half that prevents drift:**
+  `ActivityBoundaries.test.ts` wraps `activityExecute` -- the one place every
+  activity passes through, whoever created it -- and asserts the set of
+  boundaries each entry point crosses. A new `Activity.make` anywhere reachable
+  fails it as `unclassified`, demonstrated by adding one.
+
+  Writing it corrected two guesses. `permission decision` and `channel drain`
+  are boundaries in a plain durable run whether or not a policy is configured,
+  and `session projection` belongs only to the client's `DurableSubmission` --
+  hence two censuses rather than one. Guessing at this list was wrong in two
+  places out of five, which is the argument for asserting it.
+
+  **What remains is crash coverage per boundary.** Today the model and tool
+  boundaries are covered by `Durable.test.ts`'s replay tests and the session
+  projection by `DurableAgentClientSql.test.ts`'s R173 case; `channel drain`
+  and `permission decision` have no crash point of their own. Doing it
+  systematically needs a persistent journal -- the in-memory `TestRunner` does
+  not survive the process loss being simulated -- so it belongs with the SQL
+  fixtures rather than the memory ones.
 - **SD4:** The existing durable suites pass under write-failure,
   duplicate-record and reorder faults.
 - **SD5:** ✓ A browser `EventSource` reconnect resumes from `Last-Event-ID` with

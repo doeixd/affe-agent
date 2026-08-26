@@ -25,12 +25,35 @@
  * right way round for an input chosen by a model rather than a person -- the
  * refusal names the problem and the model can write something simpler.
  *
+ * ## A pattern it does not catch, measured
+ *
+ * The gap is not hypothetical, and the shape is ordinary enough to write by
+ * accident:
+ *
+ * ```
+ * a*a*a*a*a*a*a*a*a*a*a*a*b
+ * ```
+ *
+ * Twenty-five characters, accepted here, and against `"a" * 40 + "!"` it does
+ * not finish -- killed at twenty seconds, and again at four minutes. There is
+ * no quantified group and no alternation, so there is nothing for the scan
+ * above to object to: the blowup comes from a *run* of independent quantifiers
+ * over the same character, each free to give back what the next takes. Every
+ * `search` this process serves afterwards is gone with it, because the event
+ * loop is.
+ *
+ * Recorded here rather than in a plan document, because this is where someone
+ * deciding whether the check is sufficient will be standing.
+ *
  * **The real fix is a linear-time engine** (RE2 or equivalent) or running the
  * match somewhere killable. Both are larger changes than this file: RE2 is a
  * native dependency, which this package's portability rules exclude from the
  * core, and a worker means an async boundary through the whole search path.
- * Until one of them lands, this narrows the door rather than closing it, and
- * says so.
+ * `coding/internal/glob.ts` is the same problem solved the first way, for a
+ * far smaller language -- a glob has no backreferences or lookaround to give
+ * up, and a regular expression does, so the trade there was free and here it
+ * is not. Until one of them lands, this narrows the door rather than closing
+ * it, and says so.
  */
 
 /**
