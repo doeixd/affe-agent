@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
+import { Cause, Config, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -12,6 +12,7 @@ import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
+import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import * as Schedules from "../internal/schedules.js"
 import type { StorageError } from "../Errors.js"
@@ -58,6 +59,11 @@ export interface Options {
    * watching the session's events.
    */
   readonly stream?: boolean | undefined
+  /**
+   * How often the workflow checks for an externally recorded interrupt.
+   * Load `DurablePolling.workflowInterrupt` when this is operator policy.
+   */
+  readonly interruptPollInterval?: Duration.Duration | undefined
 }
 
 /**
@@ -313,6 +319,9 @@ const throughReassignment = <A, E, R>(
     Effect.retry({
       while: (error: E | Reassigning) => error instanceof Reassigning,
       times: 600,
+      // Deliberately fixed with the 600-attempt budget: roughly one minute,
+      // which must outlast the cluster's default 35s shard lease. Making only
+      // the interval configurable could silently shorten that safety window.
       schedule: Schedules.steady(Duration.millis(100))
     }),
     Effect.catchIf(
@@ -536,8 +545,25 @@ export const result = <W extends ReturnType<typeof workflow>>(
     ),
     {
       times: 600,
-      schedule: Schedule.spaced(options?.interval ?? Duration.millis(10))
+      schedule: Schedule.spaced(
+        options?.interval ?? DurablePolling.defaults.result
+      )
     }
+  )
+
+/** As `result`, with its polling interval loaded through Effect Config. */
+export const resultConfig = <W extends ReturnType<typeof workflow>>(
+  agent: W,
+  executionId: string,
+  options?: { readonly interval?: Config.Config<Duration.Duration> | undefined }
+): Effect.Effect<
+  Exit.Exit<string, DurableAgentFailure>,
+  "pending" | Config.ConfigError,
+  WorkflowEngine.WorkflowEngine
+> =>
+  Effect.flatMap(
+    options?.interval ?? DurablePolling.result,
+    (interval) => result(agent, executionId, { interval })
   )
 
 export { DurableChannels, DurableModel, DurableToolkit }

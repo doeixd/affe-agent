@@ -9,14 +9,14 @@ The method was measurement, not reading. Every `effect` import in `src/` was
 tallied and compared against the full v4 module list.
 
 **Two rounds.** Round one (E1–E13) asked *which modules are missing*. Round two
-(E14–E19) asked the harder question — *are the modules we do import used to
+(E14–E20) asked the harder question — *are the modules we do import used to
 their depth?* — and found more actionable defects than round one did, including
-two that contradict claims we make in our own documentation. Round two also
+three that contradict claims we make in our own documentation. Round two also
 records what it checked and found **clean**, so that ground is not re-walked.
 
 ## Status: acted on
 
-This is no longer a proposal. Eight of its milestones landed, and the findings
+This is no longer a proposal. Nine of its milestones landed, and the findings
 below carry their outcomes inline — what was built, what was falsified, and
 where a finding turned out to be wrong.
 
@@ -31,7 +31,9 @@ where a finding turned out to be wrong.
 | ✅ | A-11 (E18) | The documented cast inventory had drifted from 5 to 16 |
 | ✅ | A-13 (E20) | Tool arguments reached any exporter regardless of `RedactionPolicy` |
 | ✅ | A-3 (E1) | Provider fallback: the one capability gap the audit found, now built |
-| ○ | A-4/5/6/8/9/12 | Open. None blocks anything; several are gated on unbuilt plans |
+| ◑ | A-4 (E4) | `RcMap` landed in the tree; the server recorded why `LayerMap` does not fit static route registration, but AS4's separate live-layer count remains |
+| ✅ | A-5 (E2, E5, E9) | EventLog, Graph, and the sandbox process-adapter evaluations are all recorded |
+| ○ | A-6/8/9/12 | Open. None blocks anything; A-12 is documentation-only and A-8 starts with the remaining literal poll intervals |
 
 **The audit was wrong four times, and each correction is recorded next to the
 finding rather than quietly dropped:**
@@ -181,7 +183,18 @@ on different infrastructure, each with its own registry and capacity.
 
 Hand-rolling that pair is the standard way an agent server leaks sessions, and
 it is the kind of leak that shows up an hour into production rather than in a
-test. The session tree wants the same primitive for a different reason (E7).
+test. The session tree wants the same primitive for a different reason.
+
+**What landed, and what did not.** The session tree uses `RcMap` for live branch
+sessions, so a branch is rebuilt after its last holder releases it. The server
+evaluation reached a different answer: routes are registered when its layer is
+built, so a lazy `LayerMap` per static path does not fit the chosen routing
+shape. `AgentServer` instead composes the already-scoped `AgentSessionHost`
+layers and verifies that hosted sessions release when the server scope closes.
+That substitution is recorded in [plan-agent-server.md](./plan-agent-server.md)
+S2; `LayerMap` is reserved for the deferred design where the agent name is a
+path parameter. The remaining AS4 evidence gap is narrower: the test counts
+released sessions, but does not separately count live mount layers.
 
 ### E5. `Graph` — the session tree is a graph
 
@@ -196,10 +209,12 @@ recommendation to *check*, not to adopt unseen.
 
 ### E6. `unstable/cli` + `Terminal` — the named P3 gap
 
-ROADMAP lists CLI as the top remaining ecosystem gap, and `apps/tui/` is
-currently a `package.json` and a lockfile. `unstable/cli` and `Terminal` are the
-ecosystem's answer, and a CLI is also the fastest way to make the coding toolkit
-and the session tree usable by a human rather than only by a test.
+At audit time ROADMAP listed CLI as the top remaining ecosystem gap and
+`apps/tui/` was only a `package.json` and a lockfile. The full-screen TUI has
+since landed on OpenTUI/Solid, so the coding toolkit and session tree are now
+usable by a human. That does not close the distinct command-line milestone:
+`unstable/cli` and `Terminal` remain the ecosystem's answer for a conventional,
+composable CLI rather than a full-screen renderer.
 
 `unstable/reactivity` is *not* recommended for the TUI: OpenTUI/Solid brings its
 own reactive system, and running two is worse than running either.
@@ -796,6 +811,40 @@ made explicitly and even instrumented (E17's counter exists precisely because
 SSE consumer on the `/ag-ui` queue is the realistic way it bites. Write the
 policy down per queue; change only the ones the writing shows to be wrong.
 
+### E20. `RedactionPolicy` covered events but not exported spans — **fixed, A-13**
+
+`metadataOnly` promised that prompts, tool parameters, tool results and model
+output were omitted by default. That was true for the records produced from the
+event stream, but not for the other telemetry channel. Effect AI's
+`Toolkit.handle` annotates the current span with `{ tool, parameters }`; because
+that operation is untraced, the current span is the harness's own
+`ToolExecution.tool`. Any configured tracer therefore received raw tool
+arguments regardless of the `RedactionPolicy` passed to `/observability`.
+
+This is not an Effect AI defect: annotating a tool call is reasonable, and its
+toolkit does not promise redaction. The defect was our documentation making a
+content-safety promise broad enough to sound as though it covered both event
+records and spans while the policy could only reach the first.
+
+**What landed (A-13).** `Observability.redactingTracer` wraps the `Tracer`
+already supplied by the application and removes named attributes from named
+spans. Its default removes only `parameters` from `ToolExecution.tool`; the
+tool name and the harness's correlation attributes remain, so a redacted trace
+is still useful and joinable to the event stream. The wrapper delegates through
+live getters instead of snapshotting a span whose status and attributes change
+while it runs.
+
+The layer does not import an exporter, name a backend or decide where telemetry
+goes. It is opt-in application wiring, like the `RedactionPolicy` itself, so it
+preserves the rule that tracing export is the application's responsibility.
+Installing it by default would require the harness to own tracer wiring and
+would violate that boundary.
+
+Two assertions in `test/Tracing.test.ts` pin both sides: the unwrapped tracer
+test records the upstream `parameters` annotation as a change detector, and the
+wrapped test proves the parameter is absent while tool identity and correlation
+attributes survive. Removing `redactingTracer` falsifies the latter.
+
 ## What round two checked and found clean
 
 Recorded so it is not re-audited, and because it is the larger part of the
@@ -882,7 +931,7 @@ outrank most of round one.
   (see plan-pi-toolkit.md P1).
   **The `AgentState` half was withdrawn**: STM retries, so a critical section
   containing a store write cannot be a transaction (E7b).
-- **A-1b — Triage the 58 `orDie` sites (E14). ◑ `DurableSessionStore` done.**
+- **A-1b — Triage the 58 `orDie` sites (E14). ✅ Done.**
   `StorageError` introduced; the store interface now declares it; the client
   folds it into `AgentTransportError` so `RemoteError` and the wire are
   unchanged; `isInfrastructure`'s defect-sniffing replaced with a typed check.
@@ -891,8 +940,11 @@ outrank most of round one.
   consumer can reconnect from its last sequence (D5).
   `DurableChannels` and `state/AgentState` completed it. **H4 is unblocked
   across every store.** `StorageError` now lives in `Errors.ts`, since it was
-  never durability-specific. The open half is `AgentEntity`'s Rpc error schema:
-  widening it is a wire change and belongs with whoever owns the protocol.
+  never durability-specific. `AgentEntity` deliberately converts only
+  `StorageError` to a defect because its RPC schema cannot grow that error
+  without a wire change; `AgentIdleError`, which the protocol does declare,
+  remains typed. That boundary is a recorded triage outcome, not unfinished
+  store work.
 - **A-2 — Metrics in `/observability` (E8, E17). ✅ Done.** Five instruments
   over the event stream the package already consumes -- turns, turns-per-run,
   tool calls by tool and outcome, tool duration, pending input -- exported so
@@ -905,18 +957,20 @@ outrank most of round one.
   counter by step and outcome, and an example whose assertion fails if the
   combinator is removed. Four milestones, five tests, falsified at each step.
   The plan below records what it cost -- including a signature that compiled and
-  was impossible to call, and an example that nearly shipped a false claim.
-  *Originally:*
-  [plan-execution-plan.md](./plan-execution-plan.md) written: the combinator
-  shape, the model-call-only scope and why, the streaming problem and three
-  options for it, the `/durable` replay interaction, five invariants and P0's
-  two open questions (can `LanguageModel` be discharged without a cast; which
-  streaming policy). Corrects this finding's `/budget` claim. No code yet.
-- **A-4 — `LayerMap` / `RcMap` in the server and the tree (E4).** Folded into
-  [plan-agent-server.md](./plan-agent-server.md) S2 and
-  [plan-session-tree.md](./plan-session-tree.md) T3.
-- **A-5 — The three evaluations (E2, E5, E9).** Recorded in their plans before
-  the milestones that depend on them.
+  was impossible to call, and an example that nearly shipped a false claim:
+  [plan-execution-plan.md](./plan-execution-plan.md).
+- **A-4 — `LayerMap` / `RcMap` in the server and the tree (E4). ◑**
+  `RcMap` landed in [plan-session-tree.md](./plan-session-tree.md) T3.
+  [plan-agent-server.md](./plan-agent-server.md) S2 records why `LayerMap`
+  does not fit static route registration and uses the scoped
+  `AgentSessionHost` layers instead. Hosted-session release is tested; AS4's
+  separate live-mount-layer count remains.
+- **A-5 — The three evaluations (E2, E5, E9). ✅ Done.** The EventLog
+  decision is recorded in [plan-durability-hardening.md](./plan-durability-hardening.md)
+  H4b, the Graph decision in [plan-session-tree.md](./plan-session-tree.md)
+  T4, and the `FileSystem` / Effect process adapter evaluation in
+  [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md)
+  (retain `sandbox/local`; two semantic gaps).
 - **A-6 — `PartitionedSemaphore` strategy (E11)** and **`Cache` where the cost
   is real (E12).**
 - **A-7 — Un-flag `/connectors/slack` (E10). ✅ Done.** Not with `effect/Crypto`,
@@ -953,20 +1007,31 @@ outrank most of round one.
   tool-latency and queue-depth instruments, asserted from a scripted session
   (`test/Observability.test.ts`). *Token instruments are excluded by decision,
   not omission -- the event stream carries no usage.*
-- **AS3:** An agent falls back from a failing model to a second one without the
-  `Agent` naming either, and `Agent.make` still carries nine type parameters.
-- **AS4:** Mounting and unmounting N agents leaves no live sessions and no live
-  layers, asserted by count.
-- **AS5:** E2, E5 and E9 each have a recorded decision with a reason.
-- **AS6:** `npm run check` and `npm run lint:portability` unchanged in status.
+- **AS3 ✅:** An agent falls back from a failing model to a second one without
+  the `Agent` naming either, and `Agent.make` still carries nine type parameters.
+  *Met by `Agent.withExecutionPlan`; batch, streaming, tool-side-effect and
+  inference coverage live in `test/ExecutionPlan.test.ts`.*
+- **AS4 ◑:** Mounting and unmounting N agents leaves no live sessions and no
+  live layers, asserted by count. *`test/AgentServer.test.ts` counts released
+  hosted sessions after two mounts close; a separate live-layer count is still
+  missing.*
+- **AS5 ✅:** E2, E5 and E9 each have a recorded decision with a reason.
+  *E2/EventLog, E5/Graph, and E9/sandbox-local are all written; E9 retains
+  the Node adapter.*
+- **AS6 ✅:** `npm run check` and `npm run lint:portability` remain green.
+  *The latest full verification on 2026-08-26 passed 1,194 tests, both Effect
+  diagnostic projects, package verification and the portability scan.*
 - **AS7 ✅:** A trace exported from a real run can be joined to the events
   `/observability` emits for the same run **by attribute key**, with no
   translation table — and a session id filter selects spans below the host
   boundary (E15). *Met: `test/Tracing.test.ts`, "spans and events share one
   attribute vocabulary".*
-- **AS11:** With `metadataOnly`, no tool parameter reaches an exporter through
-  either channel (E20). *Not met — currently documented rather than enforced.*
-- **AS8 ◑:** Under H4's fault injection, a failed store write, a duplicated
+- **AS11 ✅:** With `metadataOnly` on the event observer and
+  `redactingTracer` on the tracer channel, no tool parameter reaches an exporter
+  through either channel (E20). *Met with the honest qualification that tracer
+  redaction is opt-in application wiring; `test/Tracing.test.ts` proves the
+  layer removes parameters before export.*
+- **AS8 ✅:** Under H4's fault injection, a failed store write, a duplicated
   record and a corrupt stored history are **three distinguishable observations**
   at the caller, not three defects (E14, D7). *Met across all four stores
   (`test/StorageError.test.ts`, 8 tests).*

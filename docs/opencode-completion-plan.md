@@ -1,5 +1,11 @@
 Mostly yes. The last response contains the **architecture, the important Effect v4 substitutions, the new semantics, lifecycle rules, permission model, persistence boundaries, implementation order, and the key invariants** an agent would need to make good design decisions.
 
+The detailed, tree-annotated revision of this brief is
+[effect-plan-2.txt](./effect-plan-2.txt) (what already ships, closed
+evaluations, related plans, and what to implement first).
+[remaining-work.md](./remaining-work.md) still lists this architecture as
+hard / not this pass.
+
 I would not hand it to an autonomous coding agent completely unchanged, though. It is a very good **design brief**; to make it an implementation brief, I’d append a short section making a few things non-negotiable.
 
 The agent should understand that the target architecture is:

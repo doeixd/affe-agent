@@ -6,6 +6,7 @@ import {
   HttpClient,
   HttpIncomingMessage,
   HttpRouter,
+  HttpServer,
   HttpServerRequest,
   HttpServerResponse
 } from "effect/unstable/http"
@@ -248,6 +249,229 @@ export const clientLayer = (options: {
   readonly baseUrl: string
 }): Layer.Layer<Client, never, HttpClient.HttpClient> =>
   Layer.effect(Client, HttpApiClient.make(Api, options))
+
+/**
+ * The schema-generated HTTP client for `Api`, including the `sessions` group.
+ *
+ * `HttpApiClient.Client` is parameterised by the *groups*, not by the `HttpApi`
+ * that holds them -- it maps each group to its methods under that group's
+ * identifier, so this already reads `{ sessions: ... }`. Passing `typeof Api`
+ * fails the `HttpApiGroup.Constraint` and, because the mapped type then has no
+ * groups to map, quietly resolves to `{}`: every `client.sessions.…` in
+ * `AgentServer` and the client tests failed as "Property 'sessions' does not
+ * exist on type '{}'", twenty-two errors from one type argument.
+ *
+ * Which makes this exactly `Service` above, so it says so rather than
+ * restating it and risking the two drifting apart.
+ */
+export type Generated = Service
+
+const ClientFailure = Schema.Union([
+  AgentBusyError,
+  AgentIdleError,
+  AgentClosedError,
+  AgentClient.AgentSessionNotFoundError,
+  AgentClient.AgentExecutionError,
+  AgentClient.AgentTransportError
+])
+const decodeClientFailure = Schema.decodeUnknownOption(ClientFailure)
+
+const toRemote = (
+  sessionId: string,
+  error: unknown
+): AgentClient.RemoteError => {
+  const decoded = decodeClientFailure(error)
+  if (Option.isSome(decoded)) return decoded.value
+  const tag = typeof error === "object" && error !== null && "_tag" in error
+    ? String((error as { readonly _tag: unknown })._tag)
+    : "Error"
+  const message =
+    typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof (error as { readonly message: unknown }).message === "string"
+      ? (error as { readonly message: string }).message
+      : String(error)
+  return new AgentClient.AgentTransportError({
+    sessionId,
+    detail: `${tag}: ${message}`
+  })
+}
+
+const lift = (
+  sessionId: string
+) =>
+  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, AgentClient.RemoteError> =>
+    effect.pipe(Effect.mapError((error) => toRemote(sessionId, error)))
+
+let requestSeq = 0
+const nextRequestId = (): AgentProtocol.RequestId => {
+  requestSeq += 1
+  return AgentProtocol.RequestId.make(
+    `http-${requestSeq}-${globalThis.crypto.randomUUID()}`
+  )
+}
+
+/**
+ * Adapt the generated HTTP client to the `AgentClient` seam.
+ *
+ * A host is backed by an `AgentClient`, not an HTTP schema. This is what lets
+ * one `AgentServer` mount a local agent and a remote one: the remote mount is
+ * an ordinary host whose client happens to speak HTTP. `AgentClientContract`
+ * runs against this adapter the same way it runs against the in-process
+ * client — that is AS3, rather than a second suite of HTTP assertions.
+ */
+export const fromGenerated = (
+  client: Generated,
+  options?: {
+    readonly headers?: { readonly authorization?: string } | undefined
+  }
+): AgentClient.Service => {
+  const headers = options?.headers ?? {}
+  const params = (id: string) => ({
+    id: AgentProtocol.SessionId.make(id)
+  })
+
+  const remoteSession = (id: string): AgentClient.RemoteSession => ({
+    id,
+    prompt: (input, promptOptions) =>
+      lift(id)(
+        client.sessions.prompt({
+          params: params(id),
+          headers,
+          payload: {
+            requestId: nextRequestId(),
+            input: Prompt.make(input),
+            options: { stream: promptOptions?.stream === true }
+          }
+        })
+      ).pipe(Effect.map((response) => response.result)),
+    steer: (input) =>
+      lift(id)(
+        client.sessions.steer({
+          params: params(id),
+          headers,
+          payload: {
+            requestId: nextRequestId(),
+            input: Prompt.make(input)
+          }
+        })
+      ).pipe(Effect.asVoid),
+    followUp: (input) =>
+      lift(id)(
+        client.sessions.followUp({
+          params: params(id),
+          headers,
+          payload: {
+            requestId: nextRequestId(),
+            input: Prompt.make(input)
+          }
+        })
+      ).pipe(Effect.asVoid),
+    interrupt: () =>
+      lift(id)(
+        client.sessions.interrupt({
+          params: params(id),
+          headers,
+          payload: { requestId: nextRequestId() }
+        })
+      ).pipe(Effect.asVoid),
+    respond: (response) =>
+      lift(id)(
+        client.sessions.respond({
+          params: params(id),
+          headers,
+          payload: {
+            requestId: nextRequestId(),
+            response
+          }
+        })
+      ).pipe(Effect.map((body) => body.matched)),
+    pending: lift(id)(
+      client.sessions.pending({ params: params(id), headers })
+    ).pipe(Effect.map((body) => body.requests)),
+    history: lift(id)(
+      client.sessions.history({ params: params(id), headers })
+    ).pipe(Effect.map((body) => body.history)),
+    status: lift(id)(
+      client.sessions.status({ params: params(id), headers })
+    ).pipe(Effect.map((body) => body.status)),
+    events: (eventOptions) =>
+      eventOptions?.after === undefined
+        ? Stream.unwrap(
+          lift(id)(client.sessions.events({ params: params(id), headers }))
+        ).pipe(Stream.catch((error) => Stream.fail(toRemote(id, error))))
+        : Stream.fail(
+          new AgentClient.AgentTransportError({
+            sessionId: id,
+            detail:
+              "this HTTP client does not resume events from a sequence; use a delivery-log-backed session"
+          })
+        )
+  })
+
+  return {
+    createSession: (sessionOptions) =>
+      lift(sessionOptions?.sessionId ?? "")(
+        client.sessions.createSession({
+          headers,
+          payload: {
+            requestId: nextRequestId(),
+            ...(sessionOptions?.sessionId === undefined
+              ? {}
+              : { sessionId: AgentProtocol.SessionId.make(sessionOptions.sessionId) })
+          }
+        })
+      ).pipe(
+        Effect.map((created) => remoteSession(created.session.sessionId))
+      ),
+    session: (sessionId) =>
+      lift(sessionId)(
+        client.sessions.getSession({
+          params: params(sessionId),
+          headers
+        })
+      ).pipe(Effect.map((found) => remoteSession(found.sessionId)))
+  }
+}
+
+/** An `AgentClient` that speaks this package's HTTP API at `baseUrl`. */
+export const agentClientLayer = (options: {
+  readonly baseUrl: string
+  readonly headers?: { readonly authorization?: string } | undefined
+}): Layer.Layer<AgentClient.AgentClient, never, HttpClient.HttpClient> =>
+  Layer.effect(
+    AgentClient.AgentClient,
+    Effect.map(
+      HttpApiClient.make(Api, { baseUrl: options.baseUrl }),
+      (client) => fromGenerated(client, options)
+    )
+  )
+
+/**
+ * Same adapter, talking to whatever `HttpServer` is in the environment.
+ *
+ * For tests and in-process composition: the listen address is not known until
+ * the server layer is built, so `agentClientLayer` cannot take it as a
+ * constant. This reads it from the live server.
+ */
+export const agentClientFromServer = (options?: {
+  readonly headers?: { readonly authorization?: string } | undefined
+}): Layer.Layer<
+  AgentClient.AgentClient,
+  never,
+  HttpClient.HttpClient | HttpServer.HttpServer
+> =>
+  Layer.effect(
+    AgentClient.AgentClient,
+    Effect.gen(function* () {
+      const httpServer = yield* HttpServer.HttpServer
+      const client = yield* HttpApiClient.make(Api, {
+        baseUrl: HttpServer.formatAddress(httpServer.address)
+      })
+      return fromGenerated(client, options)
+    })
+  )
 
 /** Stable HTTP status assigned to every anticipated protocol failure. */
 export const errorStatus = (error: AgentProtocol.RemoteError): number => {

@@ -871,10 +871,14 @@ export const serverLayer = <Principal>(
             new AgentA2ATransportError({ detail: String(cause) })
         })
         if (isAsyncIterable(response)) {
-          // The SDK generator is drained by a layer-owned fiber because it is
-          // also the task-store consumer. The response queue contains at most
-          // the adapter's finite task/status/artifact sequence, so disconnecting
-          // the one observer cannot backpressure or cancel task execution.
+          // Deliberately unbounded. The SDK generator is drained by a
+          // layer-owned fiber because it is also the task-store consumer. The
+          // response queue contains at most the adapter's finite
+          // task/status/artifact sequence, so its size is bounded by one finite
+          // protocol response even though the Queue primitive has no numeric
+          // bound. Disconnecting the one observer therefore cannot backpressure
+          // or cancel task execution, and there is no perpetual producer whose
+          // output can accumulate for the life of the server.
           const output = yield* Queue.unbounded<Option.Option<string>>()
           const requestId = typeof body.id === "string" ||
               typeof body.id === "number" || body.id === null

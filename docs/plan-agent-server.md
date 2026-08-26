@@ -224,6 +224,14 @@ holds nothing.
 - **S3 — Mixed backing.** One server with a local agent and a remote one,
   asserting identical behaviour through both (AS3) — reusing
   `AgentClientContract` rather than writing new assertions.
+
+  **S3: landed (2026-08-26).** `AgentHttp.fromGenerated` / `agentClientLayer` /
+  `agentClientFromServer` wrap the schema-generated HTTP client as
+  `AgentClient`. `test/AgentHttpClient.test.ts` runs the shared contract
+  against that adapter (stream-delta observation is opted out: SSE needs a
+  connection latch the contract's one `yieldNow` is not). 
+  `test/AgentServer.test.ts` mounts a local `AgentClient.layer` and a
+  remote HTTP-backed client on one `AgentServer` and prompts both.
 - **S4 — Inventory.** Read-only mounts/sessions/capacity/health endpoint.
 - **S5 — The auth example.** Cookie and bearer `PrincipalResolver`s, per-mount
   authorization, in `examples/`. This is documentation that compiles, and it is

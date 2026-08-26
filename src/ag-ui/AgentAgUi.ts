@@ -1013,7 +1013,14 @@ export const serverLayer = <Principal>(
           parentRunId: input.parentRunId,
           started: true
         })
-        const queue = yield* Queue.unbounded<Event>()
+        // A slow or disconnected SSE client must not grant this request an
+        // unbounded memory claim. The bounded queue preserves every protocol
+        // event by backpressuring the projection fiber; it never drops or
+        // slides frames, because either would corrupt AG-UI message/tool-call
+        // sequences. 256 absorbs ordinary token bursts while imposing a fixed
+        // per-request ceiling, and request-scope interruption releases a
+        // blocked producer when the client disconnects.
+        const queue = yield* Queue.bounded<Event>(256)
         const terminal = yield* Deferred.make<void>()
         // Who reports this run: the observer, once it has projected a fresh
         // event, or the prompt fibre, synthesising a cached response for an

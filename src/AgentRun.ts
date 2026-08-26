@@ -17,6 +17,8 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly turns: number
   readonly text: string
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+  /** Steering accepted after this run's stopping decision needs a later run. */
+  readonly steeringContinuation: boolean
 }
 
 /**
@@ -52,6 +54,7 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
     let text = ""
     let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
+    let steeringContinuation = false
 
     while (true) {
       yield* AgentTurn.applySteering(session, { submissionId, runId, turn })
@@ -114,13 +117,12 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         })
         if (late === 0) break
 
-        // The accepted steer changes future reasoning, so give it that future
-        // turn and reopen admission for steering aimed at the new turn.
-        yield* SubscriptionRef.update(session.state, (state) => ({
-          ...state,
-          acceptingSteering: true
-        }))
-        yield* session.admitSteering(session.id, true)
+        // The loop's Stop is authoritative -- in particular, maxTurns is a
+        // hard per-run spend bound. The submission starts a fresh sequential
+        // run so the accepted steer still changes future reasoning without
+        // adding a turn that this run's policy refused.
+        steeringContinuation = true
+        break
       }
     }
 
@@ -129,5 +131,5 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
       turns: turn
     })
 
-    return { runId, turns: turn, text, response }
+    return { runId, turns: turn, text, response, steeringContinuation }
   })

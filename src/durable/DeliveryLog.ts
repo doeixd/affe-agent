@@ -1,8 +1,9 @@
-import { Duration, Effect, Option, PubSub, Ref, Schema, Scope, Stream } from "effect"
+import { Config, Duration, Effect, Option, PubSub, Ref, Schema, Scope, Stream } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as AgentEvent from "../AgentEvent.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
+import * as DurablePolling from "./DurablePolling.js"
 
 /**
  * Client-facing event delivery, kept apart from the Workflow journal.
@@ -309,6 +310,15 @@ const storage =
 
 export const sqlLogTable = "effect_agent_delivery"
 
+export interface SqlLogOptions {
+  readonly table?: string | undefined
+  readonly pollInterval?: Duration.Duration | undefined
+}
+
+export interface SqlLogConfigOptions extends Omit<SqlLogOptions, "pollInterval"> {
+  readonly pollInterval?: Config.Config<Duration.Duration> | undefined
+}
+
 const escapeIdentifier = (name: string): string => {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
     // Table names reach `sql.literal`, which does not parameterise.
@@ -332,16 +342,13 @@ const escapeIdentifier = (name: string): string => {
  * and sits above this log — `read({ after })` is the cursor it resumes from.
  */
 export const sqlLog = (
-  options?: {
-    readonly table?: string | undefined
-    readonly pollInterval?: Duration.Duration | undefined
-  }
+  options?: SqlLogOptions
 ): Effect.Effect<DeliveryLog, never, SqlClient.SqlClient> =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const table = sql.literal(escapeIdentifier(options?.table ?? sqlLogTable))
     const busFor = yield* makeBuses
-    const pollInterval = options?.pollInterval ?? Duration.millis(250)
+    const pollInterval = options?.pollInterval ?? DurablePolling.defaults.deliveryLog
 
     /**
      * Establishing a subscription here is capturing the cursor.
@@ -451,10 +458,7 @@ export const sqlLog = (
 
 /** As `sqlLog`, but creates the table first if it is not there. */
 export const sqlLogWithTable = (
-  options?: {
-    readonly table?: string | undefined
-    readonly pollInterval?: Duration.Duration | undefined
-  }
+  options?: SqlLogOptions
 ): Effect.Effect<DeliveryLog, never, SqlClient.SqlClient> =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
@@ -471,3 +475,29 @@ export const sqlLogWithTable = (
     )`.pipe(Effect.orDie)
     return yield* sqlLog(options)
   })
+
+/** Load the SQL log's poll interval through Effect Config. */
+export const sqlLogConfig = (
+  options?: SqlLogConfigOptions
+): Effect.Effect<
+  DeliveryLog,
+  Config.ConfigError,
+  SqlClient.SqlClient
+> =>
+  Effect.flatMap(
+    options?.pollInterval ?? DurablePolling.deliveryLog,
+    (pollInterval) => sqlLog({ ...options, pollInterval })
+  )
+
+/** As `sqlLogConfig`, but creates the table first if it is not there. */
+export const sqlLogWithTableConfig = (
+  options?: SqlLogConfigOptions
+): Effect.Effect<
+  DeliveryLog,
+  Config.ConfigError,
+  SqlClient.SqlClient
+> =>
+  Effect.flatMap(
+    options?.pollInterval ?? DurablePolling.deliveryLog,
+    (pollInterval) => sqlLogWithTable({ ...options, pollInterval })
+  )

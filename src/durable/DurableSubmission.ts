@@ -20,6 +20,7 @@ import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
+import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
 import { isStorageError, StorageError } from "../Errors.js"
@@ -545,6 +546,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
      * declared while the events describing it are still in flight.
      */
     readonly delivery?: DeliveryLog.DeliveryLog | undefined
+    /**
+     * How often the workflow checks for an externally recorded interrupt.
+     * Default: `DurablePolling.defaults.workflowInterrupt`.
+     */
+    readonly interruptPollInterval?: Duration.Duration | undefined
   }
 ) => {
   const definition = Workflow.make(name, {
@@ -693,7 +699,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             Effect.flatMap(committed, (ready) =>
               ready ? checkInterrupt : Effect.void
             ),
-            Schedule.spaced(Duration.millis(25))
+            Schedule.spaced(
+              options.interruptPollInterval ??
+                DurablePolling.defaults.workflowInterrupt
+            )
           ).pipe(Effect.ignore, Effect.forkIn(scope))
           // The interrupt is delivered through the session's own path. When
           // the signal was found on resumption (inside an elicitation), this

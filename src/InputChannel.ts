@@ -83,7 +83,17 @@ export interface Factory {
   ) => Effect.Effect<void>
 }
 
-/** Backed by an unbounded in-memory queue. The default. */
+/**
+ * Backed by an unbounded in-memory queue. The default.
+ *
+ * This queue is deliberately lossless and unbounded: once `offer` succeeds,
+ * D1 requires the accepted steering or follow-up to reach a turn drain or be
+ * reported as failed. A dropping/sliding queue would silently break that
+ * contract, while a bounded queue could make admission wait behind a run that
+ * is parked on a human indefinitely. Durable deployments replace this factory
+ * with their persisted admission channel; the in-memory default chooses the
+ * same acceptance semantics and makes its memory-growth tradeoff explicit.
+ */
 export const memory: Factory = {
   make: () =>
     Effect.map(

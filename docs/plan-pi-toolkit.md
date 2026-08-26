@@ -190,7 +190,10 @@ entry; ✅ the existing lost-update and ordering tests still pass; ✅ two names
 for one file (a symlink and its target, on the local provider) serialise —
 the test loses an update when the key is switched back to the spelled path.
 
-### P2 — Batch edits on `edit_file`
+### P2 — Batch edits on `edit_file` ✅
+
+Landed in `src/pi/PiToolkit.ts` / `test/PiToolkit.test.ts` (I13–I15, overlap,
+JSON-string coercion, `replace_all`, lock drain).
 
 `edits: [{ old_string, new_string }]` accepted alongside today's single pair,
 with the single form kept as the common case. Each edit matched against the
@@ -204,22 +207,30 @@ edits allowed, overlapping refused, with both indices named), I15 (each failure
 mode names its index), a batch where two edits would have collided if applied
 incrementally, and the single-edit form unchanged.
 
-### P3 — `list_files` conventions
+### P3 — `list_files` conventions ✅
 
-The work M3 deliberately deferred, now with Pi as the evidence: `/` suffix for
+Landed: rendered text, `/` suffix, dotfiles, alphabetical, 500-entry cap
+that names the cut. The work M3 deliberately deferred, now with Pi as the evidence: `/` suffix for
 directories, dotfiles included, alphabetical, a 500-entry cap with the same
 "why it truncated" warning as everything else. Whether the structured result
 stays or becomes rendered text is decided by the same argument that settled
 `search` in M3 — the format is the artefact.
 
-### P4 — Truncation: heads, and saying which limit fired
+### P4 — Truncation: heads, and saying which limit fired ✅
+
+Landed: `formatSize` + named-limit notices; `GREP_MAX_LINE_LENGTH = 500`
+on `/pi` search (tighter than `/coding`'s 2000, recorded). `truncateHead`
+is exported; bash output still keeps the tail.
 
 Add `truncateHead` beside our tail, and adopt `formatSize` plus the warning
 that names the limit that fired (`50.0KB limit` / `2000 lines`). Consider
 Pi's 500-character cap for search lines against our 2000 — a decision to make
 explicitly and record, not to drift into.
 
-### P5 — Shell selection
+### P5 — Shell selection ✅
+
+Landed: `toolkit({ shell: "powershell" })` / `Shell.layer`; default remains
+`bash -lc`. SP5 is the scripted-exec test in `test/PiToolkit.test.ts`.
 
 Follow `powershell.ts`: one implementation, the shell injected. Our `bash`
 hardcodes `bash -lc`, which fails on a Windows host without bash — a real gap

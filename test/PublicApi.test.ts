@@ -161,6 +161,7 @@ describe("durable and cluster surfaces", () => {
       "DurableElicitation",
       "DurableModel",
       "DurablePermission",
+      "DurablePolling",
       "DurableSessionStore",
       "DurableSubmission",
       "DurableToolkit"
@@ -403,13 +404,25 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(http.AgentHttp).sort(), [
       "Api",
       "Client",
+      // The typed-client seam: a generated HTTP client wrapped as an ordinary
+      // `AgentClient`, so a remote agent is indistinguishable from a local one
+      // at the host. `fromGenerated` takes a client you already have;
+      // `agentClientLayer` dials a base URL; `agentClientFromServer` binds to a
+      // server in the same scope, which is what the contract suite uses.
+      "agentClientFromServer",
+      "agentClientLayer",
       "api",
       "clientLayer",
       "errorStatus",
+      "fromGenerated",
       "serverLayer"
     ])
     assert.deepStrictEqual(Object.keys(http.AgentServer).sort(), [
       "DuplicateMountError",
+      // The `/inventory` payload, exported because a caller decoding that
+      // endpoint needs the same schema the server encodes with.
+      "Inventory",
+      "MountSnapshot",
       "make",
       "mount",
       "serverLayer"

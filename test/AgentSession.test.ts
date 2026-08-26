@@ -274,6 +274,113 @@ describe("tools", () => {
     })
   )
 
+  it.effect("per-tool strategy enforces independent limits", () =>
+    Effect.gen(function* () {
+      const Serial = Tool.make("serial", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      })
+      const Wide = Tool.make("wide", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      })
+      const Mixed = Toolkit.make(Serial, Wide)
+
+      const serialActive = yield* Ref.make(0)
+      const serialMax = yield* Ref.make(0)
+      const wideActive = yield* Ref.make(0)
+      const wideMax = yield* Ref.make(0)
+      const serialStarted = yield* Deferred.make<void>()
+      const wideStarted = yield* Deferred.make<void>()
+      const serialGate = yield* Deferred.make<void>()
+      const wideGate = yield* Deferred.make<void>()
+
+      const toolkit = Mixed.pipe(
+        Effect.provide(
+          Mixed.toLayer({
+            serial: () =>
+              Effect.acquireUseRelease(
+                Ref.updateAndGet(serialActive, (n) => n + 1).pipe(
+                  Effect.tap((active) =>
+                    Ref.update(serialMax, (maximum) =>
+                      Math.max(maximum, active)
+                    )
+                  ),
+                  Effect.tap(() => Deferred.succeed(serialStarted, void 0))
+                ),
+                () => Deferred.await(serialGate).pipe(Effect.as("serial")),
+                () => Ref.update(serialActive, (n) => n - 1)
+              ),
+            wide: () =>
+              Effect.acquireUseRelease(
+                Ref.updateAndGet(wideActive, (n) => n + 1).pipe(
+                  Effect.tap((active) =>
+                    Ref.update(wideMax, (maximum) =>
+                      Math.max(maximum, active)
+                    )
+                  ),
+                  Effect.tap((active) =>
+                    active === 2
+                      ? Deferred.succeed(wideStarted, void 0)
+                      : Effect.void
+                  )
+                ),
+                () => Deferred.await(wideGate).pipe(Effect.as("wide")),
+                () => Ref.update(wideActive, (n) => n - 1)
+              )
+          })
+        )
+      )
+
+      yield* withSession(
+        [
+          {
+            toolCalls: [
+              { id: "s1", name: "serial", params: {} },
+              { id: "s2", name: "serial", params: {} },
+              { id: "w1", name: "wide", params: {} },
+              { id: "w2", name: "wide", params: {} }
+            ]
+          },
+          { text: "done" }
+        ],
+        Agent.make({
+          toolkit,
+          toolExecution: ToolExecution.perTool({
+            limits: { serial: 1, wide: 2 }
+          })
+        }),
+        ({ session }) =>
+          Effect.gen(function* () {
+            const prompt = yield* Effect.forkChild(
+              AgentSession.prompt(session, "go")
+            )
+            yield* Deferred.await(serialStarted)
+            yield* Deferred.await(wideStarted)
+
+            // Both wide calls may run together; the second serial call is
+            // still queued behind the first without constraining `wide`.
+            assert.strictEqual(yield* Ref.get(serialActive), 1)
+            assert.strictEqual(yield* Ref.get(wideActive), 2)
+
+            yield* Deferred.succeed(serialGate, void 0)
+            yield* Deferred.succeed(wideGate, void 0)
+            yield* Fiber.join(prompt)
+          })
+      )
+
+      assert.strictEqual(yield* Ref.get(serialMax), 1)
+      assert.strictEqual(yield* Ref.get(wideMax), 2)
+    })
+  )
+
+  it("per-tool strategy rejects limits that could wait forever", () => {
+    assert.throws(() => ToolExecution.perTool({ limits: { shell: 0 } }))
+    assert.throws(() =>
+      ToolExecution.perTool({ limits: {}, defaultLimit: Number.POSITIVE_INFINITY })
+    )
+  })
+
   it.effect("delivery order matches sequence order under parallel tools", () =>
     Effect.gen(function* () {
       const { events } = yield* withSession(
@@ -640,13 +747,12 @@ describe("steering", () => {
 
   /**
    * The loop said Stop, but a steer had already been accepted during that
-   * final turn. Dropping it until the next submission would discard accepted
-   * input; refusing it would contradict the acknowledgement the caller
-   * already got. So the run's closing drain takes it, gives it a turn, and
-   * only then stops -- the steering counterpart of the closing follow-up
-   * drain.
+   * final turn. Refusing it would contradict the acknowledgement the caller
+   * already got, while adding a turn would override policies such as maxTurns.
+   * The closing drain therefore commits it and starts a new sequential run
+   * under the same submission.
    */
-  it.effect("a steer accepted during the final turn gets a turn before the run stops", () =>
+  it.effect("a steer accepted during the final turn continues in a bounded new run", () =>
     Effect.gen(function* () {
       const sessionRef = yield* Deferred.make<AgentSession.AgentSession>()
       const { events, recorder } = yield* withSession(
@@ -660,15 +766,21 @@ describe("steering", () => {
           },
           { text: "done" }
         ],
-        Agent.make({}),
+        Agent.make({ loop: AgentLoop.bounded(1) }),
         ({ session }) =>
           Deferred.succeed(sessionRef, session).pipe(
             Effect.andThen(AgentSession.prompt(session, "go"))
           )
       )
 
-      // Still one run: the extra turn belongs to it, not to a new submission.
-      assert.strictEqual(events.filter(AgentEvent.is("RunStarted")).length, 1)
+      // Each run obeys maxTurns(1); the accepted steer continues the same
+      // submission rather than overriding the first run's stopping decision.
+      assert.strictEqual(events.filter(AgentEvent.is("SubmissionStarted")).length, 1)
+      assert.strictEqual(events.filter(AgentEvent.is("RunStarted")).length, 2)
+      assert.deepStrictEqual(
+        events.filter(AgentEvent.is("RunCompleted")).map(({ event }) => event.turns),
+        [1, 1]
+      )
       assert.strictEqual(events.filter(AgentEvent.is("SteeringApplied")).length, 1)
       const prompts = yield* recorder.prompts
       assert.strictEqual(prompts.length, 2)

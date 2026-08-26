@@ -107,6 +107,16 @@ const TRANSIENT = new Set([
   "AlreadyProcessingMessage"
 ])
 
+/**
+ * Deliberately fixed together: 600 jittered 100ms retries are roughly one
+ * minute, which must outlast the cluster's default 35s shard-lock expiration.
+ * Making only the interval configurable could silently shorten the recovery
+ * window below the lease it is meant to survive; deployments that change that
+ * lease need a future single policy containing all three values.
+ */
+const TRANSIENT_RETRY_INTERVAL = Duration.millis(100)
+const TRANSIENT_RETRY_TIMES = 600
+
 const tagOf = (error: unknown): string | undefined =>
   typeof error === "object" &&
   error !== null &&
@@ -133,8 +143,8 @@ const retryTransient = <A, E, R>(
 ): Effect.Effect<A, E, R> =>
   Effect.retry(effect, {
     while: isTransient,
-    times: 600,
-    schedule: Schedules.steady(Duration.millis(100))
+    times: TRANSIENT_RETRY_TIMES,
+    schedule: Schedules.steady(TRANSIENT_RETRY_INTERVAL)
   })
 
 /**
@@ -182,8 +192,8 @@ const admitting = <A, E, R>(
   Effect.retry(effect, {
     while: (error) =>
       isTransient(error) && tagOf(error) !== "AlreadyProcessingMessage",
-    times: 600,
-    schedule: Schedules.steady(Duration.millis(100))
+    times: TRANSIENT_RETRY_TIMES,
+    schedule: Schedules.steady(TRANSIENT_RETRY_INTERVAL)
   }).pipe(
     Effect.asVoid,
     Effect.catch((

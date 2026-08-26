@@ -559,9 +559,11 @@ pinning it here would be testing their widget.
   not reachable is a tool body clipped at twelve lines while it is still in
   flight. Expanding a clipped body would be worth more than scrolling.
 - **No syntax highlighting**, for the reason above.
-- **No session switching across processes.** The tree is per-run; nothing is
-  persisted between launches, though `NodeStore.keyValue` now exists and would
-  make it a wiring change.
+- **No session switching across processes.** Landed for the live backend:
+  `NodeStore.keyValue` + checkout pointer outside the workspace
+  (`apps/tui/src/backend.ts`); `restore.ts` paints the recovered `Prompt`;
+  smoke V9 asserts a second launch resumes. The tree is still one workspace
+  per process — switching workspaces in one TUI is not built.
 - SV1-SV4 all hold. SV4's answer is `vendor/opencode/PORTED.md`, which accounts
   for every upstream file rather than pretending a `diff` would be legible.
 

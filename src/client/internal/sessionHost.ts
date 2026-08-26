@@ -92,6 +92,8 @@ export interface Host<Principal> {
   >
   /** Internal observability used by conformance tests and future metrics. */
   readonly size: Effect.Effect<number>
+  /** The bound `size` is measured against. Part of the inventory snapshot. */
+  readonly maxSessions: number
 }
 
 interface HostedSession {
@@ -756,6 +758,7 @@ export const make = <Principal>(
       history,
       status,
       events,
-      size: Effect.map(Ref.get(sessions), (all) => all.size)
+      size: Effect.map(Ref.get(sessions), (all) => all.size),
+      maxSessions
     } satisfies Host<Principal>
   })

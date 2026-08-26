@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, Exit, Layer, Option, Stream } from "effect"
+import { Cause, Config, Duration, Effect, Exit, Layer, Option, Stream } from "effect"
 import type { Context } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -12,6 +12,7 @@ import * as Ids from "../internal/ids.js"
 import * as DurableAgent from "./DurableAgent.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
+import * as DurablePolling from "./DurablePolling.js"
 import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableSubmission from "./DurableSubmission.js"
 import * as DurableSessionStore from "./DurableSessionStore.js"
@@ -123,6 +124,17 @@ export interface Options {
   readonly delivery?: DeliveryLog.DeliveryLog | undefined
   /** How often `prompt` polls for its outcome. Default: 10ms. */
   readonly pollInterval?: Duration.Duration | undefined
+  /** How often a workflow checks for an interrupt intent. Default: 25ms. */
+  readonly interruptPollInterval?: Duration.Duration | undefined
+}
+
+/** Options for `layerConfig`; stores stay explicit and intervals come from Config. */
+export interface ConfigOptions extends Omit<
+  Options,
+  "pollInterval" | "interruptPollInterval"
+> {
+  readonly pollInterval?: Config.Config<Duration.Duration> | undefined
+  readonly interruptPollInterval?: Config.Config<Duration.Duration> | undefined
 }
 
 /**
@@ -167,7 +179,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
   WorkflowEngine.WorkflowEngine | LanguageModel.LanguageModel
 > => {
   const submission = DurableSubmission.workflow(name, agent, options)
-  const pollInterval = options.pollInterval ?? Duration.millis(10)
+  const pollInterval = options.pollInterval ?? DurablePolling.defaults.clientOutcome
 
   /**
    * The execution id for a claim, derived without dispatching anything.
@@ -681,3 +693,35 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
     })
   ).pipe(Layer.merge(submission.layer))
 }
+
+/**
+ * As `layer`, with operational polling durations loaded through Effect Config.
+ *
+ * Stores remain explicit capabilities. Missing config keys use the concrete
+ * defaults exported by `DurablePolling`; malformed or non-positive values fail
+ * layer construction with the typed `ConfigError`.
+ */
+export const layerConfig = <Tools extends Record<string, Tool.Any>>(
+  name: string,
+  agent: AgentDefinition<Tools, any, any>,
+  options: ConfigOptions
+): Layer.Layer<
+  AgentClient.AgentClient,
+  Config.ConfigError,
+  WorkflowEngine.WorkflowEngine | LanguageModel.LanguageModel
+> =>
+  Layer.unwrap(
+    Effect.map(
+      Config.all({
+        pollInterval: options.pollInterval ?? DurablePolling.clientOutcome,
+        interruptPollInterval:
+          options.interruptPollInterval ?? DurablePolling.workflowInterrupt
+      }),
+      ({ interruptPollInterval, pollInterval }) =>
+        layer(name, agent, {
+          ...options,
+          pollInterval,
+          interruptPollInterval
+        })
+    )
+  )

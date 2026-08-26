@@ -30,6 +30,11 @@ export type Strategy =
   | { readonly _tag: "Sequential" }
   | { readonly _tag: "Parallel" }
   | { readonly _tag: "Concurrency"; readonly limit: number }
+  | {
+      readonly _tag: "PerTool"
+      readonly limits: Readonly<Record<string, number | "unbounded">>
+      readonly defaultLimit: number | "unbounded"
+    }
 
 export const Sequential: Strategy = { _tag: "Sequential" }
 export const Parallel: Strategy = { _tag: "Parallel" }
@@ -37,6 +42,49 @@ export const concurrency = (limit: number): Strategy => ({
   _tag: "Concurrency",
   limit
 })
+
+export interface PerToolOptions {
+  /** Limits by exact tool name. Unlisted tools use `defaultLimit`. */
+  readonly limits: Readonly<Record<string, number | "unbounded">>
+  /** Default for an unlisted tool. Default: unbounded. */
+  readonly defaultLimit?: number | "unbounded" | undefined
+}
+
+const validLimit = (limit: number | "unbounded"): boolean =>
+  limit === "unbounded" ||
+  (Number.isSafeInteger(limit) && limit > 0)
+
+/**
+ * Limit calls independently by tool name.
+ *
+ * ```ts
+ * ToolExecution.perTool({
+ *   limits: { shell: 1, read_file: 10 },
+ *   defaultLimit: 4
+ * })
+ * ```
+ *
+ * Construction rejects zero, negative, fractional and non-finite limits so a
+ * typo cannot turn a tool group into work that waits forever.
+ */
+export const perTool = (options: PerToolOptions): Strategy => {
+  const defaultLimit = options.defaultLimit ?? "unbounded"
+  if (!validLimit(defaultLimit)) {
+    throw new RangeError("ToolExecution.perTool: defaultLimit must be a positive integer or unbounded")
+  }
+  for (const [name, limit] of Object.entries(options.limits)) {
+    if (!validLimit(limit)) {
+      throw new RangeError(
+        `ToolExecution.perTool: limit for ${JSON.stringify(name)} must be a positive integer or unbounded`
+      )
+    }
+  }
+  return {
+    _tag: "PerTool",
+    limits: Object.freeze({ ...options.limits }),
+    defaultLimit
+  }
+}
 
 /**
  * What happens when a tool handler fails in its error channel.
@@ -63,7 +111,9 @@ const concurrencyOption = (strategy: Strategy) =>
     ? { concurrency: 1 as const }
     : strategy._tag === "Parallel"
       ? { concurrency: "unbounded" as const }
-      : { concurrency: strategy.limit }
+      : strategy._tag === "Concurrency"
+        ? { concurrency: strategy.limit }
+        : { concurrency: "unbounded" as const }
 
 const failureResultPart = (
   call: { readonly id: string; readonly name: string },
@@ -606,6 +656,61 @@ const emptyCollected = <
   Tools extends Record<string, Tool.Any>
 >(): Collected<Tools> => ({ final: Option.none(), last: Option.none() })
 
+const executePerTool = <
+  Tools extends Record<string, Tool.Any>,
+  R
+>(
+  handler: Toolkit.WithHandler<Tools>,
+  calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
+  context: TurnContext<R>,
+  strategy: Extract<Strategy, { readonly _tag: "PerTool" }>
+): Effect.Effect<
+  ReadonlyArray<Response.AnyPart>,
+  Tool.HandlerError<Tools[keyof Tools]> | RaisedError,
+  Tool.HandlerServices<Tools[keyof Tools]> | R
+> =>
+  Effect.suspend(() => {
+    const groups = new Map<
+      string,
+      Array<{
+        readonly index: number
+        readonly call: Response.ToolCallParts<Tools, true>
+      }>
+    >()
+    for (let index = 0; index < calls.length; index++) {
+      const call = calls[index]!
+      const group = groups.get(call.name)
+      const indexed = { index, call }
+      if (group === undefined) groups.set(call.name, [indexed])
+      else group.push(indexed)
+    }
+
+    return Effect.map(
+      Effect.all(
+        Array.from(groups, ([name, group]) =>
+          Effect.all(
+            group.map(({ call, index }) =>
+              Effect.map(
+                executeOne(handler, call, context),
+                (part) => ({ index, part })
+              )
+            ),
+            {
+              concurrency:
+                strategy.limits[name] ?? strategy.defaultLimit
+            }
+          )
+        ),
+        { concurrency: "unbounded" }
+      ),
+      (completed) =>
+        completed
+          .flat()
+          .sort((left, right) => left.index - right.index)
+          .map(({ part }) => part)
+    )
+  })
+
 /**
  * Execute every tool call of one model response.
  *
@@ -622,7 +727,9 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   Tool.HandlerError<Tools[keyof Tools]> | RaisedError,
   Tool.HandlerServices<Tools[keyof Tools]> | R
 > =>
-  Effect.all(
-    calls.map((call) => executeOne(handler, call, context)),
-    concurrencyOption(context.agent.strategy)
-  )
+  context.agent.strategy._tag === "PerTool"
+    ? executePerTool(handler, calls, context, context.agent.strategy)
+    : Effect.all(
+        calls.map((call) => executeOne(handler, call, context)),
+        concurrencyOption(context.agent.strategy)
+      )

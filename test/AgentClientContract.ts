@@ -44,6 +44,13 @@ export interface Harness {
     /** Where a paused run waits for an answer. Default: refuse everything. */
     readonly elicitation?: Elicitation.Factory | undefined
   }) => Effect.Effect<Layer.Layer<AgentClient.AgentClient>>
+  /**
+   * `false` when this transport cannot deliver `MessageDelta` to an observer
+   * that subscribed one `yieldNow` before `prompt` — HTTP SSE needs the GET
+   * to finish connecting, which that latch does not wait for. The rest of
+   * the contract still runs.
+   */
+  readonly observesStreamDeltas?: boolean | undefined
 }
 
 const Search = Tool.make("search", {
@@ -403,15 +410,17 @@ export const run = (harness: Harness): void => {
       )
     )
 
-    it.live("streams deltas when asked, and not otherwise", () =>
-      Effect.gen(function* () {
-        const streamed = yield* deltasFor(harness, true)
-        const batched = yield* deltasFor(harness, false)
-        assert.strictEqual(streamed.join(""), "streamed")
-        assert.isTrue(streamed.length > 0)
-        assert.deepStrictEqual(batched, [])
-      })
-    )
+    if (harness.observesStreamDeltas !== false) {
+      it.live("streams deltas when asked, and not otherwise", () =>
+        Effect.gen(function* () {
+          const streamed = yield* deltasFor(harness, true)
+          const batched = yield* deltasFor(harness, false)
+          assert.strictEqual(streamed.join(""), "streamed")
+          assert.isTrue(streamed.length > 0)
+          assert.deepStrictEqual(batched, [])
+        })
+      )
+    }
 
     it.live("emits lifecycle events in order", () =>
       withClient(

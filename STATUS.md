@@ -1784,12 +1784,13 @@ in flight stranded every joiner on its deferred; the owner's interruption
 now interrupts the deferred. `closeRaw` closed the session scope — and
 waited for its finalizers — while holding the registry gate.
 
-Two findings were examined and left as documented semantics rather than
-changed: steering accepted during a submission's final turn is discarded at
-release (the queue is per session and the drop is deliberate), and a failed
-or interrupted submission keeps its user message in history (the
-documented "only completed commits survive" rule applies to turns, not to
-the accepted input).
+Two findings were examined at this point and initially left as documented
+semantics. The first -- steering accepted during a submission's final turn was
+discarded at release -- was later falsified by the durability crash property
+and is no longer the behavior: accepted steering continues in a later run. The
+second remains: a failed or interrupted submission keeps its user message in
+history (the documented "only completed commits survive" rule applies to turns,
+not to the accepted input).
 
 ## The whole stack, and what only the whole stack could show
 
@@ -2561,3 +2562,52 @@ including `/web/http`, import successfully under the portable no-Node-builtins
 hook. `npm run build` currently reports an unrelated concurrent
 `src/connectors/slack.ts` Web Crypto `BufferSource` typing error; package emit
 still completed and packed-entry verification passed.
+
+## Durability hardening completion
+
+The remaining work in `docs/plan-durability-hardening.md` is implemented and
+recorded at the path where each claim holds.
+
+`test/ClusterMultiNode.test.ts` now runs two real HTTP runners over shared SQL
+cluster storage. It proves ordinary dispatch, closes the owner during an active
+model call, and observes the peer acquire the shard and finish with one call on
+each model recorder: completed work is replayed and only unfinished work is
+redelivered. The fixture uses the HTTP client protocol with `Runners.layerRpc`
+for health checks; `HttpRunner.layerHttpClientOnly` was wrong here because it
+built a second sharding runtime and left submissions pending. `SingleRunner`
+still makes only the parked-workflow durability claim because it has no peer to
+take over in-flight work.
+
+The same suite discovers ten completed activities in a representative durable
+run and crashes at all eleven positions before the first and after each
+activity. A seeded (`0x5eed`), shrinking FastCheck property adds repeated
+resumes, steering and follow-ups. It found a real minimal failure: steering
+could be accepted after the final drain and then discarded during suspension.
+Session state now has a steering-admission gate, durable sessions persist a
+separate steering-open marker, and a suspended drain leaves its queue intact.
+If the loop has already stopped, that accepted steer starts a new sequential
+run under the same submission instead of overriding the stopped run's
+`maxTurns` bound. The counterexample is pinned as an ordinary regression test.
+
+The H4 fault contract is deliberately focused on observable storage semantics:
+typed failures before mutation, commit-with-lost-acknowledgement, idempotent
+retry, duplicate/conflict detection, and declared ordering. Arbitrary stalls
+have no specified result without inventing a timeout policy, while arbitrary
+batch reordering violates the store contract; neither is silently treated as a
+passing case. The EventLog/persistence evaluation also remains written into the
+plan: their primitives overlap the package's stores but do not replace semantic
+event idempotency keys, SSE cursors, transactional channel admission, or runner
+failover.
+
+`test/DurabilitySoak.test.ts` is the bounded CI soak. It exercises 208 accepted
+submissions (24 durable suspensions, 8 explicit interruptions, 176 ordinary),
+requires exactly 200 model calls, and verifies interrupted executions stay
+terminal. A separate 300-event workload repeatedly reconnects from partial
+cursors and checks exact sequence, duplicate and conflict behavior. It uses
+journal state and deterministic latches rather than sleeps, and completes in a
+few seconds.
+
+Final verification: `npm run check` is green. Both TypeScript projects and the
+package build pass; Effect diagnostics report zero findings across 308 library
+files and 15 TUI files; portability passes; all 1,194 tests in 121 files pass;
+and the TUI smoke suite reports `smoke: OK`.

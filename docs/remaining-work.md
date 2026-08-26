@@ -31,23 +31,24 @@ EventLog was not adopted (H4b). Delta storage for the tree stays deferred.
 Landed 2026-08-26. `AgentHttp.api({ name })`, `AgentServer.mount` / `make` /
 `serverLayer`. Duplicate mounts fail at construction. LayerMap deferred:
 routes register at layer construction, so lazy mounts do not fit option A.
-S3 mixed backing, S4 inventory, S5 auth example remain.
+S3 mixed backing landed 2026-08-26: `AgentHttp.fromGenerated` /
+`agentClientLayer` / `agentClientFromServer` adapt HTTP to `AgentClient`;
+the shared `AgentClientContract` runs against that adapter; one server
+serves a local mount and a remote-backed mount. S4 inventory and S5 auth
+example remain.
 
-### 3. `plan-pi-toolkit.md` — second toolkit at `/pi`
+### 3. `plan-pi-toolkit.md` — second toolkit at `/pi` ✅
 
-P0 settled 2026-08-26: **ship `@doeixd/effect-agent/pi`**, do not absorb into
-`/coding`. `/coding` stays OpenCode-shaped; `/pi` is Pi's contracts (batch
-`edits[]`, rendered `list_files`, injectable shell). P1 canonical-path
-locking landed 2026-08-26: `Sandbox.canonical` on the seam, one shared lock
-registry in `coding/internal/fileLock.ts`. P2–P5 are in `/pi`; check the
-plan's milestone list against `src/pi/PiToolkit.ts` before starting one.
+P0–P5 landed. `/pi` is a second toolkit: batch `edits[]` (I13–I15), rendered
+`list_files`, injectable `Shell`, truncation that names the limit, shared
+canonical-path lock with `/coding`. `test/PiToolkit.test.ts`.
 
-### 4. TUI leftover — persist the tree across launches
+### 4. TUI leftover — persist the tree across launches ✅
 
-`plan-tui-port.md` still lists live-region scrolling, syntax highlighting
-(blocked on OpenTUI parsers), and no cross-process session switch. The last of
-those is the easy one: `NodeStore.keyValue` exists; `apps/tui/src/restore.ts`
-already paints a recovered `Prompt`.
+Live backend writes the tree to `NodeStore.keyValue` outside the workspace
+(`apps/tui/src/backend.ts`); `restore.ts` paints a recovered `Prompt`. Smoke
+V9 asserts a second launch resumes. Remaining TUI leftovers are live-region
+scrolling and syntax highlighting (blocked on OpenTUI parsers).
 
 ### 5. Finish the in-progress A2A adapter (`STATUS.md`)
 
@@ -73,6 +74,6 @@ official-server peer test. Completing an adapter, not bridging Claude Code.
 | `plan-durability-hardening.md` remaining | H6 multi-node is blocked on a skipped fixture. H3 and H9 wait on that. |
 | `plan-a2a-layers-bridges.txt` | New packages: spawn Claude Code / OpenCode as A2A agents. |
 | `plan-relay.txt` | 16 phases: NAT, WSS, enrollment, RPC-over-relay. After other work. |
-| `opencode-completion-plan.md` | New architecture (`SessionInbox`, `ProcessManager`). Design brief. |
+| [opencode-completion-plan.md](./opencode-completion-plan.md) / [effect-plan-2.txt](./effect-plan-2.txt) | New architecture (`SessionInbox`, `ProcessManager`). Design brief; `effect-plan-2.txt` has the related-docs map and §38 implementation order (ChildProcess and EventLog spikes already closed). |
 | Filetypes phases 2–5 | Blob store, every protocol’s media projection. |
 | Compaction phases 8–15 | Manual compact API, branch summaries, durable summarizer activities. |

@@ -3,9 +3,13 @@ import { NodeHttpServer } from "@effect/platform-node"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
+import { HttpApiClient } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
+import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentHttp, AgentServer } from "../src/http/index.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 
 const requestId = (value: string) => AgentProtocol.RequestId.make(value)
 const sessionId = (value: string) => AgentProtocol.SessionId.make(value)
@@ -86,7 +90,7 @@ describe("AgentServer", () => {
         AgentServer.mount("beta", { host: Beta, path: "/internal" })
       ]
     })
-    assert.deepStrictEqual(Object.keys(api.groups).sort(), ["alpha", "beta"])
+    assert.deepStrictEqual(Object.keys(api.groups).sort(), ["alpha", "beta", "inventory"])
     const alpha = AgentHttp.api({ name: "alpha" })
     const beta = AgentHttp.api({ name: "beta", path: "/internal" })
     assert.strictEqual(alpha.groups.alpha.endpoints.createSession.path, "/agents/alpha/sessions")
@@ -137,11 +141,14 @@ describe("AgentServer", () => {
     Effect.gen(function*() {
       const Alpha = AgentSessionHost.Tag<string>("test/AgentServer/live-alpha")
       const Beta = AgentSessionHost.Tag<string>("test/AgentServer/live-beta")
-      const released = yield* Ref.make(0)
+      const sessionsReleased = yield* Ref.make(0)
+      const mountLayersReleased = yield* Ref.make(0)
       const client = Layer.succeed(AgentClient.AgentClient, {
         createSession: (options) =>
           Effect.gen(function*() {
-            yield* Effect.addFinalizer(() => Ref.update(released, (n) => n + 1))
+            yield* Effect.addFinalizer(() =>
+              Ref.update(sessionsReleased, (n) => n + 1)
+            )
             return idleSession(sessionId(options?.sessionId ?? "generated"))
           }),
         session: (id: string) =>
@@ -154,13 +161,24 @@ describe("AgentServer", () => {
           AgentServer.mount("beta", { host: Beta })
         ]
       }
-      const routes = AgentServer.serverLayer(mounts).pipe(
-        Layer.provide(
-          AgentSessionHost.layer(Alpha, hostOptions).pipe(Layer.provide(client))
-        ),
-        Layer.provide(
-          AgentSessionHost.layer(Beta, hostOptions).pipe(Layer.provide(client))
+      const mountLifetime = () =>
+        Layer.effectDiscard(
+          Effect.addFinalizer(() =>
+            Ref.update(mountLayersReleased, (n) => n + 1)
+          )
         )
+      const hosts = Layer.mergeAll(
+        Layer.merge(
+          AgentSessionHost.layer(Alpha, hostOptions).pipe(Layer.provide(client)),
+          mountLifetime()
+        ),
+        Layer.merge(
+          AgentSessionHost.layer(Beta, hostOptions).pipe(Layer.provide(client)),
+          mountLifetime()
+        )
+      )
+      const routes = AgentServer.serverLayer(mounts).pipe(
+        Layer.provide(hosts)
       )
       const server = HttpRouter.serve(routes, {
         disableLogger: true,
@@ -200,7 +218,216 @@ describe("AgentServer", () => {
 
       assert.strictEqual(created.alpha, 200)
       assert.strictEqual(created.beta, 200)
-      // AS6: after the server scope closed, both hosted sessions are gone.
-      assert.strictEqual(yield* Ref.get(released), 2)
+      // AS6: after the server scope closed, both hosted sessions and both
+      // application-supplied mount layers are gone. Counting both sides keeps
+      // this from passing merely because the HTTP listener released.
+      assert.strictEqual(yield* Ref.get(sessionsReleased), 2)
+      assert.strictEqual(yield* Ref.get(mountLayersReleased), 2)
+    }))
+
+  it.effect("inventory lists mounts, live session counts, and remaining capacity (S4)", () =>
+    Effect.gen(function*() {
+      const Alpha = AgentSessionHost.Tag<string>("test/AgentServer/inventory-alpha")
+      const Beta = AgentSessionHost.Tag<string>("test/AgentServer/inventory-beta")
+      const client = Layer.succeed(AgentClient.AgentClient, {
+        createSession: (options) =>
+          Effect.succeed(idleSession(sessionId(options?.sessionId ?? "generated"))),
+        session: (id: string) =>
+          Effect.fail(new AgentClient.AgentSessionNotFoundError({ sessionId: id }))
+      })
+      const hosts = Layer.mergeAll(
+        AgentSessionHost.layer(Alpha, { ...hostOptions, maxSessions: 4 }).pipe(
+          Layer.provide(client)
+        ),
+        AgentSessionHost.layer(Beta, { ...hostOptions, maxSessions: 2 }).pipe(
+          Layer.provide(client)
+        )
+      )
+      const mounts = {
+        agents: [
+          AgentServer.mount("alpha", { host: Alpha }),
+          AgentServer.mount("beta", { host: Beta })
+        ]
+      }
+      const routes = AgentServer.serverLayer(mounts).pipe(Layer.provide(hosts))
+      const server = HttpRouter.serve(routes, {
+        disableLogger: true,
+        disableListenLog: true
+      }).pipe(
+        Layer.provideMerge(
+          NodeHttpServer.layer(createServer, {
+            port: 0,
+            gracefulShutdownTimeout: 100
+          })
+        )
+      )
+
+      const body = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const httpServer = yield* HttpServer.HttpServer
+          const base = HttpServer.formatAddress(httpServer.address)
+          const empty = yield* Effect.promise(() => fetch(`${base}/inventory`))
+          assert.strictEqual(empty.status, 200)
+          const before = (yield* Effect.promise(() => empty.json())) as AgentServer.Inventory
+          assert.strictEqual(before.ok, true)
+          assert.deepStrictEqual(
+            before.agents.map((agent) => ({
+              name: agent.name,
+              sessions: agent.sessions,
+              maxSessions: agent.maxSessions,
+              remaining: agent.remaining
+            })),
+            [
+              { name: "alpha", sessions: 0, maxSessions: 4, remaining: 4 },
+              { name: "beta", sessions: 0, maxSessions: 2, remaining: 2 }
+            ]
+          )
+
+          const created = yield* Effect.promise(() =>
+            fetch(`${base}/agents/alpha/sessions`, {
+              method: "POST",
+              headers: {
+                ...headers,
+                "content-type": "application/json"
+              },
+              body: JSON.stringify({
+                requestId: requestId("inventory-create"),
+                sessionId: sessionId("inventory-alpha-1")
+              })
+            })
+          )
+          assert.strictEqual(created.status, 200)
+
+          const afterRes = yield* Effect.promise(() => fetch(`${base}/inventory`))
+          const after = (yield* Effect.promise(() => afterRes.json())) as AgentServer.Inventory
+          const alpha = after.agents.find((agent) => agent.name === "alpha")
+          const beta = after.agents.find((agent) => agent.name === "beta")
+          assert.strictEqual(alpha?.sessions, 1)
+          assert.strictEqual(alpha?.remaining, 3)
+          assert.strictEqual(beta?.sessions, 0)
+          assert.strictEqual(beta?.remaining, 2)
+          return after
+        }).pipe(Effect.provide(Layer.mergeAll(server, FetchHttpClient.layer)))
+      )
+
+      assert.strictEqual(body.ok, true)
+    }))
+
+  it.effect("a local mount and a remote-backed mount are both reachable (AS3)", () =>
+    Effect.gen(function*() {
+      const { layer: innerModel } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("from-remote")
+      ])
+      const { layer: localModel } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("from-local")
+      ])
+      const InnerHost = AgentSessionHost.Tag<string>("test/AgentServer/mixed-inner")
+      const LocalHost = AgentSessionHost.Tag<string>("test/AgentServer/mixed-local")
+      const RemoteHost = AgentSessionHost.Tag<string>("test/AgentServer/mixed-remote")
+      const agent = Agent.make({ loop: AgentLoop.bounded(4) })
+
+      const innerHost = AgentSessionHost.layer(InnerHost, hostOptions).pipe(
+        Layer.provide(AgentClient.layer(agent)),
+        Layer.provide(innerModel)
+      )
+      const innerRoutes = AgentHttp.serverLayer({ host: InnerHost }).pipe(
+        Layer.provide(innerHost)
+      )
+      const innerServer = HttpRouter.serve(innerRoutes, {
+        disableLogger: true,
+        disableListenLog: true
+      }).pipe(
+        Layer.provideMerge(
+          NodeHttpServer.layer(createServer, {
+            port: 0,
+            gracefulShutdownTimeout: 100
+          })
+        )
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const innerHttp = yield* HttpServer.HttpServer
+          const remoteClient = AgentHttp.agentClientLayer({
+            baseUrl: HttpServer.formatAddress(innerHttp.address),
+            headers
+          }).pipe(Layer.provide(FetchHttpClient.layer))
+
+          const localHost = AgentSessionHost.layer(LocalHost, hostOptions).pipe(
+            Layer.provide(AgentClient.layer(agent)),
+            Layer.provide(localModel)
+          )
+          const remoteHost = AgentSessionHost.layer(RemoteHost, hostOptions).pipe(
+            Layer.provide(remoteClient)
+          )
+          const mounts = {
+            agents: [
+              AgentServer.mount("local", { host: LocalHost }),
+              AgentServer.mount("remote", { host: RemoteHost })
+            ]
+          }
+          const outer = AgentServer.serverLayer(mounts).pipe(
+            Layer.provide(Layer.mergeAll(localHost, remoteHost))
+          )
+          const outerServer = HttpRouter.serve(outer, {
+            disableLogger: true,
+            disableListenLog: true
+          }).pipe(
+            Layer.provideMerge(
+              NodeHttpServer.layer(createServer, {
+                port: 0,
+                gracefulShutdownTimeout: 100
+              })
+            )
+          )
+
+          const results = yield* Effect.scoped(
+            Effect.gen(function*() {
+              const outerHttp = yield* HttpServer.HttpServer
+              const base = HttpServer.formatAddress(outerHttp.address)
+              const localApi = yield* HttpApiClient.make(
+                AgentHttp.api({ name: "local" }),
+                { baseUrl: base }
+              )
+              const remoteApi = yield* HttpApiClient.make(
+                AgentHttp.api({ name: "remote" }),
+                { baseUrl: base }
+              )
+              const localId = sessionId("mixed-local")
+              const remoteId = sessionId("mixed-remote")
+              yield* localApi.local.createSession({
+                headers,
+                payload: { requestId: requestId("create-local"), sessionId: localId }
+              })
+              yield* remoteApi.remote.createSession({
+                headers,
+                payload: { requestId: requestId("create-remote"), sessionId: remoteId }
+              })
+              const local = yield* localApi.local.prompt({
+                params: { id: localId },
+                headers,
+                payload: {
+                  requestId: requestId("prompt-local"),
+                  input: Prompt.make("hi")
+                }
+              })
+              const remote = yield* remoteApi.remote.prompt({
+                params: { id: remoteId },
+                headers,
+                payload: {
+                  requestId: requestId("prompt-remote"),
+                  input: Prompt.make("hi")
+                }
+              })
+              return { local: local.result.text, remote: remote.result.text }
+            }).pipe(
+              Effect.provide(Layer.mergeAll(outerServer, FetchHttpClient.layer))
+            )
+          )
+
+          assert.strictEqual(results.local, "from-local")
+          assert.strictEqual(results.remote, "from-remote")
+        }).pipe(Effect.provide(Layer.mergeAll(innerServer, FetchHttpClient.layer)))
+      )
     }))
 })

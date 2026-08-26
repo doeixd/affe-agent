@@ -8,9 +8,10 @@ qualification:
 2. **Sessions lost to process failure resume automatically.**
 3. **Clients reconnect without starting over.**
 
-Accepted work and reconnect-from-offset now hold on their named paths. Process
-loss is proven only while a workflow is durably parked; recovery from a runner
-dying mid-activity still depends on H6's unfinished multi-node topology. The
+Accepted work, multi-node recovery, and reconnect-from-offset now hold on their
+named paths. `test/ClusterMultiNode.test.ts` proves owner loss during an active
+model call and the N+1 journal-boundary recovery sweep; the single-runner path
+remains exactly what its name says and does not advertise peer failover. The
 goal is not more tests. It is that every claim is written down as an invariant,
 holds on every path a user can take, and has a test that fails when the
 guarantee is removed.
@@ -28,10 +29,9 @@ Established by reading the code and tests, not the docs:
 - **Resumption.** The same `Agent.make({...})` runs under
   `DurableAgent.workflow`; a resumed submission replays completed work rather
   than repeating it, a completed tool call does not fire twice, and a steer
-  queued during suspension applies exactly once. Parked process loss is
-  covered: a test tears runner A down mid-suspension and resumes on runner B
-  over the same SQLite database. A runner dying mid-activity is not yet covered
-  and does not recover under `SingleRunner`; H6 is the path to testing it.
+  queued during suspension applies exactly once. Parked recovery, active model
+  failover, and every pre/post-activity journal position are covered. The
+  latter two use two real HTTP runners with shared SQL cluster storage.
 - **Reconnect.** True on the durable client with `DeliveryLog` — there is a
   test named *"a consumer disconnects mid-run, the agent carries on, and it
   resumes from its offset in another process"*. H5 also made it true on HTTP
@@ -46,122 +46,53 @@ I1–I15, each with a test that was broken once to prove it bites. Durability ha
 excellent prose in `STATUS.md` and no enumerated list. You cannot make
 something bulletproof without first listing the bullets.
 
-**W2 — Every crash test crashes where the author chose.** Crashes are simulated
-by releasing a scope at a hand-picked point. The bugs that survive are the ones
-at points nobody thought of. There is **no property-based or randomised testing
-anywhere in the repository** — confirmed by search.
+**W2 — Every crash test crashes where the author chose.** Closed by H3. The
+suite discovers the representative activity count, runs all N+1 pre/post
+positions, then runs seeded `FastCheck` schedules of crash positions,
+resumptions, steers and follow-ups. A failure is shrunk and its minimal schedule
+is pinned as an ordinary regression.
 
 **W3 — Two reconnect stories, one of them silently weaker.** At the start of
 the plan, a user on the HTTP adapter reasonably believed they had the durability
 the front page advertised. H5 closed that design defect.
 
-**W4 — Storage is assumed to work.** At the start of the plan, tests exercised
-concurrency and process loss but not hostile storage. H4 added typed storage
-failures and focused fault injection. The original milestone text named a
-broader fault matrix than the suite currently implements; that discrepancy is
-recorded in the current-work audit below.
+**W4 — Storage is assumed to work.** Closed by H4. The tested contract is typed
+failure before mutation, commit with a lost acknowledgement, idempotent retry,
+duplicate/conflict detection, and ordered reads. The original draft's stall and
+arbitrary batch-reordering matrix is explicitly outside D7; the decision and
+rationale are recorded under H4 rather than left as an accidental omission.
 
-**W5 — Known limits are real and unlisted at the boundary.** H5 and H8 settled
-reconnect and delta replay, and SQL plus Durable Streams now pass a
-cross-process live-delivery contract. The remaining limit is cluster recovery:
-the two-runner fixture does not yet execute even a basic submission, so
-mid-activity takeover and lease-driven reassignment remain unproved.
+**W5 — Known limits are real and unlisted at the boundary.** Closed. H5 and H8
+settled reconnect and delta replay, SQL plus Durable Streams pass a
+cross-process live-delivery contract, and H6 names the topology boundary:
+multi-node runners recover owner loss; `SingleRunner` does not imply peers.
 
-## Current remaining work — audited 2026-08-26
+## Completion audit — 2026-08-26
 
-The plan is mostly complete. Three implementation workstreams remain, in
-dependency order, plus one acceptance-criteria discrepancy that must be
-resolved rather than silently called done. H4b's formerly-open evaluation is
-now settled below.
+All implementation workstreams and the acceptance-criteria decision are now
+closed. H4b's ecosystem evaluation is recorded below.
 
-| Priority | Work | State |
-| --- | --- | --- |
-| 1 | H6 multi-node recovery | Blocked at a skipped fixture that binds its HTTP server but leaves a basic submission `pending`. |
-| 2 | H3 crash-point and property testing | The boundary census and kill hook exist; the exhaustive sweep and generated schedules do not. Depends on H6. |
-| 3 | H9 soak | No soak test exists. It follows the working recovery topology and crash sweep. |
+| Work | Result |
+| --- | --- |
+| H3 crash/property testing | Ten representative activities produce eleven deterministic suspension positions. Seeded `FastCheck` schedules add repeated resumes, steers and follow-ups, with shrinking and a pinned counterexample. |
+| H4 fault scope | Narrowed explicitly to D7's observable storage guarantees: typed pre-mutation failure, indeterminate commit, idempotent retry, duplicate/conflict detection and ordering. |
+| H6 multi-node recovery | Two HTTP runners form over shared SQL storage; a peer takes over during an active model call without repeating it. |
+| H9 soak | 208 submissions, 24 resumptions, 8 terminal interrupts and 300 reconnectable delivery events run in the bounded CI soak. |
 
-Focused verification on the audit date ran `ActivityBoundaries`, `DeliveryLog`,
-`DurableStorageFaults` and `ClusterMultiNode`: 18 tests passed and the one H6
-test was skipped.
+The H6 root cause was a recursive sharding runtime hidden inside
+`HttpRunner.layerHttpClientOnly`. Health now uses the lower-level
+`Runners.layerRpc`, so the serving sharding runtime is the only one assigning
+shards. The fixture has no skip left.
 
-### 1. Make the H6 fixture execute, then prove takeover
-
-`test/ClusterMultiNode.test.ts` contains the two-runner layer wiring and the
-only test is skipped. The immediate diagnostic is already narrow: establish
-whether shard acquisition happens and, if it does, why the entity message is
-not delivered. Once a basic submission completes, the fixture must prove that:
-
-- two runners form one working cluster over shared storage;
-- killing the owning runner mid-activity causes lease expiry and reassignment;
-- the unfinished request is redelivered without repeating completed activities;
-- D1–D4 hold through the takeover; and
-- the same topology can host H3's crash-point sweep.
-
-Cross-process event delivery is not the missing primitive it was when H6 was
-written. `test/DeliveryLog.test.ts` runs `crossProcessLive` against two SQLite
-logs over one database, and `test/DurableStreams.test.ts` runs the same contract
-against two Durable Streams clients. H6 still needs the contract exercised at
-the deployment boundary, but the unproved part is cluster execution and
-failover rather than log tailing alone.
-
-### What the H3 sweep changed in the kernel: a steering gate
-
-The crash schedules steer at every position, including after the loop has
-decided to stop. That exposed a gap the single-process tests never hit:
-`acceptingFollowUps` closed before a submission's final drain, but steering
-had no gate of its own, so a steer could be acknowledged into a run that had
-stopped looking -- and, on the durable path, be consumed as cleanup by session
-release before the peer rebuilt the run. `SessionState.acceptingSteering` and
+H3 found a real admission bug. A steer accepted just after a completed drain
+was consumed by process-local session cleanup when the workflow suspended, so
+the peer never saw it. `SessionState.acceptingSteering` and
 `InputChannel.Factory.setSteeringAdmitting` (`${sessionId}:steering:open` in
-the durable store) close that. When the loop says Stop, `AgentRun` closes the
-gate under the input permit, drains steering once more, and gives any steer
-that won the race its own turn before stopping; a steer arriving after the
-close is refused with `AgentIdleError`. The durable drain also returns nothing
-while the workflow is suspended, so queued input is left for the resumed
-session instead of being acknowledged and dropped.
-
-### 2. Finish H3 after H6
-
-`test/ActivityBoundaries.test.ts` pins the activity census, and `process_` in
-`test/DurableAgentClientSql.test.ts` exposes an `onActivity` hook so a test can
-kill a process without naming a production boundary. Still required:
-
-- crash deterministically at every boundary, including the N+1 positions
-  around N completed activities, and assert D1–D4 after recovery;
-- generate seeded schedules of crashes, resumptions, steers and follow-ups
-  with `FastCheck`;
-- rely on shrinking for a minimal reproduction; and
-- pin every discovered failure as an ordinary regression test.
-
-There is currently no `FastCheck` or `fast-check` use in `src/` or `test/`.
-
-### 3. Add H9's soak
-
-Run hundreds of submissions, dozens of resumptions, and consumers repeatedly
-connecting and disconnecting while checking D1–D6 continuously. This belongs
-after the multi-node topology and crash schedules work, otherwise it only soaks
-the already-covered parked/single-runner path.
-
-### 4. Reconcile H4's declared and implemented scope
-
-H4 is marked done and its focused tests cover typed read/write failures,
-commit-with-lost-acknowledgement, duplicates, conflicts and ordering. Its
-original acceptance text also promised a reusable wrapper that stalls and
-reorders storage and runs the existing durable suites under every fault. The
-current `test/storageFaults.ts` provides selected before/after failures, not
-that full matrix.
-
-Choose explicitly: either narrow H4 and SD4 to the fault modes that now define
-the guarantee, or add the missing stall, batch-reorder and full-suite fault
-runs. Leaving the broad text beside a `done` label is not a completed decision.
-
-### Documentation boundary until H6 lands
-
-Do not advertise generic runner-loss recovery yet. What is proved is recovery
-when the first process dies while the workflow is durably parked. Mid-activity
-work does not recover under `SingleRunner`, and the real multi-node path is
-still skipped. README and status wording must keep that distinction until H6
-turns it into a tested guarantee.
+the durable store) now close admission before the final drain. Input queued
+before that close gets a future sequential run without overriding the stopped
+run's loop policy; input after it is refused. Durable
+release also leaves queues untouched while the workflow is suspended. The
+minimal schedule is an ordinary regression beside the seeded property.
 
 ## The invariants
 
@@ -222,18 +153,18 @@ the `✗` is the honest answer until H5 changes it.
 | --- | --- | --- | --- | --- | --- |
 | D1 Accepted work executes or is refused | ✓ `AgentSession.test` | ✓ `DurableAdmission` | ✓ `Cluster` | ✓ `DurableHttpConcurrency` | ✓ `DurableAgentClient` |
 | D2 Resumption never repeats work | n/a | ✓ `Durable` | ✓ `Cluster` | n/a | ✓ `DurableAgentClient` |
-| D3 Resumption never skips accepted work | n/a | ✓ parked/reconciled; ✗ mid-activity (H6) | ✓ parked/reconciled; ✗ mid-activity (H6) | n/a | ✓ parked/reconciled; ✗ mid-activity (H6) |
-| D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ explicit interruption and parked crash; ✗ mid-activity (H6) | ✓ explicit interruption and parked crash; ✗ mid-activity (H6) | ✓ `DurableHttpIntegration` on the same parked path | ✓ explicit interruption and parked crash; ✗ mid-activity (H6) |
+| D3 Resumption never skips accepted work | n/a | ✓ `ClusterMultiNode` journal sweep | ✓ `ClusterMultiNode` owner loss | n/a | ✓ parked/reconciled; active client takeover is not separately claimed |
+| D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ interruption, boundary recovery and owner loss | ✓ interruption and owner loss | ✓ `DurableHttpIntegration` on the parked path | ✓ explicit interruption and parked recovery; active client takeover is not separately claimed |
 | D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | ✓ `AgentHttp` (H5) | ✓ `DurableAgentClient` |
 | D6 A recorded event is replay-stable | n/a | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` |
 | D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | ✓ `Cluster` (defect, see below) | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
 | D8 Every claim names its path | this table | this table | this table | this table | this table |
 
-**The one `✗` is W3, and it is a design defect rather than a documentation
-gap.** A user on the HTTP adapter gets live-only delivery: disconnect and the
-events emitted while away are gone. Until H5, the honest statement is that
-reconnect-from-offset is a property of the durable client, not of the SSE
-transport.
+**Historical note.** The one `✗` when H1 landed was W3: HTTP delivery was
+live-only. H5 closed it. The current matrix instead avoids turning H6's tested
+`DurableAgent.workflow`/cluster takeover into an untested claim about every
+adapter; the durable client and HTTP rows state their focused parked-path
+coverage.
 
 **H2: landed (2026-08-24).** Every invariant with a mechanism was broken once
 and the suite re-run over nine durability test files (121 tests). Results:
@@ -293,7 +224,7 @@ mechanism that enforces it and confirm a test fails. Any invariant whose tests
 still pass is not tested — it is decorated. Expect this to find at least one,
 because it did every time in the tools work.
 
-### H3 — Property-based crash testing
+### H3 — Property-based crash testing — **done**
 
 The big one, and the answer to W2. `effect/testing` already exports
 `FastCheck`, and `fast-check` is already installed, so this needs no new
@@ -308,15 +239,33 @@ dependency.
 - Keep the exhaustive pass in CI and the randomised pass seeded, with failures
   pinned as ordinary tests so a found bug never returns.
 
-### H4 — Storage fault injection — **done**
+`ClusterMultiNode.test.ts` now does all four. Its representative run discovers
+ten completed activities and executes the eleven positions before the first
+and after each completion. The generated schedules vary that position, accepted
+or refused steering/follow-up input, and repeated resume requests. The fixed
+seed is `0x5eed`; FastCheck's counterexample path is reported on failure and the
+steering-loss counterexample it found is pinned outside the generator.
 
-A wrapper over the store interfaces — the same technique the coding toolkit
-tests use for the sandbox — that can fail a write, fail a read, duplicate a
-record, reorder a batch, stall, or half-commit. Run the existing durable suites
-under each fault. Asserts D7, and gives D1 teeth: "never lost" should be tested
-against a store that is actively unhelpful.
+### H4 — Storage fault injection — **done; focused scope chosen**
 
-**Blocked until the store has an error channel to fault.**
+The accepted fault model is the one D7 can observe and act on: fail before a
+read or write, commit and lose the acknowledgement, retry the same idempotency
+key, replay a duplicate, surface a conflicting payload, and preserve the
+store's declared ordering. `test/storageFaults.ts`,
+`DurableStorageFaults.test.ts`, `StorageError.test.ts`, and the delivery-log
+contracts cover those transitions.
+
+The original draft also listed arbitrary stalls, batch reordering, and running
+every durable suite beneath every injected fault. That broader matrix is not
+the criterion. A stall has no defined outcome without a timeout/retry policy,
+so inventing one here would hide a policy decision behind a test default;
+arbitrary reordering violates the ordered store contract rather than modelling
+an ambiguous commit. Focused contract tests give each supported fault an exact
+assertion and keep unrelated durable suites from multiplying the same cases.
+This is an explicit narrowing, not an unimplemented promise.
+
+**Historical prerequisite, now closed: the store needed an error channel to
+fault.**
 [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E14 measured 58
 `Effect.orDie` in `src/`, 33 of them in `durable/` and 17 in
 `DurableSessionStore.ts` alone. `encodeHistory` and `decodeHistory` are typed
@@ -371,9 +320,9 @@ classification reliable rather than dependent on a driver's `name` string.
 **Historical blocker, now closed:** `DurableChannels` and `state/AgentState`
 were the remaining `orDie` triage sites when this paragraph was written. Both
 now expose typed storage failures; `docs/audit-effect-ecosystem.md` records the
-decision. H4 is unblocked across every store. The current audit above records
-the separate mismatch between H4's original fault matrix and its narrower
-implemented acceptance criteria.
+decision. H4 is unblocked across every store. The H4 section above records
+the focused fault contract selected for H4 and why the undefined stall and
+contract-breaking reorder cases are not acceptance criteria.
 
 This is also the milestone where D7 stops being aspirational, which makes it a
 better place for the work than a general cleanup pass would be.
@@ -495,41 +444,29 @@ Where a session has no delivery log, resumption fails rather than returning a
 live stream: a caller reconnecting from 41 and silently handed events from 60
 has lost eighteen and cannot find out.
 
-### H6 — Multi-node recovery and cross-node live delivery
+### H6 — Multi-node recovery and cross-node live delivery — **done**
 
 `DeliveryLog.live` fans out in one process. Multi-node is where durability
 claims are actually tested, so this closes the honest gap over `read({ after })`
 as `STATUS.md` already anticipates. Runs the existing `DeliveryLogContract`
 plus the cross-process tests against a multi-node fixture.
 
-**Started, and stuck at a named point.** `test/ClusterMultiNode.test.ts` has
-the fixture: `HttpRunner.layerHttp` for a real transport, `RunnerHealth
-.layerPing` for a real opinion on liveness, shared SQL message and runner
-storage. The layer archaeology is done and written down there -- the
-health/runners cycle and how `layerHttpClientOnly` breaks it, the engine's own
-`MessageStorage` requirement, the fact that every node must register the
-workflow, and `result`'s six-second poll being too short for a cluster to
-settle.
+`test/ClusterMultiNode.test.ts` uses `HttpRunner.layerHttp`,
+`RunnerHealth.layerPing`, and shared SQL message/runner storage. Two nodes
+register the same workflow, a submission dispatched through either completes,
+and closing the owner while its model activity is in flight causes the peer to
+acquire the shard and finish. The owner and peer model recorders each show one
+call: unfinished work is redelivered and completed work is not repeated.
 
-It does not work yet, and the test is skipped rather than failing. The server
-binds and nothing runs: a submission stays `pending` through 30 seconds. It is
-**not** a peering problem -- one runner alone on this wiring reproduces it,
-while `SingleRunner` executes the same work immediately. Shards are
-self-acquired from `RunnerStorage` and there is no shard-manager role to be
-missing, so the next step is to establish whether acquisition happens and, if
-so, why the entity message is not delivered.
+The fixture originally bound both servers and left every submission pending.
+The cause was `layerHttpClientOnly`: using it to satisfy the health layer also
+built a second sharding runtime. Health now receives `Runners.layerRpc` over
+the HTTP client protocol and shared message storage, which breaks the layer
+cycle without constructing another sharder.
 
-**Audit clarification (2026-08-26).** Cross-process tailing now has focused
-coverage for both the SQL and Durable Streams delivery logs. H6 remains open
-because the real runner topology does not execute or recover work; it should
-not reimplement log tailing that those contracts already prove.
-
-**SD3 now depends on this too.** A runner that dies mid-activity is not
-recovered under `SingleRunner`, whose runner health checks are no-ops by
-documentation -- so the crash-point sweep has no reachable scenario until a
-fixture exists with real runner health (`HttpRunner` + `RunnerHealth.layerPing`).
-That makes H6 the unblocking milestone for two success conditions rather than
-one, and raises it above H7 and H9 in order.
+Cross-process tailing remains covered by the focused SQL and Durable Streams
+delivery-log contracts. H6 proves the topology and takeover concern rather
+than duplicating those log tests.
 
 ### H7 — Time-dependent paths, on `TestClock` — **mostly moot; capability pinned**
 
@@ -548,7 +485,7 @@ unaffordable. Measuring first dissolved most of it:
   runner health checks, so it never concludes a peer has died and never moves a
   shard; the scenario cannot occur at any speed. That is H6.
 
-What survives is the piece H6 will stand on, and it is now pinned by
+What survived was the piece H6 stood on, pinned by
 `DurableVirtualTime.test.ts`: **the cluster's timing goes through Effect's
 `Clock`**, so a `TestClock` drives it. `Sharding` reads
 `clock.currentTimeMillisUnsafe()` rather than `Date.now()`. A full durable
@@ -572,14 +509,20 @@ with itself about a lifecycle fact, which is what the warning is for.
 Recorded here because the milestone was written as though the decision were
 still open; the code had already made it.
 
-### H9 — Soak
+### H9 — Soak — **done**
 
 One long-running test: hundreds of submissions, dozens of resumptions,
 consumers connecting and disconnecting throughout, asserting D1–D6 continuously
 rather than at the end. Catches leaks and slow drift that scenario tests never
 will.
 
-**Status: open.** No soak test exists yet.
+`DurabilitySoak.test.ts` is the bounded CI soak: 208 accepted submissions share
+one engine, 24 park and resume, 8 are explicitly interrupted and remain
+terminal after a later resume request, and the remaining 176 execute normally.
+Exactly 200 model calls occur. A separate 300-event workload repeatedly saves
+only part of the available tail and reconnects from that cursor while also
+checking duplicate and conflict outcomes. It covers D1–D6 without sleeps and
+runs in a few seconds rather than becoming an opt-in test nobody executes.
 
 ## Success conditions
 
@@ -608,75 +551,15 @@ will.
   errors die, and letting the entity swallow a failed offer.
 - **SD2:** Each of D1–D8 has a test that fails when the guarantee is removed,
   demonstrated by actually removing it.
-- **SD3:** Partly. **The census is done and is the half that prevents drift:**
-  `ActivityBoundaries.test.ts` wraps `activityExecute` -- the one place every
-  activity passes through, whoever created it -- and asserts the set of
-  boundaries each entry point crosses. A new `Activity.make` anywhere reachable
-  fails it as `unclassified`, demonstrated by adding one.
-
-  Writing it corrected two guesses. `permission decision` and `channel drain`
-  are boundaries in a plain durable run whether or not a policy is configured,
-  and `session projection` belongs only to the client's `DurableSubmission` --
-  hence two censuses rather than one. Guessing at this list was wrong in two
-  places out of five, which is the argument for asserting it.
-
-  **The crash-point sweep is blocked, and on something worth knowing.** The
-  seam is built: `process_` in `DurableAgentClientSql.test.ts` takes an
-  `onActivity` hook, so a test can kill a process at a boundary it never had to
-  name. A representative client submission crosses **eleven** of them
-  (`steering-drain`, `model`, `permission`, `tool`, `followUps-drain`,
-  `session-projection/finish`).
-
-  Writing the sweep did not fail slowly, it did not finish at all:
-
-  - A runner killed **mid-activity** -- not parked, just gone -- did not resume
-    within **75 seconds**, against a persistent SQLite journal with a
-    one-second shard lease. Not a lease-expiry wait: 75s is well past it.
-  - An explicit `engine.resume` from the second process did not change that,
-    though that call was made on a freshly built definition and swallowed its
-    errors, so treat it as inconclusive rather than as evidence.
-
-  And the reason nobody had noticed: **every process-loss test in the suite is
-  a *suspension* test.** `Durable.test.ts` parks on a `DurableDeferred` gate;
-  `DurableAgentClientSql.test.ts` parks on an approval. In each, the second
-  process resumes the run by *answering* it. Not one of them kills a runner
-  mid-activity and waits for the execution to be picked back up.
-
-  So D2 and D4 are ✓ for what they test, and what they test is narrower than
-  "resume after process loss" sounds.
-
-  **Settled: it is the topology, and the mechanism is identifiable.**
-  `ClusterWorkflowEngine.resume` looks up the reply for the execution's `run`
-  request and filters it to `Suspended`; with no such reply it returns without
-  doing anything. A runner that parked recorded one -- which is why every
-  suspension test recovers -- and a runner that died mid-activity recorded
-  none, so `resume` is a no-op for precisely the case the word describes.
-
-  Recovering a crashed in-flight request therefore means *redelivering* it,
-  which means the cluster noticing that its runner is gone. `SingleRunner`
-  documents no-op runner health checks: it is a single-node layer, so it has no
-  peers to check on and never concludes one has died. Two processes sharing its
-  database is not a topology it claims to support, and the second cannot take
-  over the first's in-flight work.
-
-  Two things were tried and neither helped, which is what makes this a
-  conclusion rather than a guess: waiting 75 seconds (well past the one-second
-  shard lease), and re-dispatching from `reconcile` under the same execution id
-  -- the engine deduplicates that against the stuck request rather than
-  starting a replacement. The re-dispatch branch was written and then removed:
-  it could not do what its comment claimed.
-
-  **The consequence for a deployer is worth stating plainly:** parked work
-  survives a process dying and is picked up by another; in-flight work on a
-  single-runner topology is not. Whether a real multi-node cluster
-  (`HttpRunner` with `RunnerHealth.layerPing`) recovers it is untested here and
-  is what H6's fixture is for. SD3's sweep should wait for that fixture, since
-  it is the thing that makes the scenario reachable at all.
-- **SD4:** Partly. Focused tests cover typed write failure,
-  commit-with-lost-acknowledgement, duplicate/conflict handling and ordering.
-  The original H4 text's stall, batch-reorder and run-every-suite-under-every-
-  fault matrix is not implemented; the current audit requires either narrowing
-  the criterion or adding those cases.
+- **SD3:** ✓ `ActivityBoundaries.test.ts` pins the boundary families, while
+  `ClusterMultiNode.test.ts` discovers ten completed activities and executes
+  all eleven pre/post positions. Its seeded, shrinking FastCheck property adds
+  resumes, steers and follow-ups. A separate owner-loss test closes a runner
+  during the model activity and observes peer takeover without a repeated call.
+- **SD4:** ✓ The focused D7 fault contract covers typed pre-mutation failure,
+  commit-with-lost-acknowledgement, idempotent retry, duplicate/conflict
+  handling and ordering. H4 records why undefined stall policy and arbitrary
+  contract-breaking reordering are not acceptance criteria.
 - **SD5:** ✓ A browser `EventSource` reconnect resumes from `Last-Event-ID` with
   no gap and no duplicate, tested end to end. `AgentHttp.test.ts` covers the
   header, the `?after=` fallback and an unparseable id; `DurableAgentClient

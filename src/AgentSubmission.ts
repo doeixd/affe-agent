@@ -57,6 +57,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     })
 
     let next: Prompt.Prompt | undefined = input
+    let continueWithoutInput = false
     const pending: Array<Prompt.Prompt> = []
     let runs = 0
     let turns = 0
@@ -69,14 +70,17 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     // here never reports a prior submission's totals. Runs increment below;
     // turns and text/usage are updated per committed turn inside `AgentRun`.
 
-    while (next !== undefined) {
-      if (runs > 0) {
+    while (next !== undefined || continueWithoutInput) {
+      if (runs > 0 && next !== undefined) {
         // Ordering: FollowUpQueued < RunCompleted < FollowUpApplied < RunStarted
         yield* EventBus.emit(session.bus, correlation, {
           _tag: "FollowUpApplied"
         })
       }
-      yield* History.commit(session.history, next)
+      if (next !== undefined) {
+        yield* History.commit(session.history, next)
+      }
+      continueWithoutInput = false
       const runId = yield* session.ids.nextRun
       runs = runs + 1
       yield* Ref.update(session.progress, (p) => ({ ...p, runs }))
@@ -129,7 +133,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       // offer a follow-up that the closing drain below must still catch.
       yield* session.beforeClose
 
-      if (pending.length === 0) {
+      if (pending.length === 0 && !exit.value.steeringContinuation) {
         // Nothing left, so close this submission's input. Until this flips,
         // `followUp` may still be accepted, and anything accepted after the
         // drain above would be silently discarded on release.
@@ -175,6 +179,8 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       }
 
       next = pending.shift()
+      continueWithoutInput =
+        next === undefined && exit.value.steeringContinuation
       if (next !== undefined) {
         yield* SubscriptionRef.update(session.state, (state) => ({
           ...state,

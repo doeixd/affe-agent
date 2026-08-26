@@ -54,6 +54,11 @@ export const make = (
   session: AgentSession.AgentSession<any, any>
 ): Effect.Effect<AgentProbe, never, Scope.Scope> =>
   Effect.gen(function* () {
+    // Deliberately unbounded: a probe is test instrumentation whose contract is
+    // a complete event record. Dropping would make exact-sequence assertions
+    // lie, and backpressuring the observed run would make the probe change the
+    // scheduling it is meant to observe. Its surrounding test scope bounds the
+    // lifetime; tests remain responsible for not probing an infinite stream.
     const buffered = yield* Queue.unbounded<AgentEventEnvelope>()
 
     yield* Effect.forkScoped(

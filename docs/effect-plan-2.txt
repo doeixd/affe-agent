@@ -1,5 +1,173 @@
 Yes. After looking more closely at Effect v4, I would **revise the previous plan fairly substantially**.
 
+# Implementation notes (2026-08-26)
+
+This file is a **design brief**, not a description of what ships. Checked
+against `src/` on 2026-08-26 (`effect@4.0.0-rc.111`). The architecture below
+is still the right target. Several of its premises about the current tree
+have moved; those are marked `STATUS` in the sections they affect.
+
+This is the detailed revision of the architecture also summarised in
+[opencode-completion-plan.md](./opencode-completion-plan.md).
+[remaining-work.md](./remaining-work.md) still lists that work as **hard /
+not this pass** — do the easy leftover slices there first.
+
+## Related documents
+
+Read these before implementing anything in this brief. Paths are relative to
+`docs/`.
+
+### What to implement first
+
+1. **Not this architecture yet.** Follow [remaining-work.md](./remaining-work.md):
+   leftover slices of plans that already ship (pi toolkit, TUI restore, A2A
+   adapter, filetypes Phase 1, compaction 1–4, audit A-8/A-12). This file is
+   in its "Hard / not this pass" table.
+2. **If you *are* implementing this architecture**, follow §38 below. The
+   sibling handoff notes — non-goals, `session.submit()` before the inbox —
+   are in [opencode-completion-plan.md](./opencode-completion-plan.md).
+3. **Phase 0 leftover** (the only unevaluated spike): PersistedQueue vs
+   `/scheduling` `JobStore`. Queue path already shipped in
+   [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1. Persistence audit:
+   [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3. Do not replace
+   `JobStore` until that spike says so (§20).
+
+### Design authority (already built)
+
+| Topic | Document |
+| --- | --- |
+| Kernel: claim, steer, follow-up, events, durable mapping | [PLAN.md](../PLAN.md) §11 / §11.1 (atomic claim, at most one live submission), §22.1 (follow-up admission), §27–28 (events), §30 / §30.2 (same agent, stronger interpreters) |
+| What actually ships | [STATUS.md](../STATUS.md) |
+| Capability map | [ROADMAP.md](../ROADMAP.md) |
+| `DurableAgent.submit`, `DurableClock`, `DurableQueue`, `DurableDeferred` | [WORKFLOW.md](../WORKFLOW.md) |
+| `AgentClient`, host `requestId`, `DeliveryLog` | [transport.md](./transport.md) |
+| Ecosystem primitives we should reuse | [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) |
+
+### Closed evaluations — do not re-run
+
+| Spike | Document |
+| --- | --- |
+| Effect `ChildProcess` vs `sandbox/local` | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md) — retain Node adapter |
+| EventLog vs `DeliveryLog` | [plan-durability-hardening.md](./plan-durability-hardening.md) H4b — retain `DeliveryLog` |
+| `effect/Graph` vs session tree | [plan-session-tree.md](./plan-session-tree.md) T4 — not used |
+| `LayerMap` for the agent server | [plan-agent-server.md](./plan-agent-server.md) S2 — not for static routes; `RcMap` used in the tree (T3) |
+| Provider fallback | [plan-execution-plan.md](./plan-execution-plan.md) — shipped as `Agent.withExecutionPlan` |
+
+### Related plans that are *not* this brief
+
+| Document | Relation |
+| --- | --- |
+| [plan-shell-tool.md](./plan-shell-tool.md) | Rename model-facing `bash` → `shell`. `/shell` already exists as argv translation. **Not** ProcessManager. Specified, not implemented. |
+| [plan-durability-hardening.md](./plan-durability-hardening.md) remaining | H6 multi-node still blocked. Inbox/submit sit on the client/store path that already exists; they do not unblock H6. |
+| [plan-agent-server.md](./plan-agent-server.md) S3–S5 | Mixed backing, inventory, auth example. Host-wide events (§29, §12 of this brief) would plug in here later. |
+| [plan-session-tree.md](./plan-session-tree.md) | Conversation DAG + `RcMap` live branches. Not `SessionDirectory`. Delta storage deferred. |
+| [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Spawn Claude Code / OpenCode as A2A *agents*. Different problem; [remaining-work.md](./remaining-work.md) says after other work. |
+| [plan-relay.txt](./plan-relay.txt) | NAT / WSS / enrollment. After other work. |
+| [ADDITIONAL.md](../ADDITIONAL.md) §4 | Older sketch that put `ProcessManager` *inside* `Sandbox`. Superseded: ProcessManager is a sibling of Sandbox, and ProcessManager must not know `AgentSession` exists (§6). |
+
+### Source of truth for nearby names
+
+| This brief | Source |
+| --- | --- |
+| `DurableAgent.submit` (wrong inbox target) | [WORKFLOW.md](../WORKFLOW.md), `src/durable/DurableAgent.ts`, [PLAN.md](../PLAN.md) §11 / §30 |
+| Durable logical session + claim `key` | `src/durable/DurableSessionStore.ts`, `src/durable/DurableSubmission.ts`, [STATUS.md](../STATUS.md) |
+| Host `requestId` | [transport.md](./transport.md) |
+| `/scheduling` `JobStore` | `src/scheduling/Scheduling.ts`, [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1 |
+| Sandbox tree-kill | `src/sandbox/local.ts`, [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md) |
+| `/shell` | `src/shell/Shell.ts`, [plan-shell-tool.md](./plan-shell-tool.md) |
+| Usage on `Result`, not events | [PLAN.md](../PLAN.md) §33.3, `src/budget/Budget.ts`, `src/observability/Observability.ts` |
+| `DurablePolling` | `src/durable/DurablePolling.ts` — operator `Config` for poll intervals ([audit-effect-ecosystem.md](./audit-effect-ecosystem.md) A-8), not §16 monitors |
+
+## Still proposed (not built)
+
+```text
+SessionInbox over Effect PersistedQueue
+session.submit() — admit a submission without awaiting it
+ProcessManager / ProcessDirectory / ProcessStore / ProcessOutputLog
+WorkspaceManager (LayerMap / RcMap workspace lifetime)
+/sessions — SessionDirectory + SessionProjection
+host-wide AgentSessionHost.events + FiberMap session pumps
+ModelCallCompleted usage on the kernel event stream
+/process, /workspace package entries
+```
+
+Do not confuse these with things that already exist under nearby names:
+
+```text
+DurableAgent.submit          ≠ session.submit()
+/scheduling AgentDispatcher  ≠ SessionInbox
+/shell                       ≠ ProcessManager
+DurableSessionStore          ≠ SessionDirectory
+DurablePolling               ≠ durable monitors (§16)
+sandbox exec                 ≠ background process lifetime
+```
+
+## Already ships — reuse, do not rebuild
+
+| Brief name | What actually exists | See |
+| --- | --- | --- |
+| Agent / session / client / host | `Agent` → `AgentSession` → `AgentClient` → `AgentSessionHost`. Host `events` is **per session**, not host-wide. | [PLAN.md](../PLAN.md), [transport.md](./transport.md) |
+| `steer` / `followUp` / `prompt` | Core data plane. `prompt` still waits for the terminal result. No `submit()`. | [PLAN.md](../PLAN.md) §11, §22.1 |
+| Transport request ids | `AgentSessionHost` already dedupes mutating calls by `(session, requestId)`. Process-local. | [transport.md](./transport.md) |
+| Durable logical session | `DurableSessionStore` + `DurableSubmission`. Sequential submissions on one session, claim is atomic, optional claim `key` for retry-during-claim. | `src/durable/DurableSessionStore.ts`, [STATUS.md](../STATUS.md) |
+| Embedded durable submit | `DurableAgent.submit` keys the **workflow execution by session**. A second submit, even after completion, rejoins that execution. Wrong target for inbox ping-back. | [WORKFLOW.md](../WORKFLOW.md), [PLAN.md](../PLAN.md) §11 / §30 |
+| Durable client prompt | `DurableAgentClient.prompt` claims, dispatches, **awaits**. Store can take a `key`; the client does not pass one yet. | `src/durable/DurableAgentClient.ts` |
+| Delivery log | `DeliveryLog`: semantic-key dedupe, duplicate-content conflict, session-wide sequence, `read({ after })`, `live` / `subscribe`. | [transport.md](./transport.md), [plan-durability-hardening.md](./plan-durability-hardening.md) |
+| Scheduling | `/scheduling`: `AgentDispatcher` (`local` / `queued` + `JobStore`) starts **independent** `Agent.run` work. `recurring` is `Effect.repeat` + `Schedule`. Cluster-wide cron is `ScheduledAgent` over `ClusterCron`. | [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1, [ROADMAP.md](../ROADMAP.md) §14 |
+| Sandbox | `/sandbox` + `/sandbox/local`. `exec` is a bounded command (timeout, output cap), scoped to the acquisition. Not a managed background process. | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md) |
+| Shell dialect | `/shell` translates a script to argv. Orthogonal to ProcessManager. | [plan-shell-tool.md](./plan-shell-tool.md) |
+| Subagent | `Subagent.tool` is still parent-waits-for-child. | [ROADMAP.md](../ROADMAP.md) item 4, [STATUS.md](../STATUS.md) |
+| Permission | `Allow \| Ask \| Deny`, projection `action`/`resource`, elicitation floor. No `process.*` / `monitor.*` projections yet. | [PLAN.md](../PLAN.md), `src/Permission.ts` |
+| HITL / pause | `Elicitation` locally; `DurableDeferred` under durability. | [WORKFLOW.md](../WORKFLOW.md), [ROADMAP.md](../ROADMAP.md) item 6 |
+| Usage | `AgentSubmission.Result.response` carries the provider response (usage, finish reason). `Budget` reads it. **Events do not.** `TurnCompleted` is empty. `/observability` documents this and refuses to invent a token metric. | [PLAN.md](../PLAN.md) §33.3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E8 / AS2 |
+| ExecutionPlan | `Agent.withExecutionPlan` already wraps the model call. Durable agents cannot carry one (the plan provides its own model). | [plan-execution-plan.md](./plan-execution-plan.md) |
+| RcMap | Session tree live branches (`src/tree/SessionTree.ts`). Not workspaces. | [plan-session-tree.md](./plan-session-tree.md) T3 |
+| SqlClient | `DurableChannels.sqlStore`, `DurableSessionStore`, `DeliveryLog` SQL backing. | [plan-durability-hardening.md](./plan-durability-hardening.md) |
+| Host-wide events | Do not exist. `AgentSessionHost.events` forwards one session's stream. `FiberMap` is unused (`FiberSet` is used once, in `/a2a`). | [transport.md](./transport.md), [plan-agent-server.md](./plan-agent-server.md) |
+
+## Evaluations already closed — do not re-run as Phase 0
+
+| Spike this brief asked for | Outcome |
+| --- | --- |
+| Effect `ChildProcess` vs `sandbox/local` tree semantics | **Retain the Node adapter.** [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md). Two gaps: descendant-held pipes after a successful child exit, and no `lstat` / `realpath.native` on `FileSystem`. |
+| EventLog vs `DeliveryLog` | **Retain `DeliveryLog`.** [plan-durability-hardening.md](./plan-durability-hardening.md) H4b. Overlap, not substitution: no caller-supplied idempotency key, no per-session cursor. |
+| `effect/Graph` vs session tree | **Not used.** [plan-session-tree.md](./plan-session-tree.md) T4. |
+| Persistence `KeyValueStore` vs package stores | **Retain both seams.** Same [H4b](./plan-durability-hardening.md) write-up: `DurableChannels.Store` is an ordered queue with `offerIfOpen`; `AgentState.Store` is a two-op boundary. Also [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3. |
+| `LayerMap` for the agent server | **Not used for static routes.** [plan-agent-server.md](./plan-agent-server.md) S2. Reserved for a later agent-name-as-path design. [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4. |
+| PersistedQueue vs scheduling `JobStore` | **Not evaluated.** Still the only Phase 0 item. `JobStore` is a due-time store; this brief already says a queue is not a timer (§20). Queue path: [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1. |
+
+## The load-bearing conflict for `SessionInbox`
+
+Inbox delivery needs: wait until the **logical** session is idle, then start a
+**new** submission on that same session, idempotently.
+
+That is how in-process `AgentSession.prompt` already works (minus fire-and-
+forget and request-id). It is how `DurableSessionStore` + `DurableSubmission`
+work (keyed `${workflow}:${sessionId}:${submissionId}`).
+
+It is **not** how `DurableAgent.submit` works. That API's idempotency key is
+the session, on purpose, and a completed execution is returned as-is. An inbox
+worker that called `DurableAgent.submit` would never start the ping-back
+submission.
+
+So: implement inbox delivery against `AgentSession` / `AgentClient` /
+`DurableAgentClient`, never against `DurableAgent.submit`. Pushing request-id
+idempotency down means wiring `DurableSessionStore.claim({ key })` through
+`AgentClient` — the store already has the field.
+
+See [PLAN.md](../PLAN.md) §11 / §11.1, [WORKFLOW.md](../WORKFLOW.md),
+[transport.md](./transport.md), [opencode-completion-plan.md](./opencode-completion-plan.md)
+§2 (`session.submit()` before the inbox).
+
+Caveat already recorded on that field: the key lives on the **claim**, so it
+covers crash-after-admission while the submission is running, not forever.
+After `finish`, the same key is a new request. A ping-back whose retries can
+outlive the whole submission still needs a longer-lived dedup table — which
+is exactly what `PersistedQueue.offer({ id })` would be, if ACK happens after
+admission.
+
+---
+
 The central correction is:
 
 > We should not build a general background-task runtime, process runtime, worker runtime, queue runtime, or scheduler runtime. Effect v4 already has almost all of those computational semantics.
@@ -89,6 +257,18 @@ Agent → AgentSession → AgentClient → AgentSessionHost
 
 That is the architecture I would give the implementation agent.
 
+STATUS (2026-08-26): the left column of the table is accurate about Effect.
+The right column is still the *target*. Two substitutions in the picture
+are stale:
+
+* "ChildProcessSpawner / remote backend" under ProcessManager — local
+  process-tree semantics are **not** currently substitutable; see §11 and
+  [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md).
+* "existing scheduling battery" for ClusterCron — `ScheduledAgent` exists,
+  but it fires a **new session** each time via `DurableAgent.submit`, so it
+  is not a ping-back to an existing logical session. See [WORKFLOW.md](../WORKFLOW.md)
+  and [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1.
+
 ---
 
 # 1. The biggest missing semantic: `SessionInbox`
@@ -130,11 +310,18 @@ And current `AgentDispatcher` starts independent future `Agent.run(...)` work; i
 So add:
 
 ```text
-@s/doeixd/effect-agent/sessions
+@doeixd/effect-agent/sessions
     SessionDirectory
     SessionProjection
     SessionInbox
 ```
+
+STATUS (2026-08-26): none of these exist. `/tree` is a branch-and-rewind DAG
+with `RcMap`-backed live sessions, not a session directory
+([plan-session-tree.md](./plan-session-tree.md) T3). `DurableSessionStore`
+is the execution-critical durable session record (status, history, claim) —
+keep it separate, as §26 says. Host request ids:
+[transport.md](./transport.md).
 
 ## `SessionInbox`
 
@@ -205,6 +392,17 @@ Effect v4's `PersistedQueue` already provides:
 * Redis storage.
 
 That's almost exactly what a persistent session inbox needs.
+
+STATUS (2026-08-26): `effect/unstable/persistence/PersistedQueue` exists in
+the installed Effect and is unused. `PersistedQueue.make` is not a free
+function — it needs `PersistedQueueFactory` in the environment (memory, SQL,
+or Redis layer). `offer(value, { id })` and `take(f)` match the sketch
+below. Duplicate `id` is suppressed while the item is in the queue.
+
+Related: [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3
+(don't invent another queue store), [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md)
+P1 (`JobStore` is due-time, not this), [WORKFLOW.md](../WORKFLOW.md)
+(`DurableQueue` is the wait-for-result cousin, §19).
 
 So:
 
@@ -339,6 +537,26 @@ finished
 
 which background work makes unavoidable.
 
+STATUS (2026-08-26): still missing on every public surface.
+
+* `AgentSession.prompt` claims the idle session, starts the submission, and
+  awaits the terminal `Result` (which already carries `submissionId`).
+* `AgentClient.RemoteSession.prompt` and `AgentSessionHost.prompt` do the same.
+* `DurableAgentClient.prompt` claims (`DurableSessionStore.claim`), dispatches
+  a `DurableSubmission` workflow, then polls to completion. Admission and
+  await are already separate *internally*; only the await is exposed.
+* `DurableAgent.submit` returns an execution id after opening admission, which
+  looks similar — but its idempotency key is the **session**, and a second
+  call never starts a later submission. Do not use it as `session.submit`.
+
+The smallest implementation is exposing the existing admit/await split, not
+inventing a second execution noun.
+
+Prerequisite for the inbox ([opencode-completion-plan.md](./opencode-completion-plan.md)
+§2). Claim rules: [PLAN.md](../PLAN.md) §11.1. Durable submit:
+[WORKFLOW.md](../WORKFLOW.md). Host request ids (not sufficient):
+[transport.md](./transport.md).
+
 ---
 
 # 4. `submit` also needs idempotency
@@ -398,6 +616,25 @@ For local sessions a bounded in-memory table is sufficient.
 
 This is a real architectural improvement revealed by the ping-back use case.
 
+STATUS (2026-08-26): half-done, and the half that exists is not on the
+data-plane API.
+
+* `AgentSessionHost` already joins retries by `(session, requestId)`. That
+  table dies with the process — exactly the problem this section names.
+* `DurableSessionStore.claim` already accepts an optional caller `key` and
+  treats a live claim under the same key as the same admission. The window is
+  the **claim's lifetime**, not forever: `finish` drops the key, so a retry
+  arriving after the submission completed starts a new one. That is documented
+  on the store and is the right default; forever-retention belongs on the
+  inbox (`PersistedQueue` id), which ACKs after admission.
+* `DurableAgentClient.prompt` does **not** pass `key` through. Wiring
+  `session.submit({ requestId })` is mostly plumbing that field to `claim`,
+  plus not awaiting the outcome.
+* Local `AgentSession.prompt` has no `requestId` parameter.
+
+Host table: [transport.md](./transport.md). Durable claim `key`:
+`src/durable/DurableSessionStore.ts`. Kernel claim: [PLAN.md](../PLAN.md) §11.1.
+
 ---
 
 # 5. Inbox delivery should normally wait for idle and create a new submission
@@ -456,6 +693,12 @@ originSubmissionId
 and implement that explicitly.
 
 Don't make timing determine semantics.
+
+STATUS (2026-08-26): still the right default. `/scheduling`'s
+`AgentDispatcher` is the thing this is not: it starts an independent
+`Agent.run`, not a submission on an existing session. Keep both.
+See [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1 and
+[ROADMAP.md](../ROADMAP.md) item 14.
 
 ---
 
@@ -741,6 +984,25 @@ That ownership distinction is important.
 
 `FiberMap` is explicitly intended for keyed background effects that are cleaned up with a parent scope.
 
+STATUS (2026-08-26): ProcessManager is not built. `Sandbox.exec` is the
+current process surface, and it is a **bounded command**: timeout (default
+10s), max output, waits for exit, lives in the acquiring scope. There is
+no stable ProcessId, listing, reacquisition, output cursor, or ownership
+beyond that scope. `/shell` only constructs argv
+([plan-shell-tool.md](./plan-shell-tool.md)).
+
+Effect's handle is `ChildProcessHandle` from `ChildProcess.make(...)` (also
+a tagged template). There is no separate `ChildProcessSpawner.spawn` in
+the public API — the command is an Effect that requires `ChildProcessSpawner`.
+`handle.unref` exists. Effect's `ProcessId` is the OS pid; ours must be a
+different branded string.
+
+Do not start from the older [ADDITIONAL.md](../ADDITIONAL.md) §4 sketch
+(ProcessManager inside Sandbox). Local backend is blocked on §11 /
+[evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md).
+Workspace lifetime (§12–13) must land first or the process has nowhere
+stable to live.
+
 ---
 
 # 11. One spike before replacing the existing sandbox process implementation
@@ -761,33 +1023,45 @@ Those are good semantics.
 
 So don't blindly replace it.
 
-First write conformance tests:
+The conformance tests already exist in `test/Sandbox.test.ts` (descendant
+holding pipes, timeout, interruption). The spike was run against Effect's
+`ChildProcess.make` + `ChildProcessSpawner` (there is no
+`ChildProcessSpawner.spawn` — the command itself is the Effect).
 
-```text
-child spawns grandchild
-child exits but grandchild keeps stdio
-timeout kills entire tree
-Effect interruption kills entire tree
-Windows equivalent
-```
+Outcome: Effect does **not** preserve all those guarantees. The second
+branch is the current decision:
 
-Then implement the same cases using Effect's:
+> retain exactly one narrow host-specific `ProcessTree` adapter for recursive termination.
 
-```ts
-ChildProcess.make(...)
-ChildProcessSpawner.spawn(...)
-handle.kill(...)
-```
-
-If Effect preserves all those guarantees:
-
-> delete the custom Node process plumbing.
-
-If it doesn't:
-
-> retain exactly one narrow host-specific `ProcessTree` adapter for recursive termination, while using Effect ChildProcess for everything else.
+That adapter is `sandbox/local` today. A future ProcessManager local
+backend should reuse it, not ChildProcess, until the two gaps in the
+evaluation close.
 
 This is how I would approach all “Effect already does this” refactors: preserve the semantic contract, not the implementation.
+
+STATUS (2026-08-26): **spike completed; do not replace.** Written up in
+[evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md)
+(audit E9 / A-5 in [audit-effect-ecosystem.md](./audit-effect-ecosystem.md)).
+The existing `test/Sandbox.test.ts` contract already covers descendant-held
+stdio, timeout tree-kill, and interruption cleanup.
+
+Two gaps in Effect's public services:
+
+1. After a successful direct child exit, `ChildProcessSpawner` does not kill
+   the remaining process group. A descendant that inherited stdout/stderr can
+   keep `Sandbox.exec` open. The local adapter treats child-exit and stdio-
+   close as two observations and kills the tree after a grace period.
+2. `FileSystem` has no `lstat` and Node `realPath` is `fs.realpath`, not
+   `fs.realpath.native`. The workspace boundary needs both.
+
+Adoption rule from that write-up: a future candidate must keep the existing
+sandbox tests green **and delete** the manual process/filesystem machinery.
+A wrapper around ChildProcess that keeps the Node adapter beside it fails
+audit A1.
+
+Name collision: Effect's `ChildProcessSpawner.ProcessId` is the OS pid
+(branded number). The `ProcessId` this brief wants is a stable effect-agent
+identity. Do not reuse the Effect name.
 
 ---
 
@@ -886,6 +1160,26 @@ workspace provider released
 ```
 
 This is an excellent use for reference counting.
+
+STATUS (2026-08-26): workspace lifetime is still per-acquisition.
+
+* Local sandbox: temp dir per `acquire`, unless `workspaceRoot` is set (then
+  every acquisition shares that directory). Released when the acquiring
+  scope closes — which is the tool/session scope today.
+* Memory sandbox: one map keyed by workspace, shared across acquisitions.
+* `Sandbox.Current.layer(workspace)` acquires once for that layer.
+* `RcMap` landed in the **session tree** for live branch sessions, not
+  workspaces.
+* `LayerMap` was evaluated for the agent server and rejected for static
+  route registration ([plan-agent-server.md](./plan-agent-server.md) S2;
+  [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4). Still the
+  right primitive for this workspace design if/when it is built.
+  Session-tree `RcMap`: [plan-session-tree.md](./plan-session-tree.md) T3.
+
+The "dev server outlives the tool scope and must keep the same files"
+problem is real and unsolved. It is also why ProcessManager is blocked on
+this section: a background process needs a workspace that is not tied to
+the tool call's scope.
 
 ### But not for processes themselves
 
@@ -1120,6 +1414,15 @@ which wakes the logical agent.
 
 That's a very clean stack.
 
+STATUS (2026-08-26): the primitives exist; the composition does not.
+`Activity`, `DurableClock`, `DurableDeferred` are already how `/durable`
+journals model/tool calls and parks HITL ([WORKFLOW.md](../WORKFLOW.md),
+[PLAN.md](../PLAN.md) §30). Nothing currently enqueues into a session
+inbox on completion. `src/durable/DurablePolling.ts` is operator `Config`
+for existing poll intervals
+([audit-effect-ecosystem.md](./audit-effect-ecosystem.md) A-8), not this
+monitor recipe.
+
 ---
 
 # 17. Don't run infinite monitors as infinite Workflows
@@ -1150,6 +1453,16 @@ persist new state
 ```
 
 Effect Cluster already has `ClusterCron`, and effect-agent already wraps cluster scheduling concepts. Effect Cluster also has scheduled-delivery support through `DeliverAt`.
+
+STATUS (2026-08-26): `cluster/ScheduledAgent` is that wrap. It submits a
+**fresh session per firing** (id derived from the fire time) through
+`DurableAgent.submit`, because that API's idempotency key is the session.
+A perpetual monitor that must ping the *same* logical session cannot use
+`ScheduledAgent` as written; it needs `session.submit` on a stable session
+id, which is this brief's missing primitive.
+
+See [WORKFLOW.md](../WORKFLOW.md), [ROADMAP.md](../ROADMAP.md) item 14,
+[POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1.
 
 So the rule should be:
 
@@ -1284,6 +1597,23 @@ If there remains a real requirement for arbitrary durable delayed jobs outside W
 
 But only after proving Effect's existing timing primitives don't cover the actual call site.
 
+STATUS (2026-08-26): `/scheduling` already takes this position. Its module
+comment says there is no scheduler runtime, on purpose: `local` is
+`Effect.delay` + a forked fibre, `recurring` is `Effect.repeat` + `Schedule`,
+cluster cron is `ScheduledAgent`. What remains custom is `JobStore`
+(`enqueue` / `claimDue`) — a **due-time** store, which is the case this
+section says may still be justified. At-most-once: a worker that crashes
+after `claimDue` drops the job.
+
+Phase 11 is therefore "prove PersistedQueue covers `delay`, or keep
+`JobStore` for due-time and use PersistedQueue only for immediate handoff
+(the inbox)". Do not replace `JobStore` first and then discover delays
+have nowhere to go.
+
+Shipped queue path: [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1.
+Persistence audit: [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3.
+Durable timers: [WORKFLOW.md](../WORKFLOW.md).
+
 ---
 
 # 21. Background process permissions
@@ -1327,6 +1657,15 @@ ChildProcessSpawner
 ```
 
 Approval does not widen environmental authority.
+
+STATUS (2026-08-26): the Permission architecture matches this. Tools
+already project `action` / `resource` (coding toolkit uses `shell` on the
+command string). There are no `process.start` / `process.write` /
+`process.signal` projections because there is no ProcessManager. When one
+is added, new projections on its tools — not a new permission engine.
+See `src/Permission.ts` and [PLAN.md](../PLAN.md). Coding toolkit currently
+projects `shell` on the command; [plan-shell-tool.md](./plan-shell-tool.md)
+renames the *tool*, not that projection.
 
 ---
 
@@ -1437,6 +1776,13 @@ The current local sandbox explicitly warns that it isn't a real security boundar
 
 Keep saying that.
 
+STATUS (2026-08-26): that warning is still on `src/sandbox/local.ts`.
+`Sandbox.exec` is still a bounded, scoped command — not an outliving
+process. ProcessManager is the thing that would make "workspace outlives
+the tool call" load-bearing, which is why it sits after §7/§13.
+Local adapter warning and evaluation:
+[evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md).
+
 For untrusted arbitrary execution, users need a provider backed by:
 
 ```text
@@ -1496,6 +1842,11 @@ That should be built over the same durable background primitives.
 
 Don't weaken normal `Subagent.tool` by making its lifetime ambiguous.
 
+STATUS (2026-08-26): `Subagent.tool` is still parent-waits-for-child, scoped
+to the parent tool call, interruption via structured concurrency. Leave it.
+See [ROADMAP.md](../ROADMAP.md) item 4, [STATUS.md](../STATUS.md). A detached
+subagent is Phase 10 composition over §2–3, not a change to this tool.
+
 ---
 
 # 26. SessionDirectory still belongs in the plan
@@ -1538,6 +1889,14 @@ SessionDirectory
 
 Don't merge them.
 
+STATUS (2026-08-26): `DurableSessionStore` is the left-hand column and
+ships. `SessionDirectory` does not. The store's `get` / `getOrCreate` /
+`claim` / `finish` are execution transitions, not list/rename/namespace.
+`AgentSessionHost.size` is a live count of hosted sessions in this process.
+`/tree` is a conversation DAG ([plan-session-tree.md](./plan-session-tree.md)).
+None of those is a management directory. Hosted-session registry:
+[transport.md](./transport.md), [plan-agent-server.md](./plan-agent-server.md).
+
 ---
 
 # 27. SessionProjection remains a pure reducer
@@ -1576,6 +1935,13 @@ The durable delivery log already exists specifically to give clients session-wid
 
 Don't duplicate it.
 
+STATUS (2026-08-26): `DeliveryLog` is that log. A `SessionProjection`
+reducer over it is not built. `Hooks.on` is a typed dispatcher over a live
+event stream, not a durable projection.
+
+See [transport.md](./transport.md), [plan-durability-hardening.md](./plan-durability-hardening.md)
+(H4b: do not replace with EventLog; H5: resumable SSE already uses this log).
+
 ---
 
 # 28. Add normalized model usage to AgentEvent
@@ -1613,6 +1979,27 @@ model succeeds
 would lose the usage.
 
 Don't expose raw provider responses and don't compute dollar cost in core.
+
+STATUS (2026-08-26): still missing from the event stream. `TurnCompleted`
+is `TaggedStruct("TurnCompleted", {})`. Usage is already available
+in-process:
+
+* `AgentSubmission.Result.response` is `Option<GenerateTextResponse>`,
+  which carries `usage` and `finishReason`.
+* `Budget.within` reads `response.usage.inputTokens.total` +
+  `outputTokens.total` after each turn.
+* `/observability` explicitly refuses a token metric until an event
+  carries usage (`Observability.ts`: "What is deliberately absent: tokens").
+
+Adding `ModelCallCompleted` (or putting usage on `TurnCompleted` /
+`MessageStreamCompleted`) is still the kernel change this section asks
+for. Local `Result` is not a substitute: remote clients, hooks, and
+metrics all observe events, not the in-process Result. The event must
+fire when the provider returns, before tools, as written.
+
+See [PLAN.md](../PLAN.md) §33.3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md)
+E8 / AS2 (`/observability` will not invent a token metric). This is §38
+Phase 1 — no other plan owns it.
 
 ---
 
@@ -1674,6 +2061,16 @@ And still:
 > `SessionUnhosted` does not mean logical `SessionClosed`.
 
 Especially for durable sessions.
+
+STATUS (2026-08-26): not built. `AgentSessionHost` holds hosted sessions in
+a `Ref<Map>` and `events` forwards `hosted.session.events(...)`. There is
+no host-wide stream, no `SessionHosted` / `SessionUnhosted`, no `FiberMap`.
+`FiberMap` exists in Effect and is unused in `src/`.
+
+Per-session events: [transport.md](./transport.md). Later management SSE
+would plug into [plan-agent-server.md](./plan-agent-server.md) S3–S5, not
+replace the host. [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4
+already used `RcMap` for the tree; this section wants `FiberMap` for pumps.
 
 ---
 
@@ -1743,6 +2140,11 @@ are runtime lifecycle events.
 
 Keep those separate.
 
+STATUS (2026-08-26): `AgentData` still exists for typed UI payloads.
+Lifecycle events for processes/monitors/hosting do not exist yet, so
+there is nothing to accidentally merge. The rule still stands.
+See [ROADMAP.md](../ROADMAP.md) item 9, [STATUS.md](../STATUS.md).
+
 ---
 
 # 32. What should SQL actually store?
@@ -1767,6 +2169,15 @@ I would assign storage responsibilities like this:
 | Worker thread state               | nowhere durable by default                      |
 
 That's a much cleaner division.
+
+STATUS (2026-08-26): rows 1–3 and 8 already exist (`DurableSessionStore`,
+workflow journal, `DeliveryLog`, `DurableClock`, `DurableDeferred`).
+Background handoff / DurableQueue / SessionDirectory / ProcessStore /
+monitor state do not. Worker thread state correctly stays ephemeral.
+
+See [WORKFLOW.md](../WORKFLOW.md), [transport.md](./transport.md),
+[plan-durability-hardening.md](./plan-durability-hardening.md) H4b
+(package store seams stay; EventLog not adopted).
 
 ---
 
@@ -1809,6 +2220,10 @@ last observation
 
 Those are **management semantics**, not execution semantics.
 
+STATUS (2026-08-26): still the right call. No `/monitor` package. Do not
+start one to give ProcessManager somewhere to live. [remaining-work.md](./remaining-work.md)
+puts this whole architecture after easier leftover work.
+
 ---
 
 # 34. Effect EventLog: evaluate, don't immediately adopt
@@ -1836,28 +2251,56 @@ Effect EventLog may eventually eliminate some custom storage code, but only if i
 
 Run a spike; don't rewrite first.
 
+STATUS (2026-08-26): **spike completed; do not adopt.**
+[plan-durability-hardening.md](./plan-durability-hardening.md) H4b (2026-08-26);
+also [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E2:
+
+* EventLog writes mint a fresh UUIDv7; `primaryKey` is not a caller-supplied
+  idempotency key. Same semantic event twice → two entries.
+* Its sequence is a replication cursor, not the per-session integer SSE
+  `id` / `Last-Event-ID` / `read({ after })` uses.
+* Its remote server does not close cluster runner-loss (H6).
+* Adoption would add a third event runtime beside the workflow journal and
+  `DeliveryLog` without deleting either (fails audit A1).
+
+Revisit only if EventLog gains caller-supplied keys and per-aggregate
+cursor reads. Same write-up also keeps the package-specific store seams
+(`DurableChannels.Store`, `AgentState.Store`) rather than folding them
+into `KeyValueStore`.
+
 ---
 
 # 35. Specific Effect-v4 modernization work I would add to the plan
 
 This audit has uncovered several places worth revisiting:
 
-| Current project code             | Prefer                                 |
-| -------------------------------- | -------------------------------------- |
-| custom scheduling `JobStore`     | `PersistedQueue` where semantics match |
-| custom queued worker retry logic | `PersistedQueue.take`                  |
-| durable worker/result handshake  | `DurableQueue`                         |
-| long durable waits               | `DurableClock`                         |
-| durable external check           | `Activity`                             |
-| keyed background fibers          | `FiberMap`                             |
-| keyed scoped workspaces/clients  | `LayerMap` / `RcMap`                   |
-| local child-process plumbing     | `ChildProcess` / `ChildProcessSpawner` |
-| trusted JS background compute    | `Worker` / `WorkerRunner`              |
-| recurrence                       | `Schedule` / `ClusterCron`             |
-| SQL implementations              | abstract `SqlClient`                   |
-| custom durable deferred concepts | existing `DurableDeferred`             |
-| generic retry loops              | `Schedule`                             |
-| custom queue backend matrix      | Effect Persistence memory/SQL/Redis    |
+| Current project code             | Prefer                                 | Status 2026-08-26 |
+| -------------------------------- | -------------------------------------- | ----------------- |
+| custom scheduling `JobStore`     | `PersistedQueue` where semantics match | Still `JobStore`. Due-time; see §20 note. |
+| custom queued worker retry logic | `PersistedQueue.take`                  | `JobStore.claimDue` is at-most-once, not retry. |
+| durable worker/result handshake  | `DurableQueue`                         | Unused. No parent-waits-for-worker yet. |
+| long durable waits               | `DurableClock`                         | Used inside workflow (HITL parks via `DurableDeferred`). |
+| durable external check           | `Activity`                             | Used: model and tools are activities. |
+| keyed background fibers          | `FiberMap`                             | Unused. |
+| keyed scoped workspaces/clients  | `LayerMap` / `RcMap`                   | `RcMap` in session tree. Not workspaces. `LayerMap` unused. |
+| local child-process plumbing     | `ChildProcess` / `ChildProcessSpawner` | Evaluated; **retain Node adapter**. |
+| trusted JS background compute    | `Worker` / `WorkerRunner`              | Unused. Correct non-goal for untrusted scripts. |
+| recurrence                       | `Schedule` / `ClusterCron`             | Done: `/scheduling` + `ScheduledAgent`. |
+| SQL implementations              | abstract `SqlClient`                   | Done for channels, session store, delivery log. |
+| custom durable deferred concepts | existing `DurableDeferred`             | Done: durable elicitation. |
+| generic retry loops              | `Schedule`                             | Done: `internal/schedules.ts` (`steady` / `backoff`). |
+| custom queue backend matrix      | Effect Persistence memory/SQL/Redis    | Not adopted. Package stores remain. |
+| provider fallback                | `ExecutionPlan`                        | Done: `Agent.withExecutionPlan`. |
+
+Pointers for that table:
+
+* `JobStore` / recurrence — [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1, §20
+* `DurableClock` / `Activity` / `DurableDeferred` / `DurableQueue` — [WORKFLOW.md](../WORKFLOW.md), [PLAN.md](../PLAN.md) §30
+* `LayerMap` / `RcMap` — [plan-agent-server.md](./plan-agent-server.md) S2, [plan-session-tree.md](./plan-session-tree.md) T3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4
+* ChildProcess — [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md)
+* Persistence / EventLog — [plan-durability-hardening.md](./plan-durability-hardening.md) H4b, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E2/E3
+* `ExecutionPlan` — [plan-execution-plan.md](./plan-execution-plan.md)
+* Full audit — [audit-effect-ecosystem.md](./audit-effect-ecosystem.md)
 
 The design criterion should literally be:
 
@@ -1952,6 +2395,21 @@ Effect ChildProcessSpawner
 ```
 
 not another implementation of Node child processes.
+
+STATUS (2026-08-26): the CORE / EXECUTION TRANSPORT / DURABILITY /
+CAPABILITIES columns mostly already ship, under the names above plus
+packages this sketch omits (`/hooks`, `/budget`, `/plugins`, `/evals`,
+`/export`, `/tree`, `/scheduling`, `/connectors`, `/data`,
+`/durable-streams`, `/redaction`, `/pi`, `/subagent`, `/web`,
+`/observability`, `/shell`). See [STATUS.md](../STATUS.md) and
+[ROADMAP.md](../ROADMAP.md). MANAGEMENT (`/sessions`, `/process`,
+`/workspace`) does not. `/process/local` should **not** blindly wrap
+ChildProcess — see §11 /
+[evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md);
+the ProcessManager contract can still be provider-shaped, with the local
+backend remaining the sandbox's narrow process-tree adapter until Effect
+closes those two gaps. Package map of what ships:
+[remaining-work.md](./remaining-work.md) "Already done".
 
 ---
 
@@ -2055,25 +2513,31 @@ That is a feature, not something to abstract away.
 
 # 38. Revised implementation order for the agent
 
+[remaining-work.md](./remaining-work.md) still says **do not start this
+architecture** until the easy leftover slices there are done. If you *are*
+implementing it, this is the order. Handoff constraints (non-goals,
+`session.submit()` before the inbox) are in
+[opencode-completion-plan.md](./opencode-completion-plan.md).
+
 I would hand off work in this order:
 
-| Phase  | Work                                                                                                                          |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| **0**  | Write Effect-v4 substitution spikes: ChildProcess tree semantics, PersistedQueue vs current JobStore, EventLog vs DeliveryLog |
-| **1**  | Add normalized `ModelCallCompleted` usage event                                                                               |
-| **2**  | Add idempotent asynchronous `session.submit()` admission                                                                      |
-| **3**  | Build `SessionInbox` over Effect `PersistedQueue`                                                                             |
-| **4**  | Add `AgentSessionHost.events`, supervised with `FiberMap<SessionId>`                                                          |
-| **5**  | Build pure `SessionProjection` + memory `SessionDirectory`                                                                    |
-| **6**  | SQL SessionDirectory + durable DeliveryLog reconciliation                                                                     |
-| **7**  | Introduce stable workspace lifetime using `LayerMap`/`RcMap`                                                                  |
-| **8**  | Build `ProcessManager` over Effect `ChildProcessSpawner`                                                                      |
-| **9**  | Add process metadata/output persistence + local provider                                                                      |
-| **10** | Compose process-exit → SessionInbox example/helper                                                                            |
-| **11** | Refactor Scheduling's custom queue path onto `PersistedQueue` where semantics match                                           |
-| **12** | Add management HTTP routes + host/global SSE projection                                                                       |
-| **13** | Add documented recipes for local monitors, Workflow monitors, ClusterCron monitors, Workers                                   |
-| **14** | Only then decide whether repeated usage has earned `/monitor`                                                                 |
+| Phase  | Work | Status 2026-08-26 | See |
+| ------ | ---- | ----------------- | --- |
+| **0**  | Effect-v4 substitution spikes: ChildProcess tree semantics, PersistedQueue vs `JobStore`, EventLog vs `DeliveryLog` | ChildProcess: done, retain adapter. EventLog: done, retain DeliveryLog. PersistedQueue vs JobStore: **open**. | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md), [plan-durability-hardening.md](./plan-durability-hardening.md) H4b, [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E2/E3/E9 |
+| **1**  | Normalized `ModelCallCompleted` usage event | Not started. Usage exists on `Result.response` only. | [PLAN.md](../PLAN.md) §33.3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E8 / AS2. No other plan owns this. |
+| **2**  | Idempotent asynchronous `session.submit()` admission | Not started. Store `claim({ key })` is the durable half. | [opencode-completion-plan.md](./opencode-completion-plan.md) §2, [PLAN.md](../PLAN.md) §11.1, [transport.md](./transport.md), [WORKFLOW.md](../WORKFLOW.md) (`DurableAgent.submit` is the wrong target) |
+| **3**  | `SessionInbox` over Effect `PersistedQueue` | Not started. Depends on 2. Deliver via `AgentClient`, not `DurableAgent.submit`. | [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3, [WORKFLOW.md](../WORKFLOW.md) (`DurableQueue` is the wait-for-result cousin) |
+| **4**  | `AgentSessionHost.events`, supervised with `FiberMap<SessionId>` | Not started. Host events are per-session. | [transport.md](./transport.md), [plan-agent-server.md](./plan-agent-server.md) |
+| **5**  | Pure `SessionProjection` + memory `SessionDirectory` | Not started. | Do not merge with [plan-session-tree.md](./plan-session-tree.md) or `DurableSessionStore`. |
+| **6**  | SQL SessionDirectory + durable DeliveryLog reconciliation | DeliveryLog SQL exists. Directory does not. | [transport.md](./transport.md), [plan-durability-hardening.md](./plan-durability-hardening.md) H5 |
+| **7**  | Stable workspace lifetime using `LayerMap`/`RcMap` | Not started. Blocks honest background processes. | [plan-agent-server.md](./plan-agent-server.md) S2 (LayerMap not used for static routes), [plan-session-tree.md](./plan-session-tree.md) T3 (`RcMap` in the tree), [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4 |
+| **8**  | `ProcessManager` over Effect `ChildProcessSpawner` | Not started. Local backend should reuse sandbox tree-kill, not ChildProcess, until §11 gaps close. | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md). Not [plan-shell-tool.md](./plan-shell-tool.md). Not [ADDITIONAL.md](../ADDITIONAL.md) §4. |
+| **9**  | Process metadata/output persistence + local provider | Not started. Depends on 7–8. | |
+| **10** | Process-exit → SessionInbox example/helper | Not started. Composition, not a ProcessManager→Session coupling. | Depends on 3 and 8. |
+| **11** | Refactor scheduling `JobStore` onto `PersistedQueue` where semantics match | Not started. Immediate handoff only; keep due-time on `JobStore` unless proven otherwise. | [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1, §20 of this file |
+| **12** | Management HTTP routes + host/global SSE projection | Not started. HTTP already has per-session SSE. | [plan-agent-server.md](./plan-agent-server.md) S3–S5, [transport.md](./transport.md) |
+| **13** | Documented recipes for local / Workflow / ClusterCron monitors and Workers | Not started. | [WORKFLOW.md](../WORKFLOW.md), [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) |
+| **14** | Only then decide whether repeated usage has earned `/monitor` | Correct sequencing. Do not start here. | |
 
 This order is important: don't build a general Monitor abstraction and then force all these primitives underneath it.
 

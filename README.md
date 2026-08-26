@@ -583,10 +583,11 @@ Model calls and tool calls become `Activity`s, so a resumed submission returns
 persisted results rather than re-issuing them — the refund does not go out
 twice. A SQLite-backed submission also survives losing the process while it is
 durably parked and resumes when another process answers the outstanding wait.
-Recovery from a runner dying mid-activity requires a real multi-node cluster;
-that path is not yet validated, and `SingleRunner` cannot reassign its in-flight
-work. Canonical history is not stored: it is rebuilt from replayed activity
-results.
+A real multi-node cluster additionally reassigns a shard when its owner dies
+during a model activity; the peer replays completed activities and redelivers
+only the unfinished call. `SingleRunner` cannot perform peer failover and does
+not make that claim. Canonical history is not stored: it is rebuilt from
+replayed activity results.
 
 `result` yields an `Exit`, because a failed submission is still a *completed*
 workflow. Its failure crosses as a typed `DurableAgentFailure` carrying the
@@ -691,8 +692,10 @@ a fiber. See [`examples/durable-client.ts`](./examples/durable-client.ts).
 The local and durable implementations pass the same conformance suite
 (`test/AgentClientContract.ts`); the durable one is additionally proven across a
 process loss while the workflow is parked for approval on SQLite
-(`test/DurableAgentClientSql.test.ts`). Mid-activity runner takeover remains an
-open multi-node test in `test/ClusterMultiNode.test.ts`.
+(`test/DurableAgentClientSql.test.ts`). The underlying workflow topology is
+also tested with two real HTTP runners: closing the owner during a model
+activity makes the peer finish the submission without repeating completed work
+(`test/ClusterMultiNode.test.ts`).
 
 `@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
 session id is the routing key and out-of-band input reaches the owning node.
