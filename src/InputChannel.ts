@@ -69,6 +69,18 @@ export interface Factory {
     sessionId: string,
     admitting: boolean
   ) => Effect.Effect<void>
+  /**
+   * Publishes the narrower gate for steering the active run.
+   *
+   * Follow-ups may remain admissible after a run has stopped taking steering,
+   * so durable callers need a distinct marker. Closing it before the run's
+   * final drain makes every race resolve honestly: the input is either in the
+   * drain, or the caller is refused.
+   */
+  readonly setSteeringAdmitting?: (
+    sessionId: string,
+    admitting: boolean
+  ) => Effect.Effect<void>
 }
 
 /** Backed by an unbounded in-memory queue. The default. */

@@ -111,6 +111,8 @@ const inputs = Schema.Array(Schema.String)
  * what keeps it current: the session tells the factory when its gate moves.
  */
 export const openKey = (sessionId: string): string => `${sessionId}:open`
+export const steeringOpenKey = (sessionId: string): string =>
+  `${sessionId}:steering:open`
 
 /**
  * Where a submission that has been acknowledged but not yet dispatched waits.
@@ -184,10 +186,11 @@ export const offerIfAdmitting = (
   store: Store,
   sessionId: string,
   name: "steering" | "followUps",
-  input: Prompt.RawInput
+  input: Prompt.RawInput,
+  marker = openKey(sessionId)
 ): Effect.Effect<boolean, StorageError> =>
   Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
-    store.offerIfOpen(`${sessionId}:${name}`, encoded, openKey(sessionId))
+    store.offerIfOpen(`${sessionId}:${name}`, encoded, marker)
   )
 
 /**
@@ -240,6 +243,7 @@ export const factory = (
     const workflowContext = yield* Effect.context<
       WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
     >()
+    const instance = yield* WorkflowEngine.WorkflowInstance
 
     return {
       // The published half of admission. The session drives this at the exact
@@ -261,6 +265,12 @@ export const factory = (
             ? store.offer(openKey(sessionId), "open")
             : Effect.asVoid(store.takeAll(openKey(sessionId)))
         ),
+      setSteeringAdmitting: (sessionId, admitting) =>
+        Effect.orDie(
+          admitting
+            ? store.offer(steeringOpenKey(sessionId), "open")
+            : Effect.asVoid(store.takeAll(steeringOpenKey(sessionId)))
+        ),
       make: (sessionId, name) =>
         Effect.map(Ref.make(0), (drainIndex): InputChannel.InputChannel => {
           const key = `${sessionId}:${name}`
@@ -277,7 +287,14 @@ export const factory = (
             // applies here too. A drain that cannot read its own journalled
             // batch has lost accepted input, which D1 forbids silently: dying
             // is the loud version, and `isInfrastructure` classifies it.
-            drain: Effect.orDie(Effect.gen(function* () {
+            drain: Effect.suspend(() => instance.suspended
+              // `AgentSession.release` drains queues as cleanup. A workflow
+              // suspension also releases that process-local session, but its
+              // queued input is still owed to the resumed session. Consuming
+              // it here would acknowledge a steer or follow-up and then drop
+              // it before the peer can rebuild canonical history.
+              ? Effect.succeed([])
+              : Effect.orDie(Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(drainIndex, (n) => n + 1)
               const encoded = yield* Activity.make({
                 name: `${options?.prefix ?? ""}${name}-drain-${index}`,
@@ -292,7 +309,7 @@ export const factory = (
               // Decoding after the activity keeps the journalled value in its
               // wire form, which is what makes the drain replayable.
               return yield* Effect.forEach(encoded, decodePrompt)
-            }))
+            })))
           }
         })
     }

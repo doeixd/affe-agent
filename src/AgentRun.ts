@@ -42,8 +42,10 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
     yield* SubscriptionRef.update(session.state, (s) => ({
       ...s,
       activeRunId: Option.some(runId),
+      acceptingSteering: true,
       turn: 0
     }))
+    yield* session.admitSteering(session.id, true)
     yield* EventBus.emit(session.bus, correlation, { _tag: "RunStarted" })
 
     let turn = 0
@@ -91,7 +93,35 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         toolCalls: result.toolCalls
       })
 
-      if (decision._tag === "Stop") break
+      if (decision._tag === "Stop") {
+        // Close remote and local admission before the final drain. An input
+        // that won the race is already in the channel and is applied below;
+        // one that arrived later is refused instead of being accepted into a
+        // run that has stopped looking. This is the steering counterpart of
+        // AgentSubmission's closing follow-up drain.
+        yield* session.inputGate.withPermits(1)(
+          SubscriptionRef.update(session.state, (state) => ({
+            ...state,
+            acceptingSteering: false
+          })).pipe(
+            Effect.andThen(session.admitSteering(session.id, false))
+          )
+        )
+        const late = yield* AgentTurn.applySteering(session, {
+          submissionId,
+          runId,
+          turn
+        })
+        if (late === 0) break
+
+        // The accepted steer changes future reasoning, so give it that future
+        // turn and reopen admission for steering aimed at the new turn.
+        yield* SubscriptionRef.update(session.state, (state) => ({
+          ...state,
+          acceptingSteering: true
+        }))
+        yield* session.admitSteering(session.id, true)
+      }
     }
 
     yield* EventBus.emit(session.bus, correlation, {

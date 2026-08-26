@@ -232,6 +232,7 @@ export const make = <
       submissionCount: 0,
       activeSubmissionId: Option.none(),
       acceptingFollowUps: false,
+      acceptingSteering: false,
       activeRunId: Option.none(),
       turn: 0,
     })
@@ -250,6 +251,10 @@ export const make = <
       sessionId: string,
       admitting: boolean
     ) => Effect.Effect<void> = channels.setAdmitting ?? (() => Effect.void)
+    const admitSteering: (
+      sessionId: string,
+      admitting: boolean
+    ) => Effect.Effect<void> = channels.setSteeringAdmitting ?? (() => Effect.void)
     // Defaults to refusing, which is the behaviour that existed before
     // elicitation did: an agent with an approval-requiring tool must not begin
     // pausing forever because the feature arrived. A caller opts *in* to being
@@ -293,6 +298,7 @@ export const make = <
       beforeClose,
       elicitation,
       admit,
+      admitSteering,
       activeFiber,
       scope,
       env,
@@ -423,7 +429,8 @@ const claim = (self: Session<any>): Effect.Effect<Claim> =>
         submissionCount: count,
         activeSubmissionId: Option.some(submissionId),
         // Open for follow-ups until the submission closes its own input.
-        acceptingFollowUps: true
+        acceptingFollowUps: true,
+        acceptingSteering: true
       }
     ]
   })
@@ -438,6 +445,7 @@ const release = (self: Session<any>): Effect.Effect<void> =>
       status: s.status === "closed" ? s.status : ("idle" as const),
       activeSubmissionId: Option.none(),
       acceptingFollowUps: false,
+      acceptingSteering: false,
       activeRunId: Option.none()
     }))
     // Admission is deliberately *not* withdrawn here. `AgentSubmission`
@@ -641,6 +649,14 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
         // Under the permit, so the submission cannot have changed between the
         // check and the offer. See `stillActive`.
         yield* stillActive(self, submissionId, "steer")
+        const accepting = (yield* SubscriptionRef.get(self.state))
+          .acceptingSteering
+        if (!accepting) {
+          return yield* new AgentIdleError({
+            sessionId: self.id,
+            operation: "steer"
+          })
+        }
         yield* self.steering.offer(Prompt.make(input))
         yield* EventBus.emit(
           self.bus,

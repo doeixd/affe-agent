@@ -35,6 +35,8 @@ export interface SessionState {
    * never runs.
    */
   readonly acceptingFollowUps: boolean
+  /** Whether the active run can still incorporate steering at a turn boundary. */
+  readonly acceptingSteering: boolean
   readonly activeRunId: Option.Option<RunId>
   readonly turn: number
 }
@@ -98,6 +100,11 @@ export interface Session<
    * in another process. See `InputChannel.Factory.setAdmitting`.
    */
   readonly admit: (sessionId: string, admitting: boolean) => Effect.Effect<void>
+  /** Publishes the active run's narrower steering-admission gate. */
+  readonly admitSteering: (
+    sessionId: string,
+    admitting: boolean
+  ) => Effect.Effect<void>
   /**
    * Serialises admission against a submission's closing drain.
    *

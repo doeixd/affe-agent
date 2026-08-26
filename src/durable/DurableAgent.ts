@@ -256,7 +256,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         Effect.onExit(() =>
           instance.suspended
             ? Effect.void
-            : Effect.asVoid(store.takeAll(openKey(payload.sessionId)))
+            : Effect.all([
+                store.takeAll(openKey(payload.sessionId)),
+                store.takeAll(DurableChannels.steeringOpenKey(payload.sessionId))
+              ], { discard: true })
         )
       )
     })
@@ -424,7 +427,13 @@ export const steer = (
   sessionId: string,
   input: Prompt.RawInput
 ): Effect.Effect<void, AgentIdleError | StorageError> =>
-  DurableChannels.offerIfAdmitting(store, sessionId, "steering", input).pipe(
+  DurableChannels.offerIfAdmitting(
+    store,
+    sessionId,
+    "steering",
+    input,
+    DurableChannels.steeringOpenKey(sessionId)
+  ).pipe(
     Effect.flatMap((admitted) =>
       admitted
         ? Effect.void
@@ -490,7 +499,12 @@ export const open = (
   store: DurableChannels.Store,
   sessionId: string
 ): Effect.Effect<void, StorageError> =>
-  throughReassignment(store.offer(openKey(sessionId), "open"))
+  throughReassignment(
+    Effect.all([
+      store.offer(openKey(sessionId), "open"),
+      store.offer(DurableChannels.steeringOpenKey(sessionId), "open")
+    ], { discard: true })
+  )
 
 /**
  * Await a terminal result.

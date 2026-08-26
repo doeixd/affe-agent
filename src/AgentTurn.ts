@@ -38,11 +38,11 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
 export const applySteering = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools>,
   correlation: Correlation
-): Effect.Effect<void> =>
+): Effect.Effect<number> =>
   session.inputGate.withPermits(1)(
     Effect.gen(function* () {
       const inputs = yield* session.steering.drain
-      if (inputs.length === 0) return
+      if (inputs.length === 0) return 0
       for (const input of inputs) {
         yield* History.commit(session.history, input)
       }
@@ -50,6 +50,7 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
         _tag: "SteeringApplied",
         count: inputs.length
       })
+      return inputs.length
     })
   )
 

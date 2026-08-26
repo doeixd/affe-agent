@@ -66,11 +66,12 @@ describe("input channels", () => {
         }).pipe(Effect.provide(layer))
       )
 
-      // Both queues went through the substituted channel, and the steering
-      // batch is exactly what the next turn consumed.
+      // Both queues went through the substituted channel. The steers arrived
+      // during the run's final turn, so the run's closing drain took them and
+      // gave them a turn of their own before the follow-up started run two.
       assert.deepStrictEqual(yield* Ref.get(drains), [
-        ["followUps", ["follow-up"]],
-        ["steering", ["steer-a", "steer-b"]]
+        ["steering", ["steer-a", "steer-b"]],
+        ["followUps", ["follow-up"]]
       ])
     })
   )

@@ -638,6 +638,44 @@ describe("steering", () => {
     })
   )
 
+  /**
+   * The loop said Stop, but a steer had already been accepted during that
+   * final turn. Dropping it until the next submission would discard accepted
+   * input; refusing it would contradict the acknowledgement the caller
+   * already got. So the run's closing drain takes it, gives it a turn, and
+   * only then stops -- the steering counterpart of the closing follow-up
+   * drain.
+   */
+  it.effect("a steer accepted during the final turn gets a turn before the run stops", () =>
+    Effect.gen(function* () {
+      const sessionRef = yield* Deferred.make<AgentSession.AgentSession>()
+      const { events, recorder } = yield* withSession(
+        [
+          {
+            during: Effect.gen(function* () {
+              const session = yield* Deferred.await(sessionRef)
+              yield* AgentSession.steer(session, "one more thing")
+            }).pipe(Effect.orDie),
+            text: "stopping"
+          },
+          { text: "done" }
+        ],
+        Agent.make({}),
+        ({ session }) =>
+          Deferred.succeed(sessionRef, session).pipe(
+            Effect.andThen(AgentSession.prompt(session, "go"))
+          )
+      )
+
+      // Still one run: the extra turn belongs to it, not to a new submission.
+      assert.strictEqual(events.filter(AgentEvent.is("RunStarted")).length, 1)
+      assert.strictEqual(events.filter(AgentEvent.is("SteeringApplied")).length, 1)
+      const prompts = yield* recorder.prompts
+      assert.strictEqual(prompts.length, 2)
+      assert.deepStrictEqual(FakeModel.userTexts(prompts[1]!), ["go", "one more thing"])
+    })
+  )
+
   it.effect("steer on an idle session is rejected", () =>
     withSession([], Agent.make({}), ({ session }) =>
       Effect.gen(function* () {
