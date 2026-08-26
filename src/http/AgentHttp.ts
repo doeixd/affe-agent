@@ -34,6 +34,14 @@ export interface ServerOptions<Principal> {
    * same tag. See `AgentSessionHost`.
    */
   readonly host: AgentSessionHost.Tag<Principal>
+  /**
+   * Path prefix prepended to every route.
+   *
+   * The single-agent `Api` is served at `/sessions`. A named `api({ name })`
+   * lives at `/agents/${name}` by default; pass the same prefix here so the
+   * router and the schema agree. No trailing slash.
+   */
+  readonly path?: `/${string}` | undefined
 }
 
 const SessionPath = Schema.Struct({ id: AgentProtocol.SessionId })
@@ -99,7 +107,8 @@ const HttpErrors = [
   TransportError
 ] as const
 
-const Sessions = HttpApiGroup.make("sessions").add(
+const sessionsGroup = <const Id extends string>(identifier: Id) =>
+  HttpApiGroup.make(identifier).add(
   HttpApiEndpoint.post("createSession", "/sessions", {
     headers: RequestHeaders,
     payload: AgentProtocol.CreateSessionRequest,
@@ -185,8 +194,47 @@ const Sessions = HttpApiGroup.make("sessions").add(
   })
 )
 
-/** Schema-derived description used by the Effect HTTP client and documentation. */
+/**
+ * Schema-derived description used by the Effect HTTP client and documentation.
+ *
+ * The single-agent case: group id `sessions`, routes at `/sessions`. Serving
+ * several agents through `HttpApi.prefix` + `addHttpApi` silently drops all
+ * but one -- both copies keep the group id `sessions`, and the second
+ * replaces the first. `api({ name })` is the way out: each agent gets its
+ * own group id and a prefixed path. See `docs/plan-agent-server.md`.
+ */
+const Sessions = sessionsGroup("sessions")
 export const Api = HttpApi.make("AgentHttp").add(Sessions)
+
+const isGroupName = (name: string): boolean =>
+  name.length > 0 && !name.includes("/") && !name.includes(":") && !name.includes(" ")
+
+/**
+ * An HTTP API for one named agent, with its own group id and path prefix.
+ *
+ * `Api.prefix("/agents/alpha").addHttpApi(Api.prefix("/agents/beta"))` is
+ * the trap this exists to close: both still carry the group `sessions`, so
+ * the second replaces the first with no error. Naming the group after the
+ * agent makes the collision unrepresentable, and prefixing the routes keeps
+ * each agent at its own path.
+ *
+ * Default path is `/agents/${name}`. `Api` itself is unchanged.
+ */
+export const api = <const Name extends string>(options: {
+  readonly name: Name
+  readonly path?: `/${string}` | undefined
+}) => {
+  if (!isGroupName(options.name)) {
+    throw new Error(
+      `AgentHttp.api: ${JSON.stringify(options.name)} is not a valid group name` +
+        ` (non-empty, no '/', ':', or space)`
+    )
+  }
+  const path = options.path ?? (`/agents/${options.name}` as const)
+  return HttpApi.make(`AgentHttp/${options.name}`).add(
+    sessionsGroup(options.name).prefix(path)
+  )
+}
 
 /** The schema-generated client retains each route's precise input and output. */
 export type Service = HttpApiClient.Client<typeof Sessions>
@@ -692,31 +740,37 @@ export const serverLayer = <Principal>(
         )
       })
 
+      const prefix: "" | `/${string}` = options.path === undefined
+        ? ""
+        : options.path.replace(/\/+$/, "") as `/${string}`
+      const route = (suffix: `/${string}`): `/${string}` =>
+        prefix === "" ? suffix : `${prefix}${suffix}`
+
       yield* Effect.all(
         [
-          router.add("POST", "/sessions", (request) =>
+          router.add("POST", route("/sessions"), (request) =>
             handled(createSession(request))),
-          router.add("DELETE", "/sessions/:id", (request) =>
+          router.add("DELETE", route("/sessions/:id"), (request) =>
             handled(closeSession(request))),
-          router.add("GET", "/sessions/:id", (request) =>
+          router.add("GET", route("/sessions/:id"), (request) =>
             handled(getSession(request))),
-          router.add("POST", "/sessions/:id/prompt", (request) =>
+          router.add("POST", route("/sessions/:id/prompt"), (request) =>
             handled(prompt(request))),
-          router.add("POST", "/sessions/:id/steer", (request) =>
+          router.add("POST", route("/sessions/:id/steer"), (request) =>
             handled(steer(request))),
-          router.add("POST", "/sessions/:id/follow-up", (request) =>
+          router.add("POST", route("/sessions/:id/follow-up"), (request) =>
             handled(followUp(request))),
-          router.add("POST", "/sessions/:id/interrupt", (request) =>
+          router.add("POST", route("/sessions/:id/interrupt"), (request) =>
             handled(interrupt(request))),
-          router.add("POST", "/sessions/:id/respond", (request) =>
+          router.add("POST", route("/sessions/:id/respond"), (request) =>
             handled(respond(request))),
-          router.add("GET", "/sessions/:id/pending", (request) =>
+          router.add("GET", route("/sessions/:id/pending"), (request) =>
             handled(pending(request))),
-          router.add("GET", "/sessions/:id/history", (request) =>
+          router.add("GET", route("/sessions/:id/history"), (request) =>
             handled(history(request))),
-          router.add("GET", "/sessions/:id/status", (request) =>
+          router.add("GET", route("/sessions/:id/status"), (request) =>
             handled(status(request))),
-          router.add("GET", "/sessions/:id/events", (request) =>
+          router.add("GET", route("/sessions/:id/events"), (request) =>
             handled(events(request)))
         ],
         { discard: true }

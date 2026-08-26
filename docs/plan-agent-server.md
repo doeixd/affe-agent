@@ -202,9 +202,25 @@ holds nothing.
 - **S1 — Named API.** `AgentHttp.api({ name })` with a per-name group id and
   prefix; the current `Api` const stays as the single-agent case. Test AS1,
   including that a duplicate name fails loudly.
+
+  **S1: landed (2026-08-26).** `AgentHttp.api({ name, path? })`. Prefixing
+  `Api` twice still silently keeps one group — pinned as the trap. Named
+  groups both survive. `serverLayer` takes an optional `path` so the router
+  matches the schema.
 - **S2 — `AgentServer.make` / `mount`.** Composition to an `HttpApi`, per-mount
   and shared middleware, with mount wiring on `LayerMap` and live sessions on
   `RcMap`. Tests AS2, AS4, AS6.
+
+  **S2: landed (2026-08-26), with one recorded substitution.** `mount` /
+  `make` / `DuplicateMountError` / `serverLayer`. Duplicate name or path
+  fails at construction. Two mounts are reachable on their own paths; after
+  the server scope closes, hosted sessions are gone (AS6).
+
+  `LayerMap` is not used for route registration: `HttpRouter.use` binds
+  paths when the layer is built, not on first request, so lazy mount
+  construction does not fit option A (per-agent prefix). Host lifetime stays
+  on `AgentSessionHost`, which already owns the session registry. Revisit
+  `LayerMap` if option B (agent as a path parameter) is built.
 - **S3 — Mixed backing.** One server with a local agent and a remote one,
   asserting identical behaviour through both (AS3) — reusing
   `AgentClientContract` rather than writing new assertions.
