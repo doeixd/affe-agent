@@ -50,6 +50,17 @@ contract surface is genuinely wanted, it is planned separately, because it is
 an adapter with different success conditions (fidelity to Pi's schema) than a
 battery (quality of behaviour).
 
+**P0 settled (2026-08-26): ship a second toolkit.** The owner wants Pi's
+contracts as `@doeixd/effect-agent/pi`, not absorbed into `/coding`.
+`/coding` stays the OpenCode-shaped battery (structured `list_files`, one
+edit per call, `bash -lc`). `/pi` is contract fidelity: batch `edits[]`,
+rendered listings, injectable shell. Same sandbox seam, same permission
+projections, different tool schemas. Mixing both on one workspace is not
+the intended use.
+
+P1 (canonical-path lock) landed 2026-08-26 for both toolkits, on one shared
+registry. P2–P5 land in `/pi`.
+
 ## What is worth taking, and why
 
 Grounded in the source, not the README. Ordered by value.
@@ -127,10 +138,21 @@ canonicalise a path; the sandbox has no such operation today, so either
 normalised path with the *cleanup* half adopted regardless — the cleanup needs
 no new seam and removes the documented leak on its own.
 
-**The cleanup half is done** ([audit-effect-ecosystem.md](./audit-effect-ecosystem.md)
-A-1). What remains in P1 is canonical-path keying, which needs a sandbox
-operation that does not exist yet; the paragraphs below record why the cleanup
-was built the way it was.
+**Both halves are done.** The cleanup landed first
+([audit-effect-ecosystem.md](./audit-effect-ecosystem.md) A-1); canonical-path
+keying landed 2026-08-26 by answering the open question below in favour of a
+seam operation: `Sandbox.canonical(path)` returns an opaque identity that is
+equal for every name of one file. The local provider derives it from the
+`realpath` walk `resolveWithin` already does (so a not-yet-existing file has
+one, through its deepest existing ancestor); the memory provider's is the
+normalised path, since its world has no links and no case folding. The lock
+itself moved to `src/coding/internal/fileLock.ts` and is shared by `/coding`
+and `/pi` — one process-wide registry, so the two toolkits serialise against
+each other rather than each holding a private lock over the same file. If
+`canonical` fails the lock falls back to the spelled path: the operation is
+about to fail with the same error, and an ordering step should not add a
+failure mode of its own. The paragraphs below record why the cleanup was built
+the way it was.
 
 **Build the cleanup on `Tx*`, not on the `Map`.** Today `lockFor` is a
 module-global `Map<string, Semaphore.Semaphore>` whose own comment
@@ -164,8 +186,9 @@ survives the change instead of being quietly traded for runtime-wide.
 **Tests:** ✅ the registry returns to empty after edits complete; ✅ **a waiter
 arriving concurrently with a drain still gets exclusion** (the test the old
 comment said could not be written); ✅ an interrupted edit does not pin its
-entry; ✅ the existing lost-update and ordering tests still pass. Remaining: two
-names for one file serialise, once canonicalisation exists.
+entry; ✅ the existing lost-update and ordering tests still pass; ✅ two names
+for one file (a symlink and its target, on the local provider) serialise —
+the test loses an update when the key is switched back to the spelled path.
 
 ### P2 — Batch edits on `edit_file`
 
@@ -235,9 +258,9 @@ still the command string, so policies are unaffected.
   definition is TypeBox. Only the algorithms and the decisions port; expect the
   differential harnesses to compare pure functions only, and expect fewer of
   them than the opencode port allowed.
-- **Open: does the sandbox need `canonicalPath`?** P1 wants it and the seam
-  does not have it. Adding it is a seam change (I10) and therefore a separate
-  decision; P1 is written to be worth doing without it.
+- **Settled: the sandbox has `canonical`.** Added 2026-08-26 as the one seam
+  change this plan makes; a required member, so a provider cannot silently
+  opt out of file identity.
 - **Open: is a Pi-contract adapter actually wanted?** P0 exists to answer this.
   If yes, it is a different plan with fidelity, not quality, as its measure.
 
