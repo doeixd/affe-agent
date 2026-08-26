@@ -3,6 +3,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node"
 import { Crypto, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
+import { WorkflowEngine } from "effect/unstable/workflow"
 import * as NodeCrypto from "node:crypto"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
@@ -101,7 +102,23 @@ const process_ = (
    */
   breakSessionStore?: (
     store: DurableSessionStore.DurableSessionStore
-  ) => DurableSessionStore.DurableSessionStore
+  ) => DurableSessionStore.DurableSessionStore,
+  /**
+   * Called with each activity's name as this process runs it, *after* the
+   * activity has recorded its result.
+   *
+   * `activityExecute` is the single point every activity passes through, so a
+   * decorator here sees every journalled boundary without the workflow bodies
+   * knowing anything about it. It exists for SD3's crash-point sweep: a test
+   * can kill this process at a boundary it never had to name in advance, so a
+   * boundary added later is covered without anyone extending a list.
+   *
+   * That sweep is not written, and the note in
+   * `docs/plan-durability-hardening.md` says why: a runner killed mid-activity
+   * did not resume at all in this fixture. The seam is kept because it is what
+   * found that out.
+   */
+  onActivity?: (name: string) => Effect.Effect<void>
 ) =>
   Effect.gen(function* () {
     const sql = yield* Layer.build(SqliteClient.layer({ filename: file }))
@@ -119,7 +136,21 @@ const process_ = (
         ...stores,
         pollInterval: Duration.millis(50)
       }).pipe(
-        Layer.provideMerge(engineFor(file, 1)),
+        Layer.provideMerge(
+          onActivity === undefined
+            ? engineFor(file, 1)
+            : Layer.effect(
+              WorkflowEngine.WorkflowEngine,
+              Effect.map(WorkflowEngine.WorkflowEngine, (inner) => ({
+                ...inner,
+                activityExecute: (activity, attempt) =>
+                  Effect.tap(
+                    inner.activityExecute(activity, attempt),
+                    () => onActivity(activity.name)
+                  )
+              }))
+            ).pipe(Layer.provideMerge(engineFor(file, 1)))
+        ),
         Layer.provideMerge(model)
       )
     )

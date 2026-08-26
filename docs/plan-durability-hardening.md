@@ -413,13 +413,34 @@ will.
   hence two censuses rather than one. Guessing at this list was wrong in two
   places out of five, which is the argument for asserting it.
 
-  **What remains is crash coverage per boundary.** Today the model and tool
-  boundaries are covered by `Durable.test.ts`'s replay tests and the session
-  projection by `DurableAgentClientSql.test.ts`'s R173 case; `channel drain`
-  and `permission decision` have no crash point of their own. Doing it
-  systematically needs a persistent journal -- the in-memory `TestRunner` does
-  not survive the process loss being simulated -- so it belongs with the SQL
-  fixtures rather than the memory ones.
+  **The crash-point sweep is blocked, and on something worth knowing.** The
+  seam is built: `process_` in `DurableAgentClientSql.test.ts` takes an
+  `onActivity` hook, so a test can kill a process at a boundary it never had to
+  name. A representative client submission crosses **eleven** of them
+  (`steering-drain`, `model`, `permission`, `tool`, `followUps-drain`,
+  `session-projection/finish`).
+
+  Writing the sweep did not fail slowly, it did not finish at all:
+
+  - A runner killed **mid-activity** -- not parked, just gone -- did not resume
+    within **75 seconds**, against a persistent SQLite journal with a
+    one-second shard lease. Not a lease-expiry wait: 75s is well past it.
+  - An explicit `engine.resume` from the second process did not change that,
+    though that call was made on a freshly built definition and swallowed its
+    errors, so treat it as inconclusive rather than as evidence.
+
+  And the reason nobody had noticed: **every process-loss test in the suite is
+  a *suspension* test.** `Durable.test.ts` parks on a `DurableDeferred` gate;
+  `DurableAgentClientSql.test.ts` parks on an approval. In each, the second
+  process resumes the run by *answering* it. Not one of them kills a runner
+  mid-activity and waits for the execution to be picked back up.
+
+  So D2 and D4 are ✓ for what they test, and what they test is narrower than
+  "resume after process loss" sounds. Whether the gap is in the product or in
+  the fixture -- `SingleRunner` may simply not reassign a dead runner's shards
+  -- is exactly the open question, and it is a bigger one than a missing test.
+  It should be settled before the sweep is attempted again, because the sweep
+  is unwritable until it is.
 - **SD4:** The existing durable suites pass under write-failure,
   duplicate-record and reorder faults.
 - **SD5:** ✓ A browser `EventSource` reconnect resumes from `Last-Event-ID` with
