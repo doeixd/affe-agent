@@ -3799,9 +3799,37 @@ assumed from a commit message.
 
 ### Open, with what is known
 
-- **R2** needs an entry point in Effect AI's `Toolkit` that takes an
-  already-decoded value; until then the codec runs twice per call. The count is
-  pinned by a test and the constraint it implies — a parameter codec used with
+- **R2 — costed, and left documented on purpose.** The defect is confirmed in
+  current code: `ToolExecution.ts:224` decodes for the permission decision and
+  `ToolExecution.ts:490` hands the *encoded* params to `Toolkit.handle`, which
+  decodes again. Three routes were examined and each was rejected for a stated
+  reason rather than for difficulty:
+
+  1. **Own the dispatch.** `Toolkit.toHandlers` is public and yields a
+     `Context` keyed by `tool.id` holding `{name, handler, context}` — so the
+     handler *is* reachable at construction. But `WithHandler` exposes only
+     `tools` and `handle`, with no accessor for that context, and
+     `ToolExecution` receives a bare `WithHandler`. Owning dispatch therefore
+     works only for toolkits the harness built, and the two-step form
+     (`Kit.pipe(Effect.provide(Kit.toLayer(...)))`) is used throughout this
+     suite alone — six times in `AgentSession.test.ts`. The result would be a
+     security property that holds or not depending on how the toolkit was
+     constructed. An asymmetric guarantee is what this review objects to
+     elsewhere; adding one here to close a TOCTOU is not an improvement.
+  2. **Constrain the codec at the type level** — require
+     `DecodingServices = never` for parameter schemas under a permission
+     policy. Verified expressible, and ordinary tools satisfy it. Rejected
+     because it narrows rather than closes (a stateful pure decoder still
+     varies), the double decode remains, and it breaks a legitimate use at
+     compile time with a message that would say only "Type 'Rates' is not
+     assignable to type 'never'".
+  3. **Re-encode the authorized value** and pass that to `handle`. The handler
+     still performs its own second decode, so nothing is closed.
+
+  The real fix is the one the original note named: an entry point in Effect AI
+  that takes an already-decoded value. That is an upstream change, and the
+  finding above is written so it can be raised as one. Until then the count is
+  pinned by a test, and the constraint it implies — a parameter codec used with
   permission must be deterministic and side-effect-free — is documented where a
   tool author will read it.
 - **R58, the regex half.** Bounding a model-supplied `RegExp` needs a
