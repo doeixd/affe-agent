@@ -1,4 +1,4 @@
-import { Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
 import { AiError, LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as AgentEvent from "../AgentEvent.js"
@@ -543,13 +543,14 @@ const usageOf = (usage: Response.Usage): AgentEvent.ModelUsage => {
  * A summariser that asks the ambient `LanguageModel`.
  *
  * The model is a *requirement*, not an argument, which is what lets the
- * summarising model differ from the agent's: provide a cheaper one to the
- * transform (`Effect.provide` around `Compaction.make`'s result, or a layer
- * scoped to the session) and the agent's own model is untouched. Left alone,
- * it is whatever model the session runs on.
+ * summarising model differ from the agent's: discharge it on the summariser
+ * and the agent's own model is untouched. Left alone, it is whatever model
+ * the session runs on.
  *
  * ```ts
- * summarise: Compaction.model({ template: Compaction.continuationSummary })
+ * summarise: Compaction.model()
+ * // or, on a cheaper model than the agent's:
+ * summarise: (input) => Compaction.model()(input).pipe(Effect.provide(cheap))
  * ```
  *
  * Usage is returned with the text, so the checkpoint records what the
@@ -1026,13 +1027,29 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         : stored
 
     /**
-     * Ask the summariser, reporting around it.
+     * Report a compaction that did not produce a checkpoint.
      *
-     * The failure event goes out before the error propagates, and carries the
-     * cause's message rather than the cause, because the stream is
-     * observational: a renderer wants a line, and the typed error is already
-     * on its way to the caller who can act on it.
+     * Failures and defects, not interruption: an interrupted turn is being
+     * cancelled, not failing to compact, and a "failed" line for it would be
+     * false. No guard is needed for that -- an interrupted fibre does not run
+     * this handler at all, which was checked by removing a guard and watching
+     * the test that pins it stay green. The reason is the squashed cause's
+     * text rather than the cause, because the stream is observational: a
+     * renderer wants a line, and the typed error is already on its way to
+     * the caller who can act on it.
      */
+    const reportFailure = (sessionId: string, trigger: Trigger) =>
+      <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+        Effect.tapCause(self, (cause) =>
+          emit({
+            _tag: "CompactionFailed",
+            sessionId,
+            trigger,
+            reason: String(Cause.squash(cause))
+          })
+        )
+
+    /** Ask the summariser, announcing the start. */
     const summariseWith = (
       sessionId: string,
       trigger: Trigger,
@@ -1053,14 +1070,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
           })
         ),
         Effect.map(normalizeSummary),
-        Effect.tapCause((cause) =>
-          emit({
-            _tag: "CompactionFailed",
-            sessionId,
-            trigger,
-            reason: String(cause)
-          })
-        )
+        reportFailure(sessionId, trigger)
       )
 
     const completed = (sessionId: string, trigger: Trigger, checkpoint: Checkpoint) =>
@@ -1206,7 +1216,23 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
 
         yield* completed(context.sessionId, "automatic", checkpoint)
         return projected
-      })
+      }).pipe(
+        // The summariser's own failure was reported inside `summariseWith`;
+        // what is left to report here is compaction giving up -- the token
+        // policy finding nothing to fold, or a summary that did not get under
+        // the line. Filtered to that error so a summariser failure is not
+        // announced twice.
+        Effect.tapError((error) =>
+          error instanceof CompactionCannotHelpError
+            ? emit({
+              _tag: "CompactionFailed",
+              sessionId: context.sessionId,
+              trigger: "automatic",
+              reason: error.message
+            })
+            : Effect.void
+        )
+      )
     )
 
     return {

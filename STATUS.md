@@ -3017,6 +3017,16 @@ request or see it happen.
   transport's wire vocabulary, and compaction is owned by whoever built the
   transform. Sliding buffer of 64 per controller.
 
-Seven tests in `test/Compaction.test.ts` ("compaction controller (phases
-8-10)"), two of them broken once. The public-API pin in `PublicApi.test.ts`
-lists the eight new names. 25/25 in the file; lint clean.
+Eight tests in `test/Compaction.test.ts` ("compaction controller (phases
+8-10)"), three of them broken once. The public-API pin in `PublicApi.test.ts`
+lists the eight new names. 26/26 in the file; lint clean.
+
+The post-commit review of the first cut found two real defects, fixed in the
+follow-up commit: the automatic path's `CompactionCannotHelpError`s
+(`summary-too-large`, the token policy's `nothing-to-fold`) were never
+reported on the stream although the event's doc said they were; and
+`model()`'s doc told the reader to provide a model around `make`'s result,
+which does not discharge the transform's requirement -- the summariser
+wrapper is the pattern. A guard against reporting *interruption* as failure
+turned out to be dead code (an interrupted fibre never runs the handler);
+removed, and the test that pins the behaviour stays.

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as Agent from "../src/Agent.js"
@@ -1202,6 +1202,77 @@ describe("compaction controller (phases 8-10)", () => {
       const encoded = yield* Schema.encodeEffect(json)(events)
       assert.strictEqual(typeof encoded, "string")
       assert.deepStrictEqual(yield* Schema.decodeEffect(json)(encoded), events)
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("compaction giving up under a token policy is reported as failed, once, and not on interruption", () =>
+    Effect.gen(function* () {
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.tokens({
+          // Per-message cost is 1; the window is tight enough that a summary
+          // of ten characters cannot fit under the line.
+          budget: { contextWindow: 6, reserveTokens: 1, keepRecentTokens: 2 },
+          estimate: (prompt) => Effect.succeed(prompt.content.length === 1 ? 1 : prompt.content.length * 3)
+        }),
+        summarise: () => Effect.succeed("a summary far too large for the budget")
+      })
+      const seen = yield* Ref.make<Array<Compaction.CompactionEvent>>([])
+      yield* Effect.forkScoped(
+        Stream.runForEach(compaction.events, (event) => Ref.update(seen, (all) => [...all, event]))
+      )
+      yield* Effect.yieldNow
+
+      // Turn one projects one message (cost 1, under the line of 5). Turn two
+      // projects three (cost 9): the walk keeps two, folds one, and the
+      // summary plus the tail is three messages again -- still 9.
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("one"),
+        TestLanguageModel.text("two")
+      ])
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ contextTransform: compaction.transform, loop: AgentLoop.bounded(1) })
+          )
+          yield* session.prompt("a")
+          return yield* Effect.exit(session.prompt("b"))
+        })
+      ).pipe(Effect.provide(layer))
+      assert.isTrue(Exit.isFailure(exit))
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause)
+        assert.instanceOf(error, Compaction.CompactionCannotHelpError)
+        if (error instanceof Compaction.CompactionCannotHelpError) {
+          assert.strictEqual(error.kind, "summary-too-large")
+        }
+      }
+      yield* Effect.yieldNow
+      // Started, then exactly one Failed naming the reason -- not one from the
+      // summariser wrapper and another from the transform.
+      assert.deepStrictEqual((yield* Ref.get(seen)).map((e) => e._tag), ["CompactionStarted", "CompactionFailed"])
+      const failed = (yield* Ref.get(seen))[1]
+      if (failed?._tag === "CompactionFailed") {
+        assert.strictEqual(failed.trigger, "automatic")
+        assert.include(failed.reason, "summary still over budget")
+      }
+
+      // An interrupted summary is not a failed compaction.
+      const parked = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(1, { retain: 1 }),
+        summarise: () => Effect.never
+      })
+      const parkedSeen = yield* Ref.make<Array<Compaction.CompactionEvent>>([])
+      yield* Effect.forkScoped(
+        Stream.runForEach(parked.events, (event) => Ref.update(parkedSeen, (all) => [...all, event]))
+      )
+      yield* Effect.yieldNow
+      const fiber = yield* Effect.forkChild(parked.compact({ sessionId: "p", history: conversation(3) }))
+      yield* Effect.yieldNow
+      yield* Fiber.interrupt(fiber)
+      // Generous, because the claim is that nothing arrives: a single yield
+      // would pass even if a late event were on its way.
+      for (let i = 0; i < 50; i++) yield* Effect.yieldNow
+      assert.deepStrictEqual((yield* Ref.get(parkedSeen)).map((e) => e._tag), ["CompactionStarted"])
     }).pipe(Effect.scoped)
   )
 
