@@ -4,6 +4,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import type * as InputChannel from "../InputChannel.js"
 import { isStorageError, StorageError } from "../Errors.js"
+import * as PromptWire from "../PromptWire.js"
 import { detailOf } from "../internal/detail.js"
 
 /**
@@ -194,13 +195,14 @@ export const offerIfAdmitting = (
   )
 
 /**
- * Prompts cross the store as JSON; an unencodable prompt is a bug, not a case.
+ * Prompts cross the store through the JSON-safe `PromptWire` codec; an
+ * unencodable prompt is a bug, not a case.
  *
  * Encoding stays a defect for the reason `StorageError` gives: the value was
  * built by this process, so a schema that cannot encode it is a bug here.
  */
 const encodePrompt = (prompt: Prompt.Prompt): Effect.Effect<string> =>
-  Schema.encodeEffect(Prompt.Prompt)(prompt).pipe(
+  Schema.encodeEffect(PromptWire.Prompt)(prompt).pipe(
     Effect.map((encoded) => JSON.stringify(encoded)),
     Effect.orDie
   )
@@ -216,7 +218,7 @@ const decodePrompt = (
   encoded: string
 ): Effect.Effect<Prompt.Prompt, StorageError> =>
   Effect.try(() => JSON.parse(encoded) as unknown).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Prompt.Prompt)),
+    Effect.flatMap(Schema.decodeUnknownEffect(PromptWire.Prompt)),
     Effect.mapError(
       (cause) =>
         new StorageError({ operation: "decodePrompt", detail: detailOf(cause) })

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
@@ -73,28 +73,58 @@ describe("the durable stack under virtual time (H7)", () => {
 
       const fiber = yield* Effect.forkChild(run)
       /**
-       * Time moves in steps, not one jump.
+       * Time moves in steps, not one jump, and the budget fails rather than
+       * hangs.
        *
        * Nothing progresses on its own under a `TestClock`, and the cluster's
        * loops re-arm after each wake -- so a single large `adjust` fires the
        * currently-scheduled sleep and then stops, with the next one scheduled
        * beyond it. The `yieldNow` lets the woken fibres run before time moves
        * again.
+       *
+       * Because this loop is the only thing advancing time, a workflow that
+       * has not finished when it stops never will. A bare `Fiber.await` here
+       * would block until the runner's own timeout and report nothing about
+       * why; polling turns "needed more than 40 steps" into a sentence.
        */
-      for (let i = 0; i < 40; i++) {
+      const steps = 40
+      // Typed from the fiber rather than annotated, so the nesting below is
+      // the compiler's account of it and not the test's assumption.
+      let settled: ReturnType<typeof fiber.pollUnsafe> = undefined
+      for (let i = 0; i < steps && settled === undefined; i++) {
         yield* Effect.yieldNow
         yield* TestClock.adjust("250 millis").pipe(Effect.provide(clock))
+        settled = fiber.pollUnsafe()
       }
+      assert.isDefined(
+        settled,
+        `the submission did not complete within ${steps} virtual-time steps`
+      )
+      if (settled === undefined) return
 
-      const exit = yield* Fiber.await(fiber)
-      assert.isTrue(Exit.isSuccess(exit))
       /**
-       * The model's own answer, so this cannot pass on a run that never
-       * happened. `Exit.isSuccess` alone would be satisfied by a submission
-       * that completed having done nothing, which is exactly the shape of
-       * false pass this suite keeps producing.
+       * Two exits, and both are load-bearing.
+       *
+       * `DurableAgent.result` yields an `Exit`, so the fiber's exit *contains*
+       * one. Checking only the outer says the fiber did not die -- it says
+       * nothing about whether the submission succeeded. Unwrapping is what
+       * makes this a test of the durable run rather than of the test harness.
        */
-      if (Exit.isSuccess(exit)) assert.include(String(exit.value), "done")
+      assert.isTrue(Exit.isSuccess(settled), "the driving fiber must not die")
+      if (!Exit.isSuccess(settled)) return
+      const inner = settled.value
+      assert.isTrue(
+        Exit.isSuccess(inner),
+        "the durable submission itself must succeed"
+      )
+      if (!Exit.isSuccess(inner)) return
+      /**
+       * The model's own answer, exactly. A substring match on a stringified
+       * exit would pass on a failure whose message happened to contain the
+       * word, which is the same shape of false pass this file was written to
+       * rule out.
+       */
+      assert.strictEqual(inner.value, "done")
     })
   )
 })

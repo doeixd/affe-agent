@@ -277,6 +277,20 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
           })
         )
 
+    const inputTokens = response.usage.inputTokens.total ?? 0
+    const outputTokens = response.usage.outputTokens.total ?? 0
+    const reportedTotal = Reflect.get(response.usage, "totalTokens")
+    const totalTokens = typeof reportedTotal === "number" && Number.isSafeInteger(reportedTotal) && reportedTotal >= 0 ? reportedTotal : inputTokens + outputTokens
+    yield* EventBus.emit(session.bus, correlation, {
+      _tag: "ModelCallCompleted",
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens
+      },
+      finishReason: response.finishReason
+    })
+
     // Calls the provider already executed are resolved: their results are in
     // the response, and Effect AI's own resolver skips them too. Running them
     // locally would repeat a side effect the provider performed, and counting

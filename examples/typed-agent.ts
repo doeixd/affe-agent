@@ -105,5 +105,25 @@ export type _ToolFailureIsCatchable = Assert<
 >
 export type _ErrorNotUnknown = Assert<unknown extends PromptErr ? false : true>
 
+type SubmitEffect = ReturnType<
+  typeof AgentSession.submit<{ readonly search: typeof Search }, never>
+>
+type Receipt = SubmitEffect extends Effect.Effect<infer A, any, any> ? A : never
+type SubmitErr = SubmitEffect extends Effect.Effect<any, infer E, any> ? E : never
+// This assertion was deliberately inverted once while adding the public
+// signature; isolated tsc rejected it, proving it is enforced.
+export type _ReceiptNotAny = Assert<IsAny<Receipt> extends false ? true : false>
+export type _ReceiptCarriesSubmissionId = Assert<
+  Receipt extends { readonly submissionId: AgentSession.SubmissionReceipt["submissionId"] }
+    ? true
+    : false
+>
+export type _SubmitErrorNotUnknown = Assert<
+  unknown extends SubmitErr ? false : true
+>
+export type _ToolFailureIsNotAdmissionFailure = Assert<
+  "rate_limited" extends SubmitErr ? false : true
+>
+
 // The handler above destructures `query` with no annotation; if it were `any`
 // the `_ToolCallNameIsLiteral` assertion would also have degraded.

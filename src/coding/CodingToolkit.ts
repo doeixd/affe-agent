@@ -247,8 +247,9 @@ export const Search = Permission.annotate(
 /**
  * Run a shell command in the workspace.
  *
- * The command is one string a shell interprets (`bash -lc`), which is what a
- * model expects of a shell tool; the sandbox's isolation still bounds what it
+ * The command is one string a shell interprets (`bash -c` by default, or
+ * whatever `Shell` the environment supplies), which is what a model expects
+ * of a shell tool; the sandbox's isolation still bounds what it
  * can touch. `action: "shell"` on the command is what a policy gates, so
  * `git status` can be allowed and `git push` asked about.
  */
@@ -358,7 +359,7 @@ const bounded = (
   Effect.gen(function* () {
     const end = Truncate.tail(text)
     if (!end.cut) return end.text
-    const limit = Truncate.firedLimit(text)
+    const limit = Truncate.nameLimit(end.fired ?? "lines")
     const saved = yield* Effect.option(
       Effect.gen(function* () {
         const at = yield* Sandbox.path(Truncate.nextOutputPath())
@@ -386,24 +387,51 @@ const lineCount = (text: string): number => ReadFormat.toLines(text).length
  * `skip` names directories not worth descending into. It applies only to
  * directories the walk would enter, never to the root it was given, so a search
  * scoped at an ignored directory still searches it.
+ *
+ * Whole `Entry` values, not bare paths: `list` already reports each file's size
+ * and a search needs it to decide whether the file is worth reading at all.
+ * Throwing it away here and asking `stat` for it again is one extra provider
+ * call per file in the tree, to learn something already in hand.
  */
 const walk = (
   sandbox: Sandbox.Sandbox,
   root: Sandbox.SandboxPath | undefined,
   skip: ReadonlySet<string> = new Set()
-): Effect.Effect<ReadonlyArray<Sandbox.SandboxPath>, string> =>
+): Effect.Effect<ReadonlyArray<Sandbox.Entry>, string> =>
   Effect.gen(function* () {
     const entries = yield* sandbox.list(root).pipe(Effect.mapError(errorMessage))
-    const files: Array<Sandbox.SandboxPath> = []
+    const files: Array<Sandbox.Entry> = []
     for (const entry of [...entries].sort((a, b) => (a.path < b.path ? -1 : 1))) {
       if (entry.type === "file") {
-        files.push(entry.path)
+        files.push(entry)
       } else if (!skip.has(ReadFormat.basename(entry.path))) {
         files.push(...(yield* walk(sandbox, entry.path, skip)))
       }
     }
     return files
   })
+
+/**
+ * The size a search should judge a file by, or `None` when the provider will
+ * not say.
+ *
+ * `list` sizes ordinary files, so the common path costs nothing extra; the
+ * local provider deliberately declines to size a symlink, because sizing it
+ * would follow the link and report a file `read` may then refuse. Those are
+ * asked once, with `stat`. A failing `stat` is not fatal here: the read that
+ * follows raises the same error, with the message the model needs, and a
+ * search must not die because one entry vanished mid-walk.
+ */
+const sizeOf = (
+  sandbox: Sandbox.Sandbox,
+  entry: Sandbox.Entry
+): Effect.Effect<Option.Option<number>> =>
+  Option.isSome(entry.size)
+    ? Effect.succeed(entry.size)
+    : Effect.map(
+      Effect.option(sandbox.stat(entry.path)),
+      Option.flatMap((found) => found.size)
+    )
 
 /**
  * The handlers, typed against the tools so every parameter infers from its
@@ -538,6 +566,12 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
               }
             }
           })
+      ).pipe(
+        // The lock now surfaces a `canonical` failure rather than silently
+        // keying on the spelled path; it joins the sandbox's other errors.
+        Effect.mapError((error) =>
+          typeof error === "string" ? error : errorMessage(error)
+        )
       )
     }),
 
@@ -598,9 +632,18 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
       const files = yield* walk(sandbox, at, SearchFormat.IGNORED_DIRECTORIES)
 
       const matches: Array<SearchFormat.Match> = []
-      for (const file of files) {
+      let skippedForSize = 0
+      for (const entry of files) {
+        const file = entry.path
         if (matches.length >= SearchFormat.SEARCH_LIMIT) break
         if (filter !== undefined && !filter.matches(file)) continue
+        // Before the read, not after: the point of the cap is that the bytes
+        // are never allocated. See `MAX_SEARCH_FILE_BYTES`.
+        const size = yield* sizeOf(sandbox, entry)
+        if (Option.isSome(size) && size.value > SearchFormat.MAX_SEARCH_FILE_BYTES) {
+          skippedForSize++
+          continue
+        }
         const bytes = yield* sandbox.read(file).pipe(Effect.mapError(errorMessage))
         // A binary file has no lines worth showing, and its bytes would wreck
         // the output. Skipping is not an error: it is simply not a match.
@@ -612,7 +655,7 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
           if (regex.test(text)) matches.push({ path: file, line: i + 1, text })
         }
       }
-      return SearchFormat.render(matches)
+      return SearchFormat.render(matches, skippedForSize)
     }),
 
   bash: ({ command, timeout_ms }) =>

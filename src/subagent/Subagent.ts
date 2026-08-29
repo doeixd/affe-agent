@@ -30,11 +30,22 @@ import type { AgentDefinition } from "../Agent.js"
  *   the child through ordinary structured concurrency -- no cancellation
  *   protocol crosses the boundary.
  *
- * A child failure is returned to the parent model as a string on the tool's
- * `failure` channel, not raised as a defect: "the researcher could not find
- * it" is something the parent can read and route around, the same choice the
- * coding toolkit makes. Pass `onError: "die"` when a child failure should
- * instead fail the parent run.
+ * A child *failure* -- a typed error on the child run's error channel -- is
+ * returned to the parent model as a string on the tool's `failure` channel,
+ * not raised as a defect: "the researcher could not find it" is something the
+ * parent can read and route around, the same choice the coding toolkit makes.
+ * Pass `onError: "die"` when a child failure should instead fail the parent
+ * run.
+ *
+ * A child *defect* is still a defect, under either setting, and it kills the
+ * parent run. That is deliberate rather than an omission. `onError` is about
+ * what an *answer* looks like when the child could not produce one, and a
+ * defect is not an answer -- it is a bug in the child's tools or wiring, with
+ * no reason to believe the child is in a state to be asked anything else.
+ * Widening `"return"` to swallow defects would hand the parent model a string
+ * to reason about and leave the bug unreported, which is the one outcome worse
+ * than the run failing. A child that has a recoverable failure mode should say
+ * so on its error channel, which is what makes it recoverable.
  */
 
 /** The tool a subagent presents to the parent model: one prompt in, its answer out. */
@@ -47,7 +58,7 @@ const Parameters = Schema.Struct({
   prompt: Schema.String
 })
 
-/** How a child failure reaches the parent. */
+/** How a child failure reaches the parent. Defects are not covered: see the module doc. */
 export type OnError =
   /** Return the child's failure to the parent model as a string it can act on. Default. */
   | "return"
@@ -110,6 +121,15 @@ const describeError = (error: unknown): string => {
  * `tools`, alongside ordinary tools. A policy can gate it by tool name -- it
  * carries no action/resource projection, since a delegated prompt has no
  * natural resource to project (unlike a file path or a shell command).
+ *
+ * **`provide` is built per delegation.** `Effect.provide` runs inside the
+ * handler, so two `research` calls in one parent run build the child's layer
+ * twice and tear it down twice. That is what keeps this function pure -- it
+ * returns a plain `BoundTool`, with no scope to own the built services and no
+ * `Effect` for the caller to run. For a cheap layer (a model client the
+ * provider already memoises) it costs nothing; for one that opens a connection
+ * pool or reads config it is the whole cost of delegating. Use
+ * {@link toolScoped} there, which builds once and shares.
  */
 export const tool = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
   name: string,
@@ -139,3 +159,65 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
 
   return Agent.tool(definition, handler)
 }
+
+/**
+ * {@link tool}, with the child's layer built once and shared by every
+ * delegation.
+ *
+ * Same tool, same isolation, same interruption story; the difference is where
+ * `options.provide` is built. Here it is built at construction, into the
+ * `Scope` this effect asks for, and every call is given the resulting services
+ * directly. N delegations, one build.
+ *
+ * ```ts
+ * const lead = Effect.gen(function*() {
+ *   const research = yield* Subagent.toolScoped("research", Researcher, {
+ *     description: "Research a question and return a short findings summary.",
+ *     provide: ExpensiveClient.layer
+ *   })
+ *   return Agent.make({ instructions: "Delegate research.", tools: [research] })
+ * })
+ * ```
+ *
+ * Two consequences follow from building early, and both are the point rather
+ * than a caveat.
+ *
+ * The layer's own failure (`LE`) is reported *here*, when the tool is built,
+ * instead of reaching the parent model as a string on the first delegation.
+ * A missing API key is a wiring fault, and finding it before the agent starts
+ * is better than finding it in the middle of a run -- so `onError` no longer
+ * has anything to say about it, and covers only child run failures.
+ *
+ * The child's services live as long as the scope, not as long as a call. That
+ * is why this is a separate function and not a flag: the caller has to choose
+ * that lifetime, and scoping is how Effect asks them to.
+ */
+export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
+  name: string,
+  agent: AgentDefinition<Tools, E, R>,
+  options: Options<R, LE>
+) =>
+  Effect.map(Layer.build(options.provide), (services) => {
+    const definition = Tool.make(name, {
+      description: options.description,
+      parameters: Parameters,
+      success: Schema.String,
+      failure: Schema.String
+    })
+
+    const run = ({ prompt }: SubagentParams) =>
+      Agent.run(agent, prompt).pipe(
+        Effect.map((result) => result.text),
+        // The already-built services, not the layer: this is the whole
+        // difference from `tool`. The child's `LanguageModel | R` is still
+        // discharged here and only here, so parent and child share no context.
+        Effect.provideContext(services)
+      )
+
+    const handler: Agent.Handler<typeof definition> = (params) =>
+      options.onError === "die"
+        ? run(params).pipe(Effect.orDie)
+        : run(params).pipe(Effect.mapError(describeError))
+
+    return Agent.tool(definition, handler)
+  })

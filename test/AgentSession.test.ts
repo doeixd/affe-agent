@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import {
+  Cause,
   Deferred,
   Effect,
   Exit,
@@ -32,6 +33,30 @@ const callEcho = (id: string, value = "x") => ({
   name: "echo",
   params: { value }
 })
+
+/**
+ * The typed failure an exit carries.
+ *
+ * `assert.isTrue(Exit.isFailure(exit))` pins almost nothing: "steer on an idle
+ * session is rejected" passes just as well when the session was *closed*, when
+ * the wrong error was raised, or when a defect escaped from somewhere else
+ * entirely -- so the assertion survives the very regressions it exists to
+ * catch. Naming the error is what makes each of these tests about the
+ * invariant it claims.
+ */
+const failureOf = <A, E>(exit: Exit.Exit<A, E>): E => {
+  const error = Exit.isFailure(exit)
+    ? Cause.findErrorOption(exit.cause)
+    : Option.none<E>()
+  if (Option.isNone(error)) {
+    throw new Error(
+      `expected a typed failure, got ${
+        Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "a success"
+      }`
+    )
+  }
+  return error.value
+}
 
 describe("canonical history and derived context", () => {
   it.effect("commits user, assistant and tool messages", () =>
@@ -332,13 +357,13 @@ describe("tools", () => {
         )
       )
 
-      yield* withSession(
+      const { session } = yield* withSession(
         [
           {
             toolCalls: [
               { id: "s1", name: "serial", params: {} },
-              { id: "s2", name: "serial", params: {} },
               { id: "w1", name: "wide", params: {} },
+              { id: "s2", name: "serial", params: {} },
               { id: "w2", name: "wide", params: {} }
             ]
           },
@@ -371,6 +396,17 @@ describe("tools", () => {
 
       assert.strictEqual(yield* Ref.get(serialMax), 1)
       assert.strictEqual(yield* Ref.get(wideMax), 2)
+
+      const history = yield* AgentSession.history(session)
+      const toolMessage = history.content.find(
+        (message): message is Prompt.ToolMessage => message.role === "tool"
+      )
+      assert.deepStrictEqual(
+        toolMessage?.content.flatMap((part) =>
+          part.type === "tool-result" ? [part.id] : []
+        ),
+        ["s1", "w1", "s2", "w2"]
+      )
     })
   )
 
@@ -552,6 +588,102 @@ describe("unknown tools", () => {
 })
 
 describe("run lifecycle and events", () => {
+  it.effect("submit returns an admission receipt while execution continues", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const releaseModel = yield* Deferred.make<void>()
+
+      const outcome = yield* withSession(
+        [
+          {
+            started,
+            during: Deferred.await(releaseModel),
+            text: "done"
+          }
+        ],
+        Agent.make({}),
+        ({ session }) =>
+          Effect.gen(function* () {
+            const receipt = yield* session.submit("go")
+            assert.strictEqual(`${receipt.submissionId}`, "submission-1")
+
+            // The receipt is available while the admitted child is still in
+            // the model, rather than being a renamed terminal Result.
+            yield* Deferred.await(started)
+            assert.strictEqual(yield* session.status, "running")
+
+            const second = yield* Effect.exit(session.submit("too soon"))
+            assert.strictEqual(failureOf(second)._tag, "AgentBusyError")
+
+            const becameIdle = yield* session.state.changes.pipe(
+              Stream.filter((state) => state.status === "idle"),
+              Stream.runHead,
+              Effect.forkChild
+            )
+            yield* Effect.yieldNow
+            yield* Deferred.succeed(releaseModel, void 0)
+            assert.isTrue(Option.isSome(yield* Fiber.join(becameIdle)))
+
+            assert.deepStrictEqual(
+              FakeModel.userTexts(yield* session.history),
+              ["go"]
+            )
+          })
+      )
+
+      assert.deepStrictEqual(tags(outcome.events), [
+        "SubmissionStarted",
+        "RunStarted",
+        "TurnStarted",
+        "ModelCallCompleted",
+        "MessageCompleted",
+        "TurnCompleted",
+        "RunCompleted",
+        "SubmissionCompleted"
+      ])
+    })
+  )
+
+  it.effect("a detached failure is terminally observed and releases the session", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const releaseModel = yield* Deferred.make<void>()
+
+      const outcome = yield* withSession(
+        [
+          {
+            started,
+            during: Deferred.await(releaseModel),
+            fail: "provider exploded"
+          }
+        ],
+        Agent.make({}),
+        ({ session }) =>
+          Effect.gen(function* () {
+            yield* AgentSession.submit(session, "go")
+            yield* Deferred.await(started)
+
+            const becameIdle = yield* session.state.changes.pipe(
+              Stream.filter((state) => state.status === "idle"),
+              Stream.runHead,
+              Effect.forkChild
+            )
+            yield* Effect.yieldNow
+            yield* Deferred.succeed(releaseModel, void 0)
+            assert.isTrue(Option.isSome(yield* Fiber.join(becameIdle)))
+          })
+      )
+
+      assert.deepStrictEqual(tags(outcome.events), [
+        "SubmissionStarted",
+        "RunStarted",
+        "TurnStarted",
+        "RunFailed",
+        "SubmissionFailed"
+      ])
+    })
+  )
+
   it.effect("emits an exact, gap-free, correlated event sequence", () =>
     Effect.gen(function* () {
       const { events } = yield* withSession(
@@ -564,11 +696,13 @@ describe("run lifecycle and events", () => {
         "SubmissionStarted",
         "RunStarted",
         "TurnStarted",
+        "ModelCallCompleted",
         "ToolCallStarted",
         "ToolCallSucceeded",
         "MessageCompleted",
         "TurnCompleted",
         "TurnStarted",
+        "ModelCallCompleted",
         "MessageCompleted",
         "TurnCompleted",
         "RunCompleted",
@@ -582,7 +716,7 @@ describe("run lifecycle and events", () => {
       )
 
       const inRun = events.filter((e) =>
-        ["TurnStarted", "ToolCallStarted", "TurnCompleted"].includes(
+        ["TurnStarted", "ModelCallCompleted", "ToolCallStarted", "TurnCompleted"].includes(
           e.event._tag
         )
       )
@@ -635,7 +769,9 @@ describe("run lifecycle and events", () => {
             const result = yield* Effect.exit(
               AgentSession.prompt(session, "second")
             )
-            assert.isTrue(Exit.isFailure(result))
+            // Busy, specifically: a closed session or a provider fault would
+            // also be "a failure", and neither is what this asserts.
+            assert.strictEqual(failureOf(result)._tag, "AgentBusyError")
 
             yield* AgentSession.interrupt(session)
             yield* Fiber.join(fiber)
@@ -792,7 +928,14 @@ describe("steering", () => {
     withSession([], Agent.make({}), ({ session }) =>
       Effect.gen(function* () {
         const result = yield* Effect.exit(AgentSession.steer(session, "nope"))
-        assert.isTrue(Exit.isFailure(result))
+        const failure = failureOf(result)
+        assert.strictEqual(failure._tag, "AgentIdleError")
+        // And it names the operation the caller attempted, which is the only
+        // thing distinguishing this from a rejected `followUp`.
+        assert.strictEqual(
+          failure._tag === "AgentIdleError" ? failure.operation : undefined,
+          "steer"
+        )
       })
     )
   )
@@ -832,6 +975,7 @@ describe("follow-ups and quiescence", () => {
         "TurnStarted",
         // Queued from inside the model call, hence within the turn.
         "FollowUpQueued",
+        "ModelCallCompleted",
         "MessageCompleted",
         "TurnCompleted",
         "RunCompleted",
@@ -840,6 +984,7 @@ describe("follow-ups and quiescence", () => {
         "FollowUpApplied",
         "RunStarted",
         "TurnStarted",
+        "ModelCallCompleted",
         "MessageCompleted",
         "TurnCompleted",
         "RunCompleted",
@@ -900,7 +1045,12 @@ describe("follow-ups and quiescence", () => {
         const result = yield* Effect.exit(
           AgentSession.followUp(session, "nope")
         )
-        assert.isTrue(Exit.isFailure(result))
+        const failure = failureOf(result)
+        assert.strictEqual(failure._tag, "AgentIdleError")
+        assert.strictEqual(
+          failure._tag === "AgentIdleError" ? failure.operation : undefined,
+          "followUp"
+        )
       })
     )
   )
@@ -1199,7 +1349,9 @@ describe("interruption", () => {
 
       assert.strictEqual(yield* AgentSession.status(session), "closed")
       const result = yield* Effect.exit(AgentSession.prompt(session, "again"))
-      assert.isTrue(Exit.isFailure(result))
+      // Closed, not merely busy: the scope is gone, and the distinction is
+      // what a caller acts on.
+      assert.strictEqual(failureOf(result)._tag, "AgentClosedError")
     })
   )
 })
@@ -1222,7 +1374,12 @@ describe("session claim and release", () => {
           )
           const succeeded = results.filter(Exit.isSuccess)
           assert.strictEqual(succeeded.length, 1)
-          assert.strictEqual(results.filter(Exit.isFailure).length, 1)
+          // The loser lost *the claim* -- one atomic transition refusing a
+          // second claimant -- rather than failing for some other reason.
+          assert.deepStrictEqual(
+            results.filter(Exit.isFailure).map((exit) => failureOf(exit)._tag),
+            ["AgentBusyError"]
+          )
         })
     )
   )

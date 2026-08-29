@@ -93,8 +93,8 @@ const tokens = (text: string): ReadonlyArray<string> =>
 /**
  * A keyword-matching, in-process memory. Suitable for tests and single-node
  * development; the map dies with the process. `recall` scores each entry by how
- * many of the query's words it contains and returns the best `limit`. A real
- * deployment implements `Memory` with embeddings or a hosted store instead.
+ * many of the query's words it contains and returns the best `limit` (default 5).
+ * A real deployment implements `Memory` with embeddings or a hosted store instead.
  */
 export const layer = (options?: { readonly limit?: number }): Layer.Layer<Memory> =>
   Layer.effect(

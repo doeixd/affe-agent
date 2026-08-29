@@ -18,8 +18,13 @@ describe("public API", () => {
       "AgentSession",
       "AgentSubmission",
       "ContextTransform",
+      "Elicitation",
       "InputChannel",
       "Permission",
+      // The same prompt codec is used by every JSON and durable boundary. It
+      // is public so custom JobStore and transport implementations do not
+      // invent a subtly incompatible file-data representation.
+      "PromptWire",
       // The vocabulary for a failing store, public because a caller has to be
       // able to catch it and to recognise one that crossed a journal.
       // `detailOf`, which fills in its `detail`, is deliberately internal.
@@ -64,6 +69,10 @@ describe("public API", () => {
       "withTools"
     ])
     assert.isTrue(typeof Harness.AgentEvent.match === "function")
+    assert.deepStrictEqual(Object.keys(Harness.PromptWire).sort(), [
+      "Message",
+      "Prompt"
+    ])
     // The permission vocabulary (#9): decisions, requests, projections, the
     // policy seam and a few trivial interpreters. No DSL, no UI, no store.
     assert.deepStrictEqual(Object.keys(Harness.Permission).sort(), [
@@ -110,6 +119,9 @@ describe("public API", () => {
         "state",
         "status",
         "steer",
+        // Admit without awaiting; the child fiber owns terminal events and
+        // release, so a caller that stops observing cannot abandon cleanup.
+        "submit",
         "subscribe"
       ]
     )
@@ -213,6 +225,16 @@ describe("durable and cluster surfaces", () => {
   it("exports the compaction vocabulary and nothing beyond it", async () => {
     const compaction = await import("../src/compaction/index.js")
     assert.deepStrictEqual(Object.keys(compaction).sort(), ["Compaction"])
+    assert.deepStrictEqual(Object.keys(compaction.Compaction).sort(), [
+      "Checkpoint",
+      "CompactionCannotHelpError",
+      "SummaryResult",
+      "estimate",
+      "make",
+      "serialize",
+      "tokens",
+      "whenLongerThan"
+    ])
   })
 
   it("exports the tree vocabulary and nothing beyond it", async () => {
@@ -253,6 +275,9 @@ describe("durable and cluster surfaces", () => {
       "Export",
       "ExportError",
       "Header",
+      // The floor is public because it is the promise: a reader can ask what
+      // this build still opens, not only what it writes.
+      "MINIMUM_READABLE_VERSION",
       "Provenance",
       "VERSION",
       "append",
@@ -265,7 +290,10 @@ describe("durable and cluster surfaces", () => {
       "of",
       "ofSession",
       "parse",
-      "parseJsonl"
+      "parseJsonl",
+      // The recovering read is separate from `parseJsonl` so a caller that
+      // wants to know a tail was dropped can, without every caller having to.
+      "parseJsonlRecovering"
     ])
 
     assert.deepStrictEqual(Object.keys(exported.Replay).sort(), [
@@ -316,6 +344,22 @@ describe("durable and cluster surfaces", () => {
       "AgentMcp",
       "McpClient",
       "McpToolkit"
+    ])
+    assert.deepStrictEqual(Object.keys(mcp.AgentMcp).sort(), [
+      "AgentToolkit",
+      "AskAgent",
+      "AwaitAgent",
+      "CloseAgent",
+      "FollowUpAgent",
+      "InterruptAgent",
+      "RespondAgent",
+      "ServerToolkit",
+      "StartAgent",
+      "StatusAgent",
+      "SteerAgent",
+      "handlers",
+      "layer",
+      "serverLayer"
     ])
     assert.deepStrictEqual(Object.keys(mcp.McpClient).sort(), [
       "stdio",
@@ -419,6 +463,9 @@ describe("durable and cluster surfaces", () => {
     ])
     assert.deepStrictEqual(Object.keys(http.AgentServer).sort(), [
       "DuplicateMountError",
+      // Public alongside `DuplicateMountError` because it is the same kind of
+      // construction-time refusal: a mount that cannot safely become a route.
+      "InvalidMountNameError",
       // The `/inventory` payload, exported because a caller decoding that
       // endpoint needs the same schema the server encodes with.
       "Inventory",
@@ -507,8 +554,39 @@ describe("durable and cluster surfaces", () => {
       "AgentA2ATransportError",
       "AgentA2AUnsupportedContentError",
       "client",
+      // Public because the policy it enforces is a deployment decision: an
+      // operator has to be able to ask what this server will refuse to call,
+      // and to test their `allowHosts` without standing a server up.
+      "rejectPushUrl",
       "serverLayer",
       "typed"
     ])
+  })
+
+  it("exports the elicitation vocabulary and nothing beyond it", async () => {
+    const elicitation = await import("../src/Elicitation.js")
+    assert.deepStrictEqual(Object.keys(elicitation).sort(), [
+      "Request",
+      "Response",
+      "denied",
+      "elicitValue",
+      "memory"
+    ])
+  })
+
+  it("exports the tool-source vocabulary and nothing beyond it", async () => {
+    const toolSource = await import("../src/toolSource/index.js")
+    assert.deepStrictEqual(Object.keys(toolSource).sort(), ["GraphQL", "OpenApi", "ToolSource"])
+    assert.deepStrictEqual(Object.keys(toolSource.ToolSource).sort(), [
+      "ExtractionError",
+      "InvocationError",
+      "ToolError",
+      "ToolSourceMissingError",
+      "bind",
+      "bindDiscovered",
+      "fromMcpConnection"
+    ])
+    assert.deepStrictEqual(Object.keys(toolSource.OpenApi).sort(), ["extractOpenApi", "makeOpenApiSource"])
+    assert.deepStrictEqual(Object.keys(toolSource.GraphQL).sort(), ["extractGraphQL", "makeGraphQLSource"])
   })
 })

@@ -105,7 +105,24 @@ describe("guarded HTTP web fetch provider", () => {
         ["http://[::1]/", "WebFetchDeniedTargetError"],
         ["http://[fe80::1]/", "WebFetchDeniedTargetError"],
         ["http://[fc00::1]/", "WebFetchDeniedTargetError"],
-        ["http://[::ffff:127.0.0.1]/", "WebFetchDeniedTargetError"]
+        ["http://[::ffff:127.0.0.1]/", "WebFetchDeniedTargetError"],
+        // Four ways to spell an internal address that the earlier prefix list
+        // did not name. The first three are IPv4 addresses wearing an IPv6
+        // prefix -- NAT64, 6to4, and the IPv4-*translated* form, which is one
+        // hextet away from the mapped form that was checked. The last is
+        // ICANN's private-use TLD, of which three instances were listed as
+        // metadata hosts while the suffix itself was public.
+        ["http://[64:ff9b::127.0.0.1]/", "WebFetchDeniedTargetError"],
+        ["http://[2002:7f00:1::]/", "WebFetchDeniedTargetError"],
+        ["http://[::ffff:0:127.0.0.1]/", "WebFetchDeniedTargetError"],
+        ["http://[2001:0:1::2]/", "WebFetchDeniedTargetError"],
+        ["http://metadata.example.internal/", "WebFetchDeniedTargetError"],
+        // 192.0.0.0/24 is IETF protocol assignments, and 192.0.0.192 in it is
+        // Oracle Cloud's instance-metadata endpoint.
+        ["http://192.0.0.192/", "WebFetchDeniedTargetError"],
+        ["http://192.0.2.5/", "WebFetchDeniedTargetError"],
+        ["http://198.51.100.5/", "WebFetchDeniedTargetError"],
+        ["http://203.0.113.5/", "WebFetchDeniedTargetError"]
       ] as const
 
       for (const [url, suffix] of cases) {
@@ -117,6 +134,22 @@ describe("guarded HTTP web fetch provider", () => {
         }
       }
       assert.strictEqual(yield* Ref.get(calls), 0)
+    })
+  )
+
+  it.effect("still reaches ordinary public IPv6 addresses", () =>
+    Effect.gen(function* () {
+      // The guard became an allow-list of 2000::/3 rather than a list of bad
+      // prefixes, so this is the half that would break silently: a change that
+      // denies every IPv6 target passes the table above and fails here.
+      const client = HttpClient.make((request) =>
+        Effect.succeed(response(request, "public", {
+          headers: { "content-type": "text/plain" }
+        })))
+      for (const url of ["http://[2606:4700::1111]/", "http://[2002:808:808::]/"]) {
+        const result = yield* fetchWith(client, url)
+        assert.strictEqual(result.body, "public", url)
+      }
     })
   )
 

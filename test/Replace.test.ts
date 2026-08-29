@@ -123,8 +123,15 @@ describe("replace: what each strategy can do", () => {
     assert.deepStrictEqual(Replace.candidatesOf("context-aware", file, tooDifferent), [])
   })
 
-  it("9. multi-occurrence -- exact text everywhere, under replace_all", () => {
+  it("replace_all fires on repeated exact text, from `simple` alone", () => {
+    // This used to be attributed to a ninth strategy, `multi-occurrence`,
+    // which yielded `find` once per occurrence. It is gone: the driver walks
+    // every occurrence of every candidate itself, so `simple` -- yielding the
+    // text once -- already reaches the same locations and the same single
+    // spelling. The behaviour it was meant to provide is asserted here, and
+    // the strategy that actually provides it is named.
     const out = replaced("a\na\na", "a", "b", true)
+    assert.strictEqual(out.strategy, "simple")
     assert.strictEqual(out.count, 3)
     assert.strictEqual(out.content, "b\nb\nb")
   })
@@ -133,7 +140,9 @@ describe("replace: what each strategy can do", () => {
 describe("replace: which strategy the driver lets answer", () => {
   it("every strategy is registered, exact first", () => {
     assert.strictEqual(Replace.strategyOrder[0], "simple")
-    assert.strictEqual(Replace.strategyOrder.length, 9)
+    // Eight, not upstream's nine: `multi-occurrence` was ported and then
+    // found unable to reach a location `simple` had not already reached.
+    assert.strictEqual(Replace.strategyOrder.length, 8)
     assert.deepStrictEqual(
       [...Replace.strategyOrder].sort(),
       Object.keys(Replace.strategyByName).sort()
@@ -241,6 +250,48 @@ describe("replace: the three terminal failures", () => {
   })
 })
 
+describe("replace: a disproportionate candidate is skipped, not fatal", () => {
+  /**
+   * One strategy, two candidates: a runaway and an exact one.
+   *
+   * `whitespace-normalized` normalises runs of whitespace, so both lines below
+   * normalise to `foo bar` and it offers both -- the 606-character line first,
+   * then the seven-character one. Nothing earlier can answer: `simple` needs
+   * the literal `foo\nbar`, which is not in the file; `line-trimmed` needs two
+   * consecutive lines trimming to `foo` and `bar`; `block-anchor` and
+   * `context-aware` want three lines.
+   *
+   * The guard used to return `Disproportionate` on seeing the first candidate,
+   * discarding the correct answer the same strategy produced one line later.
+   */
+  const runawayThenExact = ["foo" + " ".repeat(600) + "bar", "foo bar"].join("\n")
+
+  it("a strategy's oversized candidate does not veto its exact one", () => {
+    const outcome = Replace.replace(runawayThenExact, "foo\nbar", "REPLACED")
+    assert.strictEqual(outcome._tag, "Replaced")
+    if (outcome._tag !== "Replaced") return
+    assert.strictEqual(outcome.strategy, "whitespace-normalized")
+    assert.strictEqual(outcome.count, 1)
+    // The short line, and only the short line: the runaway is untouched.
+    assert.strictEqual(outcome.matched, "foo bar")
+    assert.strictEqual(
+      outcome.content,
+      "foo" + " ".repeat(600) + "bar" + "\nREPLACED"
+    )
+  })
+
+  it("every candidate oversized is still Disproportionate", () => {
+    // The same file with the good line removed: now nothing usable survives
+    // anywhere in the chain, which is the case the guard exists for.
+    const onlyRunaway = "foo" + " ".repeat(600) + "bar"
+    const outcome = Replace.replace(onlyRunaway, "foo\nbar", "REPLACED")
+    assert.strictEqual(outcome._tag, "Disproportionate")
+    if (outcome._tag !== "Disproportionate") return
+    assert.strictEqual(outcome.strategy, "whitespace-normalized")
+    assert.strictEqual(outcome.matched, onlyRunaway)
+  })
+})
+
 describe("replace: the proportionality guard itself", () => {
   it("refuses a span 2x longer, or 3+ lines longer", () => {
     assert.isTrue(Replace.isDisproportionate("a\nb\nc\nd", "a"))
@@ -345,6 +396,30 @@ describe("replace: agreement with upstream", () => {
     )
     assert.strictEqual(unrelated._tag, "NotFound")
     assert.strictEqual(Replace.replace("", "x", "y")._tag, "NotFound")
+  })
+
+  it("scans for a closing anchor that is not there in linear time", () => {
+    /**
+     * The shape that made the anchored strategies quadratic.
+     *
+     * Both of them answered "the first line at or after k whose trim is the
+     * closing anchor" by scanning forward -- and a scan that finds nothing
+     * runs to the end of the file, once per opening anchor. A find whose first
+     * line is common (`}`) and whose last line is absent is therefore one full
+     * pass per `}`: measured at 2.2s for 12,000 lines before the index, and
+     * quadratic from there, in a synchronous position no `Effect.timeout` can
+     * preempt -- the same failure `internal/glob.ts` was rewritten to remove.
+     *
+     * The bound is deliberately loose (30,000 lines took ~14s before and
+     * ~0.25s after): it is here to catch the return of a quadratic scan, not
+     * to police constant factors on a loaded machine.
+     */
+    const content = Array.from({ length: 30_000 }, () => "}").join("\n")
+    const started = Date.now()
+    const outcome = Replace.replace(content, "}\n  middle\nNOT-IN-THE-FILE", "x")
+    const elapsed = Date.now() - started
+    assert.strictEqual(outcome._tag, "NotFound")
+    assert.isBelow(elapsed, 3_000, `anchor scan took ${elapsed}ms`)
   })
 
   it("offers only the best-scoring anchored block, never a runner-up", () => {

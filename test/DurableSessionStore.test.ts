@@ -84,6 +84,59 @@ const contract = (
     }))
   )
 
+  /**
+   * All three file-data variants, not just bytes.
+   *
+   * `PromptWire` exists because the three are ambiguous once serialized, and
+   * the URL case is the one whose failure is silent: `FileDataWireRead`
+   * deliberately accepts a bare string on read, so a URL that failed to encode
+   * as `{_tag:"Url"}` comes back as a **string** rather than as an error --
+   * and `string` is a legal `FilePart.data`, so nothing downstream notices.
+   * A test that only exercised bytes could never see that.
+   */
+  it.effect("preserves every file-data variant in persisted history", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const store = yield* makeStore
+      const bytes = new Uint8Array([51, 52, 53])
+      const url = new URL("https://cdn.example.com/asset.png")
+      const inline = "inline string payload"
+      const created = yield* store.getOrCreate(
+        "multimodal",
+        Prompt.make([{
+          role: "user",
+          content: [
+            { type: "file", mediaType: "application/octet-stream", data: bytes },
+            { type: "file", mediaType: "image/png", data: url },
+            { type: "file", mediaType: "text/plain", data: inline }
+          ]
+        }])
+      )
+      const history = yield* DurableSessionStore.decodeHistory(created.history)
+      const message = history.content[0]
+      assert.strictEqual(message?.role, "user")
+      if (message?.role !== "user") return
+      const data = message.content.flatMap((part) =>
+        part.type === "file" ? [part.data] : []
+      )
+      assert.strictEqual(data.length, 3)
+
+      assert.isTrue(data[0] instanceof Uint8Array, "bytes must stay bytes")
+      if (data[0] instanceof Uint8Array) {
+        assert.deepStrictEqual(Array.from(data[0]), Array.from(bytes))
+      }
+
+      assert.isTrue(
+        data[1] instanceof URL,
+        "a URL must stay a URL, not decay to a string"
+      )
+      if (data[1] instanceof URL) {
+        assert.strictEqual(data[1].href, url.href)
+      }
+
+      assert.strictEqual(data[2], inline, "a string must stay that exact string")
+    }))
+  )
+
   it.effect("claim on a missing session reports Missing", () =>
     Effect.scoped(Effect.gen(function* () {
       const store = yield* makeStore
@@ -406,6 +459,20 @@ const contract = (
       yield* store.addPendingRequest("s1", request)
       assert.deepStrictEqual(yield* store.pendingRequests("s1"), [])
       assert.strictEqual((yield* store.recordedAnswers("s1")).length, 1)
+    }))
+  )
+
+  it.effect("an id that is already pending keeps the request it was created with", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const store = yield* makeStore
+      yield* store.addPendingRequest("s1", { id: "elicit-1", kind: "input", detail: "first" })
+      // A replay asking under the same id with a different payload. First
+      // write wins, as everywhere else in the store; the memory store used to
+      // overwrite here while the SQL store kept the original.
+      yield* store.addPendingRequest("s1", { id: "elicit-1", kind: "input", detail: "second" })
+      const pending = yield* store.pendingRequests("s1")
+      assert.strictEqual(pending.length, 1)
+      assert.strictEqual(pending[0]?.detail, "first")
     }))
   )
 

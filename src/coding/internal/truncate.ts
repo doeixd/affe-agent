@@ -55,11 +55,43 @@ export const firedLimit = (
   return `${maxLines} lines`
 }
 
+/**
+ * How many lines `text` holds, not counting a trailing newline as one more.
+ *
+ * `"a\nb\n".split("\n")` is `["a", "b", ""]`, and treating that empty trailing
+ * segment as a third line makes a complete two-line output look truncated --
+ * which nearly all command output is, since nearly all of it ends in a
+ * newline. The banner then reports a cut that did not happen.
+ */
+const lineCount = (lines: ReadonlyArray<string>): number =>
+  lines.length > 1 && lines[lines.length - 1] === ""
+    ? lines.length - 1
+    : lines.length
+
+/** Which budget stopped the walk. `undefined` when nothing did. */
+export type Fired = "lines" | "bytes" | undefined
+
+/** Name a budget for the banner, from what actually fired. */
+export const nameLimit = (
+  fired: Exclude<Fired, undefined>,
+  maxLines: number = MAX_LINES,
+  maxBytes: number = MAX_BYTES
+): string => (fired === "bytes" ? formatSize(maxBytes) : `${maxLines} lines`)
+
 export interface Tail {
   /** The kept text: the whole of it when nothing was over budget. */
   readonly text: string
   /** Whether anything was dropped. */
   readonly cut: boolean
+  /**
+   * Which budget stopped the walk, so the banner can name the right one.
+   *
+   * Reported by the walk rather than re-derived from the input, because the
+   * two disagree: 200 lines totalling 100KB against a 100-line, 50KB budget
+   * exceeds both, but if the first 100 lines are 10KB it is the *line* cap
+   * that fired. Inspecting the input afterwards would name the byte cap.
+   */
+  readonly fired?: Fired
 }
 
 /**
@@ -77,16 +109,18 @@ export const tail = (
   maxBytes: number = MAX_BYTES
 ): Tail => {
   const lines = text.split("\n")
-  if (lines.length <= maxLines && byteLength(text) <= maxBytes) {
+  if (lineCount(lines) <= maxLines && byteLength(text) <= maxBytes) {
     return { text, cut: false }
   }
 
   const out: Array<string> = []
   let bytes = 0
+  let fired: Fired = "lines"
   for (let i = lines.length - 1; i >= 0 && out.length < maxLines; i--) {
     const line = lines[i] ?? ""
     const size = byteLength(line) + (out.length > 0 ? 1 : 0)
     if (bytes + size > maxBytes) {
+      fired = "bytes"
       if (out.length === 0) {
         // One line is bigger than the whole budget: keep its end. `0b10xxxxxx`
         // marks a continuation byte, so walking forward past those lands on the
@@ -102,12 +136,14 @@ export const tail = (
     bytes += size
   }
 
-  return { text: out.join("\n"), cut: true }
+  return { text: out.join("\n"), cut: true, fired }
 }
 
 export interface Head {
   readonly text: string
   readonly cut: boolean
+  /** Which budget stopped the walk. See `Tail.fired`. */
+  readonly fired?: Fired
 }
 
 /**
@@ -125,16 +161,18 @@ export const head = (
   maxBytes: number = MAX_BYTES
 ): Head => {
   const lines = text.split("\n")
-  if (lines.length <= maxLines && byteLength(text) <= maxBytes) {
+  if (lineCount(lines) <= maxLines && byteLength(text) <= maxBytes) {
     return { text, cut: false }
   }
 
   const out: Array<string> = []
   let bytes = 0
+  let fired: Fired = "lines"
   for (let i = 0; i < lines.length && out.length < maxLines; i++) {
     const line = lines[i] ?? ""
     const size = byteLength(line) + (out.length > 0 ? 1 : 0)
     if (bytes + size > maxBytes) {
+      fired = "bytes"
       if (out.length === 0) {
         const encoded = encoder.encode(line)
         let end = maxBytes
@@ -146,7 +184,7 @@ export const head = (
     out.push(line)
     bytes += size
   }
-  return { text: out.join("\n"), cut: true }
+  return { text: out.join("\n"), cut: true, fired }
 }
 
 /** Where a truncated command's full output is kept, relative to the workspace. */

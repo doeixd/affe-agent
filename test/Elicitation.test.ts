@@ -354,6 +354,28 @@ describe("Elicitation.elicitValue and the terminal answer state", () => {
       assert.isFalse(second)
     })
   )
+
+  it.effect("one wait's teardown does not unregister another wait on the same id", () =>
+    Effect.gen(function* () {
+      // `Elicitor` is a public seam and the id comes from the caller, so a
+      // reused id is a caller's mistake -- but it must not silently take the
+      // *live* question down with it. Removing by id alone did: the first
+      // wait's interruption deleted the second's registration, leaving a
+      // question nothing reported as pending and `respond` could not answer.
+      const elicitor = yield* Elicitation.memory.make("s")
+      const first = yield* Effect.forkChild(elicitor.elicit(request, Effect.void))
+      yield* Effect.yieldNow
+      const second = yield* Effect.forkChild(elicitor.elicit(request, Effect.void))
+      yield* Effect.yieldNow
+
+      yield* Fiber.interrupt(first)
+      yield* Effect.yieldNow
+
+      assert.deepStrictEqual(yield* elicitor.pending, [request])
+      assert.isTrue(yield* elicitor.respond({ id: "q1", granted: true }))
+      assert.strictEqual((yield* Fiber.join(second)).granted, true)
+    })
+  )
 })
 
 // Type-level assertion (E1 / CLAUDE.md: assert inference). `elicitValue`'s

@@ -46,15 +46,23 @@ describe("AgentProtocol", () => {
       const request: AgentProtocol.PromptRequest = {
         requestId,
         sessionId,
-        input: Prompt.make("hello"),
+        input: Prompt.make([{
+          role: "user",
+          content: [{
+            type: "file",
+            mediaType: "application/octet-stream",
+            data: new Uint8Array([4, 5, 6])
+          }]
+        }]),
         options: { stream: true }
       }
 
       const encoded = yield* Schema.encodeEffect(AgentProtocol.PromptRequest)(
         request
       )
-      const decoded = yield* Schema.decodeEffect(AgentProtocol.PromptRequest)(
-        encoded
+      assert.include(JSON.stringify(encoded), '"_tag":"Bytes"')
+      const decoded = yield* Schema.decodeUnknownEffect(AgentProtocol.PromptRequest)(
+        JSON.parse(JSON.stringify(encoded))
       )
 
       assert.deepStrictEqual(decoded, request)

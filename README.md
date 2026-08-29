@@ -46,8 +46,8 @@ else is a *battery* that plugs into one of a handful of **seams** — it adds a
 capability, policy, interpreter, or adapter, never a second execution model. The
 core depends on no battery.
 
-Learn these seams and the whole library falls into place — each is either a field
-on `Agent.make` or a `Layer` you provide at the session:
+Learn these seams and the whole library falls into place — each is attached at
+agent/session construction or supplied as a `Layer`:
 
 | Seam | Where | What it swaps | Batteries that use it |
 |------|-------|---------------|-----------------------|
@@ -56,8 +56,8 @@ on `Agent.make` or a `Layer` you provide at the session:
 | **`loop`** | `Agent.make` | the continue/stop policy after each turn | `AgentLoop.*`, `/budget` |
 | **`permission`** | `Agent.make` | allow / ask / deny per tool call | `Permission`, `/coding` projections |
 | **`toolExecution` / failure / denial** | `Agent.make` | concurrency and what a failed or denied call does | core policies |
-| **`elicitation`** | `Agent.make` | where a paused run waits for an outside answer | `Elicitation` (local / durable) |
-| **`InputChannel`** | `Agent.make` | where steering / follow-up input is held | core (memory / durable) |
+| **`elicitation`** | `AgentSession.make` | where a paused run waits for an outside answer | `Elicitation` (local / durable) |
+| **`InputChannel`** | `AgentSession.make` | where steering / follow-up input is held | core (memory / durable) |
 | **`eventSink` / `events`** | session | synchronous or streamed observation of lifecycle events | `/observability`, `/hooks`, `/data` |
 | **`AgentSessionHost`** | transport | the request-facing session seam a transport drives | `/http`, `/rpc`, `/ag-ui`, `/a2a`, `/connectors` |
 | **`LanguageModel`** | `Layer` | the model provider | `/openai`, `@effect/ai-*` |
@@ -74,10 +74,14 @@ Core is the default import; everything else is an explicit subpath.
 : `/client` · `/rpc` · `/http` · `/ag-ui` · `/a2a` · `/mcp` (`/mcp/v1`, `/mcp/v2`) · `/durable` · `/cluster` · `/durable-streams` · `/openai`.
 
 **Batteries** (capabilities over a seam)
-: `/coding` — file/shell tools over a sandbox · `/pi` — the same seam with Pi's tool contracts (batch edits, rendered listings, PowerShell) · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
+: `/coding` — file/shell tools over a sandbox · `/pi` — the same seam with Pi's tool contracts (batch edits, rendered listings, PowerShell) · `/tool-source` — MCP/OpenAPI/GraphQL catalogs as typed or discovered toolkits · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
 
 **Host & testing**
-: `/sandbox` (portable) + `/sandbox/local` (host) · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
+: `/sandbox` (portable) + `/sandbox/local` (host) · `/shell` · `/elicitation` · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
+
+**Applications in this repository**
+: `apps/tui` — the full-screen local coding harness · `apps/cli` — a
+conventional `effect/unstable/cli` client for any mounted HTTP agent.
 
 ## Install
 
@@ -200,6 +204,23 @@ yield* AgentSession.followUp(session, "Then summarize the API.")
 
 `prompt`, `steer` and `followUp` all take `Prompt.RawInput`, so an image or a
 structured message steers a conversation exactly as a sentence does.
+
+When a prompt crosses JSON or durable storage, use the root `PromptWire`
+namespace rather than Effect AI's in-memory schema directly. Its `Prompt` and
+`Message` codecs keep the decoded Effect types unchanged while preserving
+whether each file part contains a string, `Uint8Array`, or `URL`:
+
+```ts
+import { PromptWire } from "@doeixd/effect-agent"
+import { Schema } from "effect"
+
+const json = yield* Schema.encodeEffect(PromptWire.Prompt)(prompt)
+const restored = yield* Schema.decodeUnknownEffect(PromptWire.Prompt)(json)
+```
+
+The built-in HTTP, RPC, cluster, durable-store, export, and key-value-tree
+boundaries already use this codec. It is public for custom stores and
+transports that need the same stable representation.
 
 `prompt` resolves only once the session goes quiet — after the initial prompt
 **and** every follow-up queued while it ran. Nothing keeps executing after
@@ -351,7 +372,7 @@ stop covering events as the ADT grows.
 
 ```
 SubmissionStarted → RunStarted → TurnStarted
-  → ToolCallStarted → ToolCallSucceeded
+  → ModelCallCompleted → ToolCallStarted → ToolCallSucceeded
   → MessageCompleted → TurnCompleted
   → RunCompleted → SubmissionCompleted
 ```
@@ -387,6 +408,26 @@ Agent.make({ toolkit, toolFailurePolicy: ToolExecution.FailRun })
 
 Defects always fail the run either way — a broken handler is not something the
 model can correct.
+
+### Per-tool concurrency
+
+Global sequential, parallel and bounded strategies remain available. When one
+tool mutates shared state while another is safe to fan out, limit them
+independently:
+
+```ts
+Agent.make({
+  toolkit,
+  toolExecution: ToolExecution.perTool({
+    limits: { bash: 1, read_file: 10 },
+    defaultLimit: 4
+  })
+})
+```
+
+Limits are positive integers or `"unbounded"`. Different tool names use
+independent pools, and the returned tool results retain the model's original
+call order even when handlers finish out of order.
 
 ### Dynamic capabilities: a toolkit resolved per turn
 
@@ -508,6 +549,36 @@ These are enforced by tests, not just documented:
 - A turn commits atomically — an interrupted turn leaves no partial record.
 - Every event carries a monotonically increasing session sequence.
 - **End-user code never needs a type cast.**
+
+## Limits
+
+Every bound a user can hit is documented where they meet it, not only here.
+This is the index — the source of truth is the JSDoc on the option or exported
+constant it names.
+
+| Area | Bound | Default | Where | What happens |
+|------|-------|---------|-------|--------------|
+| Host | `maxSessions` | required | `AgentSessionHost.Options` | `AgentCapacityExceededError` (429 on HTTP) — host never evicts live work |
+| Host | `maxRequestsPerSession` | required | `AgentSessionHost.Options` | `AgentRequestCapacityExceededError` — oldest *completed* request record evicted FIFO |
+| Sandbox | `ExecOptions.timeout` | `10 seconds` | `Sandbox.timeoutMillis` / `Sandbox.ExecOptions` | `TimeoutError` after `SIGTERM` + 1 s `SIGKILL` grace, awaited on `close` |
+| Sandbox | `ExecOptions.maxOutputBytes` | `1 MiB` | `Sandbox.ExecOptions` | `OutputLimitError` |
+| Compaction | `maxSessions` | `1024` | `Compaction.make({ maxSessions })` | oldest checkpoint evicted; session re-summarises next turn |
+| MCP | `maxSessions` | `128` | `AgentMcp.handlers({ maxSessions })` | refuses newcomer with `session capacity of N reached` when every session busy |
+| MCP shared-host tickets | host `maxSessions` × `maxRequestsPerSession` | required by host | `AgentMcp.serverLayer({ host })` | evicts oldest settled ticket/bucket; refuses while every eligible slot is in flight |
+| Memory | `limit` | `5` | `Memory.layer({ limit })` | recall returns best 5 |
+| Truncation | `MAX_BYTES` / `MAX_LINES` | `50 KB` / `2000 lines` | `PiToolkit.MAX_BYTES`, `coding/internal/truncate.ts` | tail kept, banner names `50.0KB` or `2000 lines` limit and spills full output to `.effect-agent/tool-output/` |
+| Read | window | `2000 lines`, `50 KB`, `2000 chars/line` | `coding/internal/readFormat.ts` — `DEFAULT_LIMIT`, `MAX_BYTES`, `MAX_LINE_LENGTH` | slice capped, footer with `offset=` to continue |
+| Search | `SEARCH_LIMIT` | `100` | `coding/internal/searchFormat.ts` | `Found N matches (more matches available)` |
+| Pi list | `LS_LIMIT` | `500` | `PiToolkit.LS_LIMIT` | truncated notice to narrow path or use search |
+| Pi grep | `GREP_MAX_LINE_LENGTH` | `500 chars` | `PiToolkit.GREP_MAX_LINE_LENGTH` | `... (line truncated to 500 chars)` |
+| Web search | `DEFAULT_LIMIT` / `MAX_LIMIT` / `MAX_RESPONSE_BYTES` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `8` / `10` / `1 MiB` / `15 s` / `4` | `web/brave.ts` | `WebSearchResponseTooLargeError` / `WebSearchTimeoutError` / semaphore queue |
+| Web fetch | `MAX_RESPONSE_BYTES` / `MAX_REDIRECTS` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `1 MiB` / `5` / `20 s` / `4` | `web/http.ts` | `WebFetchResponseTooLargeError` / `RedirectLimitError` / `TimeoutError`; cross-origin redirects refused |
+| Slack | `toleranceSeconds` | `300 s` | `Connectors.Slack.Options` | replay window guard |
+| Durable polling | `clientOutcome` / `deliveryLog` / `workflowInterrupt` / `result` | `10 ms` / `250 ms` / `25 ms` / `10 ms` | `DurablePolling.defaults` / `EFFECT_AGENT_*_POLL_INTERVAL` | validated positive `Duration` via `Config`; also `DeliveryLog.live` fans out only in-process, cross-node via `read({ after })` |
+| Interrupt | poll | `25 ms` | `DurablePolling.workflowInterrupt` | signal polled while submission runs |
+
+STATUS.md keeps the history of how each was found; the JSDoc above is where a
+user meets it.
 
 ## Stability
 
@@ -654,6 +725,22 @@ const DurableSupport = DurableAgentClient.layer("Support", Support, {
 program.pipe(Effect.provide(DurableSupport))
 ```
 
+Polling policy can stay explicit through the constructors above, or come from
+Effect `Config` through `DurableAgentClient.layerConfig`,
+`DeliveryLog.sqlLogConfig` / `sqlLogWithTableConfig`, and
+`DurableAgent.resultConfig`. The validated defaults and stable environment
+names live in `DurablePolling`:
+
+| Environment variable | Default | Controls |
+|---|---:|---|
+| `EFFECT_AGENT_DURABLE_CLIENT_POLL_INTERVAL` | `10 millis` | initial client outcome poll delay |
+| `EFFECT_AGENT_DELIVERY_LOG_POLL_INTERVAL` | `250 millis` | cross-node SQL delivery polling |
+| `EFFECT_AGENT_DURABLE_INTERRUPT_POLL_INTERVAL` | `25 millis` | workflow interrupt-intent polling |
+| `EFFECT_AGENT_DURABLE_RESULT_POLL_INTERVAL` | `10 millis` | lower-level `DurableAgent.resultConfig` polling |
+
+Values must be positive finite Effect duration strings. Invalid policy fails
+with `ConfigError`; it is never silently replaced by a default.
+
 Three identities are kept apart underneath: the **session** (the conversation),
 the **submission** (one prompt and its follow-up chain), and the **execution**
 (one workflow run, keyed `${name}:${sessionId}:${submissionId}`). Sequential
@@ -754,6 +841,40 @@ lookup that can never succeed is not a transport hiccup either. Failures that
 
 `AgentClient.layer(agent)` is the in-process implementation: useful on its own,
 and the reference other transports are checked against.
+
+### Multiple agents and authentication
+
+`AgentServer` composes several HTTP-backed hosts without taking ownership of
+their policy. Each host keeps its own principal resolver, authorization rules,
+capacity and `AgentClient` backend; the server only assigns distinct paths and
+adds the read-only `/inventory` projection.
+
+[`examples/agent-server-auth.ts`](./examples/agent-server-auth.ts) is the full
+compiling example: one bearer-authenticated support mount and one
+cookie-authenticated admin mount, with separate role authorization and
+`Config.redacted` credentials. Authentication failures retain the protocol's
+typed 401 and authenticated principals crossing a mount's policy receive its
+typed 403.
+
+### Conventional CLI
+
+`apps/cli` is a composable command-line client over the same `AgentClient`
+contract. It uses `effect/unstable/cli` for parsing/help and Effect `Terminal`
+for output; it does not embed a second agent runtime. Point it at any mounted
+HTTP agent, local or durable:
+
+```sh
+npm run cli -- create --id demo
+npm run cli -- prompt demo "research this"
+npm run cli -- status demo --json
+npm run cli -- follow-up demo "also compare alternatives"
+npm run cli -- respond demo approval-1 allow
+```
+
+`--url` falls back to `EFFECT_AGENT_URL` and then
+`http://127.0.0.1:3000`. `--token` falls back to `EFFECT_AGENT_TOKEN`; the
+value stays `Redacted` until the HTTP authorization header is built. See
+[`apps/cli/README.md`](./apps/cli/README.md) for the command inventory.
 
 ## AG-UI
 
@@ -910,6 +1031,29 @@ const agent = Agent.make({
 })
 ```
 
+For production context pressure, use a token policy. The budget can be a fixed
+value or an Effect-valued resolver, so model metadata stays in application
+wiring rather than entering `Agent`:
+
+```ts
+const compact = yield* Compaction.make({
+  policy: Compaction.tokens({
+    budget: {
+      contextWindow: 200_000,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000
+    },
+    estimate: Compaction.estimate.approximate
+  }),
+  summarise: ({ messages, previous }) => summarise(messages, previous)
+})
+```
+
+Supply an exact provider tokenizer by replacing `estimate.approximate`; its
+typed failures and service requirements flow through the transform. Token cuts
+walk backward from the newest message and then move off tool results so a
+retained tail never begins with an orphaned tool answer.
+
 A carve-out from a broad rule reads better as an exception than as a
 double-negated matcher. `Permission.except(base, exceptions)` lets a matching
 exception replace the base decision — so "deny all writes, except inside
@@ -1014,7 +1158,7 @@ router. The layer is host-independent and lives on Effect's `HttpRouter`.
 ## A2A v1
 
 `@doeixd/effect-agent/a2a` exposes a Harness agent through the official A2A v1
-JSON-RPC protocol:
+JSON-RPC and HTTP+JSON protocols:
 
 ```ts
 import { AgentA2A } from "@doeixd/effect-agent/a2a"
@@ -1049,11 +1193,16 @@ const A2ALive = AgentA2A.serverLayer({
 ```
 
 Mounting the layer serves the v1 card at
-`/.well-known/agent-card.json` and native JSON-RPC at `/a2a`. The current slice
+`/.well-known/agent-card.json`, native JSON-RPC at `/a2a`, and the v1 REST
+resources below `/a2a` (`message:send`, `message:stream`, task get/list,
+subscribe, cancel, and push-configuration resources). Both bindings use one
+official SDK request handler, task store, and event-bus manager. The adapter
 supports blocking text `SendMessage` and owner-scoped `GetTask`; carrying the
 returned task's context id into another message continues the same Harness
 session. `CancelTask` interrupts an active Harness run, stores the canceled
-terminal state, and leaves that session usable.
+terminal state, and leaves that session usable. Push routes return the protocol's
+capability error because the card deliberately advertises push notifications as
+disabled.
 
 `SendStreamingMessage` emits native JSON-RPC SSE in exact task, working,
 artifact, completed order. Disconnecting the SSE response stops observation but
@@ -1066,8 +1215,7 @@ A run that pauses for an answer — tool approval, or any `Elicitation`
 question — surfaces as the A2A `input-required` task state with the question
 rendered in the status message. A follow-up message carrying the same task id
 supplies the answer: the text is granted to the pending request and the task
-completes with the run's final answer. REST remains planned rather than
-silently accepted.
+completes with the run's final answer.
 
 ### Talking to another agent's A2A endpoint
 
@@ -1097,6 +1245,65 @@ Conformance runs against a real official-SDK server in both directions.
 ## MCP
 
 `@doeixd/effect-agent/mcp` exposes an agent to MCP clients as a tool:
+
+For an application serving more than one frontend, use the shared host path so
+MCP, HTTP, RPC, AG-UI and A2A see one registry and one capacity policy:
+
+```ts
+import { AgentSessionHost } from "@doeixd/effect-agent/client"
+import { AgentMcp } from "@doeixd/effect-agent/mcp"
+import { McpServer } from "effect/unstable/ai"
+
+const Host = AgentSessionHost.Tag<User>("app/AgentSessionHost")
+
+AgentMcp.serverLayer({ host: Host }).pipe(
+  Layer.provide(HostLive),
+  Layer.provide(McpServer.layerStdio({
+    name: "researcher",
+    version: "1.0.0"
+  }))
+)
+```
+
+On Streamable HTTP, MCP authorization headers reach the host's ordinary
+principal resolver. Stdio has no request headers and is treated honestly as a
+single-user process transport. The shared-host layer exposes `ask_agent` plus
+`agent_start`, `agent_await`, `agent_close`, `agent_steer`, `agent_follow_up`,
+`agent_interrupt`, `agent_status`, and `agent_respond`. `ask_agent` remains one-shot:
+an anonymous call releases its session as soon as the call ends. An anonymous
+`agent_start` instead returns its generated `sessionId`; the run outlives that
+tool call and the client releases it explicitly with `agent_close`.
+
+The same layer exposes authenticated `agent://session/{id}/history` and
+`/pending` resource templates. A complete cast-free stdio composition is in
+[`examples/mcp-frontend.ts`](./examples/mcp-frontend.ts).
+
+`agent_await` can be called more than once and never starts the prompt again.
+Its retained ticket table is bounded by the host's `maxSessions` and
+`maxRequestsPerSession`, evicts only settled entries, and refuses admission
+when every eligible slot is still in flight. Every await authenticates and
+authorizes against the ticket's session, so a request id is not a bearer token.
+Steering changes the active run at its next safe model boundary; follow-up adds
+a sequential run under the same submission and await ticket; interrupt stops
+the active run, after which await returns an `interrupted` result.
+
+`agent_status` returns session state and pending elicitation requests together;
+`agent_respond` answers one pending id. When a stdio client advertises MCP form
+elicitation, a tool-approval question is presented natively during
+`agent_await`/`ask_agent` and its answer resumes the run. The unsupported policy
+is configurable as `pending` (the default), `deny`, or `fail`; none grants
+silently.
+
+With the pinned Effect rc.111 transport, Streamable HTTP cannot flush a reverse
+elicitation request while the originating tool call is open. HTTP therefore
+uses the explicit status/respond path even when the client advertises forms;
+calling native elicitation there would hang. This restriction is transport
+gating, not a permission fallback, and can be removed when the upstream
+transport supports the full-duplex exchange.
+
+The client-backed compatibility path remains available when MCP is the only
+frontend. It intentionally keeps the original one-tool `ask_agent` surface and
+idle-session eviction policy:
 
 ```ts
 import { AgentMcp } from "@doeixd/effect-agent/mcp"
@@ -1461,6 +1668,11 @@ leak. `Observability.describe` is the pure event → record mapper if you want t
 build your own exporter; the default `trace` sink logs structured records any
 Effect tracing backend already captures.
 
+Each successful provider call emits `ModelCallCompleted` before any requested
+tools run, with normalised input/output/total token counts and finish reason.
+`Observability.metrics` records those as `agent_model_tokens` (by `direction`),
+alongside turn depth, tool outcomes and duration, and pending input.
+
 ## Evals
 
 A test asks whether the code works; an eval asks whether the *agent behaves* —
@@ -1659,8 +1871,18 @@ reasoning over.
 
 Summaries are checkpointed, so a conversation past the threshold does not
 re-summarise every turn, and each new checkpoint is handed the previous summary
-so it folds rather than forgets. `summarise` is an ordinary Effect — a cheaper
-model, a heuristic, a cache — and may fail and require services of its own.
+so it folds rather than forgets. `Compaction.Checkpoint` is a Schema value and
+records token measurements when a token policy supplied them. By default the
+checkpoints use a bounded in-memory cache; pass an Effect `KeyValueStore` as
+`checkpointStore` when they must survive process recreation. Persistence and
+schema failures remain in the transform's error channel.
+
+`summarise` is an ordinary Effect — a cheaper model, a heuristic, a cache — and
+may fail and require services of its own. It may return a string or
+`Compaction.SummaryResult`, whose provider-neutral usage is retained with the
+checkpoint. `Compaction.serialize(messages)` is the safe starting point for a
+model summarizer: it labels every prompt part, truncates oversized tool results,
+and describes file payloads instead of copying them into the summary request.
 
 ## Testing
 

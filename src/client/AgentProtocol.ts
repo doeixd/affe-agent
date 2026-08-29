@@ -2,6 +2,7 @@ import { Effect, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as AgentEvent from "../AgentEvent.js"
 import * as Elicitation from "../Elicitation.js"
+import * as PromptWire from "../PromptWire.js"
 import {
   AgentBusyError,
   AgentClosedError,
@@ -12,6 +13,7 @@ import {
   SubmissionId as SubmissionIdSchema
 } from "../internal/ids.js"
 import * as AgentClient from "./AgentClient.js"
+import * as ProtocolErrors from "./internal/protocolErrors.js"
 
 /**
  * The schema-owned contract shared by remote session transports.
@@ -28,28 +30,23 @@ export type SessionId = typeof SessionId.Type
 export const SubmissionId = SubmissionIdSchema
 export type SubmissionId = typeof SubmissionId.Type
 
-/** Identifies one mutation so a retry cannot execute it twice. */
-export const RequestId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/RequestId")
-)
-export type RequestId = typeof RequestId.Type
+/**
+ * The protocol's vocabulary of failures, declared one module down.
+ *
+ * `AgentClient.RemoteError` has to name every one of these -- a transport that
+ * cannot say "forbidden" reports a 403 as a retryable transport failure -- and
+ * this module already imports `AgentClient`. Declaring them here and importing
+ * them back would put a cycle around a `Schema.Union` built at module
+ * initialisation. They therefore live in `internal/protocolErrors.ts`, which
+ * depends on nothing, and are re-exported here: this is still where they are
+ * *named*, and every existing `AgentProtocol.AgentForbiddenError` import is
+ * unchanged.
+ */
+export const RequestId = ProtocolErrors.RequestId
+export type RequestId = ProtocolErrors.RequestId
 
-/** Operations named in authorization and wire-level validation failures. */
-export const Operation = Schema.Literals([
-  "createSession",
-  "closeSession",
-  "getSession",
-  "prompt",
-  "steer",
-  "followUp",
-  "interrupt",
-  "respond",
-  "pending",
-  "history",
-  "status",
-  "events"
-])
-export type Operation = typeof Operation.Type
+export const Operation = ProtocolErrors.Operation
+export type Operation = ProtocolErrors.Operation
 
 /** Transport-neutral context evaluated before every protected operation. */
 export interface AuthorizationContext<Principal> {
@@ -98,88 +95,36 @@ export const AgentSessionNotFoundError = AgentClient.AgentSessionNotFoundError
 export type AgentSessionNotFoundError = AgentClient.AgentSessionNotFoundError
 
 /** A create request named a session that is already open. */
-export class AgentSessionAlreadyExistsError extends Schema.TaggedError<AgentSessionAlreadyExistsError>()(
-  "AgentSessionAlreadyExistsError",
-  { sessionId: SessionId }
-) {
-  override get message() {
-    return `Session ${this.sessionId} already exists`
-  }
-}
+export const AgentSessionAlreadyExistsError = ProtocolErrors.AgentSessionAlreadyExistsError
+export type AgentSessionAlreadyExistsError = ProtocolErrors.AgentSessionAlreadyExistsError
 
 /** A request id was reused for a different mutation payload. */
-export class AgentRequestConflictError extends Schema.TaggedError<AgentRequestConflictError>()(
-  "AgentRequestConflictError",
-  { sessionId: Schema.Option(SessionId), requestId: RequestId }
-) {
-  override get message() {
-    return `Request ${this.requestId} was already used for a different mutation`
-  }
-}
+export const AgentRequestConflictError = ProtocolErrors.AgentRequestConflictError
+export type AgentRequestConflictError = ProtocolErrors.AgentRequestConflictError
 
 /** Every retained request for a session is still running. */
-export class AgentRequestCapacityExceededError extends Schema.TaggedError<AgentRequestCapacityExceededError>()(
-  "AgentRequestCapacityExceededError",
-  { sessionId: Schema.Option(SessionId), capacity: Schema.Natural }
-) {
-  override get message() {
-    return `All ${this.capacity} retained request slots are still in flight`
-  }
-}
+export const AgentRequestCapacityExceededError = ProtocolErrors.AgentRequestCapacityExceededError
+export type AgentRequestCapacityExceededError = ProtocolErrors.AgentRequestCapacityExceededError
 
 /** No authenticated principal was available for a protected operation. */
-export class AgentUnauthorizedError extends Schema.TaggedError<AgentUnauthorizedError>()(
-  "AgentUnauthorizedError",
-  { operation: Operation }
-) {
-  override get message() {
-    return `Authentication is required to ${this.operation}`
-  }
-}
+export const AgentUnauthorizedError = ProtocolErrors.AgentUnauthorizedError
+export type AgentUnauthorizedError = ProtocolErrors.AgentUnauthorizedError
 
 /** The authenticated principal may not perform the requested operation. */
-export class AgentForbiddenError extends Schema.TaggedError<AgentForbiddenError>()(
-  "AgentForbiddenError",
-  { operation: Operation, sessionId: Schema.Option(SessionId) }
-) {
-  override get message() {
-    return `The authenticated principal may not ${this.operation}`
-  }
-}
+export const AgentForbiddenError = ProtocolErrors.AgentForbiddenError
+export type AgentForbiddenError = ProtocolErrors.AgentForbiddenError
 
 /** The host cannot acquire another live session. */
-export class AgentCapacityExceededError extends Schema.TaggedError<AgentCapacityExceededError>()(
-  "AgentCapacityExceededError",
-  { capacity: Schema.Natural }
-) {
-  override get message() {
-    return `The session host has reached its capacity of ${this.capacity}`
-  }
-}
+export const AgentCapacityExceededError = ProtocolErrors.AgentCapacityExceededError
+export type AgentCapacityExceededError = ProtocolErrors.AgentCapacityExceededError
 
 /** A request was well-formed at the transport level but invalid for the API. */
-export class AgentInvalidRequestError extends Schema.TaggedError<AgentInvalidRequestError>()(
-  "AgentInvalidRequestError",
-  { operation: Operation, detail: Schema.String }
-) {
-  override get message() {
-    return `Invalid ${this.operation} request: ${this.detail}`
-  }
-}
+export const AgentInvalidRequestError = ProtocolErrors.AgentInvalidRequestError
+export type AgentInvalidRequestError = ProtocolErrors.AgentInvalidRequestError
 
 /** A typed protocol value could not cross its declared codec boundary. */
-export class AgentProtocolCodecError extends Schema.TaggedError<AgentProtocolCodecError>()(
-  "AgentProtocolCodecError",
-  {
-    operation: Operation,
-    phase: Schema.Literals(["request", "response"]),
-    detail: Schema.String
-  }
-) {
-  override get message() {
-    return `Could not encode the ${this.operation} ${this.phase}: ${this.detail}`
-  }
-}
+export const AgentProtocolCodecError = ProtocolErrors.AgentProtocolCodecError
+export type AgentProtocolCodecError = ProtocolErrors.AgentProtocolCodecError
 
 /** Every anticipated failure that a protocol adapter may encode. */
 export const RemoteError = Schema.Union([
@@ -233,7 +178,7 @@ export type GetSessionResponse = typeof GetSessionResponse.Type
 export const PromptRequest = Schema.Struct({
   requestId: RequestId,
   sessionId: SessionId,
-  input: Prompt.Prompt,
+  input: PromptWire.Prompt,
   options: Schema.optional(RemotePromptOptions)
 })
 export type PromptRequest = typeof PromptRequest.Type
@@ -247,14 +192,14 @@ export type PromptResponse = typeof PromptResponse.Type
 export const SteerRequest = Schema.Struct({
   requestId: RequestId,
   sessionId: SessionId,
-  input: Prompt.Prompt
+  input: PromptWire.Prompt
 })
 export type SteerRequest = typeof SteerRequest.Type
 
 export const FollowUpRequest = Schema.Struct({
   requestId: RequestId,
   sessionId: SessionId,
-  input: Prompt.Prompt
+  input: PromptWire.Prompt
 })
 export type FollowUpRequest = typeof FollowUpRequest.Type
 
@@ -303,7 +248,7 @@ export type PendingResponse = typeof PendingResponse.Type
 export const HistoryRequest = Schema.Struct({ sessionId: SessionId })
 export type HistoryRequest = typeof HistoryRequest.Type
 
-export const HistoryResponse = Schema.Struct({ history: Prompt.Prompt })
+export const HistoryResponse = Schema.Struct({ history: PromptWire.Prompt })
 export type HistoryResponse = typeof HistoryResponse.Type
 
 export const StatusRequest = Schema.Struct({ sessionId: SessionId })

@@ -84,7 +84,7 @@ export const layer = (options?: {
 
       const toFileError = (
         cause: unknown,
-        target: Sandbox.SandboxPath,
+        target: string,
         operation: "read" | "write" | "list" | "stat"
       ): Sandbox.FileError => {
         const code = (cause as { code?: unknown }).code
@@ -428,7 +428,9 @@ export const layer = (options?: {
                   catch: (cause) =>
                     toFileError(
                       cause,
-                      target ?? ("." as Sandbox.SandboxPath),
+                      // The workspace root, which is not a `SandboxPath` -- that type
+                      // names a file, and this names the directory being listed.
+                      target ?? "(workspace root)",
                       "list"
                     )
                 })

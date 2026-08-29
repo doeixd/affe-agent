@@ -287,6 +287,58 @@ describe("AgentAgUi event projection", () => {
     })
   )
 
+  /**
+   * An event this build has no case for is skipped, not fatal.
+   *
+   * The wire envelope decodes tolerantly, so a newer peer's event reaches the
+   * projection as `UnknownEvent`. AG-UI already covers a subset of tags and
+   * ignores the rest; tolerance is only worth having if the unknown one is
+   * treated the same way -- carried through the switch with no frame, no
+   * state change, and no premature terminal.
+   */
+  it.effect("skips an event from a newer peer without disturbing the projection", () =>
+    Effect.gen(function* () {
+      const options = { threadId: "thread-unknown", runId: "ag-ui-run-unknown" }
+      const known: ReadonlyArray<AgentEvent.AgentEvent> = [
+        { _tag: "SubmissionStarted" },
+        { _tag: "MessageCompleted", text: "hello" },
+        { _tag: "SubmissionCompleted", runs: 1 }
+      ]
+      const fromNewerPeer: AgentEvent.AgentEventEnvelope = {
+        sessionId,
+        submissionId: Option.some(submissionId),
+        runId: Option.some(harnessRunId),
+        turn: Option.some(1),
+        sequence: 99,
+        event: {
+          _tag: "UnknownEvent",
+          originalTag: "SomethingThisBuildHasNeverHeardOf",
+          payload: { _tag: "SomethingThisBuildHasNeverHeardOf", detail: "x" }
+        }
+      }
+
+      const baseline = yield* Stream.runCollect(
+        AgentAgUi.project(
+          options,
+          Stream.fromIterable(known.map((event, index) => envelope(index + 1, event)))
+        )
+      )
+      const withUnknown = yield* Stream.runCollect(
+        AgentAgUi.project(
+          options,
+          Stream.fromIterable([
+            envelope(1, known[0]!),
+            fromNewerPeer,
+            envelope(2, known[1]!),
+            envelope(3, known[2]!)
+          ])
+        )
+      )
+      assert.deepStrictEqual(withUnknown, baseline)
+      assert.strictEqual(withUnknown[withUnknown.length - 1]?.type, "RUN_FINISHED")
+    })
+  )
+
   it.effect("does not duplicate a streamed message and balances an interrupt", () =>
     Effect.gen(function* () {
       const mapper = yield* AgentAgUi.makeEventMapper({

@@ -8,7 +8,9 @@ import {
 import * as Body from "./internal/body.js"
 import * as WebFetch from "./WebFetch.js"
 
+/** Byte budget for a fetched body including redirect chain; exceeding it becomes `WebFetchResponseTooLargeError`. */
 export const MAX_RESPONSE_BYTES = 1024 * 1024
+/** At most 5 redirects are followed; the 6th becomes `WebFetchRedirectLimitError` and cross-origin redirects are refused earlier. */
 export const MAX_REDIRECTS = 5
 /**
  * How many fetches this provider will have in flight at once.
@@ -26,6 +28,7 @@ export const MAX_REDIRECTS = 5
  */
 export const MAX_CONCURRENT = 4
 
+/** Whole-operation budget for one fetch including redirects: `Effect.timeout` → `WebFetchTimeoutError`. */
 export const TIMEOUT_MILLIS = 20_000
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
@@ -56,14 +59,22 @@ const ipv4Octets = (host: string): ReadonlyArray<number> | undefined => {
 const deniedIpv4 = (octets: ReadonlyArray<number>): boolean => {
   const first = octets[0] ?? 0
   const second = octets[1] ?? 0
+  const third = octets[2] ?? 0
   return first === 0 ||
     first === 10 ||
     first === 127 ||
     (first === 100 && second >= 64 && second <= 127) ||
     (first === 169 && second === 254) ||
     (first === 172 && second >= 16 && second <= 31) ||
+    // 192.0.0.0/24 is IETF protocol assignments, not a routable destination --
+    // and 192.0.0.192 is Oracle Cloud's instance-metadata address, so leaving
+    // the block out was a metadata endpoint reachable through the guard.
+    (first === 192 && second === 0 && third === 0) ||
+    (first === 192 && second === 0 && third === 2) ||
     (first === 192 && second === 168) ||
     (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51 && third === 100) ||
+    (first === 203 && second === 0 && third === 113) ||
     first >= 224
 }
 
@@ -100,22 +111,47 @@ const ipv6Hextets = (host: string): ReadonlyArray<number> | undefined => {
   return zeros >= 1 ? [...left, ...Array<number>(zeros).fill(0), ...right] : undefined
 }
 
+/** The IPv4 address a pair of hextets encodes, for the embedding prefixes. */
+const embeddedIpv4 = (high: number, low: number): ReadonlyArray<number> =>
+  [high >> 8, high & 0xff, low >> 8, low & 0xff]
+
+/**
+ * Whether an IPv6 target is anything but a public destination.
+ *
+ * **An allow-list of `2000::/3`, not a list of the bad prefixes.** Naming the
+ * blocks -- `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8` and the `::ffff:0:0/96`
+ * mapped form -- looked complete and was not, because the interesting attack
+ * is not "spell loopback in IPv6" but "spell an IPv4 address in an IPv6
+ * prefix nobody enumerated". Three got through a hostile table:
+ *
+ * - `64:ff9b::7f00:1`, the RFC 6052 NAT64 well-known prefix. On any network
+ *   with NAT64 -- the ordinary arrangement on IPv6-only cloud and mobile
+ *   networks -- that address *is* 127.0.0.1.
+ * - `2002:7f00:1::`, 6to4, which carries its IPv4 in the second and third
+ *   hextets.
+ * - `::ffff:0:7f00:1`, the RFC 2765 IPv4-*translated* form, one hextet away
+ *   from the mapped form that was checked and matching none of its tests.
+ *
+ * Global unicast is `2000::/3` and everything else is reserved, so the
+ * allow-list is both shorter and closed: a prefix nobody thought of is denied
+ * by default rather than allowed by default. The two embedding prefixes that
+ * live *inside* `2000::/3` still need their own answer, below.
+ */
 const deniedIpv6 = (hextets: ReadonlyArray<number>): boolean => {
   if (hextets.length !== 8) return true
   const first = hextets[0] ?? 0
-  const allZero = hextets.every((part) => part === 0)
-  const loopback = hextets.slice(0, 7).every((part) => part === 0) && hextets[7] === 1
-  const uniqueLocal = (first & 0xfe00) === 0xfc00
-  const linkLocal = (first & 0xffc0) === 0xfe80
-  const siteLocal = (first & 0xffc0) === 0xfec0
-  const multicast = (first & 0xff00) === 0xff00
-  const ipv4Mapped = hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff
-  if (ipv4Mapped) {
-    const high = hextets[6] ?? 0
-    const low = hextets[7] ?? 0
-    return deniedIpv4([high >> 8, high & 0xff, low >> 8, low & 0xff])
+  // Everything outside 2000::/3: ::/8 (unspecified, loopback, both IPv4
+  // embeddings and the NAT64 prefix), fc00::/7, fe80::/10, fec0::/10, ff00::/8.
+  if ((first & 0xe000) !== 0x2000) return true
+  // 6to4 relays to the IPv4 address in the next two hextets, so it inherits
+  // that address's verdict rather than being denied outright.
+  if (first === 0x2002) {
+    return deniedIpv4(embeddedIpv4(hextets[1] ?? 0, hextets[2] ?? 0))
   }
-  return allZero || loopback || uniqueLocal || linkLocal || siteLocal || multicast
+  // Teredo (2001::/32) tunnels to an IPv4 endpoint it obfuscates; there is no
+  // public destination it is the right way to reach.
+  if (first === 0x2001 && (hextets[1] ?? 0) === 0) return true
+  return false
 }
 
 const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> => {
@@ -141,6 +177,13 @@ const validateTarget = (url: URL): Effect.Effect<void, WebFetch.WebFetchError> =
     host === "localhost" ||
     host.endsWith(".localhost") ||
     host.endsWith(".local") ||
+    // ICANN reserved `.internal` for private-use names in 2024, and three of
+    // the four metadata hosts named above already live under it -- so the
+    // suffix is the rule and the list was three instances of it. Without this,
+    // `metadata.<anything-else>.internal` was a public name as far as the
+    // guard was concerned.
+    host === "internal" ||
+    host.endsWith(".internal") ||
     METADATA_HOSTS.has(host)
   ) {
     return Effect.fail(

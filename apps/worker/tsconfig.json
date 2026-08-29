@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "WebWorker"],
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": "../..",
+    "paths": {
+      "@doeixd/effect-agent": ["./src/index.ts"],
+      "@doeixd/effect-agent/elicitation": ["./src/Elicitation.ts"],
+      "@doeixd/effect-agent/tool-source": ["./src/toolSource/index.ts"],
+      "@doeixd/effect-agent/*": ["./src/*", "./src/*/index.ts", "./src/*.ts"]
+    },
+    "types": [],
+    "plugins": [{ "name": "@effect/language-service" }]
+  },
+  "include": ["src"]
+}

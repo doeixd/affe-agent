@@ -169,7 +169,7 @@ effect-agent
       opencode serve
 ```
 
-Our `/a2a` package already exposes real A2A v1 Agent Cards, JSON-RPC, streaming, tasks, cancellation, session resolution, and `INPUT_REQUIRED` handling over `AgentSessionHost`.
+Our `/a2a` package already exposes real A2A v1 Agent Cards, JSON-RPC and HTTP+JSON, streaming, tasks, cancellation, session resolution, and `INPUT_REQUIRED` handling over `AgentSessionHost`.
 
 So we already believe:
 

@@ -20,7 +20,8 @@ Two kinds of `as` are worth telling apart, because only one is a hole.
 A plain `x as T` is still checked for overlap — it can narrow, it cannot claim a
 string is a number. `src/` has around a hundred of those and they are ordinary.
 What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
-which routes around it. **Eighteen of those exist, in four files**, and they
+which routes around it. A third form erases too, from the other end: `x as never`, since `never` is
+assignable to everything. **Nineteen erasing casts exist, in four files**, and they
 are the list below. `test/Casts.test.ts` enforces it: adding one fails the build
 until it is written down here, with its reason.
 
@@ -55,6 +56,14 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   in the one place licensed to hold it rather than in the test that wanted it
   (two of them -- one per entry point, because a streamed run must see the same
   provider as a batch one);
+* **satisfying an unreduced conditional return type** (`Agent.ts`'s
+  `withExecutionPlan`, the one `as never` in `src/`). The signature states the
+  plan/error compatibility check as a conditional on the *return* type, so with
+  the type parameter still unresolved the compiler cannot reduce it and accepts
+  nothing but `never`. Stating it as a constraint on the parameter was tried
+  first and is worse: it destroys the inference that makes
+  `ExecutionPlan.make(...)` assignable, and buries the diagnostic inside the
+  plan's type instead of putting the message at the call site;
 * **widening an error channel to cross an `Activity` boundary**
   (`DurableModel.ts:129`), where a workflow activity's `execute` must be typed
   against the schema the journal declares, and the underlying effect's error is
@@ -62,6 +71,23 @@ The erasing casts in `src/` are structural, and each is documented at the site:
 
 Adding another needs a reason of that kind, and `test/Casts.test.ts` will ask
 for it.
+
+### One erasure that is not a cast
+
+`Permission.ProjectionKey` is `Context.Service<ProjectionKey, Projection<any>>`
+(`src/Permission.ts`). The `any` is in *type* position, so it is not a cast and
+`test/Casts.test.ts` cannot see it -- which is why it is written down here
+instead.
+
+It is a variance escape, and deliberate. `Projection<Params>.resource` is
+`(params: Params) => string`, so under `strictFunctionTypes` a
+`Projection<{ city: string }>` is not assignable to `Projection<unknown>`, while
+`annotate` has to accept every tool's own parameter type. `Projection<never>`
+accepts each concrete projection contravariantly, but `projectionOf` reads the
+annotation back and would then need a cast of its own -- moving the hole rather
+than closing it. The safety is at the edges: `annotate` types the projection
+against `Tool.Parameters<T>` before it is stored, and the reader applies it to
+that same tool's decoded parameters.
 
 One entry that is **not** in that list, because it does not erase: returning the
 caller's exact tool type from `Permission.annotate` is a plain `as T`. Effect

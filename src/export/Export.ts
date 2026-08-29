@@ -2,6 +2,7 @@ import { DateTime, Effect, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as AgentSession from "../AgentSession.js"
 import type { AgentBusyError, AgentClosedError } from "../Errors.js"
+import * as PromptWire from "../PromptWire.js"
 import * as Redaction from "../redaction/Redaction.js"
 
 /**
@@ -27,7 +28,21 @@ import * as Redaction from "../redaction/Redaction.js"
  * newer file rather than merely miss a field. A format without a version is a
  * format that can only be written once.
  */
-export const VERSION = 1
+export const VERSION = 2
+
+/**
+ * The oldest version this build can still read.
+ *
+ * A bump protects an *old reader* from misreading a *new* file. It is not a
+ * reason to refuse an old file: refusing one discards data the reader can still
+ * understand. `PromptWire.FileDataWireRead` accepts the untagged file data v1
+ * wrote for exactly this reason, and a v1 export with no file parts is byte
+ * identical to a v2 one, so the overwhelming majority differ in nothing but
+ * this number.
+ *
+ * Raise this only when a change genuinely cannot be read forward.
+ */
+export const MINIMUM_READABLE_VERSION = 1
 
 /**
  * Where a transcript came from.
@@ -129,7 +144,7 @@ export class ExportError extends Schema.TaggedError<ExportError>()(
 ) {
   override get message() {
     return this.reason === "unsupported-version"
-      ? `Cannot read an export written at version ${this.found}: this build reads version ${VERSION}`
+      ? `Cannot read an export written at version ${this.found}: this build reads versions ${MINIMUM_READABLE_VERSION} through ${VERSION}`
       : `Malformed export: ${this.detail}`
   }
 }
@@ -173,6 +188,13 @@ const decodeExport = Schema.decodeUnknownEffect(Export)
  * The version is checked *before* the rest is decoded. Decoding first would
  * report a newer file as a missing field, which sends the reader looking for a
  * bug in their data rather than telling them to upgrade.
+ *
+ * Only a *newer* version is refused. An older one is read, because every
+ * change so far is one this build can still understand -- see
+ * `MINIMUM_READABLE_VERSION`. Refusing v1 here would have made every export
+ * written before the `PromptWire` rollout unopenable, including the many that
+ * contain no file part and therefore differ from a v2 export in nothing but
+ * the number itself.
  */
 export const decode = (value: unknown): Effect.Effect<Export, ExportError> =>
   Effect.suspend(() => {
@@ -185,7 +207,7 @@ export const decode = (value: unknown): Effect.Effect<Export, ExportError> =>
         })
       )
     }
-    if (version !== VERSION) {
+    if (version > VERSION || version < MINIMUM_READABLE_VERSION) {
       return Effect.fail(
         new ExportError({ reason: "unsupported-version", detail: "", found: version })
       )
@@ -198,7 +220,7 @@ export const decode = (value: unknown): Effect.Effect<Export, ExportError> =>
   })
 
 const encodeExport = Schema.encodeUnknownEffect(Export)
-const encodeMessage = Schema.encodeUnknownEffect(Prompt.Message)
+const encodeMessage = Schema.encodeUnknownEffect(PromptWire.Message)
 
 /**
  * Bounded metadata a session picker needs, with no conversation attached.
@@ -336,8 +358,60 @@ const parseJson = (text: string, detail: string): Effect.Effect<unknown, ExportE
     }
   })
 
-const linesOf = (text: string): ReadonlyArray<string> =>
-  text.split("\n").filter((line) => line.length > 0)
+/**
+ * The non-empty lines, each with the file line number it came from.
+ *
+ * The number is carried rather than recomputed because blank lines are
+ * dropped: an index into the filtered array does not match what a person sees
+ * in an editor, and a parse error naming the wrong line sends them to the
+ * wrong place. A trailing `\r` is stripped so a file written with CRLF reads
+ * the same as one written with LF.
+ */
+const linesOf = (
+  text: string
+): ReadonlyArray<{ readonly line: string; readonly number: number }> => {
+  const out: Array<{ readonly line: string; readonly number: number }> = []
+  const raw = text.split("\n")
+  for (let i = 0; i < raw.length; i++) {
+    const line = (raw[i] ?? "").replace(/\r$/, "")
+    if (line.length > 0) out.push({ line, number: i + 1 })
+  }
+  return out
+}
+
+/**
+ * The first non-empty line, without splitting the file.
+ *
+ * `headerOf` reads one line, and `append` calls `headerOf` on the whole log
+ * every time a turn is added. Reaching it through `linesOf` allocated one
+ * string per message in the transcript, and ran a regex over each, to look at
+ * the first — so appending to a long log was linear in the log for no reason
+ * anyone could see from the call site.
+ */
+const firstLine = (text: string): string | undefined => {
+  let from = 0
+  while (from <= text.length) {
+    const end = text.indexOf("\n", from)
+    const line = (end === -1 ? text.slice(from) : text.slice(from, end)).replace(/\r$/, "")
+    if (line.length > 0) return line
+    if (end === -1) return undefined
+    from = end + 1
+  }
+  return undefined
+}
+
+/** The last non-empty line, likewise without splitting the file. */
+const lastLine = (text: string): string | undefined => {
+  let end = text.length
+  while (end > 0) {
+    const start = text.lastIndexOf("\n", end - 1)
+    const line = text.slice(start + 1, end).replace(/\r$/, "")
+    if (line.length > 0) return line
+    if (start === -1) return undefined
+    end = start
+  }
+  return undefined
+}
 
 /**
  * The header of a JSONL transcript, from the first line only.
@@ -352,7 +426,7 @@ const linesOf = (text: string): ReadonlyArray<string> =>
  */
 export const headerOf = (text: string): Effect.Effect<Header, ExportError> =>
   Effect.suspend(() => {
-    const line = linesOf(text)[0]
+    const line = firstLine(text)
     if (line === undefined) {
       return Effect.fail(
         new ExportError({
@@ -374,7 +448,7 @@ const readHeader = (value: unknown): Effect.Effect<Header, ExportError> => {
       })
     )
   }
-  if (version !== VERSION) {
+  if (version > VERSION || version < MINIMUM_READABLE_VERSION) {
     return Effect.fail(
       new ExportError({ reason: "unsupported-version", detail: "", found: version })
     )
@@ -459,6 +533,30 @@ export const encodeJsonl = (
  * been said yet.
  */
 export const parseJsonl = (text: string): Effect.Effect<Export, ExportError> =>
+  Effect.map(parseJsonlRecovering(text), (result) => result.export)
+
+/**
+ * `parseJsonl`, reporting whether a trailing partial line had to be dropped.
+ *
+ * **A truncated last line is recovered, not fatal.** This format is the
+ * append-only commit log, so a crash mid-append leaves exactly one partial
+ * line, at the end. Failing the whole file would throw away every complete
+ * message before it -- the opposite of what putting the header first was for.
+ *
+ * A malformed line anywhere *else* still fails, because that is not a shape a
+ * crash produces: an interrupted append cannot corrupt a line it already
+ * flushed. The same reasoning bounds the repair to a file that does not end in
+ * a newline, since a completed append always terminates one.
+ *
+ * `truncatedTail` carries the dropped text rather than a boolean, so a caller
+ * can log or requeue it instead of discovering later that something was lost.
+ */
+export const parseJsonlRecovering = (
+  text: string
+): Effect.Effect<
+  { readonly export: Export; readonly truncatedTail: Option.Option<string> },
+  ExportError
+> =>
   Effect.gen(function*() {
     const lines = linesOf(text)
     const first = lines[0]
@@ -468,32 +566,78 @@ export const parseJsonl = (text: string): Effect.Effect<Export, ExportError> =>
         detail: "empty file, so this is not a JSONL export"
       })
     }
-    const headerValue = yield* parseJson(first, "JSONL header")
+    const headerValue = yield* parseJson(first.line, "JSONL header")
     const header = yield* readHeader(headerValue)
+
+    const lastIndex = lines.length - 1
+    const mayBeTruncated = !text.endsWith("\n")
+    let truncatedTail = Option.none<string>()
+
     const messages: Array<unknown> = []
     for (let i = 1; i < lines.length; i++) {
-      const line = lines[i]
-      if (line === undefined) continue
-      messages.push(yield* parseJson(line, `JSONL message ${i}`))
+      const entry = lines[i]!
+      const parsed = yield* Effect.result(
+        parseJson(entry.line, `JSONL message on line ${entry.number}`)
+      )
+      if (parsed._tag === "Success") {
+        messages.push(parsed.success)
+        continue
+      }
+      if (i === lastIndex && mayBeTruncated) {
+        truncatedTail = Option.some(entry.line)
+        break
+      }
+      return yield* parsed.failure
     }
-    return yield* decode({
+
+    const decoded = yield* decode({
       version: header.version,
       exportedAt: header.exportedAt,
       session: { sessionId: header.sessionId, history: { content: messages } },
       provenance: header.provenance
     })
+    return { export: decoded, truncatedTail }
   })
 
 const newlineTerminated = (text: string): string =>
   text.endsWith("\n") || text.length === 0 ? text : `${text}\n`
 
 /**
+ * Whether the file ends in a line an interrupted append left behind.
+ *
+ * Same rule `parseJsonlRecovering` repairs by: no terminating newline, and a
+ * final line that is not a JSON value. Anything that parses is a complete
+ * record whose write simply had not reached the newline yet, and extending
+ * that is safe.
+ */
+const endsPartial = (text: string): boolean => {
+  if (text.endsWith("\n") || text.length === 0) return false
+  const line = lastLine(text)
+  if (line === undefined) return false
+  try {
+    JSON.parse(line)
+    return false
+  } catch {
+    return true
+  }
+}
+
+/**
  * Append messages to an existing JSONL export without rewriting the header.
  *
- * The header is re-read so a truncated or foreign file is refused rather
- * than extended. The new lines are encoded through `Prompt.Message`, so they
- * are the same shape `encodeJsonl` would have written had they been there
- * from the start.
+ * The header is re-read so a foreign file is refused rather than extended.
+ *
+ * A crash-truncated file is refused too, and that is the case worth spelling
+ * out: the header was intact, so the header check passed, and the partial
+ * final line was silently terminated with a newline and buried under the new
+ * records. `parseJsonlRecovering` repairs a bad line only at the end of the
+ * file -- deliberately, because that is the only place a crash can put one --
+ * so appending turned a log that recovered every complete message into one
+ * that parses to nothing. Extending it is refused instead: recover the tail
+ * with `parseJsonlRecovering`, which hands it back, and write from there.
+ *
+ * The new lines are encoded through `Prompt.Message`, so they are the same
+ * shape `encodeJsonl` would have written had they been there from the start.
  */
 export const append = (
   text: string,
@@ -501,6 +645,14 @@ export const append = (
 ): Effect.Effect<string, ExportError> =>
   Effect.gen(function*() {
     yield* headerOf(text)
+    if (endsPartial(text)) {
+      return yield* new ExportError({
+        reason: "malformed",
+        detail: "the log ends in a partial line, so a previous append did not" +
+          " finish. Appending would bury it mid-file, where it can no longer be" +
+          " recovered; read it with parseJsonlRecovering first."
+      })
+    }
     const encoded = yield* Effect.forEach(history.content, (message) =>
       encodeMessage(message).pipe(
         Effect.mapError((error) =>

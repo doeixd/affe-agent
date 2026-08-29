@@ -10,6 +10,61 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      // Every published subpath, and nothing else.
+      //
+      // A `"@doeixd/effect-agent/*"` wildcard used to sit here, and it
+      // resolved any subpath to source whether or not `package.json#exports`
+      // declared one -- so an example could import a path that does not exist
+      // in the published package and `typecheck` stayed green. Enumerating
+      // them makes a typo or an undeclared entry a compile error, which is the
+      // only place it can be caught before a consumer hits it.
+      //
+      // Generated from `package.json#exports`; `verify:package` proves the
+      // other direction, that each of these resolves from the packed tarball.
+      "@doeixd/effect-agent": ["./src/index.ts"],
+      "@doeixd/effect-agent/durable": ["./src/durable/index.ts"],
+      "@doeixd/effect-agent/cluster": ["./src/cluster/index.ts"],
+      "@doeixd/effect-agent/testing": ["./src/testing/index.ts"],
+      "@doeixd/effect-agent/compaction": ["./src/compaction/index.ts"],
+      "@doeixd/effect-agent/client": ["./src/client/index.ts"],
+      "@doeixd/effect-agent/rpc": ["./src/rpc/index.ts"],
+      "@doeixd/effect-agent/http": ["./src/http/index.ts"],
+      "@doeixd/effect-agent/ag-ui": ["./src/ag-ui/index.ts"],
+      "@doeixd/effect-agent/coding": ["./src/coding/index.ts"],
+      "@doeixd/effect-agent/tree": ["./src/tree/index.ts"],
+      "@doeixd/effect-agent/export": ["./src/export/index.ts"],
+      "@doeixd/effect-agent/redaction": ["./src/redaction/index.ts"],
+      "@doeixd/effect-agent/web": ["./src/web/index.ts"],
+      "@doeixd/effect-agent/web/brave": ["./src/web/brave.ts"],
+      "@doeixd/effect-agent/web/http": ["./src/web/http.ts"],
+      "@doeixd/effect-agent/subagent": ["./src/subagent/index.ts"],
+      "@doeixd/effect-agent/state": ["./src/state/index.ts"],
+      "@doeixd/effect-agent/skills": ["./src/skills/index.ts"],
+      "@doeixd/effect-agent/memory": ["./src/memory/index.ts"],
+      "@doeixd/effect-agent/evals": ["./src/evals/index.ts"],
+      "@doeixd/effect-agent/observability": ["./src/observability/index.ts"],
+      "@doeixd/effect-agent/data": ["./src/data/index.ts"],
+      "@doeixd/effect-agent/connectors": ["./src/connectors/index.ts"],
+      "@doeixd/effect-agent/connectors/slack": ["./src/connectors/slack.ts"],
+      "@doeixd/effect-agent/hooks": ["./src/hooks/index.ts"],
+      "@doeixd/effect-agent/scheduling": ["./src/scheduling/index.ts"],
+      "@doeixd/effect-agent/plugins": ["./src/plugins/index.ts"],
+      "@doeixd/effect-agent/budget": ["./src/budget/index.ts"],
+      "@doeixd/effect-agent/durable-streams": ["./src/durable-streams/index.ts"],
+      "@doeixd/effect-agent/openai": ["./src/openai/index.ts"],
+      "@doeixd/effect-agent/a2a": ["./src/a2a/index.ts"],
+      "@doeixd/effect-agent/mcp": ["./src/mcp/index.ts"],
+      "@doeixd/effect-agent/elicitation": ["./src/Elicitation.ts"],
+      "@doeixd/effect-agent/tool-source": ["./src/toolSource/index.ts"],
+      "@doeixd/effect-agent/shell": ["./src/shell/index.ts"],
+      "@doeixd/effect-agent/sandbox": ["./src/sandbox/index.ts"],
+      "@doeixd/effect-agent/sandbox/local": ["./src/sandbox/local.ts"],
+      "@doeixd/effect-agent/mcp/v1": ["./src/mcp/v1/index.ts"],
+      "@doeixd/effect-agent/mcp/v2": ["./src/mcp/v2/index.ts"],
+      "@doeixd/effect-agent/pi": ["./src/pi/index.ts"]
+    },
     "plugins": [{ "name": "@effect/language-service" }]
   },
   "include": ["src", "test", "examples"]

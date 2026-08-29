@@ -1,0 +1,116 @@
+[
+  {
+    "id": "D1",
+    "guarantee": "Admission is a promise",
+    "applied": "admit even when already claimed",
+    "verdict": "bites",
+    "failed": 8,
+    "passed": 176,
+    "names": [
+      "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > rejects a concurrent prompt with AgentBusyError",
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > two clients racing for one idle session: exactly one is accepted",
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a claim whose dispatch never happened is dispatched on reacquisition",
+      "test/DurableAgentClient.test.ts > D7 at the durable client > a retry under the same idempotency key rejoins the claim it already made",
+      "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a retry under the same key is the same claim, not a busy session",
+      "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a different key on a claimed session is still Busy"
+    ]
+  },
+  {
+    "id": "D2",
+    "guarantee": "Resumption never repeats completed work",
+    "applied": "randomise the tool activity name",
+    "verdict": "bites",
+    "failed": 4,
+    "passed": 180,
+    "names": [
+      "test/Durable.test.ts > durable submissions > a subagent run by a tool does not shift the parent's model journal on replay",
+      "test/DurableAudit.test.ts > durable edge cases > parallel tool calls replay without re-running or deadlocking",
+      "test/ToolActivity.test.ts > durable tool activity identity > is unchanged when concurrent calls arrive in a different order",
+      "test/ToolActivity.test.ts > durable tool activity identity > still separates a tool call id reused across turns"
+    ]
+  },
+  {
+    "id": "D2b",
+    "guarantee": "Resumption never repeats completed work",
+    "applied": "make every occurrence look like the first",
+    "verdict": "bites",
+    "failed": 2,
+    "passed": 182,
+    "names": [
+      "test/DurableAudit.test.ts > durable edge cases > a tool call id reused across turns still executes each time",
+      "test/ToolActivity.test.ts > durable tool activity identity > still separates a tool call id reused across turns"
+    ]
+  },
+  {
+    "id": "D3",
+    "guarantee": "Resumption never skips accepted work",
+    "applied": "leave an accepted-but-undispatched claim alone",
+    "verdict": "bites",
+    "failed": 1,
+    "passed": 183,
+    "names": [
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a claim whose dispatch never happened is dispatched on reacquisition"
+    ]
+  },
+  {
+    "id": "D4",
+    "guarantee": "Interruption is terminal, crash is not",
+    "applied": "record an interrupted result as completed",
+    "verdict": "bites",
+    "failed": 4,
+    "passed": 180,
+    "names": [
+      "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > interrupt ends the submission and leaves the session reusable",
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > interrupt from another client commits nothing partial and frees the session",
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > interrupting a submission parked on an approval ends it without running the tool",
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > interrupting one session leaves another session on the same client untouched"
+    ]
+  },
+  {
+    "id": "D4b",
+    "guarantee": "Interruption is terminal, crash is not",
+    "applied": "convert an interrupted run into a typed durable failure",
+    "verdict": "SURVIVES",
+    "failed": 0,
+    "passed": 184,
+    "names": []
+  },
+  {
+    "id": "D5",
+    "guarantee": "Observation is at-least-once with a stable cursor",
+    "applied": "ignore the caller's `after` offset",
+    "verdict": "bites",
+    "failed": 3,
+    "passed": 181,
+    "names": [
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > events are delivered through the log with durable ids and a session-wide offset",
+      "test/DurableAgentClient.test.ts > DurableAgentClient resumable events (H5) > delivers exactly the events above the offset",
+      "test/DurableAgentClient.test.ts > DurableAgentClient resumable events (H5) > neither drops nor repeats an event recorded during the catch-up read"
+    ]
+  },
+  {
+    "id": "D6",
+    "guarantee": "A recorded event is replay-stable",
+    "applied": "never notice a duplicate key",
+    "verdict": "bites",
+    "failed": 2,
+    "passed": 182,
+    "names": [
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > approval asked through one client is answered through another",
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a replayed submission with parallel tools appends no duplicate or conflicting events"
+    ]
+  },
+  {
+    "id": "D7",
+    "guarantee": "Storage failure degrades, it does not corrupt",
+    "applied": "remove the idempotency key from `claim`",
+    "verdict": "bites",
+    "failed": 3,
+    "passed": 181,
+    "names": [
+      "test/DurableAgentClient.test.ts > D7 at the durable client > a retry under the same idempotency key rejoins the claim it already made",
+      "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a retry under the same key is the same claim, not a busy session",
+      "test/DurableSessionStore.test.ts > DurableSessionStore (sqlite) > a retry under the same key is the same claim, not a busy session"
+    ]
+  }
+]

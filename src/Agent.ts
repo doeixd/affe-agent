@@ -724,6 +724,19 @@ export const withExecutionPlan =
      */
     : "This execution plan's `input` does not accept the model call's AiError,"
       & "so its `while` and schedules would be handed a failure they do not describe." =>
+    // `as never`, and it is in the cast inventory rather than hidden.
+    //
+    // The return type above is a conditional on `Plan`, which is still
+    // unresolved here, so the compiler cannot reduce it and will not accept a
+    // value against either branch -- `never` is the only thing assignable to
+    // an unreduced conditional. The alternative is stating the constraint on
+    // the parameter instead, and that was tried: it destroys the inference
+    // that makes `ExecutionPlan.make(...)` assignable at all, and moves the
+    // diagnostic from the call site to somewhere inside the plan's type.
+    //
+    // Confined to this one expression, and the value is exactly the branch the
+    // condition selects: `definition` is typed, so what is returned is checked
+    // even though the checker cannot be told which branch it belongs to.
     definition({ ...agent, executionPlan: Option.some(plan) }) as never
 
 /** Replace what a denied or refused call does to the run. */

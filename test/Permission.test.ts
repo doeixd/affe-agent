@@ -288,6 +288,38 @@ const call = (id: string, command: string): TestLanguageModel.Turn => ({
 const decodeDetail = Schema.decodeUnknownSync(Schema.toCodecJson(Permission.ApprovalDetail))
 
 /** The next approval question on a session, decoded, optionally skipping one already seen. */
+/**
+ * Subscribe *now*, wait *later*.
+ *
+ * `nextAsk` subscribes when it is run, so calling it after the action that
+ * provokes the ask is a race: the event can go out before the subscription
+ * exists, and `session.events` -- correctly -- does not replay it. These
+ * tests used to win that race on scheduling alone, which is not a contract.
+ * `Stream.toPull` opens the stream into the scope on this call, so the
+ * returned effect awaits a subscription that already exists before the
+ * answer that provokes the next ask is given.
+ */
+const armAsk = (session: AgentSession.AgentSession<any, any>, exclude?: string) =>
+  Effect.map(
+    Stream.toPull(
+      session.events.pipe(
+        Stream.filter(
+          (e) => AgentEvent.is("ElicitationRequested")(e) && e.event.id !== exclude
+        )
+      )
+    ),
+    (pull) =>
+      pull.pipe(
+        Effect.flatMap((chunk) => {
+          const head = chunk[0]
+          return AgentEvent.is("ElicitationRequested")(head)
+            ? Effect.succeed({ id: head.event.id, detail: decodeDetail(head.event.detail) })
+            : Effect.die(new Error("no elicitation"))
+        }),
+        Effect.catchCause(() => Effect.die(new Error("the stream ended before a second elicitation")))
+      )
+  )
+
 const nextAsk = (session: AgentSession.AgentSession<any, any>, exclude?: string) =>
   Stream.runHead(
     session.events.pipe(
@@ -418,9 +450,10 @@ describe("Permission enforcement", () => {
           // Paused: nothing ran yet, and the run is still in flight.
           assert.deepStrictEqual(yield* Ref.get(f.ran), [])
           assert.strictEqual(yield* session.status, "running")
+          const askAfterFirst = yield* armAsk(session, first.id)
           yield* AgentSession.respond(session, { id: first.id, granted: true })
 
-          const second = yield* nextAsk(session, first.id)
+          const second = yield* askAfterFirst
           assert.strictEqual(second.detail.resource, "git push --force")
           yield* AgentSession.respond(session, { id: second.id, granted: false })
 
@@ -544,10 +577,11 @@ describe("Permission enforcement", () => {
           const probe = yield* AgentProbe.make(session)
           const running = yield* Effect.forkChild(session.prompt("go"))
           const first = yield* nextAsk(session)
+          const askAfterFirst = yield* armAsk(session, first.id)
           yield* AgentSession.respond(session, { id: first.id, granted: true, value: { remember: true } })
           // c2 is the same action and resource: no second question. c3 is
           // different and is asked.
-          const third = yield* nextAsk(session, first.id)
+          const third = yield* askAfterFirst
           yield* AgentSession.respond(session, { id: third.id, granted: true })
           yield* Fiber.join(running)
           return {
@@ -574,8 +608,9 @@ describe("Permission enforcement", () => {
           const probe = yield* AgentProbe.make(session)
           const running = yield* Effect.forkChild(session.prompt("go"))
           const first = yield* nextAsk(session)
+          const askAfterFirst = yield* armAsk(session, first.id)
           yield* AgentSession.respond(session, { id: first.id, granted: true, value: { remember: "yes" } })
-          const second = yield* nextAsk(session, first.id)
+          const second = yield* askAfterFirst
           yield* AgentSession.respond(session, { id: second.id, granted: true })
           yield* Fiber.join(running)
           return (yield* probe.events).filter(AgentEvent.is("ElicitationRequested")).length
@@ -598,8 +633,9 @@ describe("Permission enforcement", () => {
           const probe = yield* AgentProbe.make(session)
           const running = yield* Effect.forkChild(session.prompt("go"))
           const first = yield* nextAsk(session)
+          const askAfterFirst = yield* armAsk(session, first.id)
           yield* AgentSession.respond(session, { id: first.id, granted: false, value: { remember: true } })
-          const second = yield* nextAsk(session, first.id)
+          const second = yield* askAfterFirst
           yield* AgentSession.respond(session, { id: second.id, granted: true })
           yield* Fiber.join(running)
           return (yield* probe.events).filter(AgentEvent.is("ElicitationRequested")).length

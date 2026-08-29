@@ -285,10 +285,12 @@ independently of P0-P5.
 
 [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) supplies P1's
 mechanism (E7) and flags two further items this plan touches: a
-`PartitionedSemaphore` `ToolExecution.Strategy` for per-tool concurrency limits
-(E11) — one `bash` at a time while reads run wide, which the batch work in P2
-makes more attractive — and `Cache` for files re-read within a turn (E12).
-Neither blocks P0-P5; both belong to the toolkit rather than the kernel.
+per-tool `ToolExecution.Strategy` (E11) — one `bash` at a time while reads run
+wide, which the batch work in P2 makes more attractive — and a cache evaluation
+for files re-read within a turn (E12). A-6 closed both: `perTool` ships, while
+`PartitionedSemaphore` was rejected because its keys share one global capacity,
+and file caching was rejected because edits make rereads semantically fresh.
+Neither changed P0-P5.
 
 ## Non-goals
 

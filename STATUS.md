@@ -3,9 +3,9 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 1193 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 1260 passing. `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
-imports every published entry point from the packed tarball (39 entries).
+imports every published entry point from the packed tarball (42 entries).
 `verify:package` is the source of truth for the entry-point count; regenerate
 these numbers from `npm run verify:package` and `npm run test` when they change.
 
@@ -61,6 +61,29 @@ scripts/verify-package.mjs   imports each entry point from the packed tarball
 .github/workflows/ci.yml     check, build, and that verification
 examples/                    typed agent, tracing, durable, a real provider
 ```
+
+## Breaking changes since `0.0.1`
+
+**`DurableAgent.workflow` no longer accepts `interruptPollInterval`** (removed
+2026-08-27, alongside the `PromptWire` rollout). It is layer policy now:
+
+```ts
+// before
+DurableAgent.workflow("name", agent, { store, interruptPollInterval: "50 millis" })
+
+// after — supply the interval as a layer
+Layer.provide(DurablePolling.workflowInterrupt("50 millis"))
+```
+
+`DurableAgentClient` and `DurableSubmission` still take the option directly,
+because those are per-call decisions a caller makes about *its own* polling. The
+workflow's interval is an operator's decision about a deployment, and passing it
+as a constructor argument meant every call site had to know it. The capability
+did not change; only where it is set.
+
+The removal rode along in a serialization change and was not recorded at the
+time, which is how it went unnoticed — a breaking change to a published subpath
+belongs here whatever else is in the commit.
 
 ## Phase status
 
@@ -177,8 +200,8 @@ assertion proves omitting the service cannot compile. See PLAN §33.6.
 
 **Input was `string`, excluding multimodal prompts.** `prompt`, `steer` and
 `followUp` take `Prompt.RawInput`. `InputChannel` carries `Prompt`, and the
-durable store holds prompts encoded through their Schema, so a key-value store
-still backs it unchanged.
+durable store holds prompts through the shared `PromptWire` codec, so a
+key-value store still backs it unchanged without losing file-data variants.
 
 A related ergonomic fix fell out: `Agent.make` accepts a bare function for
 `loop` and `contextTransform`, so writing one inline gets `Tools` by contextual
@@ -509,20 +532,33 @@ value to two callers or lose one offered in between.
 The table name reaches `sql.literal`, which does not parameterise, so anything
 that is not a plain identifier is refused rather than quoted.
 
-## Multimodal submissions across the journal
+## Prompt wire codec and multimodal durability
 
-The workflow payload is a `Prompt`, and the claim throughout has been that
-`Prompt` carries its own Schema so a multimodal submission survives the journal
-exactly as a text one does. That was never exercised against real storage, which
-is where the last two bugs in this area came from.
+Effect AI's `Prompt.Prompt` schema describes the in-memory union correctly, but
+its encoded file data is still `string | Uint8Array | URL`; that is not a stable
+JSON representation. In particular, the previous durable path preserved byte
+*content* as base64 while decoding it into the string arm. A resumed provider
+could therefore observe a different runtime type from a fresh provider.
 
-It holds, with one caveat worth knowing. A `Uint8Array` in a file part survives
-in *content* but not in *representation*: `Prompt` encodes it as base64, and
-decoding leaves it a base64 string rather than restoring the array. That is
-Effect AI's wire form rather than a choice this library makes, but it is a real
-difference between a fresh run and a resumed one — a tool that branches on
-`instanceof Uint8Array` takes the other arm after a durable round trip. Pinned
-by a test so it cannot change silently.
+`PromptWire` is now the one public process-boundary codec. It keeps
+`Prompt.Prompt` and `Prompt.Message` as the decoded types and tags file data as
+`String`, `Bytes(base64)` or `Url`, reconstructing the exact runtime variant on
+decode. Its outer encoded schema is `Schema.Json`, so non-JSON tool values also
+fail at the boundary instead of being silently mangled by `JSON.stringify`.
+
+The codec is used by HTTP request/response bodies, the shared RPC protocol,
+cluster entity payloads, durable workflow payloads, `DurableSessionStore`,
+`DurableChannels`, snapshots/full exports, JSONL message exports, and the
+key-value tree store. The public namespace lets custom `JobStore`, persistence,
+and transport implementations use the same format rather than inventing one.
+New encodings are always tagged. Decoding also accepts legacy untagged strings
+so existing durable rows remain readable; their old string/bytes/URL ambiguity
+cannot be recovered because it was never recorded. Export format version 2
+marks the incompatible representation for self-describing files.
+
+Tests cover all three variants and malformed base64, real HTTP and RPC clients,
+cluster/workflow routing, real SQLite, both session-store implementations,
+full and JSONL export/import, durable channels, and key-value reconstruction.
 
 ## Tool progress events
 
@@ -624,6 +660,37 @@ cannot see them; live remote streaming needs the delivery log, which does not
 exist. `DurableAgent.workflow` takes `stream` as a definition-level option, so
 replay makes the same choice the original run did.
 
+## Public-surface proof, portable bundle, and external tool sources
+
+Three small probes replaced claims in the 2026-08-27 design notes with facts.
+`examples/ref-coding-agent.ts` uses only published package imports and runs an
+edit/search/shell conversation with permissions, in-memory elicitation and
+compaction. Building it exposed that `Elicitation.memory` was unreachable to an
+installed application. `Elicitation` now ships from the root and `/elicitation`,
+both surfaces are pinned, and the example runs in the main check rather than
+merely typechecking.
+
+The portable core also typechecks with no Node types and bundles through the
+browser/workerd resolution path in `verify:workerd`. The probe needed no new
+portability exception. It is deliberately not described as a deployment: the
+Worker entry is a compatibility fence, not yet a Durable Object host.
+
+`/tool-source` is the first integration-axis slice. A source eagerly extracts
+descriptors and skipped operations, then invokes one named operation. Declared
+binding verifies offered names and preserves the caller's Effect schemas;
+discovered binding uses dynamic tools and honest `unknown` values. MCP,
+OpenAPI JSON operations and GraphQL root fields share that seam. OpenAPI and
+GraphQL invocation is bounded for response size and time and uses web `fetch`,
+so the package stays portable. Authentication and credential ownership are not
+hidden behind a default; those layers remain future work.
+
+The first execution test found a signature defect in both generic and MCP
+discovered binders: `Record<string, Tool.Any>` leaked an `any` service
+requirement, so ordinary `Effect.runPromise(toolkit.handle(...))` did not type.
+The internal runtime values now widen only to a dynamic tool with `unknown`
+parameters/results/failures and `never` requirements. A compile-time assertion
+was broken once and restored, and the actual handler is executed in the test.
+
 ## Compaction (roadmap #1 item 5)
 
 The interesting thing about compaction is how little it needed. It is a
@@ -642,6 +709,31 @@ Two details carry the design. The threshold counts only what has accumulated
 turn — the expensive thing compaction exists to avoid. And the retained tail is
 kept verbatim, because it is what the model is still reasoning over; summarising
 it would compact away the live part.
+
+The original message-count policy remains as the cheap option. A token-aware
+policy now resolves `{ contextWindow, reserveTokens, keepRecentTokens }` from a
+fixed value or an Effect-valued function and accepts any Effect-valued token
+estimator; `Compaction.estimate.approximate` is the portable built-in. It
+measures the already-checkpointed projection rather than the ever-growing full
+canonical transcript, so crossing the window does not cause a summary on every
+later turn. Tail selection walks newest-first by tokens, then backs off tool
+results to retain the corresponding assistant call.
+
+Cut selection is isolated in a pure internal `prepare` phase with explicit
+`messagesToSummarise`, retained prompt, previous checkpoint, boundary, token
+measurements and split-turn flag. `Compaction.Checkpoint` is now Schema-defined;
+token fields are `Option` because the compatible message-count policy has no
+tokenizer. A supplied Effect `KeyValueStore` persists those checkpoints across
+transform and process recreation; the default remains a bounded in-memory LRU.
+Storage and schema failures stay visible in the transform's typed error channel.
+
+Summarisers may return the compatible string form or a Schema-defined
+`SummaryResult` containing text and provider-neutral usage, which is stored in
+the checkpoint. Generic typed details are deferred until the branch and coding
+features provide two concrete consumers and their schemas. The public
+`Compaction.serialize` helper renders a labelled transcript for a summarizer,
+including reasoning, calls, results, approvals and file descriptors. Only tool
+results are truncated, and file payloads are described rather than copied.
 
 Worth recording a testing mistake: the first version of the checkpoint-reuse
 test asserted `summaries < 8`, which passes whether or not the checkpoint is
@@ -792,6 +884,24 @@ success and error bodies, concurrent controls during a prompt, an interrupted
 waiter followed by an idempotent retry, SSE parsing and disconnect cleanup, and
 whole-layer shutdown with an open subscription. The client response and stream
 inference assertions were deliberately broken once and restored.
+
+## Multi-agent HTTP composition
+
+`AgentServer.mount` / `make` / `serverLayer` compose named hosts at distinct
+paths and reject duplicate names or paths at construction. One server can mix
+local and HTTP-backed `AgentClient`s; `/inventory` reports mounts, session
+counts and remaining capacity without adding a mutating administration API.
+Host and hosted-session finalizers are counted independently when the composed
+scope closes.
+
+The final documentation slice is now complete. The compiling
+`examples/agent-server-auth.ts` mounts bearer-authenticated support and
+cookie-authenticated admin hosts with independent role authorization and
+`Config.redacted` credentials. Auth remains entirely on
+`AgentSessionHost`—the server gained no registry or policy of its own.
+`test/AgentServerAuthExample.test.ts` directly exercises the example's resolver
+and policy values, including malformed credentials and the typed forbidden
+path.
 
 ## AG-UI adapter (issue #1)
 
@@ -1007,22 +1117,24 @@ model never got to react. `McpToolError` now carries what the server reported,
 decoded against the declared schema; a server reporting an error for a tool
 declared infallible is named as the mismatch it is rather than papered over.
 
-## A2A v1 adapter (roadmap #1 item 7, in progress)
+## A2A v1 adapter (roadmap #1 item 7, complete)
 
-The first `@doeixd/effect-agent/a2a` vertical slice now serves a native A2A v1
-Agent Card and JSON-RPC endpoint using the official `@a2a-js/sdk` 1.0.1 server
-types and request handler. This is a protocol adapter over `AgentClient` and the
-same internal session host used by RPC, HTTP and AG-UI; it is not another agent
+`@doeixd/effect-agent/a2a` serves a native A2A v1 Agent Card plus JSON-RPC and
+HTTP+JSON endpoints using the official `@a2a-js/sdk` 1.0.1 types, codecs and
+request handler. This is a protocol adapter over `AgentClient` and the same
+internal session host used by RPC, HTTP and AG-UI; it is not another agent
 runtime.
 
 The application authenticates the HTTP request and resolves principal + A2A
 context id to a branded Harness session id. A separate stable principal subject
 scopes the official task store, so one authenticated owner cannot load another
-owner's tasks. The official SDK owns v1 routing, task persistence and JSON
-encoding; Harness owns authorization, execution and scope lifetime.
+owner's tasks. The official SDK owns task semantics, persistence and wire
+codecs; Harness owns portable Effect HTTP routing, authorization, execution and
+scope lifetime. The SDK's supplied REST router is Express-only, so importing it
+here would violate the package's runtime portability boundary.
 
-The current card advertises exactly the implemented surface: JSON-RPC with
-streaming enabled and push notifications disabled. Blocking `SendMessage`
+The card advertises exactly the implemented surface: JSON-RPC and HTTP+JSON
+with streaming enabled and push notifications disabled. Blocking `SendMessage`
 accepts text parts, emits the required submitted/working/completed task
 lifecycle, and returns a text artifact; `GetTask` reads that owner-scoped stored
 result. A second message carrying the first task's context id reuses the same
@@ -1036,7 +1148,10 @@ formats those with the SDK's SSE formatter. The exact observable sequence is
 Task submitted, working status, artifact update, completed status; task,
 context and artifact correlation are asserted at every step, followed by a
 stored-task lookup. A canceled stream instead ends with one canceled status and
-never exposes the executor's synthetic failure state.
+never exposes the executor's synthetic failure state. HTTP+JSON streaming uses
+the same generator and lifecycle but encodes the SDK's `StreamResponse` values
+directly, as the REST binding requires; failures before the first event retain
+an HTTP status, while later failures are protocol SSE error events.
 
 Consuming the official SDK generator is also what updates its task store, so
 the generator cannot belong to the HTTP observer. It is drained in a
@@ -1058,11 +1173,25 @@ handshake: mark cancellation intent, resolve the Harness interrupt, publish the
 terminal status, then release the executor. An interrupt failure still fails
 the cancellation instead of claiming work stopped when it did not.
 
-This is intentionally not the completed phase. Input-required continuation,
-REST, a Harness-native typed client, and the reverse official-server peer test
-remain. None is advertised by the current Agent Card. The public layer
-inference assertion was deliberately broken once and restored; the test and
-adapter contain no caller-side casts.
+The HTTP+JSON binding landed 2026-08-27. It exposes blocking and streaming send,
+task get/list/subscribe/cancel, extended-card, and push-configuration resources,
+including tenant-prefixed forms, all over the same request handler, task store,
+event-bus manager and principal context as JSON-RPC. Extended-card and push
+routes are present but return the SDK's capability errors because neither is
+advertised. The official REST client covers discovery, send, get, list, stream
+and cancel; raw-wire checks cover malformed input, content type, protocol
+version, not-found encoding and disabled push. A subtle SDK packaging fact is
+handled at the boundary: its exported subpaths are separately bundled, so
+semantic errors from `/server` do not share constructor identity with
+`/errors`; the adapter normalizes them by their stable SDK error name before
+calling the official REST status/body helpers.
+
+Input-required continuation and the Harness-native typed client had already
+landed. The supposed missing reverse-peer test was stale documentation:
+`AgentA2AClient.test.ts` already runs this library's client against an official
+SDK server. The server direction is exercised by both official JSON-RPC and
+REST clients. The public layer inference assertion was deliberately broken once
+and restored; the tests and adapter contain no new caller-side casts.
 
 ## MCP protocol adapters (roadmap #1 item 7)
 
@@ -1072,10 +1201,150 @@ MCP is a protocol adapter over the transport seam rather than a second way into
 the harness. Sessions are held in the layer's scope, so a `sessionId` really
 continues a conversation and omitting one really is a one-shot.
 
-The A2A direction is now underway in the section above. Unlike the earlier
-specification-only state, its first slice is checked by the official SDK in a
-real client/server exchange. The unimplemented capabilities remain named rather
-than inferred from that one successful path.
+An additive shared-host server path landed 2026-08-28:
+`AgentMcp.serverLayer({ host })`. It registers `ask_agent` plus bounded
+`agent_start`, `agent_await`, and `agent_close` tools and the authenticated
+`agent_steer`, `agent_follow_up`, and `agent_interrupt` controls. It delegates
+session lookup, creation, capacity, authentication, authorization and
+request ownership to the application-owned `AgentSessionHost`; it has no
+private session registry or semaphore. HTTP request headers reach the host principal resolver,
+while stdio supplies empty headers. A real official-v2 MCP client creates the
+conversation through Agent HTTP, prompts it through MCP, then reads the MCP
+turn from Agent HTTP history with host capacity one. The legacy `handlers` and
+`layer` remain because they evict the oldest idle session whereas the shared
+host refuses at capacity; changing that observable policy is not a refactor.
+
+Start/await deliberately did not become a new public or host-level ticket
+primitive. MCP retains a private deferred per request because A2A's superficially
+similar task id owns protocol task state and history, not merely an await result.
+The MCP table is bounded by both host session capacity and per-session request
+capacity; settled entries and settled session buckets are FIFO eviction
+candidates, while all-in-flight capacity is a stated tool failure. Session
+acquisition precedes ticket eviction, so host refusal cannot discard an older
+valid ticket; if this call created the session and ticket admission then fails,
+only that new session is closed. Start's session/ticket/fork handoff is
+uninterruptible, so cancellation cannot strand half-owned state.
+
+Await never reissues `host.prompt`. It authenticates again, authorizes access
+to the ticket's current session, and waits on the retained deferred. Official
+v2-client tests prove two simultaneous awaits make one model call, a leaked
+request id is useless without the principal, and an await still returns the
+original result after another mutation evicts the host's request record. A
+separate deterministic test proves the ticket limit refuses a second start
+while its only slot is in flight. `agent_close` purges the session's tickets and
+releases generated-session capacity.
+
+The three control tools are tested as behavior, not just accepted host calls.
+The scripted provider's exact second prompt contains steering; follow-up keeps
+the original ticket pending through a second run; and interrupt makes await
+return the protocol's `interrupted` result. The provider prompt intentionally
+replaced the plan's proposed event-log assertion because it proves the input
+crossed the final boundary into the model rather than merely reaching the
+session state machine.
+
+The next frontend slice is also live. `agent_status` combines the authenticated
+session status and pending questions, and `agent_respond` answers one exact
+elicitation id. `ServerOptions.onUnsupportedElicitation` is explicit:
+`pending` (default), `deny`, or `fail`; there is intentionally no grant mode.
+Official-client tests prove pending can be answered manually, deny never runs
+the protected tool, and fail ends only that await—the paused run remains
+answerable and the same retained ticket later completes.
+
+Native MCP form elicitation is wired for full-duplex stdio. An official split-v2
+client accepts a real `tool-approval` request, the adapter feeds its response
+through `AgentSessionHost.respond`, and the run resumes. The event listener is
+not a forked lazy stream: it eagerly runs events into a request-scoped queue
+before taking the pending snapshot. The first version merely obtained the
+`Stream`, which subscribes only when run and left a gap where the only
+`ElicitationRequested` event could disappear.
+
+Two Effect rc.111 integration defects constrained the implementation. First,
+`McpServer.registerToolkit` captures the handler Layer context and later
+`provideContext`s it over the request invocation, dropping the
+`McpServerClient` service needed by reverse calls. Only `ask_agent` and
+`agent_await` therefore use a local adapter over the public `McpServer.addTool`;
+the other seven tools still use `registerToolkit`. Second, Streamable HTTP does
+not flush a reverse request while the originating tool call is open. A capable
+official client never receives it and both sides wait. HTTP is transport-gated
+to the manual status/respond path; stdio is native. This avoids timeout guesses
+and, more importantly, never converts inability to ask into permission to act.
+
+The shared MCP host now also registers authenticated resource templates for
+`agent://session/{id}/history` and `/pending`. History is encoded with
+`PromptWire` and pending requests are JSON; an official v2 HTTP client reads
+both in conformance tests. Event resources with `after` resumption and
+subscriptions remain pending because the pinned `McpServer` API does not
+expose subscription registration, and the host intentionally has no
+session-enumeration seam for an `agent://sessions` index.
+
+The next MCP audit falsified three assumptions in the frontend plan. A resource
+read is finite but `AgentSessionHost.events` returns only a live stream, so
+there is no honest poll-with-`after` implementation without a finite log-read
+seam. `McpServer.addTool` discards the call's `_meta.progressToken` before the
+handler, preventing correlated progress notifications. Finally, aborting an
+official split-v2 call did not interrupt the hanging `ask_agent` handler over
+HTTP or stdio even though its `Effect.onInterrupt` cleanup is correct;
+`agent_interrupt` remains the tested cancellation path. The timed-out
+experiments were removed rather than weakened into timing-based tests.
+
+Skill prompts are not being exposed yet. `load_skill` is permission annotated,
+whereas reading `SkillRegistry` from an MCP prompt handler would bypass the
+session's permission policy and bind session-scoped data at server construction.
+That is a security boundary, not missing adapter glue; it needs a shared,
+authenticated load seam before the prompt surface is safe.
+
+`examples/mcp-frontend.ts` now demonstrates the portable shared-host stdio
+composition with an inferred tool handler and no casts. Its `IsAny` assertion
+was inverted once and produced the expected compiler failure before being
+restored, so the example checks inference rather than merely compiling.
+
+The post-example repository gate is green: all TypeScript projects and builds,
+Effect diagnostics across 329 files with zero findings, portability and the
+workerd bundle, 1,389 tests in 131 files, all 41 packed entry points, and the
+reference coding-agent, CLI and TUI smoke runs.
+
+After the session-lifecycle refactor, the then-current full suite also passed
+1,390 tests in 131 files, and focused session/cast tests remain green. The next
+aggregate `npm run check` encountered concurrent edits timestamped after that
+run: `test/SessionObserve.test.ts` and new `test/ZProbe.test.ts` currently fail
+typecheck on nonexistent `Effect.fork` and `unknown` requirement channels.
+Those files were left untouched; this is a dirty-worktree gate blocker, not a
+failure introduced by the MCP or session changes.
+
+The shared-host `ask_agent` failure text is pinned through an official client:
+one provider defect produces one model call and the existing
+`AgentExecutionError.message` exactly. The plan's suggested tag/retryability
+prefix was not applied because it contradicted the simultaneous compatibility
+criterion; changing that text is a versioned behavior decision, not frontend
+plumbing.
+
+Phase 2 of the background-work brief has its first lifecycle prerequisite.
+`AgentSession` submission fibers now own session release instead of leaving it
+on the blocking `prompt` waiter. A `Deferred` registration latch means a child
+cannot emit, complete and release before its exact fiber is installed as the
+active submission; blocking callers still interrupt the child they started.
+This is behavior-preserving preparation for asynchronous admission, covered by
+the existing caller-interruption, session, client and durable suites.
+
+The public `session.submit` API remains intentionally unexported. The brief
+requires later await and request-id idempotency but does not define bounded
+retention or eviction for completed outcomes and request fingerprints.
+`DurableSessionStore.claim({ key })` forgets the key at finish, so it cannot
+alone prevent a queue retry after completion from creating a duplicate. An
+unbounded map and an arbitrary LRU are both incorrect; the retention contract
+must be decided before Phase 2 can safely expose a surface.
+
+The proposed public `Record<string, Schema>` elicitation registry was rejected
+for now. A schema describes a form but not how its answer maps onto
+`Elicitation.Response.granted` and `.value`; exporting it would freeze an
+under-specified API. Tool approval has its typed `remember` mapping and unknown
+kinds use an explicit yes/no form until a second concrete mapping establishes
+the reusable shape.
+
+The A2A direction is complete for the advertised text-only v1 surface and is
+checked by official SDK clients in both JSON-RPC and HTTP+JSON modes plus the
+reverse official-server peer suite. Rich media remains a separate filetypes
+plan rather than an implicit protocol promise.
 
 A testing note. The conversation-continuity test first asserted the *answer*
 returned by the tool — which proves nothing, because a scripted model returns
@@ -1175,6 +1444,15 @@ holds regardless: events are the serializable record, and a `Cause` is an
 in-process value holding fibers and arbitrary defects. The full `Cause` stays in
 `prompt`'s typed error channel. Envelope round-trip and defect-vs-failure
 distinction are both tested.
+
+**Model usage is now part of that event contract.** Every successful batch or
+streaming provider call emits one `ModelCallCompleted` immediately after the
+response returns and before any tool executes. It carries provider-neutral
+input/output/total token counts and Effect AI's normalised finish reason.
+Missing provider totals become zero, matching `/budget` accounting. Emitting at
+the provider boundary preserves usage when a later tool fails the turn.
+`test/ModelUsageEvent.test.ts` asserts batch/stream parity, exact ordering, wire
+round-trip, and the model-success/tool-failure case.
 
 ## Durable execution: how it works
 
@@ -2361,10 +2639,11 @@ mapper) and `trace` (the observer) record ids and names by default and include
 prompts / tool params / tool results / model output only under a
 `RedactionPolicy`, with a `redact` hook to scrub what passes. The default
 `trace` sink logs structured records any Effect exporter captures; a custom sink
-routes them elsewhere. Three tests (`test/Observability.test.ts`) against the
-real events of a real run: the span-tree mapping and correlation attributes,
-the redaction default/opt-in/scrub, and the observer emitting one record per
-event with base attributes merged. Falsified by forcing content past the policy.
+routes them elsewhere. `ModelCallCompleted` records are classified under
+`ai.model` and expose usage/finish metadata; `metrics` counts
+`agent_model_tokens` by input/output direction alongside turns, run depth, tool
+outcomes/duration and pending input. `test/Observability.test.ts` drives all of
+these from real session events. Falsified by forcing content past the policy.
 
 ## Structured client/UI data (roadmap #4 §9)
 
@@ -2611,3 +2890,40 @@ Final verification: `npm run check` is green. Both TypeScript projects and the
 package build pass; Effect diagnostics report zero findings across 308 library
 files and 15 TUI files; portability passes; all 1,194 tests in 121 files pass;
 and the TUI smoke suite reports `smoke: OK`.
+
+## Effect ecosystem audit completion (2026-08-27)
+
+All actions in `docs/audit-effect-ecosystem.md` are now closed.
+
+- Server lifetime coverage separately counts two hosted-session releases and
+  two mount-layer finalizers when the composed server scope closes (A-4/AS4).
+- The sandbox platform spike retains `/sandbox/local`: Effect ChildProcess does
+  not clean a successful child's pipe-holding descendants, and the portable
+  FileSystem surface lacks the `lstat` / native-realpath semantics the
+  workspace boundary relies on (A-5).
+- `ToolExecution.perTool` gives exact tool names independent concurrency
+  limits while preserving model-call result order. `PartitionedSemaphore` was
+  rejected because its keys share one global permit count. `Cache` and
+  `ScopedCache` were also rejected for now: MCP discovery already happens once
+  per toolkit, while skill and file reads are intentionally fresh (A-6).
+- `DurablePolling` owns validated Config recipes for the four operator-tunable
+  intervals. Config-aware client, delivery-log and result constructors preserve
+  the explicit constructors' narrower error channels. The cluster's 100ms
+  interval remains deliberately coupled to its 600-attempt lease-recovery
+  envelope. Brave, Slack, provider examples and the CLI keep credentials
+  `Redacted` until their signing/header boundaries (A-8/AS10).
+- `apps/cli` is the conventional `effect/unstable/cli` + `Terminal` client over
+  the HTTP `AgentClient` seam, with Config-backed URL/token policy and
+  deterministic parser/output tests (A-9).
+- The four unbounded queues named by E19 now state their lossless or finite
+  policy. AG-UI's slow-consumer risk was real, so its per-request queue is
+  bounded at 256 with backpressure (A-12).
+
+The durable polling defaults and environment names, keyed tool-concurrency
+example, CLI invocation, and multi-agent auth wiring are documented in
+`README.md`. `npm run check` is green: all three TypeScript projects and the
+package build pass; Effect diagnostics are zero across 327 root files, 2 CLI
+files and 15 TUI files; portability and the workerd bundle pass; 1,260 tests in
+130 files pass; the public reference coding agent runs; and
+the TUI smoke suite reports `smoke: OK`. The CLI smoke compiles the application
+and renders the real command tree's help from its emitted JavaScript.

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Option, Stream } from "effect"
+import { Effect, Fiber, Option, Ref, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -414,6 +414,133 @@ describe("SessionTree", () => {
       assert.include(out.painted, "trunk answer")
       assert.notInclude(out.painted, "branch answer")
       assert.isTrue(out.grew)
+    })
+  )
+
+  /**
+   * Re-activating the branch in front of the user paints what it has said.
+   *
+   * `RcMap` hands back the session a previous activation left running, so the
+   * node's recorded history -- which is where `Activation.history` used to
+   * come from -- is short by every turn taken since. A renderer redrawing on a
+   * switch back showed a transcript with the last exchange missing.
+   *
+   * Both halves of the contract are checked, because the repair trades one
+   * bug for the other if the ordering is wrong. The history is read *after*
+   * `consume` has subscribed, so a turn already in the snapshot is not in the
+   * queue behind it (no double render), and a turn taken from now on is (no
+   * gap).
+   *
+   * Falsified by reading `find(node.id)`'s history in `install` again: the
+   * "say one" assertion fails. Falsified the other way by moving the read
+   * above `consume`: the turn count assertion cannot see the difference
+   * cooperatively, which is why the *no replay* half is asserted against the
+   * live feed rather than against a second snapshot.
+   */
+  it.effect("re-activating a live branch paints the turns it has taken since", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk answer", "one", "two")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent)
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const node = yield* tree.commit(session)
+
+        // The tree's aggregate feed, followed from before the first
+        // activation, so a replayed turn would show up as a second
+        // `TurnCompleted` for a turn that only happened once.
+        const seen = yield* Ref.make<ReadonlyArray<string>>([])
+        yield* Effect.forkChild(
+          Stream.runForEach(
+            tree.events,
+            (envelope) => Ref.update(seen, (all) => [...all, envelope.event._tag])
+          )
+        )
+        const turns = Effect.map(
+          Ref.get(seen),
+          (all) => all.filter((tag) => tag === "TurnCompleted").length
+        )
+        /**
+         * Yield until the feed has caught up, bounded so a genuine failure
+         * reports as an assertion instead of hanging.
+         */
+        const awaitTurns = (count: number) =>
+          Effect.gen(function*() {
+            for (let attempt = 0; attempt < 200; attempt++) {
+              if ((yield* turns) >= count) return
+              yield* Effect.yieldNow
+            }
+          })
+
+        const first = yield* tree.activate(node)
+        yield* first.session.prompt("say one")
+        yield* settle(tree, 2)
+        yield* awaitTurns(1)
+        const beforeSwitch = yield* turns
+
+        const again = yield* tree.activate(node)
+        // Every chance for a re-subscription to replay what it missed.
+        for (let attempt = 0; attempt < 50; attempt++) yield* Effect.yieldNow
+        const afterSwitch = yield* turns
+
+        // ...and nothing is lost from here either.
+        yield* again.session.prompt("say two")
+        yield* awaitTurns(2)
+
+        return {
+          sameSession: first.session.id === again.session.id,
+          painted: textOf(again.history),
+          beforeSwitch,
+          afterSwitch,
+          atEnd: yield* turns
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      // The same live branch, which is the case the staleness needed.
+      assert.isTrue(out.sameSession)
+      // The turn taken since the node was recorded is in what the renderer
+      // would paint.
+      assert.include(out.painted, "say one")
+      assert.strictEqual(out.beforeSwitch, 1)
+      // Nothing re-delivered behind the snapshot: no double render.
+      assert.strictEqual(out.afterSwitch, 1)
+      // And the turn after the switch still arrives: no gap.
+      assert.strictEqual(out.atEnd, 2)
+    })
+  )
+
+  /**
+   * `sessionIds` names the sessions the tree drives itself, too.
+   *
+   * A caller supplies it to control the ids their store sees. Before this the
+   * `RcMap` hardcoded `${id}-active-${n}`, so exactly the sessions the caller
+   * did not create arrived under a scheme they never chose.
+   *
+   * Falsified by restoring the hardcoded id: `active` no longer carries the
+   * caller's prefix.
+   */
+  it.effect("sessionIds names every session the store sees, activations included", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* script("trunk answer", "branch answer")
+
+      const out = yield* Effect.gen(function*() {
+        const tree = yield* SessionTree.make(agent, {
+          sessionIds: (node, ordinal) => `named-${node.id}-${ordinal}`
+        })
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("ask")
+        const node = yield* tree.commit(session)
+
+        const branched = yield* tree.branch(node)
+        const activation = yield* tree.activate(node)
+        return { branch: branched.id, active: activation.session.id }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      assert.isTrue(out.branch.startsWith("named-"), out.branch)
+      assert.isTrue(out.active.startsWith("named-"), out.active)
+      // The ordinal comes from one counter, so the two cannot collide.
+      assert.notStrictEqual(out.branch, out.active)
     })
   )
 

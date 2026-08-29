@@ -92,8 +92,18 @@ export interface Host<Principal> {
   >
   /** Internal observability used by conformance tests and future metrics. */
   readonly size: Effect.Effect<number>
+  /**
+   * How many request-idempotency buckets are held, live and closed together.
+   *
+   * Internal: it exists so the retention bound can be *observed* to hold. A
+   * leak that only shows up as a heap graph in production is not something a
+   * test can name, and this is the number the bound is about.
+   */
+  readonly requestBuckets: Effect.Effect<number>
   /** The bound `size` is measured against. Part of the inventory snapshot. */
   readonly maxSessions: number
+  /** The per-session request-retention bound used by protocol adapters. */
+  readonly maxRequestsPerSession: number
 }
 
 interface HostedSession {
@@ -207,6 +217,25 @@ export const make = <Principal>(
       new Map<AgentProtocol.SessionId, HostedSession>()
     )
     const requests = yield* Ref.make<RequestState>(new Map())
+    /**
+     * Closed sessions whose request buckets are still answering retries.
+     *
+     * `maxRequestsPerSession` bounds what is *in* a bucket; nothing bounded the
+     * number of buckets, and `closeRaw` left one behind for every session it
+     * closed -- non-empty by construction, because the `closeSession` request
+     * that emptied the registry is itself retained. A server that opens and
+     * closes sessions grew this map for as long as it ran.
+     *
+     * Dropping the bucket on close would have been one line and a broken
+     * promise: a retried `closeSession` under the same request id would
+     * re-execute and be told `AgentSessionNotFoundError` instead of joining the
+     * cached `{ closed: true }`, which is exactly the case idempotency exists
+     * for. So the buckets are retained in FIFO order and capped at
+     * `maxSessions` -- a number the host already has, and the same reasoning
+     * `AgentMcp` uses for its ticket retention. Recent retries still join;
+     * memory is bounded by a constant the operator already chose.
+     */
+    const retained = yield* Ref.make<ReadonlyArray<AgentProtocol.SessionId>>([])
     const registryGate = yield* Semaphore.make(1)
     const requestGate = yield* Semaphore.make(1)
 
@@ -283,6 +312,37 @@ export const make = <Principal>(
         nextEntries.set(requestId, { ...entry, completed: true })
         return new Map(state).set(bucket, nextEntries)
       })
+
+    /**
+     * Retain a closed session's bucket, evicting the oldest beyond the cap.
+     *
+     * Under the request gate, because it both appends to the retention list
+     * and deletes from `requests`: a reservation racing the eviction could
+     * otherwise write into a bucket that is about to be dropped, and the
+     * request that reserved it would be answered twice.
+     */
+    const retainClosed = (sessionId: AgentProtocol.SessionId) =>
+      requestGate.withPermits(1)(
+        Effect.gen(function* () {
+          // A session id can be reused after a close; keep one entry for it.
+          const queue = (yield* Ref.get(retained)).filter((id) => id !== sessionId)
+          const next = [...queue, sessionId]
+          const evicted = next.slice(0, Math.max(0, next.length - maxSessions))
+          yield* Ref.set(retained, next.slice(evicted.length))
+          if (evicted.length === 0) return
+          yield* Ref.update(requests, (state) => {
+            const withoutEvicted = new Map(state)
+            for (const id of evicted) withoutEvicted.delete(id)
+            return withoutEvicted
+          })
+        })
+      )
+
+    /** A session id that is live again is no longer a retained closed one. */
+    const unretain = (sessionId: AgentProtocol.SessionId) =>
+      requestGate.withPermits(1)(
+        Ref.update(retained, (queue) => queue.filter((id) => id !== sessionId))
+      )
 
     const reserve = Effect.fn("AgentSessionHost.reserveRequest")(function* (
       operation: MutationOperation,
@@ -460,6 +520,11 @@ export const make = <Principal>(
             session: { sessionId, status }
           }
         })
+      ).pipe(
+        // A reopened id is a live session again, so its bucket is no longer
+        // one of the closed ones waiting to be evicted -- leaving it in the
+        // FIFO would let a later close evict a bucket that is in use.
+        Effect.tap((response) => unretain(response.session.sessionId))
       )
     })
 
@@ -491,7 +556,11 @@ export const make = <Principal>(
             requestId: request.requestId,
             closed: true
           })
-        )
+        ),
+        // The bucket outlives the session, on purpose and not forever: a retry
+        // arriving just after the close still joins this answer, and the
+        // oldest retained bucket is dropped once `maxSessions` of them exist.
+        Effect.tap(() => retainClosed(request.sessionId))
       )
     })
 
@@ -578,7 +647,16 @@ export const make = <Principal>(
       )
       const mutation = Effect.flatMap(findSession(request.sessionId), (hosted) =>
         Effect.map(
-          hosted.session.prompt(request.input, request.options),
+          // The wire request id travels on as the idempotency key. The host's
+          // own retention answers a retry that reaches *this* process; a
+          // durable client's store has to answer one that reaches another, and
+          // it can only do that if the two are told the same name for the
+          // request. Minting a second name here would make a retried prompt a
+          // fresh claim as soon as the host moved.
+          hosted.session.prompt(request.input, {
+            ...request.options,
+            idempotencyKey: request.requestId
+          }),
           (result) => ({ requestId: request.requestId, result })
         )
       )
@@ -759,6 +837,8 @@ export const make = <Principal>(
       status,
       events,
       size: Effect.map(Ref.get(sessions), (all) => all.size),
-      maxSessions
+      requestBuckets: Effect.map(Ref.get(requests), (all) => all.size),
+      maxSessions,
+      maxRequestsPerSession: maxRequests
     } satisfies Host<Principal>
   })

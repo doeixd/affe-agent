@@ -56,12 +56,16 @@ const sourceFiles = (dir: string): ReadonlyArray<string> => {
  * they cannot turn a string into a number. Counting those would make this a
  * style rule nobody could satisfy, and would bury the sixteen that matter.
  *
- * Two forms erase, and they are the two AGENTS.md names:
+ * Three forms erase, and they are the ones AGENTS.md names:
  *
  *   - `x as any`, which turns the checker off;
  *   - `x as unknown as T`, which routes around it -- the outer half is the
  *     erasure, and it is found by asking whether the inner expression is
  *     itself a cast to `any` / `unknown` / `never`.
+ *   - `x as never`, which is maximally erasing in the *other* direction:
+ *     `never` is assignable to everything, so it satisfies any target at all.
+ *     It was uncounted at first because the predicate only looked for `any` in
+ *     target position, and the inventory therefore missed one in `Agent.ts`.
  *
  * A bare `JSON.parse(x) as unknown` is deliberately **not** counted: it is the
  * safe direction, taking `any` down to `unknown` so the value must be decoded
@@ -70,13 +74,17 @@ const sourceFiles = (dir: string): ReadonlyArray<string> => {
  * `as const` is excluded for the same reason -- it narrows a literal, it never
  * claims one thing is another.
  */
-const castsIn = (file: string): ReadonlyArray<CastSite> => {
-  const source = ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true
+const castsIn = (file: string): ReadonlyArray<CastSite> =>
+  castsInSource(
+    ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true),
+    file.split("\\").join("/")
   )
+
+/** The detector itself, over a parsed file, so a test can hand it a literal. */
+const castsInSource = (
+  source: ts.SourceFile,
+  file = source.fileName
+): ReadonlyArray<CastSite> => {
   const found: Array<CastSite> = []
   const visit = (node: ts.Node): void => {
     if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
@@ -88,12 +96,10 @@ const castsIn = (file: string): ReadonlyArray<CastSite> => {
           : undefined
       const erases =
         type === "any" ||
+        type === "never" ||
         (inner !== undefined && ["any", "unknown", "never"].includes(inner))
       if (erases) {
-        found.push({
-          file: file.split("\\").join("/"),
-          type: type.replace(/\s+/g, " ")
-        })
+        found.push({ file, type: type.replace(/\s+/g, " ") })
       }
     }
     ts.forEachChild(node, visit)
@@ -112,9 +118,11 @@ const castsIn = (file: string): ReadonlyArray<CastSite> => {
 const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
   [
     "src/Agent.ts",
-    4,
+    5,
     "the phantom `Tools` field, the `Toolkit.empty` default, the `definition` " +
-      "assembly, and `mergeHandled`'s two delegating calls"
+      "assembly, `mergeHandled`'s two delegating calls, and " +
+      "`withExecutionPlan`'s `as never` -- its return type is a conditional " +
+      "on an unresolved parameter, which nothing but `never` satisfies"
   ],
   [
     "src/durable/DurableModel.ts",
@@ -210,5 +218,17 @@ describe("cast inventory", () => {
     }
     visitProse(prose)
     assert.strictEqual(inProse, 0)
+  })
+
+  it("counts `as never`, which is erasing in target position", () => {
+    // The blind spot this predicate was widened to close: `never` is
+    // assignable to every type, so `x as never` satisfies any target at all --
+    // the same hole as `as any`, approached from the other end.
+    const write = (text: string) =>
+      castsInSource(ts.createSourceFile("t.ts", text, ts.ScriptTarget.Latest, true))
+
+    assert.strictEqual(write(`const x = y as never`).length, 1)
+    // Still not a style rule: an ordinary narrowing stays uncounted.
+    assert.strictEqual(write(`const x = y as string`).length, 0)
   })
 })

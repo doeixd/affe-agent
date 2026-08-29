@@ -174,6 +174,11 @@ export interface Lane {
  * together is the point: a caller that fetched a snapshot and then subscribed
  * would miss anything that arrived in between, and one that subscribed first
  * would draw an empty transcript.
+ *
+ * It is the *session's* conversation as of activation, not the node's. Those
+ * differ exactly when the branch is already live -- re-activating the node in
+ * front of the user -- and the node's copy would then be short by every turn
+ * taken since. Use `historyOf` for what the node itself holds.
  */
 export interface Activation<Tools extends Record<string, Tool.Any>, E> {
   readonly node: Node
@@ -472,7 +477,16 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
         Effect.gen(function*() {
           const found = yield* find(id)
           const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
-          const sessionId = `${id}-active-${n}`
+          // `sessionIds` names *every* session the store will see, not just
+          // the ones `branch` hands out. A caller who supplied it to control
+          // those ids -- a durable store keyed by them, say -- would otherwise
+          // find the tree's own activations arriving under a scheme they never
+          // chose, and exactly for the sessions the tree drives itself.
+          //
+          // The ordinal comes from the same counter as `branch`'s, so the two
+          // never collide even though both call the caller's function with the
+          // same node.
+          const sessionId = options?.sessionIds?.(found.node, n) ?? `${id}-active-${n}`
           const session = yield* AgentSession.make(agent, {
             ...options?.session,
             history: found.history,
@@ -921,12 +935,18 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
 
     const activate: SessionTree<Tools, E, SE>["activate"] = (node, activateOptions) =>
       Effect.gen(function*() {
-        const { history } = yield* find(node.id)
         // A scope of the tree's own, so the reference is dropped on the next
         // switch rather than when some caller's scope happens to end.
+        //
+        // No `find` here any more. It used to read the node's history to hand
+        // to `install`, and that read is what made `Activation.history` stale:
+        // the node records where a branch *started*, and the branch may have
+        // run turns since. `install` reads the live session instead, and the
+        // `NodeMissing` this used to raise still comes from the `RcMap`
+        // lookup, which finds the node to seed a branch from.
         const scope = yield* Scope.make()
         return yield* Effect.onExit(
-          install(node, history, scope, activateOptions?.lane),
+          install(node, scope, activateOptions?.lane),
           // Anything that is not a completed install leaves this scope
           // holding a branch reference and two consumers that nobody will
           // ever close, because nobody else has a handle on it. Interruption
@@ -938,7 +958,6 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
     /** The second half of `activate`, once its scope exists. */
     const install = (
       node: Node,
-      history: Prompt.Prompt,
       scope: Scope.Closeable,
       /**
        * Name this line of work.
@@ -967,6 +986,26 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
           Effect.provideService(Scope.Scope, scope)
         )
         yield* consume(session, scope, (envelope) => PubSub.publish(feed, envelope))
+
+        /**
+         * The history to paint, read *after* the subscription exists.
+         *
+         * The node's own history is the wrong answer whenever the branch is
+         * already live: `RcMap` hands back the session a previous activation
+         * left running, and re-activating the node in front of the user then
+         * painted a transcript missing every turn taken since.
+         *
+         * The ordering is the invariant `Activation` states, and it is the
+         * reason this read is here rather than three lines up. `consume`
+         * subscribes before returning -- that is what its docstring is for --
+         * so from this point everything the branch emits is queued. Reading
+         * the history *after* that means the snapshot can only be older than
+         * the queue, never newer: a renderer that paints it and then follows
+         * the events misses nothing. It cannot double-render either, because
+         * a turn already in this snapshot published its events before the
+         * subscription existed and so is not in the queue.
+         */
+        const history = yield* session.history
 
         const activation: Activation<Tools, E> = { node, session, history }
 

@@ -15,6 +15,11 @@ export const Id = Ids.SubmissionId
 export type Id = Ids.SubmissionId
 import type { Session, SessionState } from "./internal/state.js"
 
+/** Proof that a submission was admitted and now owns its own execution. */
+export interface Receipt {
+  readonly submissionId: Id
+}
+
 /**
  * The outcome of one submission.
  *

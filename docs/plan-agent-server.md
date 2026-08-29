@@ -214,7 +214,8 @@ holds nothing.
   **S2: landed (2026-08-26), with one recorded substitution.** `mount` /
   `make` / `DuplicateMountError` / `serverLayer`. Duplicate name or path
   fails at construction. Two mounts are reachable on their own paths; after
-  the server scope closes, hosted sessions are gone (AS6).
+  the server scope closes, separate counters prove both hosted sessions and
+  mount layers are gone (AS6).
 
   `LayerMap` is not used for route registration: `HttpRouter.use` binds
   paths when the layer is built, not on first request, so lazy mount
@@ -233,9 +234,22 @@ holds nothing.
   `test/AgentServer.test.ts` mounts a local `AgentClient.layer` and a
   remote HTTP-backed client on one `AgentServer` and prompts both.
 - **S4 — Inventory.** Read-only mounts/sessions/capacity/health endpoint.
+
+  **S4: landed (2026-08-26).** `/inventory` returns Schema-typed mount
+  snapshots. Coverage reads it before and after creating a session.
 - **S5 — The auth example.** Cookie and bearer `PrincipalResolver`s, per-mount
   authorization, in `examples/`. This is documentation that compiles, and it is
   what makes the feature usable.
+
+  **S5: landed (2026-08-27).** `examples/agent-server-auth.ts` mounts a bearer-
+  authenticated support agent and a cookie-authenticated admin agent on one
+  server. Authentication stays in each host's `PrincipalResolver`; independent
+  role policies return the existing typed 403 when an authenticated principal
+  crosses mount authority. Credentials come from `Config.redacted`, captured
+  when the host layers are built. `test/AgentServerAuthExample.test.ts` imports
+  the example itself and covers valid, missing and malformed bearer headers,
+  named cookie decoding among unrelated cookies, malformed encoding, and the
+  per-mount authorization boundary. No server-owned auth concept was added.
 
 ## Success conditions
 

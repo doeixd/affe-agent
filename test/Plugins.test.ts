@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Option } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -19,6 +19,20 @@ import { TestLanguageModel } from "../src/testing/index.js"
 const S = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 const MCP_S = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
 const skillMd = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\n---\nbody`
+
+/**
+ * The `PluginError` an exit carries, or a thrown explanation of what it carried
+ * instead -- a sandbox `ProviderError`, a defect, or a success.
+ */
+const failureOf = <A, E>(exit: Exit.Exit<A, E>): Plugins.PluginError => {
+  const error = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none<E>()
+  if (Option.isNone(error) || !(error.value instanceof Plugins.PluginError)) {
+    throw new Error(
+      `expected a PluginError, got ${Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "a success"}`
+    )
+  }
+  return error.value
+}
 
 const load = (seed: Record<string, string>, options?: Plugins.LoadOptions) =>
   Plugins.load(options).pipe(
@@ -46,10 +60,15 @@ describe("Plugins.load", () => {
 
   it.effect("fails only when plugin.json is missing or fatally invalid", () =>
     Effect.gen(function* () {
+      // Naming the failure, not merely its existence: `Exit.isFailure` passes
+      // just as well when the sandbox threw, when a skill blew up, or when a
+      // defect escaped from somewhere else entirely -- so it survives the very
+      // regressions it is here to catch.
       const missing = yield* Effect.exit(load({ "skills/x/SKILL.md": skillMd("x", "y") }))
-      assert.isTrue(Exit.isFailure(missing))
+      assert.strictEqual(failureOf(missing).reason, "plugin.json is missing or unreadable")
+
       const badName = yield* Effect.exit(load({ "plugin.json": JSON.stringify({ $schema: S, name: "BAD" }) }))
-      assert.isTrue(Exit.isFailure(badName))
+      assert.include(failureOf(badName).reason, "name")
     })
   )
 

@@ -1,11 +1,20 @@
 import {
+  A2A_CONTENT_TYPE,
   A2A_PROTOCOL_VERSION,
   A2A_VERSION_HEADER,
   AGENT_CARD_PATH,
   AgentCard as AgentCardCodec,
   formatSSEErrorEvent,
   formatSSEEvent,
+  ListTaskPushNotificationConfigsResponse as ListTaskPushNotificationConfigsResponseCodec,
+  ListTasksRequest as ListTasksRequestCodec,
+  ListTasksResponse as ListTasksResponseCodec,
   Role,
+  SendMessageRequest as SendMessageRequestCodec,
+  SendMessageResponse as SendMessageResponseCodec,
+  StreamResponse as StreamResponseCodec,
+  Task as TaskCodec,
+  TaskPushNotificationConfig as TaskPushNotificationConfigCodec,
   TaskState,
   type AgentCard,
   type AgentSkill,
@@ -17,7 +26,21 @@ import {
   type Task,
   type TaskStatusUpdateEvent
 } from "@a2a-js/sdk"
-import { A2AError, TaskNotCancelableError } from "@a2a-js/sdk/errors"
+import {
+  A2AError,
+  ContentTypeNotSupportedError,
+  ExtendedAgentCardNotConfiguredError,
+  ExtensionSupportRequiredError,
+  InvalidAgentResponseError,
+  PushNotificationNotSupportedError,
+  RequestMalformedError,
+  TaskNotCancelableError,
+  TaskNotFoundError,
+  UnsupportedOperationError,
+  VersionNotSupportedError,
+  restStatusFor,
+  toRestErrorBody
+} from "@a2a-js/sdk/errors"
 import { ClientFactory } from "@a2a-js/sdk/client"
 import {
   AgentEvent,
@@ -26,6 +49,7 @@ import {
   InMemoryTaskStore,
   JsonRpcTransportHandler,
   ServerCallContext,
+  validateVersion,
   type AgentExecutor,
   type ExecutionEventBus,
   type RequestContext,
@@ -34,12 +58,14 @@ import {
 import {
   Clock,
   Deferred,
+  Duration,
   Effect,
   Fiber,
   Exit,
   FiberSet,
   Layer,
   Option,
+  Predicate,
   Queue,
   Ref,
   Schema,
@@ -55,6 +81,16 @@ import {
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import { is as isEvent } from "../AgentEvent.js"
+
+/**
+ * The SSE keep-alive frame.
+ *
+ * A comment, not an event: the spec says a line beginning with `:` is
+ * ignored, so it reaches the socket -- and any proxy counting idle time --
+ * without reaching the application, without an `id:` field, and so without
+ * disturbing `Last-Event-ID` or the protocol's event sequence.
+ */
+const SSE_KEEP_ALIVE = ": keep-alive\n\n"
 
 /** A2A skill metadata advertised by the generated v1 Agent Card. */
 export interface Skill {
@@ -111,6 +147,148 @@ export interface ServerOptions<Principal> {
   readonly path?: `/${string}` | undefined
   /** Public endpoint URL for reverse-proxy deployments; otherwise derived per request. */
   readonly publicUrl?: string | undefined
+  /**
+   * Where push notifications may be sent.
+   *
+   * A push notification config names a URL this server will later POST task
+   * content to, chosen by the caller. That is an outbound request on the
+   * server's behalf to an address it did not pick, so the default refuses
+   * anything but `https` to a non-loopback, non-private host.
+   *
+   * `allowHosts` opts specific hostnames back in -- the usual reason being an
+   * internal collector reachable only on a private network. Supplying it is
+   * a deliberate statement that those hosts are safe to reach; there is no
+   * wildcard, because a wildcard would silently restore the default-open
+   * behaviour this exists to remove.
+   */
+  /**
+   * How long an SSE stream may sit idle before a keep-alive comment frame is
+   * written, or `false` to write none.
+   *
+   * An intermediary cannot tell a stream parked on `input-required` from a
+   * dead connection, and drops it at its own idle timeout. A comment frame is
+   * the only thing that can be sent without inventing a protocol event: SSE
+   * parsers -- the official client's included -- discard a line starting with
+   * `:`, so it reaches the socket without reaching the application, and
+   * touches neither `Last-Event-ID` nor the event sequence.
+   *
+   * The default is 15 seconds because the shortest idle timeout in common
+   * infrastructure is 30 (nginx `proxy_read_timeout` is 60, AWS ALB and GCP
+   * load balancers default to 60, Heroku to 55; the tightest of the ones
+   * worth naming is Cloudflare's 30 for a stalled origin). Half of the
+   * tightest gives one frame's grace before the timeout, so a single lost
+   * write does not close the stream.
+   */
+  readonly sseHeartbeat?: Duration.Duration | false | undefined
+  readonly pushNotifications?: {
+    readonly allowHosts?: ReadonlyArray<string> | undefined
+    /** Permit `http`. Off by default: the target receives task content. */
+    readonly allowInsecure?: boolean | undefined
+  } | undefined
+}
+
+/**
+ * Addresses a server must not be talked into calling.
+ *
+ * Not an exhaustive SSRF defence -- DNS still resolves wherever it likes, and
+ * a name that looks public can point at a private address. It removes the
+ * direct cases, which is what a literal in a request body actually carries,
+ * and leaves the rest to network policy where it belongs.
+ */
+const privateIpv4Pattern =
+  /^(127\.|0\.|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/
+
+/**
+ * Hostnames that name an internal service without looking like an address.
+ *
+ * The link-local address is covered by the IPv4 rule, but the cloud providers
+ * also publish *names* for the same endpoint, and a name does not match any
+ * address pattern.
+ */
+const metadataHostnames = new Set([
+  "metadata.google.internal",
+  "metadata.goog",
+  "metadata",
+  "instance-data"
+])
+
+/**
+ * Whether a URL's hostname names something on the local or private network.
+ *
+ * The WHATWG `URL` parser does more of this work than it looks: it canonicalises
+ * every IPv4 spelling before this sees it, so `2130706433`, `0x7f000001`,
+ * `0177.0.0.1` and `127.1` all arrive as `127.0.0.1`. Verified, not assumed --
+ * each of those is in the test.
+ *
+ * What it does *not* normalise is an IPv4-mapped IPv6 address, so
+ * `[::ffff:127.0.0.1]` arrives with the mapping intact and has to be unwrapped
+ * before the IPv4 rules can see the loopback inside it.
+ */
+const isPrivateHost = (hostname: string): boolean => {
+  const host = hostname.toLowerCase().replace(/\.$/, "")
+  if (host === "localhost" || host.endsWith(".localhost")) return true
+  if (metadataHostnames.has(host)) return true
+  if (privateIpv4Pattern.test(host)) return true
+
+  if (host.startsWith("[") && host.endsWith("]")) {
+    const inner = host.slice(1, -1)
+    // `::ffff:127.0.0.1` and `::ffff:7f00:1` are the same address; the parser
+    // may hand back either spelling.
+    const mapped = /^::ffff:(.+)$/.exec(inner)
+    if (mapped !== null) {
+      const embedded = mapped[1]!
+      if (privateIpv4Pattern.test(embedded)) return true
+      const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(embedded)
+      if (hex !== null) {
+        const high = Number.parseInt(hex[1]!, 16)
+        const low = Number.parseInt(hex[2]!, 16)
+        const dotted = `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`
+        if (privateIpv4Pattern.test(dotted)) return true
+      }
+    }
+    if (inner === "::1" || inner === "::" || /^(fc|fd|fe8|fe9|fea|feb)/.test(inner)) {
+      return true
+    }
+    return false
+  }
+  return false
+}
+
+/**
+ * Reject a push-notification target, with a reason, or accept it.
+ *
+ * Returns the reason rather than a boolean so the caller can say *why* the
+ * config was refused: "not a URL" and "points at loopback" send an operator to
+ * very different places.
+ */
+export const rejectPushUrl = (
+  value: unknown,
+  policy?: ServerOptions<never>["pushNotifications"]
+): Option.Option<string> => {
+  if (typeof value !== "string" || value === "") {
+    return Option.some("push notification url is required")
+  }
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return Option.some(`push notification url is not a valid URL: ${value}`)
+  }
+  const allowed = policy?.allowHosts ?? []
+  if (allowed.includes(url.hostname)) return Option.none()
+  if (url.protocol !== "https:") {
+    if (!(url.protocol === "http:" && policy?.allowInsecure === true)) {
+      return Option.some(
+        `push notification url must use https, got ${url.protocol.replace(":", "")}`
+      )
+    }
+  }
+  if (isPrivateHost(url.hostname)) {
+    return Option.some(
+      `push notification url may not target a private or loopback address: ${url.hostname}`
+    )
+  }
+  return Option.none()
 }
 
 export class AgentA2AInvalidInputError extends Schema.TaggedError<AgentA2AInvalidInputError>()(
@@ -218,6 +396,11 @@ const agentCard = <Principal>(
   supportedInterfaces: [{
     url,
     protocolBinding: "JSONRPC",
+    tenant: "",
+    protocolVersion: A2A_PROTOCOL_VERSION
+  }, {
+    url,
+    protocolBinding: "HTTP+JSON",
     tenant: "",
     protocolVersion: A2A_PROTOCOL_VERSION
   }],
@@ -376,7 +559,8 @@ const isAsyncIterable = (value: unknown): value is AsyncIterable<unknown> =>
   Symbol.asyncIterator in value
 
 /**
- * Register a native A2A v1 Agent Card and JSON-RPC endpoint.
+ * Register a native A2A v1 Agent Card, JSON-RPC endpoint, and HTTP+JSON
+ * binding.
  *
  * The official SDK owns protocol routing and task persistence. Harness owns
  * authentication, session identity, execution, and scope lifetime.
@@ -812,15 +996,16 @@ export const serverLayer = <Principal>(
       const taskStore = new InMemoryTaskStore()
       const eventBusManager = new DefaultExecutionEventBusManager()
 
-      const handlerFor = (card: AgentCard) =>
-        new JsonRpcTransportHandler(
-          new DefaultRequestHandler(
-            card,
-            taskStore,
-            executor,
-            eventBusManager
-          )
+      const requestHandlerFor = (card: AgentCard) =>
+        new DefaultRequestHandler(
+          card,
+          taskStore,
+          executor,
+          eventBusManager
         )
+
+      const handlerFor = (card: AgentCard) =>
+        new JsonRpcTransportHandler(requestHandlerFor(card))
 
       const cardRoute = Effect.fn("AgentA2A.agentCard")(function* (
         request: HttpServerRequest.HttpServerRequest
@@ -832,6 +1017,50 @@ export const serverLayer = <Principal>(
           ),
           { headers: { [A2A_VERSION_HEADER]: A2A_PROTOCOL_VERSION } }
         ).pipe(Effect.orDie)
+      })
+
+      const heartbeatIdle = options.sseHeartbeat === undefined
+        ? Duration.seconds(15)
+        : options.sseHeartbeat
+
+      /**
+       * Start the keep-alive fibre for one SSE response, and hand back the
+       * effect that tells it a real frame was just written.
+       *
+       * Idleness is measured against a shared instant rather than a fixed
+       * tick, so an event genuinely restarts the countdown instead of merely
+       * skipping the next tick -- a stream that emits every 14 seconds should
+       * never write a keep-alive. `Clock` rather than `Date.now()` so a test
+       * can drive it deterministically with `TestClock`.
+       *
+       * Forked as a child of the caller's fibre, which is the pump: when the
+       * generator ends and the pump offers its sentinel, the heartbeat is
+       * interrupted with it, so nothing can be written after the close.
+       */
+      const startHeartbeat = Effect.fn("AgentA2A.sseHeartbeat")(function* (
+        output: Queue.Queue<Option.Option<string>>
+      ) {
+        if (heartbeatIdle === false) return { touch: Effect.void }
+        const idle = Duration.toMillis(heartbeatIdle)
+        const lastWrite = yield* Ref.make(yield* Clock.currentTimeMillis)
+        yield* Effect.forkChild(Effect.gen(function* () {
+          while (true) {
+            const now = yield* Clock.currentTimeMillis
+            const remaining = idle - (now - (yield* Ref.get(lastWrite)))
+            if (remaining > 0) {
+              yield* Effect.sleep(Duration.millis(remaining))
+              continue
+            }
+            yield* Queue.offer(output, Option.some(SSE_KEEP_ALIVE))
+            yield* Ref.set(lastWrite, now)
+          }
+        }))
+        return {
+          touch: Effect.flatMap(
+            Clock.currentTimeMillis,
+            (now) => Ref.set(lastWrite, now)
+          )
+        }
       })
 
       const jsonRpcRoute = Effect.fn("AgentA2A.jsonRpc")(function* (
@@ -894,6 +1123,7 @@ export const serverLayer = <Principal>(
           // the host session keeps running, unobserved through A2A.
           const iterator = response[Symbol.asyncIterator]()
           const pump = Effect.gen(function* () {
+            const { touch } = yield* startHeartbeat(output)
             while (true) {
               const next = yield* Effect.tryPromise({
                 try: () => iterator.next(),
@@ -902,6 +1132,7 @@ export const serverLayer = <Principal>(
               })
               if (next.done === true) break
               yield* Queue.offer(output, Option.some(formatSSEEvent(next.value)))
+              yield* touch
             }
           }).pipe(
             Effect.catchTag("AgentA2ATransportError", (error) =>
@@ -919,7 +1150,13 @@ export const serverLayer = <Principal>(
             Effect.ensuring(Queue.offer(output, Option.none())),
             Effect.onInterrupt(() =>
               Effect.sync(() => {
-                void iterator.return?.()
+                // Fire-and-forget for the reason above -- awaiting would
+                // deadlock on a parked task -- but the rejection still has to
+                // be absorbed. An unhandled rejection from a generator that
+                // was interrupted mid-`next()` crashes the process under
+                // Node's default policy, which would turn a client
+                // disconnecting into a server outage.
+                iterator.return?.()?.catch(() => {})
               })
             )
           )
@@ -944,6 +1181,521 @@ export const serverLayer = <Principal>(
         return yield* HttpServerResponse.json(response, {
           headers: { [A2A_VERSION_HEADER]: A2A_PROTOCOL_VERSION }
         }).pipe(Effect.orDie)
+      })
+
+      const restJson = (
+        body: unknown,
+        status = 200
+      ): Effect.Effect<HttpServerResponse.HttpServerResponse> =>
+        HttpServerResponse.json(body, {
+          status,
+          contentType: A2A_CONTENT_TYPE,
+          headers: { [A2A_VERSION_HEADER]: A2A_PROTOCOL_VERSION }
+        }).pipe(Effect.orDie)
+
+      const restFailure = (cause: unknown) => {
+        // The SDK publishes each subpath as a self-contained bundle, so an
+        // error created by `@a2a-js/sdk/server` is not `instanceof` the same
+        // constructor re-exported by `@a2a-js/sdk/errors`. Rebuild semantic
+        // server errors by their stable SDK name before using the official
+        // REST status/body helpers.
+        const normalized = cause instanceof A2AError || !(cause instanceof Error)
+          ? cause
+          : cause.name === "TaskNotFoundError"
+            ? new TaskNotFoundError(cause.message)
+            : cause.name === "TaskNotCancelableError"
+              ? new TaskNotCancelableError(cause.message)
+              : cause.name === "PushNotificationNotSupportedError"
+                ? new PushNotificationNotSupportedError(cause.message)
+                : cause.name === "UnsupportedOperationError"
+                  ? new UnsupportedOperationError(cause.message)
+                  : cause.name === "ContentTypeNotSupportedError"
+                    ? new ContentTypeNotSupportedError(cause.message)
+                    : cause.name === "InvalidAgentResponseError"
+                      ? new InvalidAgentResponseError(cause.message)
+                      : cause.name === "ExtendedAgentCardNotConfiguredError"
+                        ? new ExtendedAgentCardNotConfiguredError(cause.message)
+                        : cause.name === "ExtensionSupportRequiredError"
+                          ? new ExtensionSupportRequiredError(cause.message)
+                          : cause.name === "VersionNotSupportedError"
+                            ? new VersionNotSupportedError(cause.message)
+                            : cause.name === "RequestMalformedError"
+                              ? new RequestMalformedError(cause.message)
+                              : cause
+        const status = cause instanceof AgentProtocol.AgentUnauthorizedError
+          ? 401
+          : cause instanceof AgentProtocol.AgentForbiddenError
+            ? 403
+            : cause instanceof AgentA2AInvalidInputError
+              ? 400
+              : restStatusFor(normalized)
+        return { body: toRestErrorBody(normalized, status), status }
+      }
+
+      const restErrorResponse = (
+        cause: unknown
+      ): Effect.Effect<HttpServerResponse.HttpServerResponse> => {
+        const failure = restFailure(cause)
+        return restJson(failure.body, failure.status)
+      }
+
+      const sdkJson = <A>(
+        evaluate: () => Promise<A>,
+        encode: (value: A) => unknown,
+        status = 200
+      ): Effect.Effect<HttpServerResponse.HttpServerResponse> =>
+        Effect.tryPromise({
+          try: evaluate,
+          // Normalize the SDK rejection at this private boundary so the
+          // public operation has no `unknown` error channel.
+          catch: restFailure
+        }).pipe(
+          Effect.matchEffect({
+            onFailure: (failure) => restJson(failure.body, failure.status),
+            onSuccess: (value) => restJson(encode(value), status)
+          })
+        )
+
+      const sdkEmpty = (
+        evaluate: () => Promise<void>
+      ): Effect.Effect<HttpServerResponse.HttpServerResponse> =>
+        Effect.tryPromise({
+          try: evaluate,
+          catch: restFailure
+        }).pipe(
+          Effect.matchEffect({
+            onFailure: (failure) => restJson(failure.body, failure.status),
+            onSuccess: () => Effect.succeed(HttpServerResponse.empty({
+              status: 204,
+              headers: { [A2A_VERSION_HEADER]: A2A_PROTOCOL_VERSION }
+            }))
+          })
+        )
+
+      const sdkStream = Effect.fn("AgentA2A.restStream")(function* (
+        evaluate: () => Promise<AsyncGenerator<StreamResponse, void, undefined>>
+      ) {
+        return yield* Effect.tryPromise({
+          try: async () => {
+            const iterator = (await evaluate())[Symbol.asyncIterator]()
+            const first = await iterator.next()
+            return { first, iterator }
+          },
+          // REST can still select an HTTP status until the first event has
+          // been pulled. This matches the official Express binding.
+          catch: restFailure
+        }).pipe(
+          Effect.matchEffect({
+            onFailure: (failure) => restJson(failure.body, failure.status),
+            onSuccess: ({ first, iterator }) =>
+              Effect.gen(function* () {
+                const output = yield* Queue.unbounded<Option.Option<string>>()
+                if (!first.done) {
+                  yield* Queue.offer(
+                    output,
+                    Option.some(formatSSEEvent(
+                      StreamResponseCodec.toJSON(first.value)
+                    ))
+                  )
+                }
+                const pump = Effect.gen(function* () {
+                  const { touch } = yield* startHeartbeat(output)
+                  while (true) {
+                    const next = yield* Effect.tryPromise({
+                      try: () => iterator.next(),
+                      catch: (cause) => restFailure(cause).body
+                    })
+                    if (next.done === true) break
+                    yield* Queue.offer(
+                      output,
+                      Option.some(formatSSEEvent(
+                        StreamResponseCodec.toJSON(next.value)
+                      ))
+                    )
+                    yield* touch
+                  }
+                }).pipe(
+                  Effect.catch((error) =>
+                    Queue.offer(
+                      output,
+                      Option.some(formatSSEErrorEvent(error))
+                    ).pipe(Effect.asVoid)
+                  ),
+                  Effect.ensuring(Queue.offer(output, Option.none())),
+                  Effect.onInterrupt(() =>
+                    Effect.sync(() => {
+                      void iterator.return?.()
+                    })
+                  )
+                )
+                yield* Effect.forkIn(pump, layerScope)
+                return HttpServerResponse.stream(
+                  Stream.fromQueue(output).pipe(
+                    Stream.takeWhile(Option.isSome),
+                    Stream.map((chunk) => chunk.value),
+                    Stream.encodeText
+                  ),
+                  {
+                    contentType: "text/event-stream",
+                    headers: {
+                      "cache-control": "no-cache",
+                      connection: "keep-alive",
+                      "x-accel-buffering": "no",
+                      [A2A_VERSION_HEADER]: A2A_PROTOCOL_VERSION
+                    }
+                  }
+                )
+              })
+          })
+        )
+      })
+
+      const restContext = Effect.fn("AgentA2A.restContext")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        operation: AgentProtocol.Operation,
+        tenant: string
+      ) {
+        // The tenant is a path segment, so it is the caller's word and nothing
+        // more until the application's resolver joins it to the principal.
+        // Presenting it is the whole point: only the application knows which
+        // tenants a principal may act in, and without this the segment would
+        // be stamped onto `ServerCallContext` having passed no check at all.
+        //
+        // The tenantless routes carry no segment, and that is *absent*, not
+        // the tenant named by the empty string -- a resolver testing
+        // `tenant !== undefined` must not see a request to `/message:send`
+        // as addressing a tenant.
+        const principal = yield* host.resolve({
+          operation,
+          sessionId: Option.none(),
+          tenant: tenant === "" ? undefined : tenant,
+          headers: request.headers
+        })
+        const url = yield* requestUrl(request, path, options.publicUrl)
+        const card = agentCard(options, url)
+        const requestedVersion = request.headers["a2a-version"]
+        const context = new ServerCallContext({
+          tenant,
+          ...(requestedVersion === undefined ? {} : { requestedVersion }),
+          user: {
+            isAuthenticated: true,
+            userName: options.principal.subject(principal)
+          },
+          state: new Map<string, unknown>([[
+            "headers",
+            request.headers satisfies RequestHeaders
+          ]])
+        })
+        principals.set(context, { value: principal })
+        return { card, context, handler: requestHandlerFor(card) }
+      })
+
+      const restHandled = <R>(
+        effect: Effect.Effect<
+          HttpServerResponse.HttpServerResponse,
+          AgentA2AInvalidInputError | AgentProtocol.AgentUnauthorizedError,
+          R
+        >
+      ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, R> =>
+        effect.pipe(Effect.catch(restErrorResponse))
+
+      const validateRest = (
+        context: ServerCallContext,
+        card: AgentCard
+      ): Option.Option<unknown> => {
+        try {
+          validateVersion(context.requestedVersion, card, "HTTP+JSON")
+          return Option.none()
+        } catch (cause) {
+          return Option.some(cause)
+        }
+      }
+
+      const validateContentType = (
+        request: HttpServerRequest.HttpServerRequest
+      ): Option.Option<ContentTypeNotSupportedError> => {
+        const raw = request.headers["content-type"]
+        if (raw === undefined) return Option.none()
+        const mediaType = raw.split(";", 1)[0]?.trim().toLowerCase()
+        return mediaType === "application/json" || mediaType === A2A_CONTENT_TYPE
+          ? Option.none()
+          : Option.some(new ContentTypeNotSupportedError(
+            `Unsupported Content-Type "${raw}"; expected application/json or ${A2A_CONTENT_TYPE}.`
+          ))
+      }
+
+      const restBody = (
+        request: HttpServerRequest.HttpServerRequest
+      ): Effect.Effect<
+        Record<string, unknown>,
+        AgentA2AInvalidInputError
+      > =>
+        HttpIncomingMessage.schemaBodyJson(JsonRpcBody)(request).pipe(
+          Effect.mapError((error) =>
+            new AgentA2AInvalidInputError({ detail: error.message })
+          )
+        )
+
+      const routeParams = Effect.fn("AgentA2A.routeParams")(function* () {
+        const params = yield* HttpRouter.params
+        return {
+          tenant: params.tenant ?? ""
+        }
+      })
+
+      const taskRouteParams = Effect.fn("AgentA2A.taskRouteParams")(function* () {
+        const params = yield* HttpRouter.params
+        const captured = params.taskId ?? ""
+        const subscribe = captured.endsWith(":subscribe")
+        const cancel = captured.endsWith(":cancel")
+        return {
+          tenant: params.tenant ?? "",
+          taskId: subscribe
+            ? captured.slice(0, -":subscribe".length)
+            : cancel
+              ? captured.slice(0, -":cancel".length)
+              : captured,
+          action: subscribe ? "subscribe" as const : cancel ? "cancel" as const : "task" as const,
+          tail: params["*"] ?? ""
+        }
+      })
+
+      const prepareRest = Effect.fn("AgentA2A.prepareRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        operation: AgentProtocol.Operation,
+        tenant: string,
+        hasBody: boolean
+      ) {
+        if (hasBody) {
+          const invalidContentType = validateContentType(request)
+          if (Option.isSome(invalidContentType)) {
+            return { _tag: "Response" as const, response: yield* restErrorResponse(invalidContentType.value) }
+          }
+        }
+        const prepared = yield* restContext(request, operation, tenant)
+        const invalidVersion = validateRest(prepared.context, prepared.card)
+        if (Option.isSome(invalidVersion)) {
+          return { _tag: "Response" as const, response: yield* restErrorResponse(invalidVersion.value) }
+        }
+        return { _tag: "Prepared" as const, ...prepared }
+      })
+
+      const sendResultJson = (result: SendMessageResult): unknown =>
+        SendMessageResponseCodec.toJSON({
+          payload: "messageId" in result
+            ? { $case: "message", value: result }
+            : { $case: "task", value: result }
+        })
+
+      const sendMessageRest = Effect.fn("AgentA2A.sendMessageRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        streaming: boolean
+      ) {
+        const prepared = yield* prepareRest(request, "prompt", tenant, true)
+        if (prepared._tag === "Response") return prepared.response
+        const body = yield* restBody(request)
+        const params = SendMessageRequestCodec.fromJSON({ ...body, tenant })
+        if (params.message === undefined || params.message.messageId === "") {
+          return yield* restErrorResponse(new RequestMalformedError(
+            params.message === undefined
+              ? "message is required"
+              : "message.messageId is required"
+          ))
+        }
+        return streaming
+          ? yield* sdkStream(() =>
+            Promise.resolve(
+              prepared.handler.sendMessageStream(params, prepared.context)
+            )
+          )
+          : yield* sdkJson(
+            () => prepared.handler.sendMessage(params, prepared.context),
+            sendResultJson
+          )
+      })
+
+      const taskRest = Effect.fn("AgentA2A.taskRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string
+      ) {
+        const prepared = yield* prepareRest(request, "status", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        const search = yield* HttpServerRequest.ParsedSearchParams
+        const historyLength = search.historyLength
+        const params = {
+          tenant,
+          id: taskId,
+          ...(typeof historyLength === "string"
+            ? { historyLength: Number(historyLength) }
+            : {})
+        }
+        if (
+          params.historyLength !== undefined &&
+          (!Number.isInteger(params.historyLength) || params.historyLength < 0)
+        ) {
+          return yield* restErrorResponse(new RequestMalformedError(
+            "historyLength must be a non-negative integer"
+          ))
+        }
+        return yield* sdkJson(
+          () => prepared.handler.getTask(params, prepared.context),
+          TaskCodec.toJSON
+        )
+      })
+
+      const listTasksRest = Effect.fn("AgentA2A.listTasksRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string
+      ) {
+        const prepared = yield* prepareRest(request, "status", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        const search = yield* HttpServerRequest.ParsedSearchParams
+        const params = ListTasksRequestCodec.fromJSON({ ...search, tenant })
+        return yield* sdkJson(
+          () => prepared.handler.listTasks(params, prepared.context),
+          ListTasksResponseCodec.toJSON
+        )
+      })
+
+      const cancelTaskRest = Effect.fn("AgentA2A.cancelTaskRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string
+      ) {
+        const prepared = yield* prepareRest(request, "interrupt", tenant, true)
+        if (prepared._tag === "Response") return prepared.response
+        return yield* sdkJson(
+          () => prepared.handler.cancelTask({
+            tenant,
+            id: taskId,
+            metadata: undefined
+          }, prepared.context),
+          TaskCodec.toJSON
+        )
+      })
+
+      const subscribeTaskRest = Effect.fn("AgentA2A.subscribeTaskRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string
+      ) {
+        const prepared = yield* prepareRest(request, "events", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        return yield* sdkStream(() =>
+          Promise.resolve(prepared.handler.resubscribe({
+            tenant,
+            id: taskId
+          }, prepared.context))
+        )
+      })
+
+      const extendedCardRest = Effect.fn("AgentA2A.extendedCardRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string
+      ) {
+        const prepared = yield* prepareRest(request, "status", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        return yield* sdkJson(
+          () => prepared.handler.getAuthenticatedExtendedAgentCard(
+            { tenant },
+            prepared.context
+          ),
+          AgentCardCodec.toJSON
+        )
+      })
+
+      const createPushConfigRest = Effect.fn("AgentA2A.createPushConfigRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string
+      ) {
+        const prepared = yield* prepareRest(request, "configure", tenant, true)
+        if (prepared._tag === "Response") return prepared.response
+        const body = yield* restBody(request)
+        // Only a target that was actually supplied is checked here. A request
+        // with no `url` is not a bad target, it is an incomplete request, and
+        // the handler answers it better: on a server that does not support
+        // push at all, "push notifications are not supported" is the useful
+        // reply, not a complaint about a field that would not have helped.
+        const suppliedUrl = Predicate.isObject(body)
+          ? Reflect.get(body, "url")
+          : undefined
+        if (suppliedUrl !== undefined) {
+          const rejected = rejectPushUrl(suppliedUrl, options.pushNotifications)
+          if (Option.isSome(rejected)) {
+            return yield* restErrorResponse(
+              new AgentA2AInvalidInputError({ detail: rejected.value })
+            )
+          }
+        }
+        const config = TaskPushNotificationConfigCodec.fromJSON({
+          ...body,
+          tenant,
+          taskId
+        })
+        return yield* sdkJson(
+          () => prepared.handler.createTaskPushNotificationConfig(
+            config,
+            prepared.context
+          ),
+          TaskPushNotificationConfigCodec.toJSON,
+          201
+        )
+      })
+
+      const listPushConfigsRest = Effect.fn("AgentA2A.listPushConfigsRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string
+      ) {
+        const prepared = yield* prepareRest(request, "configure", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        return yield* sdkJson(
+          () => prepared.handler.listTaskPushNotificationConfigs({
+            tenant,
+            taskId,
+            pageSize: 0,
+            pageToken: ""
+          }, prepared.context),
+          ListTaskPushNotificationConfigsResponseCodec.toJSON
+        )
+      })
+
+      const getPushConfigRest = Effect.fn("AgentA2A.getPushConfigRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string,
+        configId: string
+      ) {
+        const prepared = yield* prepareRest(request, "configure", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        return yield* sdkJson(
+          () => prepared.handler.getTaskPushNotificationConfig({
+            tenant,
+            taskId,
+            id: configId
+          }, prepared.context),
+          TaskPushNotificationConfigCodec.toJSON
+        )
+      })
+
+      const deletePushConfigRest = Effect.fn("AgentA2A.deletePushConfigRest")(function* (
+        request: HttpServerRequest.HttpServerRequest,
+        tenant: string,
+        taskId: string,
+        configId: string
+      ) {
+        const prepared = yield* prepareRest(request, "configure", tenant, false)
+        if (prepared._tag === "Response") return prepared.response
+        return yield* sdkEmpty(
+          () => prepared.handler.deleteTaskPushNotificationConfig({
+            tenant,
+            taskId,
+            id: configId
+          }, prepared.context)
+        )
       })
 
       const handled = <A extends HttpServerResponse.HttpServerResponse>(
@@ -977,11 +1729,93 @@ export const serverLayer = <Principal>(
           )
         )
 
+      const restRouter = router.prefixed(path)
+      const sendRoute = (streaming: boolean) =>
+        (request: HttpServerRequest.HttpServerRequest) =>
+          restHandled(
+            Effect.flatMap(routeParams(), ({ tenant }) =>
+              sendMessageRest(request, tenant, streaming)
+            )
+          )
+      const listTasksRoute = (request: HttpServerRequest.HttpServerRequest) =>
+        restHandled(
+          Effect.flatMap(routeParams(), ({ tenant }) =>
+              listTasksRest(request, tenant)
+            )
+          )
+      const extendedCardRoute = (request: HttpServerRequest.HttpServerRequest) =>
+        restHandled(
+          Effect.flatMap(routeParams(), ({ tenant }) =>
+              extendedCardRest(request, tenant)
+            )
+          )
+
+      const malformedTaskRoute = () =>
+        restErrorResponse(new RequestMalformedError("Unknown A2A task resource"))
+
+      const taskGetDispatch = (request: HttpServerRequest.HttpServerRequest) =>
+        restHandled(
+          Effect.flatMap(taskRouteParams(), ({ action, tail, taskId, tenant }) => {
+            if (action === "subscribe" && tail === "") {
+              return subscribeTaskRest(request, tenant, taskId)
+            }
+            if (action !== "task") return malformedTaskRoute()
+            if (tail === "") return taskRest(request, tenant, taskId)
+            if (tail === "pushNotificationConfigs") {
+              return listPushConfigsRest(request, tenant, taskId)
+            }
+            const prefix = "pushNotificationConfigs/"
+            return tail.startsWith(prefix) && tail.length > prefix.length
+              ? getPushConfigRest(request, tenant, taskId, tail.slice(prefix.length))
+              : malformedTaskRoute()
+          })
+        )
+
+      const taskPostDispatch = (request: HttpServerRequest.HttpServerRequest) =>
+        restHandled(
+          Effect.flatMap(taskRouteParams(), ({ action, tail, taskId, tenant }) => {
+            if (tail !== "") {
+              return action === "task" && tail === "pushNotificationConfigs"
+                ? createPushConfigRest(request, tenant, taskId)
+                : malformedTaskRoute()
+            }
+            if (action === "cancel") return cancelTaskRest(request, tenant, taskId)
+            if (action === "subscribe") {
+              return subscribeTaskRest(request, tenant, taskId)
+            }
+            return malformedTaskRoute()
+          })
+        )
+
+      const taskDeleteDispatch = (request: HttpServerRequest.HttpServerRequest) =>
+        restHandled(
+          Effect.flatMap(taskRouteParams(), ({ action, tail, taskId, tenant }) => {
+            const prefix = "pushNotificationConfigs/"
+            return action === "task" && tail.startsWith(prefix) && tail.length > prefix.length
+              ? deletePushConfigRest(request, tenant, taskId, tail.slice(prefix.length))
+              : malformedTaskRoute()
+          })
+        )
+
       yield* Effect.all([
         router.add("GET", `/${AGENT_CARD_PATH}`, (request) =>
           handled(cardRoute(request))),
         router.add("POST", path, (request) =>
-          handled(jsonRpcRoute(request)))
+          handled(jsonRpcRoute(request))),
+        restRouter.add("GET", "/extendedAgentCard", extendedCardRoute),
+        restRouter.add("GET", "/:tenant/extendedAgentCard", extendedCardRoute),
+        restRouter.add("POST", "/message::send", sendRoute(false)),
+        restRouter.add("POST", "/:tenant/message::send", sendRoute(false)),
+        restRouter.add("POST", "/message::stream", sendRoute(true)),
+        restRouter.add("POST", "/:tenant/message::stream", sendRoute(true)),
+        restRouter.add("GET", "/tasks", listTasksRoute),
+        restRouter.add("GET", "/:tenant/tasks", listTasksRoute),
+        restRouter.add("GET", "/tasks/:taskId/*", taskGetDispatch),
+        restRouter.add("GET", "/:tenant/tasks/:taskId/*", taskGetDispatch),
+        restRouter.add("POST", "/tasks/:taskId/*", taskPostDispatch),
+        restRouter.add("POST", "/:tenant/tasks/:taskId/*", taskPostDispatch),
+        restRouter.add("DELETE", "/tasks/:taskId/*", taskDeleteDispatch),
+        restRouter.add("DELETE", "/:tenant/tasks/:taskId/*", taskDeleteDispatch)
       ], { discard: true })
     })
   )

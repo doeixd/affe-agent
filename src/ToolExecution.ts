@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Option, Schema, Semaphore, Stream } from "effect"
 import { Response } from "effect/unstable/ai"
 import type { Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
@@ -34,6 +34,8 @@ export type Strategy =
       readonly _tag: "PerTool"
       readonly limits: Readonly<Record<string, number | "unbounded">>
       readonly defaultLimit: number | "unbounded"
+      /** The ceiling across all names. See `PerToolOptions.total`. */
+      readonly total: number | "unbounded"
     }
 
 export const Sequential: Strategy = { _tag: "Sequential" }
@@ -44,10 +46,26 @@ export const concurrency = (limit: number): Strategy => ({
 })
 
 export interface PerToolOptions {
-  /** Limits by exact tool name. Unlisted tools use `defaultLimit`. */
+  /**
+   * Limits by exact tool name. Unlisted tools use `defaultLimit`.
+   *
+   * **Scoped to one model response.** See `perTool` for what that does and
+   * does not promise.
+   */
   readonly limits: Readonly<Record<string, number | "unbounded">>
   /** Default for an unlisted tool. Default: unbounded. */
   readonly defaultLimit?: number | "unbounded" | undefined
+  /**
+   * A ceiling across *all* names, within the same one response. Default:
+   * unbounded.
+   *
+   * Without it the per-name limits multiply: `defaultLimit: 4` with ten
+   * distinct tools in one response permits forty concurrent handlers, which is
+   * rarely what someone writing a limit meant. `total: 8` with
+   * `defaultLimit: 4` reads as "at most eight tools running, at most four of
+   * any one name".
+   */
+  readonly total?: number | "unbounded" | undefined
 }
 
 const validLimit = (limit: number | "unbounded"): boolean =>
@@ -55,14 +73,33 @@ const validLimit = (limit: number | "unbounded"): boolean =>
   (Number.isSafeInteger(limit) && limit > 0)
 
 /**
- * Limit calls independently by tool name.
+ * Limit calls independently by tool name, **within one model response**.
  *
  * ```ts
  * ToolExecution.perTool({
- *   limits: { shell: 1, read_file: 10 },
- *   defaultLimit: 4
+ *   limits: { read_file: 10, http_get: 2 },
+ *   defaultLimit: 4,
+ *   total: 8
  * })
  * ```
+ *
+ * ## What a limit is scoped to
+ *
+ * `execute` runs once per model response, so every number here bounds calls
+ * *within* that response and nothing beyond it. Across turns, and across
+ * concurrent sessions sharing one `Agent`, there is no coordination: a limit of
+ * `1` means "not twice in the same response", not "never twice at once".
+ *
+ * That is why the example above is not `shell: 1`. Someone who writes that
+ * wants a real guarantee -- one child process, no contention on a working
+ * directory -- and this cannot give it. A process-wide guarantee belongs in the
+ * handler, around the work itself: a `Semaphore` closed over by the tool, which
+ * holds for every turn and every session that shares it. `PartitionedSemaphore`
+ * was rejected for the keyed version of this because its keys share one global
+ * permit count.
+ *
+ * `total` bounds the whole response across names; without it the per-name
+ * limits multiply, since distinct names run concurrently with each other.
  *
  * Construction rejects zero, negative, fractional and non-finite limits so a
  * typo cannot turn a tool group into work that waits forever.
@@ -72,6 +109,10 @@ export const perTool = (options: PerToolOptions): Strategy => {
   if (!validLimit(defaultLimit)) {
     throw new RangeError("ToolExecution.perTool: defaultLimit must be a positive integer or unbounded")
   }
+  const total = options.total ?? "unbounded"
+  if (!validLimit(total)) {
+    throw new RangeError("ToolExecution.perTool: total must be a positive integer or unbounded")
+  }
   for (const [name, limit] of Object.entries(options.limits)) {
     if (!validLimit(limit)) {
       throw new RangeError(
@@ -79,10 +120,21 @@ export const perTool = (options: PerToolOptions): Strategy => {
       )
     }
   }
+  const limits: Record<string, number | "unbounded"> = Object.create(null)
+  Object.assign(limits, options.limits)
   return {
     _tag: "PerTool",
-    limits: Object.freeze({ ...options.limits }),
-    defaultLimit
+    // Null-prototype, so a *lookup* is safe rather than each reader having to
+    // remember to make it so. Tool names are not always written by the
+    // application -- `bindDiscovered` takes whatever an MCP server, an OpenAPI
+    // `operationId` or a GraphQL root field offers -- and on a plain object
+    // literal a tool named `constructor` or `toString` resolves a function from
+    // `Object.prototype`, which `?? defaultLimit` does not rescue because a
+    // function is not nullish. That value then reaches `Effect.all` as its
+    // concurrency.
+    limits: Object.freeze(limits),
+    defaultLimit,
+    total
   }
 }
 
@@ -669,7 +721,15 @@ const executePerTool = <
   Tool.HandlerError<Tools[keyof Tools]> | RaisedError,
   Tool.HandlerServices<Tools[keyof Tools]> | R
 > =>
-  Effect.suspend(() => {
+  Effect.gen(function* () {
+    // A semaphore, not the outer `Effect.all`'s concurrency: that would bound
+    // the number of *groups* in flight, and a group is many calls, so `total`
+    // would still multiply by the per-name limits. A permit per call is what
+    // "at most N tool calls running" actually means.
+    const ceiling = strategy.total === "unbounded"
+      ? undefined
+      : yield* Semaphore.make(strategy.total)
+
     const groups = new Map<
       string,
       Array<{
@@ -685,19 +745,27 @@ const executePerTool = <
       else group.push(indexed)
     }
 
-    return Effect.map(
+    return yield* Effect.map(
       Effect.all(
         Array.from(groups, ([name, group]) =>
           Effect.all(
-            group.map(({ call, index }) =>
-              Effect.map(
+            group.map(({ call, index }) => {
+              const one = Effect.map(
                 executeOne(handler, call, context),
                 (part) => ({ index, part })
               )
-            ),
+              return ceiling === undefined
+                ? one
+                : Semaphore.withPermits(ceiling, 1)(one)
+            }),
             {
-              concurrency:
-                strategy.limits[name] ?? strategy.defaultLimit
+              // `Object.hasOwn` rather than `?? defaultLimit`, because
+              // `Strategy` is a public union anyone can build by hand -- only
+              // the value `perTool` returns has the null prototype that makes
+              // a plain lookup safe.
+              concurrency: Object.hasOwn(strategy.limits, name)
+                ? strategy.limits[name]!
+                : strategy.defaultLimit
             }
           )
         ),

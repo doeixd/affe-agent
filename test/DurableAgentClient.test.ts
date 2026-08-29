@@ -18,7 +18,7 @@ import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
-import { breakingClaim, detail } from "./storageFaults.js"
+import { breakingClaim, detail, failure } from "./storageFaults.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -1045,10 +1045,12 @@ describe("DurableAgentClient (durability specifics)", () => {
         "SubmissionStarted",
         "RunStarted",
         "TurnStarted",
+        "ModelCallCompleted",
         "ToolCallStarted",
         "ToolCallSucceeded",
         "TurnCompleted",
         "TurnStarted",
+        "ModelCallCompleted",
         "MessageCompleted",
         "TurnCompleted",
         "RunCompleted",
@@ -1058,6 +1060,7 @@ describe("DurableAgentClient (durability specifics)", () => {
         "SubmissionStarted",
         "RunStarted",
         "TurnStarted",
+        "ModelCallCompleted",
         "MessageCompleted",
         "TurnCompleted",
         "RunCompleted",
@@ -1371,6 +1374,91 @@ describe("D7 at the durable client", () => {
           }
         }
       }
+    })
+  )
+
+  it.live("a retry under the same idempotency key rejoins the claim it already made", () =>
+    Effect.gen(function* () {
+      /**
+       * The reason `Claim.key` exists, exercised from the path that reaches
+       * it. Until now the key was only ever passed by `DurableSessionStore`'s
+       * own unit tests -- nothing in `src/` supplied one -- so D7's "bites"
+       * verdict was narrower than it read: the store honoured a key no
+       * production caller sent, and the crash window the key closes was open
+       * on the only path that reaches it.
+       *
+       * The fault here is the one the doc on `Claim.key` describes: the claim
+       * *commits* and the acknowledgement is lost. The caller is told the
+       * store failed while the session is, in fact, claimed. Without a key the
+       * retry is a second request and is refused as `Busy` -- the caller then
+       * believes nothing started while a claim sits on the session. With one,
+       * the store recognises the repeat and hands back the claim it already
+       * made.
+       */
+      const claimed = yield* Ref.make<ReadonlyArray<string>>([])
+      const acknowledged = yield* Ref.make(false)
+
+      const f = yield* fixture(
+        Agent.make({ loop: AgentLoop.bounded(2) }),
+        script,
+        undefined,
+        (inner) => ({
+          ...inner,
+          claim: (sessionId, submission) =>
+            Effect.flatMap(inner.claim(sessionId, submission), (outcome) =>
+              Effect.flatMap(
+                Ref.update(claimed, (all) =>
+                  outcome._tag === "Claimed"
+                    ? [...all, outcome.claim.submissionId]
+                    : [...all, outcome._tag]),
+                () =>
+                  Effect.flatMap(
+                    Ref.getAndSet(acknowledged, true),
+                    // Only the first call loses its reply. The write has
+                    // landed either way; that is what makes this the partial
+                    // failure worth testing rather than a refused call.
+                    (already) =>
+                      already
+                        ? Effect.succeed(outcome)
+                        : Effect.fail(failure("claim"))
+                  )
+              ))
+        })
+      )
+
+      const outcomes = yield* using(f.client, (client) =>
+        Effect.scoped(
+          Effect.flatMap(client.createSession({ sessionId: "idem" }), (session) =>
+            Effect.gen(function* () {
+              const first = yield* Effect.exit(
+                session.prompt("go", { idempotencyKey: "req-1" })
+              )
+              const second = yield* Effect.exit(
+                session.prompt("go", { idempotencyKey: "req-1" })
+              )
+              return { first, second }
+            }))))
+
+      // The lost acknowledgement, seen as the caller sees it.
+      assert.isTrue(Exit.isFailure(outcomes.first))
+
+      // And the retry is *not* refused. This is the assertion the issue is
+      // about: without the key forwarded, this is `AgentBusyError`.
+      if (Exit.isFailure(outcomes.second)) {
+        const error = Cause.findErrorOption(outcomes.second.cause)
+        assert.fail(
+          `the retry was refused: ${
+            Option.isSome(error) ? error.value._tag : "an unknown cause"
+          }`
+        )
+      }
+
+      // Same submission, not a second one. Comparing the ids the store
+      // actually returned is what distinguishes "recognised the retry" from
+      // "happened to succeed twice".
+      const ids = yield* Ref.get(claimed)
+      assert.strictEqual(ids.length, 2)
+      assert.strictEqual(ids[0], ids[1])
     })
   )
 

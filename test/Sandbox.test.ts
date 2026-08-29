@@ -801,4 +801,123 @@ describe("sandbox composition", () => {
       ])
     })
   )
+
+  /**
+   * The brand carries the rule, not just a name.
+   *
+   * `SandboxPath` used to be a bare `Schema.brand`, so the validation lived
+   * only in `path()` and anything else could mint one -- including values
+   * `path()` itself refuses. Two things depend on the promise:
+   * `internal/fileLock.ts` keys mutual exclusion on these, and `Shell` builds
+   * argv from them. "Somebody branded a string" is not the same claim as
+   * "this cannot escape the workspace".
+   */
+  describe("SandboxPath is refined, not just branded", () => {
+    const refused = [
+      "",
+      "/etc/passwd",
+      "C:/Windows",
+      "c:/windows",
+      "../secret",
+      "a/../../secret",
+      "a/..",
+      "..",
+      ".",
+      "./",
+      // A NUL byte truncates the name for any C API underneath: a check
+      // written in JavaScript sees the whole string, the filesystem sees only
+      // what precedes the NUL. It never escaped the workspace -- the local
+      // provider raised a `ProviderError` from `fs` -- but a value the brand
+      // calls validated must not be one a provider then refuses, and the
+      // wrong error class is the observable half of that.
+      "a.txt\u0000.png",
+      "\u0000"
+    ]
+
+    it.effect("a NUL byte is an InvalidPathError, not a provider failure", () =>
+      Effect.gen(function* () {
+        const outcome = yield* Effect.exit(Sandbox.path("notes/a.txt\u0000.png"))
+        assert.isTrue(Exit.isFailure(outcome))
+        if (!Exit.isFailure(outcome)) return
+        const error = Cause.findErrorOption(outcome.cause)
+        assert.strictEqual(error._tag, "Some")
+        if (error._tag !== "Some") return
+        assert.isTrue(error.value instanceof Sandbox.InvalidPathError)
+        if (!(error.value instanceof Sandbox.InvalidPathError)) return
+        assert.strictEqual(error.value.reason, "a NUL byte is not a filename character")
+        assert.strictEqual(error.value.path, "notes/a.txt\u0000.png")
+      }))
+
+    it("the schema refuses what path() refuses", () => {
+      for (const value of refused) {
+        assert.throws(
+          () => Schema.decodeUnknownSync(Sandbox.SandboxPath)(value),
+          undefined,
+          undefined,
+          `${JSON.stringify(value)} must not decode to a SandboxPath`
+        )
+      }
+    })
+
+    /**
+     * A backslash is valid *input* and not a valid *value*.
+     *
+     * `path()` normalises separators, so `a\b` is something a caller may hand
+     * it and `a/b` is what comes back. The brand describes the normalised
+     * form, so it refuses the unnormalised one -- the two are not in conflict,
+     * they are describing different ends of the same function.
+     */
+    it("a backslash is normalised by path() and refused by the schema", () =>
+      Effect.runSync(Effect.gen(function* () {
+        const built = yield* Sandbox.path("a\\b.ts")
+        assert.strictEqual(built, "a/b.ts")
+        assert.throws(
+          () => Schema.decodeUnknownSync(Sandbox.SandboxPath)("a\\b.ts"),
+          undefined,
+          undefined,
+          "an unnormalised separator is not a SandboxPath value"
+        )
+        assert.isFalse(Sandbox.isSandboxPath("a\\b.ts"))
+      })))
+
+    it.effect("path() and the schema agree, in both directions", () =>
+      Effect.gen(function* () {
+        for (const value of refused) {
+          const viaConstructor = yield* Effect.exit(Sandbox.path(value))
+          assert.isTrue(
+            Exit.isFailure(viaConstructor),
+            `path(${JSON.stringify(value)}) must fail`
+          )
+          assert.isFalse(
+            Sandbox.isSandboxPath(value),
+            `isSandboxPath(${JSON.stringify(value)}) must be false`
+          )
+        }
+
+        for (const value of ["a.ts", "src/a.ts", "a/b/c.ts", "a.b.c"]) {
+          const built = yield* Sandbox.path(value)
+          assert.strictEqual(built, value)
+          assert.isTrue(Sandbox.isSandboxPath(value))
+          assert.strictEqual(
+            Schema.decodeUnknownSync(Sandbox.SandboxPath)(built),
+            built
+          )
+        }
+      }))
+
+    it.effect("everything path() produces satisfies the schema", () =>
+      Effect.gen(function* () {
+        // `path()` normalises as well as validates, so its *output* is the
+        // interesting input -- `a/./b` becomes `a/b`, which must pass.
+        for (const value of ["a/./b.ts", "a//b.ts", "./a.ts"]) {
+          const built = yield* Sandbox.path(value)
+          assert.doesNotThrow(
+            () => Schema.decodeUnknownSync(Sandbox.SandboxPath)(built),
+            `path(${JSON.stringify(value)}) produced ${
+              JSON.stringify(built)
+            }, which the schema rejected`
+          )
+        }
+      }))
+  })
 })

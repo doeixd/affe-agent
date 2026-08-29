@@ -249,7 +249,10 @@ export const make = <A, I>(
         if (!live) {
           // A catch-up read is one response: the client has it whole.
           const items = yield* promise(() => session.json())
-          offer(items, Offset.make(session.offset))
+          // Same contract as the live path: a failed `offer` has already
+          // failed the queue with the decode cause, and ending it here would
+          // race that failure with an EOF. Return instead.
+          if (!offer(items, Offset.make(session.offset))) return
           Queue.endUnsafe(queue)
           return
         }

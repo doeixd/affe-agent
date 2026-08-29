@@ -31,11 +31,14 @@ where a finding turned out to be wrong.
 | ✅ | A-11 (E18) | The documented cast inventory had drifted from 5 to 16 |
 | ✅ | A-13 (E20) | Tool arguments reached any exporter regardless of `RedactionPolicy` |
 | ✅ | A-3 (E1) | Provider fallback: the one capability gap the audit found, now built |
-| ◑ | A-4 (E4) | `RcMap` landed in the tree; the server recorded why `LayerMap` does not fit static route registration, but AS4's separate live-layer count remains |
+| ✅ | A-4 (E4) | `RcMap` landed in the tree; static server mounts use scoped layers, and the test now counts both released sessions and released mount layers |
 | ✅ | A-5 (E2, E5, E9) | EventLog, Graph, and the sandbox process-adapter evaluations are all recorded |
-| ○ | A-6/8/9/12 | Open. None blocks anything; A-12 is documentation-only and A-8 starts with the remaining literal poll intervals |
+| ✅ | A-6 (E11, E12) | Independent per-tool limits shipped; `PartitionedSemaphore` and speculative caches were rejected after checking their actual semantics and call sites |
+| ✅ | A-8 (E13, E16) | Durable polling policy is validated `Config`; the credential sweep keeps secrets `Redacted` to their transport boundaries |
+| ✅ | A-9 (E6) | `apps/cli` is an `unstable/cli` + `Terminal` client over the existing HTTP `AgentClient` seam |
+| ✅ | A-12 (E19) | Every queue in the finding now states its policy; AG-UI alone became bounded with backpressure |
 
-**The audit was wrong four times, and each correction is recorded next to the
+**The audit was wrong six times, and each correction is recorded next to the
 finding rather than quietly dropped:**
 
 - **E1** claimed `/budget` gains a seam for "step down to a cheaper model".
@@ -43,12 +46,18 @@ finding rather than quietly dropped:**
   before anything fails.
 - **E7** proposed `Tx*` for `AgentState`'s swap-and-persist. STM commits by
   retrying, and that critical section contains a store write (**E7b**).
-- **E8** listed token metrics. No event carries usage, so that instrument would
-  have to be invented rather than observed.
+- **E8** listed token metrics before an event carried usage, so the instrument
+  would have had to be invented rather than observed. That prerequisite landed
+  later as `ModelCallCompleted` (2026-08-27), and the metric now exists.
 - **E10** said `effect/Crypto` would un-flag the Slack verifier. It has neither
   HMAC nor a constant-time compare. The goal was reached through Web Crypto's
   `subtle.verify` instead — which is also a *better* guarantee than the
   `timingSafeEqual` it replaced.
+- **E11** called `PartitionedSemaphore` independent per-key capacity. Its keys
+  partition fairness over one global permit pool; `ToolExecution.perTool`
+  therefore groups calls and applies independent limits directly.
+- **E12** said MCP discovery re-queries. Both binding paths list tools once
+  while constructing the toolkit; there is no repeated request to cache.
 
 The pattern is worth naming: every one of those was a finding written from
 knowing a module *exists* rather than from reading what it does. The measurement
@@ -171,7 +180,7 @@ package.
 The interfaces themselves are small and good; the cost of the mistake is not the
 interface, it is the N adapters behind it.
 
-### E4. `LayerMap` + `RcMap` / `RcRef` — the agent server's missing half
+### E4. `LayerMap` + `RcMap` / `RcRef` — scoped server and tree lifetimes
 
 [plan-agent-server.md](./plan-agent-server.md) mounts several agents, possibly
 on different infrastructure, each with its own registry and capacity.
@@ -193,8 +202,8 @@ shape. `AgentServer` instead composes the already-scoped `AgentSessionHost`
 layers and verifies that hosted sessions release when the server scope closes.
 That substitution is recorded in [plan-agent-server.md](./plan-agent-server.md)
 S2; `LayerMap` is reserved for the deferred design where the agent name is a
-path parameter. The remaining AS4 evidence gap is narrower: the test counts
-released sessions, but does not separately count live mount layers.
+path parameter. A-4's final test addition closes AS4 by separately counting
+released hosted sessions and mount-layer finalizers.
 
 ### E5. `Graph` — the session tree is a graph
 
@@ -215,6 +224,16 @@ since landed on OpenTUI/Solid, so the coding toolkit and session tree are now
 usable by a human. That does not close the distinct command-line milestone:
 `unstable/cli` and `Terminal` remain the ecosystem's answer for a conventional,
 composable CLI rather than a full-screen renderer.
+
+**What landed (A-9).** `apps/cli` is the conventional counterpart to the TUI:
+an `effect/unstable/cli` command tree whose output goes through `Terminal`.
+It operates the existing HTTP `AgentClient` seam (`create`, `prompt`,
+`status`, `history`, `interrupt`, `steer`, `follow-up`, `pending`, `respond`)
+instead of embedding a second local agent runtime. That makes the same
+executable work against a local or durable mount. The server URL is
+`Config`-backed, the optional bearer token
+is `Redacted` until the HTTP-header boundary, and `test/Cli.test.ts` runs the
+real parser against an injected client and test terminal.
 
 `unstable/reactivity` is *not* recommended for the TUI: OpenTUI/Solid brings its
 own reactive system, and running two is worse than running either.
@@ -300,18 +319,21 @@ One import in the whole repository. `/observability` standardises span names and
 attributes carefully and ships essentially no counters or histograms, yet most
 of what an operator asks is derivable from the event stream it already consumes.
 
-**One correction to this finding.** It listed *tokens in/out* among them. No
-event carries model usage, so a token metric would have to be **invented rather
-than observed** -- adding usage to the event stream is a change to the kernel's
-vocabulary and deserves its own decision, not a smuggled dependency inside a
-metrics change. Dropped, and said so in the module.
+**One correction to this finding.** It originally listed *tokens in/out* before
+any event carried model usage, when a token metric would have been **invented
+rather than observed**. The metric was correctly dropped at that point. On
+2026-08-27 the separate kernel decision in `effect-plan-2.txt` Phase 1 added
+`ModelCallCompleted`; `/observability` then added `agent_model_tokens` from that
+event without reconstructing provider results.
 
 **What landed (A-2).** `Observability.metrics(events)` -- the sibling of
 `trace`, forked the same way, kept separate because the two have different costs
-and different reasons to be switched off. Five instruments, all three shapes:
+and different reasons to be switched off. Six event-derived instruments, all
+three shapes:
 
 | Instrument | Shape | From |
 |---|---|---|
+| `agent_model_tokens` | counter, by `direction` | `ModelCallCompleted.usage` |
 | `agent_turns` | counter | `TurnCompleted` |
 | `agent_turns_per_run` | histogram | `RunCompleted.turns` |
 | `agent_tool_calls` | counter, by `tool` + `outcome` | the three terminal tool events |
@@ -400,12 +422,33 @@ wrong bytes.
 ten concurrent `read_file`s. `PartitionedSemaphore` is that primitive exactly,
 and this is a `Strategy` variant rather than new API surface.
 
+**What landed (A-6), with a correction to the recommendation.** Reading the
+v4 primitive showed that `PartitionedSemaphore` has one global permit pool;
+keys provide partitioned fairness, not independent capacities. It therefore
+cannot express one concurrent `bash` *and* ten concurrent `read_file` calls.
+`ToolExecution.perTool` is the promised strategy variant, implemented by
+grouping one response's calls by exact tool name, applying each group's own
+positive-integer or `"unbounded"` limit, and running groups independently.
+Results are restored to model-call order. A latch-backed test proves a limit-1
+tool stays serial while a limit-2 tool overlaps in the same response, and
+invalid limits are rejected at construction.
+
 ### E12. `Cache` / `ScopedCache`
 
 Zero uses. Skills load lazily on every request, MCP tool discovery re-queries,
 subagent definitions rebuild, and the coding toolkit re-reads files it has
 already read within a turn. `ScopedCache` in particular matches the MCP case,
 where the cached thing owns a connection.
+
+**Decision (A-6): do not add either cache now.** The proposed costs were not
+present on inspection. MCP `bind` and `bindDiscovered` call `listTools` once
+while constructing a toolkit, not per tool request; the connection is already
+owned by the caller's scope. Skill bodies and resources are Effects precisely
+so a backing registry may change between loads, and caching them would silently
+change that contract. Coding tools reread files because earlier tools can edit
+them, so a turn cache would return stale source. No measured subagent rebuild
+cost remains. An opt-in cache belongs beside a future expensive, stable backing
+service; adding one today would delete no work and remove no observed cost.
 
 ### E13. `Config` / `ConfigProvider`, and `Redacted` end to end
 
@@ -414,6 +457,19 @@ and a CLI, limits, capacities, budgets and provider credentials should arrive
 through `Config`, and credentials should be `Redacted` from arrival to use.
 `/observability` already has a redaction policy for telemetry; the two halves
 should meet rather than solve the same problem twice.
+
+**What landed (A-8).** `DurablePolling` owns four validated positive finite
+duration recipes and their concrete defaults. `DurableAgentClient.layerConfig`,
+`DeliveryLog.sqlLogConfig` / `sqlLogWithTableConfig`, and
+`DurableAgent.resultConfig` load them without widening the existing explicit
+constructors' error channels; malformed operator policy remains the typed
+`ConfigError`. The remaining 100ms cluster retry is deliberately fixed beside
+its 600-attempt budget because those two numbers jointly outlast the default
+35-second shard lease. The credential sweep found the public credentials in
+`/web/brave`, `/connectors/slack`, provider examples, and the new CLI already
+use `Redacted`; each unwrap occurs only at the request-signing/header boundary.
+`test/DurablePolling.test.ts` covers defaults, all stable names, and rejection
+of zero.
 
 ## Group 3 — situational, listed so they are not rediscovered
 
@@ -717,8 +773,10 @@ claimed the interval was an upper bound when it is a mean.
 Three tests, falsified twice: swapping the cap and jitter back reproduces the
 223ms overshoot, and removing jitter fails the desynchronisation assertion.
 
-**Still open:** the intervals themselves are still literals. Turning them into
-`Config` is A-8, and unchanged by this.
+**A-8 closed the policy half.** The four independently tunable durable poll
+intervals now come from `DurablePolling` recipes (with explicit-constructor
+overrides preserved). The cluster reassignment interval remains fixed with its
+attempt budget because the pair defines one lease-recovery envelope.
 
 ### E17. `Metric` has exactly one instance, and it is the right one
 
@@ -810,6 +868,15 @@ made explicitly and even instrumented (E17's counter exists precisely because
 `/data` drops). A queue with no bound is a memory-growth decision, and a slow
 SSE consumer on the `/ag-ui` queue is the realistic way it bites. Write the
 policy down per queue; change only the ones the writing shows to be wrong.
+
+**What landed (A-12).** `InputChannel.memory` documents why accepted input must
+be lossless and why bounding can deadlock behind a human wait; durable
+deployments replace it with persisted admission. `AgentProbe` documents its
+complete-record test contract and scope-bounded lifetime. A2A documents that
+its queue holds one finite protocol response and is drained by a layer-owned
+fiber. AG-UI was the one unsafe case: its per-request SSE queue is now bounded
+at 256 and publication backpressures, so a slow client cannot grow memory
+without limit and no protocol event is dropped.
 
 ### E20. `RedactionPolicy` covered events but not exported spans — **fixed, A-13**
 
@@ -945,12 +1012,11 @@ outrank most of round one.
   without a wire change; `AgentIdleError`, which the protocol does declare,
   remains typed. That boundary is a recorded triage outcome, not unfinished
   store work.
-- **A-2 — Metrics in `/observability` (E8, E17). ✅ Done.** Five instruments
-  over the event stream the package already consumes -- turns, turns-per-run,
-  tool calls by tool and outcome, tool duration, pending input -- exported so
-  nothing has to restate a description to read one. Tokens dropped from the
-  original list: no event carries usage, so that instrument would have to be
-  invented rather than observed.
+- **A-2 — Metrics in `/observability` (E8, E17). ✅ Done.** Six instruments
+  over the event stream the package already consumes -- model tokens by
+  direction, turns, turns-per-run, tool calls by tool and outcome, tool duration,
+  pending input -- exported so nothing has to restate a description to read
+  one. Tokens were added only after `ModelCallCompleted` made them observable.
 - **A-3 — `ExecutionPlan` combinator (E1). ✅ Done.**
   `Agent.withExecutionPlan` ships: batch and streaming fallback, `LanguageModel`
   discharged from the requirements without a cast, an `agent_model_attempts`
@@ -959,43 +1025,51 @@ outrank most of round one.
   The plan below records what it cost -- including a signature that compiled and
   was impossible to call, and an example that nearly shipped a false claim:
   [plan-execution-plan.md](./plan-execution-plan.md).
-- **A-4 — `LayerMap` / `RcMap` in the server and the tree (E4). ◑**
+- **A-4 — `LayerMap` / `RcMap` in the server and the tree (E4). ✅ Done.**
   `RcMap` landed in [plan-session-tree.md](./plan-session-tree.md) T3.
   [plan-agent-server.md](./plan-agent-server.md) S2 records why `LayerMap`
   does not fit static route registration and uses the scoped
-  `AgentSessionHost` layers instead. Hosted-session release is tested; AS4's
-  separate live-mount-layer count remains.
+  `AgentSessionHost` layers instead. `test/AgentServer.test.ts` separately
+  counts finalization of two hosted sessions and two mount layers when the
+  server scope closes.
 - **A-5 — The three evaluations (E2, E5, E9). ✅ Done.** The EventLog
   decision is recorded in [plan-durability-hardening.md](./plan-durability-hardening.md)
   H4b, the Graph decision in [plan-session-tree.md](./plan-session-tree.md)
   T4, and the `FileSystem` / Effect process adapter evaluation in
   [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md)
   (retain `sandbox/local`; two semantic gaps).
-- **A-6 — `PartitionedSemaphore` strategy (E11)** and **`Cache` where the cost
-  is real (E12).**
+- **A-6 — Per-tool concurrency and cache evaluation (E11, E12). ✅ Done.**
+  `ToolExecution.perTool` provides independent keyed limits. The similarly
+  named `PartitionedSemaphore` has one global capacity and was rejected.
+  `Cache` / `ScopedCache` were not adopted because the alleged repeated MCP
+  discovery does not exist and the other reads are intentionally dynamic.
 - **A-7 — Un-flag `/connectors/slack` (E10). ✅ Done.** Not with `effect/Crypto`,
   which has neither HMAC nor a constant-time compare: with Web Crypto's
   `subtle.verify`, which does the comparison natively and is therefore both more
   portable *and* a better guarantee than the `timingSafeEqual` it replaces.
   `HOST_MODULES` is one entry shorter, which is the proof.
-- **A-8 — `Config` and `Redacted` sweep (E13, E16)**, alongside the server and
-  CLI, starting with the five hard-coded poll intervals that are policy today.
-- **A-9 — `unstable/cli` (E6).** The named roadmap gap, once the tree exists to
-  drive it.
+- **A-8 — `Config` and `Redacted` sweep (E13, E16). ✅ Done.** Four tunable
+  durable intervals are validated recipes with Config-aware constructors; the
+  lease-coupled cluster retry is documented as fixed. Credentials remain
+  `Redacted` through configuration and are unwrapped only at transport edges.
+- **A-9 — `unstable/cli` (E6). ✅ Done.** `apps/cli` drives `AgentClient` over
+  HTTP with `unstable/cli`, `Terminal`, Config-backed connection policy and a
+  Redacted token.
 - **A-10 — Backoff and jitter on retry schedules (E16). ✅ Done.**
   `internal/schedules.ts` supplies `steady` (jittered, for count-bounded
   retries against shared infrastructure) and `backoff` (capped exponential, for
   polls). Fixes an unbounded 10ms poll that cost millions of queries a day for
   a submission parked on a human. Three tests, falsified twice — one of which
   caught that `jittered` can *exceed* its base delay, so a cap applied before
-  it is not a cap. The intervals are still literals; making them `Config` is
-  A-8.
+  it is not a cap. A-8 subsequently moved the operator-tunable intervals into
+  validated `Config` recipes.
 - **A-11 — Close the cast-inventory drift (E18). ✅ Done.**
   `test/Casts.test.ts` counts erasing casts per file from the AST and fails when
   the set changes; AGENTS.md gained the two missing kinds and the
   erasing-vs-narrowing distinction. Falsified by adding a cast.
-- **A-12 — State each unbounded queue's policy (E19).** Documentation, plus a
-  bound wherever the writing shows one belongs.
+- **A-12 — State each unbounded queue's policy (E19). ✅ Done.** Three queues
+  now document their lossless finite/scope policy; AG-UI is bounded at 256 with
+  backpressure.
 
 ## Success conditions
 
@@ -1003,24 +1077,26 @@ outrank most of round one.
   with no window in which a held lock can be dropped — the test the old comment
   said could not be written. *Met: three tests in `test/CodingToolkit.test.ts`,
   falsified by removing the eviction and by dropping `acquireUseRelease`.*
-- **AS2 ✅:** `/observability` exposes turn, run-depth, tool-outcome,
-  tool-latency and queue-depth instruments, asserted from a scripted session
-  (`test/Observability.test.ts`). *Token instruments are excluded by decision,
-  not omission -- the event stream carries no usage.*
+- **AS2 ✅:** `/observability` exposes model-token, turn, run-depth,
+  tool-outcome, tool-latency and queue-depth instruments, asserted from a
+  scripted session (`test/Observability.test.ts`). `agent_model_tokens` landed
+  after `ModelCallCompleted` supplied the missing usage event.
 - **AS3 ✅:** An agent falls back from a failing model to a second one without
   the `Agent` naming either, and `Agent.make` still carries nine type parameters.
   *Met by `Agent.withExecutionPlan`; batch, streaming, tool-side-effect and
   inference coverage live in `test/ExecutionPlan.test.ts`.*
-- **AS4 ◑:** Mounting and unmounting N agents leaves no live sessions and no
-  live layers, asserted by count. *`test/AgentServer.test.ts` counts released
-  hosted sessions after two mounts close; a separate live-layer count is still
-  missing.*
+- **AS4 ✅:** Mounting and unmounting N agents leaves no live sessions and no
+  live layers, asserted by count. *`test/AgentServer.test.ts` separately counts
+  two hosted-session finalizers and two mount-layer finalizers after the server
+  scope closes.*
 - **AS5 ✅:** E2, E5 and E9 each have a recorded decision with a reason.
   *E2/EventLog, E5/Graph, and E9/sandbox-local are all written; E9 retains
   the Node adapter.*
 - **AS6 ✅:** `npm run check` and `npm run lint:portability` remain green.
-  *The latest full verification on 2026-08-26 passed 1,194 tests, both Effect
-  diagnostic projects, package verification and the portability scan.*
+  *The latest full verification on 2026-08-27 passed 1,215 tests in 124 files,
+  all three TypeScript projects, zero diagnostics across the 312-file root,
+  2-file CLI and 15-file TUI projects, the package build, portability scan and
+  CLI/TUI smoke suites.*
 - **AS7 ✅:** A trace exported from a real run can be joined to the events
   `/observability` emits for the same run **by attribute key**, with no
   translation table — and a session id filter selects spans below the host
@@ -1039,9 +1115,11 @@ outrank most of round one.
   AGENTS.md records it — falsified by adding one to `AgentLoop.ts` and watching
   the suite name that file (E18). *Plain narrowings are deliberately out of
   scope; see the finding for why.*
-- **AS10:** Every retry interval in `src/` is either derived from `Config` or
+- **AS10 ✅:** Every retry interval in `src/` is either derived from `Config` or
   documented at its site as deliberately fixed, and no retry against shared
-  infrastructure is un-jittered (E16).
+  infrastructure is un-jittered (E16). *The cluster's 100ms/600-attempt pair is
+  fixed as one lease-recovery envelope; durable operator polls load through
+  `DurablePolling`.*
 
 ## Non-goals
 

@@ -399,7 +399,17 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           Effect.gen(function* () {
             const outcome = yield* options.sessionStore.claim(sessionId, {
               prompt: Prompt.make(input),
-              stream: promptOptions?.stream === true
+              stream: promptOptions?.stream === true,
+              // The caller's key, forwarded verbatim. Without it a retry
+              // after a lost acknowledgement — the store took the claim, the
+              // reply never arrived — is a *second* request, refused as
+              // `Busy`; with it the store recognises the retry and hands back
+              // the claim it already made. Spread rather than passed as
+              // `undefined` because `Claim.key` is optional and absent means
+              // "no idempotence", not "the key `undefined`".
+              ...(promptOptions?.idempotencyKey === undefined
+                ? {}
+                : { key: promptOptions.idempotencyKey })
             })
             if (outcome._tag === "Missing") {
               return yield* noSuchSession(sessionId)

@@ -23,14 +23,52 @@ export const workspace = (label: string): Workspace => label as Workspace
 /**
  * A path relative to the sandbox root.
  *
- * Validation is runtime work a schema cannot express: absolute paths and any
- * `..` segment are refused at construction, so every handle that reaches a
- * sandbox has already passed the check. Segments are normalised to "/" so the
- * value is portable across providers.
+ * Absolute paths, drive letters and any `..` segment are refused, and segments
+ * are normalised to "/" so the value is portable across providers. Every handle
+ * that reaches a sandbox has therefore already passed the check.
+ *
+ * **The refinement is on the brand, not only in `path()`.** A bare
+ * `Schema.brand` would let `SandboxPath.makeUnsafe("../etc/passwd")` produce a
+ * value the type says is safe and the constructor would have refused, and two
+ * features now sit downstream of that promise: `internal/fileLock.ts` keys
+ * mutual exclusion on these, and `Shell` builds argv from them. A type that
+ * means "somebody branded a string" is not the same claim as "this cannot
+ * escape the workspace", and only the second is worth having here.
+ *
+ * `path()` remains the constructor to reach for -- it normalises as well as
+ * validates, and reports why in an `InvalidPathError` rather than a schema
+ * issue. The refinement is what makes every *other* route agree with it.
+ *
+ * The rules live in `isSandboxPath` so the schema and `path()` cannot drift:
+ * two checks that are supposed to agree and are written separately do not stay
+ * agreeing.
  */
-export const SandboxPath = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/sandbox/SandboxPath")
-)
+export const isSandboxPath = (value: string): boolean => {
+  if (value.length === 0) return false
+  // A NUL byte is not a filename character on any supported host, and it is
+  // the classic truncation trick: `a.txt<NUL>.png` names one file to a check
+  // written in JavaScript and another to a C API that stops at the NUL.
+  // Nothing was escaping the workspace -- the local provider surfaced it as a
+  // `ProviderError` from `fs` -- but that is the provider refusing an input
+  // this type already claims to have validated, reported in the wrong error
+  // class. Refusing it here makes the brand's promise true and gives `path()`
+  // an `InvalidPathError` to report instead.
+  if (value.includes("\u0000")) return false
+  if (value.includes("\\")) return false
+  if (/^([a-zA-Z]:)?\//.test(value)) return false
+  if (/^[a-zA-Z]:/.test(value)) return false
+  const segments = value.split("/")
+  if (segments.includes("..")) return false
+  return segments.some((segment) => segment !== "" && segment !== ".")
+}
+
+export const SandboxPath = Schema.String.check(
+  Schema.makeFilter((value) =>
+    isSandboxPath(value)
+      ? undefined
+      : "not a workspace-relative path: no leading '/', no drive letter, no '..' segment, '/' separators"
+  )
+).pipe(Schema.brand("@doeixd/effect-agent/sandbox/SandboxPath"))
 export type SandboxPath = typeof SandboxPath.Type
 
 export class InvalidPathError extends Schema.TaggedError<InvalidPathError>()(
@@ -49,6 +87,16 @@ export const path = (
   if (normalised.length === 0) {
     return Effect.fail(
       new InvalidPathError({ path: value, reason: "the path is empty" })
+    )
+  }
+  // Kept in step with `isSandboxPath`, which refuses the same byte: the two
+  // checks agree or the brand stops meaning what it says.
+  if (normalised.includes("\u0000")) {
+    return Effect.fail(
+      new InvalidPathError({
+        path: value,
+        reason: "a NUL byte is not a filename character"
+      })
     )
   }
   if (/^([a-zA-Z]:)?\//.test(normalised)) {

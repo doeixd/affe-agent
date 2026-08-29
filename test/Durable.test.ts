@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
@@ -30,6 +30,7 @@ const Gate = DurableDeferred.make("DurableTestGate", { success: Schema.String })
 const Gate2 = DurableDeferred.make("DurableTestGate2", { success: Schema.String })
 const Gate3 = DurableDeferred.make("DurableTestGate3", { success: Schema.String })
 const Gate4 = DurableDeferred.make("DurableTestGate4", { success: Schema.String })
+const Gate5 = DurableDeferred.make("DurableTestGate5", { success: Schema.String })
 const StreamGate = DurableDeferred.make("StreamGate", { success: Schema.String })
 
 const Refund = Tool.make("refund", {
@@ -653,15 +654,32 @@ describe("durable submissions", () => {
         const executionId = yield* DurableAgent.submit(durable, store, "s4", "go")
         yield* Deferred.await(gateReady)
 
-        yield* durable.definition.interrupt(executionId)
+        // The recorded intent, not `durable.definition.interrupt`. The
+        // engine's own interrupt is mark-and-resume: it forks a replay that
+        // knows nothing about why it was restarted, and the replay -- whose
+        // `suspendOnce` gate no longer parks it -- ran to completion. That
+        // was issue #77's D4 violation.
+        yield* DurableAgent.interrupt(store, "s4")
 
-        // Waking the gate after interruption must not revive the submission.
+        // Waking the gate after interruption must not revive the submission:
+        // the resumed replay finds the intent before it can run.
         yield* DurableDeferred.succeed(Gate3, {
           token: yield* Deferred.await(gateReady),
           value: "too late"
         }).pipe(Effect.ignore)
 
-        return yield* durable.definition.poll(executionId)
+        // The original assertion polled *here*, at the instant the engine had
+        // forked a fibre and recorded no exit, so `poll` returned `None` every
+        // single time and the conjunction below could not be false. Waiting
+        // for the execution to settle is what makes this test able to fail.
+        return yield* Effect.retry(
+          Effect.flatMap(durable.definition.poll(executionId), (polled) =>
+            Option.isSome(polled) && polled.value._tag === "Complete"
+              ? Effect.succeed(polled.value)
+              : Effect.fail("pending" as const)
+          ),
+          { times: 400, schedule: Schedule.spaced(Duration.millis(25)) }
+        )
       }).pipe(
         Effect.provide(
           durable.layer.pipe(
@@ -671,14 +689,101 @@ describe("durable submissions", () => {
         )
       )
 
-      // Interrupted is terminal: it is not Complete, and completing the gate
-      // afterwards does not make it so.
+      // Interrupted is terminal, and it is terminal as an *interruption*:
+      // never a success, and carrying the reason rather than an anonymous
+      // death. Completing the gate afterwards does not change either.
       assert.isFalse(
-        Option.isSome(outcome) &&
-          outcome.value._tag === "Complete" &&
-          Exit.isSuccess(outcome.value.exit),
+        Exit.isSuccess(outcome.exit),
         "an interrupted submission must not complete successfully"
       )
+      const failure = Exit.isFailure(outcome.exit)
+        ? Option.getOrUndefined(Cause.findErrorOption(outcome.exit.cause))
+        : undefined
+      assert.strictEqual(failure?.tag, "SubmissionInterrupted")
+    })
+  )
+
+  it.live("a replay resuming a journal whose interrupt intent is recorded stops before it runs", () =>
+    Effect.gen(function* () {
+      // The cross-process shape of the same guarantee, and the half the
+      // poller cannot cover. The intent is recorded while nothing is
+      // running -- the submission is parked on a durable await, so its body
+      // fibre, and with it the poller, is gone. What observes the intent is
+      // the *replay*, at the top of the body, before the model is reached.
+      //
+      // The parking happens in the `ContextTransform`, ahead of the first
+      // model call, so the original run never reaches the provider. A replay
+      // that ran to completion would -- and the recorded prompt count is what
+      // distinguishes "stopped before running" from "ran and was relabelled",
+      // which the outcome tag alone cannot.
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const store = yield* DurableChannels.memoryStore
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([
+        { text: "first" }
+      ])
+
+      // Parks before the first model call and never again, so the replay is
+      // free to run straight through -- the condition under which the
+      // violation reproduced.
+      const parkOnce = yield* Ref.make(true)
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          if (yield* Ref.getAndSet(parkOnce, false)) {
+            yield* Deferred.succeed(gateReady, yield* DurableDeferred.token(Gate5))
+            yield* DurableDeferred.await(Gate5)
+          }
+          return context.canonicalPrompt
+        })
+      )
+
+      const Parking = Agent.make({ contextTransform: gating })
+      // The poller is put out of reach on purpose. It would also catch this
+      // intent -- but only by winning a race against a replay that no longer
+      // parks, which is the race the violation won. What must hold is that
+      // the replay observes the intent *before it runs*, so the one check
+      // that can still fire here is the one at the top of the body.
+      const durable = DurableAgent.workflow("Replayed", Parking, {
+        store,
+        interruptPollInterval: Duration.minutes(10)
+      })
+
+      const outcome = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "s4b", "go")
+        const token = yield* Deferred.await(gateReady)
+
+        // Recorded while the execution is suspended: nothing is polling.
+        yield* DurableAgent.interrupt(store, "s4b")
+
+        // Waking it is what starts the replay.
+        yield* DurableDeferred.succeed(Gate5, { token, value: "resume" }).pipe(
+          Effect.ignore
+        )
+
+        return yield* Effect.retry(
+          Effect.flatMap(durable.definition.poll(executionId), (polled) =>
+            Option.isSome(polled) && polled.value._tag === "Complete"
+              ? Effect.succeed(polled.value)
+              : Effect.fail("pending" as const)
+          ),
+          { times: 400, schedule: Schedule.spaced(Duration.millis(25)) }
+        )
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(modelLayer)
+          )
+        )
+      )
+
+      assert.isFalse(Exit.isSuccess(outcome.exit))
+      const failure = Exit.isFailure(outcome.exit)
+        ? Option.getOrUndefined(Cause.findErrorOption(outcome.exit.cause))
+        : undefined
+      assert.strictEqual(failure?.tag, "SubmissionInterrupted")
+      // The replay stopped before the model: the provider was never reached,
+      // by either the original run or the replay.
+      assert.strictEqual((yield* recorder.prompts).length, 0)
     })
   )
 })

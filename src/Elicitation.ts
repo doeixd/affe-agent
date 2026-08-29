@@ -147,9 +147,16 @@ export const memory: Factory = {
             // Removed however the wait ends, including interruption: a session
             // that is torn down mid-question must not keep reporting it as
             // pending.
+            //
+            // Removed only if it is still *ours*. `Elicitor` is a public seam
+            // and ids come from whoever calls it, so a reused id registers a
+            // second wait over the first; deleting by id alone would then have
+            // one wait's teardown unregister the other's, leaving a live
+            // question invisible to `pending` and unanswerable by `respond`.
             return yield* Deferred.await(deferred).pipe(
               Effect.ensuring(
                 Ref.update(waiting, (all) => {
+                  if (all.get(request.id)?.deferred !== deferred) return all
                   const next = new Map(all)
                   next.delete(request.id)
                   return next

@@ -13,6 +13,7 @@ import * as Agent from "../src/Agent.js"
 import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
 import type { AgentTransportError } from "../src/client/AgentClient.js"
+import { PromptWire } from "../src/index.js"
 import * as EntityClient from "../src/cluster/EntityClient.js"
 import {
   AgentEntity,
@@ -36,7 +37,7 @@ const textsIn = (store: DurableChannels.Store, key: string) =>
   Effect.map(store.takeAll(key), (encoded) =>
     encoded.flatMap((json) =>
       FakeModel.userTexts(
-        Schema.decodeUnknownSync(Prompt.Prompt)(JSON.parse(json))
+        Schema.decodeUnknownSync(PromptWire.Prompt)(JSON.parse(json))
       )
     )
   )
@@ -68,6 +69,19 @@ describe("agent entity", () => {
       // directly rather than the admission-checked convenience functions.
       yield* DurableChannels.offer(store, "session-a", "steering", "for a")
       yield* DurableChannels.offer(store, "session-b", "followUps", "for b")
+      yield* DurableChannels.offer(
+        store,
+        "session-c",
+        "steering",
+        Prompt.make([{
+          role: "user",
+          content: [{
+            type: "file",
+            mediaType: "application/octet-stream",
+            data: new Uint8Array([31, 32, 33])
+          }]
+        }])
+      )
 
       // The store holds encoded prompts, so compare their text rather than
       // their wire form.
@@ -80,12 +94,24 @@ describe("agent entity", () => {
         ["for b"]
       )
       assert.deepStrictEqual(yield* textsIn(store, "session-b:steering"), [])
+      const encoded = yield* store.takeAll("session-c:steering")
+      const decoded = Schema.decodeUnknownSync(PromptWire.Prompt)(
+        JSON.parse(encoded[0]!)
+      )
+      const message = decoded.content[0]
+      const data = message?.role === "user"
+        ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])[0]
+        : undefined
+      assert.isTrue(data instanceof Uint8Array)
+      if (data instanceof Uint8Array) {
+        assert.deepStrictEqual(Array.from(data), [31, 32, 33])
+      }
     })
   )
 
   it.live("submits and steers through a sharded entity client", () =>
     Effect.gen(function* () {
-      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([{ text: "done" }])
       const store = yield* DurableChannels.memoryStore
       const durable = DurableAgent.workflow("Sharded", Agent.make({}), { store })
 
@@ -101,7 +127,16 @@ describe("agent entity", () => {
       const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
       const client = yield* makeClient("session-alpha")
 
-      const executionId = yield* client.submit({ input: Prompt.make("hello") })
+      const executionId = yield* client.submit({
+        input: Prompt.make([{
+          role: "user",
+          content: [{
+            type: "file",
+            mediaType: "application/octet-stream",
+            data: new Uint8Array([41, 42, 43])
+          }]
+        }])
+      })
       assert.isString(executionId)
 
       yield* client.steer({ input: Prompt.make("stay on topic") })
@@ -124,6 +159,17 @@ describe("agent entity", () => {
       ).pipe(Effect.provide(runtime))
 
       assert.strictEqual(result._tag, "Complete")
+      const submitted = (yield* recorder.prompts)[0]
+      const submittedMessage = submitted?.content[0]
+      const submittedData = submittedMessage?.role === "user"
+        ? submittedMessage.content.flatMap((part) =>
+            part.type === "file" ? [part.data] : []
+          )[0]
+        : undefined
+      assert.isTrue(submittedData instanceof Uint8Array)
+      if (submittedData instanceof Uint8Array) {
+        assert.deepStrictEqual(Array.from(submittedData), [41, 42, 43])
+      }
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)

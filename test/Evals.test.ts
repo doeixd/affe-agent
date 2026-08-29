@@ -144,6 +144,27 @@ describe("Evals", () => {
     })
   )
 
+  it.effect("an eval that asserts nothing fails rather than passing vacuously", () =>
+    Effect.gen(function* () {
+      // `every` on an empty array is true, so a body that records no check
+      // would otherwise report PASS -- an eval that cannot fail is worse than
+      // no eval, because CI reads it as evidence.
+      const { layer } = yield* TestLanguageModel.script(weatherScript())
+      const silent = Evals.defineEval({
+        name: "silent",
+        agent: WeatherAgent,
+        test: (t) => Effect.asVoid(t.send("weather?"))
+      })
+      const result = yield* Evals.run(silent).pipe(Effect.provide(layer))
+
+      assert.isFalse(result.passed)
+      assert.deepStrictEqual(result.checks.map((check) => [check.label, check.passed]), [
+        ["recorded at least one check", false]
+      ])
+      assert.include(Evals.formatText([result]), "the eval asserted nothing")
+    })
+  )
+
   it.effect("runAll reports each eval independently, and the reporters render them", () =>
     Effect.gen(function* () {
       // One shared, sequentially-consumed script: eval one takes the first pair

@@ -68,9 +68,81 @@ describe("Redaction", () => {
     const env = Redaction.make(Redaction.environmentSecrets)
     assert.strictEqual(env.redact("AWS_SECRET_KEY=hunter2"), "AWS_SECRET_KEY=[redacted]")
 
+    // The separator survives: a colon-separated line is YAML or a header dump,
+    // and rewriting it to `=` redacted the secret by corrupting the document
+    // around it.
+    assert.strictEqual(env.redact("API_TOKEN: abc"), "API_TOKEN: [redacted]")
+    assert.strictEqual(env.redact("  password:secret1"), "  password:secret1")
+    assert.strictEqual(env.redact("PASSWORD : x"), "PASSWORD : [redacted]")
+
     // And plainly does not catch this, which is the honest half of the claim:
     // two matchers are two matchers.
     assert.include(env.redact(`the key is ${SECRET}`), SECRET)
+  })
+
+  it("a pattern instance redacts every time it is applied, not only the first", () => {
+    // The expression is hoisted out of `apply` now. `String.prototype.replace`
+    // resets `lastIndex`, so that is safe -- but "safe" is a claim about the
+    // second call, so the second call is what is asserted.
+    const rule = Redaction.pattern(/token=\w+/)
+    assert.strictEqual(rule.apply("token=aaa"), "[redacted]")
+    assert.strictEqual(rule.apply("token=aaa"), "[redacted]")
+    assert.strictEqual(rule.apply("token=bbb and token=ccc"), "[redacted] and [redacted]")
+    assert.strictEqual(rule.apply("token=bbb and token=ccc"), "[redacted] and [redacted]")
+  })
+
+  it("a self-referential value is walked once, not until the stack runs out", () => {
+    // `asSpanHook` and `asHook` take arbitrary span attributes and log
+    // annotations. Nothing promises those are acyclic, and an overflow here is
+    // an outage rather than a leak -- but it is still the redactor's fault.
+    const self: Record<string, unknown> = { secret: SECRET }
+    self["self"] = self
+    const out = Redaction.deep(self, Redaction.make(Redaction.literal(SECRET))) as Record<
+      string,
+      unknown
+    >
+    assert.strictEqual(out.secret, "[redacted]")
+    // The revisited node is handed back as it was, rather than recursed into.
+    assert.strictEqual(out["self"], self)
+  })
+
+  it("passes a Date, a class instance and a Map through untouched", () => {
+    class Sensor {
+      constructor(readonly label: string) {}
+      describe(): string {
+        return `sensor ${this.label}`
+      }
+    }
+    const redaction = Redaction.make(Redaction.literal(SECRET))
+    const when = new Date(0)
+    const sensor = new Sensor(SECRET)
+    const tags = new Map([["k", SECRET]])
+
+    const out = Redaction.deep({ when, sensor, tags, note: SECRET }, redaction) as Record<
+      string,
+      unknown
+    >
+
+    // Rebuilding these from `Object.entries` flattened a Date to `{}` and left
+    // a class instance without its methods: that is not redaction, it is loss.
+    assert.strictEqual(out.when, when)
+    assert.strictEqual(out.sensor, sensor)
+    assert.strictEqual(out.tags, tags)
+    // Identity, and the behaviour that identity was protecting.
+    assert.strictEqual((out.sensor as Sensor).describe(), `sensor ${SECRET}`)
+    // The plain parts of the same value are still covered.
+    assert.strictEqual(out.note, "[redacted]")
+  })
+
+  it("walks nested arrays, which are structure rather than a foreign shape", () => {
+    const redaction = Redaction.make(Redaction.literal(SECRET))
+    const out = Redaction.deep(
+      { rows: [[SECRET, "plain"], [{ deep: [SECRET] }]] },
+      redaction
+    )
+    assert.deepStrictEqual(out, {
+      rows: [["[redacted]", "plain"], [{ deep: ["[redacted]"] }]]
+    })
   })
 
   it("does nothing by default", () => {

@@ -22,10 +22,15 @@ import * as WebSearch from "./WebSearch.js"
 const ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 const AUTH_HEADER = "x-subscription-token"
 
+/** Default results when `SearchOptions.limit` is absent; capped by `MAX_LIMIT`. */
 export const DEFAULT_LIMIT = 8
+/** Hard ceiling for `SearchOptions.limit` — `Math.min(MAX_LIMIT, requested)` — so a model cannot request an unbounded ranking. */
 export const MAX_LIMIT = 10
+/** Byte budget for the provider response body; exceeding it becomes `WebSearchResponseTooLargeError`. */
 export const MAX_RESPONSE_BYTES = 1024 * 1024
+/** Whole-operation budget for one search including one retry: `Effect.timeout` → `WebSearchTimeoutError`. */
 export const TIMEOUT_MILLIS = 15_000
+/** At most 4 Brave searches run at once; excess tool calls queue on this `Semaphore` so one model turn cannot behave like a crawler. */
 export const MAX_CONCURRENT = 4
 
 const BraveResult = Schema.Struct({
@@ -189,6 +194,27 @@ export const make = Effect.fn("BraveWebSearch.make")(function*(options: Options)
           redirect: "manual",
           credentials: "omit"
         }),
+        /**
+         * The generic client span is suppressed, for the reason `web/http.ts`
+         * suppresses its own.
+         *
+         * `HttpClient` unconditionally annotates `url.full` and `url.query` on
+         * its `http.client GET` span, and here the query string *is* the
+         * model's search text -- user content, on an exported span, reached by
+         * no redaction wiring documented for the tool boundary. Redacting the
+         * subscription token does not help: that is a header, and this is the
+         * URL. Disabling the tracer for the execution is what actually
+         * prevents the attribute from being written; anything downstream is a
+         * filter someone has to remember to install.
+         *
+         * The cost is real and accepted, the same trade `http.ts` made: there
+         * is no `http.client` child span for a Brave search. What a trace
+         * still shows is `BraveWebSearch.search`, whose timing, retry and
+         * failure are the things an outbound search is read for -- and the
+         * endpoint is a constant, so the suppressed span's one useful
+         * attribute is already known from the span name.
+         */
+        Effect.withTracerEnabled(false),
         Effect.catchTag("HttpClientError", (error) =>
           Effect.fail(transportError(error.reason._tag)))
       )

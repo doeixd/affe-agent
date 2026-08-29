@@ -2,6 +2,7 @@ import { Effect, Option, Ref, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { SqlClient } from "effect/unstable/sql"
 import * as Elicitation from "../Elicitation.js"
+import * as PromptWire from "../PromptWire.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 
@@ -281,7 +282,8 @@ export interface DurableSessionStore {
 // -- Encoded prompts -------------------------------------------------------------
 
 /**
- * Prompts cross storage as JSON; an unencodable prompt is a bug, not a case.
+ * Prompts cross storage through the JSON-safe `PromptWire` codec; an
+ * unencodable prompt is a bug, not a case.
  *
  * Encoding stays a defect deliberately. The value was assembled by this
  * process a moment ago, so a schema that cannot encode it means the library
@@ -291,7 +293,7 @@ export interface DurableSessionStore {
 export const encodeHistory = (
   prompt: Prompt.Prompt
 ): Effect.Effect<string> =>
-  Schema.encodeEffect(Prompt.Prompt)(prompt).pipe(
+  Schema.encodeEffect(PromptWire.Prompt)(prompt).pipe(
     Effect.map((encoded) => JSON.stringify(encoded)),
     Effect.orDie
   )
@@ -313,7 +315,7 @@ export const decodeHistory = (
   sessionId?: string
 ): Effect.Effect<Prompt.Prompt, StorageError> =>
   Effect.try(() => JSON.parse(encoded) as unknown).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Prompt.Prompt)),
+    Effect.flatMap(Schema.decodeUnknownEffect(PromptWire.Prompt)),
     Effect.mapError(
       (cause) =>
         new StorageError({
@@ -479,6 +481,13 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
           // Idempotent: a replayed run asks under the same id, and one that
           // was already answered keeps its answer rather than waiting again.
           if (all.answered.get(sessionId)?.has(request.id)) return all
+          // First write wins, as everywhere else in the store. An id that is
+          // already pending keeps the request it was created with rather
+          // than being overwritten by a replay carrying a different payload.
+          // This used to `.set` unconditionally, which disagreed with the SQL
+          // store's `INSERT ... WHERE NOT EXISTS`; two implementations of one
+          // contract get one answer, and SQL's is the one that matches the rule.
+          if (all.pending.get(sessionId)?.has(request.id)) return all
           return {
             ...all,
             pending: new Map(all.pending).set(

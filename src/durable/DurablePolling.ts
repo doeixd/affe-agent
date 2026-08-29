@@ -22,7 +22,14 @@ const duration = (
 ): Config.Config<Duration.Duration> =>
   Config.schema(PositiveDuration, name).pipe(Config.withDefault(fallback))
 
-/** Concrete defaults shared by explicit and Config-backed constructors. */
+/**
+ * Concrete defaults shared by explicit and Config-backed constructors.
+ *
+ * These are the values a user meets when they do not supply Config:
+ * `clientOutcome` 10 ms, `deliveryLog` 250 ms, `workflowInterrupt` 25 ms
+ * (the interrupt signal polled while a submission runs), `result` 10 ms.
+ * Each is also reachable as `EFFECT_AGENT_*_POLL_INTERVAL` via `all`.
+ */
 export const defaults = Object.freeze({
   clientOutcome: Duration.millis(10),
   deliveryLog: Duration.millis(250),

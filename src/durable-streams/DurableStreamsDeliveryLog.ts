@@ -44,22 +44,55 @@ const Record = Schema.Struct({
 })
 type Record = typeof Record.Type
 
+/**
+ * A session's cache of the stream.
+ *
+ * Deliberately mutated in place rather than rebuilt per record. The
+ * copy-on-write version made appending record *n* cost O(n) -- a new
+ * `entries` array and a new `payloads` map every time -- so rebuilding an
+ * index from a stream of n records was O(n^2), on a log that is never
+ * truncated. Mutation is safe because every index is reached only through
+ * `withSession`, under that session's one-permit semaphore; the one reader
+ * that escapes the lock (`subscribe`) takes its own `branch` first and
+ * never touches the canonical one.
+ */
 interface Index {
   /** The position read up to. */
-  readonly offset: DurableStreams.Offset
-  /** First-occurrence records, numbered 1..n. */
-  readonly entries: ReadonlyArray<AgentEvent.AgentEventEnvelope>
-  /** Key to its first payload, for conflict detection. */
-  readonly payloads: ReadonlyMap<string, string>
-  readonly ensured: boolean
+  offset: DurableStreams.Offset
+  /** How many first occurrences have been seen; the next one's sequence is `count + 1`. */
+  count: number
+  /** First-occurrence records, numbered 1..n. Appended to in place. */
+  readonly entries: Array<AgentEvent.AgentEventEnvelope>
+  /**
+   * Key to its first payload and the sequence it was given. The sequence
+   * lives here so `append` can name its own record's position by lookup;
+   * it used to be recovered by walking the map's insertion order.
+   */
+  readonly payloads: Map<string, { readonly payload: string; readonly sequence: number }>
+  ensured: boolean
 }
 
-const emptyIndex: Index = {
+const emptyIndex = (): Index => ({
   offset: DurableStreams.start,
+  count: 0,
   entries: [],
   payloads: new Map(),
   ensured: false
-}
+})
+
+/**
+ * A private copy for a reader outside the session lock. `entries` starts
+ * empty: a subscriber is told about what arrives from here on, and carrying
+ * the history would only duplicate it per consumer. `count` and `payloads`
+ * are what numbering and dedupe need, and both are already settled.
+ */
+const branch = (index: Index): Index => ({
+  offset: index.offset,
+  count: index.count,
+  entries: [],
+  payloads: new Map(index.payloads),
+  ensured: true
+})
 
 /** The payload identity used for conflict detection: the wire form, without the per-process sequence. */
 const payloadOf = (envelope: AgentEvent.AgentEventEnvelope): Effect.Effect<string> =>
@@ -67,25 +100,26 @@ const payloadOf = (envelope: AgentEvent.AgentEventEnvelope): Effect.Effect<strin
     encoded.replace(/"sequence":\d+/, "")
   )
 
-/** Fold one record into an index: a new key is the next entry; a seen key is skipped. */
+/**
+ * Fold one record into an index in place: a new key is the next entry; a
+ * seen key only advances the offset. Returns the entry when the record was
+ * a first occurrence.
+ */
 const absorb = (
   index: Index,
   record: DurableStreams.Record<Record>,
   payload: string
-): { readonly index: Index; readonly entry: Option.Option<AgentEvent.AgentEventEnvelope> } => {
-  if (index.payloads.has(record.value.key)) {
-    return { index: { ...index, offset: record.offset }, entry: Option.none() }
-  }
+): Option.Option<AgentEvent.AgentEventEnvelope> => {
+  index.offset = record.offset
+  if (index.payloads.has(record.value.key)) return Option.none()
+  index.count += 1
   const entry: AgentEvent.AgentEventEnvelope = {
     ...record.value.envelope,
-    sequence: index.entries.length + 1
+    sequence: index.count
   }
-  const payloads = new Map(index.payloads)
-  payloads.set(record.value.key, payload)
-  return {
-    index: { ...index, offset: record.offset, entries: [...index.entries, entry], payloads },
-    entry: Option.some(entry)
-  }
+  index.payloads.set(record.value.key, { payload, sequence: index.count })
+  index.entries.push(entry)
+  return Option.some(entry)
 }
 
 export interface Options {
@@ -120,7 +154,7 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
         const existing = all.get(sessionId)
         return existing !== undefined
           ? Effect.succeed(existing)
-          : Effect.flatMap(Ref.make(emptyIndex), (fresh) =>
+          : Effect.flatMap(Ref.make(emptyIndex()), (fresh) =>
               Ref.modify(indexes, (current) => {
                 const raced = current.get(sessionId)
                 if (raced !== undefined) return [raced, current]
@@ -150,16 +184,16 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
         const current = yield* Ref.get(index)
         if (!current.ensured) {
           yield* stream.ensure.pipe(Effect.orDie)
-          yield* Ref.update(index, (i) => ({ ...i, ensured: true }))
+          current.ensured = true
         }
-        const folded = yield* Stream.runFoldEffect(
+        yield* Stream.runForEach(
           stream.read({ after: current.offset, live: false }),
-          () => ({ ...current, ensured: true }),
-          (acc, record) =>
-            Effect.map(payloadOf(record.value.envelope), (payload) => absorb(acc, record, payload).index)
+          (record) =>
+            Effect.map(payloadOf(record.value.envelope), (payload) => {
+              absorb(current, record, payload)
+            })
         ).pipe(Effect.orDie)
-        yield* Ref.set(index, folded)
-        return folded
+        return current
       })
 
     const withSession = <A>(sessionId: string, use: (index: Ref.Ref<Index>) => Effect.Effect<A>) =>
@@ -179,7 +213,7 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
           const before = yield* sync(sessionId, index)
           const seen = before.payloads.get(key)
           if (seen !== undefined) {
-            return seen === payload
+            return seen.payload === payload
               ? { _tag: "Duplicate" as const }
               : { _tag: "Conflict" as const }
           }
@@ -192,8 +226,8 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
           // duplicate -- the same outcome, unless they disagree about it.
           const after = yield* sync(sessionId, index)
           const first = after.payloads.get(key)
-          return first === payload
-            ? { _tag: "Appended" as const, sequence: indexOfKey(after, key) }
+          return first !== undefined && first.payload === payload
+            ? { _tag: "Appended" as const, sequence: first.sequence }
             : { _tag: "Conflict" as const }
         })
       )
@@ -217,22 +251,32 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
           Effect.map((snapshot) => {
             // A private copy of the index from here on: numbering is
             // deterministic, so counting locally agrees with every other
-            // reader and needs no lock.
-            let local = snapshot
-            return streamFor(options, sessionId)
-              .read({ after: snapshot.offset, live: true })
-              .pipe(
-                Stream.mapEffect((record) =>
-                  Effect.map(payloadOf(record.value.envelope), (payload) => {
-                    const result = absorb(local, record, payload)
-                    local = result.index
-                    return result.entry
-                  })
-                ),
-                Stream.filter(Option.isSome),
-                Stream.map((entry) => entry.value),
-                Stream.orDie
-              )
+            // reader and needs no lock. Taken here so later appends by
+            // others cannot move it.
+            const frozen = branch(snapshot)
+            // The cursor is allocated per *consumption*, not per
+            // subscription, which is why the `branch` is inside the
+            // `unwrap`. It used to be one `let` closed over by the returned
+            // `Stream`, so consuming that one value twice -- or forking it to
+            // two consumers -- had both advance the same count and the same
+            // dedupe set: the second consumer found every key already seen
+            // and delivered nothing at all.
+            return Stream.unwrap(
+              Effect.sync(() => {
+                const local = branch(frozen)
+                return streamFor(options, sessionId)
+                  .read({ after: frozen.offset, live: true })
+                  .pipe(
+                    Stream.mapEffect((record) =>
+                      Effect.map(payloadOf(record.value.envelope), (payload) =>
+                        absorb(local, record, payload))
+                    ),
+                    Stream.filter(Option.isSome),
+                    Stream.map((entry) => entry.value),
+                    Stream.orDie
+                  )
+              })
+            )
           })
         )
 
@@ -241,14 +285,3 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
 
     return { append, live, subscribe, read }
   })
-
-/** The sequence of a key's first occurrence, or -1. */
-const indexOfKey = (index: Index, key: string): number => {
-  // Keys are recorded in entry order, and a Map iterates in insertion order.
-  let position = 0
-  for (const k of index.payloads.keys()) {
-    position += 1
-    if (k === key) return position
-  }
-  return -1
-}

@@ -329,20 +329,18 @@ describe("JSONL commit log", () => {
         const exported = yield* Export.ofSession(session, provenance)
         const jsonl = yield* Export.encodeJsonl(exported)
         const first = jsonl.split("\n")[0] ?? ""
-        // The rest of the file is truncated mid-message. A picker that parsed
-        // the conversation would fail; one that reads the header does not.
+        // The rest of the file is truncated mid-message, the shape a crash
+        // during append leaves behind.
         const truncated = `${first}\n{"role":"user"`
         return {
           full: yield* Export.headerOf(jsonl),
           firstLine: yield* Export.headerOf(first),
-          truncated: yield* Export.headerOf(truncated),
-          truncatedParse: yield* Effect.flip(Export.parseJsonl(truncated))
+          truncated: yield* Export.headerOf(truncated)
         }
       }).pipe(Effect.provide(layer), Effect.scoped)
 
       assert.deepStrictEqual(out.firstLine, out.full)
       assert.deepStrictEqual(out.truncated, out.full)
-      assert.strictEqual(out.truncatedParse.reason, "malformed")
       assert.strictEqual(out.full.version, Export.VERSION)
       assert.strictEqual(out.full.provenance.harnessVersion, provenance.harnessVersion)
     }))
@@ -422,6 +420,52 @@ describe("JSONL commit log", () => {
       ])
       const failure = yield* Effect.flip(Export.append("not json\n", extra))
       assert.strictEqual(failure.reason, "malformed")
+    }))
+
+  /**
+   * The case the header check was believed to cover and did not.
+   *
+   * A crash mid-append leaves one partial line, at the end -- which is exactly
+   * the shape `parseJsonlRecovering` repairs, and it repairs it only there,
+   * because that is the only place a crash can put one. Appending to such a
+   * file terminated the partial line with a newline and buried it under the
+   * new records, so a log that recovered every complete message before the
+   * crash became one that parses to nothing at all. The header was intact
+   * throughout, so nothing refused it.
+   */
+  it.effect("append refuses a log that ends in a crash-truncated line", () =>
+    Effect.gen(function*() {
+      const exported = yield* Export.of(
+        {
+          sessionId: "s1",
+          history: Prompt.fromMessages([
+            Prompt.userMessage({ content: [Prompt.textPart({ text: "one" })] }),
+            Prompt.userMessage({ content: [Prompt.textPart({ text: "two" })] })
+          ])
+        },
+        { harnessVersion: "test" }
+      )
+      const jsonl = yield* Export.encodeJsonl(exported)
+      // A write that stopped part-way through the final record.
+      const truncated = jsonl.slice(0, jsonl.length - 12)
+      const extra = Prompt.fromMessages([
+        Prompt.userMessage({ content: [Prompt.textPart({ text: "three" })] })
+      ])
+
+      const failure = yield* Effect.flip(Export.append(truncated, extra))
+      assert.strictEqual(failure.reason, "malformed")
+
+      // And the log is still what it was: the complete records recover, with
+      // the partial line handed back rather than lost.
+      const recovered = yield* Export.parseJsonlRecovering(truncated)
+      assert.strictEqual(recovered.export.session.history.content.length, 1)
+      assert.isTrue(Option.isSome(recovered.truncatedTail))
+
+      // A complete log -- the same bytes plus the newline the crash never
+      // reached -- is still extended.
+      const extended = yield* Export.append(jsonl, extra)
+      const restored = yield* Export.parseJsonl(extended)
+      assert.strictEqual(Export.historyOf(restored).content.length, 3)
     }))
 })
 
@@ -624,7 +668,29 @@ describe("Replay", () => {
         { harnessVersion: "test" }
       )
 
-      const prompts = Replay.promptsOf(exported)
+      // Both export forms are real process boundaries, not just projections
+      // over the in-memory value. Each must restore the bytes variant.
+      const fullRoundTrip = yield* Effect.flatMap(
+        Export.encode(exported),
+        Export.parse
+      )
+      const jsonlRoundTrip = yield* Effect.flatMap(
+        Export.encodeJsonl(exported),
+        Export.parseJsonl
+      )
+      for (const roundTrip of [fullRoundTrip, jsonlRoundTrip]) {
+        const message = roundTrip.session.history.content[1]
+        assert.strictEqual(message?.role, "user")
+        const data = message?.role === "user"
+          ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])[0]
+          : undefined
+        assert.isTrue(data instanceof Uint8Array)
+        if (data instanceof Uint8Array) {
+          assert.deepStrictEqual(Array.from(data), [1, 2, 3])
+        }
+      }
+
+      const prompts = Replay.promptsOf(fullRoundTrip)
       assert.strictEqual(prompts.length, 2)
       // The file survived: the prompt is the message, not its caption.
       const first = prompts[0]!.content[0]!
@@ -632,14 +698,209 @@ describe("Replay", () => {
       if (first.role === "user") assert.strictEqual(first.content.length, 2)
 
       // The empty turn is still a turn, so the second answer stays second.
-      const turns = Replay.turnsOf(exported)
+      const turns = Replay.turnsOf(fullRoundTrip)
       assert.strictEqual(turns.length, 2)
       assert.strictEqual(turns[0]?.text, "")
       assert.strictEqual(turns[1]?.text, "done")
 
       // The seed is the system message and nothing else: no prompt is in both.
-      const seed = Replay.seedOf(exported)
+      const seed = Replay.seedOf(fullRoundTrip)
       assert.strictEqual(seed.content.length, 1)
       assert.strictEqual(seed.content[0]?.role, "system")
     }))
+
+  /**
+   * A version bump protects an old reader from a new file. It is not licence
+   * to refuse an old one.
+   *
+   * `VERSION` went to 2 for the `PromptWire` file-data representation, and a
+   * strict `!==` made every export written before that unopenable -- including
+   * the majority that contain no file part and so differ from a v2 export in
+   * nothing but the number. `PromptWire.FileDataWireRead` accepts the untagged
+   * form v1 wrote precisely so this would not happen, and the gate was
+   * throwing that away before the codec was ever consulted.
+   *
+   * The fixtures below are literal, not built from `Export.VERSION`. A test
+   * written against the constant it is testing follows the next bump
+   * automatically and can never detect a compatibility break -- which is why
+   * nothing here caught it.
+   */
+  describe("reading older versions", () => {
+    const v1Envelope = {
+      version: 1,
+      exportedAt: 0,
+      session: { sessionId: "old-session", history: { content: [] } },
+      provenance: {
+        harnessVersion: "0.0.0-test",
+        model: { provider: "test", modelId: "scripted" },
+        tools: ["read_file", "bash"]
+      }
+    }
+
+    it.effect("reads a v1 export written before the PromptWire rollout", () =>
+      Effect.gen(function*() {
+        const restored = yield* Export.decode(v1Envelope)
+        assert.strictEqual(restored.version, 1)
+        assert.strictEqual(restored.session.sessionId, "old-session")
+      }))
+
+    it.effect("reads a v1 export carrying an untagged file part", () =>
+      Effect.gen(function*() {
+        // v1 wrote file data as a bare string, with no runtime-variant tag.
+        const restored = yield* Export.decode({
+          ...v1Envelope,
+          session: {
+            sessionId: "old-session",
+            history: {
+              content: [{
+                role: "user",
+                content: [{
+                  type: "file",
+                  mediaType: "text/plain",
+                  data: "legacy-untagged-payload"
+                }]
+              }]
+            }
+          }
+        })
+        const message = restored.session.history.content[0]
+        assert.strictEqual(message?.role, "user")
+        if (message?.role !== "user") return
+        const part = message.content[0]
+        assert.strictEqual(part?.type, "file")
+        if (part?.type !== "file") return
+        // The variant is unrecoverable, so it stays a string -- readable, which
+        // is the whole point, rather than refused.
+        assert.strictEqual(part.data, "legacy-untagged-payload")
+      }))
+
+    it.effect("reads a v1 JSONL export through the same gate", () =>
+      Effect.gen(function*() {
+        const header = JSON.stringify({
+          version: 1,
+          exportedAt: 0,
+          sessionId: "old-session",
+          provenance: v1Envelope.provenance
+        })
+        const restored = yield* Export.parseJsonl(`${header}\n`)
+        assert.strictEqual(restored.version, 1)
+        assert.strictEqual(restored.session.sessionId, "old-session")
+      }))
+
+    it.effect("still refuses a version from the future, by name", () =>
+      Effect.gen(function*() {
+        const failure = yield* Effect.flip(
+          Export.decode({ ...v1Envelope, version: Export.VERSION + 1 })
+        )
+        assert.strictEqual(failure.reason, "unsupported-version")
+        assert.strictEqual(failure.found, Export.VERSION + 1)
+        // Both bounds in the message, so a reader knows to upgrade rather than
+        // to go looking for a bug in their file.
+        assert.include(failure.message, String(Export.VERSION))
+        assert.include(failure.message, String(Export.MINIMUM_READABLE_VERSION))
+      }))
+
+    it.effect("refuses a version below the readable floor", () =>
+      Effect.gen(function*() {
+        const failure = yield* Effect.flip(
+          Export.decode({
+            ...v1Envelope,
+            version: Export.MINIMUM_READABLE_VERSION - 1
+          })
+        )
+        assert.strictEqual(failure.reason, "unsupported-version")
+      }))
+  })
+
+  /**
+   * The JSONL form is the append-only commit log, so the one corruption a
+   * crash actually produces is a partial final line. Failing the whole file
+   * for it discards every complete message before it, which is the opposite of
+   * what putting the header first was for.
+   *
+   * A bad line anywhere else is not a shape a crash makes -- an interrupted
+   * append cannot corrupt a line it already flushed -- so that still fails.
+   */
+  describe("recovering a crash-truncated JSONL log", () => {
+    const logWithMessages = Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("first"),
+        TestLanguageModel.text("second")
+      ])
+      return yield* Effect.gen(function*() {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("one")
+        yield* session.prompt("two")
+        const exported = yield* Export.ofSession(session, provenance)
+        return yield* Export.encodeJsonl(exported)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    })
+
+    it.effect("keeps every complete message before the partial tail", () =>
+      Effect.gen(function*() {
+        const jsonl = yield* logWithMessages
+        const whole = yield* Export.parseJsonl(jsonl)
+        const truncated = `${jsonl}{"role":"user","content":[{"type":"te`
+
+        const recovered = yield* Export.parseJsonlRecovering(truncated)
+        assert.isTrue(
+          Option.isSome(recovered.truncatedTail),
+          "the dropped text is reported, not silently discarded"
+        )
+        assert.strictEqual(
+          recovered.export.session.history.content.length,
+          whole.session.history.content.length,
+          "every message written before the crash survives"
+        )
+        assert.deepStrictEqual(
+          recovered.export.session.history,
+          whole.session.history
+        )
+      }))
+
+    it.effect("a clean log reports no truncation", () =>
+      Effect.gen(function*() {
+        const jsonl = yield* logWithMessages
+        const clean = yield* Export.parseJsonlRecovering(jsonl)
+        assert.isTrue(Option.isNone(clean.truncatedTail))
+      }))
+
+    it.effect("still fails on a bad line in the middle", () =>
+      Effect.gen(function*() {
+        const jsonl = yield* logWithMessages
+        const lines = jsonl.split("\n").filter((line) => line.length > 0)
+        assert.isAtLeast(lines.length, 3, "need a header and two messages")
+        // Corrupt a line that is not the last, and terminate the file properly
+        // so the truncation path cannot claim it.
+        const corrupted = [lines[0], `{"role":"user"`, ...lines.slice(2)]
+          .join("\n")
+          .concat("\n")
+        const failure = yield* Effect.flip(Export.parseJsonl(corrupted))
+        assert.strictEqual(failure.reason, "malformed")
+      }))
+
+    it.effect("a partial line is not recovered when the file ends in a newline", () =>
+      Effect.gen(function*() {
+        const jsonl = yield* logWithMessages
+        // A completed append always terminates its line, so a trailing newline
+        // means the bad line was flushed, not interrupted.
+        const failure = yield* Effect.flip(
+          Export.parseJsonl(`${jsonl}{"role":"user"\n`)
+        )
+        assert.strictEqual(failure.reason, "malformed")
+      }))
+
+    it.effect("names the file line a bad message is on, counting blanks", () =>
+      Effect.gen(function*() {
+        const jsonl = yield* logWithMessages
+        const lines = jsonl.split("\n").filter((line) => line.length > 0)
+        // A blank line before the corrupt one: the reported number has to be
+        // the line in the file, not an index into the filtered array.
+        const withBlank = [lines[0], "", `{"role":"user"`, ...lines.slice(2)]
+          .join("\n")
+          .concat("\n")
+        const failure = yield* Effect.flip(Export.parseJsonl(withBlank))
+        assert.include(failure.message, "line 3")
+      }))
+  })
 })

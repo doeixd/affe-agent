@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, PubSub, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, PubSub, Ref, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -273,6 +273,122 @@ describe("AgentSession.observe", () => {
 
       // All five, in sequence order.
       assert.deepStrictEqual(seen, [1, 2, 3, 4, 5])
+    }))
+
+  /**
+   * The re-entry guard has to survive contention, not merely coexist with it.
+   *
+   * The marker recording "which fibre is inside `emit`" was set before the
+   * ordering permit was acquired, so it was a shared slot two fibres wrote to:
+   * a second emitter waiting for the permit overwrote the holder's mark, and
+   * the holder's release then cleared it. The fibre that went on to run the
+   * observers was therefore recorded as nobody, and its re-entrant observer
+   * blocked on the permit it was itself holding -- the undiagnosed hang the
+   * guard exists to remove, back again whenever two events overlap. Parallel
+   * tool calls emit concurrently, so that is the ordinary case rather than an
+   * exotic one.
+   */
+  it.effect("refuses re-entry on a fibre that queued behind another emit", () =>
+    Effect.gen(function*() {
+      const bus = yield* EventBus.make(SessionId.make("session-reentry-contended"))
+      const correlation = { submissionId: undefined, runId: undefined, turn: undefined }
+      // The first emit parks inside its observer, holding the permit, until it
+      // is released -- so the second emit is genuinely queued behind it rather
+      // than racing.
+      const holdingPermit = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+
+      const outcome = yield* Effect.scoped(
+        Effect.gen(function*() {
+          yield* EventBus.observe(bus, (envelope) => {
+            switch (envelope.event._tag) {
+              case "SessionStarted":
+                return Effect.andThen(
+                  Deferred.succeed(holdingPermit, void 0),
+                  Deferred.await(release)
+                )
+              case "TurnStarted":
+                // The re-entrant call, on the observer's own fibre.
+                return EventBus.emit(bus, correlation, { _tag: "SessionClosed" })
+              default:
+                return Effect.void
+            }
+          })
+
+          const first = yield* Effect.forkChild(
+            EventBus.emit(bus, correlation, { _tag: "SessionStarted" })
+          )
+          yield* Deferred.await(holdingPermit)
+          const second = yield* Effect.forkChild(
+            EventBus.emit(bus, correlation, { _tag: "TurnStarted" })
+          )
+          // Enough turns for the second emit to reach the permit and wait.
+          yield* yields(5)
+          yield* Deferred.succeed(release, void 0)
+          yield* Fiber.join(first)
+          // A bounded wait, because the defect this asserts against presents as
+          // a hang: the failure is then a timeout rather than a suite that
+          // never ends.
+          return yield* Effect.exit(
+            Effect.timeout(Fiber.join(second), "5 seconds")
+          )
+        })
+      )
+
+      assert.strictEqual(outcome._tag, "Success")
+      // Two emits published, and the third -- the re-entrant one -- refused.
+      assert.strictEqual(yield* Ref.get(bus.sequence), 2)
+    }))
+})
+
+describe("AgentSession.events after the session has closed", () => {
+  it.effect("delivers the retained SessionClosed and ends, rather than hanging", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("hi")])
+
+      // The handle outlives its scope on purpose: this is the reconnecting
+      // client, holding a session that closed while it was away.
+      const session = yield* Effect.scoped(
+        Effect.provide(AgentSession.make(agent), layer)
+      )
+
+      // Bounded, because the defect this guards against presents as a hang.
+      const envelopes = yield* Effect.timeout(
+        Stream.runCollect(AgentSession.events(session)),
+        "5 seconds"
+      )
+
+      // Not merely "the stream ended": a late subscriber sees the terminal
+      // event itself, which is the thing it subscribed to find out.
+      assert.deepStrictEqual(
+        envelopes.map((envelope) => envelope.event._tag),
+        ["SessionClosed"]
+      )
+    }))
+
+  it.effect("does not deliver the close twice to a subscriber that was already live", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("hi")])
+
+      const fiber = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* Effect.provide(AgentSession.make(agent), layer)
+          const subscribed = yield* Deferred.make<void>()
+          return yield* Effect.forkChild(
+            Stream.runCollect(
+              AgentSession.events(session).pipe(
+                Stream.onStart(Deferred.succeed(subscribed, void 0))
+              )
+            )
+          ).pipe(Effect.tap(() => Deferred.await(subscribed)))
+        })
+      )
+      const collected = yield* Effect.timeout(Fiber.join(fiber), "5 seconds")
+
+      assert.strictEqual(
+        collected.filter((envelope) => envelope.event._tag === "SessionClosed").length,
+        1
+      )
     }))
 })
 

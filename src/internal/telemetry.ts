@@ -34,11 +34,23 @@ export const attributeNames = {
   turn: "agent.turn.index",
   sequence: "agent.sequence",
   event: "agent.event",
+  /**
+   * For an `UnknownEvent`, the tag it arrived with.
+   *
+   * Without this every event from a newer peer reads as the same
+   * `UnknownEvent` in telemetry, which defeats the reason the tag is carried
+   * through the wire at all.
+   */
+  eventOriginalTag: "agent.event.original_tag",
   toolName: "ai.tool.name",
   toolCallId: "ai.tool.call_id",
   toolParams: "ai.tool.params",
   toolResult: "ai.tool.result",
   modelText: "ai.model.text",
+  modelFinishReason: "ai.model.finish_reason",
+  modelInputTokens: "ai.model.usage.input_tokens",
+  modelOutputTokens: "ai.model.usage.output_tokens",
+  modelTotalTokens: "ai.model.usage.total_tokens",
   streaming: "agent.streaming",
   durable: "agent.durable"
 } as const

@@ -68,10 +68,23 @@ const releaseLock = (key: string): Effect.Effect<void> =>
 /**
  * Run an effect under a file's write lock.
  *
- * The key is the sandbox's canonical name for the path. If the sandbox cannot
- * produce one -- the path escapes, say -- the operation itself is about to
- * fail with the same error, so the lock falls back to the spelled path rather
- * than adding a failure mode of its own to a step that only orders work.
+ * The key is the sandbox's canonical name for the path, so two spellings of
+ * one file take the same lock.
+ *
+ * **A `canonical` failure fails the operation; it does not fall back.** The
+ * earlier version substituted the spelled path, reasoning that the operation
+ * was about to fail with the same error anyway. That holds for a *permanent*
+ * failure like a path escaping the workspace, and not for a transient one --
+ * `local.ts` implements `canonical` as a filesystem `stat`, which can fail
+ * because an ancestor directory is briefly absent, on an EINTR, or on a
+ * momentary permissions error. When that happened to one fibre and not
+ * another, the two took different keys for the same file and the mutual
+ * exclusion this module exists to provide silently disappeared: two writers
+ * proceeding at once, with no error and nothing observable from outside.
+ *
+ * Trading a visible error for a silent correctness hole is the wrong side of
+ * that trade. Where the operation really was about to fail, surfacing the
+ * error here costs nothing and loses no behaviour.
  *
  * `acquireUseRelease` rather than a bare `withPermit`, so the holder count is
  * decremented even when the caller is interrupted while waiting or mid-edit.
@@ -81,12 +94,9 @@ export const withFileLock = <A, E, R>(
   sandbox: Sandbox.Sandbox,
   path: Sandbox.SandboxPath,
   effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> =>
+): Effect.Effect<A, E | Sandbox.FileError, R> =>
   Effect.flatMap(
-    Effect.orElseSucceed(
-      sandbox.canonical(path),
-      () => `${sandbox.workspace} ${path}`
-    ),
+    sandbox.canonical(path),
     (key) =>
       Effect.acquireUseRelease(
         acquireLock(key),

@@ -4,6 +4,17 @@ import { AiError, Tool, Toolkit } from "effect/unstable/ai"
 
 const isObject = Predicate.isObject
 
+type DiscoveredTool = Tool.Dynamic<
+  string,
+  {
+    readonly parameters: Schema.Constraint | JsonSchema.JsonSchema
+    readonly success: typeof Schema.Unknown
+    readonly failure: typeof Schema.Unknown
+    readonly failureMode: "error"
+  },
+  never
+>
+
 /**
  * Using a remote MCP server's tools, with the types inferred.
  *
@@ -142,6 +153,24 @@ export class McpToolMissingError extends Schema.TaggedError<McpToolMissingError>
   }
 }
 
+/**
+ * A tool name this adapter is willing to put in a toolkit.
+ *
+ * `tools/list` is the server's word for what it offers, and the names go
+ * straight into the toolkit the model provider is shown. An empty name, or one
+ * carrying a newline, does not fail *that* tool — it fails the whole tool
+ * declaration block, so one hostile or buggy server takes down every turn for
+ * every other tool in the run. The length bound is the same argument at a
+ * different scale.
+ *
+ * Deliberately permissive about what is *inside* a name: MCP places no
+ * restriction there and servers in the wild use dots, slashes and colons.
+ * `ToolSource.bindDiscovered` applies this same rule for the same reason;
+ * this is the direct MCP door and had been missing it.
+ */
+const isBindableName = (value: string): boolean =>
+  value.length > 0 && value.length <= 128 && !/[\r\n\0]/.test(value) && !/^\s|\s$/.test(value)
+
 const describe = (error: unknown): string =>
   typeof error === "object" && error !== null && "message" in error
     ? String((error as { message: unknown }).message)
@@ -164,27 +193,39 @@ const describe = (error: unknown): string =>
  */
 export const bindDiscovered = (
   connections: ReadonlyArray<Connection>
-): Effect.Effect<Toolkit.WithHandler<Record<string, Tool.Any>>, McpTransportError> =>
+): Effect.Effect<
+  Toolkit.WithHandler<Record<string, DiscoveredTool>>,
+  McpTransportError
+> =>
   Effect.gen(function* () {
     const listings = yield* Effect.forEach(connections, (connection) =>
       Effect.map(connection.listTools, (tools) => tools.map((tool) => ({ tool, connection }))))
 
     const seen = new Set<string>()
     const unique = listings.flat().filter(({ tool }) => {
+      // Dropped, not raised: a server offering one unusable name alongside
+      // twenty good ones should cost the caller that one tool, which is the
+      // same rule a name collision already follows. See `isBindableName`.
+      if (!isBindableName(tool.name)) return false
       if (seen.has(tool.name)) return false
       seen.add(tool.name)
       return true
     })
 
-    const tools: Array<Tool.Any> = unique.map(({ tool }) =>
-      Tool.dynamic(tool.name, {
+    const tools: Array<DiscoveredTool> = unique.map(({ tool }) => {
+      const parameters: Schema.Constraint | JsonSchema.JsonSchema =
+        isObject(tool.inputSchema)
+          ? tool.inputSchema as JsonSchema.JsonSchema
+          : Schema.Unknown
+      return Tool.dynamic(tool.name, {
         ...(tool.description === undefined ? {} : { description: tool.description }),
         // `inputSchema` is the server's JSON Schema; `unknown` structurally, but
         // that is exactly what `Tool.dynamic`'s JSON-Schema mode consumes.
-        ...(isObject(tool.inputSchema) ? { parameters: tool.inputSchema as JsonSchema.JsonSchema } : {}),
+        parameters,
         // Unknown, so a server-reported failure can surface as the tool's failure.
         failure: Schema.Unknown
-      }))
+      })
+    })
 
     const built = Toolkit.make(...tools)
 
@@ -203,8 +244,8 @@ export const bindDiscovered = (
     )
 
     return (yield* built.pipe(
-      Effect.provide(built.toLayer(handlers as Toolkit.HandlersFrom<Record<string, Tool.Any>>))
-    )) as Toolkit.WithHandler<Record<string, Tool.Any>>
+      Effect.provide(built.toLayer(handlers as Toolkit.HandlersFrom<Record<string, DiscoveredTool>>))
+    )) as Toolkit.WithHandler<Record<string, DiscoveredTool>>
   })
 
 /**

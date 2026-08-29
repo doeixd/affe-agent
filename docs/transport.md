@@ -122,8 +122,10 @@ declaration. The distinction matters for three things:
    `AgentEvent.toWire(envelope)` substitutes `result := encodedResult` once,
    and every recorder and transmitter applies it, so no adapter re-derives
    it and no adapter mangles a `Date` into a string-that-is-not-a-date.
-3. **Tool results in history.** `Prompt` crosses through its own JSON codec
-   (`Prompt.Prompt`), which is how `history` arrives intact.
+3. **Prompts and tool results in history.** `PromptWire` is the shared JSON
+   codec. It restores prompt type ids and exact string / bytes / URL file-data
+   variants; decoded tool values that are not JSON fail encoding instead of
+   being silently changed.
 
 A value admitted by a schema must encode; failure to do so is a bug in the
 producer, not a condition callers handle. Adapters therefore treat encode
@@ -271,10 +273,13 @@ with `RUN_FINISHED { outcome: { type: "interrupt", interrupts: [...] } }`
 carrying the request; the answer comes back as the next run's resume input
 on the same endpoint.
 
-**A2A v1** (`/a2a`). JSON-RPC over the official SDK's server. A session is
+**A2A v1** (`/a2a`). JSON-RPC and HTTP+JSON over one official SDK request
+handler, task store and event-bus manager. The portable Effect router exposes
+the REST send/stream, task get/list/subscribe/cancel and push-configuration
+resources without importing the SDK's Express-only adapter. A session is
 addressed by `contextId`; a paused run surfaces as `INPUT_REQUIRED` with the
-elicitation detail, and the next message on that task answers it. Tasks can
-be cancelled while parked. The reverse direction -- an agent calling another
+elicitation detail, and the next message on that task answers it. Tasks can be
+cancelled while parked. The reverse direction -- an agent calling another
 agent -- is `AgentA2A.client` / `AgentA2A.typed`.
 
 **OpenAI** (`/openai`). `POST /v1/chat/completions`. Non-streaming returns a

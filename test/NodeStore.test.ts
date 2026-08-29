@@ -112,6 +112,119 @@ describe("NodeStore, key-value", () => {
       assert.deepStrictEqual(roots, ["one", "two"])
     }))
 
+  /**
+   * A crash between a node's indexes is repaired on the next open.
+   *
+   * The semaphore serialises writers; it cannot make four writes one. The
+   * simulation is a backing that swallows the write to `order` -- which is
+   * exactly what a process losing power after the structural link and before
+   * the order list leaves behind -- so the entries and the parent links are on
+   * disk and `nodes` has nothing to list.
+   *
+   * Both directions, because a crash can reach either index first: a node
+   * missing from `order` is found by walking the roots and their children, and
+   * a node missing from its parent's `children` is found through `order`.
+   *
+   * Falsified by removing `opened` from `nodes`: the listing comes back empty
+   * while both nodes remain perfectly retrievable by id, which is the shape of
+   * the defect. Falsified again by seeding `reconcile` from `ORDER` alone: the
+   * first case, where `ORDER` is the empty list, recovers nothing.
+   */
+  it.effect("rebuilds an index a torn write left missing", () =>
+    Effect.gen(function*() {
+      const kv = yield* freshKv
+      // The order list is the last write of a `put`, so dropping it is the
+      // crash window this recovers from.
+      const crashing: KeyValueStore.KeyValueStore = {
+        ...kv,
+        set: (key, value) => key === "order" ? Effect.void : kv.set(key, value)
+      }
+      const history = Prompt.fromMessages([
+        Prompt.userMessage({ content: [Prompt.textPart({ text: "x" })] })
+      ])
+      const before = NodeStore.keyValue(crashing)
+      yield* before.put(
+        {
+          id: "root" as NodeStore.NodeId,
+          parent: Option.none(),
+          cause: "root",
+          at: 0,
+          label: Option.none()
+        },
+        history
+      )
+      yield* before.put(
+        {
+          id: "child" as NodeStore.NodeId,
+          parent: Option.some("root" as NodeStore.NodeId),
+          cause: "prompt",
+          at: 1,
+          label: Option.none()
+        },
+        history
+      )
+      assert.isUndefined(yield* kv.get("order"))
+
+      // A restart over the same backing, and the recovery pass runs on the
+      // first operation that needs an index.
+      const after = NodeStore.keyValue(kv)
+      assert.deepStrictEqual(
+        (yield* after.nodes).map((node) => node.id).sort(),
+        ["child", "root"]
+      )
+      // Repaired in the store, not recomputed per read: a third adapter that
+      // never saw the damage reads the rebuilt list.
+      assert.deepStrictEqual(
+        (yield* NodeStore.keyValue(kv).nodes).map((node) => node.id).sort(),
+        ["child", "root"]
+      )
+      assert.deepStrictEqual(
+        (yield* after.children("root" as NodeStore.NodeId)).map((node) => node.id),
+        ["child"]
+      )
+    }))
+
+  /** The other half of the crash window: the parent link is what was lost. */
+  it.effect("rebuilds a parent link a torn write left missing", () =>
+    Effect.gen(function*() {
+      const kv = yield* freshKv
+      const crashing: KeyValueStore.KeyValueStore = {
+        ...kv,
+        set: (key, value) => key === "children:root" ? Effect.void : kv.set(key, value)
+      }
+      const history = Prompt.fromMessages([
+        Prompt.userMessage({ content: [Prompt.textPart({ text: "x" })] })
+      ])
+      const before = NodeStore.keyValue(crashing)
+      yield* before.put(
+        {
+          id: "root" as NodeStore.NodeId,
+          parent: Option.none(),
+          cause: "root",
+          at: 0,
+          label: Option.none()
+        },
+        history
+      )
+      yield* before.put(
+        {
+          id: "child" as NodeStore.NodeId,
+          parent: Option.some("root" as NodeStore.NodeId),
+          cause: "prompt",
+          at: 1,
+          label: Option.none()
+        },
+        history
+      )
+      assert.isUndefined(yield* kv.get("children:root"))
+
+      const after = NodeStore.keyValue(kv)
+      assert.deepStrictEqual(
+        (yield* after.children("root" as NodeStore.NodeId)).map((node) => node.id),
+        ["child"]
+      )
+    }))
+
   it.effect("namespaces let two trees share one backing", () =>
     Effect.gen(function*() {
       const kv = yield* freshKv
@@ -152,7 +265,15 @@ describe("NodeStore, key-value", () => {
           label: Option.some("start")
         },
         Prompt.fromMessages([
-          Prompt.userMessage({ content: [Prompt.textPart({ text: "remembered" })] })
+          Prompt.userMessage({
+            content: [
+              Prompt.textPart({ text: "remembered" }),
+              Prompt.filePart({
+                mediaType: "application/octet-stream",
+                data: new Uint8Array([21, 22, 23])
+              })
+            ]
+          })
         ])
       )
 
@@ -164,6 +285,14 @@ describe("NodeStore, key-value", () => {
       assert.strictEqual(found.node.at, 42)
       assert.strictEqual(Option.getOrThrow(found.node.label), "start")
       assert.strictEqual(found.history.content.length, 1)
+      const message = found.history.content[0]
+      const data = message?.role === "user"
+        ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])[0]
+        : undefined
+      assert.isTrue(data instanceof Uint8Array)
+      if (data instanceof Uint8Array) {
+        assert.deepStrictEqual(Array.from(data), [21, 22, 23])
+      }
       assert.deepStrictEqual((yield* after.roots).map((node) => node.id), ["a"])
       assert.deepStrictEqual((yield* after.nodes).map((node) => node.id), ["a"])
     }))

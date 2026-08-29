@@ -159,6 +159,14 @@
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
     },
+    "./elicitation": {
+      "types": "./dist/Elicitation.d.ts",
+      "default": "./dist/Elicitation.js"
+    },
+    "./tool-source": {
+      "types": "./dist/toolSource/index.d.ts",
+      "default": "./dist/toolSource/index.js"
+    },
     "./shell": {
       "types": "./dist/shell/index.d.ts",
       "default": "./dist/shell/index.js"
@@ -203,15 +211,23 @@
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit",
+    "typecheck:cli": "tsc --noEmit --project apps/cli",
     "test": "vitest run",
     "lint": "node scripts/effect-diagnostics.mjs tsconfig.json",
+    "lint:cli": "node scripts/effect-diagnostics.mjs apps/cli/tsconfig.json",
     "lint:tui": "node scripts/effect-diagnostics.mjs apps/tui/tsconfig.json",
     "lint:portability": "node scripts/verify-portability.mjs",
-    "check": "npm run typecheck && npm run typecheck:tui && npm run build && npm run lint && npm run lint:tui && npm run lint:portability && npm run test && npm run smoke:tui",
+    "check": "npm run typecheck && npm run typecheck:cli && npm run typecheck:tui && npm run typecheck:worker && npm run build && npm run lint && npm run lint:cli && npm run lint:tui && npm run lint:portability && npm run verify:workerd && npm run test && npm run verify:package && npm run smoke:ref-coding && npm run smoke:cli && npm run smoke:tui",
+    "cli": "npm --prefix apps/cli run dev --",
     "prepublishOnly": "npm run check",
     "verify:package": "node scripts/verify-package.mjs",
+    "verify:durability": "node scripts/falsify.mjs",
     "verify:pack": "node scripts/pack-check.mjs",
+    "verify:workerd": "node scripts/verify-workerd.mjs",
     "typecheck:tui": "tsc --noEmit --project apps/tui",
+    "typecheck:worker": "tsc --noEmit --project apps/worker/tsconfig.json",
+    "smoke:cli": "npm --prefix apps/cli run dev -- --help",
+    "smoke:ref-coding": "tsx examples/ref-coding-agent.ts",
     "smoke:tui": "node scripts/tui-smoke.mjs"
   },
   "peerDependencies": {

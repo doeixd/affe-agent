@@ -1,4 +1,4 @@
-import { Cause, Config, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
+import { Cause, Config, Deferred, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -6,7 +6,8 @@ import { Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import * as AgentEvent from "../AgentEvent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
-import { AgentIdleError } from "../Errors.js"
+import { AgentClosedError, AgentIdleError } from "../Errors.js"
+import * as PromptWire from "../PromptWire.js"
 import * as Ids from "../internal/ids.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
@@ -60,11 +61,62 @@ export interface Options {
    */
   readonly stream?: boolean | undefined
   /**
-   * How often the workflow checks for an externally recorded interrupt.
-   * Load `DurablePolling.workflowInterrupt` when this is operator policy.
+   * How often the submission checks for an externally recorded interrupt.
+   * Default: `DurablePolling.defaults.workflowInterrupt`.
    */
   readonly interruptPollInterval?: Duration.Duration | undefined
 }
+
+/**
+ * The channels-store key holding this session's interrupt intent.
+ *
+ * Per *session*, not per submission, because this module's idempotency key is
+ * the session: a session has at most one execution here, so its id names the
+ * submission unambiguously.
+ */
+const interruptSignalName = (sessionId: string): string =>
+  `${sessionId}:interrupt`
+
+/**
+ * Interrupt a running submission from outside the workflow.
+ *
+ * `Workflow.interrupt` is not this. The engine implements it as *mark and
+ * resume*: it sets a flag and forks a fresh replay, and the replay -- which
+ * knows nothing about why it was restarted -- runs to completion. That is the
+ * D4 violation issue #77 records: an interrupted submission finishing
+ * successfully, under a guarantee that says it must not.
+ *
+ * So interruption is a recorded *intent*, exactly as `DurableSubmission`
+ * records it: written to the shared channels store, where the running body's
+ * poller finds it and routes through `AgentSession.interrupt` -- committed
+ * turns stay committed, the run stops at the next boundary -- and where a
+ * replay resumed in any process finds it before it can run to completion.
+ * Callable with only a session id, because the process that dispatched the
+ * submission is typically gone.
+ */
+export const interrupt = (
+  store: DurableChannels.Store,
+  sessionId: string
+): Effect.Effect<void, StorageError> =>
+  throughReassignment(store.offer(interruptSignalName(sessionId), "interrupt"))
+
+/**
+ * The terminal failure an interrupted submission carries.
+ *
+ * It has to be a *failure*: this workflow's success schema is the agent's
+ * text, which has no room for an outcome tag, and a session absorbs
+ * interruption by design -- `prompt` returns normally with whatever was
+ * committed before the cut. Without this conversion that partial text is
+ * recorded as a successful completion, which is precisely what D4 forbids.
+ * The tag matches the event `AgentSession` emits for the same thing, so a
+ * caller branching on it needs no second vocabulary.
+ */
+const interruptedFailure = (): DurableAgentFailure =>
+  new DurableAgentFailure({
+    tag: "SubmissionInterrupted",
+    detail: "the submission was interrupted",
+    isDefect: false
+  })
 
 /**
  * Define the workflow for an agent.
@@ -129,9 +181,9 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
   options: Options
 ) => {
   const definition = Workflow.make(name, {
-    // `Prompt` carries its own Schema, so a multimodal submission survives the
-    // journal exactly as a text one does.
-    payload: { sessionId: Schema.String, prompt: Prompt.Prompt },
+    // The dedicated wire codec preserves each file-data runtime variant across
+    // the workflow journal rather than relying on incidental JSON behaviour.
+    payload: { sessionId: Schema.String, prompt: PromptWire.Prompt },
     idempotencyKey: (payload) => `${name}:${payload.sessionId}`,
     success: Schema.String,
     // A submission's failure is declared, not flattened into a defect.
@@ -210,6 +262,28 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       // resumable.
       const instance = yield* WorkflowEngine.WorkflowInstance
 
+      // The interrupt intent this submission watches for. See `interrupt`
+      // above for why the engine's own `Workflow.interrupt` cannot be it.
+      const interruptKey = interruptSignalName(payload.sessionId)
+      const requested = yield* Deferred.make<void>()
+      // Peeked, never consumed. The intent is deliberately never cleared:
+      // this module's execution id is a pure function of the session, so a
+      // terminal execution is never re-run and a lingering intent can reach
+      // nothing. Taking it, by contrast, would make the interruption
+      // non-durable -- a crash between taking the signal and recording the
+      // interrupted outcome replays into a body that finds no intent,
+      // re-issues the model call and completes, with the user's interrupt
+      // silently lost. Signalling the deferred twice is harmless.
+      //
+      // The read dies rather than failing: losing an interrupt intent to a
+      // store failure must not be quiet, and this runs in a forked poller
+      // whose typed failure nobody would ever see.
+      const checkInterrupt = Effect.flatMap(
+        Effect.orDie(store.size(interruptKey)),
+        (pending) =>
+          pending > 0 ? Deferred.succeed(requested, void 0) : Effect.void
+      ).pipe(Effect.asVoid)
+
       // Decisions are journalled like tool calls: see `DurablePermission`.
       const durablePermission = yield* DurablePermission.wrap(agent.permission)
       const durableAgent = {
@@ -225,6 +299,49 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             elicitation,
             sessionId: payload.sessionId
           })
+
+          // Checked once here, before anything runs, and not left to the
+          // poller. A replay resumed in another process -- or by the engine
+          // waking a durable await -- must learn that it was interrupted
+          // while it was parked *before* it can run to completion, and the
+          // poller's first tick is a poll interval away. A replay whose gate
+          // no longer parks it wins that race easily; that is exactly how
+          // the D4 violation reproduced. Empty text here is not the
+          // submission's answer: the terminal branch below replaces it.
+          yield* checkInterrupt
+          if (yield* Deferred.isDone(requested)) return ""
+
+          const scope = yield* Effect.scope
+          // Interruption is delivered through a *local* deferred, not
+          // `Workflow.interrupt` (terminal, and the mechanism this replaces)
+          // nor an awaited `DurableDeferred` (the engine suspends on any
+          // pending durable await, even in a child fibre, which would park
+          // every submission that was merely interruptible).
+          yield* Effect.repeat(
+            checkInterrupt,
+            Schedule.spaced(
+              options.interruptPollInterval ??
+                DurablePolling.defaults.workflowInterrupt
+            )
+          ).pipe(Effect.ignore, Effect.forkIn(scope))
+          // The handoff to the session's own path: committed turns stay
+          // committed, the run stops at the next boundary, and `prompt`
+          // returns an interrupted result rather than dying.
+          yield* Deferred.await(requested).pipe(
+            Effect.flatMap(() =>
+              // A signal for work that already stopped is stale, not an error.
+              AgentSession.interrupt(session).pipe(
+                Effect.catchIf(
+                  (error): error is AgentIdleError | AgentClosedError =>
+                    error._tag === "AgentIdleError" ||
+                    error._tag === "AgentClosedError",
+                  () => Effect.void
+                )
+              )
+            ),
+            Effect.forkIn(scope)
+          )
+
           const result = yield* AgentSession.prompt(session, payload.prompt, {
             stream: options.stream === true
           })
@@ -236,24 +353,64 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
         // Suspension is signalled by interrupting the fiber, so projecting it
         // would turn every parked submission into a permanently failed one.
         //
-        // The instance flags are consulted first because they are the precise
-        // signal; `hasInterruptsOnly` is the fallback for an interrupt this
-        // workflow did not ask for, such as its runner shutting down. A cause
-        // holding *both* a failure and an interrupt is projected rather than
-        // re-raised: re-raising it would record neither outcome, leaving the
-        // execution non-terminal with nothing left to resume it, and any
-        // caller polling for a result would simply hang.
+        // `instance.suspended` is the one disjunct that carries this: it is
+        // set by `Workflow.suspend` immediately before the self-interrupt, so
+        // it is already true when the cause arrives here.
+        //
+        // The other two are defence, not signal, and the comment that used to
+        // stand here overstated them on both counts.
+        //
+        // `instance.interrupted` cannot be true at this point at all. Both
+        // engines assign it in exactly one place each -- `WorkflowEngine`'s
+        // `resume` and `ClusterWorkflowEngine`'s `run` -- and both do so
+        // inside an `Effect.onExit` handler wrapped *around* the body, so it
+        // is set only after this `catchCause` has already run. Instrumenting
+        // this expression across the durable suite (67 tests, including the
+        // two-runner failover) recorded it false on every one of the seven
+        // times the branch was reached. It is left in place because it costs
+        // nothing and would become live if the engine ever set the flag from
+        // inside the run, but it is not what makes this correct today.
+        //
+        // `hasInterruptsOnly` is the fallback for an interrupt this workflow
+        // did not ask for, such as its runner shutting down. That is real, but
+        // unobservable in the suite: removing it and re-running the failover
+        // test changes nothing, because an interrupt reaching the body from
+        // outside is the same event that tears down whatever would have
+        // recorded the difference.
+        //
+        // A cause holding *both* a failure and an interrupt is re-raised, not
+        // projected, whenever either flag reads true -- the disjunction is
+        // checked before the cause is. `Workflow.intoResult` then keeps the
+        // non-interrupt reasons, so the failure is still recorded.
         Effect.catchCause((cause) =>
-          instance.suspended ||
-            instance.interrupted ||
-            Cause.hasInterruptsOnly(cause)
+          instance.suspended
             ? Effect.failCause(cause)
-            : Effect.fail(durableFailure(cause))
+            : Effect.flatMap(Deferred.isDone(requested), (interrupted) =>
+                // A recorded interrupt outranks the cause. Left to
+                // `hasInterruptsOnly` the execution would be re-raised as
+                // merely resumable, and the engine would resume it -- which
+                // is the loop this mechanism exists to break.
+                interrupted
+                  ? Effect.fail(interruptedFailure())
+                  : instance.interrupted || Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.fail(durableFailure(cause))
+              )
         ),
         Effect.flatMap((text) =>
           instance.suspended
             ? Workflow.suspend(instance)
-            : Effect.succeed(text)
+            : // A session absorbs interruption by design, so an interrupted
+              // run reaches here as a *success* carrying whatever text was
+              // committed before the cut. Recording that as a completion is
+              // the D4 violation; the intent is consulted before the outcome
+              // is believed. The suspension branch is checked first, so a
+              // merely parked run is untouched.
+              Effect.flatMap(Deferred.isDone(requested), (interrupted) =>
+                interrupted
+                  ? Effect.fail(interruptedFailure())
+                  : Effect.succeed(text)
+              )
         ),
         // The marker says "this session is still accepting input", which a
         // suspended submission very much is — it is waiting to be resumed.

@@ -482,8 +482,13 @@ const startedEvent = (options: MapperOptions): RunStartedEvent =>
  * refuse a value -- and is done before `transition`, which therefore stays
  * a pure function of state and input.
  */
+/**
+ * Accepts a `StreamedEvent`, so an event from a newer peer is carried rather
+ * than refused. AG-UI already projects a subset of tags and ignores the rest;
+ * an unknown tag is one more it has no frame for.
+ */
 export const encodePayload = (
-  event: AgentEvent.AgentEvent
+  event: AgentEvent.StreamedEvent
 ): Effect.Effect<Option.Option<string>, AgentProtocol.AgentProtocolCodecError> =>
   event._tag === "ToolCallStarted"
     ? Effect.map(json(event.params), Option.some)

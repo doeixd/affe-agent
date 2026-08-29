@@ -30,6 +30,7 @@ import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentRpc } from "../src/rpc/index.js"
+import * as Contract from "./AgentClientContract.js"
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
@@ -64,6 +65,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
     const authentication = yield* Ref.make<ReadonlyArray<string>>([])
     const released = yield* Ref.make(0)
     const promptCalls = yield* Ref.make(0)
+    const promptInputs = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([])
     const promptStarted = yield* Deferred.make<void>()
     const promptSpan = yield* Deferred.make<{
       readonly names: ReadonlyArray<string>
@@ -104,9 +106,10 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
 
           return {
             id,
-            prompt: () =>
+            prompt: (input) =>
               Effect.gen(function* () {
                 yield* record("prompt")
+                yield* Ref.update(promptInputs, (all) => [...all, Prompt.make(input)])
                 const currentSpan = yield* Effect.option(Effect.currentSpan)
                 if (Option.isSome(currentSpan)) {
                   yield* Deferred.succeed(
@@ -137,7 +140,17 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
             pending: Effect.as(record("pending"), [
               { id: "approval-1", kind: "approval", detail: "check" }
             ]),
-            history: Effect.as(record("history"), Prompt.make("history")),
+            history: Effect.as(
+              record("history"),
+              Prompt.make([{
+                role: "assistant",
+                content: [{
+                  type: "file",
+                  mediaType: "text/plain",
+                  data: new URL("https://example.com/result.txt")
+                }]
+              }])
+            ),
             status: Effect.as(record("status"), "idle" as const),
             events: () => Stream.fromIterable(events)
           }
@@ -181,6 +194,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
       authentication,
       released,
       promptCalls,
+      promptInputs,
       promptStarted,
       promptSpan,
       allowPrompt
@@ -210,19 +224,38 @@ describe("AgentRpc", () => {
           const found = yield* client.getSession({ sessionId: id }, authenticated)
           assert.strictEqual(found.status, "idle")
 
+          const outboundBytes = new Uint8Array([10, 11, 12])
           const traced = yield* Effect.gen(function* () {
             const span = yield* Effect.currentSpan
             const result = yield* client.prompt(
               {
                 requestId: requestId("prompt"),
                 sessionId: id,
-                input: Prompt.make("hello")
+                input: Prompt.make([{
+                  role: "user",
+                  content: [{
+                    type: "file",
+                    mediaType: "application/octet-stream",
+                    data: outboundBytes
+                  }]
+                }])
               },
               authenticated
             )
             return { result, traceId: span.traceId }
           }).pipe(Effect.withSpan("AgentRpc.test"))
           assert.strictEqual(traced.result.result.text, "rpc answer")
+          const receivedPrompt = (yield* Ref.get(test.promptInputs))[0]
+          assert.isDefined(receivedPrompt)
+          const receivedData = receivedPrompt?.content.flatMap((message) =>
+            message.role === "user"
+              ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])
+              : []
+          )[0]
+          assert.isTrue(receivedData instanceof Uint8Array)
+          if (receivedData instanceof Uint8Array) {
+            assert.deepStrictEqual(Array.from(receivedData), Array.from(outboundBytes))
+          }
           const serverSpan = yield* Deferred.await(test.promptSpan)
           assert.strictEqual(serverSpan.traceId, traced.traceId)
           assert.deepStrictEqual(serverSpan.names, [
@@ -272,11 +305,19 @@ describe("AgentRpc", () => {
             (yield* client.pending({ sessionId: id }, authenticated)).requests,
             [{ id: "approval-1", kind: "approval", detail: "check" }]
           )
-          assert.strictEqual(
-            (yield* client.history({ sessionId: id }, authenticated)).history
-              .content[0]?.role,
-            "user"
-          )
+          const remoteHistory = (
+            yield* client.history({ sessionId: id }, authenticated)
+          ).history
+          assert.strictEqual(remoteHistory.content[0]?.role, "assistant")
+          const remoteData = remoteHistory.content.flatMap((message) =>
+            message.role === "assistant"
+              ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])
+              : []
+          )[0]
+          assert.isTrue(remoteData instanceof URL)
+          if (remoteData instanceof URL) {
+            assert.strictEqual(remoteData.href, "https://example.com/result.txt")
+          }
           assert.strictEqual(
             (yield* client.status({ sessionId: id }, authenticated)).status,
             "idle"
@@ -679,3 +720,40 @@ describe("AgentRpc", () => {
     })
   )
 })
+
+/**
+ * Issue #73: the same protocol-error contract the HTTP client is held to.
+ *
+ * RPC never collapsed these -- it exposes the protocol group's own error
+ * union -- and that is exactly why it belongs here. The two transports
+ * disagreeing about what a 403 is was invisible for as long as each was
+ * checked by its own suite; running one contract over both is what makes a
+ * future divergence a failing test rather than a review comment.
+ */
+const rpcProtocolErrors: Contract.ProtocolErrorHarness = {
+  name: "rpc",
+  failure: (error) =>
+    Effect.gen(function* () {
+      const Host = AgentSessionHost.Tag<string>(
+        `test/AgentRpc/errors/${globalThis.crypto.randomUUID()}`
+      )
+      const handlers = AgentRpc.serverLayer({ host: Host }).pipe(
+        Layer.provide(Layer.succeed(Host, Contract.failingHost("rpc-errors", error)))
+      )
+      return yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(AgentRpc.Protocol)
+        // A host that fails every operation and still answers with a session
+        // is a broken fixture, not a case this contract has an answer for.
+        return yield* Effect.orDie(
+          Effect.flip(
+            client.getSession(
+              { sessionId: sessionId("protocol-errors") },
+              { headers: { authorization: "Bearer test" } }
+            )
+          )
+        )
+      }).pipe(Effect.provide(handlers), Effect.scoped)
+    })
+}
+
+Contract.runProtocolErrors(rpcProtocolErrors)

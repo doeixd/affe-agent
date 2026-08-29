@@ -260,8 +260,16 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
         Effect.catchCause((cause) => record("eval run", false, `the test errored: ${String(cause)}`))
       )
 
+      // An eval that recorded nothing asserted nothing, and `every` on an empty
+      // array is `true` -- so a test body that returned before its first check
+      // (or never had one) reported PASS in the CI report, which is the one
+      // outcome an eval must never produce by omission. Recorded as a failed
+      // check rather than a bare `passed: false`, so the reporters say why.
       const recorded = yield* Ref.get(checks)
-      return { name: evaluation.name, passed: recorded.every((check) => check.passed), checks: recorded }
+      const checked = recorded.length === 0
+        ? [{ label: "recorded at least one check", passed: false, detail: "the eval asserted nothing" }]
+        : recorded
+      return { name: evaluation.name, passed: checked.every((check) => check.passed), checks: checked }
     })
   )
 

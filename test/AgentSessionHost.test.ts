@@ -255,6 +255,53 @@ describe("AgentSessionHost", () => {
     })
   )
 
+  it.effect("retains closed sessions' request buckets, bounded by maxSessions", () =>
+    Effect.gen(function* () {
+      const fixture = yield* clientFixture()
+      const maxSessions = 3
+      const extra = 4
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const host = yield* hostWith(AgentSessionHost.allowAll<void>(), {
+            maxSessions
+          })
+
+          // One session at a time, opened and closed, so capacity is never the
+          // thing under test -- only what is left behind afterwards.
+          for (let index = 0; index < maxSessions + extra; index += 1) {
+            const id = yield* sessionId(`leak-${index}`)
+            yield* host.createSession(undefined, {
+              requestId: yield* requestId(`create-${index}`),
+              sessionId: id
+            })
+            yield* host.closeSession(undefined, {
+              requestId: yield* requestId(`close-${index}`),
+              sessionId: id
+            })
+          }
+
+          assert.strictEqual(yield* host.size, 0)
+          // The bound, not "smaller than before": every closed session used to
+          // leave a bucket that nothing ever removed, and the leak is only
+          // visible as a count that keeps climbing.
+          assert.isAtMost(yield* host.requestBuckets, maxSessions)
+
+          // And retention is not an empty promise: a retry arriving right
+          // after the close still joins the cached answer rather than being
+          // told the session is gone. This is why the buckets are kept at all.
+          const recent = yield* sessionId(`leak-${maxSessions + extra - 1}`)
+          const retried = yield* host.closeSession(undefined, {
+            requestId: yield* requestId(`close-${maxSessions + extra - 1}`),
+            sessionId: recent
+          })
+          assert.isTrue(retried.closed)
+          assert.strictEqual(yield* Ref.get(fixture.released), maxSessions + extra)
+        }).pipe(Effect.provide(fixture.layer))
+      )
+    })
+  )
+
   it.effect("joins duplicate prompts and rejects request-id payload conflicts", () =>
     Effect.gen(function* () {
       const fixture = yield* clientFixture({ blockPrompts: true })

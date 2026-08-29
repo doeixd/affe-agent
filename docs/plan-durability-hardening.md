@@ -114,6 +114,28 @@ crash reaches a terminal state after recovery, without operator action.
 submission stays interrupted; a submission lost to process death resumes. The
 two are never confused.
 
+*Amended (issue #77).* `DurableAgent.workflow` held this only by delegating to
+`Workflow.interrupt`, which the engine implements as **mark and resume**: it
+sets a flag and forks a replay that knows nothing about why it was restarted,
+and the replay ran to completion. An interrupted submission therefore finished
+*successfully*. The test that should have caught it could not: it polled at the
+instant the engine had forked and recorded no exit, so `poll` returned `None`
+every time and its assertion was vacuous.
+
+`DurableAgent.workflow` now carries the recorded-intent mechanism
+`DurableSubmission` already had. `DurableAgent.interrupt(store, sessionId)`
+writes the intent to the channels store, under a session-scoped key (this
+module's idempotency key is the session). The body observes it in two places --
+once at the top, before anything runs, so a replay resumed in any process
+cannot finish first, and once per tick from a forked poller -- and delivers it
+through `AgentSession.interrupt`, so committed turns stay committed. Because a
+session absorbs interruption by design, `prompt` returns *normally* with the
+partial text; every terminal branch therefore consults the intent before it
+believes the outcome, and converts it into a typed `DurableAgentFailure` tagged
+`SubmissionInterrupted`. The intent is peeked and never cleared: taking it
+would let a crash between the take and the recorded outcome replay into a body
+that finds nothing and completes.
+
 **D5 — Observation is at-least-once with a stable cursor.** A consumer that
 disconnects and reconnects from its saved offset sees every event it had not
 seen, in order, with no gap; duplicates are detectable by key.
@@ -125,6 +147,16 @@ conflict and is surfaced, never silently accepted.
 **D7 — Storage failure degrades, it does not corrupt.** A store that fails a
 write causes the caller to see a failure; it never causes work to be reported
 accepted and then dropped, nor an activity to be committed twice.
+
+*Amended (issue #78).* The recovery half of this was unreachable. `Claim.key`
+closes the crash window where a claim commits and its acknowledgement is lost,
+but no caller in `src/` ever supplied one -- only the store's own unit tests
+did, so the "bites" verdict below was narrower than it read. `RemotePromptOptions`
+now carries `idempotencyKey`, and `DurableAgentClient` forwards it to
+`sessionStore.claim` as `key`, spread rather than passed as `undefined` because
+absent means "no idempotence". Covered at the client level by
+`a retry under the same idempotency key rejoins the claim it already made`;
+dropping the forward turns that retry back into `AgentBusyError`.
 
 **D8 — Every claim names its path.** No guarantee is advertised that does not
 hold on the path the user is on.
@@ -165,6 +197,63 @@ live-only. H5 closed it. The current matrix instead avoids turning H6's tested
 `DurableAgent.workflow`/cluster takeover into an untested claim about every
 adapter; the durable client and HTTP rows state their focused parked-path
 coverage.
+
+**SD2 re-run: 2026-08-28.** The 2026-08-24 table below was evidence about code
+that had since been rewritten — conditional writes, resumable SSE and
+multi-node takeover all landed after it, and the suite grew from 121 tests to
+1389. Re-running it is now `scripts/falsify.mjs`, so it is repeatable rather
+than a thing someone has to remember to redo.
+
+Against a green baseline of 190 tests over eleven durability files:
+
+| Invariant | Break applied | Verdict |
+| --- | --- | --- |
+| D1 | admit even when already claimed (both stores) | **bites** (7 fail) |
+| D2 | randomise the tool activity name | **bites** (4 fail) |
+| D2b | make every occurrence look like the first | **bites** (2 fail) |
+| D3 | leave an accepted-but-undispatched claim alone | **bites** (1 fail) |
+| D4 | record an interrupted result as completed | **bites** (4 fail) |
+| D4b | convert an interrupted run into a typed durable failure | **survives** |
+| D5 | ignore the caller's `after` offset | **bites** (3 fail) |
+| D6 | never notice a duplicate key | **bites** (2 fail) |
+| D7 | remove the idempotency key from `claim` (both stores) | **bites** (2 fail) |
+
+Every verdict the original table recorded still holds, and D1 and D2 now bite
+harder (7 and 4, against 4 and 2) because the breaks reach both store
+implementations and the suites around them have grown. **The guarantees that
+were enforced in August are still enforced.**
+
+**D4b is the one finding, and it is narrower than it first looked.**
+`DurableAgent` discriminates an interrupt from a failure before deciding
+whether to propagate the cause or convert it to a typed `durableFailure`:
+
+```ts
+instance.suspended || instance.interrupted || Cause.hasInterruptsOnly(cause)
+  ? Effect.failCause(cause)
+  : Effect.fail(durableFailure(cause))
+```
+
+Removing the two interrupt disjuncts changes nothing any of the 1389 tests can
+see. Probing the one scenario that exercises it — `Durable.test.ts`'s
+"an interrupted submission reaches a terminal state and stays there" —
+`definition.poll` returns `Option.none()` **both** with the guard and without
+it, so the two paths are indistinguishable there.
+
+That leaves two possibilities, and this pass does not settle which:
+
+1. The interrupt disjuncts are redundant, because an interrupt at this point
+   already leaves the execution non-terminal by another route. `suspended` —
+   the disjunct with the documented hang hazard — is separate and *is* still
+   load-bearing; it was not part of the break.
+2. They matter in a scenario nothing constructs: an interrupt arriving while
+   the workflow is *running* rather than parked on a gate.
+
+Deliberately not "fixed" by writing a test to match. A test asserting a
+difference that the probe says is not observable would be a test of nothing,
+and the existing assertion is already weak in the way that let this through —
+`isFalse(Complete && isSuccess)` passes for a failure exit just as it does for
+an interrupt. Whoever owns this branch should decide whether it is dead code or
+under-tested; both answers are cheap once the question is stated.
 
 **H2: landed (2026-08-24).** Every invariant with a mechanism was broken once
 and the suite re-run over nine durability test files (121 tests). Results:
@@ -561,8 +650,12 @@ runs in a few seconds rather than becoming an opt-in test nobody executes.
 
   All three fail when the guarantee is removed: letting the client's store
   errors die, and letting the entity swallow a failed offer.
-- **SD2:** Each of D1–D8 has a test that fails when the guarantee is removed,
-  demonstrated by actually removing it.
+- **SD2:** ✓ (2026-08-28) Each of D1–D8 has a test that fails when the
+  guarantee is removed, demonstrated by actually removing it — eight of nine
+  breaks bite; see the re-run table above. `scripts/falsify.mjs` makes this
+  repeatable, which matters more than the one result: the previous table went
+  stale silently because nothing re-ran it. The single survivor, D4b, is
+  recorded there with what the probe showed and what it does not settle.
 - **SD3:** ✓ `ActivityBoundaries.test.ts` pins the boundary families, while
   `ClusterMultiNode.test.ts` discovers ten completed activities and executes
   all eleven pre/post positions. Its seeded, shrinking FastCheck property adds
@@ -578,8 +671,43 @@ runs in a few seconds rather than becoming an opt-in test nobody executes.
   .test.ts` covers the join, driving an append on each side of the catch-up
   read so one assertion catches both a gap and a duplicate. Both directions
   fail when the guarantee is removed.
-- **SD6:** No known limit remains unlisted at its boundary: every one is either
-  fixed or documented where a user meets it, not only in `STATUS.md`.
+- **SD6:** ✓ (2026-08-28) No known limit remains unlisted at its boundary.
+
+  The three limits `STATUS.md` names were already at theirs and stayed there:
+  `DeliveryLog.live`'s single-process fan-out (`DeliveryLog.ts`, twice — the
+  module header and `live` itself), the replayed-`MessageDelta` conflict
+  (`DurableSubmission.ts`, at both the shape and the branch that tolerates it),
+  and the 25 ms interrupt poll (`DurablePolling.ts`, now with every default
+  listed beside it).
+
+  The sweep found the gaps somewhere else. Every one was in `/toolSource`,
+  which is the newest module and the least exercised — the same correlation the
+  review findings showed:
+
+  | Limit | Was | Now |
+  | --- | --- | --- |
+  | `select` length (4096) | bare literal, twice | `MAX_SELECT_CHARS`, with why it is bounded apart from the operation |
+  | operation length (8192) | bare literal, twice | `MAX_OPERATION_CHARS`, documented as a backstop rather than a policy |
+  | URL length (2048) | bare literal | `MAX_URL_CHARS`, with the reason a local refusal beats an opaque 414 |
+  | `$ref` depth (32) | bare literal | `MAX_REF_DEPTH`, distinguishing the cycle guard from the depth guard |
+  | header name/value truncation | undocumented `.slice()` | named, and the silent truncation justified — a credential never arrives this way |
+  | error `detail` truncation (500) | one-line comment | named, and it says the untruncated value stays on `ToolError.error` |
+  | `GraphQLOptions` / `OpenApiOptions` | **no JSDoc at all** | every field documented with its default |
+
+  The options interfaces were the real find. A caller meets `maxResponseBytes`
+  and `timeout` directly, and nothing told them what they got by omitting one —
+  which is exactly the shape SD6 names: a limit that exists, is reachable, and
+  is written down nowhere the person hitting it will look.
+
+  Also documented at its boundary: `AgentMcp`'s ticket retention, which borrows
+  `host.maxSessions` for a different purpose than the host uses it for, and now
+  says what a caller actually loses when it evicts.
+
+  Checked and already sound: `AgentSessionHost.maxSessions` /
+  `maxRequestsPerSession`, `Truncate.MAX_LINES` / `MAX_BYTES`,
+  `Compaction`'s 1024-session checkpoint bound, `EntityClient`'s retry window
+  against the 35 s shard lease, `ToolExecution.MAX_RENDERED_FAILURE`, Slack's
+  300-second replay tolerance, and the A2A push-URL policy.
 
 ## What this plan does not claim
 

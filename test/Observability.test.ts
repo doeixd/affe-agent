@@ -1,10 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Metric, Option, Ref, Schema, Stream } from "effect"
-import { Prompt, Tool } from "effect/unstable/ai"
+import { Deferred, Effect, Metric, Option, Ref, Schema, Stream } from "effect"
+import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
-import type { AgentEventEnvelope } from "../src/AgentEvent.js"
+import type { AgentEvent, AgentEventEnvelope } from "../src/AgentEvent.js"
 import * as Ids from "../src/internal/ids.js"
 import { Observability } from "../src/observability/index.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
@@ -28,8 +28,11 @@ const Weather = Agent.make({
 // Run one session and collect its real event envelopes.
 const collectEnvelopes = Effect.gen(function* () {
   const { layer } = yield* TestLanguageModel.script([
-    { toolCalls: [{ id: "w1", name: "get_weather", params: { city: "Paris" } }] },
-    TestLanguageModel.text("It is Sunny in Paris.")
+    {
+      toolCalls: [{ id: "w1", name: "get_weather", params: { city: "Paris" } }],
+      usage: { input: 5, output: 2 }
+    },
+    { text: "It is Sunny in Paris.", usage: { input: 8, output: 3 } }
   ])
   return yield* Effect.gen(function* () {
     const session = yield* AgentSession.make(Weather)
@@ -64,6 +67,12 @@ describe("Observability.describe", () => {
       assert.strictEqual(Observability.describe(find(envelopes, "RunStarted")!).name, "agent.run")
       assert.strictEqual(Observability.describe(find(envelopes, "TurnStarted")!).name, "agent.turn")
       assert.strictEqual(Observability.describe(find(envelopes, "MessageCompleted")!).name, "ai.model")
+      const model = Observability.describe(find(envelopes, "ModelCallCompleted")!)
+      assert.strictEqual(model.name, "ai.model")
+      assert.strictEqual(model.attributes[N.modelInputTokens], 5)
+      assert.strictEqual(model.attributes[N.modelOutputTokens], 2)
+      assert.strictEqual(model.attributes[N.modelTotalTokens], 7)
+      assert.strictEqual(model.attributes[N.modelFinishReason], "stop")
     })
   )
 
@@ -173,7 +182,7 @@ describe("Observability.trace", () => {
 })
 
 describe("Observability.metrics", () => {
-  it.effect("records turns, tool outcomes and queue depth from the event stream", () =>
+  it.effect("records model usage, turns, tool outcomes and queue depth from the event stream", () =>
     Effect.gen(function* () {
       const envelopes = yield* collectEnvelopes
       yield* Observability.metrics(Stream.fromIterable(envelopes))
@@ -182,6 +191,19 @@ describe("Observability.metrics", () => {
       const turns = envelopes.filter((e) => e.event._tag === "TurnCompleted").length
       const turnsMetric = yield* Metric.value(Observability.instruments.turns)
       assert.strictEqual(turnsMetric.count, turns)
+
+      const inputTokens = yield* Metric.value(
+        Metric.withAttributes(Observability.instruments.modelTokens, {
+          direction: "input"
+        })
+      )
+      const outputTokens = yield* Metric.value(
+        Metric.withAttributes(Observability.instruments.modelTokens, {
+          direction: "output"
+        })
+      )
+      assert.strictEqual(inputTokens.count, 13)
+      assert.strictEqual(outputTokens.count, 5)
 
       // Tool calls are attributed by tool name *and* by how the call ended, so
       // "which tool is failing" is a query rather than a log search.
@@ -211,32 +233,82 @@ describe("Observability.metrics", () => {
     }).pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
   )
 
-  it.effect("pending input returns to zero once everything queued is applied", () =>
+  it.effect("pending input climbs while queued and returns to zero once applied", () =>
     Effect.gen(function* () {
       // The invariant behind the gauge: accepted input is always applied, so a
       // gauge that does not return to zero means something was dropped. Driven
       // from synthetic envelopes so the queue depth is exactly known.
-      const envelope = (tag: string, sequence: number): AgentEventEnvelope => ({
+      //
+      // The climb is asserted as well as the return, because an unset gauge
+      // reads as zero: a test that only checked the end state would pass just
+      // as well if `metrics` ignored every one of these events.
+      const envelope = (event: AgentEvent, sequence: number): AgentEventEnvelope => ({
         sessionId: Ids.sessionId("s1"),
         submissionId: Option.some(Ids.submissionId("s1:submission-1")),
         runId: Option.none(),
         turn: Option.none(),
         sequence,
-        event: { _tag: tag, input: Prompt.empty } as never
+        event
       })
+      const queued = [
+        envelope({ _tag: "SteeringQueued" }, 1),
+        envelope({ _tag: "FollowUpQueued" }, 2)
+      ]
+      const gauge = Metric.value(Observability.instruments.pendingInput)
+
+      yield* Observability.metrics(Stream.fromIterable(queued))
+      assert.strictEqual((yield* gauge).value, 2)
 
       yield* Observability.metrics(
         Stream.fromIterable([
-          envelope("SteeringQueued", 1),
-          envelope("FollowUpQueued", 2),
-          envelope("SteeringApplied", 3),
-          envelope("FollowUpApplied", 4)
+          ...queued,
+          envelope({ _tag: "SteeringApplied", count: 1 }, 3),
+          envelope({ _tag: "FollowUpApplied" }, 4)
         ])
       )
+      assert.strictEqual((yield* gauge).value, 0)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
+  )
 
-      const gauge = yield* Metric.value(
-        Observability.instruments.pendingInput
+  it.effect("a batched SteeringApplied clears every steer it applied", () =>
+    Effect.gen(function* () {
+      // Steering drains as a batch: two steers queued during one turn are
+      // committed by a single `SteeringApplied` carrying `count: 2`. A gauge
+      // that decremented once per event would sit at 1 forever and report the
+      // dropped-input invariant as broken. Driven from a real run, because the
+      // batching is the runtime's behaviour and not something a synthetic
+      // sequence should be trusted to reproduce.
+      const sessionRef = yield* Deferred.make<AgentSession.AgentSession<{}>>()
+      const { layer } = yield* TestLanguageModel.script([
+        {
+          text: "first",
+          during: Effect.gen(function* () {
+            const session = yield* Deferred.await(sessionRef)
+            yield* AgentSession.steer(session, "one")
+            yield* AgentSession.steer(session, "two")
+          }).pipe(Effect.orDie)
+        },
+        TestLanguageModel.text("second")
+      ])
+
+      const envelopes = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(Agent.make({ instructions: "steerable" }))
+        const probe = yield* AgentProbe.make(session)
+        yield* Deferred.succeed(sessionRef, session)
+        yield* session.prompt("go")
+        yield* session.prompt("again")
+        return yield* probe.events
+      }).pipe(Effect.provide(layer), Effect.scoped)
+
+      const applied = envelopes.filter((envelope) => envelope.event._tag === "SteeringApplied")
+      assert.strictEqual(applied.length, 1)
+      assert.strictEqual(
+        envelopes.filter((envelope) => envelope.event._tag === "SteeringQueued").length,
+        2
       )
+
+      yield* Observability.metrics(Stream.fromIterable(envelopes))
+      const gauge = yield* Metric.value(Observability.instruments.pendingInput)
       assert.strictEqual(gauge.value, 0)
     }).pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
   )

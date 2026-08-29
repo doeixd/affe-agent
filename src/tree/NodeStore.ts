@@ -1,6 +1,7 @@
 import { Effect, Equal, Option, Ref, Schema, Semaphore } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
+import * as PromptWire from "../PromptWire.js"
 
 /**
  * Where a tree's nodes live.
@@ -265,12 +266,11 @@ const Entry = Schema.Struct({
    * obviously right, and swapping in deltas changes this module and nothing
    * else, which is what keeping `history` off `Node` bought.
    *
-   * `Prompt.Prompt` rather than `Schema.Unknown`: a prompt is not a plain JSON
-   * value -- its parts carry type ids -- so the schema is what makes it one,
-   * and using it here means a stored conversation is decoded back into a real
-   * prompt rather than cast into the shape of one.
+   * `PromptWire.Prompt` rather than `Schema.Unknown`: a prompt is not a plain
+   * JSON value -- its parts carry type ids and file data has three runtime
+   * variants. The codec restores a real prompt with that variant intact.
    */
-  history: Prompt.Prompt
+  history: PromptWire.Prompt
 })
 
 const nodeKey = (id: string) => `node:${id}`
@@ -366,7 +366,8 @@ export const keyValue = (
    * between the node and its indexes still leaves an unindexed node, which
    * `nodes` cannot find. That needs a transactional backing and is a change of
    * store, not of lock. What the permit removes is the concurrent case, which
-   * is the one this process can actually cause.
+   * is the one this process can actually cause. What `reconcile` below removes
+   * is most of the crash case, on the next open.
    */
   // `runSync` because this constructor is a plain function and a semaphore is
   // just a Ref -- there is nothing to await. The permit belongs to *this*
@@ -374,6 +375,77 @@ export const keyValue = (
   // is the same limit the memory store has and worth knowing before sharing a
   // namespace between processes.
   const writing = Effect.runSync(Semaphore.make(1))
+
+  /**
+   * Rebuild whatever a torn write left out of the indexes.
+   *
+   * A `put` is four writes with no transaction between them, so a crash can
+   * stop after any of them. The repair is possible because the *node* is the
+   * record and the indexes are derived: anything an index says can be
+   * recomputed from the entries, so the pass walks the entries it can reach
+   * and appends whatever is missing. `append` already ignores an id it finds,
+   * which is what makes running this on every open cheap in the ordinary case
+   * where nothing is wrong.
+   *
+   * Reachability is the limit, and it is worth stating plainly. A
+   * `KeyValueStore` has `get` and `set` and no way to enumerate keys, so a
+   * node is discoverable only through an index that already names it. This
+   * therefore repairs every crash that reached *one* of a node's two index
+   * writes -- in `ORDER` but unlinked from its parent, or linked but missing
+   * from `ORDER` -- and cannot repair a crash between the entry and the first
+   * of them, which leaves a node nothing can name again. That last window
+   * needs a backing that can scan, not a better order here.
+   *
+   * A dangling id -- an index naming an entry that is not there -- is left
+   * alone rather than pruned. `nodesOf` reports it as the torn write it is,
+   * and silently dropping it would turn visible damage into a shorter tree.
+   */
+  const reconcile: Effect.Effect<void, StoreError> = Effect.gen(function*() {
+    const seen = new Set<string>()
+    const stored: Array<Node> = []
+    // Both entry points, because either can be the one a crash left behind:
+    // `ORDER` misses a node whose link landed first, and the links miss a node
+    // that only reached `ORDER`.
+    const pending = [...(yield* readIds(ORDER)), ...(yield* readIds(ROOTS))]
+    while (pending.length > 0) {
+      const id = pending.pop()
+      if (id === undefined || seen.has(id)) continue
+      seen.add(id)
+      const entry = yield* entries.get(nodeKey(id)).pipe(Effect.mapError(fail("read", id)))
+      if (Option.isNone(entry)) continue
+      stored.push(entry.value.node)
+      // Children of a node that exists are themselves reachable, so a whole
+      // subtree missing from `ORDER` comes back rather than only its top.
+      pending.push(...(yield* readIds(childrenKey(id))))
+    }
+    yield* Effect.forEach(stored, (node) =>
+      Effect.andThen(
+        Option.isSome(node.parent)
+          ? append(childrenKey(node.parent.value), node.id)
+          : append(ROOTS, node.id),
+        append(ORDER, node.id)
+      ), { discard: true }).pipe(Semaphore.withPermit(writing))
+  })
+
+  /**
+   * The recovery pass, run once, on the first operation that needs an index.
+   *
+   * Lazily rather than in this constructor because `keyValue` is a plain
+   * function: making it an `Effect` would change every caller's signature to
+   * pay for something a tree that never crashed does not notice. Its own
+   * permit, not `writing`'s, because a semaphore is not reentrant and `put`
+   * holds `writing` for its own body.
+   *
+   * The flag is set only on success, so a backing that was unavailable at
+   * first touch is retried rather than remembered as reconciled.
+   */
+  const opening = Effect.runSync(Semaphore.make(1))
+  const reconciled = Effect.runSync(Ref.make(false))
+  const opened: Effect.Effect<void, StoreError> = Effect.gen(function*() {
+    if (yield* Ref.get(reconciled)) return
+    yield* reconcile
+    yield* Ref.set(reconciled, true)
+  }).pipe(Semaphore.withPermit(opening))
 
   return {
     put: (node, history) =>
@@ -395,11 +467,17 @@ export const keyValue = (
         // The node first, then the indexes. The other order can leave an index
         // pointing at a node that was never written, which reads as corruption
         // rather than as an interrupted write.
+        //
+        // The order *among* the indexes is deliberately not load-bearing:
+        // `reconcile` seeds from `ORDER` and from the roots and repairs in
+        // both directions, so whichever of the two a crash reached is enough
+        // to find the node again. Reordering them was tried and bought
+        // nothing.
         yield* append(ORDER, node.id)
         yield* Option.isSome(node.parent)
           ? append(childrenKey(node.parent.value), node.id)
           : append(ROOTS, node.id)
-      }).pipe(Semaphore.withPermit(writing)),
+      }).pipe(Semaphore.withPermit(writing), (write) => Effect.andThen(opened, write)),
 
     get: (id) =>
       entries.get(nodeKey(id)).pipe(
@@ -407,8 +485,10 @@ export const keyValue = (
         Effect.map(Option.map((entry) => ({ node: entry.node, history: entry.history })))
       ),
 
-    children: (id) => nodesOf(childrenKey(id)),
-    roots: nodesOf(ROOTS),
-    nodes: nodesOf(ORDER)
+    // Every index read goes through `opened` first; `get` does not, because it
+    // reads the entry by key and needs no index to find it.
+    children: (id) => Effect.andThen(opened, nodesOf(childrenKey(id))),
+    roots: Effect.andThen(opened, nodesOf(ROOTS)),
+    nodes: Effect.andThen(opened, nodesOf(ORDER))
   }
 }

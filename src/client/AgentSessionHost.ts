@@ -44,6 +44,17 @@ export interface PrincipalContext {
   readonly operation: AgentProtocol.Operation
   readonly sessionId: Option.Option<AgentProtocol.SessionId>
   readonly headers: Headers.Headers
+  /**
+   * The tenant the request addressed, when the transport carries one.
+   *
+   * Untrusted until the resolver joins it to the principal: it comes from a
+   * URL path or a header, and a caller can put anything there. A resolver
+   * that scopes storage by tenant must refuse a request whose addressed
+   * tenant is not one its principal may act in -- the transport cannot make
+   * that decision, because only the application knows the mapping. Absent on
+   * transports with no tenant concept, which is most of them.
+   */
+  readonly tenant?: string | undefined
 }
 
 /** Turn a request's headers into the application's principal. */

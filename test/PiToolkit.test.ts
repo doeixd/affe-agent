@@ -6,6 +6,7 @@ import { PiToolkit } from "../src/pi/index.js"
 import * as LineEndings from "../src/coding/internal/lineEndings.js"
 import * as MemorySandbox from "../src/sandbox/memory.js"
 import * as Sandbox from "../src/sandbox/Sandbox.js"
+import * as SearchFormat from "../src/coding/internal/searchFormat.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -603,6 +604,36 @@ describe("PiToolkit search (P4 grep cap)", () => {
       assert.notInclude(out, "binary.zip")
     }))
 
+  it.effect("search skips a file above the size cap and reports the skip", () =>
+    Effect.gen(function* () {
+      // Same cap and same note as the coding toolkit: `search` here shared the
+      // unbounded read, so it needed the same bound rather than a second one.
+      const big = "x".repeat(2 * 1024 * 1024 - 5) + "hello"
+      const opened = yield* Ref.make<ReadonlyArray<string>>([])
+      const out = yield* withSandbox(
+        { "big.txt": big, "small.txt": "hello" },
+        Effect.gen(function* () {
+          const inner = yield* Sandbox.Current
+          // Typed as a `Sandbox`, so `path` infers from the interface rather
+          // than arriving as `any` from a bare object literal.
+          const recording: Sandbox.Sandbox = {
+            ...inner,
+            read: (path) =>
+              Effect.andThen(Ref.update(opened, (seen) => [...seen, path]), inner.read(path))
+          }
+          const result = yield* H.search({ pattern: "hello" }, ctx).pipe(
+            Effect.provideService(Sandbox.Current, recording)
+          )
+          return { result, opened: yield* Ref.get(opened) }
+        })
+      )
+      assertString(out.result)
+      assert.deepStrictEqual(out.opened, ["small.txt"])
+      assert.include(out.result, "small.txt:")
+      assert.notInclude(out.result, "big.txt")
+      assert.include(out.result, SearchFormat.skippedForSizeNote(1))
+    }))
+
   it.effect("search refuses dangerous regex", () =>
     Effect.gen(function* () {
       const err = yield* withSandbox({ "a.txt": "x" }, Effect.flip(H.search({ pattern: "(a+)+$" }, ctx)))
@@ -670,7 +701,7 @@ describe("PiToolkit shell (P5)", () => {
         (cmd) => Ref.set(seen, { executable: cmd.executable, args: cmd.args }).pipe(Effect.as({ exitCode: 0, stdout: "hi\n", stderr: "" }))
       )
       void result
-      assert.deepStrictEqual(yield* Ref.get(seen), { executable: "bash", args: ["-lc", "echo hi"] })
+      assert.deepStrictEqual(yield* Ref.get(seen), { executable: "bash", args: ["-c", "echo hi"] })
     }))
 
   it.effect("bash timeout is reported as actionable failure", () =>
@@ -686,10 +717,6 @@ describe("PiToolkit shell (P5)", () => {
     }))
 
   it("Permission projection for bash is shell on command", () => {
-    // Static check: Pi's bash projects to shell on command, same as coding
-    const tool = PiToolkit.Bash as unknown as { readonly _tag: string }
-    void tool
-    // We can't introspect Permission.annotation at runtime cheaply, but we assert the tool exists and has correct name
     assert.strictEqual(PiToolkit.Bash.name, "bash")
   })
 })

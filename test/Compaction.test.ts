@@ -1,9 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Option, Ref, Schema } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentRun from "../src/AgentRun.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as AgentSubmission from "../src/AgentSubmission.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import { Compaction } from "../src/compaction/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -18,6 +21,39 @@ const summaryOf = (prompt: Prompt.Prompt) =>
   prompt.content.flatMap((message) =>
     message.role === "system" ? [message.content] : []
   )
+
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false
+type Assert<T extends true> = T
+
+class BudgetFailure extends Schema.TaggedError<BudgetFailure>()(
+  "BudgetFailure",
+  {}
+) {
+  override get message() {
+    return "budget failed"
+  }
+}
+
+class EstimateFailure extends Schema.TaggedError<EstimateFailure>()(
+  "EstimateFailure",
+  {}
+) {
+  override get message() {
+    return "estimate failed"
+  }
+}
+
+class SummaryFailure extends Schema.TaggedError<SummaryFailure>()(
+  "SummaryFailure",
+  {}
+) {
+  override get message() {
+    return "summary failed"
+  }
+}
 
 describe("compaction", () => {
   it.effect("shrinks the projection and leaves history complete", () =>
@@ -553,4 +589,398 @@ describe("compaction", () => {
       )
     })
   )
+
+  it.effect("persists checkpoints across transform recreation", () =>
+    Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+        Effect.provide(KeyValueStore.layerMemory)
+      )
+      const ranges = yield* Ref.make<Array<number>>([])
+      const usage = {
+        inputTokens: 13,
+        outputTokens: 3,
+        totalTokens: 16
+      }
+      const makeAgent = Effect.map(
+        Compaction.make({
+          policy: Compaction.whenLongerThan(2, { retain: 2 }),
+          summarise: ({ messages }) =>
+            Ref.update(
+              ranges,
+              (all) => [...all, messages.content.length]
+            ).pipe(
+              Effect.as({
+                text: "persistent summary",
+                usage: Option.some(usage)
+              })
+            ),
+          checkpointStore: kv
+        }),
+        (contextTransform) =>
+          Agent.make({
+            contextTransform,
+            loop: AgentLoop.bounded(1)
+          })
+      )
+      const { layer } = yield* TestLanguageModel.script(
+        Array.from({ length: 6 }, (_, index) =>
+          TestLanguageModel.text(`r${index}`)
+        )
+      )
+
+      const firstAgent = yield* makeAgent
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(firstAgent, {
+            sessionId: "persistent"
+          })
+          for (let index = 0; index < 4; index++) {
+            yield* session.prompt(`m${index}`)
+          }
+          return yield* AgentSession.snapshot(session)
+        })
+      ).pipe(Effect.provide(layer))
+
+      // A new transform has a fresh Ref; only the supplied store can carry the
+      // checkpoint across this boundary.
+      const secondAgent = yield* makeAgent
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.restore(secondAgent, snapshot)
+          yield* session.prompt("m4")
+          yield* session.prompt("m5")
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.deepStrictEqual(yield* Ref.get(ranges), [3, 4])
+      const stored = yield* KeyValueStore.toSchemaStore(
+        KeyValueStore.prefix(kv, "effect-agent:compaction:"),
+        Compaction.Checkpoint
+      ).get("persistent")
+      assert.isTrue(Option.isSome(stored))
+      if (Option.isSome(stored)) {
+        assert.deepStrictEqual(stored.value.usage, Option.some(usage))
+      }
+
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2),
+        summarise: () => Effect.succeed("summary"),
+        checkpointStore: kv
+      })
+      const prompt = Prompt.make("hello")
+      const transformed = compaction.transform({
+        sessionId: AgentSession.Id.make("typed-persistence"),
+        submissionId: AgentSubmission.Id.make("typed-persistence"),
+        runId: AgentRun.Id.make("typed-persistence"),
+        turnIndex: 1,
+        canonicalPrompt: prompt,
+        prompt
+      })
+      type _Error = Assert<
+        Equal<
+          Effect.Error<typeof transformed>,
+          KeyValueStore.KeyValueStoreError | Schema.SchemaError | Compaction.CompactionCannotHelpError
+        >
+      >
+    })
+  )
+
+  it.effect("compacts against token pressure and keeps a token-sized tail", () =>
+    Effect.gen(function* () {
+      const summarised = yield* Ref.make<ReadonlyArray<number>>([])
+      const estimator: Compaction.EstimateTokens = (prompt) =>
+        Effect.succeed(prompt.content.length * 2)
+      const compaction = yield* Compaction.make({
+        policy: Compaction.tokens({
+          budget: {
+            contextWindow: 10,
+            reserveTokens: 2,
+            keepRecentTokens: 3
+          },
+          estimate: estimator
+        }),
+        summarise: ({ messages }) =>
+          Ref.update(
+            summarised,
+            (all) => [...all, messages.content.length]
+          ).pipe(Effect.as("TOKEN SUMMARY"))
+      })
+      const { layer, recorder } = yield* TestLanguageModel.script(
+        Array.from({ length: 7 }, (_, index) =>
+          TestLanguageModel.text(`answer ${index}`)
+        )
+      )
+
+      const history = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({
+              contextTransform: compaction,
+              loop: AgentLoop.bounded(1)
+            })
+          )
+          for (let index = 0; index < 7; index++) {
+            yield* session.prompt(`message ${index}`)
+          }
+          return yield* session.history
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.strictEqual(history.content.length, 14)
+      const ranges = yield* Ref.get(summarised)
+      assert.isAtLeast(ranges.length, 1)
+      assert.isTrue(ranges.every((length) => length > 0))
+      assert.isBelow(ranges.length, 7)
+      const prompts = yield* recorder.prompts
+      assert.isTrue(
+        prompts.some((prompt) =>
+          summaryOf(prompt).some((summary) => summary.includes("TOKEN SUMMARY"))
+        )
+      )
+    })
+  )
+
+  it.effect("ships a portable approximate estimator for text and bytes", () =>
+    Effect.gen(function* () {
+      const empty = yield* Compaction.estimate.approximate(Prompt.empty)
+      const short = yield* Compaction.estimate.approximate(Prompt.make("hello"))
+      const binary = yield* Compaction.estimate.approximate(Prompt.make([{
+        role: "user",
+        content: [{
+          type: "file",
+          mediaType: "application/octet-stream",
+          data: new Uint8Array(120)
+        }]
+      }]))
+      assert.strictEqual(empty, 0)
+      assert.isAbove(short, 0)
+      assert.isAbove(binary, short)
+    })
+  )
+
+  it.effect("preserves policy and summarizer failures in the transform type", () =>
+    Effect.gen(function* () {
+      const budgetFailure = new BudgetFailure()
+      const estimateFailure = new EstimateFailure()
+      const summaryFailure = new SummaryFailure()
+      const compaction = yield* Compaction.make({
+        policy: Compaction.tokens({
+          budget: () => Effect.fail(budgetFailure),
+          estimate: () => Effect.fail(estimateFailure)
+        }),
+        summarise: () => Effect.fail(summaryFailure)
+      })
+      const prompt = Prompt.make("hello")
+      const outcome = compaction.transform({
+        sessionId: AgentSession.Id.make("typed-session"),
+        submissionId: AgentSubmission.Id.make("typed-submission"),
+        runId: AgentRun.Id.make("typed-run"),
+        turnIndex: 1,
+        canonicalPrompt: prompt,
+        prompt
+      })
+      type _Error = Assert<
+        Equal<
+          Effect.Error<typeof outcome>,
+          BudgetFailure | EstimateFailure | SummaryFailure | Compaction.CompactionCannotHelpError
+        >
+      >
+      const exit = yield* Effect.exit(outcome)
+      assert.strictEqual(exit._tag, "Failure")
+    })
+  )
+
+  it.effect("defines checkpoints as round-trippable Schema values", () =>
+    Effect.gen(function* () {
+      const checkpoint: Compaction.Checkpoint = {
+        coveredThrough: 12,
+        summary: "summary",
+        prefix: "abc123",
+        tokensBefore: Option.some(900),
+        tokensAfter: Option.some(240),
+        usage: Option.none()
+      }
+      const encoded = yield* Schema.encodeEffect(Compaction.Checkpoint)(checkpoint)
+      const decoded = yield* Schema.decodeEffect(Compaction.Checkpoint)(encoded)
+      type _Checkpoint = Assert<Equal<typeof decoded, Compaction.Checkpoint>>
+      assert.deepStrictEqual(decoded, checkpoint)
+    })
+  )
+
+  it("serializes a bounded, file-safe summarizer transcript", () => {
+    const prompt = Prompt.fromMessages([
+      Prompt.systemMessage({ content: "Follow the policy." }),
+      Prompt.userMessage({
+        content: [
+          Prompt.textPart({ text: "inspect this" }),
+          Prompt.filePart({
+            mediaType: "application/octet-stream",
+            fileName: "blob.bin",
+            data: new Uint8Array([10, 20, 30])
+          })
+        ]
+      }),
+      Prompt.assistantMessage({
+        content: [
+          Prompt.reasoningPart({ text: "considering" }),
+          Prompt.toolCallPart({
+            id: "call-1",
+            name: "lookup",
+            params: { query: "effect" },
+            providerExecuted: false
+          }),
+          Prompt.toolApprovalRequestPart({
+            approvalId: "approval-1",
+            toolCallId: "call-1"
+          })
+        ]
+      }),
+      Prompt.toolMessage({
+        content: [
+          Prompt.toolResultPart({
+            id: "call-1",
+            name: "lookup",
+            isFailure: false,
+            result: "abcdefghij",
+            providerExecuted: false
+          }),
+          Prompt.toolApprovalResponsePart({
+            approvalId: "approval-1",
+            approved: false,
+            reason: "not now"
+          })
+        ]
+      })
+    ])
+
+    assert.strictEqual(
+      Compaction.serialize(prompt, { maxToolResultChars: 5 }),
+      `[System]\nFollow the policy.\n\n[User]\ninspect this\n\n[File: blob.bin; application/octet-stream; 3 bytes]\n\n[Assistant]\n[Reasoning]\nconsidering\n\n[Tool call: lookup; id=call-1]\n{\n  "query": "effect"\n}\n\n[Tool approval requested: approval-1; call=call-1]\n\n[Tool]\n[Tool result: lookup; id=call-1; success]\n"abcd\n… [7 characters omitted]\n\n[Tool approval denied: approval-1]\nnot now`
+    )
+    assert.throws(
+      () => Compaction.serialize(prompt, { maxToolResultChars: -1 }),
+      "non-negative safe integer"
+    )
+  })
+
+  /**
+   * What a transform *before* compaction costs, and who is told about it.
+   *
+   * `substitute` already establishes that an earlier transform's injection --
+   * retrieved memory, a dynamic instruction -- stays in the projection. It is
+   * therefore counted in `tokensBefore`, and it is not in canonical history, so
+   * no cut can fold it away. When the injection alone is over budget the walk
+   * retains every canonical message, finds no boundary, and compaction has to
+   * say so.
+   *
+   * What it must not say is that the retained tail exceeded `keepRecentTokens`,
+   * which is precisely what this branch has just established is false -- the
+   * walk stopped here because the tail fit. That message sent an operator to
+   * lower `keepRecentTokens`, which cannot change the outcome, and it is why
+   * the failure now carries a `kind`.
+   */
+  it.effect("blames the injection, not the tail, when no cut exists", () =>
+    Effect.gen(function* () {
+      const summarised = yield* Ref.make(0)
+      const compaction = yield* Compaction.make({
+        policy: Compaction.tokens({
+          budget: {
+            contextWindow: 100,
+            reserveTokens: 10,
+            keepRecentTokens: 40
+          },
+          estimate: Compaction.estimate.approximate
+        }),
+        summarise: () =>
+          Ref.update(summarised, (n) => n + 1).pipe(Effect.as("summary"))
+      })
+      const canonical = Prompt.make("a short question")
+      const injected = Prompt.fromMessages([
+        Prompt.systemMessage({ content: "M".repeat(4_000) }),
+        ...canonical.content
+      ])
+
+      const failure = yield* Effect.flip(
+        compaction.transform({
+          sessionId: AgentSession.Id.make("injected"),
+          submissionId: AgentSubmission.Id.make("injected"),
+          runId: AgentRun.Id.make("injected"),
+          turnIndex: 1,
+          canonicalPrompt: canonical,
+          prompt: injected
+        })
+      )
+
+      assert.strictEqual(failure._tag, "CompactionCannotHelpError")
+      if (failure._tag === "CompactionCannotHelpError") {
+        assert.strictEqual(failure.kind, "nothing-to-fold")
+        assert.notInclude(failure.message, "retained tail alone exceeds")
+      }
+      // And nothing was summarised, so no model call was paid for a cut that
+      // could not exist.
+      assert.strictEqual(yield* Ref.get(summarised), 0)
+    })
+  )
+
+  /**
+   * A `ResolveBudget` is an ordinary Effect: it may read configuration or ask a
+   * provider. It was resolved twice on a compacting turn -- once to choose the
+   * cut and again to check the summary against the budget -- so a caller paid
+   * for both, and the two answers need not agree: the check could be made
+   * against a window the cut was never chosen for.
+   */
+  it.effect("resolves a dynamic budget once per turn", () =>
+    Effect.gen(function* () {
+      const resolved = yield* Ref.make(0)
+      const compaction = yield* Compaction.make({
+        policy: Compaction.tokens({
+          budget: () =>
+            Ref.update(resolved, (n) => n + 1).pipe(
+              Effect.as({
+                contextWindow: 10,
+                reserveTokens: 2,
+                keepRecentTokens: 3
+              })
+            ),
+          estimate: (prompt) => Effect.succeed(prompt.content.length * 2)
+        }),
+        summarise: () => Effect.succeed("summary")
+      })
+      const canonical = Prompt.fromMessages(
+        Array.from({ length: 7 }, (_, index) =>
+          Prompt.userMessage({
+            content: [Prompt.textPart({ text: `message ${index}` })]
+          }))
+      )
+
+      const projected = yield* compaction.transform({
+        sessionId: AgentSession.Id.make("dynamic-budget"),
+        submissionId: AgentSubmission.Id.make("dynamic-budget"),
+        runId: AgentRun.Id.make("dynamic-budget"),
+        turnIndex: 1,
+        canonicalPrompt: canonical,
+        prompt: canonical
+      })
+
+      // The turn really did compact, or "resolved once" would be vacuous.
+      assert.isBelow(projected.content.length, canonical.content.length)
+      assert.strictEqual(summaryOf(projected).length, 1)
+      assert.isTrue(summaryOf(projected)[0]?.endsWith("summary"))
+      assert.strictEqual(yield* Ref.get(resolved), 1)
+    })
+  )
+
+  it("rejects token budgets that cannot leave room for a summary", () => {
+    assert.throws(
+      () => Compaction.tokens({
+        budget: {
+          contextWindow: 100,
+          reserveTokens: 20,
+          keepRecentTokens: 80
+        },
+        estimate: Compaction.estimate.approximate
+      }),
+      "must leave room"
+    )
+  })
 })

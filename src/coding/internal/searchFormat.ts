@@ -24,6 +24,28 @@ import { MAX_LINE_LENGTH, MAX_LINE_SUFFIX } from "./readFormat.js"
 export const SEARCH_LIMIT = 100
 
 /**
+ * The largest file a search will read.
+ *
+ * The walk was bounded and the output was bounded, but the *read* between them
+ * was not: `sandbox.read` returns the whole file, so a single 500 MB blob
+ * anywhere under the searched path made one `search` allocate 500 MB and then
+ * decode it. `IGNORED_DIRECTORIES` is no defence -- a bundle, a fixture or a
+ * database dump committed inside `src/` is not in a skipped directory.
+ *
+ * 1 MiB, because it is far above any file a regular expression search over
+ * source is meant to answer about (this repository's largest source file is
+ * under 60 KiB) and far below a size worth decoding on a whim. A file over it
+ * is almost always generated, and a model that really wants such a file can
+ * still `read_file` it by name with an offset -- the cap is on searching
+ * blindly, not on access.
+ *
+ * Skips are *reported* rather than silent: "no match in a file that was never
+ * read" and "no match in this file" are different answers, and a model that
+ * cannot tell them apart draws the wrong conclusion from an empty result.
+ */
+export const MAX_SEARCH_FILE_BYTES = 1024 * 1024
+
+/**
  * Directory names a search does not descend into.
  *
  * Without this a search is worthless on a real repository: it walks
@@ -85,8 +107,24 @@ const cap = (text: string): string =>
  * Matches must already be ordered by file for the grouping to be meaningful,
  * which the walk guarantees.
  */
-export const render = (matches: ReadonlyArray<Match>): string => {
-  if (matches.length === 0) return NO_RESULTS
+/**
+ * What the search says about files it declined to open.
+ *
+ * Phrased so the model's next move is obvious: the file has a name, and
+ * `read_file` will still open it.
+ */
+export const skippedForSizeNote = (count: number): string =>
+  `(${count} file${count === 1 ? "" : "s"} skipped: larger than ${MAX_SEARCH_FILE_BYTES}` +
+  ` bytes. Read such a file by name if it is the one you want.)`
+
+export const render = (
+  matches: ReadonlyArray<Match>,
+  skippedForSize = 0
+): string => {
+  const note = skippedForSize > 0 ? ["", skippedForSizeNote(skippedForSize)] : []
+  if (matches.length === 0) {
+    return skippedForSize > 0 ? [NO_RESULTS, ...note].join("\n") : NO_RESULTS
+  }
 
   // "Exactly the limit" is how upstream infers truncation. It cannot tell a
   // search that found exactly 100 from one that stopped at 100, and says
@@ -111,5 +149,5 @@ export const render = (matches: ReadonlyArray<Match>): string => {
     lines.push("(Results truncated. Consider using a more specific path or pattern.)")
   }
 
-  return lines.join("\n")
+  return [...lines, ...note].join("\n")
 }

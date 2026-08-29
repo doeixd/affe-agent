@@ -65,6 +65,22 @@ export interface EventBus {
    * contention and must wait, which is the whole point of the permit.
    */
   readonly emitting: Ref.Ref<Option.Option<number>>
+  /**
+   * The terminal envelope, retained once it has been published.
+   *
+   * `events` ends on `SessionClosed`, which works only for a subscriber that
+   * was attached when it went out. A client reconnecting to a session that
+   * closed while it was away subscribed to a PubSub that would never speak
+   * again, and waited forever -- no error, no end of stream.
+   *
+   * Retaining the envelope rather than short-circuiting to an empty stream is
+   * the choice that answers the question the late subscriber actually asked:
+   * it *sees* `SessionClosed`, and then the same `takeUntil` ends its stream,
+   * so live and late subscribers observe the same terminal event by the same
+   * rule. Read and written under `order`, so subscribing is atomic with
+   * respect to publication and there is no window between the two.
+   */
+  readonly closed: Ref.Ref<Option.Option<AgentEventEnvelope>>
 }
 
 export const make = (
@@ -76,6 +92,7 @@ export const make = (
     const sequence = yield* Ref.make(0)
     const order = yield* Semaphore.make(1)
     const emitting = yield* Ref.make(Option.none<number>())
+    const closed = yield* Ref.make(Option.none<AgentEventEnvelope>())
     return {
       sessionId,
       pubsub,
@@ -83,7 +100,8 @@ export const make = (
       order,
       sink,
       observers: new Set(),
-      emitting
+      emitting,
+      closed
     } satisfies EventBus
   })
 
@@ -109,7 +127,19 @@ export const emit = (
         sequence,
         event
       }
-      return PubSub.publish(bus.pubsub, envelope).pipe(
+      // Retained *before* it is published, and that order is what `events`
+      // relies on: a subscriber that registers and then finds this empty knows
+      // the publish has not happened yet, so its own subscription will carry
+      // the close. Retaining after publishing left a window between the two
+      // in which a subscriber saw neither, and closing that window by making
+      // subscribers take the emit permit starved them instead -- a busy
+      // emitter re-takes the semaphore before a queued subscriber is
+      // scheduled, and the subscriber missed every event emitted meanwhile.
+      return (event._tag === "SessionClosed"
+        ? Ref.set(bus.closed, Option.some(envelope))
+        : Effect.void
+      ).pipe(
+        Effect.andThen(PubSub.publish(bus.pubsub, envelope)),
         /**
          * The sink is a *participant*, and its failure is the emit's failure.
          *
@@ -130,12 +160,20 @@ export const emit = (
         )
       )
     }),
-    Semaphore.withPermit(bus.order),
     Effect.asVoid,
-    // `holding` first, so it wraps the emit; `guardReentry` outermost, so it
-    // reads the marker *before* this call sets it. The other order has every
-    // emit find its own mark and refuse itself.
+    // `holding` *inside* the permit, not around it. Marking before the permit
+    // was acquired made the marker a shared last-writer-wins slot: a second
+    // emitter blocked on the permit had already overwritten the holder's mark,
+    // and the holder's `ensuring` then cleared it -- so the fibre that went on
+    // to run the observers was recorded as nobody, and a re-entrant observer
+    // hung on the permit instead of being refused. Under the permit only one
+    // fibre can be inside `holding` at a time, which is what the marker claims.
+    //
+    // `guardReentry` stays outermost, so it reads the marker *before* this call
+    // sets it -- and, being outside the permit, a re-entrant call is refused
+    // rather than queued behind the permit it is itself holding.
     holding(bus),
+    Semaphore.withPermit(bus.order),
     guardReentry(bus)
   )
 
@@ -238,6 +276,26 @@ export const observe = (
  * longer existed, until the connection itself was torn down.
  */
 export const events = (bus: EventBus): Stream.Stream<AgentEventEnvelope> =>
-  Stream.fromPubSub(bus.pubsub).pipe(
-    Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed")
+  Stream.unwrap(
+    // Subscribe first, then read the marker; no permit. The two cases are
+    // exhaustive because `emit` retains the close *before* publishing it:
+    // reading `None` after subscribing proves the publish is still to come,
+    // and this subscription is already registered to receive it; reading
+    // `Some` means it may already have gone out, so the retained envelope is
+    // replayed and the subscription is left unread -- seen once either way.
+    //
+    // Not under `bus.order`. It was, briefly, and a subscriber queued behind
+    // an emitting fibre was starved for as long as that fibre kept emitting,
+    // which for a subscriber joining mid-run meant missing the events it
+    // subscribed for. Ordering the retention before the publish is what makes
+    // the permit unnecessary.
+    Effect.flatMap(PubSub.subscribe(bus.pubsub), (subscription) =>
+      Effect.map(Ref.get(bus.closed), (closed) =>
+        Option.isSome(closed)
+          ? Stream.make(closed.value)
+          : Stream.fromSubscription(subscription).pipe(
+            Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed")
+          )
+      )
+    )
   )

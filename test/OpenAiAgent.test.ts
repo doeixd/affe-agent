@@ -453,6 +453,46 @@ describe("OpenAiAgent over the in-process client", () => {
     }).pipe(Effect.scoped)
   )
 
+  /**
+   * A request that never produces a result must release the key it claimed.
+   *
+   * The claim happens before the work is even resolvable, so a request that
+   * fails on its way there -- a stateful call whose trailing input is empty,
+   * a session the backend refuses -- left the key held by a promise nothing
+   * would ever keep. The retry the key exists to serve then joined a deferred
+   * that never completed and hung for as long as the client would wait, which
+   * is a worse outcome than the double execution the key prevents.
+   */
+  it.live("a request that fails before executing releases its idempotency key", () =>
+    Effect.gen(function* () {
+      const { address } = yield* makeServer(Agent.make({ loop: AgentLoop.bounded(2) }), [
+        TestLanguageModel.text("never reached")
+      ])
+      const headers = {
+        "x-agent-session-id": "thread-release",
+        "idempotency-key": "k-unresolvable"
+      }
+      // Stateful mode submits the user messages *after* the last assistant
+      // message, and this request has none.
+      const body = {
+        model: "agent",
+        messages: [user("hi"), { role: "assistant", content: "already answered" }]
+      }
+      const first = yield* post(address, body, headers)
+      assert.strictEqual(first.status, 400)
+      assert.strictEqual((yield* errorBody(first)).error.code, "empty_delta")
+
+      // The retry gets the same answer rather than waiting on a result that
+      // is never coming. The timeout is the assertion: without the release it
+      // does not return at all.
+      const retry = yield* post(address, body, headers).pipe(
+        Effect.timeout("5 seconds")
+      )
+      assert.strictEqual(retry.status, 400)
+      assert.strictEqual((yield* errorBody(retry)).error.code, "empty_delta")
+    }).pipe(Effect.scoped)
+  )
+
   it.live("a custom path and header names are honoured", () =>
     Effect.gen(function* () {
       const { address } = yield* makeServer(

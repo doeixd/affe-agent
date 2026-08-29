@@ -708,22 +708,16 @@ describe("multimodal submissions", () => {
         )
         assert.strictEqual(files.length, 1, "the file part was dropped")
         assert.strictEqual(files[0]!.mediaType, "application/pdf")
-        // The content survives, but not the representation: `Prompt` encodes
-        // `Uint8Array` as base64, and decoding leaves it a base64 string
-        // rather than restoring the array. That is Effect AI's wire form, not
-        // something this library chooses, and it is worth pinning because it
-        // is a real difference between a fresh run and a resumed one: a tool
-        // that branches on `instanceof Uint8Array` sees the other arm after a
-        // durable round trip.
+        // The process-boundary codec records the runtime variant explicitly,
+        // so a resumed provider sees the same bytes arm as a fresh run.
         const data = files[0]!.data
-        // No cast anywhere: narrowing is the assertion.
         assert.isTrue(
-          typeof data === "string",
+          data instanceof Uint8Array,
           "the file part's content did not survive"
         )
-        if (typeof data === "string") {
+        if (data instanceof Uint8Array) {
           assert.deepStrictEqual(
-            Array.from(Buffer.from(data, "base64")),
+            Array.from(data),
             Array.from(bytes),
             "the bytes did not survive the journal"
           )

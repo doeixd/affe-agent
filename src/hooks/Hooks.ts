@@ -34,8 +34,8 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
 
 /** A side effect per event tag; every entry is optional. */
 export type Handlers<E, R> = {
-  readonly [Tag in AgentEvent.AgentEvent["_tag"]]?: (
-    event: Extract<AgentEvent.AgentEvent, { readonly _tag: Tag }>,
+  readonly [Tag in AgentEvent.StreamedEvent["_tag"]]?: (
+    event: Extract<AgentEvent.StreamedEvent, { readonly _tag: Tag }>,
     envelope: AgentEventEnvelope
   ) => Effect.Effect<void, E, R>
 }
@@ -79,7 +79,7 @@ export const on = <H extends Handlers<any, any>, EO = never, RO = never>(
     // constraint already type-checked each handler against its tag at the call.
     const table = handlers as Record<
       string,
-      ((event: AgentEvent.AgentEvent, envelope: AgentEventEnvelope) => Effect.Effect<void, ErrorsOf<H>, ServicesOf<H>>) | undefined
+      ((event: AgentEvent.StreamedEvent, envelope: AgentEventEnvelope) => Effect.Effect<void, ErrorsOf<H>, ServicesOf<H>>) | undefined
     >
     const handler = table[envelope.event._tag]
     // `suspend` runs the handler invocation *inside* the caught region, so a

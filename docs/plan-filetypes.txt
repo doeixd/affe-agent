@@ -13,9 +13,9 @@ The gaps are mostly in **wire encoding, large-object storage, and protocol proje
 | Model receives multimodal prompt    |      ✅ | Good                                                      |
 | Canonical session history           |      ✅ | Preserves response parts                                  |
 | Model-produced files/images         |     🟨 | Stored, but poorly exposed remotely                       |
-| RPC transport                       |     🟨 | Correct schema shape; binary conformance needs hardening  |
-| HTTP transport                      |     🟨 | Correct shape, but JSON/binary needs explicit codec/tests |
-| Durable session persistence         |     🟨 | Prompt stored, but blobs inline + JSON concerns           |
+| RPC transport                       |      ✅ | `PromptWire`; JSON and RPC conformance covered            |
+| HTTP transport                      |      ✅ | Exact inline string / bytes / URL round-trips             |
+| Durable session persistence         |     🟨 | Exact inline codec; large blobs still need a blob store    |
 | Event stream                        |      ❌ | `MessageCompleted` is text-only                           |
 | `RemoteResult`                      |      ❌ | Explicitly text-only                                      |
 | A2A                                 |      ❌ | Current adapter deliberately accepts text only            |
@@ -43,7 +43,11 @@ yield* session.prompt([
 ])
 ```
 
-`AgentSession.prompt` accepts `Prompt.RawInput`, and the remote protocol normalizes inputs to `Prompt.Prompt`. More importantly, the canonical remote protocol uses the actual `Prompt.Prompt` Schema for `prompt`, `steer`, `followUp`, and history responses rather than inventing a text-only request shape.
+`AgentSession.prompt` accepts `Prompt.RawInput`, and the remote protocol
+normalizes inputs to `Prompt.Prompt`. The canonical remote protocol uses
+`PromptWire.Prompt` for `prompt`, `steer`, `followUp`, and history responses.
+That codec's decoded type is still exactly `Prompt.Prompt`; only the stable
+process-boundary representation differs.
 
 That's the right foundation.
 
@@ -222,11 +226,10 @@ hopefully text
 
 ---
 
-# Durable storage needs more attention
+# Durable storage still needs large-object work
 
-The durable session store does preserve canonical `Prompt.Prompt`, which is good.
-
-But it currently does:
+The durable session store preserves canonical `Prompt.Prompt` through the
+shared JSON-safe `PromptWire` codec. Before Phase 1 it did:
 
 ```ts
 Schema.encodeEffect(Prompt.Prompt)(prompt)
@@ -236,9 +239,8 @@ JSON.stringify(...)
 
 and stores the resulting JSON string.
 
-There are two issues.
-
-First, I would add hard conformance tests before claiming that every `FilePart.data` variant round-trips correctly:
+The first issue is now closed. Conformance tests cover every
+`FilePart.data` runtime variant:
 
 ```text
 string/base64
@@ -247,7 +249,7 @@ URL
 Uint8Array
 ```
 
-particularly through:
+through:
 
 ```text
 Prompt.Prompt
@@ -257,9 +259,14 @@ Prompt.Prompt
 → Schema.decode
 ```
 
-There are explicit Effect Schema transformations for binary/base64 representation, so we should use an intentionally **JSON-safe codec**, not rely on incidental serialization behavior.
+`PromptWire` uses Effect's URL and base64 transformations, tags the runtime
+variant explicitly, and validates the complete encoded value as `Schema.Json`.
+New writes never rely on incidental `JSON.stringify(Uint8Array)` behaviour.
+Legacy untagged strings remain readable as strings because rejecting existing
+durable rows would be worse; the old encoding did not preserve enough
+information to recover whether such a string began as bytes or a URL.
 
-Second, even if it round-trips perfectly:
+The remaining issue is independent of codec correctness:
 
 > **Putting a 25 MB PNG as base64 inside the session-history SQL row is the wrong storage model.**
 
@@ -284,7 +291,29 @@ AgentFilePart
 
 We already have those semantics through `Prompt.FilePart`.
 
-## Phase 1 — make inline multimodality actually correct
+## Phase 1 — make inline multimodality actually correct ✅
+
+Implemented 2026-08-27. `src/PromptWire.ts` is public at the root namespace and
+is used by HTTP, RPC, cluster entities, durable workflows and stores,
+snapshots/exports (full and JSONL), and key-value session trees. Deterministic
+tests cover malformed base64, legacy reads, all three variants, both wire
+directions, real SQLite, and all current persistence/transport consumers.
+
+Export format version 2 records the incompatible file-data representation, and
+`Export.MINIMUM_READABLE_VERSION` is 1: a bump protects an old reader from a
+new file, and is not a reason to refuse an old one. A v1 export with no file
+part is byte-identical to a v2 one, and `FileDataWireRead` accepts the untagged
+form v1 wrote, so there is nothing a v1 file needs that this build cannot give
+it. The gate was briefly strict equality, which made every export written
+before the rollout unopenable.
+
+Corrected 2026-08-28: the per-consumer round-trips originally exercised only
+the `Uint8Array` variant, so "all three variants" was true of `PromptWire`'s own
+unit test and not of the boundaries. The HTTP and durable-store round-trips now
+carry bytes, a `URL` and a string each. The URL case is the one worth pinning:
+`FileDataWireRead` accepts a bare string on read, so a URL that failed to encode
+as `{_tag:"Url"}` would come back as a *string* rather than as an error — and a
+string is a legal `FilePart.data`, so nothing downstream would notice.
 
 Add a transport codec, conceptually:
 
@@ -882,7 +911,7 @@ LOCAL AGENT SEMANTICS          ✅ basically correct
 CANONICAL HISTORY              ✅ correct
 SCHEMA/TYPING FOUNDATION       ✅ correct
 
-WIRE HARDENING                 🟨
+INLINE WIRE HARDENING          ✅
 DURABLE BINARY STORAGE         🟨
 REMOTE RESULT                  ❌ text-only
 EVENT OBSERVATION              ❌ text-only
@@ -898,8 +927,8 @@ So this is **not a foundational redesign**. It's exactly the kind of gap I'd wan
 The plan should be:
 
 ```text
-1. PromptWire JSON-safe codec
-2. multimodal conformance tests
+1. ✅ PromptWire JSON-safe codec
+2. Expand multimodal conformance alongside each later adapter/storage phase
 3. remote result/content events
 4. A2A / AG-UI / OpenAI projections
 5. BlobStore + BlobRef

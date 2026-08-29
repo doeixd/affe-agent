@@ -47,7 +47,17 @@ export const make = (...rules: ReadonlyArray<Rule>): Redaction => ({
  */
 export const pattern = (match: RegExp, replacement = "[redacted]"): Rule => {
   const flags = match.flags.includes("g") ? match.flags : `${match.flags}g`
-  return { apply: (text) => text.replace(new RegExp(match.source, flags), replacement) }
+  // Built once, not per `apply`. This is the *opposite* decision from
+  // `Permission.stateless`, and the difference is which method runs.
+  // `Permission` calls `RegExp.prototype.test`, which advances `lastIndex` on a
+  // global expression and so answers differently on a second call for the same
+  // input -- a permission decided by call order. Here the only consumer is
+  // `String.prototype.replace`, which is specified to set `lastIndex` to 0
+  // before it starts and again when it is done, so a shared expression carries
+  // no state between calls. It is also a *fresh* expression rather than the
+  // caller's, so redacting still never mutates the rule it was handed.
+  const expression = new RegExp(match.source, flags)
+  return { apply: (text) => text.replace(expression, replacement) }
 }
 
 /**
@@ -79,10 +89,16 @@ export const bearerTokens: Rule = pattern(
  * The second, and the one with a false-positive rate: it is matching a *name*,
  * so a variable called `TOKEN_COUNT` loses its value. That is the right way
  * round for a redactor, and it is why this is not on by default.
+ *
+ * The separator is captured and put back rather than normalised to `=`. It
+ * matches `:` as well, so a YAML line or a header dump used to come back
+ * rewritten to `KEY=[redacted]` -- redacted, but no longer the document it was.
+ * That is the same complaint `deep`'s own doc raises about rewriting keys: a
+ * redactor that corrupts its output has not protected anything.
  */
 export const environmentSecrets: Rule = pattern(
-  /\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|CREDENTIAL)[A-Z0-9_]*)\s*[=:]\s*\S+/g,
-  "$1=[redacted]"
+  /\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|CREDENTIAL)[A-Z0-9_]*)(\s*[=:]\s*)\S+/g,
+  "$1$2[redacted]"
 )
 
 /**
@@ -106,21 +122,51 @@ export const environmentSecrets: Rule = pattern(
  * straight past it. `keys: true` covers those, and is for values with no
  * schema to break: span attributes, log annotations. `Export.encode` leaves it
  * off and verifies its output instead.
+ *
+ * Two things are deliberately *not* walked.
+ *
+ * A value already visited is returned as it is rather than recursed into.
+ * `asSpanHook` and `asHook` are handed arbitrary span attributes and log
+ * annotations, which have no schema and are under no obligation to be acyclic;
+ * without the guard `{ self: self }` overflowed the stack, which turns a
+ * redactor into an outage. The guard is per top-level call, so nothing carries
+ * between them.
+ *
+ * A non-plain object -- a `Date`, a `Map`, a class instance, anything whose
+ * prototype is neither `Object.prototype` nor `null` -- is passed through
+ * untouched. Rebuilding one from `Object.entries` did not redact it, it
+ * *destroyed* it: a `Date` became `{}` and a class instance lost its methods
+ * and its identity. Copying strings out of a shape whose invariants this module
+ * does not know is the key-rewriting mistake again, one level up. Arrays are
+ * the exception, because an array is transparent structure and its elements are
+ * exactly the kind of place a secret hides.
  */
+const isPlainObject = (value: object): boolean => {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
 export const deep = (
   value: unknown,
   redaction: Redaction,
   options?: { readonly keys?: boolean | undefined }
 ): unknown => {
-  if (typeof value === "string") return redaction.redact(value)
-  if (Array.isArray(value)) return value.map((item) => deep(item, redaction, options))
-  if (value === null || typeof value !== "object") return value
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
-      options?.keys === true ? redaction.redact(key) : key,
-      deep(nested, redaction, options)
-    ])
-  )
+  const seen = new WeakSet<object>()
+  const walk = (current: unknown): unknown => {
+    if (typeof current === "string") return redaction.redact(current)
+    if (current === null || typeof current !== "object") return current
+    if (seen.has(current)) return current
+    seen.add(current)
+    if (Array.isArray(current)) return current.map(walk)
+    if (!isPlainObject(current)) return current
+    return Object.fromEntries(
+      Object.entries(current).map(([key, nested]) => [
+        options?.keys === true ? redaction.redact(key) : key,
+        walk(nested)
+      ])
+    )
+  }
+  return walk(value)
 }
 
 /**

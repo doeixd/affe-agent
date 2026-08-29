@@ -7,8 +7,8 @@
  * dcd461925db2edf69a43c8135db1180d418afd54.
  *
  * This is a *second toolkit*, not an improvement to `/coding`. `/coding`
- * keeps OpenCode's contracts (structured `list_files`, one edit per call,
- * `bash -lc`). This module is for callers who want Pi's:
+ * keeps OpenCode's contracts (structured `list_files`, one edit per call).
+ * This module is for callers who want Pi's:
  *
  * - `edit_file` accepts `edits: [{ old_string, new_string }, ...]` and
  *   applies them atomically against the original file, refusing overlaps
@@ -38,10 +38,15 @@ import * as Replace from "../coding/internal/replace.js"
 import * as SearchFormat from "../coding/internal/searchFormat.js"
 import * as Truncate from "../coding/internal/truncate.js"
 
+/** Command output kept: at most 50 KB from the tail, after the 2000-line cap — the same budget `coding/internal/truncate.ts` truncates to, and the banner names which fired. */
 export const MAX_BYTES = 50 * 1024
+/** Lines of command output kept from the tail; mirroring `truncate.ts`'s 2000-line budget. */
 export const MAX_LINES = 2000
+/** A single grep match line longer than this is capped with `... (line truncated to 500 chars)` rather than dominating the result. */
 export const GREP_MAX_LINE_LENGTH = 500
+/** `list_files` renders at most 500 entries; above that it warns to narrow the path or use search. */
 export const LS_LIMIT = 500
+/** Human label for `MAX_BYTES` — `50.0KB`, used in truncation banners. */
 export const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 
 export const formatSize = Truncate.formatSize
@@ -180,7 +185,7 @@ const bounded = (sandbox: Sandbox.Sandbox, text: string): Effect.Effect<string> 
         return at
       })
     )
-    const limit = Truncate.firedLimit(text)
+    const limit = Truncate.nameLimit(end.fired ?? "lines")
     return Option.isNone(saved) ? Truncate.unsavedNotice(limit) + end.text : Truncate.savedNotice(saved.value, limit) + end.text
   })
 
@@ -190,16 +195,30 @@ const walk = (
   sandbox: Sandbox.Sandbox,
   root: Sandbox.SandboxPath | undefined,
   skip: ReadonlySet<string> = new Set()
-): Effect.Effect<ReadonlyArray<Sandbox.SandboxPath>, string> =>
+): Effect.Effect<ReadonlyArray<Sandbox.Entry>, string> =>
   Effect.gen(function* () {
     const entries = yield* sandbox.list(root).pipe(Effect.mapError(errorMessage))
-    const files: Array<Sandbox.SandboxPath> = []
+    const files: Array<Sandbox.Entry> = []
     for (const entry of [...entries].sort((a, b) => (a.path < b.path ? -1 : 1))) {
-      if (entry.type === "file") files.push(entry.path)
+      if (entry.type === "file") files.push(entry)
       else if (!skip.has(ReadFormat.basename(entry.path))) files.push(...(yield* walk(sandbox, entry.path, skip)))
     }
     return files
   })
+
+/**
+ * The size a search should judge a file by, or `None` when the provider will
+ * not say. `list` already sized ordinary files; only an entry it declined to
+ * size (the local provider will not size a symlink) costs a `stat`, and a
+ * failing `stat` is not fatal -- the read that follows raises the same error.
+ */
+const sizeOf = (
+  sandbox: Sandbox.Sandbox,
+  entry: Sandbox.Entry
+): Effect.Effect<Option.Option<number>> =>
+  Option.isSome(entry.size)
+    ? Effect.succeed(entry.size)
+    : Effect.map(Effect.option(sandbox.stat(entry.path)), Option.flatMap((found) => found.size))
 
 export type ShellKind = Shell.Kind
 export interface PiToolkitOptions {
@@ -300,6 +319,10 @@ export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFro
                 }
               }
             })
+          ).pipe(
+            Effect.mapError((error) =>
+              typeof error === "string" ? error : errorMessage(error)
+            )
           )
         }
         if (replace_all === true && coerced.length > 1) return yield* Effect.fail(`replace_all cannot be used with multiple edits`)
@@ -341,6 +364,12 @@ export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFro
             const removed = sorted.reduce((sum, m) => sum + lineCount(m.matched), 0)
             return { path: file, replacements: sorted.length, added, removed, strategy: sorted.length === 1 ? sorted[0]!.strategy : "batch", matched: sorted.map((m) => m.matched).join("\n---\n") }
           })
+        ).pipe(
+          // The lock now surfaces a `canonical` failure rather than silently
+          // keying on the spelled path; it joins the sandbox's other errors.
+          Effect.mapError((error) =>
+            typeof error === "string" ? error : errorMessage(error)
+          )
         )
       }),
     list_files: ({ path: dir }) =>
@@ -352,7 +381,10 @@ export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFro
         const rendered = sorted.map((entry) => entry.type === "directory" ? `${entry.path}/` : entry.path)
         if (rendered.length > LS_LIMIT) {
           const shown = rendered.slice(0, LS_LIMIT).join("\n")
-          return `${shown}\n\n...truncated to ${LS_LIMIT} entries (${formatSize(rendered.join("\n").length)} limit, ${rendered.length} total). Narrow the path or use search.`
+          // The size named is what the *whole* listing would have been, not a
+          // limit: the cap here is the entry count, and calling the observed
+          // size a "limit" told the model a byte budget had fired that had not.
+          return `${shown}\n\n...truncated to ${LS_LIMIT} entries (${rendered.length} total, ${formatSize(rendered.join("\n").length)} untruncated). Narrow the path or use search.`
         }
         if (rendered.length === 0) return `No entries in ${dir ?? "."}`
         return rendered.join("\n")
@@ -369,9 +401,18 @@ export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFro
         const files = yield* walk(sandbox, at, SearchFormat.IGNORED_DIRECTORIES)
         const matches: Array<SearchFormat.Match> = []
         const capLine = (text: string): string => text.length > GREP_MAX_LINE_LENGTH ? text.slice(0, GREP_MAX_LINE_LENGTH) + `... (line truncated to ${GREP_MAX_LINE_LENGTH} chars)` : text
-        for (const file of files) {
+        let skippedForSize = 0
+        for (const entry of files) {
+          const file = entry.path
           if (matches.length >= SearchFormat.SEARCH_LIMIT) break
           if (filter !== undefined && !filter.matches(file)) continue
+          // Before the read, so the bytes are never allocated at all. See
+          // `SearchFormat.MAX_SEARCH_FILE_BYTES` for why 1 MiB.
+          const size = yield* sizeOf(sandbox, entry)
+          if (Option.isSome(size) && size.value > SearchFormat.MAX_SEARCH_FILE_BYTES) {
+            skippedForSize++
+            continue
+          }
           const bytes = yield* sandbox.read(file).pipe(Effect.mapError(errorMessage))
           if (ReadFormat.isBinary(file, bytes.slice(0, ReadFormat.SAMPLE_BYTES))) continue
           const lines = ReadFormat.toLines(new TextDecoder().decode(bytes))
@@ -381,7 +422,7 @@ export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFro
             if (regex.test(text)) matches.push({ path: file, line: i + 1, text: capLine(text) })
           }
         }
-        return SearchFormat.render(matches)
+        return SearchFormat.render(matches, skippedForSize)
       }),
     bash: ({ command, timeout_ms }) =>
       Effect.gen(function* () {

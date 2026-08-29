@@ -150,6 +150,16 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
  *
  * Determinism is the point: loop continuation, event ordering and steering
  * placement become assertions rather than observations of a real provider.
+ *
+ * **Past the end of the script** a call answers with a bare finish part: no
+ * text, no tool calls, so a loop sees a turn with nothing to continue on and
+ * stops. It is deliberately not a defect. A script says what the *interesting*
+ * turns are, and several suites drive a session past them on purpose -- a
+ * bounded loop under test, a follow-up that must be admitted and answered with
+ * nothing. Making exhaustion fatal would turn "the script had said all it had
+ * to say" into a crash in every one of them. The cost is that a script one turn
+ * short reads as an empty reply rather than an error, so a test asserting on a
+ * reply should assert its text, not merely that the run completed.
  */
 export const make = (turns: ReadonlyArray<Turn>) =>
   Effect.gen(function* () {

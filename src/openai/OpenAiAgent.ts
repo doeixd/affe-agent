@@ -537,75 +537,113 @@ export const serverLayer = (
               )
             : Effect.void
 
-        // Resolution happens before the response starts, in either mode, so
-        // an unknown session or a refused creation is a status code and not
-        // a frame. The session handle is scoped to the request, which for a
-        // streaming response lasts until the body has been sent.
-        const { session, input, done } = yield* resolve(body, sessionId, idempotencyKey)
+        const served = Effect.gen(function* () {
+          // Resolution happens before the response starts, in either mode, so
+          // an unknown session or a refused creation is a status code and not
+          // a frame. The session handle is scoped to the request, which for a
+          // streaming response lasts until the body has been sent.
+          const { session, input, done } = yield* resolve(body, sessionId, idempotencyKey)
 
-        if (Option.isSome(done)) {
-          const result = Projection.response.success(projection, done.value)
-          yield* record(Exit.succeed(result))
-          return body.stream === true
-            ? sseResponse(replay(projection, result))
-            : yield* jsonResponse(result)
-        }
+          if (Option.isSome(done)) {
+            const result = Projection.response.success(projection, done.value)
+            yield* record(Exit.succeed(result))
+            return body.stream === true
+              ? sseResponse(replay(projection, result))
+              : yield* jsonResponse(result)
+          }
 
-        if (body.stream !== true) {
-          const exit = yield* session.prompt(input).pipe(
-            Effect.mapError(fromRemoteError),
-            Effect.map((result) => Projection.response.success(projection, result.text)),
-            Effect.exit
-          )
-          yield* record(exit)
-          return yield* Effect.flatMap(exit, jsonResponse)
-        }
+          if (body.stream !== true) {
+            const exit = yield* session.prompt(input).pipe(
+              Effect.mapError(fromRemoteError),
+              Effect.map((result) => Projection.response.success(projection, result.text)),
+              Effect.exit
+            )
+            yield* record(exit)
+            return yield* Effect.flatMap(exit, jsonResponse)
+          }
 
-        // The collected text is what an idempotent retry replays.
-        let text = ""
-        let failure: OpenAiSchema.ErrorBody | undefined
-        // Whether the stream reached its terminal `Done` frame. A stream cut
-        // short -- the consumer disconnects mid-generation -- must not record
-        // the partial text as the answer, or a retry under the same key would
-        // replay a truncated result. It records a failure instead, releasing
-        // the key so the retry re-executes.
-        let completed = false
-        return sseResponse(
-          live(session, input, projection).pipe(
-            Stream.tap((frame) =>
-              Effect.sync(() => {
-                if (frame._tag === "Done") {
-                  completed = true
-                } else if (frame._tag === "Chunk") {
-                  text += frame.chunk.choices[0]?.delta.content ?? ""
-                } else if (frame._tag === "Error") {
-                  failure = frame.error
-                }
-              })
-            ),
-            Stream.ensuring(
-              Effect.suspend(() =>
-                record(
-                  failure !== undefined
-                    ? Exit.fail(new OpenAiError({ status: 422, error: failure }))
-                    : completed
-                      ? Exit.succeed(Projection.response.success(projection, text))
-                      // Interrupted before the terminal frame: release the key.
-                      : Exit.fail(
-                          new OpenAiError({
-                            status: 503,
-                            error: Projection.error(
-                              "server_error",
-                              "the stream was interrupted before completing",
-                              "interrupted"
-                            )
-                          })
-                        )
+          // The collected text is what an idempotent retry replays.
+          let text = ""
+          let failure: OpenAiSchema.ErrorBody | undefined
+          // Whether the stream reached its terminal `Done` frame. A stream cut
+          // short -- the consumer disconnects mid-generation -- must not record
+          // the partial text as the answer, or a retry under the same key would
+          // replay a truncated result. It records a failure instead, releasing
+          // the key so the retry re-executes.
+          let completed = false
+          return sseResponse(
+            live(session, input, projection).pipe(
+              Stream.tap((frame) =>
+                Effect.sync(() => {
+                  if (frame._tag === "Done") {
+                    completed = true
+                  } else if (frame._tag === "Chunk") {
+                    text += frame.chunk.choices[0]?.delta.content ?? ""
+                  } else if (frame._tag === "Error") {
+                    failure = frame.error
+                  }
+                })
+              ),
+              Stream.ensuring(
+                Effect.suspend(() =>
+                  record(
+                    failure !== undefined
+                      ? Exit.fail(new OpenAiError({ status: 422, error: failure }))
+                      : completed
+                        ? Exit.succeed(Projection.response.success(projection, text))
+                        // Interrupted before the terminal frame: release the key.
+                        : Exit.fail(
+                            new OpenAiError({
+                              status: 503,
+                              error: Projection.error(
+                                "server_error",
+                                "the stream was interrupted before completing",
+                                "interrupted"
+                              )
+                            })
+                          )
+                  )
                 )
               )
             )
           )
-        )
+        })
+
+        /**
+         * A claimed key is either kept or released -- never left claimed.
+         *
+         * `record` is reached on every path that produces an answer, and on
+         * none of the paths that do not: an unusable stateful delta, a
+         * refused session, a request interrupted before its response exists.
+         * The key then held a promise nothing would ever keep, and the retry
+         * it exists to serve joined a deferred that never completed -- worse
+         * than executing twice, because it never ends.
+         *
+         * Only a non-success exit is handled here. A JSON answer has already
+         * recorded, and a streaming one records from its own `ensuring` once
+         * the body has been sent -- the response value succeeding is not the
+         * stream succeeding.
+         */
+        return yield* Effect.onExit(served, (exit) => {
+          if (Exit.isSuccess(exit)) return Effect.void
+          const failures = exit.cause.reasons.flatMap((reason) =>
+            reason._tag === "Fail" ? [reason.error] : [])
+          return record(
+            Exit.fail(
+              failures[0] ??
+                // A defect or an interruption: nothing the caller asked for
+                // happened, so the key is released the same way.
+                new OpenAiError({
+                  status: 503,
+                  error: Projection.error(
+                    "server_error",
+                    "the request ended before producing a result",
+                    "interrupted"
+                  )
+                })
+            )
+          )
+        })
       })
 
       yield* router.add("POST", path, (request) =>

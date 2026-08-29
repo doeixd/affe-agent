@@ -12,6 +12,16 @@ import {
   AgentClosedError,
   AgentIdleError
 } from "../Errors.js"
+import {
+  AgentCapacityExceededError,
+  AgentForbiddenError,
+  AgentInvalidRequestError,
+  AgentProtocolCodecError,
+  AgentRequestCapacityExceededError,
+  AgentRequestConflictError,
+  AgentSessionAlreadyExistsError,
+  AgentUnauthorizedError
+} from "./internal/protocolErrors.js"
 
 /**
  * Talking to a session that may not be in this process.
@@ -125,6 +135,15 @@ export class AgentExecutionError extends Schema.TaggedError<AgentExecutionError>
  * Every member is a `Schema.TaggedError`, so the union survives the wire, and a
  * caller can tell "this session is busy" from "the transport broke" without
  * either being a defect.
+ *
+ * This is the *whole* protocol vocabulary, not the six the seam once named.
+ * The narrower union was not a smaller promise, it was a wrong one: the HTTP
+ * `Api` declares fourteen errors, and the eight this type could not name --
+ * authorization, capacity, conflict, codec -- collapsed into
+ * `AgentTransportError` on the way out. That tag exists to mean "retrying is
+ * reasonable", so a caller with an ordinary retry policy retried a 403 for as
+ * long as it was willing to keep asking. A seam has to be able to say what its
+ * transports can already say.
  */
 export type RemoteError =
   | AgentBusyError
@@ -133,6 +152,14 @@ export type RemoteError =
   | AgentSessionNotFoundError
   | AgentExecutionError
   | AgentTransportError
+  | AgentSessionAlreadyExistsError
+  | AgentRequestConflictError
+  | AgentRequestCapacityExceededError
+  | AgentUnauthorizedError
+  | AgentForbiddenError
+  | AgentCapacityExceededError
+  | AgentInvalidRequestError
+  | AgentProtocolCodecError
 
 /**
  * The wire contract, as a schema rather than as six strings.
@@ -152,7 +179,15 @@ const RemoteErrorSchema = Schema.Union([
   AgentClosedError,
   AgentSessionNotFoundError,
   AgentExecutionError,
-  AgentTransportError
+  AgentTransportError,
+  AgentSessionAlreadyExistsError,
+  AgentRequestConflictError,
+  AgentRequestCapacityExceededError,
+  AgentUnauthorizedError,
+  AgentForbiddenError,
+  AgentCapacityExceededError,
+  AgentInvalidRequestError,
+  AgentProtocolCodecError
 ])
 
 const decodeRemote = Schema.decodeUnknownOption(RemoteErrorSchema)
@@ -217,6 +252,18 @@ export interface RemotePromptOptions {
    * stream.
    */
   readonly stream?: boolean | undefined
+  /**
+   * Names this prompt so a retry is the same request, not a second one.
+   *
+   * A durable client hands it to the session store's `claim` as the
+   * idempotency key: a caller whose acknowledgement was lost retries under the
+   * same key and is told what it would have been told the first time, instead
+   * of being refused as `Busy` for a submission it does not know it started.
+   * The HTTP and RPC adapters forward their `requestId`, which already means
+   * exactly this on the wire. The in-process client ignores it -- a local
+   * call cannot lose its acknowledgement.
+   */
+  readonly idempotencyKey?: string | undefined
 }
 
 export interface RemoteSession {

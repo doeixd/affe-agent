@@ -48,24 +48,21 @@ all since landed.
 The issue #4 P0–P3 capability roadmap (items 1–14) is **complete**. What's left
 is ecosystem polish, not capability:
 
-1. **P3 / ecosystem** — CLI, dev & deployment ergonomics, more
-   sandbox/channel/deployment adapters (a real crypto-backed Slack signature
-   verifier as a host-flagged sub-entry, more channel platforms, durable/queue
-   implementations of `AgentDispatcher`).
+1. **P3 / ecosystem** — dev and deployment ergonomics, plus more
+   sandbox/channel/deployment adapters (more channel platforms and
+   durable/queue implementations of `AgentDispatcher`). The conventional CLI
+   and portable crypto-backed Slack verifier now ship in this repository.
 2. **Effect modules we are re-deriving** —
    [docs/audit-effect-ecosystem.md](./docs/audit-effect-ecosystem.md) measured
    every `effect` import against the v4 module list. The core is used deeply;
-   the gaps cluster, and most are primitives an unbuilt plan proposes to
-   hand-roll. One is a genuine capability gap rather than polish:
-   **`ExecutionPlan`** — provider fallback and per-model retry ladders, which
-   every user currently writes themselves. Planned in
-   [docs/plan-execution-plan.md](./docs/plan-execution-plan.md); not yet built.
-   The rest are folded into the plans that should act on them, and several have
-   landed: `Tx*` closed the coding toolkit's lock leak, `Metric` gave
-   `/observability` its instruments, typed `StorageError`s replaced the stores'
-   `orDie`, and `Schedule` gained backoff and jitter. Still open:
-   `LayerMap`/`RcMap` for the server and the session tree, `Crypto` for the
-   Slack verifier above, `unstable/cli` for the CLI above.
+   the gaps clustered around real work, and the audit's actions have now
+   landed. `ExecutionPlan` supplies provider fallback and per-model retry
+   ladders; `Tx*` closed the coding toolkit's lock leak; `Metric` gave
+   `/observability` its instruments; typed `StorageError`s replaced the stores'
+   `orDie`; and `Schedule` gained backoff and jitter. `RcMap` owns tree
+   sessions; static server mounts use scoped layers because `LayerMap` does not
+   fit construction-time routes; Web Crypto verifies Slack HMACs; and
+   `apps/cli` uses `unstable/cli` + `Terminal`.
 
 ### Small refinements worth folding in
 
@@ -74,10 +71,28 @@ is ecosystem polish, not capability:
   double-resolution with an explicit terminal state.
 - **Document the dynamic-capability story** (#7) — the toolkit-as-Effect
   mechanism exists; it needs a short section, not code.
-- **Getting-started / package-map** at the top of the README.
+- **Getting-started / package-map** at the top of the README. *(Partly done
+  2026-08-27: [docs/MODULES.md](./docs/MODULES.md) is the package map. The
+  README still needs the short version at its top.)*
+
+## Design threads opened 2026-08-27
+
+Six documents, none implemented, indexed in [docs/README.md](./docs/README.md)
+and argued between in
+[docs/plan-primitives.md](./docs/plan-primitives.md).
+
+One of them qualifies the assessment above. "Ecosystem polish, not capability"
+holds for issue #4's scope, but the **integration axis** — a `ToolSource` seam
+over OpenAPI/GraphQL/WebMCP/CLI sources, plus credential resolution per
+principal — is capability work by this document's own definition, and it is
+absent. See [docs/research-tool-sources.md](./docs/research-tool-sources.md).
+The rest of the threads (MCP frontend, code mode, integrations, deployment) are
+adapters, batteries and entry points, and do fit "polish".
 
 ## Order of work
 
-1. Update the tracker: mark #4's shipped items, finalize/close #1.
-2. Build `/observability`.
-3. Then `/data`, then a first `channels` adapter.
+**Superseded.** The three steps that used to sit here — build `/observability`,
+then `/data`, then a first channel adapter — all shipped and are listed under
+*Done* above. The live ranking is
+[docs/remaining-work.md](./docs/remaining-work.md); the tracker item (mark #4's
+shipped items, finalize/close #1) is still open.

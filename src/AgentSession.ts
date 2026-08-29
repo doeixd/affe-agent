@@ -1,5 +1,6 @@
 import {
   Cause,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -20,6 +21,7 @@ import * as InputChannel from "./InputChannel.js"
 import * as AgentEvent from "./AgentEvent.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
+import * as PromptWire from "./PromptWire.js"
 import {
   AgentBusyError,
   AgentClosedError,
@@ -41,6 +43,7 @@ export type { Status }
 export type { SessionState as State }
 export type Result<Tools extends Record<string, Tool.Any> = {}> =
   AgentSubmission.Result<Tools>
+export type SubmissionReceipt = AgentSubmission.Receipt
 
 
 
@@ -92,6 +95,19 @@ export interface AgentSession<
     input: Prompt.RawInput,
     options?: PromptOptions
   ) => Effect.Effect<Result<Tools>, PromptError<Tools, E>>
+
+  /**
+   * Admit a submission and return without waiting for execution to finish.
+   *
+   * The returned id is an admission receipt, not a retained result handle.
+   * Execution continues in the session's scope and reports its outcome through
+   * normal events and history. Request-key deduplication belongs to a durable
+   * client boundary; this process-local primitive admits each call once.
+   */
+  readonly submit: (
+    input: Prompt.RawInput,
+    options?: PromptOptions
+  ) => Effect.Effect<SubmissionReceipt, SubmitError>
 
   /** Insert guidance into the active run, applied at the next turn boundary. */
   readonly steer: (
@@ -342,6 +358,7 @@ export const make = <
       [SessionTypeId]: session,
       id,
       prompt: (input, options) => prompt(handle, input, options),
+      submit: (input, options) => submit(handle, input, options),
       steer: (input) => steer(handle, input),
       followUp: (input) => followUp(handle, input),
       interrupt: () => interrupt(handle),
@@ -356,19 +373,6 @@ export const make = <
     return handle
   })
 
-/**
- * Begin a submission. Requires an idle session.
- *
- * Resolves only once the session reaches quiescence — after the initial prompt
- * and every follow-up queued during its execution.
- */
-/**
- * The failures a submission can produce.
- *
- * Typed rather than collapsed into one agent error: a caller can distinguish a
- * busy session from a provider fault from a tool's own declared failure, which
- * is the point of Effect's error channel.
- */
 /**
  * Per-request options for a submission.
  *
@@ -387,6 +391,13 @@ export interface PromptOptions {
   readonly stream?: boolean | undefined
 }
 
+/**
+ * The failures a submission can produce.
+ *
+ * Typed rather than collapsed into one agent error: a caller can distinguish a
+ * busy session from a provider fault from a tool's own declared failure, which
+ * is the point of Effect's error channel.
+ */
 export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
   | AgentBusyError
   | AgentClosedError
@@ -402,6 +413,9 @@ export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
   | ToolExecution.RaisedError
   // Whatever the agent's own loop or context transform can fail with.
   | E
+
+/** Admission can fail only before execution has begun. */
+export type SubmitError = AgentBusyError | AgentClosedError
 
 type Claim =
   | { readonly _tag: "Claimed"; readonly submissionId: SubmissionId }
@@ -439,24 +453,152 @@ const claim = (self: Session<any>): Effect.Effect<Claim> =>
 const release = (self: Session<any>): Effect.Effect<void> =>
   Effect.gen(function* () {
     yield* Ref.set(self.activeFiber, Option.none())
-    yield* SubscriptionRef.update(self.state, (s) => ({
-      ...s,
-      // A closed session stays closed; the scope has already gone.
-      status: s.status === "closed" ? s.status : ("idle" as const),
-      activeSubmissionId: Option.none(),
-      acceptingFollowUps: false,
-      acceptingSteering: false,
-      activeRunId: Option.none()
-    }))
-    // Admission is deliberately *not* withdrawn here. `AgentSubmission`
-    // publishes the close when its gate closes, which is what shuts the
-    // accepted-then-discarded window; release also runs when a run is merely
-    // interrupted, and under durability that includes a submission suspending.
-    // A parked submission is still open for business — it is waiting to be
-    // resumed — so withdrawing admission here would refuse steering aimed at a
-    // run that is about to continue.
-    yield* self.steering.drain
-    yield* self.followUps.drain
+    // The withdrawal and the drain are one step, under the same permit
+    // `followUp` and `steer` hold across their check-and-offer.
+    //
+    // `AgentSubmission`'s closing sequence already reasons this way for the
+    // normal path, and the argument transfers unchanged: ungated, a `release`
+    // landing between a follow-up's accepting-read and its offer sets
+    // `acceptingFollowUps: false` and drains, and the offer then lands in an
+    // empty queue that nobody will look at again. The caller was told
+    // `FollowUpQueued`; the item was already condemned. Only interruption --
+    // and, under durability, a submission suspending -- reaches release with
+    // the gate still open, which is why the bug was invisible on the ordinary
+    // path.
+    //
+    // With the permit, the two orders are the only two: a follow-up that got
+    // there first completes its offer *and* its announcement before admission
+    // is withdrawn, and one that arrives after reads a closed gate and is
+    // refused outright. An interrupt therefore never acknowledges work it has
+    // already decided to throw away.
+    yield* self.inputGate.withPermits(1)(
+      Effect.gen(function* () {
+        yield* SubscriptionRef.update(self.state, (s) => ({
+          ...s,
+          // A closed session stays closed; the scope has already gone.
+          status: s.status === "closed" ? s.status : ("idle" as const),
+          activeSubmissionId: Option.none(),
+          acceptingFollowUps: false,
+          acceptingSteering: false,
+          activeRunId: Option.none()
+        }))
+        // Admission is deliberately *not* withdrawn here. `AgentSubmission`
+        // publishes the close when its gate closes, which is what shuts the
+        // accepted-then-discarded window for an out-of-process caller; release
+        // also runs when a run is merely interrupted, and under durability that
+        // includes a submission suspending. A parked submission is still open
+        // for business — it is waiting to be resumed — so withdrawing admission
+        // here would refuse steering aimed at a run that is about to continue.
+        yield* self.steering.drain
+        yield* self.followUps.drain
+      })
+    )
+  })
+
+/**
+ * Claim, fork and register one submission as a single uninterruptible
+ * admission step.
+ *
+ * The submission fiber owns `release`: a future asynchronous `submit` caller
+ * must be free to return after admission without leaving session cleanup tied
+ * to an observer that may never await it. The child waits on `registered`
+ * before doing any work, so even a synchronously completing submission cannot
+ * clear the session and then be installed as a stale `activeFiber`.
+ */
+const startSubmission = Effect.fn("AgentSession.startSubmission")(
+  function* <Tools extends Record<string, Tool.Any>, E>(
+    self: Session<Tools, E, never>,
+    input: Prompt.RawInput,
+    options: PromptOptions
+  ) {
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const claimed = yield* claim(self)
+        if (claimed._tag !== "Claimed") return claimed
+        const submissionId = claimed.submissionId
+
+        // Zero this submission's progress before the fibre exists, inside the
+        // uninterruptible claim: an interrupt in this window must never report
+        // the previous submission's committed totals as its own.
+        yield* Ref.set(self.progress, {
+          runs: 0,
+          turns: 0,
+          text: "",
+          response: Option.none()
+        })
+
+        const registered = yield* Deferred.make<void>()
+        const submission = Deferred.await(registered).pipe(
+          Effect.andThen(
+            AgentSubmission.execute(
+              self,
+              submissionId,
+              Prompt.make(input),
+              options
+            )
+          ),
+          // The captured environment satisfies the model and any tool-handler
+          // services; providing it leaves the submission with no requirements.
+          Effect.provide(self.env)
+        ) as Effect.Effect<
+          Omit<Result<Tools>, "status">,
+          PromptError<Tools, E>
+        >
+
+        const fiber = yield* submission.pipe(
+          // Terminal events belong to the submission fiber, not whichever
+          // observer happens to await it.
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit)
+              ? EventBus.emit(
+                  self.bus,
+                  { submissionId },
+                  Cause.hasInterruptsOnly(exit.cause)
+                    ? { _tag: "SubmissionInterrupted" }
+                    : {
+                        _tag: "SubmissionFailed",
+                        failure: AgentEvent.failureFromCause(exit.cause)
+                      }
+                )
+              : Effect.void
+          ),
+          Effect.ensuring(release(self)),
+          Effect.forkIn(self.scope)
+        )
+        yield* Ref.set(self.activeFiber, Option.some({ submissionId, fiber }))
+        yield* Deferred.succeed(registered, void 0)
+        return { _tag: "Started" as const, submissionId, fiber }
+      })
+    )
+  }
+)
+
+/**
+ * Admit a submission without retaining or awaiting its eventual result.
+ *
+ * Once this succeeds, the child fiber owns terminal events and release. An
+ * interruption after admission therefore cannot abandon session cleanup or
+ * cancel work merely because the receipt's caller stopped observing it.
+ */
+export const submit = Effect.fn("AgentSession.submit")(function* <
+  Tools extends Record<string, Tool.Any>,
+  E
+>(
+  session: AgentSession<Tools, E>,
+  input: Prompt.RawInput,
+  options: PromptOptions = {}
+) {
+    const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
+    const started = yield* startSubmission(self, input, options)
+
+    if (started._tag === "Closed") {
+      return yield* new AgentClosedError({ sessionId: self.id })
+    }
+    if (started._tag === "Busy") {
+      return yield* new AgentBusyError({ sessionId: self.id })
+    }
+    return { submissionId: started.submissionId } satisfies SubmissionReceipt
   })
 
 /**
@@ -476,76 +618,10 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
 
-    // Claim, fork and register as one uninterruptible step, and the release
-    // finalizer installed in the same step. Each gap here was a real hole:
-    // a caller interrupted between claim and fork (a `timeout`, a lost race)
-    // left the session `running` with nothing to release it; one interrupted
-    // between fork and registration left a submission no finalizer owned;
-    // and `interrupt` arriving between claim and registration passed
-    // `requireRunning`, found no fiber, and reported success while the
-    // submission went on to complete. Nothing in this step blocks, so
-    // holding interruption off for it costs nothing.
-    const started = yield* Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const claimed = yield* claim(self)
-        if (claimed._tag !== "Claimed") return claimed
-        const submissionId = claimed.submissionId
-
-        // Zero this submission's progress before the fibre exists, inside the
-        // uninterruptible claim: if it were reset inside the submission body it
-        // would sit behind the `SubmissionStarted` emit, and a submission
-        // interrupted in that window would report the *previous* submission's
-        // committed totals as its own.
-        yield* Ref.set(self.progress, { runs: 0, turns: 0, text: "", response: Option.none() })
-
-        // The submission runs in a fiber owned by the session scope, so
-        // `interrupt` is ordinary fiber interruption rather than a bespoke
-        // cancellation protocol.
-        const submission = AgentSubmission.execute(
-          self,
-          submissionId,
-          Prompt.make(input),
-          options
-        ).pipe(
-          // The captured environment satisfies the model and any tool-handler
-          // services; providing it leaves a submission with no requirements.
-          Effect.provide(self.env)
-        ) as Effect.Effect<Omit<Result<Tools>, "status">, PromptError<Tools, E>>
-        // The submission's own terminal events are emitted by the submission
-        // fibre, not by whoever awaits it. A caller that times out or loses a
-        // race is not there to emit them, and a closing session must be able
-        // to wait for them before announcing `SessionClosed`.
-        const fiber = yield* submission.pipe(
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit)
-              ? EventBus.emit(
-                  self.bus,
-                  { submissionId },
-                  Cause.hasInterruptsOnly(exit.cause)
-                    ? { _tag: "SubmissionInterrupted" }
-                    : {
-                        _tag: "SubmissionFailed",
-                        failure: AgentEvent.failureFromCause(exit.cause)
-                      }
-                )
-              : Effect.void
-          ),
-          Effect.forkIn(self.scope)
-        )
-        yield* Ref.set(self.activeFiber, Option.some({ submissionId, fiber }))
-
-        // The finalizer runs however this ends, including when the *caller*
-        // is interrupted by a timeout or a lost race. Without it the
-        // submission would outlive its caller and the session would stay
-        // `running` for good.
-        const exit = yield* restore(Fiber.await(fiber)).pipe(
-          Effect.ensuring(
-            Fiber.interrupt(fiber).pipe(Effect.andThen(release(self)))
-          )
-        )
-        return { _tag: "Done" as const, submissionId, exit }
-      })
-    )
+    // Admission itself is uninterruptible and the child owns release. The
+    // blocking `prompt` API still preserves structured cancellation: if its
+    // caller goes away, it interrupts the submission it started.
+    const started = yield* startSubmission(self, input, options)
 
     if (started._tag === "Closed") {
       return yield* new AgentClosedError({ sessionId: self.id })
@@ -553,7 +629,10 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     if (started._tag === "Busy") {
       return yield* new AgentBusyError({ sessionId: self.id })
     }
-    const { submissionId, exit } = started
+    const { fiber, submissionId } = started
+    const exit = yield* Fiber.await(fiber).pipe(
+      Effect.onInterrupt(() => Fiber.interrupt(fiber).pipe(Effect.asVoid))
+    )
 
     if (Exit.isFailure(exit)) {
       // Interruption is a terminal state, not a caller-level failure: the
@@ -815,7 +894,7 @@ export const status = (session: AgentSession<any, any>): Effect.Effect<Status> =
  */
 export const Snapshot = Schema.Struct({
   sessionId: Schema.String,
-  history: Prompt.Prompt
+  history: PromptWire.Prompt
 })
 export type Snapshot = typeof Snapshot.Type
 
@@ -925,20 +1004,6 @@ export const events = (
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
 
 /**
- * Subscribe now, consume later, miss nothing.
- *
- * `events` is a `Stream`, and a `Stream` subscribes when it is *run* -- so a
- * caller that forks a consumer and then does something that emits has a race
- * it cannot close, because there is no moment it can point to and say "I am
- * attached now". Anything published in that window is simply gone.
- *
- * This closes it by acquiring the subscription in the caller's scope: by the
- * time this returns, every subsequent event is queued, whether or not anyone
- * is reading yet. Use it when missing an event is a bug rather than a
- * cosmetic gap -- a renderer switching branches, a recorder attaching to a
- * session already in flight.
- */
-/**
  * Observe events synchronously, as they are published.
  *
  * The difference from `subscribe` is *when* the observer runs, and it decides
@@ -982,6 +1047,20 @@ export const observe = (
 ): Effect.Effect<void, never, Scope.Scope> =>
   EventBus.observe(unwrap(session).bus, observer)
 
+/**
+ * Subscribe now, consume later, miss nothing.
+ *
+ * `events` is a `Stream`, and a `Stream` subscribes when it is *run* -- so a
+ * caller that forks a consumer and then does something that emits has a race
+ * it cannot close, because there is no moment it can point to and say "I am
+ * attached now". Anything published in that window is simply gone.
+ *
+ * This closes it by acquiring the subscription in the caller's scope: by the
+ * time this returns, every subsequent event is queued, whether or not anyone
+ * is reading yet. Use it when missing an event is a bug rather than a
+ * cosmetic gap -- a renderer switching branches, a recorder attaching to a
+ * session already in flight.
+ */
 export const subscribe = (
   session: AgentSession<any, any>
 ): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>

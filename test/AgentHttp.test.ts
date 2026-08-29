@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { NodeHttpServer } from "@effect/platform-node"
 import {
   Deferred,
+  Duration,
   Effect,
   Fiber,
   Layer,
@@ -21,6 +22,7 @@ import {
 import { HttpApiClient } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
+import * as SseBody from "../src/http/internal/sse.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError } from "../src/Errors.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentHttp } from "../src/http/index.js"
@@ -45,6 +47,14 @@ const fixture = (options?: {
   readonly holdEvents?: boolean
   /** The session's event stream fails after its first event. */
   readonly failEvents?: boolean
+  /**
+   * `events` refuses `after`, the way a session with no delivery log does.
+   *
+   * The default fixture honours resumption, which cannot tell "resume from
+   * 0" apart from "live": both deliver sequence 1 first. A client that
+   * refuses can, and that is what the in-process client actually is.
+   */
+  readonly refuseResume?: boolean
   /** `session(id)` addresses any id, the way a durable client does. */
   readonly adoptable?: boolean
 }) =>
@@ -52,6 +62,7 @@ const fixture = (options?: {
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const released = yield* Ref.make(0)
     const promptCalls = yield* Ref.make(0)
+    const promptInputs = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([])
     const promptStarted = yield* Deferred.make<void>()
     const allowPrompt = yield* Deferred.make<void>()
     const eventStreamReleased = yield* Deferred.make<void>()
@@ -105,9 +116,10 @@ const fixture = (options?: {
 
           return {
             id,
-            prompt: () =>
+            prompt: (input) =>
               Effect.gen(function* () {
                 yield* record("prompt")
+                yield* Ref.update(promptInputs, (all) => [...all, Prompt.make(input)])
                 yield* Ref.update(promptCalls, (count) => count + 1)
                 yield* Deferred.succeed(promptStarted, void 0)
                 if (options?.blockPrompt === true) {
@@ -128,7 +140,17 @@ const fixture = (options?: {
             pending: Effect.as(record("pending"), [
               { id: "approval-1", kind: "approval", detail: "check" }
             ]),
-            history: Effect.as(record("history"), Prompt.make("history")),
+            history: Effect.as(
+              record("history"),
+              Prompt.make([{
+                role: "assistant",
+                content: [{
+                  type: "file",
+                  mediaType: "application/octet-stream",
+                  data: new Uint8Array([7, 8, 9])
+                }]
+              }])
+            ),
             status: Effect.as(record("status"), "idle" as const),
             /**
              * Honours `after` the way a delivery log does, so a transport test
@@ -139,7 +161,14 @@ const fixture = (options?: {
             events: (eventOptions) =>
               eventOptions?.after === undefined
                 ? events
-                : Stream.filter(events, (e) => e.sequence > eventOptions.after!)
+                : options?.refuseResume === true
+                  ? Stream.fail(
+                      new AgentClient.AgentTransportError({
+                        sessionId: id,
+                        detail: "this session has no delivery log"
+                      })
+                    )
+                  : Stream.filter(events, (e) => e.sequence > eventOptions.after!)
           }
         }),
       session: (id) =>
@@ -216,6 +245,7 @@ const fixture = (options?: {
       adopted,
       released,
       promptCalls,
+      promptInputs,
       promptStarted,
       allowPrompt,
       eventStreamReleased
@@ -228,6 +258,52 @@ const json = <S extends Schema.Constraint>(response: Response, schema: S) =>
   )
 
 describe("AgentHttp", () => {
+  it.live("bounds the SSE queue, so a stalled reader cannot run the producer away", () =>
+    Effect.gen(function* () {
+      const produced = yield* Ref.make(0)
+      // Completed only if the producer gets further ahead than the bound
+      // allows. Waiting on it -- rather than sleeping and counting -- is what
+      // makes "the producer blocked" the thing being asserted.
+      const overran = yield* Deferred.make<void>()
+      // Never completed: the reader takes one frame and stalls, which is the
+      // sleeping laptop this bound exists for.
+      const stalled = yield* Deferred.make<void>()
+
+      const source = Stream.unfold(0, (seed) =>
+        Effect.gen(function* () {
+          const count = yield* Ref.updateAndGet(produced, (n) => n + 1)
+          if (count > SseBody.frameCapacity + 8) {
+            yield* Deferred.succeed(overran, void 0)
+          }
+          return [`data: ${count}
+
+`, seed + 1]
+        })
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reader = yield* Effect.forkChild(
+            Stream.runForEach(SseBody.body(source), () => Deferred.await(stalled))
+          )
+          const ran = yield* Effect.timeoutOption(
+            Deferred.await(overran),
+            Duration.millis(250)
+          )
+          // The producer is blocked on the queue, not merely slow.
+          assert.isTrue(Option.isNone(ran))
+          // And it is blocked *near the bound*: a queue an order of magnitude
+          // larger would also never reach the deferred within the window.
+          assert.isAtMost(
+            yield* Ref.get(produced),
+            SseBody.frameCapacity + 8
+          )
+          yield* Fiber.interrupt(reader)
+        })
+      )
+    })
+  )
+
   it("assigns a stable status to every declared remote error", () => {
     const id = sessionId("status-map")
     const mutationId = requestId("status-map-request")
@@ -300,17 +376,60 @@ describe("AgentHttp", () => {
               .status,
             "idle"
           )
+          /**
+           * All three file-data variants across the HTTP boundary.
+           *
+           * The URL case is the one that fails silently: `PromptWire` accepts
+           * a bare string on read for backward compatibility, so a URL that
+           * did not encode as `{_tag:"Url"}` arrives as a *string* rather than
+           * as an error -- and a string is a legal `FilePart.data`, so nothing
+           * further along would notice.
+           */
+          const outboundBytes = new Uint8Array([1, 2, 3])
+          const outboundUrl = new URL("https://cdn.example.com/a.png")
+          const outboundString = "inline string payload"
           assert.strictEqual(
             (yield* client.sessions.prompt({
               params: { id },
               headers,
               payload: {
                 requestId: requestId("prompt"),
-                input: Prompt.make("hello")
+                input: Prompt.make([{
+                  role: "user",
+                  content: [
+                    {
+                      type: "file",
+                      mediaType: "application/octet-stream",
+                      data: outboundBytes
+                    },
+                    { type: "file", mediaType: "image/png", data: outboundUrl },
+                    { type: "file", mediaType: "text/plain", data: outboundString }
+                  ]
+                }])
               }
             })).result.text,
             "http answer"
           )
+          const receivedPrompt = (yield* Ref.get(test.promptInputs))[0]
+          assert.isDefined(receivedPrompt)
+          const receivedData = receivedPrompt?.content.flatMap((message) =>
+            message.role === "user"
+              ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])
+              : []
+          ) ?? []
+          assert.strictEqual(receivedData.length, 3)
+          assert.isTrue(receivedData[0] instanceof Uint8Array)
+          if (receivedData[0] instanceof Uint8Array) {
+            assert.deepStrictEqual(Array.from(receivedData[0]), Array.from(outboundBytes))
+          }
+          assert.isTrue(
+            receivedData[1] instanceof URL,
+            "a URL must arrive as a URL, not as a string"
+          )
+          if (receivedData[1] instanceof URL) {
+            assert.strictEqual(receivedData[1].href, outboundUrl.href)
+          }
+          assert.strictEqual(receivedData[2], outboundString)
           assert.isTrue(
             (yield* client.sessions.steer({
               params: { id },
@@ -353,11 +472,19 @@ describe("AgentHttp", () => {
               .requests,
             [{ id: "approval-1", kind: "approval", detail: "check" }]
           )
-          assert.strictEqual(
-            (yield* client.sessions.history({ params: { id }, headers }))
-              .history.content[0]?.role,
-            "user"
-          )
+          const remoteHistory = (
+            yield* client.sessions.history({ params: { id }, headers })
+          ).history
+          assert.strictEqual(remoteHistory.content[0]?.role, "assistant")
+          const remoteData = remoteHistory.content.flatMap((message) =>
+            message.role === "assistant"
+              ? message.content.flatMap((part) => part.type === "file" ? [part.data] : [])
+              : []
+          )[0]
+          assert.isTrue(remoteData instanceof Uint8Array)
+          if (remoteData instanceof Uint8Array) {
+            assert.deepStrictEqual(Array.from(remoteData), [7, 8, 9])
+          }
           assert.strictEqual(
             (yield* client.sessions.status({ params: { id }, headers })).status,
             "idle"
@@ -966,6 +1093,72 @@ describe("AgentHttp", () => {
             headers: { ...auth, "last-event-id": "not-a-number" }
           })
           assert.strictEqual(nonsense.id, "1")
+        }).pipe(Effect.provide(Layer.merge(FetchHttpClient.layer, test.server)))
+      )
+    })
+  )
+
+  /**
+   * A blank resume cursor is absent, not zero.
+   *
+   * `Number("")` is `0`, so an empty `Last-Event-ID` -- what a proxy that
+   * normalises headers forwards, and what `?after=` with nothing after it
+   * says -- read as "resume from the beginning". A session with no delivery
+   * log refuses that, so a client which had asked for nothing at all got a
+   * failure frame instead of the live stream it meant. The fixture refuses
+   * resumption here for exactly that reason: honouring it would deliver
+   * sequence 1 either way and prove nothing.
+   */
+  it.effect("a blank Last-Event-ID or ?after= subscribes live rather than refusing", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ holdEvents: true, refuseResume: true })
+      const id = sessionId("sse-blank-cursor")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          const baseUrl = HttpServer.formatAddress(httpServer.address)
+          const client = yield* HttpApiClient.make(AgentHttp.Api, { baseUrl })
+          yield* client.sessions.createSession({
+            headers,
+            payload: { requestId: requestId("sse-blank-create"), sessionId: id }
+          })
+          const auth = { authorization: headers.authorization }
+
+          const blankHeader = yield* firstEventOf(baseUrl, id, {
+            headers: { ...auth, "last-event-id": "" }
+          })
+          assert.strictEqual(blankHeader.event, "SessionStarted")
+          assert.strictEqual(blankHeader.id, "1")
+
+          const blankQuery = yield* Effect.gen(function* () {
+            const response = yield* promise(() =>
+              fetch(`${baseUrl}/sessions/${id}/events?after=`, { headers: auth }))
+            const body = response.body
+            if (body === null) return yield* Effect.die(new Error("no body"))
+            const reader = body.getReader()
+            const decoder = new TextDecoder()
+            const parsed: Array<Sse.Event> = []
+            const parser = Sse.makeParser((event) => {
+              if (event._tag === "Event") parsed.push(event)
+            })
+            while (parsed.length < 1) {
+              const chunk = yield* promise(() => reader.read())
+              if (chunk.done) return yield* Effect.die(new Error("ended early"))
+              const parseError = parser.feed(decoder.decode(chunk.value))
+              if (parseError !== undefined) return yield* parseError
+            }
+            yield* promise(() => reader.cancel())
+            return parsed[0]!
+          })
+          assert.strictEqual(blankQuery.event, "SessionStarted")
+          assert.strictEqual(blankQuery.id, "1")
+
+          // The refusal is still real for a cursor that was actually sent.
+          const refused = yield* firstEventOf(baseUrl, id, {
+            headers: { ...auth, "last-event-id": "1" }
+          })
+          assert.strictEqual(refused.event, "effect/httpapi/stream/failure")
         }).pipe(Effect.provide(Layer.merge(FetchHttpClient.layer, test.server)))
       )
     })

@@ -283,6 +283,106 @@ crossProcessLive(
   { settle: "250 millis" }
 )
 
+describe("DurableStreamsDeliveryLog internals", () => {
+  it.live("one subscription stream consumed twice gives each consumer the same sequences", () =>
+    Effect.gen(function* () {
+      // The cursor a subscription counts with used to be a single `let`
+      // closed over by the returned `Stream`. A `Stream` is a value, not a
+      // running thing: consuming it twice -- or forking it to two consumers,
+      // which is what a fan-out does -- had both advance the same count and
+      // the same dedupe set, so each stole the other's numbering. Every
+      // caller today consumes it once, which is why nothing was broken and
+      // why nothing would have noticed when it broke.
+      const { url } = yield* server
+      const log = yield* DurableStreamsDeliveryLog.make({ baseUrl: `${url}/twice` })
+
+      // One `Stream` value, consumed by two independent fibres.
+      const events = yield* log.subscribe("s")
+      const collect = Stream.runCollect(Stream.take(events, 3))
+      const first = yield* Effect.forkChild(collect)
+      const second = yield* Effect.forkChild(collect)
+
+      yield* Effect.sleep("250 millis")
+      yield* log.append("s", "k1", envelope(1, { _tag: "SubmissionStarted" }))
+      yield* log.append("s", "k2", envelope(2, { _tag: "RunStarted" }))
+      yield* log.append("s", "k3", envelope(3, { _tag: "SubmissionStarted" }))
+
+      // Not merely "no crash": both consumers see the same three offsets,
+      // which is the property a shared cursor destroys.
+      const seenByFirst = yield* Fiber.join(first)
+      const seenBySecond = yield* Fiber.join(second)
+      assert.deepStrictEqual(seenByFirst.map((e) => e.sequence), [1, 2, 3])
+      assert.deepStrictEqual(seenBySecond.map((e) => e.sequence), [1, 2, 3])
+    }).pipe(Effect.scoped),
+    30_000
+  )
+
+  it.live("rebuilding an index from a long stream is linear, not quadratic", () =>
+    Effect.gen(function* () {
+      /**
+       * A session's log is unbounded and never truncated, so the cost of
+       * folding it is a cost that only grows. It used to rebuild `entries`
+       * and `payloads` per record -- `[...index.entries, entry]` and a fresh
+       * `Map` -- making the fold O(n^2), and `append` walked the key map
+       * linearly to recover its own sequence on top of that.
+       *
+       * The guard is deliberately loose. It is not a benchmark; it is here to
+       * fail if the linear scan comes back. At this size the fold takes
+       * ~240ms with the fix and ~4.7s without it, so the bound sits with
+       * room on both sides rather than on a knife edge.
+       * Only the *rebuild* is timed: the writes below are network-bound and
+       * would drown the signal.
+       */
+      const { url } = yield* server
+      const options = { baseUrl: `${url}/long` }
+      const raw = DurableStreamsDeliveryLog.streamFor(options, "s")
+      yield* raw.ensure
+
+      const count = 5_000
+      yield* Effect.forEach(
+        Array.from({ length: count }, (_, i) => i),
+        (i) =>
+          raw.append({
+            key: `k${i}`,
+            envelope: envelope(i + 1, { _tag: "RunStarted" })
+          }),
+        // Concurrent on purpose: the writes are network-bound and are not
+        // what is being measured. Nothing below depends on their order --
+        // the assertion is that the sequences are the record positions
+        // 1..n, whatever order the stream ended up in.
+        { discard: true, concurrency: 32 }
+      )
+
+      // A log that has never seen this session: its first read is the fold.
+      const log = yield* DurableStreamsDeliveryLog.make(options)
+      const started = Date.now()
+      const events = yield* log.read("s")
+      const elapsed = Date.now() - started
+
+      assert.strictEqual(events.length, count)
+      // Numbering survives the rewrite: first, last, and no gaps.
+      assert.strictEqual(events[0]?.sequence, 1)
+      assert.strictEqual(events[count - 1]?.sequence, count)
+      assert.isTrue(
+        events.every((event, i) => event.sequence === i + 1),
+        "sequences are not the record positions"
+      )
+      assert.isTrue(
+        elapsed < 1_500,
+        `rebuilding ${count} records took ${elapsed}ms; the linear scan is back`
+      )
+
+      // And an append onto that log still names its own position by lookup
+      // rather than by walking the keys.
+      assert.deepStrictEqual(
+        yield* log.append("s", "last", envelope(1, { _tag: "SubmissionStarted" })),
+        { _tag: "Appended", sequence: count + 1 }
+      )
+    }).pipe(Effect.scoped),
+    120_000
+  )
+})
+
 describe("DurableStreamsDeliveryLog across processes", () => {
   it.live("two logs over one stream agree on sequences, duplicates and conflicts", () =>
     Effect.gen(function* () {

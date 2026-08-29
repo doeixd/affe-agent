@@ -16,6 +16,7 @@ import {
   HttpClientRequest,
   HttpClientResponse
 } from "effect/unstable/http"
+import type { Tracer } from "effect"
 import * as BraveWebSearch from "../src/web/brave.js"
 import { WebSearch } from "../src/web/index.js"
 
@@ -55,6 +56,34 @@ const searchWith = (
     service.search(query, searchOptions)).pipe(
       Effect.provide(provider(client))
     )
+
+
+/**
+ * Every span from the client callback up to the root, with its attributes.
+ *
+ * Captured *inside* the `HttpClient`, because the span at issue is the one
+ * `HttpClient` creates for itself: an assertion made around the search never
+ * sees the attribute it is looking for. Walking to the root rather than
+ * checking one span, because a suppressed annotation that reappears on a
+ * parent is the same leak.
+ *
+ * `ExternalSpan` ends the walk: it carries no attributes and no parent, so
+ * there is nothing further to inspect.
+ */
+interface CapturedSpan {
+  readonly name: string
+  readonly attributes: ReadonlyMap<string, unknown>
+}
+
+const spanChain = (span: Tracer.Span): ReadonlyArray<CapturedSpan> => {
+  const chain: Array<CapturedSpan> = []
+  let current: Tracer.AnySpan | undefined = span
+  while (current !== undefined && current._tag === "Span") {
+    chain.push({ name: current.name, attributes: current.attributes })
+    current = Option.getOrUndefined(current.parent)
+  }
+  return chain
+}
 
 describe("Brave web search provider", () => {
   it.effect("uses the fixed endpoint, maps neutral options, redacts auth and decodes results", () =>
@@ -440,4 +469,53 @@ describe("Brave web search provider", () => {
       assert.isAbove(yield* Ref.get(physical), 2)
     })
   )
+
+  /**
+   * The query is user content, and `HttpClient` puts it on a span for free.
+   *
+   * `HttpClient` unconditionally annotates `url.full` and `url.query` on its
+   * `http.client GET` span, and for a search the query string *is* the model's
+   * search text. Redacting `x-subscription-token` does not touch it: that is a
+   * header and this is the URL. `src/web/http.ts` already made this trade for
+   * fetches; this pins that `brave.ts` makes it too.
+   *
+   * Falsified by removing `Effect.withTracerEnabled(false)` from `brave.ts`:
+   * an `http.client GET` span appears in the chain carrying the query.
+   */
+  it.effect("never exports the model's search query on a span", () =>
+    Effect.gen(function*() {
+      const query = "how to appeal a denied benefits claim"
+      const seen = yield* Ref.make<ReadonlyArray<CapturedSpan>>([])
+      const client = HttpClient.make((request) =>
+        Effect.flatMap(Effect.currentSpan, (span) =>
+          Ref.set(seen, spanChain(span)).pipe(
+            Effect.as(response(request, body()))
+          )).pipe(Effect.orDie))
+
+      const results = yield* searchWith(client, query)
+      assert.strictEqual(results.length, 1)
+
+      const spans = yield* Ref.get(seen)
+      // The adapter's own span is still there -- suppression removes the
+      // annotations, not the call's place in the trace.
+      assert.isTrue(spans.some((span) => span.name === "BraveWebSearch.search"))
+      for (const span of spans) {
+        assert.isFalse(
+          span.attributes.has("url.query"),
+          `${span.name} carries url.query`
+        )
+        assert.isFalse(
+          span.attributes.has("url.full"),
+          `${span.name} carries url.full`
+        )
+        for (const [key, value] of span.attributes) {
+          assert.isFalse(
+            typeof value === "string" && value.includes("appeal"),
+            `${span.name}.${key} carries the search text`
+          )
+        }
+      }
+    })
+  )
+
 })

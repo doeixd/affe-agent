@@ -4,6 +4,7 @@ import { Entity } from "effect/unstable/cluster"
 import { Rpc } from "effect/unstable/rpc"
 import { AgentIdleError } from "../Errors.js"
 import * as Elicitation from "../Elicitation.js"
+import * as PromptWire from "../PromptWire.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
 import * as DurableElicitation from "../durable/DurableElicitation.js"
 import * as DurableChannels from "../durable/DurableChannels.js"
@@ -23,10 +24,10 @@ import * as DurableChannels from "../durable/DurableChannels.js"
  */
 export const AgentEntity = Entity.make("AgentSession", [
   // `Prompt` rather than `string`: steering a multimodal conversation with an
-  // image is the same operation as steering it with a sentence, and `Prompt`
-  // carries its own Schema, so it crosses the wire as cleanly as text did.
+  // image is the same operation as steering it with a sentence. `PromptWire`
+  // preserves the exact string / bytes / URL file-data variant across RPC.
   Rpc.make("submit", {
-    payload: { input: Prompt.Prompt },
+    payload: { input: PromptWire.Prompt },
     success: Schema.String
   }),
   // Admission is a real answer, not a crash. A client that steers a session
@@ -34,11 +35,11 @@ export const AgentEntity = Entity.make("AgentSession", [
   // falling over, and `AgentIdleError` is a `Schema.TaggedError`, so it
   // serialises across the cluster without further ceremony.
   Rpc.make("steer", {
-    payload: { input: Prompt.Prompt },
+    payload: { input: PromptWire.Prompt },
     error: AgentIdleError
   }),
   Rpc.make("followUp", {
-    payload: { input: Prompt.Prompt },
+    payload: { input: PromptWire.Prompt },
     error: AgentIdleError
   }),
   // No payload. The execution id is a pure function of the session, and the

@@ -7,6 +7,7 @@ import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import { CodingToolkit } from "../src/coding/index.js"
+import * as FileLock from "../src/coding/internal/fileLock.js"
 import * as Glob from "../src/coding/internal/glob.js"
 import * as ReadFormat from "../src/coding/internal/readFormat.js"
 import * as SearchFormat from "../src/coding/internal/searchFormat.js"
@@ -248,7 +249,7 @@ describe("CodingToolkit handlers", () => {
       )
       assert.deepStrictEqual(result, { exit_code: 0, stdout: "hi\n", stderr: "" })
       // The command reached exec as a shell invocation, not split into argv.
-      assert.deepStrictEqual(yield* Ref.get(seen), { executable: "bash", args: ["-lc", "echo hi"] })
+      assert.deepStrictEqual(yield* Ref.get(seen), { executable: "bash", args: ["-c", "echo hi"] })
     })
   )
 
@@ -614,6 +615,65 @@ describe("CodingToolkit edit_file: the replacer chain", () => {
    *
    * These three tests are the ones that could not be written before.
    */
+  /**
+   * A `canonical` failure must fail the operation, not fall back to a
+   * different key.
+   *
+   * `local.ts` resolves the canonical name with a filesystem `stat`, which can
+   * fail transiently -- a missing ancestor directory, EINTR, a momentary
+   * permissions error. The lock used to substitute the spelled path in that
+   * case. One fibre keying on the canonical name and another on the spelling
+   * are not excluded from each other, so two writers proceeded at once with
+   * nothing observable to say so.
+   */
+  it.effect("a canonical failure fails the write instead of splitting the lock", () =>
+    Effect.gen(function* () {
+      assert.strictEqual(yield* CodingToolkit.lockRegistrySize, 0)
+      let failCanonical = true
+      yield* withSandbox(
+        { "a.ts": "alpha\n" },
+        Effect.gen(function* () {
+          const base = yield* Sandbox.Current
+          const flaky: Sandbox.Sandbox = {
+            ...base,
+            canonical: (target) =>
+              failCanonical
+                ? Effect.fail(
+                  new Sandbox.ProviderError({ detail: "transient stat failure" })
+                )
+                : base.canonical(target)
+          }
+          const target = yield* Sandbox.path("a.ts")
+
+          const attempt = yield* Effect.exit(
+            FileLock.withFileLock(
+              flaky,
+              target,
+              Effect.succeed("would have written")
+            )
+          )
+          assert.isTrue(
+            Exit.isFailure(attempt),
+            "an unresolvable identity must refuse the lock, not invent a key"
+          )
+          // Nothing was retained for a lock that was never granted.
+          assert.strictEqual(yield* CodingToolkit.lockRegistrySize, 0)
+
+          // Once identity resolves again the lock works normally, so the
+          // refusal is about the failure and not about the sandbox.
+          failCanonical = false
+          const ok = yield* FileLock.withFileLock(
+            flaky,
+            target,
+            Effect.succeed("wrote")
+          )
+          assert.strictEqual(ok, "wrote")
+        })
+      )
+      assert.strictEqual(yield* CodingToolkit.lockRegistrySize, 0)
+    })
+  )
+
   it.effect("the lock registry drains: an edited path leaves no entry behind", () =>
     Effect.gen(function* () {
       assert.strictEqual(yield* CodingToolkit.lockRegistrySize, 0)
@@ -931,6 +991,63 @@ describe("CodingToolkit search: bounds, filters and skips", () => {
       assert.notInclude(out, ".git/")
       assert.notInclude(out, "coverage/")
       assert.include(out, "Found 1 matches")
+    })
+  )
+
+  it.effect("skips a file above the size cap, reads the small one, and says so", () =>
+    Effect.gen(function* () {
+      /**
+       * The read is what the cap protects, so the assertion is on the read.
+       *
+       * A 2 MiB file and a 1 KiB file, both containing the pattern. Before the
+       * cap, `search` opened and decoded both -- the walk was bounded and the
+       * output was bounded, but the read between them was not, so one large
+       * blob anywhere under the searched path was allocated in full. The
+       * counting wrapper records exactly which paths were opened.
+       */
+      const big = "x".repeat(2 * 1024 * 1024 - 7) + "needle"
+      const files = { "big.ts": big, "small.ts": "needle" }
+      const opened = yield* Ref.make<ReadonlyArray<string>>([])
+      const recording = (inner: Sandbox.Sandbox): Sandbox.Sandbox => ({
+        ...inner,
+        read: (path) =>
+          Effect.andThen(Ref.update(opened, (seen) => [...seen, path]), inner.read(path))
+      })
+      const out = yield* withSandbox(
+        files,
+        Effect.gen(function* () {
+          const gated = recording(yield* Sandbox.Current)
+          const result = yield* H.search({ pattern: "needle" }, ctx).pipe(
+            Effect.provideService(Sandbox.Current, gated)
+          )
+          return { result, opened: yield* Ref.get(opened) }
+        })
+      )
+      assertString(out.result)
+      // The large file was never read at all -- not read and then discarded.
+      assert.deepStrictEqual(out.opened, ["small.ts"])
+      assert.strictEqual(
+        out.result,
+        [
+          "Found 1 matches",
+          "small.ts:",
+          "  Line 1: needle",
+          "",
+          SearchFormat.skippedForSizeNote(1)
+        ].join("\n")
+      )
+    })
+  )
+
+  it.effect("a file exactly at the cap is still searched", () =>
+    Effect.gen(function* () {
+      // The bound is `>`, not `>=`: a file of exactly MAX_SEARCH_FILE_BYTES is
+      // inside the budget, and an off-by-one here silently loses a file.
+      const exact = "needle" + "x".repeat(SearchFormat.MAX_SEARCH_FILE_BYTES - 6)
+      const out = yield* withSandbox({ "exact.ts": exact }, H.search({ pattern: "needle" }, ctx))
+      assertString(out)
+      assert.include(out, "exact.ts:")
+      assert.notInclude(out, "skipped")
     })
   )
 
@@ -1341,6 +1458,74 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
 describe("output truncation", () => {
   it("returns short text unchanged", () => {
     assert.deepStrictEqual(Truncate.tail("a\nb\nc"), { text: "a\nb\nc", cut: false })
+  })
+
+  /**
+   * Nearly all command output ends in a newline, so counting the empty
+   * trailing segment as a line made complete output look truncated and put a
+   * banner on it that was not true.
+   */
+  describe("a trailing newline is not an extra line", () => {
+    for (const shape of ["tail", "head"] as const) {
+      const run = shape === "tail" ? Truncate.tail : Truncate.head
+
+      it(`${shape} does not report a cut on exactly-budget output`, () => {
+        const out = run("a\nb\n", 2, Truncate.MAX_BYTES)
+        assert.isFalse(out.cut, "two lines and a trailing newline is two lines")
+        assert.strictEqual(out.text, "a\nb\n")
+      })
+
+      it(`${shape} still reports a cut when there is genuinely more`, () => {
+        const out = run("a\nb\nc\n", 2, Truncate.MAX_BYTES)
+        assert.isTrue(out.cut)
+      })
+
+      it(`${shape} handles a file with no trailing newline`, () => {
+        assert.isFalse(run("a\nb", 2, Truncate.MAX_BYTES).cut)
+        assert.isTrue(run("a\nb\nc", 2, Truncate.MAX_BYTES).cut)
+      })
+    }
+  })
+
+  /**
+   * The banner has to name the budget that actually stopped the walk.
+   *
+   * Deriving it from the input instead gets this wrong whenever both budgets
+   * are exceeded but the line cap is reached first, which is the common shape
+   * for a long log of short lines.
+   */
+  describe("naming the limit that fired", () => {
+    // 200 short lines: well past a 3-line cap, nowhere near a large byte cap.
+    const manyShortLines = Array.from({ length: 200 }, (_, i) => `line ${i}`)
+      .join("\n")
+
+    it("reports the line cap when lines ran out first", () => {
+      const out = Truncate.tail(manyShortLines, 3, 1_000_000)
+      assert.isTrue(out.cut)
+      assert.strictEqual(out.fired, "lines")
+      assert.strictEqual(Truncate.nameLimit(out.fired!, 3, 1_000_000), "3 lines")
+    })
+
+    it("reports the byte cap when bytes ran out first", () => {
+      const out = Truncate.tail(manyShortLines, 1000, 40)
+      assert.isTrue(out.cut)
+      assert.strictEqual(out.fired, "bytes")
+      assert.include(Truncate.nameLimit(out.fired!, 1000, 40), "B")
+    })
+
+    it("reports the line cap even when the input also exceeds the byte cap", () => {
+      // Both budgets are exceeded by the whole input, but the first three
+      // lines fit comfortably in bytes -- so it is the line cap that fired.
+      const bytes = new TextEncoder().encode(manyShortLines).byteLength
+      assert.isAbove(bytes, 100, "the fixture must exceed the byte budget too")
+      const out = Truncate.tail(manyShortLines, 3, 100)
+      assert.isTrue(out.cut)
+      assert.strictEqual(
+        out.fired,
+        "lines",
+        "the walk stopped on lines, so the banner must not blame bytes"
+      )
+    })
   })
 
   it("keeps the last lines when the line budget runs out", () => {

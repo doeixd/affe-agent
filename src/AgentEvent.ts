@@ -1,4 +1,5 @@
-import { Cause, Effect, Schema } from "effect"
+import { Cause, Effect, Option, Schema, SchemaGetter, SchemaIssue } from "effect"
+import { Response } from "effect/unstable/ai"
 import { RunId, SessionId, SubmissionId } from "./internal/ids.js"
 
 export { RunId, SessionId, SubmissionId }
@@ -158,6 +159,28 @@ export const RunInterrupted = Schema.TaggedStruct("RunInterrupted", {})
 
 export const TurnStarted = Schema.TaggedStruct("TurnStarted", {})
 export const TurnCompleted = Schema.TaggedStruct("TurnCompleted", {})
+
+/** Provider-neutral token totals for one successful model call. */
+export const ModelUsage = Schema.Struct({
+  inputTokens: Schema.Natural,
+  outputTokens: Schema.Natural,
+  totalTokens: Schema.Natural
+})
+export type ModelUsage = typeof ModelUsage.Type
+
+/**
+ * The provider returned successfully. Tools named by the response have not run
+ * yet, so this event is retained even if later work in the turn fails.
+ *
+ * Effect AI normalises finish reasons to `Response.FinishReason` and represents
+ * an unreported reason as `"unknown"`. Providers may omit either token total;
+ * those totals are normalised to zero here, as `Budget` already does when it
+ * accounts for a response.
+ */
+export const ModelCallCompleted = Schema.TaggedStruct("ModelCallCompleted", {
+  usage: ModelUsage,
+  finishReason: Response.FinishReason
+})
 
 export const MessageCompleted = Schema.TaggedStruct("MessageCompleted", {
   text: Schema.String
@@ -336,6 +359,7 @@ export const AgentEvent = Schema.Union([
   RunInterrupted,
   TurnStarted,
   TurnCompleted,
+  ModelCallCompleted,
   MessageCompleted,
   MessageStarted,
   MessageDelta,
@@ -355,6 +379,121 @@ export const AgentEvent = Schema.Union([
   FollowUpApplied
 ])
 export type AgentEvent = typeof AgentEvent.Type
+
+/**
+ * An event this build does not know.
+ *
+ * The stream crosses a process boundary, and the two ends are not always the
+ * same build: `AgentServer` and the relay exist so a client and a server can be
+ * deployed independently. A strict union makes every event addition a breaking
+ * wire change -- adding `ModelCallCompleted` meant an older client failed to
+ * decode the stream the first time a model call completed, which is every turn.
+ *
+ * Nothing here is invented: the tag and the raw payload are carried through
+ * exactly as they arrived, so a consumer can log or forward it, and a build
+ * that *does* know the tag can decode it properly. What it removes is the
+ * decode failure, which is the part an older client cannot do anything about.
+ *
+ * This is deliberately not a version number. A version says "refuse the whole
+ * stream"; the useful behaviour for an observational stream is to keep the
+ * events you understand and skip the ones you do not, which is what every
+ * projection already does -- `AgentAgUi` covers a subset of tags and ignores
+ * the rest with no ill effect.
+ */
+export const UnknownEvent = Schema.TaggedStruct("UnknownEvent", {
+  /** The tag as it arrived, so a consumer can recognise it by name. */
+  originalTag: Schema.String,
+  /** The event's fields, undecoded. */
+  payload: Schema.Unknown
+})
+export type UnknownEvent = typeof UnknownEvent.Type
+
+/**
+ * What a consumer of the *stream* sees: a known event, or one from a newer
+ * peer.
+ *
+ * `AgentEvent` remains the closed union this build emits. The distinction
+ * matters at exactly one place -- reading the wire -- and naming it keeps every
+ * producer exhaustive while letting consumers stay tolerant.
+ */
+export type StreamedEvent = AgentEvent | UnknownEvent
+
+const decodeKnownEvent = Schema.decodeUnknownEffect(AgentEvent)
+const encodeKnownEvent = Schema.encodeUnknownEffect(AgentEvent)
+
+/**
+ * The tags this build has, read off the union rather than restated, so a new
+ * event cannot be added above and forgotten here.
+ */
+const knownTags: ReadonlySet<string> = new Set(
+  AgentEvent.members.map((member) => String(member.fields._tag.ast.literal))
+)
+
+const tagOf = (value: unknown): string | undefined => {
+  if (typeof value !== "object" || value === null) return undefined
+  const tag = (value as { _tag?: unknown })._tag
+  return typeof tag === "string" ? tag : undefined
+}
+
+/**
+ * The event union, tolerant of tags this build does not have.
+ *
+ * Encoding is unchanged: a known event encodes exactly as it always did, so
+ * adopting this is not itself a wire change. Only the read side gains the
+ * fallback, and an `UnknownEvent` re-encodes to the payload it arrived as, so
+ * relaying a stream through a build that does not understand every event does
+ * not degrade it for one that does.
+ *
+ * A value with no `_tag` at all is still a decode failure. That is not a
+ * newer peer, it is malformed input, and quietly accepting it would remove the
+ * only check that this is an event stream.
+ *
+ * So is a value whose tag *is* one of this build's. Tolerance is for a name
+ * this build has never heard of; a `ToolCallSucceeded` that fails to decode is
+ * a corrupt event, and turning it into an `UnknownEvent` would be the worst of
+ * both -- the failure is gone, and so is the tool result, because every
+ * consumer skips a tag it has no frame for. The decode failure is the honest
+ * answer, and it is the one a known tag keeps.
+ */
+export const AgentEventTolerant: Schema.Codec<
+  AgentEvent | UnknownEvent,
+  unknown
+> = Schema.Unknown.pipe(
+  Schema.decodeTo(
+    Schema.toType(Schema.Union([AgentEvent, UnknownEvent])),
+    {
+      decode: SchemaGetter.transformOrFail((value: unknown) =>
+        decodeKnownEvent(value).pipe(
+          Effect.catch((error) => {
+            const tag = tagOf(value)
+            if (tag === undefined) {
+              return Effect.fail(
+                new SchemaIssue.InvalidValue(
+                  { message: "not an agent event: no _tag" },
+                  Option.some(value)
+                )
+              )
+            }
+            return knownTags.has(tag)
+              ? Effect.fail(error.issue)
+              : Effect.succeed<AgentEvent | UnknownEvent>({
+                _tag: "UnknownEvent",
+                originalTag: tag,
+                payload: value
+              })
+          })
+        )
+      ),
+      encode: SchemaGetter.transformOrFail((event) =>
+        event._tag === "UnknownEvent"
+          ? Effect.succeed(event.payload)
+          : encodeKnownEvent(event).pipe(
+            Effect.mapError((error) => error.issue)
+          )
+      )
+    }
+  )
+)
 
 /**
  * Identifies the execution position an event belongs to.
@@ -392,7 +531,21 @@ export const AgentEventEnvelope = Schema.Struct({
   runId: Schema.Option(RunId),
   turn: Schema.Option(Schema.Number),
   sequence: Schema.Number,
-  event: AgentEvent
+  /**
+   * `AgentEventTolerant`, not `AgentEvent`, because this is the wire.
+   *
+   * The two ends of a stream are not always the same build -- `AgentServer`
+   * and the relay exist precisely so they need not be -- and a strict union
+   * makes every new event a breaking change for every deployed client. Adding
+   * `ModelCallCompleted` did exactly that: an older client failed to decode the
+   * stream the first time a model call completed, which is every turn.
+   *
+   * A known event is unaffected, in both directions. An unknown one arrives as
+   * `UnknownEvent` carrying its original tag and payload, so a consumer can
+   * skip it -- which every projection already does for tags it has no frame
+   * for -- and a relay can forward it intact to a build that understands it.
+   */
+  event: AgentEventTolerant
 })
 export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
 
@@ -418,14 +571,22 @@ export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
  */
 export const match =
   <A, E = never, R = never>(handlers: {
-    readonly [Tag in AgentEvent["_tag"]]?: (
-      event: Extract<AgentEvent, { readonly _tag: Tag }>,
+    readonly [Tag in StreamedEvent["_tag"]]?: (
+      event: Extract<StreamedEvent, { readonly _tag: Tag }>,
       envelope: AgentEventEnvelope
     ) => Effect.Effect<A, E, R>
   } & {
-    /** Runs for any event without its own handler. */
+    /**
+     * Runs for any event without its own handler.
+     *
+     * Including `UnknownEvent`, which is how an event from a newer peer
+     * arrives. Most consumers want the same thing for both -- ignore it -- and
+     * `orElse` already means that, so tolerance costs an existing caller
+     * nothing. A consumer that wants to log or forward unknown events can
+     * name `UnknownEvent` explicitly.
+     */
     readonly orElse: (
-      event: AgentEvent,
+      event: StreamedEvent,
       envelope: AgentEventEnvelope
     ) => Effect.Effect<A, E, R>
   }) =>
@@ -434,7 +595,7 @@ export const match =
     return handler === undefined
       ? handlers.orElse(envelope.event, envelope)
       : (handler as (
-          event: AgentEvent,
+          event: StreamedEvent,
           envelope: AgentEventEnvelope
         ) => Effect.Effect<A, E, R>)(envelope.event, envelope)
   }

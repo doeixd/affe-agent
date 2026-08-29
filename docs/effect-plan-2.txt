@@ -20,17 +20,19 @@ Read these before implementing anything in this brief. Paths are relative to
 ### What to implement first
 
 1. **Not this architecture yet.** Follow [remaining-work.md](./remaining-work.md):
-   leftover slices of plans that already ship (pi toolkit, TUI restore, A2A
-   adapter, filetypes Phase 1, compaction 1–4, audit A-8/A-12). This file is
-   in its "Hard / not this pass" table.
+   filetypes Phase 1 and compaction phases 1–7 landed 2026-08-27. The A2A
+   protocol work, pi toolkit,
+   TUI restore, and audit actions A-0 through A-13 have landed. This file is in
+   its "Hard / not this pass" table.
 2. **If you *are* implementing this architecture**, follow §38 below. The
    sibling handoff notes — non-goals, `session.submit()` before the inbox —
    are in [opencode-completion-plan.md](./opencode-completion-plan.md).
-3. **Phase 0 leftover** (the only unevaluated spike): PersistedQueue vs
-   `/scheduling` `JobStore`. Queue path already shipped in
-   [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1. Persistence audit:
-   [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3. Do not replace
-   `JobStore` until that spike says so (§20).
+3. **Phase 0 is closed.** PersistedQueue vs `/scheduling` `JobStore` was
+   evaluated on 2026-08-27: retain `JobStore` for arbitrary due-time dispatch
+   and use PersistedQueue for immediate durable handoff. The queue has no timer
+   operation, and adopting it would also change delivery from at-most-once to
+   scoped ACK/retry. See
+   [evaluation-persisted-queue-job-store.md](./evaluation-persisted-queue-job-store.md).
 
 ### Design authority (already built)
 
@@ -59,7 +61,7 @@ Read these before implementing anything in this brief. Paths are relative to
 | --- | --- |
 | [plan-shell-tool.md](./plan-shell-tool.md) | Rename model-facing `bash` → `shell`. `/shell` already exists as argv translation. **Not** ProcessManager. Specified, not implemented. |
 | [plan-durability-hardening.md](./plan-durability-hardening.md) remaining | H6 multi-node still blocked. Inbox/submit sit on the client/store path that already exists; they do not unblock H6. |
-| [plan-agent-server.md](./plan-agent-server.md) S3–S5 | Mixed backing, inventory, auth example. Host-wide events (§29, §12 of this brief) would plug in here later. |
+| [plan-agent-server.md](./plan-agent-server.md) | S1–S5 are complete: named mounts, mixed backing, inventory, and bearer/cookie auth example. Host-wide events (§29, §12 of this brief) would plug in here later. |
 | [plan-session-tree.md](./plan-session-tree.md) | Conversation DAG + `RcMap` live branches. Not `SessionDirectory`. Delta storage deferred. |
 | [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Spawn Claude Code / OpenCode as A2A *agents*. Different problem; [remaining-work.md](./remaining-work.md) says after other work. |
 | [plan-relay.txt](./plan-relay.txt) | NAT / WSS / enrollment. After other work. |
@@ -75,7 +77,7 @@ Read these before implementing anything in this brief. Paths are relative to
 | `/scheduling` `JobStore` | `src/scheduling/Scheduling.ts`, [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1 |
 | Sandbox tree-kill | `src/sandbox/local.ts`, [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md) |
 | `/shell` | `src/shell/Shell.ts`, [plan-shell-tool.md](./plan-shell-tool.md) |
-| Usage on `Result`, not events | [PLAN.md](../PLAN.md) §33.3, `src/budget/Budget.ts`, `src/observability/Observability.ts` |
+| Usage on `Result` and `ModelCallCompleted` | [PLAN.md](../PLAN.md) §33.3, `src/AgentEvent.ts`, `src/budget/Budget.ts`, `src/observability/Observability.ts` |
 | `DurablePolling` | `src/durable/DurablePolling.ts` — operator `Config` for poll intervals ([audit-effect-ecosystem.md](./audit-effect-ecosystem.md) A-8), not §16 monitors |
 
 ## Still proposed (not built)
@@ -87,7 +89,6 @@ ProcessManager / ProcessDirectory / ProcessStore / ProcessOutputLog
 WorkspaceManager (LayerMap / RcMap workspace lifetime)
 /sessions — SessionDirectory + SessionProjection
 host-wide AgentSessionHost.events + FiberMap session pumps
-ModelCallCompleted usage on the kernel event stream
 /process, /workspace package entries
 ```
 
@@ -119,7 +120,7 @@ sandbox exec                 ≠ background process lifetime
 | Subagent | `Subagent.tool` is still parent-waits-for-child. | [ROADMAP.md](../ROADMAP.md) item 4, [STATUS.md](../STATUS.md) |
 | Permission | `Allow \| Ask \| Deny`, projection `action`/`resource`, elicitation floor. No `process.*` / `monitor.*` projections yet. | [PLAN.md](../PLAN.md), `src/Permission.ts` |
 | HITL / pause | `Elicitation` locally; `DurableDeferred` under durability. | [WORKFLOW.md](../WORKFLOW.md), [ROADMAP.md](../ROADMAP.md) item 6 |
-| Usage | `AgentSubmission.Result.response` carries the provider response (usage, finish reason). `Budget` reads it. **Events do not.** `TurnCompleted` is empty. `/observability` documents this and refuses to invent a token metric. | [PLAN.md](../PLAN.md) §33.3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E8 / AS2 |
+| Usage | `AgentSubmission.Result.response` retains the provider response. `ModelCallCompleted` now emits normalised usage and finish reason immediately after every successful provider call, before tools; `/observability` records `agent_model_tokens`. | `src/AgentEvent.ts`, `src/AgentTurn.ts`, `test/ModelUsageEvent.test.ts` |
 | ExecutionPlan | `Agent.withExecutionPlan` already wraps the model call. Durable agents cannot carry one (the plan provides its own model). | [plan-execution-plan.md](./plan-execution-plan.md) |
 | RcMap | Session tree live branches (`src/tree/SessionTree.ts`). Not workspaces. | [plan-session-tree.md](./plan-session-tree.md) T3 |
 | SqlClient | `DurableChannels.sqlStore`, `DurableSessionStore`, `DeliveryLog` SQL backing. | [plan-durability-hardening.md](./plan-durability-hardening.md) |
@@ -134,7 +135,7 @@ sandbox exec                 ≠ background process lifetime
 | `effect/Graph` vs session tree | **Not used.** [plan-session-tree.md](./plan-session-tree.md) T4. |
 | Persistence `KeyValueStore` vs package stores | **Retain both seams.** Same [H4b](./plan-durability-hardening.md) write-up: `DurableChannels.Store` is an ordered queue with `offerIfOpen`; `AgentState.Store` is a two-op boundary. Also [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3. |
 | `LayerMap` for the agent server | **Not used for static routes.** [plan-agent-server.md](./plan-agent-server.md) S2. Reserved for a later agent-name-as-path design. [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4. |
-| PersistedQueue vs scheduling `JobStore` | **Not evaluated.** Still the only Phase 0 item. `JobStore` is a due-time store; this brief already says a queue is not a timer (§20). Queue path: [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1. |
+| PersistedQueue vs scheduling `JobStore` | **Retain both for distinct semantics.** `JobStore` is a due-time, at-most-once store. PersistedQueue is an immediate handoff with scoped ACK/retry and long-lived custom-id dedupe. [evaluation-persisted-queue-job-store.md](./evaluation-persisted-queue-job-store.md). |
 
 ## The load-bearing conflict for `SessionInbox`
 
@@ -393,11 +394,14 @@ Effect v4's `PersistedQueue` already provides:
 
 That's almost exactly what a persistent session inbox needs.
 
-STATUS (2026-08-26): `effect/unstable/persistence/PersistedQueue` exists in
+STATUS (2026-08-27): `effect/unstable/persistence/PersistedQueue` exists in
 the installed Effect and is unused. `PersistedQueue.make` is not a free
 function — it needs `PersistedQueueFactory` in the environment (memory, SQL,
 or Redis layer). `offer(value, { id })` and `take(f)` match the sketch
-below. Duplicate `id` is suppressed while the item is in the queue.
+below. A custom duplicate `id` is suppressed even after successful ACK: the
+memory and Redis stores retain their id sets, and SQL retains the completed row
+behind a unique `(id, queue_name)` index. That is the durable inbox idempotency
+window this design needs.
 
 Related: [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3
 (don't invent another queue store), [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md)
@@ -1551,7 +1555,7 @@ Good for:
 
 ---
 
-# 20. Current `/scheduling` should be modernized
+# 20. Current `/scheduling` queue boundary has been evaluated
 
 This is one concrete place the repo is now re-deriving Effect.
 
@@ -1568,7 +1572,7 @@ and its own memory queue and polling worker.
 
 Effect v4 now has a much stronger generic primitive in `PersistedQueue`, including memory, SQL, Redis, dedupe, retry, and multi-worker processing.
 
-So I would refactor `/scheduling`.
+The overlap warranted a substitution spike, not an assumed refactor.
 
 Do **not** blindly jam delayed jobs into `PersistedQueue`, though.
 
@@ -1597,7 +1601,15 @@ If there remains a real requirement for arbitrary durable delayed jobs outside W
 
 But only after proving Effect's existing timing primitives don't cover the actual call site.
 
-STATUS (2026-08-26): `/scheduling` already takes this position. Its module
+STATUS (2026-08-27): the Phase 0 spike retained `JobStore` for delayed work.
+PersistedQueue has no due-time field or delayed-take operation; delaying before
+`offer` would not durably record the work during the delay. It would also change
+the existing at-most-once claim contract to scoped ACK/retry. Use
+PersistedQueue for the proposed immediate `SessionInbox`, not as the backend for
+arbitrary `runAfterMillis` jobs. Full evidence and consequences:
+[evaluation-persisted-queue-job-store.md](./evaluation-persisted-queue-job-store.md).
+
+`/scheduling` already takes the surrounding position. Its module
 comment says there is no scheduler runtime, on purpose: `local` is
 `Effect.delay` + a forked fibre, `recurring` is `Effect.repeat` + `Schedule`,
 cluster cron is `ScheduledAgent`. What remains custom is `JobStore`
@@ -1605,10 +1617,9 @@ cluster cron is `ScheduledAgent`. What remains custom is `JobStore`
 section says may still be justified. At-most-once: a worker that crashes
 after `claimDue` drops the job.
 
-Phase 11 is therefore "prove PersistedQueue covers `delay`, or keep
-`JobStore` for due-time and use PersistedQueue only for immediate handoff
-(the inbox)". Do not replace `JobStore` first and then discover delays
-have nowhere to go.
+Phase 11 is therefore closed without a production refactor: `JobStore` remains
+for due-time scheduling, and PersistedQueue is reserved for an explicit
+immediate-handoff API when one is needed (the inbox is Phase 3).
 
 Shipped queue path: [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1.
 Persistence audit: [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3.
@@ -1946,9 +1957,11 @@ See [transport.md](./transport.md), [plan-durability-hardening.md](./plan-durabi
 
 # 28. Add normalized model usage to AgentEvent
 
-This recommendation still stands and becomes even more valuable for `SessionStats`.
+This recommendation is implemented and becomes even more valuable for
+`SessionStats`.
 
-Current observability explicitly cannot report token counts because the event vocabulary doesn't expose them.
+Before 2026-08-27 observability could not report token counts because the event
+vocabulary did not expose them.
 
 Add something like:
 
@@ -1960,7 +1973,7 @@ ModelCallCompleted {
     totalTokens: number
   }
 
-  finishReason?: string
+  finishReason: FinishReason
 }
 ```
 
@@ -1980,26 +1993,23 @@ would lose the usage.
 
 Don't expose raw provider responses and don't compute dollar cost in core.
 
-STATUS (2026-08-26): still missing from the event stream. `TurnCompleted`
-is `TaggedStruct("TurnCompleted", {})`. Usage is already available
-in-process:
+STATUS (2026-08-27): implemented as its own Schema-defined event.
 
-* `AgentSubmission.Result.response` is `Option<GenerateTextResponse>`,
-  which carries `usage` and `finishReason`.
-* `Budget.within` reads `response.usage.inputTokens.total` +
-  `outputTokens.total` after each turn.
-* `/observability` explicitly refuses a token metric until an event
-  carries usage (`Observability.ts`: "What is deliberately absent: tokens").
-
-Adding `ModelCallCompleted` (or putting usage on `TurnCompleted` /
-`MessageStreamCompleted`) is still the kernel change this section asks
-for. Local `Result` is not a substitute: remote clients, hooks, and
-metrics all observe events, not the in-process Result. The event must
-fire when the provider returns, before tools, as written.
+* Batch and streaming emit exactly once per successful provider call.
+* It fires after a streamed `MessageStreamCompleted` and before filtering or
+  executing tool calls, so a later malformed response or tool failure does not
+  erase observed usage.
+* Missing provider totals normalise to zero, matching `Budget.within`; total is
+  the sum of the normalised input and output counts.
+* Finish reason uses Effect AI's normalised `Response.FinishReason`, whose
+  absent-provider value is `"unknown"`.
+* `/observability` classifies it as `ai.model`, includes usage/finish attributes,
+  and records `agent_model_tokens` by input/output direction.
+* `test/ModelUsageEvent.test.ts` covers batch/stream parity, ordering, wire
+  round-trip, and model-success followed by tool-failure.
 
 See [PLAN.md](../PLAN.md) §33.3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md)
-E8 / AS2 (`/observability` will not invent a token metric). This is §38
-Phase 1 — no other plan owns it.
+E8 / AS2. This closes §38 Phase 1.
 
 ---
 
@@ -2068,7 +2078,7 @@ no host-wide stream, no `SessionHosted` / `SessionUnhosted`, no `FiberMap`.
 `FiberMap` exists in Effect and is unused in `src/`.
 
 Per-session events: [transport.md](./transport.md). Later management SSE
-would plug into [plan-agent-server.md](./plan-agent-server.md) S3–S5, not
+would extend the completed [plan-agent-server.md](./plan-agent-server.md), not
 replace the host. [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E4
 already used `RcMap` for the tree; this section wants `FiberMap` for pumps.
 
@@ -2521,11 +2531,11 @@ implementing it, this is the order. Handoff constraints (non-goals,
 
 I would hand off work in this order:
 
-| Phase  | Work | Status 2026-08-26 | See |
+| Phase  | Work | Status 2026-08-27 | See |
 | ------ | ---- | ----------------- | --- |
-| **0**  | Effect-v4 substitution spikes: ChildProcess tree semantics, PersistedQueue vs `JobStore`, EventLog vs `DeliveryLog` | ChildProcess: done, retain adapter. EventLog: done, retain DeliveryLog. PersistedQueue vs JobStore: **open**. | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md), [plan-durability-hardening.md](./plan-durability-hardening.md) H4b, [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E2/E3/E9 |
-| **1**  | Normalized `ModelCallCompleted` usage event | Not started. Usage exists on `Result.response` only. | [PLAN.md](../PLAN.md) §33.3, [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E8 / AS2. No other plan owns this. |
-| **2**  | Idempotent asynchronous `session.submit()` admission | Not started. Store `claim({ key })` is the durable half. | [opencode-completion-plan.md](./opencode-completion-plan.md) §2, [PLAN.md](../PLAN.md) §11.1, [transport.md](./transport.md), [WORKFLOW.md](../WORKFLOW.md) (`DurableAgent.submit` is the wrong target) |
+| **0**  | Effect-v4 substitution spikes: ChildProcess tree semantics, PersistedQueue vs `JobStore`, EventLog vs `DeliveryLog` | **Done.** Retain the sandbox adapter; retain DeliveryLog; retain `JobStore` for due-time work and use PersistedQueue for immediate handoff. | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md), [evaluation-persisted-queue-job-store.md](./evaluation-persisted-queue-job-store.md), [plan-durability-hardening.md](./plan-durability-hardening.md) H4b |
+| **1**  | Normalized `ModelCallCompleted` usage event | **Done.** One event per successful provider call, before tools, with batch/stream, wire, and later-tool-failure coverage. `/observability` now records token metrics. | `src/AgentEvent.ts`, `src/AgentTurn.ts`, `test/ModelUsageEvent.test.ts` |
+| **2**  | Idempotent asynchronous `session.submit()` admission | **Lifecycle prerequisite landed 2026-08-28.** The submission fiber now owns release and waits for registration before starting. Public submit/await remains blocked on explicit result/idempotency retention bounds; store `claim({ key })` is only the durable running half. | [opencode-completion-plan.md](./opencode-completion-plan.md) §2, [PLAN.md](../PLAN.md) §11.1, [transport.md](./transport.md), [WORKFLOW.md](../WORKFLOW.md) (`DurableAgent.submit` is the wrong target) |
 | **3**  | `SessionInbox` over Effect `PersistedQueue` | Not started. Depends on 2. Deliver via `AgentClient`, not `DurableAgent.submit`. | [audit-effect-ecosystem.md](./audit-effect-ecosystem.md) E3, [WORKFLOW.md](../WORKFLOW.md) (`DurableQueue` is the wait-for-result cousin) |
 | **4**  | `AgentSessionHost.events`, supervised with `FiberMap<SessionId>` | Not started. Host events are per-session. | [transport.md](./transport.md), [plan-agent-server.md](./plan-agent-server.md) |
 | **5**  | Pure `SessionProjection` + memory `SessionDirectory` | Not started. | Do not merge with [plan-session-tree.md](./plan-session-tree.md) or `DurableSessionStore`. |
@@ -2534,8 +2544,8 @@ I would hand off work in this order:
 | **8**  | `ProcessManager` over Effect `ChildProcessSpawner` | Not started. Local backend should reuse sandbox tree-kill, not ChildProcess, until §11 gaps close. | [evaluation-sandbox-effect-platform.md](./evaluation-sandbox-effect-platform.md). Not [plan-shell-tool.md](./plan-shell-tool.md). Not [ADDITIONAL.md](../ADDITIONAL.md) §4. |
 | **9**  | Process metadata/output persistence + local provider | Not started. Depends on 7–8. | |
 | **10** | Process-exit → SessionInbox example/helper | Not started. Composition, not a ProcessManager→Session coupling. | Depends on 3 and 8. |
-| **11** | Refactor scheduling `JobStore` onto `PersistedQueue` where semantics match | Not started. Immediate handoff only; keep due-time on `JobStore` unless proven otherwise. | [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) P1, §20 of this file |
-| **12** | Management HTTP routes + host/global SSE projection | Not started. HTTP already has per-session SSE. | [plan-agent-server.md](./plan-agent-server.md) S3–S5, [transport.md](./transport.md) |
+| **11** | Refactor scheduling `JobStore` onto `PersistedQueue` where semantics match | **Closed without a refactor.** No current scheduling path is immediate-only; the public job shape includes arbitrary delay. Keep due-time on `JobStore`. | [evaluation-persisted-queue-job-store.md](./evaluation-persisted-queue-job-store.md), §20 of this file |
+| **12** | Management HTTP routes + host/global SSE projection | Partly done: read-only `/inventory` exists and S1–S5 are complete; host/global SSE does not. HTTP already has per-session SSE. | [plan-agent-server.md](./plan-agent-server.md), [transport.md](./transport.md) |
 | **13** | Documented recipes for local / Workflow / ClusterCron monitors and Workers | Not started. | [WORKFLOW.md](../WORKFLOW.md), [POST-ROADMAP-PLAN.md](../POST-ROADMAP-PLAN.md) |
 | **14** | Only then decide whether repeated usage has earned `/monitor` | Correct sequencing. Do not start here. | |
 
@@ -2773,6 +2783,31 @@ same requestId + different request
 ```
 
 Without that, reliable ping-back is impossible.
+
+**Implementation finding (2026-08-28).** The current `prompt` waiter used to
+own both interruption and session release. That makes asynchronous admission
+unsafe: returning the receipt would abandon the only release finalizer. The
+internal lifecycle prerequisite is now landed. A registration latch prevents
+the child from beginning before `activeFiber` is installed, and the child owns
+release; blocking `prompt` still interrupts its child when its caller is
+interrupted. Existing interruption, close-order, client and durable tests stay
+green.
+
+The public API is still deliberately not added. `submit` plus later `await`
+requires retaining outcomes, and request-id idempotency requires retaining the
+request fingerprint and receipt. The brief does not say:
+
+- how many completed outcomes/keys a local session retains;
+- when an entry may be evicted, and what `await` returns afterwards;
+- whether request-id identity lasts only while running, until queue ACK, or for
+  the logical session's lifetime; or
+- how the in-memory bound corresponds to durable SQL retention.
+
+An unbounded map violates the remote-input invariant, while an arbitrary LRU
+can turn a retry into a second submission. `DurableSessionStore.claim({ key })`
+does not close this: the key is cleared at finish, so a queue retry after finish
+can submit twice. Resolve the retention contract before exporting `submit` or
+building `SessionInbox`.
 
 ### 3. `SessionInbox` should be boring
 

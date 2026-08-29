@@ -80,6 +80,7 @@ export const attributeNames = Telemetry.attributeNames
  */
 const spanNameFor = (tag: string): string => {
   if (tag.startsWith("ToolCall")) return "ai.tool"
+  if (tag.startsWith("ModelCall")) return "ai.model"
   if (tag.startsWith("Message")) return "ai.model"
   if (tag.startsWith("Session")) return "agent.session"
   if (tag.startsWith("Submission")) return "agent.submission"
@@ -179,6 +180,19 @@ export const describe = (
       if (policy.modelText) attributes[attributeNames.modelText] = redact(event.delta)
       break
     }
+    case "ModelCallCompleted": {
+      attributes[attributeNames.modelFinishReason] = event.finishReason
+      attributes[attributeNames.modelInputTokens] = event.usage.inputTokens
+      attributes[attributeNames.modelOutputTokens] = event.usage.outputTokens
+      attributes[attributeNames.modelTotalTokens] = event.usage.totalTokens
+      break
+    }
+    case "UnknownEvent": {
+      // A newer peer's event. The tag it arrived with is the only thing that
+      // distinguishes one from another, so it is the one attribute worth keeping.
+      attributes[attributeNames.eventOriginalTag] = event.originalTag
+      break
+    }
     default:
       break
   }
@@ -236,22 +250,25 @@ export const trace = (
  * failure mode, attributed by the dimension you would group by.
  *
  * Names follow the attribute vocabulary above: `agent_*`, snake_case, with the
- * unit in the name where there is one. Nothing here is derived from a new
- * event -- every instrument reads the public stream `trace` already consumes.
- *
- * **What is deliberately absent: tokens.** No event carries model usage, so a
- * token counter would have to be invented rather than observed. Adding one
- * means adding usage to the event stream first, which is a change to the
- * kernel's vocabulary and belongs in its own decision, not smuggled in here.
+ * unit in the name where there is one. Every instrument reads the public stream
+ * `trace` already consumes. `ModelCallCompleted` now supplies provider-neutral
+ * usage, so tokens are observed here rather than reconstructed from results.
  */
 export const metricNames = {
   modelAttempts: "agent_model_attempts",
+  modelTokens: "agent_model_tokens",
   turns: "agent_turns",
   turnsPerRun: "agent_turns_per_run",
   toolCalls: "agent_tool_calls",
   toolDuration: "agent_tool_duration_ms",
   pendingInput: "agent_pending_input"
 } as const
+
+/** Input and output tokens reported by successful model calls. */
+const modelTokens = Metric.counter(metricNames.modelTokens, {
+  description: "Model tokens used, attributed by input or output direction",
+  incremental: true
+})
 
 /** Turns executed, across every run. */
 const turnsTotal = Metric.counter(metricNames.turns, {
@@ -331,6 +348,7 @@ export const instruments = {
    * rest.
    */
   modelAttempts: Telemetry.modelAttempts,
+  modelTokens,
   turns: turnsTotal,
   turnsPerRun,
   toolCalls,
@@ -390,6 +408,17 @@ export const metrics = (
     return yield* Stream.runForEach(events, (envelope) => {
       const event = envelope.event
       switch (event._tag) {
+        case "ModelCallCompleted":
+          return Effect.all([
+            Metric.update(
+              withBase(modelTokens, { direction: "input" }),
+              event.usage.inputTokens
+            ),
+            Metric.update(
+              withBase(modelTokens, { direction: "output" }),
+              event.usage.outputTokens
+            )
+          ], { discard: true })
         case "TurnCompleted":
           return Metric.update(withBase(turnsTotal), 1)
         case "RunCompleted":
@@ -428,7 +457,15 @@ export const metrics = (
         case "FollowUpQueued":
           outstanding = outstanding + 1
           return Metric.update(withBase(pendingInput), outstanding)
+        // Steering is drained in a batch: one `SteeringApplied` reports the
+        // whole batch through `count`, so decrementing by one leaks a steer per
+        // extra input in the batch and the gauge never returns to zero -- which
+        // is precisely the signal this instrument uses to mean "input was
+        // accepted and then dropped". A follow-up is applied singly and carries
+        // no count.
         case "SteeringApplied":
+          outstanding = Math.max(0, outstanding - event.count)
+          return Metric.update(withBase(pendingInput), outstanding)
         case "FollowUpApplied":
           outstanding = Math.max(0, outstanding - 1)
           return Metric.update(withBase(pendingInput), outstanding)

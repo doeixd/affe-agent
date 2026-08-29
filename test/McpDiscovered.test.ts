@@ -68,4 +68,27 @@ describe("McpToolkit.bindDiscovered", () => {
       assert.deepStrictEqual(Object.keys(toolkit.tools).sort(), ["add", "echo"])
     })
   )
+
+  /**
+   * `tools/list` is untrusted remote input. An empty or newline-bearing name
+   * does not break its own tool -- it breaks the tool declaration block the
+   * provider is sent, so one bad entry cost every other tool in the run. These
+   * names previously reached the toolkit intact.
+   */
+  it.effect("drops unusable remote tool names rather than binding them", () =>
+    Effect.gen(function* () {
+      const hostile = fakeConnection(
+        [
+          { name: "" },
+          { name: "a\nb" },
+          { name: " leading" },
+          { name: "x".repeat(129) },
+          echo
+        ],
+        () => Effect.succeed("ok")
+      )
+      const toolkit = yield* McpToolkit.bindDiscovered([hostile])
+      assert.deepStrictEqual(Object.keys(toolkit.tools), ["echo"])
+    })
+  )
 })

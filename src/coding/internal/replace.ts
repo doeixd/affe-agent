@@ -8,7 +8,7 @@
  * Upstream credits the strategies to Cline's diff-apply evals and Gemini CLI's
  * `editCorrector.ts`.
  *
- * Faithful to upstream: all nine strategies, their order, the 0.65 anchor
+ * Faithful to upstream: the strategies, their order, the 0.65 anchor
  * similarity threshold, the 0.5 context-aware middle-line threshold, the
  * 25% block-size tolerance, the driver's fall-through-on-ambiguity rule and
  * both proportionality-guard formulas.
@@ -35,8 +35,8 @@
  *
  * The design in one sentence: **a strategy may only ever point at a span of
  * text that already exists in the file, and the driver splices that exact span
- * out.** Fuzzy matching selects; it never synthesizes. That is what makes nine
- * increasingly forgiving strategies safe to chain -- the worst a bad strategy
+ * out.** Fuzzy matching selects; it never synthesizes. That is what makes a
+ * chain of increasingly forgiving strategies safe -- the worst a bad strategy
  * can do is select the wrong region, which the uniqueness and proportionality
  * checks then refuse.
  *
@@ -67,7 +67,6 @@ export type StrategyName =
   | "escape-normalized"
   | "trimmed-boundary"
   | "context-aware"
-  | "multi-occurrence"
 
 /**
  * The outcome of a replacement attempt.
@@ -163,6 +162,53 @@ const blockOf = (
   withNewline: boolean
 ): string =>
   withNewline ? sliceLines(content, lines, start, start + count) : coreOf(lines, start, count)
+
+/**
+ * The trimmed lines, plus where each distinct trimmed line occurs.
+ *
+ * The two anchored strategies used to answer "the first line at or after `k`
+ * whose trim equals the closing anchor" by scanning forward from every opening
+ * anchor, and a scan that finds nothing runs to the end of the file. A find
+ * whose first line is common and whose last line is absent -- `}` opening,
+ * a mistyped closing line -- therefore cost one full scan per `}` in the file:
+ * measured at **2.2 seconds for 12,000 lines**, and quadratic from there. That
+ * is the same failure the glob engine was rewritten to remove, in the same
+ * uninterruptible synchronous position: no `Effect.timeout` reaches it.
+ *
+ * Occurrences are recorded in ascending order, so the same question is a
+ * binary search. Built once per strategy call, which is O(lines), and the
+ * `trim()` per line is paid once instead of once per candidate pair.
+ */
+interface LineIndex {
+  readonly trimmed: ReadonlyArray<string>
+  readonly occurrences: ReadonlyMap<string, ReadonlyArray<number>>
+}
+
+const indexLines = (lines: ReadonlyArray<string>): LineIndex => {
+  const trimmed = lines.map((line) => line.trim())
+  const occurrences = new Map<string, Array<number>>()
+  for (let i = 0; i < trimmed.length; i++) {
+    const key = trimmed[i] ?? ""
+    const at = occurrences.get(key)
+    if (at === undefined) occurrences.set(key, [i])
+    else at.push(i)
+  }
+  return { trimmed, occurrences }
+}
+
+/** The first index at or after `from` whose trimmed line is `anchor`. */
+const firstAt = (index: LineIndex, anchor: string, from: number): number | undefined => {
+  const at = index.occurrences.get(anchor)
+  if (at === undefined) return undefined
+  let low = 0
+  let high = at.length
+  while (low < high) {
+    const mid = (low + high) >>> 1
+    if ((at[mid] ?? 0) < from) low = mid + 1
+    else high = mid
+  }
+  return at[low]
+}
 
 /** Levenshtein distance, two-row DP. Used only to score block middles. */
 const levenshtein = (a: string, b: string): number => {
@@ -284,15 +330,13 @@ const BlockAnchorReplacer: Replacer = function*(content, find) {
   const lastAnchor = (search[search.length - 1] ?? "").trim()
   const tolerance = Math.max(1, Math.floor(search.length * 0.25))
 
+  const index = indexLines(lines)
   const candidates: Array<{ readonly start: number; readonly end: number }> = []
-  for (let start = 0; start < lines.length; start++) {
-    if ((lines[start] ?? "").trim() !== firstAnchor) continue
-    for (let end = start + 2; end < lines.length; end++) {
-      if ((lines[end] ?? "").trim() !== lastAnchor) continue
-      // The first close wins: a later one would swallow an inner block.
-      if (Math.abs(end - start + 1 - search.length) <= tolerance) candidates.push({ start, end })
-      break
-    }
+  for (const start of index.occurrences.get(firstAnchor) ?? []) {
+    // The first close wins: a later one would swallow an inner block.
+    const end = firstAt(index, lastAnchor, start + 2)
+    if (end === undefined) continue
+    if (Math.abs(end - start + 1 - search.length) <= tolerance) candidates.push({ start, end })
   }
   if (candidates.length === 0) return
 
@@ -314,7 +358,7 @@ const BlockAnchorReplacer: Replacer = function*(content, find) {
     if (comparable > 0) {
       let total = 0
       for (let k = 1; k < search.length - 1 && k < size - 1; k++) {
-        const found = (lines[candidate.start + k] ?? "").trim()
+        const found = index.trimmed[candidate.start + k] ?? ""
         const wanted = (search[k] ?? "").trim()
         const longest = Math.max(found.length, wanted.length)
         // A pair of blank lines earns nothing rather than a free point, and
@@ -442,50 +486,49 @@ const ContextAwareReplacer: Replacer = function*(content, find) {
   const firstAnchor = (search[0] ?? "").trim()
   const lastAnchor = (search[search.length - 1] ?? "").trim()
 
-  for (let start = 0; start < lines.length; start++) {
-    if ((lines[start] ?? "").trim() !== firstAnchor) continue
-    for (let end = start + 2; end < lines.length; end++) {
-      if ((lines[end] ?? "").trim() !== lastAnchor) continue
-      const size = end - start + 1
-      if (size === search.length) {
-        let comparable = 0
-        let same = 0
-        for (let k = 1; k < size - 1; k++) {
-          const found = (lines[start + k] ?? "").trim()
-          const wanted = (search[k] ?? "").trim()
-          // A pair counts when either side has content, so a line the model
-          // dropped still tells against the block.
-          if (found.length > 0 || wanted.length > 0) {
-            comparable++
-            if (found === wanted) same++
-          }
-        }
-        if (comparable === 0 || same / comparable >= CONTEXT_MIDDLE_THRESHOLD) {
-          yield blockOf(content, lines, start, size, whole)
-        }
+  // Indexed for the same reason as `BlockAnchorReplacer`: the forward scan for
+  // a closing anchor that is not there is one full pass per opening anchor.
+  const index = indexLines(lines)
+  for (const start of index.occurrences.get(firstAnchor) ?? []) {
+    // Only the first close is considered for this opening anchor.
+    const end = firstAt(index, lastAnchor, start + 2)
+    if (end === undefined) continue
+    const size = end - start + 1
+    if (size !== search.length) continue
+    let comparable = 0
+    let same = 0
+    for (let k = 1; k < size - 1; k++) {
+      const found = index.trimmed[start + k] ?? ""
+      const wanted = (search[k] ?? "").trim()
+      // A pair counts when either side has content, so a line the model
+      // dropped still tells against the block.
+      if (found.length > 0 || wanted.length > 0) {
+        comparable++
+        if (found === wanted) same++
       }
-      // Only the first close is considered for this opening anchor.
-      break
+    }
+    if (comparable === 0 || same / comparable >= CONTEXT_MIDDLE_THRESHOLD) {
+      yield blockOf(content, lines, start, size, whole)
     }
   }
 }
 
 /**
- * 9. Last resort, and only useful under `replaceAll`: the exact text, offered
- * once per occurrence so the driver's replace-all path can fire on text that
- * the strict uniqueness check would otherwise have rejected as ambiguous.
+ * Eight strategies, not upstream's nine.
+ *
+ * Upstream's ninth, `MultiOccurrenceReplacer`, yields the exact `find` once per
+ * occurrence, so that its replace-all path can fire on text a strict uniqueness
+ * check would have called ambiguous. It was ported with the rest and then found
+ * to be unable to produce an answer the chain did not already have: this
+ * driver walks *every* occurrence of every candidate (`while (index !== -1 &&
+ * locations.size < 2)`) and collects the distinct spellings in `texts`, so the
+ * first strategy -- `simple`, yielding `find` once -- already reaches exactly
+ * the same `locations` and the same single-element `texts` that repeating the
+ * yield would. Running it ninth could only re-derive a decision `simple` made
+ * first. Keeping a strategy that cannot change an outcome would misrepresent
+ * the chain, so it is gone rather than registered-but-dead; the port's fidelity
+ * note above still records that it came from upstream.
  */
-const MultiOccurrenceReplacer: Replacer = function*(content, find) {
-  if (find.length === 0) return
-  let from = 0
-  for (;;) {
-    const index = content.indexOf(find, from)
-    if (index === -1) return
-    yield find
-    from = index + find.length
-  }
-}
-
 const strategies: ReadonlyArray<readonly [StrategyName, Replacer]> = [
   ["simple", SimpleReplacer],
   ["line-trimmed", LineTrimmedReplacer],
@@ -494,8 +537,7 @@ const strategies: ReadonlyArray<readonly [StrategyName, Replacer]> = [
   ["indentation-flexible", IndentationFlexibleReplacer],
   ["escape-normalized", EscapeNormalizedReplacer],
   ["trimmed-boundary", TrimmedBoundaryReplacer],
-  ["context-aware", ContextAwareReplacer],
-  ["multi-occurrence", MultiOccurrenceReplacer]
+  ["context-aware", ContextAwareReplacer]
 ]
 
 /** The strategies in the order the driver tries them. Exported for tests. */
@@ -518,8 +560,7 @@ export const strategyByName: Readonly<Record<StrategyName, Replacer>> = {
   "indentation-flexible": IndentationFlexibleReplacer,
   "escape-normalized": EscapeNormalizedReplacer,
   "trimmed-boundary": TrimmedBoundaryReplacer,
-  "context-aware": ContextAwareReplacer,
-  "multi-occurrence": MultiOccurrenceReplacer
+  "context-aware": ContextAwareReplacer
 }
 
 /** The candidates a strategy offers for `find`, in order. */
@@ -573,6 +614,22 @@ export const replace = (
 ): Replacement => {
   if (find.length === 0) return { _tag: "NotFound" }
   let found = false
+  /**
+   * The first oversized span anyone offered, kept only as the answer of last
+   * resort.
+   *
+   * This used to return immediately, so one disproportionate candidate ended
+   * the whole call -- including when the *same* strategy had also offered a
+   * unique, exactly-sized candidate a moment later. A loose strategy that
+   * latches onto the wrong anchor and then onto the right one is the ordinary
+   * case, not a rare one, and refusing the good answer because a bad one was
+   * generated first is the guard punishing the wrong party. A disproportionate
+   * candidate is *skipped* now: it contributes no location and no spelling, so
+   * it can neither be replaced nor make the place look ambiguous. Only when
+   * nothing usable survives anywhere in the chain does it become the reported
+   * outcome, which is the case the guard was written for.
+   */
+  let oversized: { readonly matched: string; readonly strategy: StrategyName } | undefined
 
   for (const [strategy, replacer] of strategies) {
     /**
@@ -605,18 +662,18 @@ export const replace = (
      * One entry per candidate, so this stays linear.
      */
     const texts = new Set<string>()
-    let disproportionate: string | undefined
 
     for (const candidate of replacer(content, find)) {
       if (candidate.length === 0) continue
       let index = content.indexOf(candidate)
       // A strategy may only point at text that is really there.
       if (index === -1) continue
+      if (isDisproportionate(candidate, find)) {
+        if (oversized === undefined) oversized = { matched: candidate, strategy }
+        continue
+      }
       found = true
       texts.add(candidate)
-      if (disproportionate === undefined && isDisproportionate(candidate, find)) {
-        disproportionate = candidate
-      }
       // Every occurrence, not just the first: a candidate appearing twice is
       // two places, which is exactly the ambiguity being looked for. Once two
       // are known there is nothing left to learn, so later candidates are
@@ -627,9 +684,6 @@ export const replace = (
       }
     }
 
-    if (disproportionate !== undefined) {
-      return { _tag: "Disproportionate", matched: disproportionate, strategy }
-    }
     if (locations.size === 0) continue
 
     if (replaceAll) {
@@ -666,5 +720,11 @@ export const replace = (
     }
   }
 
+  // Every candidate the chain produced was oversized: the guard fired, and
+  // saying so is more useful to the model than "not found" would be. An
+  // ordinary ambiguity outranks it -- `found` means something usable was seen.
+  if (!found && oversized !== undefined) {
+    return { _tag: "Disproportionate", matched: oversized.matched, strategy: oversized.strategy }
+  }
   return found ? { _tag: "Ambiguous" } : { _tag: "NotFound" }
 }

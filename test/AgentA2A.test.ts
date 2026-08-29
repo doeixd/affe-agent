@@ -5,15 +5,17 @@ import {
   type Message,
   type Task
 } from "@a2a-js/sdk"
-import { ClientFactory } from "@a2a-js/sdk/client"
+import { ClientFactory, RestTransportFactory } from "@a2a-js/sdk/client"
 import { assert, describe, it } from "@effect/vitest"
 import {
   Deferred,
+  Duration,
   Effect,
   Layer,
   Option,
   Queue,
   Ref,
+  Schema,
   Stream
 } from "effect"
 import { Prompt } from "effect/unstable/ai"
@@ -45,6 +47,21 @@ const collect = <A>(iterable: AsyncIterable<A>) =>
     Stream.runCollect,
     Effect.map((values) => Array.from(values))
   )
+
+const restClient = (url: string) =>
+  new ClientFactory({
+    transports: [new RestTransportFactory()],
+    preferredTransports: ["HTTP+JSON"]
+  }).createFromUrl(url)
+
+const RestErrorBody = Schema.Struct({
+  error: Schema.Struct({
+    code: Schema.Number,
+    status: Schema.String,
+    message: Schema.String,
+    details: Schema.Array(Schema.Unknown)
+  })
+})
 
 const promptText = (prompt: Prompt.Prompt): string => {
   const message = prompt.content[prompt.content.length - 1]
@@ -85,6 +102,122 @@ const taskText = (task: Task): string => {
   return content.value
 }
 
+/**
+ * Open one `message:stream` response and expose its frames as they reach the
+ * socket.
+ *
+ * Raw bytes rather than the official client, because the thing under test is
+ * an SSE *comment*, and every conforming parser -- the official client's
+ * included -- discards it before an application could observe it. That the
+ * client is undisturbed by these frames is what the other REST tests in this
+ * file assert; this one has to see the wire.
+ */
+const sseFrames = Effect.fn("AgentA2A.test.sseFrames")(function* (
+  url: string,
+  messageId: string,
+  text: string
+) {
+  // One controller owns the connection. Aborting it on scope close is what
+  // ends a read the server would otherwise keep pending forever -- a
+  // keep-alive stream has no natural end -- and a `ReadableStreamDefaultReader`
+  // cannot be interrupted by a fibre, only released by its source.
+  const controller = new AbortController()
+  yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()))
+  const response = yield* Effect.tryPromise({
+    try: () =>
+    fetch(`${url}/a2a/message:stream`, {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        "A2A-Version": "1.0",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: {
+          messageId,
+          role: "ROLE_USER",
+          parts: [{ text, mediaType: "text/plain" }]
+        }
+      })
+    }),
+    catch: (cause) =>
+      new AgentA2A.AgentA2ATransportError({ detail: String(cause) })
+  })
+  assert.strictEqual(response.status, 200)
+  const body = response.body
+  if (body === null) {
+    return yield* Effect.die(new Error("expected a streaming response body"))
+  }
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+
+  type Read =
+    | { readonly _tag: "frame"; readonly text: string }
+    | { readonly _tag: "end" }
+    | { readonly _tag: "timeout" }
+
+  /**
+   * At most one read is ever pending. A reader queues concurrent reads and
+   * answers them in order, so a read abandoned by a timeout would still
+   * consume the next chunk and hand it to nobody; keeping the one promise and
+   * racing it again is what makes a timed-out wait resumable.
+   */
+  let pending: Promise<Read> | undefined
+  const next = (within: Duration.Duration): Effect.Effect<Read> =>
+    Effect.promise(() => {
+      pending ??= reader.read().then(
+        (chunk): Read =>
+          chunk.done
+            ? { _tag: "end" }
+            : { _tag: "frame", text: decoder.decode(chunk.value) },
+        // An abort at teardown rejects the read; nothing is waiting by then.
+        (): Read => ({ _tag: "end" })
+      )
+      const read = pending.then((result) => {
+        pending = undefined
+        return result
+      })
+      const timer = new Promise<Read>((resolve) =>
+        setTimeout(() => resolve({ _tag: "timeout" }), Duration.toMillis(within))
+      )
+      return Promise.race([read, timer])
+    })
+
+  return {
+    next,
+    /**
+     * Close the connection now, from the client side.
+     *
+     * The server layer is provided *inside* the test's scope, so it tears down
+     * before this helper's finalizer runs; a connection still open at that
+     * moment has its response fibre interrupted, and that interruption
+     * surfaces as the test's own failure. A test that leaves the stream open
+     * on purpose ends it here first. The finalizer stays as the backstop.
+     */
+    close: Effect.sync(() => controller.abort()),
+    /**
+     * Read frames until `marker` has been seen, returning everything read, or
+     * fail naming what *was* seen. Chunk boundaries do not line up with frame
+     * boundaries -- one read can carry two events, or half of one -- so this
+     * matches on the accumulated text rather than counting reads.
+     */
+    drainUntil: (marker: string, within: Duration.Duration) =>
+      Effect.gen(function* () {
+        let seen = ""
+        while (!seen.includes(marker)) {
+          const read = yield* next(within)
+          if (read._tag !== "frame") {
+            return yield* Effect.die(
+              new Error(`${read._tag} before ${marker}; saw: ${JSON.stringify(seen)}`)
+            )
+          }
+          seen += read.text
+        }
+        return seen
+      })
+  }
+})
+
 const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
   fixtureOptions?: {
     readonly blockFirstPrompt?: boolean
@@ -94,6 +227,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     readonly failResumedRun?: boolean
     /** With elicitFirstPrompt: the resumed run asks a second question. */
     readonly askAgain?: boolean
+    /** Passed straight through to `serverLayer`; otherwise its own default. */
+    readonly sseHeartbeat?: Duration.Duration | false
   }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
@@ -110,6 +245,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
   const waiting = yield* Ref.make(new Map<string, Elicitation.Request>())
   const lastText = yield* Ref.make<string | undefined>(undefined)
   const eventQueue = yield* Queue.unbounded<AgentProtocol.AgentEventEnvelope>()
+  /** Every addressed tenant the principal resolver was shown, in order. */
+  const resolvedTenants = yield* Ref.make<ReadonlyArray<string | undefined>>([])
 
   const envelope = (sessionId: string) => {
     let sequence = 0
@@ -310,12 +447,36 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     })
   )
 
-  const Host = AgentSessionHost.Tag<{ readonly subject: string }>("test/AgentA2A/host")
+  const Host = AgentSessionHost.Tag<{
+    readonly subject: string
+    readonly tenant: string | undefined
+  }>("test/AgentA2A/host")
   const host = AgentSessionHost.layer(Host, {
     authorization: { authorize: () => Effect.void },
     principal: {
-      resolve: ({ headers }) =>
-        Effect.succeed({ subject: headers.authorization ?? "anonymous" })
+      // The tenant a principal may act in is a header here; a real deployment
+      // would read it from the token. What matters is that the *addressed*
+      // tenant reaches the resolver at all, so the join can be made.
+      resolve: ({ headers, operation, tenant }) =>
+        Effect.flatMap(
+          Ref.update(resolvedTenants, (all) => [...all, tenant]),
+          () => {
+            // A principal with no `x-tenant` is unscoped and may act in any
+            // tenant, which is what the rest of this suite's requests are.
+            // A scoped one is refused the moment the addressed tenant is not
+            // its own -- the join this test exists to prove.
+            const owned = headers["x-tenant"]
+            return tenant !== undefined && owned !== undefined &&
+                tenant !== owned
+              ? Effect.fail(
+                new AgentProtocol.AgentUnauthorizedError({ operation })
+              )
+              : Effect.succeed({
+                subject: headers.authorization ?? "anonymous",
+                tenant: owned
+              })
+          }
+        )
     },
     maxSessions: 4,
     maxRequestsPerSession: 16
@@ -337,6 +498,9 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
       }]
     },
     principal: { subject: (principal) => principal.subject },
+    ...(fixtureOptions?.sseHeartbeat === undefined
+      ? {}
+      : { sseHeartbeat: fixtureOptions.sseHeartbeat }),
     session: {
       resolve: ({ principal, contextId }) =>
         Effect.succeed(
@@ -365,7 +529,17 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     )
   )
 
-  return { server, opened, released, calls, promptStarted, asked }
+  return {
+    server,
+    opened,
+    released,
+    calls,
+    promptStarted,
+    /** Releases a `blockFirstPrompt` run, so a test can end it cleanly. */
+    promptInterrupted,
+    asked,
+    resolvedTenants
+  }
 })
 
 describe("AgentA2A v1 server", () => {
@@ -451,6 +625,314 @@ describe("AgentA2A v1 server", () => {
         `${opened[0]}:1:first`,
         `${opened[0]}:2:second`
       ])
+      assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("serves send, get, list, and stream through the official REST client", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture()
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const url = HttpServer.formatAddress(server.address)
+          const client = yield* promise(() => restClient(url))
+          const card = yield* promise(() => client.getAgentCard())
+
+          assert.strictEqual(client.protocolVersion, "1.0")
+          assert.deepStrictEqual(
+            card.supportedInterfaces.map((entry) => entry.protocolBinding),
+            ["JSONRPC", "HTTP+JSON"]
+          )
+
+          const sent = yield* promise(() =>
+            client.sendMessage({
+              tenant: "tenant-a",
+              message: userMessage("rest-message", "", "rest"),
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in sent)) {
+            assert.fail("expected REST SendMessage to return a task")
+          }
+          assert.strictEqual(
+            sent.status?.state,
+            TaskState.TASK_STATE_COMPLETED
+          )
+          assert.strictEqual(
+            taskText(sent),
+            `a2a:anonymous:${sent.contextId}:1:rest`
+          )
+
+          const stored = yield* promise(() =>
+            client.getTask({
+              tenant: "tenant-a",
+              id: sent.id,
+              historyLength: 1
+            })
+          )
+          assert.strictEqual(stored.id, sent.id)
+          assert.strictEqual(stored.history.length, 1)
+
+          const listed = yield* promise(() =>
+            client.listTasks({
+              tenant: "tenant-a",
+              contextId: sent.contextId,
+              status: TaskState.TASK_STATE_COMPLETED,
+              pageToken: "",
+              statusTimestampAfter: undefined,
+              includeArtifacts: true
+            })
+          )
+          assert.deepStrictEqual(listed.tasks.map((task) => task.id), [sent.id])
+          const listedTask = listed.tasks[0]
+          if (listedTask === undefined) {
+            assert.fail("expected the REST task in the list")
+          }
+          assert.strictEqual(taskText(listedTask), taskText(sent))
+
+          const events = yield* collect(
+            client.sendMessageStream({
+              tenant: "tenant-a",
+              message: userMessage("rest-stream", sent.contextId, "stream"),
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          assert.deepStrictEqual(
+            events.map((event) => event.payload?.$case),
+            ["task", "statusUpdate", "artifactUpdate", "statusUpdate"]
+          )
+          const completed = events[3]?.payload
+          if (completed?.$case !== "statusUpdate") {
+            assert.fail("expected the REST stream to complete")
+          }
+          assert.strictEqual(
+            completed.value.status?.state,
+            TaskState.TASK_STATE_COMPLETED
+          )
+        }).pipe(Effect.provide(fixture.server))
+      )
+
+      const opened = yield* Ref.get(fixture.opened)
+      assert.strictEqual(opened.length, 1)
+      assert.deepStrictEqual(yield* Ref.get(fixture.calls), [
+        `${opened[0]}:1:rest`,
+        `${opened[0]}:2:stream`
+      ])
+      assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("returns protocol-shaped REST errors for invalid requests", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture()
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const url = HttpServer.formatAddress(server.address)
+
+          const malformed = yield* promise(() =>
+            fetch(`${url}/a2a/message:send`, {
+              method: "POST",
+              headers: {
+                "A2A-Version": "1.0",
+                "Content-Type": "application/json"
+              },
+              body: "{}"
+            })
+          )
+          assert.strictEqual(malformed.status, 400)
+          assert.strictEqual(
+            malformed.headers.get("content-type"),
+            "application/a2a+json"
+          )
+          const malformedBody = Schema.decodeUnknownSync(RestErrorBody)(
+            yield* promise(() => malformed.json())
+          )
+          assert.strictEqual(malformedBody.error.status, "INVALID_ARGUMENT")
+          assert.include(malformedBody.error.message, "message is required")
+
+          const unsupportedContent = yield* promise(() =>
+            fetch(`${url}/a2a/message:send`, {
+              method: "POST",
+              headers: {
+                "A2A-Version": "1.0",
+                "Content-Type": "text/plain"
+              },
+              body: "{}"
+            })
+          )
+          assert.strictEqual(unsupportedContent.status, 400)
+          const unsupportedBody = Schema.decodeUnknownSync(RestErrorBody)(
+            yield* promise(() => unsupportedContent.json())
+          )
+          assert.strictEqual(unsupportedBody.error.status, "INVALID_ARGUMENT")
+          assert.include(unsupportedBody.error.message, "Unsupported Content-Type")
+
+          const wrongVersion = yield* promise(() =>
+            fetch(`${url}/a2a/tasks/missing`, {
+              headers: { "A2A-Version": "9.9" }
+            })
+          )
+          assert.strictEqual(wrongVersion.status, 400)
+          const versionBody = Schema.decodeUnknownSync(RestErrorBody)(
+            yield* promise(() => wrongVersion.json())
+          )
+          assert.strictEqual(versionBody.error.status, "FAILED_PRECONDITION")
+          assert.include(versionBody.error.message, "9.9")
+
+          const missing = yield* promise(() =>
+            fetch(`${url}/a2a/tasks/missing`, {
+              headers: { "A2A-Version": "1.0" }
+            })
+          )
+          assert.strictEqual(missing.status, 404)
+          const missingBody = Schema.decodeUnknownSync(RestErrorBody)(
+            yield* promise(() => missing.json())
+          )
+          assert.strictEqual(missingBody.error.status, "NOT_FOUND")
+          assert.strictEqual(
+            missingBody.error.details[0] !== undefined,
+            true
+          )
+
+          const push = yield* promise(() =>
+            fetch(`${url}/a2a/tasks/missing/pushNotificationConfigs`, {
+              method: "POST",
+              headers: {
+                "A2A-Version": "1.0",
+                "Content-Type": "application/json"
+              },
+              body: "{}"
+            })
+          )
+          assert.strictEqual(push.status, 400)
+          const pushBody = Schema.decodeUnknownSync(RestErrorBody)(
+            yield* promise(() => push.json())
+          )
+          assert.strictEqual(pushBody.error.status, "FAILED_PRECONDITION")
+          assert.include(pushBody.error.message.toLowerCase(), "push notification")
+        }).pipe(Effect.provide(fixture.server))
+      )
+    })
+  )
+
+  it.effect("presents the addressed tenant to the principal resolver", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture()
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const url = HttpServer.formatAddress(server.address)
+
+          const send = (tenantPath: string, owned: string | undefined) =>
+            promise(() =>
+              fetch(`${url}/a2a${tenantPath}/message:send`, {
+                method: "POST",
+                headers: {
+                  "A2A-Version": "1.0",
+                  "Content-Type": "application/json",
+                  ...(owned === undefined ? {} : { "X-Tenant": owned })
+                },
+                body: JSON.stringify({
+                  message: {
+                    messageId: "tenant-1",
+                    role: "ROLE_USER",
+                    content: [{ text: "hello" }]
+                  }
+                })
+              })
+            )
+
+          // A principal that owns "acme" reaching into "globex" is refused by
+          // the resolver -- which can only happen because the path segment is
+          // now part of the principal decision.
+          const crossTenant = yield* send("/globex", "acme")
+          assert.strictEqual(crossTenant.status, 401)
+          const crossBody = Schema.decodeUnknownSync(RestErrorBody)(
+            yield* promise(() => crossTenant.json())
+          )
+          assert.strictEqual(crossBody.error.code, 401)
+          // The SDK's `toRestErrorBody` names only NOT_FOUND, INTERNAL and
+          // INVALID_ARGUMENT from an HTTP status, so an authentication refusal
+          // is UNKNOWN in its vocabulary. The 401 and the message carry it.
+          assert.strictEqual(crossBody.error.status, "UNKNOWN")
+          assert.include(
+            crossBody.error.message,
+            "Authentication is required to prompt"
+          )
+
+          const matching = yield* send("/acme", "acme")
+          assert.strictEqual(matching.status, 200)
+
+          // The tenantless route addresses no tenant at all, which is not the
+          // same as addressing the tenant named by the empty string.
+          const untenanted = yield* send("", undefined)
+          assert.strictEqual(untenanted.status, 200)
+
+          assert.deepStrictEqual(
+            yield* Ref.get(fixture.resolvedTenants),
+            ["globex", "acme", undefined]
+          )
+        }).pipe(Effect.provide(fixture.server))
+      )
+    })
+  )
+
+  it.effect("cancels an active task through the official REST client", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ blockFirstPrompt: true })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            restClient(HttpServer.formatAddress(server.address))
+          )
+          const submitted = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: userMessage("rest-cancel", "", "block"),
+              configuration: {
+                acceptedOutputModes: ["text/plain"],
+                taskPushNotificationConfig: undefined,
+                returnImmediately: true
+              },
+              metadata: undefined
+            })
+          )
+          if (!("id" in submitted)) {
+            assert.fail("expected REST SendMessage to return a task")
+          }
+          yield* Deferred.await(fixture.promptStarted)
+
+          const canceled = yield* promise(() =>
+            client.cancelTask({
+              tenant: "",
+              id: submitted.id,
+              metadata: undefined
+            })
+          )
+          assert.strictEqual(
+            canceled.status?.state,
+            TaskState.TASK_STATE_CANCELED
+          )
+          const stored = yield* promise(() =>
+            client.getTask({ tenant: "", id: submitted.id })
+          )
+          assert.strictEqual(
+            stored.status?.state,
+            TaskState.TASK_STATE_CANCELED
+          )
+        }).pipe(Effect.provide(fixture.server))
+      )
+
+      const opened = yield* Ref.get(fixture.opened)
       assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
     })
   )
@@ -1055,4 +1537,225 @@ describe("AgentA2A v1 server", () => {
       )
     })
   )
+
+  /**
+   * A push notification config is not status.
+   *
+   * It names a URL this server will later POST task content to, and carries a
+   * `token` and `authentication` block besides. Reading one leaks a
+   * credential; writing one arranges for task content to keep arriving at an
+   * address of the caller's choosing, after the grant that allowed it is gone.
+   *
+   * So all four endpoints authorize as `configure`, not `status`, and the URL
+   * is checked before it is stored.
+   */
+  describe("push notification configuration", () => {
+    it("is a distinct operation from reading status", () => {
+      const operations = AgentProtocol.Operation.literals
+      assert.include(operations, "configure")
+      assert.include(operations, "status")
+      assert.notStrictEqual(
+        "configure",
+        "status",
+        "a read-only grant must not imply the ability to configure delivery"
+      )
+    })
+
+    describe("target validation", () => {
+      const rejected: ReadonlyArray<readonly [unknown, string]> = [
+        [undefined, "a missing url"],
+        ["", "an empty url"],
+        [42, "a non-string url"],
+        ["not a url", "an unparseable url"],
+        ["http://example.com/hook", "plain http, which exposes task content"],
+        ["https://localhost/hook", "loopback by name"],
+        ["https://127.0.0.1/hook", "loopback by address"],
+        ["https://10.0.0.5/hook", "an RFC1918 address"],
+        ["https://192.168.1.10/hook", "an RFC1918 address"],
+        ["https://172.16.0.9/hook", "an RFC1918 address"],
+        ["https://169.254.169.254/latest/meta-data", "the cloud metadata endpoint"],
+        ["https://[::1]/hook", "IPv6 loopback"],
+        // The WHATWG URL parser canonicalises every IPv4 spelling before the
+        // check sees it, so these arrive as 127.0.0.1. Pinned rather than
+        // assumed: the guard would be wrong to rely on it if it ever changed.
+        ["https://2130706433/hook", "loopback as a 32-bit integer"],
+        ["https://0x7f000001/hook", "loopback in hex"],
+        ["https://0177.0.0.1/hook", "loopback with an octal octet"],
+        ["https://127.1/hook", "loopback in short form"],
+        // These are not normalised, and each was a live bypass.
+        ["https://[::ffff:127.0.0.1]/hook", "IPv4-mapped IPv6 loopback"],
+        ["https://[::ffff:7f00:1]/hook", "the same, in hextet form"],
+        ["https://metadata.google.internal/x", "a metadata endpoint by name"],
+        ["https://metadata.goog/x", "the same, short form"],
+        ["https://[::]/hook", "the unspecified address"],
+        ["https://[fe80::1]/hook", "IPv6 link-local"],
+        ["https://localhost./hook", "a trailing dot on localhost"],
+        ["https://LOCALHOST/hook", "localhost in caps"],
+        ["https://sub.localhost/hook", "a subdomain of localhost"],
+        ["https://0.0.0.0/hook", "the any-address"],
+        ["https://evil.com@127.0.0.1/hook", "userinfo disguising the host"]
+      ]
+
+      for (const [url, why] of rejected) {
+        it(`rejects ${JSON.stringify(url)} — ${why}`, () => {
+          const reason = AgentA2A.rejectPushUrl(url)
+          assert.isTrue(Option.isSome(reason), why)
+        })
+      }
+
+      it("accepts an ordinary https endpoint", () => {
+        assert.isTrue(
+          Option.isNone(AgentA2A.rejectPushUrl("https://hooks.example.com/a2a"))
+        )
+      })
+
+      it("an allowHosts entry opts one host back in, and only that host", () => {
+        const policy = { allowHosts: ["collector.internal"] }
+        assert.isTrue(
+          Option.isNone(
+            AgentA2A.rejectPushUrl("https://collector.internal/hook", policy)
+          )
+        )
+        // A neighbour on the same private network is still refused: the opt-in
+        // is per host, not a switch that reopens the range.
+        assert.isTrue(
+          Option.isSome(
+            AgentA2A.rejectPushUrl("https://10.0.0.5/hook", policy)
+          )
+        )
+      })
+
+      it("allowInsecure permits http without permitting private targets", () => {
+        const policy = { allowInsecure: true }
+        assert.isTrue(
+          Option.isNone(
+            AgentA2A.rejectPushUrl("http://hooks.example.com/a2a", policy)
+          )
+        )
+        assert.isTrue(
+          Option.isSome(
+            AgentA2A.rejectPushUrl("http://127.0.0.1/a2a", policy)
+          ),
+          "relaxing the scheme must not also relax the address range"
+        )
+      })
+
+      it("says why, so an operator is not left guessing", () => {
+        const scheme = AgentA2A.rejectPushUrl("http://example.com/hook")
+        const address = AgentA2A.rejectPushUrl("https://127.0.0.1/hook")
+        assert.isTrue(Option.isSome(scheme) && Option.isSome(address))
+        if (Option.isSome(scheme)) assert.include(scheme.value, "https")
+        if (Option.isSome(address)) assert.include(address.value, "127.0.0.1")
+      })
+    })
+  })
+
+  /**
+   * An idle SSE stream is indistinguishable from a dead one to a proxy with
+   * an idle timeout, and a task parked on input-required can be idle for
+   * minutes. The keep-alive frame is an SSE *comment* -- `: keep-alive` --
+   * which the official client skips, so it costs nothing at the protocol
+   * level and is never mistaken for an event.
+   *
+   * Driven by a short real interval rather than `TestClock`: the stream is
+   * read through a real HTTP connection, and what is being asserted is that
+   * bytes reach the wire while the run is blocked. A 40 ms interval against a
+   * bounded read is deterministic enough -- the frame either arrives within
+   * the bound or the test fails, it cannot pass by accident.
+   */
+  /**
+   * `it.live`, not `it.effect`: the effect runner provides a `TestClock`, under
+   * which no `Effect.sleep` fires unless the test advances it -- and the
+   * server under test is built inside the same runtime, so its heartbeat
+   * would never tick either. A real HTTP connection wants a real clock. The
+   * bounded reads are what keep this deterministic: a frame either arrives
+   * within the bound or the test fails, it cannot pass by accident.
+   */
+  describe("SSE keep-alive", () => {
+    it.live("writes a comment frame while the run is idle", () =>
+      Effect.gen(function* () {
+        const fixture = yield* serverFixture({
+          blockFirstPrompt: true,
+          sseHeartbeat: Duration.millis(40)
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* HttpServer.HttpServer
+            const url = HttpServer.formatAddress(server.address)
+            const frames = yield* sseFrames(url, "keep-alive-1", "stay-running")
+            yield* Deferred.await(fixture.promptStarted)
+            // Nothing else is written while the prompt is blocked, so the
+            // next thing on the wire has to be the heartbeat.
+            const seen = yield* frames.drainUntil(
+              ": keep-alive",
+              Duration.seconds(3)
+            )
+            assert.include(seen, ": keep-alive\n\n")
+            // A comment, not an event: no `data:` line belongs to it.
+            const afterHeartbeat = seen.slice(seen.indexOf(": keep-alive"))
+            assert.notInclude(afterHeartbeat, "data:")
+            // End the run and close the connection before the server layer
+            // tears down; either left open would surface as an interruption
+            // of the test itself.
+            yield* Deferred.succeed(fixture.promptInterrupted, void 0)
+            yield* frames.close
+          }).pipe(Effect.provide(fixture.server))
+        )
+      })
+    )
+
+    it.live("is silent when disabled", () =>
+      Effect.gen(function* () {
+        const fixture = yield* serverFixture({
+          blockFirstPrompt: true,
+          sseHeartbeat: false
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* HttpServer.HttpServer
+            const url = HttpServer.formatAddress(server.address)
+            const frames = yield* sseFrames(url, "keep-alive-2", "stay-running")
+            yield* Deferred.await(fixture.promptStarted)
+            // Drain what the run itself writes before it blocks, then the
+            // wire must go quiet: a read that times out is the assertion.
+            yield* frames.drainUntil("TASK_STATE_WORKING", Duration.seconds(3))
+            const next = yield* frames.next(Duration.millis(300))
+            assert.strictEqual(
+              next._tag,
+              "timeout",
+              `expected silence with the heartbeat disabled, saw: ${JSON.stringify(next)}`
+            )
+            yield* Deferred.succeed(fixture.promptInterrupted, void 0)
+            yield* frames.close
+          }).pipe(Effect.provide(fixture.server))
+        )
+      })
+    )
+
+    it.live("stops when the stream ends", () =>
+      Effect.gen(function* () {
+        const fixture = yield* serverFixture({
+          failFirstPrompt: true,
+          sseHeartbeat: Duration.millis(20)
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* HttpServer.HttpServer
+            const url = HttpServer.formatAddress(server.address)
+            const frames = yield* sseFrames(url, "keep-alive-3", "fail-fast")
+            yield* frames.drainUntil("TASK_STATE_FAILED", Duration.seconds(3))
+            // The response closes. A heartbeat fibre that outlived the pump
+            // would hold the connection open and this read would see a
+            // keep-alive, or time out, instead of the end.
+            const end = yield* frames.next(Duration.seconds(2))
+            assert.strictEqual(
+              end._tag,
+              "end",
+              `the stream must close once the run is terminal, saw: ${JSON.stringify(end)}`
+            )
+          }).pipe(Effect.provide(fixture.server))
+        )
+      })
+    )
+  })
 })

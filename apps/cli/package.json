@@ -1,0 +1,20 @@
+{
+  "name": "@doeixd/effect-agent-cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.runtime.json",
+    "dev": "npm run build && npm run start --",
+    "start": "node dist/apps/cli/src/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "node ../../scripts/effect-diagnostics.mjs tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/platform-node": "^4.0.0-rc.111",
+    "effect": "^4.0.0-rc.111"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.0"
+  }
+}

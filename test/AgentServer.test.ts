@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { NodeHttpServer } from "@effect/platform-node"
-import { Effect, Layer, Ref, Stream } from "effect"
+import { Deferred, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
@@ -14,6 +14,14 @@ import { TestLanguageModel } from "../src/testing/index.js"
 const requestId = (value: string) => AgentProtocol.RequestId.make(value)
 const sessionId = (value: string) => AgentProtocol.SessionId.make(value)
 const headers = { authorization: "Bearer test" } as const
+
+/**
+ * Decoded rather than asserted-as: `/inventory` answers JSON, and the counts
+ * are `Option`s, so reading them means running the schema the endpoint
+ * encoded with. A cast would have claimed the shape instead of checking it,
+ * and would have handed the test the *encoded* Option to compare against.
+ */
+const decodeInventory = Schema.decodeUnknownEffect(AgentServer.Inventory)
 
 const hostOptions = {
   authorization: {
@@ -108,11 +116,10 @@ describe("AgentServer", () => {
       })
       assert.fail("expected DuplicateMountError")
     } catch (error) {
-      assert.strictEqual(
-        (error as AgentServer.DuplicateMountError)._tag,
-        "@doeixd/effect-agent/http/DuplicateMountError"
-      )
-      const failure = error as AgentServer.DuplicateMountError
+      // `instanceOf` narrows, so the fields are read without a cast.
+      assert.instanceOf(error, AgentServer.DuplicateMountError)
+      const failure = error
+      assert.strictEqual(failure._tag, "@doeixd/effect-agent/http/DuplicateMountError")
       assert.strictEqual(failure.kind, "name")
       assert.strictEqual(failure.value, "support")
       assert.include(failure.message, "support")
@@ -130,7 +137,8 @@ describe("AgentServer", () => {
       })
       assert.fail("expected DuplicateMountError")
     } catch (error) {
-      const failure = error as AgentServer.DuplicateMountError
+      assert.instanceOf(error, AgentServer.DuplicateMountError)
+      const failure = error
       assert.strictEqual(failure.kind, "path")
       assert.strictEqual(failure.value, "/same")
       assert.include(failure.message, "/same")
@@ -268,7 +276,7 @@ describe("AgentServer", () => {
           const base = HttpServer.formatAddress(httpServer.address)
           const empty = yield* Effect.promise(() => fetch(`${base}/inventory`))
           assert.strictEqual(empty.status, 200)
-          const before = (yield* Effect.promise(() => empty.json())) as AgentServer.Inventory
+          const before = yield* decodeInventory(yield* Effect.promise(() => empty.json()))
           assert.strictEqual(before.ok, true)
           assert.deepStrictEqual(
             before.agents.map((agent) => ({
@@ -299,7 +307,7 @@ describe("AgentServer", () => {
           assert.strictEqual(created.status, 200)
 
           const afterRes = yield* Effect.promise(() => fetch(`${base}/inventory`))
-          const after = (yield* Effect.promise(() => afterRes.json())) as AgentServer.Inventory
+          const after = yield* decodeInventory(yield* Effect.promise(() => afterRes.json()))
           const alpha = after.agents.find((agent) => agent.name === "alpha")
           const beta = after.agents.find((agent) => agent.name === "beta")
           assert.strictEqual(alpha?.sessions, 1)
@@ -311,6 +319,100 @@ describe("AgentServer", () => {
       )
 
       assert.strictEqual(body.ok, true)
+    }))
+
+  /**
+   * A host that answers `size` however the test needs it to.
+   *
+   * Every other member fails: this fixture exists for `/inventory`, which
+   * touches nothing else, and a stub that quietly answered session operations
+   * would let a future test pass for the wrong reason.
+   */
+  const sizeOnlyHost = (
+    size: Effect.Effect<number>
+  ): AgentSessionHost.Service<string> => {
+    const unused = Effect.fail(
+      new AgentProtocol.AgentInvalidRequestError({
+        operation: "getSession",
+        detail: "this fixture only answers size"
+      })
+    )
+    return {
+      resolve: () => Effect.succeed("inventory"),
+      createSession: () => unused,
+      closeSession: () => unused,
+      session: () => unused,
+      prompt: () => unused,
+      steer: () => unused,
+      followUp: () => unused,
+      interrupt: () => unused,
+      respond: () => unused,
+      pending: () => unused,
+      history: () => unused,
+      status: () => unused,
+      events: () => unused,
+      size,
+      requestBuckets: Effect.succeed(0),
+      maxSessions: 4,
+      maxRequestsPerSession: 16
+    }
+  }
+
+  it.live("inventory reports ok: false for a mount whose host does not answer", () =>
+    Effect.gen(function*() {
+      const Healthy = AgentSessionHost.Tag<string>("test/AgentServer/ok-healthy")
+      const Stuck = AgentSessionHost.Tag<string>("test/AgentServer/ok-stuck")
+      const hosts = Layer.mergeAll(
+        Layer.succeed(Healthy, sizeOnlyHost(Effect.succeed(1))),
+        // Never resolves. `size` has no error channel, so a host that hangs is
+        // the only way "could not be read" happens -- and it is the realistic
+        // one, since a mount can be backed by a remote client.
+        Layer.succeed(Stuck, sizeOnlyHost(Effect.never))
+      )
+      const mounts = {
+        agents: [
+          AgentServer.mount("healthy", { host: Healthy }),
+          AgentServer.mount("stuck", { host: Stuck })
+        ]
+      }
+      const routes = AgentServer.serverLayer(mounts).pipe(Layer.provide(hosts))
+      const server = HttpRouter.serve(routes, {
+        disableLogger: true,
+        disableListenLog: true
+      }).pipe(
+        Layer.provideMerge(
+          NodeHttpServer.layer(createServer, {
+            port: 0,
+            gracefulShutdownTimeout: 100
+          })
+        )
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const httpServer = yield* HttpServer.HttpServer
+          const base = HttpServer.formatAddress(httpServer.address)
+          const response = yield* Effect.promise(() => fetch(`${base}/inventory`))
+          // The endpoint still answers: a fleet view that dies because one
+          // mount is stuck cannot tell an operator which mount is stuck.
+          assert.strictEqual(response.status, 200)
+          const inventory = yield* decodeInventory(
+            yield* Effect.promise(() => response.json())
+          )
+
+          assert.strictEqual(inventory.ok, false)
+          const healthy = inventory.agents.find((agent) => agent.name === "healthy")
+          const stuck = inventory.agents.find((agent) => agent.name === "stuck")
+          // The healthy mount is still reported in full ...
+          assert.strictEqual(healthy?.sessions, 1)
+          assert.strictEqual(healthy?.remaining, 3)
+          // ... and the stuck one is named, with no count invented for it. `0`
+          // there would read as an idle agent.
+          assert.strictEqual(stuck?.sessions, null)
+          assert.strictEqual(stuck?.remaining, null)
+          assert.strictEqual(stuck?.maxSessions, 4)
+        }).pipe(Effect.provide(Layer.mergeAll(server, FetchHttpClient.layer)))
+      )
     }))
 
   it.effect("a local mount and a remote-backed mount are both reachable (AS3)", () =>
@@ -430,4 +532,87 @@ describe("AgentServer", () => {
         }).pipe(Effect.provide(Layer.mergeAll(innerServer, FetchHttpClient.layer)))
       )
     }))
+
+  /**
+   * A mount name becomes a route segment and an `HttpApi` group id.
+   *
+   * Both refusals are at construction, for the same reason the duplicate check
+   * is: a mount that resolves somewhere unintended shows up later as a 404 or
+   * as another mount's traffic disappearing, and neither points back at the
+   * name that caused it.
+   */
+  describe("mount naming", () => {
+    const host = AgentSessionHost.Tag<null>("test/naming-host")
+
+    it("refuses a name that is not a safe route segment", () => {
+      for (
+        const name of [
+          "../admin",
+          "a/b",
+          "",
+          "with space",
+          "-leading-dash",
+          "9leading-digit",
+          "trailing/",
+          "q?x",
+          "a#b",
+          "a%2e%2e"
+        ]
+      ) {
+        assert.throws(
+          () => AgentServer.mount(name, { host }),
+          undefined,
+          undefined,
+          `${JSON.stringify(name)} must not become a route segment`
+        )
+      }
+    })
+
+    it("accepts ordinary identifiers", () => {
+      for (const name of ["support", "admin2", "with-dash", "with_underscore"]) {
+        const mounted = AgentServer.mount(name, { host })
+        assert.strictEqual(mounted.path, `/agents/${name}`)
+      }
+    })
+
+    it("an explicit path is still the caller's to choose", () => {
+      const mounted = AgentServer.mount("support", {
+        host,
+        path: "/v1/tenants/acme/agent"
+      })
+      assert.strictEqual(mounted.path, "/v1/tenants/acme/agent")
+    })
+
+    it("refuses two mounts where one path is a prefix of the other", () => {
+      assert.throws(() =>
+        AgentServer.make({
+          agents: [
+            AgentServer.mount("a", { host, path: "/agents/a" }),
+            AgentServer.mount("b", { host, path: "/agents/a/b" })
+          ]
+        })
+      )
+    })
+
+    it("refuses paths differing only by a trailing slash", () => {
+      assert.throws(() =>
+        AgentServer.make({
+          agents: [
+            AgentServer.mount("a", { host, path: "/agents/a" }),
+            AgentServer.mount("b", { host, path: "/agents/a/" })
+          ]
+        })
+      )
+    })
+
+    it("still accepts genuinely distinct sibling paths", () => {
+      const api = AgentServer.make({
+        agents: [
+          AgentServer.mount("a", { host, path: "/agents/a" }),
+          AgentServer.mount("ab", { host, path: "/agents/ab" })
+        ]
+      })
+      assert.isDefined(api)
+    })
+  })
 })

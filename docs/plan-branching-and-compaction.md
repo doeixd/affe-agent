@@ -1428,15 +1428,35 @@ Maybe `CompactionStore` if applications genuinely need to select persistence.
 
 I would give the coding agent this order:
 
+Implementation note (2026-08-27): phases 1–7 are complete. The existing ten
+behavior tests were strong enough to serve as the phase-1 freeze and all stayed
+green through the refactor. The cut-point calculation now lives in pure
+`internal/prepare.ts`; `Compaction.tokens` supports fixed or Effect-resolved
+budgets plus typed Effect-valued estimators; and `Compaction.Checkpoint` is a
+Schema value. Token measurements are `Option` because the compatible
+message-count policy has no tokenizer. Checkpoints can use a supplied Effect
+`KeyValueStore`; a restart test recreates the transform and proves it reuses the
+persisted checkpoint. `SummaryResult` carries provider-neutral usage while the
+string return remains source-compatible. `Compaction.serialize` renders all
+prompt part variants, describes file payloads, and bounds tool-result text.
+
+Two proposed abstractions were deliberately not added. `KeyValueStore` already
+has a schema-aware view, so a package-specific `CheckpointStore` would only
+rename an existing Effect primitive. `SummaryResult<D>` was narrowed to a
+non-generic `SummaryResult` with usage: typed details have only the speculative
+branch/coding consumers in phases 12–13, and repository scope discipline says
+not to export a concept before two real features need it. Those phases can add
+details with their schemas when the use cases are concrete.
+
 | Phase  | Work                                                                   |
 | ------ | ---------------------------------------------------------------------- |
-| **1**  | Freeze current compaction behavior with regression tests               |
-| **2**  | Extract pure preparation/cut-point logic                               |
-| **3**  | Add token estimation + `ContextBudget` policy                          |
-| **4**  | Convert `Checkpoint` to Schema + add tokens/usage/details              |
-| **5**  | Add memory/KeyValueStore checkpoint persistence                        |
-| **6**  | Enrich `Summarise` to structured `SummaryResult<D>`                    |
-| **7**  | Add transcript serializer + truncation                                 |
+| **1** ✅ | Freeze current compaction behavior with regression tests             |
+| **2** ✅ | Extract pure preparation/cut-point logic                             |
+| **3** ✅ | Add token estimation + `ContextBudget` policy                        |
+| **4** ✅ | Convert `Checkpoint` to Schema + token measurements                  |
+| **5** ✅ | Add memory/KeyValueStore checkpoint persistence                     |
+| **6** ✅ | Enrich `Summarise` with structured text + usage (typed details deferred until consumers exist) |
+| **7** ✅ | Add transcript serializer + truncation                              |
 | **8**  | Add default continuation-oriented model summarizer                     |
 | **9**  | Add controller/manual `compact()` API                                  |
 | **10** | Add `CompactionEvent` stream and usage reporting                       |

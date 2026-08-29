@@ -19,10 +19,12 @@ import {
 } from "effect/unstable/httpapi"
 import * as Elicitation from "../Elicitation.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError } from "../Errors.js"
+import * as PromptWire from "../PromptWire.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
+import * as SseBody from "./internal/sse.js"
 
 /** Re-exported so an HTTP deployment reads its auth types from one place. */
 export type PrincipalContext = AgentSessionHost.PrincipalContext
@@ -50,12 +52,12 @@ const SessionPath = Schema.Struct({ id: AgentProtocol.SessionId })
 const CloseBody = Schema.Struct({ requestId: AgentProtocol.RequestId })
 const PromptBody = Schema.Struct({
   requestId: AgentProtocol.RequestId,
-  input: Prompt.Prompt,
+  input: PromptWire.Prompt,
   options: Schema.optional(AgentProtocol.RemotePromptOptions)
 })
 const InputBody = Schema.Struct({
   requestId: AgentProtocol.RequestId,
-  input: Prompt.Prompt
+  input: PromptWire.Prompt
 })
 const RequestBody = Schema.Struct({ requestId: AgentProtocol.RequestId })
 const RespondBody = Schema.Struct({
@@ -266,13 +268,32 @@ export const clientLayer = (options: {
  */
 export type Generated = Service
 
+/**
+ * Every error the `Api` declares, so `toRemote` can recognise all of them.
+ *
+ * This union used to hold six of the fourteen, and the other eight -- a 401, a
+ * 403, capacity, conflict, a codec failure -- fell through to
+ * `AgentTransportError` at the bottom of `toRemote`. `AgentTransportError`
+ * means "retrying is reasonable", so a caller retrying on it retried a
+ * forbidden request forever. RPC never did this, because it exposes the
+ * protocol group's own error union; the two transports now agree, and
+ * `AgentClientContract` checks that they do.
+ */
 const ClientFailure = Schema.Union([
   AgentBusyError,
   AgentIdleError,
   AgentClosedError,
   AgentClient.AgentSessionNotFoundError,
   AgentClient.AgentExecutionError,
-  AgentClient.AgentTransportError
+  AgentClient.AgentTransportError,
+  AgentProtocol.AgentSessionAlreadyExistsError,
+  AgentProtocol.AgentRequestConflictError,
+  AgentProtocol.AgentRequestCapacityExceededError,
+  AgentProtocol.AgentUnauthorizedError,
+  AgentProtocol.AgentForbiddenError,
+  AgentProtocol.AgentCapacityExceededError,
+  AgentProtocol.AgentInvalidRequestError,
+  AgentProtocol.AgentProtocolCodecError
 ])
 const decodeClientFailure = Schema.decodeUnknownOption(ClientFailure)
 
@@ -339,8 +360,23 @@ export const fromGenerated = (
         client.sessions.prompt({
           params: params(id),
           headers,
+          /**
+           * The caller's idempotency key *is* the wire request id.
+           *
+           * `requestId` already means "this mutation, once" to the host, and
+           * `RemotePromptOptions.idempotencyKey` means the same thing to a
+           * durable store. Minting a fresh id for a request the caller has
+           * named would make the two disagree: the retry the caller intends
+           * as one claim would reach the store as a second.
+           *
+           * Absent a key the generated id still holds across a retry of *this*
+           * effect, because it is fixed when the effect is built, not when it
+           * is run.
+           */
           payload: {
-            requestId: nextRequestId(),
+            requestId: promptOptions?.idempotencyKey === undefined
+              ? nextRequestId()
+              : AgentProtocol.RequestId.make(promptOptions.idempotencyKey),
             input: Prompt.make(input),
             options: { stream: promptOptions?.stream === true }
           }
@@ -670,7 +706,15 @@ const resumeFrom = (
     )
   )
   if (Option.isNone(header)) return undefined
-  const parsed = Number(header.value)
+  // Blank is absent, not zero. `Number("")` is `0`, so a proxy that forwards
+  // an empty `Last-Event-ID` -- or a `?after=` with nothing after it -- asked
+  // to resume from the very beginning, and a session with no delivery log
+  // answers that with a failure. The client had said nothing at all; live
+  // delivery is what it meant, and what the malformed-value rule below
+  // already gives every other unusable value.
+  const raw = header.value.trim()
+  if (raw === "") return undefined
+  const parsed = Number(raw)
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined
 }
 
@@ -707,22 +751,10 @@ const eventResponse = (
     Stream.map((frame) => frame.value),
     Stream.catch((error) => Stream.fromEffect(encodeStreamError(error)))
   )
-  // An SSE comment first, so the response headers go out before the first
-  // event exists. A body that writes nothing until the session emits leaves
-  // the client waiting on headers -- `fetch` does not resolve, `EventSource`
-  // does not open -- for as long as the session stays quiet, which for a
-  // subscription opened *before* the prompt is exactly the interesting case.
-  //
-  // The subscription is acquired *eagerly*: the source is run into a queue
-  // from the moment the response starts, so a client that has connected is
-  // observing from then, not from its second read. (`concat` would start
-  // the source only once the comment had been consumed.)
-  const body = Stream.unwrap(
-    Effect.map(Stream.toQueue(frames, { capacity: "unbounded" }), (queue) =>
-      Stream.fromQueue(queue).pipe(Stream.prepend([": connected\n\n"]))
-    )
-  ).pipe(Stream.encodeText)
-  return HttpServerResponse.stream(body, {
+  // Eager subscription, a leading SSE comment so the headers flush before the
+  // first event exists, and a *bounded* queue so a stalled reader cannot claim
+  // unbounded memory. `internal/sse.ts` carries the reasoning for all three.
+  return HttpServerResponse.stream(SseBody.body(frames), {
     contentType: "text/event-stream",
     headers: {
       "cache-control": "no-cache, no-store",

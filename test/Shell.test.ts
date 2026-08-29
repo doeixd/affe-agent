@@ -27,7 +27,7 @@ describe("Shell", () => {
   it("fromKind builds the expected argv", () => {
     assert.deepStrictEqual(Shell.fromKind("bash").toCommand("echo hi"), {
       executable: "bash",
-      args: ["-lc", "echo hi"]
+      args: ["-c", "echo hi"]
     })
     assert.deepStrictEqual(Shell.fromKind("zsh").toCommand("echo hi"), {
       executable: "zsh",
@@ -96,7 +96,7 @@ describe("Shell", () => {
       )
       assert.deepStrictEqual(yield* Ref.get(seen), {
         executable: "bash",
-        args: ["-lc", "echo hi"]
+        args: ["-c", "echo hi"]
       })
     }))
 
@@ -134,4 +134,37 @@ describe("Shell", () => {
       )
       assert.strictEqual(yield* Ref.get(seen), "xonsh")
     }))
+
+  /**
+   * No built-in shell loads the invoking user's environment.
+   *
+   * `bash` was the only one built with `-l`, which sources `/etc/profile` and
+   * `~/.bash_profile` -- so the same script behaved differently depending on
+   * whose dotfiles were on the machine, and it was the default. `zsh` and
+   * `fish` have the same dotfile story and never had it, so the difference was
+   * accidental rather than decided.
+   */
+  it("no built-in shell is a login shell", () => {
+    const kinds = ["bash", "sh", "zsh", "fish", "nushell"] as const
+    for (const kind of kinds) {
+      const command = Shell.fromKind(kind).toCommand("echo hi")
+      assert.notInclude(
+        command.args,
+        "-l",
+        `${kind} must not source the user's profile`
+      )
+      assert.notInclude(command.args, "-lc", `${kind} must not be a login shell`)
+    }
+  })
+
+  it("an application that wants a login shell can still build one", () => {
+    const login = Shell.make(
+      "bash-login",
+      (script) => Sandbox.command("bash", ["-lc", script])
+    )
+    assert.deepStrictEqual(login.toCommand("echo hi"), {
+      executable: "bash",
+      args: ["-lc", "echo hi"]
+    })
+  })
 })
