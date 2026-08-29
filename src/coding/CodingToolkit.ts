@@ -3,7 +3,7 @@ import { Tool, Toolkit } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as Permission from "../Permission.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
-import * as Shell from "../shell/Shell.js"
+import * as ShellRuntime from "../shell/Shell.js"
 import * as FileLock from "./internal/fileLock.js"
 import * as LineEndings from "./internal/lineEndings.js"
 import * as Glob from "./internal/glob.js"
@@ -31,7 +31,7 @@ import * as Replace from "./internal/replace.js"
  *   match, the way a careful editor does; `search` walks the tree in process
  *   so it works against any provider, not only one with `grep`.
  * - **A permission projection on every tool** (`Permission.annotate`). A file
- *   tool projects to `read`/`write` on the path; `bash` projects to `shell`
+ *   tool projects to `read`/`write` on the path; `shell` projects to `shell`
  *   on the command. So a `Permission` policy can allow reads, ask before
  *   writes outside `src/`, and deny `rm -rf` -- without the policy knowing
  *   anything about these tools' parameter shapes.
@@ -156,7 +156,7 @@ export const EditFile = Permission.annotate(
     /**
      * What changed, structured.
      *
-     * A record rather than a sentence, for the same reason `bash` returns
+     * A record rather than a sentence, for the same reason `shell` returns
      * `{exit_code, stdout, stderr}`: the caller should not have to parse prose
      * to learn what happened. `strategy` is the part worth having explicitly --
      * anything but `"simple"` means the text matched was not the text supplied,
@@ -245,35 +245,81 @@ export const Search = Permission.annotate(
 )
 
 /**
- * Run a shell command in the workspace.
+ * Run a command in the workspace.
  *
- * The command is one string a shell interprets (`bash -c` by default, or
- * whatever `Shell` the environment supplies), which is what a model expects
- * of a shell tool; the sandbox's isolation still bounds what it
- * can touch. `action: "shell"` on the command is what a policy gates, so
- * `git status` can be allowed and `git push` asked about.
+ * The command is one string a shell interprets, which is what a model expects
+ * of a command tool; the sandbox's isolation still bounds what it can touch.
+ * `action: "shell"` on the command is what a policy gates, so `git status`
+ * can be allowed and `git push` asked about.
+ *
+ * Built per configured shell, because the *description* names the dialect
+ * -- "using PowerShell 7 (pwsh)" -- and a description is static once an
+ * agent is built. The same `Service` that renders it also builds the argv the
+ * handler executes, so the model is never told one dialect and run under
+ * another (SH2 in `docs/plan-shell-tool.md`).
  */
-export const Bash = Permission.annotate(
-  Tool.make("bash", {
-    description: Prompts.BASH,
-    parameters: Schema.Struct({
-      command: Schema.String,
-      /** Kill the command after this many milliseconds. Provider default otherwise. */
-      timeout_ms: Schema.optional(Schema.Number)
+const shellTool = (shell: ShellRuntime.Service) =>
+  Permission.annotate(
+    Tool.make("shell", {
+      description: Prompts.shell(shell.displayName),
+      parameters: Schema.Struct({
+        command: Schema.String,
+        /** Kill the command after this many milliseconds. Provider default otherwise. */
+        timeout_ms: Schema.optional(Schema.Number)
+      }),
+      success: Schema.Struct({
+        exit_code: Schema.Number,
+        stdout: Schema.String,
+        stderr: Schema.String
+      }),
+      failure: Schema.String,
+      dependencies: [Sandbox.Current]
     }),
-    success: Schema.Struct({
-      exit_code: Schema.Number,
-      stdout: Schema.String,
-      stderr: Schema.String
-    }),
-    failure: Schema.String,
-    dependencies: [Sandbox.Current]
-  }),
-  { action: "shell", resource: (params) => params.command }
-)
+    { action: "shell", resource: (params) => params.command }
+  )
+
+type ShellTool = ReturnType<typeof shellTool>
+
+const fileTools = [ReadFile, WriteFile, EditFile, ListFiles, Search] as const
 
 /** Every tool the toolkit provides, annotated for policy. */
-export const tools = [ReadFile, WriteFile, EditFile, ListFiles, Search, Bash] as const
+export type Tools = readonly [
+  typeof ReadFile,
+  typeof WriteFile,
+  typeof EditFile,
+  typeof ListFiles,
+  typeof Search,
+  ShellTool
+]
+
+export type Handlers = Toolkit.HandlersFrom<Toolkit.ToolsByName<Tools>>
+
+export interface ToolkitOptions {
+  /**
+   * The dialect the command tool speaks: a built-in `Kind`, or a `Service`
+   * of the application's own. Default: Bash, executed as `bash -c`.
+   *
+   * Resolved once, here. A `Shell.layer` in the run environment does not
+   * change an already-built toolkit -- the description the model saw and the
+   * argv that runs come from this one value. An application that wants the
+   * Layer to decide reads it first: `toolkit({ shell: yield* Shell.Shell })`.
+   */
+  readonly shell?: ShellRuntime.Kind | ShellRuntime.Service | undefined
+}
+
+const resolveShell = (options?: ToolkitOptions): ShellRuntime.Service =>
+  options?.shell === undefined
+    ? ShellRuntime.bash
+    : typeof options.shell === "string"
+    ? ShellRuntime.fromKind(options.shell)
+    : options.shell
+
+/** A toolkit's parts, built from one resolved shell. */
+export interface Configured {
+  readonly shell: ShellRuntime.Service
+  readonly tools: Tools
+  readonly handlers: Handlers
+}
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -434,10 +480,11 @@ const sizeOf = (
     )
 
 /**
- * The handlers, typed against the tools so every parameter infers from its
- * schema. Errors reach the model as strings it can act on.
+ * The file handlers, typed against the tools so every parameter infers from
+ * its schema. Errors reach the model as strings it can act on. The command
+ * handler is built per shell, below.
  */
-export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> = {
+const fileHandlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof fileTools>> = {
   read_file: ({ limit, offset, path: file }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
@@ -656,12 +703,17 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
         }
       }
       return SearchFormat.render(matches, skippedForSize)
-    }),
+    })
+}
 
-  bash: ({ command, timeout_ms }) =>
+/**
+ * The command handler for one shell. `toCommand` is captured here, not
+ * looked up at execution, so nothing provided later can change what runs.
+ */
+const shellHandler = (shell: ShellRuntime.Service): Handlers["shell"] =>
+  ({ command, timeout_ms }) =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox.Current
-      const shell = yield* Shell.current()
       const result = yield* sandbox.exec(
         shell.toCommand(command),
         timeout_ms === undefined ? undefined : { timeout: timeout_ms }
@@ -678,16 +730,50 @@ export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> =
         stderr: yield* bounded(sandbox, result.stderr)
       }
     })
-}
 
 // ---------------------------------------------------------------------------
 // The toolkit
 // ---------------------------------------------------------------------------
 
 /**
- * The tools bound to their handlers, for
- * `Agent.make({ toolkit: CodingToolkit.toolkit() })`. The sandbox provider is
- * the application's to supply (`Sandbox.currentLayer` over a provider); a
- * `Permission` policy is optional and composes as usual.
+ * Tools and handlers built from one resolved shell, for composition:
+ *
+ * ```ts
+ * const configured = CodingToolkit.configure({ shell: "powershell" })
+ * Agent.toolkit(configured.tools, { ...configured.handlers, read_file: audited })
+ * ```
+ *
+ * One call rather than separate `tools`/`handlers` factories, so a caller
+ * cannot describe one dialect and execute another.
  */
-export const toolkit = () => Agent.toolkit(tools, handlers)
+export const configure = (options?: ToolkitOptions): Configured => {
+  const shell = resolveShell(options)
+  return {
+    shell,
+    tools: [...fileTools, shellTool(shell)],
+    handlers: { ...fileHandlers, shell: shellHandler(shell) }
+  }
+}
+
+const defaults = configure()
+
+/** The command tool, in its default (Bash) configuration. */
+export const Shell = defaults.tools[5]
+
+/** Every tool the toolkit provides, annotated for policy -- Bash configuration. */
+export const tools: Tools = defaults.tools
+
+/** The handlers of the Bash configuration; `configure` for any other. */
+export const handlers: Handlers = defaults.handlers
+
+/**
+ * The tools bound to their handlers, for
+ * `Agent.make({ toolkit: CodingToolkit.toolkit() })` -- or
+ * `toolkit({ shell: "pwsh" })`. The sandbox provider is the application's to
+ * supply (`Sandbox.currentLayer` over a provider); a `Permission` policy is
+ * optional and composes as usual.
+ */
+export const toolkit = (options?: ToolkitOptions) => {
+  const configured = configure(options)
+  return Agent.toolkit(configured.tools, configured.handlers)
+}

@@ -9,7 +9,14 @@ import * as Sandbox from "../sandbox/Sandbox.js"
  * never names a binary.
  */
 export interface Service {
+  /** Stable programmatic identity: the `Kind` for a built-in. */
   readonly name: string
+  /**
+   * What the model is told it is writing for -- "PowerShell 7 (pwsh)", not
+   * "pwsh". Rendered into a tool description, so it is configuration, never
+   * model input, and `make` refuses a value with a line break in it.
+   */
+  readonly displayName: string
   readonly toCommand: (script: string) => Sandbox.Command
 }
 
@@ -17,9 +24,38 @@ export class Shell extends Context.Service<Shell, Service>()(
   "@doeixd/effect-agent/shell/Shell"
 ) {}
 
-export const make = (name: string, toCommand: (script: string) => Sandbox.Command): Service => ({
-  name,
-  toCommand
+/**
+ * A name is configuration, not model input, and it ends up inside a prompt.
+ * A line break or control character in it would turn a label into a second
+ * line of instructions, so both are refused at construction -- a pure
+ * constructor like `AgentLoop.maxTurns`, throwing before any Effect exists.
+ */
+const singleLine = (label: "name" | "displayName", value: string): string => {
+  if (value.length === 0 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new RangeError(`Shell.make: ${label} must be a non-empty single-line string`)
+  }
+  return value
+}
+
+/**
+ * A shell of the application's own.
+ *
+ * ```ts
+ * Shell.make({
+ *   name: "xonsh",
+ *   displayName: "Xonsh",
+ *   toCommand: (script) => Sandbox.command("xonsh", ["-c", script])
+ * })
+ * ```
+ */
+export const make = (options: {
+  readonly name: string
+  readonly displayName: string
+  readonly toCommand: (script: string) => Sandbox.Command
+}): Service => ({
+  name: singleLine("name", options.name),
+  displayName: singleLine("displayName", options.displayName),
+  toCommand: options.toCommand
 })
 
 /**
@@ -38,20 +74,48 @@ export const make = (name: string, toCommand: (script: string) => Sandbox.Comman
  * say so:
  *
  * ```ts
- * Shell.make("bash-login", (script) => Sandbox.command("bash", ["-lc", script]))
+ * Shell.make({
+ *   name: "bash-login",
+ *   displayName: "Bash (login shell)",
+ *   toCommand: (script) => Sandbox.command("bash", ["-lc", script])
+ * })
  * ```
  */
-export const bash: Service = make("bash", (script) => Sandbox.command("bash", ["-c", script]))
-export const sh: Service = make("sh", (script) => Sandbox.command("sh", ["-c", script]))
-export const zsh: Service = make("zsh", (script) => Sandbox.command("zsh", ["-c", script]))
-export const fish: Service = make("fish", (script) => Sandbox.command("fish", ["-c", script]))
-export const powershell: Service = make("powershell", (script) =>
-  Sandbox.command("powershell", ["-NoProfile", "-Command", script])
-)
-export const pwsh: Service = make("pwsh", (script) =>
-  Sandbox.command("pwsh", ["-NoProfile", "-Command", script])
-)
-export const nushell: Service = make("nushell", (script) => Sandbox.command("nu", ["-c", script]))
+export const bash: Service = make({
+  name: "bash",
+  displayName: "Bash",
+  toCommand: (script) => Sandbox.command("bash", ["-c", script])
+})
+export const sh: Service = make({
+  name: "sh",
+  displayName: "POSIX sh",
+  toCommand: (script) => Sandbox.command("sh", ["-c", script])
+})
+export const zsh: Service = make({
+  name: "zsh",
+  displayName: "zsh",
+  toCommand: (script) => Sandbox.command("zsh", ["-c", script])
+})
+export const fish: Service = make({
+  name: "fish",
+  displayName: "fish",
+  toCommand: (script) => Sandbox.command("fish", ["-c", script])
+})
+export const powershell: Service = make({
+  name: "powershell",
+  displayName: "Windows PowerShell",
+  toCommand: (script) => Sandbox.command("powershell", ["-NoProfile", "-Command", script])
+})
+export const pwsh: Service = make({
+  name: "pwsh",
+  displayName: "PowerShell 7 (pwsh)",
+  toCommand: (script) => Sandbox.command("pwsh", ["-NoProfile", "-Command", script])
+})
+export const nushell: Service = make({
+  name: "nushell",
+  displayName: "Nushell",
+  toCommand: (script) => Sandbox.command("nu", ["-c", script])
+})
 
 export type Kind = "bash" | "sh" | "zsh" | "fish" | "powershell" | "pwsh" | "nushell"
 
@@ -73,10 +137,16 @@ export const layer = (shell: Service | Kind): Layer.Layer<Shell> =>
 /**
  * The Shell in the environment, or `fallback` (default bash).
  *
- * Tools do not declare `Shell` in `dependencies`, so existing agents that
- * never provide one still compile and run as `bash -c` -- the default above,
- * not the login shell this line used to name. A Layer at the session wins
- * over the fallback.
+ * For application-authored dynamic tools. The built-in toolkits do *not*
+ * call this: they resolve their shell once, when constructed, so that the
+ * dialect the model was told about is the one that runs (`SH2`/`SH4` in
+ * `docs/plan-shell-tool.md`). An application that wants Layer-sourced
+ * selection reads the service before building the agent:
+ *
+ * ```ts
+ * const shell = yield* Shell.Shell
+ * Agent.make({ toolkit: CodingToolkit.toolkit({ shell }) })
+ * ```
  */
 export const current = (fallback: Service = bash): Effect.Effect<Service> =>
   Effect.map(Effect.serviceOption(Shell), (opt) => Option.getOrElse(opt, () => fallback))

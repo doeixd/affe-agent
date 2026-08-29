@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import * as Permission from "../src/Permission.js"
 import * as Agent from "../src/Agent.js"
 import * as AgentSession from "../src/AgentSession.js"
 import { PiToolkit } from "../src/pi/index.js"
@@ -669,7 +670,7 @@ describe("PiToolkit truncation helpers (P4)", () => {
       const big = Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n")
       const result = yield* withSandbox(
         {},
-        H.bash({ command: `echo hi` }, ctx),
+        H.shell({ command: `echo hi` }, ctx),
         () => Effect.succeed({ exitCode: 0, stdout: big, stderr: "" })
       )
       // Pi's bash uses tail, so result stdout is truncated
@@ -682,22 +683,22 @@ describe("PiToolkit shell (P5)", () => {
   it.effect("powershell is the same tool with a different argv", () =>
     Effect.gen(function* () {
       const seen = yield* Ref.make<{ executable: string; args: ReadonlyArray<string> } | undefined>(undefined)
-      const Hps = PiToolkit.handlersFor({ shell: "powershell" })
+      const Hps = PiToolkit.configure({ shell: "powershell" }).handlers
       const result = yield* withSandbox(
         {},
-        Hps.bash({ command: "Write-Output hi" }, ctx),
+        Hps.shell({ command: "Write-Output hi" }, ctx),
         (cmd) => Ref.set(seen, { executable: cmd.executable, args: cmd.args }).pipe(Effect.as({ exitCode: 0, stdout: "hi\n", stderr: "" }))
       )
       assert.deepStrictEqual(result, { exit_code: 0, stdout: "hi\n", stderr: "" })
       assert.deepStrictEqual(yield* Ref.get(seen), { executable: "powershell", args: ["-NoProfile", "-Command", "Write-Output hi"] })
     }))
 
-  it.effect("default shell is bash -lc", () =>
+  it.effect("default shell is bash -c", () =>
     Effect.gen(function* () {
       const seen = yield* Ref.make<{ executable: string; args: ReadonlyArray<string> } | undefined>(undefined)
       const result = yield* withSandbox(
         {},
-        H.bash({ command: "echo hi" }, ctx),
+        H.shell({ command: "echo hi" }, ctx),
         (cmd) => Ref.set(seen, { executable: cmd.executable, args: cmd.args }).pipe(Effect.as({ exitCode: 0, stdout: "hi\n", stderr: "" }))
       )
       void result
@@ -708,7 +709,7 @@ describe("PiToolkit shell (P5)", () => {
     Effect.gen(function* () {
       const err = yield* withSandbox(
         {},
-        Effect.flip(H.bash({ command: "sleep 10" }, ctx)),
+        Effect.flip(H.shell({ command: "sleep 10" }, ctx)),
         () => Effect.fail(new Sandbox.TimeoutError({ executable: "bash", timeoutMillis: 100 }))
       )
       assertString(err)
@@ -716,8 +717,11 @@ describe("PiToolkit shell (P5)", () => {
       assert.include(err, "100")
     }))
 
-  it("Permission projection for bash is shell on command", () => {
-    assert.strictEqual(PiToolkit.Bash.name, "bash")
+  it("the command tool is `shell`, projecting to shell on the command", () => {
+    assert.strictEqual(PiToolkit.Shell.name, "shell")
+    const projection = Permission.projectionOf(PiToolkit.Shell)
+    assert.strictEqual(projection.action, "shell")
+    assert.strictEqual(projection.resource({ command: "git push" }), "git push")
   })
 })
 

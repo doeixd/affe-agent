@@ -13,8 +13,8 @@
  * - `edit_file` accepts `edits: [{ old_string, new_string }, ...]` and
  *   applies them atomically against the original file, refusing overlaps
  * - `list_files` is rendered text: `/` suffix, alphabetical, 500-entry cap
- * - `bash` takes its argv from `Shell` (`toolkit({ shell: "zsh" })` or
- *   `Effect.provide(Shell.layer("nushell"))`)
+ * - `shell` speaks the dialect the toolkit was built with
+ *   (`toolkit({ shell: "zsh" })`), and says so in its description
  * - truncated output names the limit that fired
  *
  * Handlers still demand `Sandbox.Current` and carry the same `Permission`
@@ -27,7 +27,7 @@ import { Tool, Toolkit } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as Permission from "../Permission.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
-import * as Shell from "../shell/Shell.js"
+import * as ShellRuntime from "../shell/Shell.js"
 import * as FileLock from "../coding/internal/fileLock.js"
 import * as Glob from "../coding/internal/glob.js"
 import * as LineEndings from "../coding/internal/lineEndings.js"
@@ -135,21 +135,36 @@ export const Search = Permission.annotate(
   { action: "read", resource: (params) => params.path ?? ".", describe: (params) => `${params.pattern} in ${params.path ?? "."}` }
 )
 
-export const Bash = Permission.annotate(
-  Tool.make("bash", {
-    description: Prompts.BASH,
-    parameters: Schema.Struct({
-      command: Schema.String,
-      timeout_ms: Schema.optional(Schema.Number)
+/** As `/coding`'s: built per shell so the description names the dialect that runs. */
+const shellTool = (shell: ShellRuntime.Service) =>
+  Permission.annotate(
+    Tool.make("shell", {
+      description: Prompts.shell(shell.displayName),
+      parameters: Schema.Struct({
+        command: Schema.String,
+        timeout_ms: Schema.optional(Schema.Number)
+      }),
+      success: Schema.Struct({ exit_code: Schema.Number, stdout: Schema.String, stderr: Schema.String }),
+      failure: Schema.String,
+      dependencies: [Sandbox.Current]
     }),
-    success: Schema.Struct({ exit_code: Schema.Number, stdout: Schema.String, stderr: Schema.String }),
-    failure: Schema.String,
-    dependencies: [Sandbox.Current]
-  }),
-  { action: "shell", resource: (params) => params.command }
-)
+    { action: "shell", resource: (params) => params.command }
+  )
 
-export const tools = [ReadFile, WriteFile, EditFile, ListFiles, Search, Bash] as const
+type ShellTool = ReturnType<typeof shellTool>
+
+const fileTools = [ReadFile, WriteFile, EditFile, ListFiles, Search] as const
+
+export type Tools = readonly [
+  typeof ReadFile,
+  typeof WriteFile,
+  typeof EditFile,
+  typeof ListFiles,
+  typeof Search,
+  ShellTool
+]
+
+export type Handlers = Toolkit.HandlersFrom<Toolkit.ToolsByName<Tools>>
 
 /** The per-file write lock, shared with `/coding`: see `coding/internal/fileLock.ts`. @internal */
 export const lockRegistrySize = FileLock.lockRegistrySize
@@ -220,9 +235,25 @@ const sizeOf = (
     ? Effect.succeed(entry.size)
     : Effect.map(Effect.option(sandbox.stat(entry.path)), Option.flatMap((found) => found.size))
 
-export type ShellKind = Shell.Kind
-export interface PiToolkitOptions {
-  readonly shell?: Shell.Kind | Shell.Service | undefined
+export interface ToolkitOptions {
+  /**
+   * The dialect the command tool speaks. Default: Bash as `bash -c`.
+   * Resolved once, at construction; see `CodingToolkit.ToolkitOptions`.
+   */
+  readonly shell?: ShellRuntime.Kind | ShellRuntime.Service | undefined
+}
+
+const resolveShell = (options?: ToolkitOptions): ShellRuntime.Service =>
+  options?.shell === undefined
+    ? ShellRuntime.bash
+    : typeof options.shell === "string"
+    ? ShellRuntime.fromKind(options.shell)
+    : options.shell
+
+export interface Configured {
+  readonly shell: ShellRuntime.Service
+  readonly tools: Tools
+  readonly handlers: Handlers
 }
 
 const EditPair = Schema.Struct({
@@ -259,13 +290,7 @@ const coerceEdits = (
   return `Provide old_string/new_string or edits`
 }
 
-export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> => {
-  const fallback = options.shell === undefined
-    ? Shell.bash
-    : typeof options.shell === "string"
-    ? Shell.fromKind(options.shell)
-    : options.shell
-  return {
+const fileHandlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof fileTools>> = {
     read_file: ({ limit, offset, path: file }) =>
       Effect.gen(function* () {
         const sandbox = yield* Sandbox.Current
@@ -423,19 +448,40 @@ export const handlersFor = (options: PiToolkitOptions = {}): Toolkit.HandlersFro
           }
         }
         return SearchFormat.render(matches, skippedForSize)
-      }),
-    bash: ({ command, timeout_ms }) =>
-      Effect.gen(function* () {
-        const sandbox = yield* Sandbox.Current
-        const shell = yield* Shell.current(fallback)
-        const result = yield* sandbox.exec(shell.toCommand(command), timeout_ms === undefined ? undefined : { timeout: timeout_ms }).pipe(
-          Effect.mapError((error) => error instanceof Sandbox.TimeoutError ? Truncate.timedOut(error.timeoutMillis) : errorMessage(error))
-        )
-        return { exit_code: result.exitCode, stdout: yield* bounded(sandbox, result.stdout), stderr: yield* bounded(sandbox, result.stderr) }
       })
+}
+
+/** `toCommand` captured at construction: nothing provided later changes what runs. */
+const shellHandler = (shell: ShellRuntime.Service): Handlers["shell"] =>
+  ({ command, timeout_ms }) =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox.Current
+      const result = yield* sandbox.exec(shell.toCommand(command), timeout_ms === undefined ? undefined : { timeout: timeout_ms }).pipe(
+        Effect.mapError((error) => error instanceof Sandbox.TimeoutError ? Truncate.timedOut(error.timeoutMillis) : errorMessage(error))
+      )
+      return { exit_code: result.exitCode, stdout: yield* bounded(sandbox, result.stdout), stderr: yield* bounded(sandbox, result.stderr) }
+    })
+
+/** Tools and handlers from one resolved shell; see `CodingToolkit.configure`. */
+export const configure = (options?: ToolkitOptions): Configured => {
+  const shell = resolveShell(options)
+  return {
+    shell,
+    tools: [...fileTools, shellTool(shell)],
+    handlers: { ...fileHandlers, shell: shellHandler(shell) }
   }
 }
 
-export const handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<typeof tools>> = handlersFor()
+const defaults = configure()
 
-export const toolkit = (options: PiToolkitOptions = {}) => Agent.toolkit(tools, handlersFor(options))
+/** The command tool, in its default (Bash) configuration. */
+export const Shell = defaults.tools[5]
+
+export const tools: Tools = defaults.tools
+
+export const handlers: Handlers = defaults.handlers
+
+export const toolkit = (options?: ToolkitOptions) => {
+  const configured = configure(options)
+  return Agent.toolkit(configured.tools, configured.handlers)
+}

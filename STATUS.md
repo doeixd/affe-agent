@@ -3030,3 +3030,34 @@ which does not discharge the transform's requirement -- the summariser
 wrapper is the pattern. A guard against reporting *interruption* as failure
 turned out to be dead code (an interrupted fibre never runs the handler);
 removed, and the test that pins the behaviour stays.
+
+## The `shell` tool (2026-08-29)
+
+`docs/plan-shell-tool.md`, S0–S5, in one change. Both built-in coding
+batteries used to expose a tool named `bash` whose description said "with
+bash" while the argv came from whatever `Shell` Layer happened to be in the
+run environment -- so an application configured for PowerShell handed the
+model a tool that asked for Bash syntax. That is the API lying about itself,
+and the fix is the rename the plan specified rather than a softer alias.
+
+- `/shell`: `Service` gained `displayName`; `make` takes an options object and
+  refuses an empty or multi-line label at construction, because the label is
+  rendered into a prompt. Seven built-ins with fixed labels.
+- `/coding`, `/pi`: the tool is `shell` (`CodingToolkit.Shell`,
+  `handlers.shell`; the same on `PiToolkit`). `configure({ shell })` resolves
+  the dialect once and builds tools *and* handlers from that one service, so
+  the description the model reads and the argv that runs cannot disagree;
+  `toolkit(options?)` delegates to it. A `Shell.layer` provided later changes
+  nothing -- the load-bearing test. `Prompts.shell(displayName)` names the
+  dialect in its first sentence and keeps the rest dialect-neutral.
+- No `bash` alias, deliberately: an alias keeps code compiling while model
+  fixtures and permission `toolName`s still use the obsolete name, a
+  half-migration a compile error would have caught. Durable workflows holding
+  an unfinished built-in `bash` call must be drained or versioned before
+  deploying; recorded transcripts stay readable. The TUI keeps a display-only
+  `bash` view for old rows.
+
+`test/Shell.test.ts` is the shared contract, run against both toolkits;
+SH4, SH6 and the label guard were each broken once. Focused suites: 263
+tests across the shell, coding, pi, prompts, composition and public-API
+files; the full gate below.

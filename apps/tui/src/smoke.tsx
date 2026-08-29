@@ -661,11 +661,11 @@ onReuse({ _tag: "SubmissionStarted" })
 onReuse({ _tag: "MessageStarted" })
 onReuse({ _tag: "MessageDelta", kind: "text", delta: "thinking" })
 
-onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "bash", params: { command: "first" } })
-onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "bash", result: { exit_code: 0, stdout: "one", stderr: "" } } as never)
+onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "shell", params: { command: "first" } })
+onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "shell", result: { exit_code: 0, stdout: "one", stderr: "" } } as never)
 // The same id again, while the first row is still in the live tree.
-onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "bash", params: { command: "second" } })
-onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "bash", result: { exit_code: 0, stdout: "two", stderr: "" } } as never)
+onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "shell", params: { command: "second" } })
+onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "shell", result: { exit_code: 0, stdout: "two", stderr: "" } } as never)
 
 const reuseRows = reuseStore.entries.filter((entry) => entry.kind === "tool")
 const reuseStatuses = reuseRows.map((entry) => entry.status)
@@ -694,7 +694,7 @@ onApproval({
   _tag: "ElicitationRequested",
   id: "e1",
   kind: "tool-approval",
-  detail: { toolName: "bash", action: "shell", resource: "rm -rf /" }
+  detail: { toolName: "shell", action: "shell", resource: "rm -rf /" }
 } as never)
 const askedBeforeInterrupt = approvalStore.footer().type
 onApproval({ _tag: "SubmissionInterrupted" })
@@ -711,7 +711,7 @@ onResolved({
   _tag: "ElicitationRequested",
   id: "e2",
   kind: "tool-approval",
-  detail: { toolName: "bash", action: "shell", resource: "ls" }
+  detail: { toolName: "shell", action: "shell", resource: "ls" }
 } as never)
 onResolved({ _tag: "ElicitationResolved", id: "e2", granted: true } as never)
 const afterAnswering = resolvedStore.footer().type
@@ -730,9 +730,9 @@ const afterAnswering = resolvedStore.footer().type
  * times and the second question is the thing under test.
  */
 const twice: ReadonlyArray<TestLanguageModel.Turn> = [
-  { toolCalls: [{ id: "r1", name: "bash", params: { command: "echo same" } }] },
+  { toolCalls: [{ id: "r1", name: "shell", params: { command: "echo same" } }] },
   TestLanguageModel.text("once"),
-  { toolCalls: [{ id: "r2", name: "bash", params: { command: "echo same" } }] },
+  { toolCalls: [{ id: "r2", name: "shell", params: { command: "echo same" } }] },
   TestLanguageModel.text("twice")
 ]
 
@@ -953,7 +953,7 @@ const dismissed = footer().type === "prompt"
 
 const checks: Array<readonly [string, boolean]> = [
   ["user message committed", transcript.includes("what is in this workspace?")],
-  ["tool call committed with argument", transcript.includes("bash echo hi")],
+  ["tool call committed with argument", transcript.includes("shell echo hi")],
   ["tool marked succeeded", transcript.includes("✓")],
   ["listing body committed", transcript.includes("README.md")],
   ["directory marked with slash", transcript.includes("src/")],
@@ -1051,7 +1051,7 @@ const checks: Array<readonly [string, boolean]> = [
  */
 const interruptStore = makeStore()
 const { onEvent: onInterrupted } = project(interruptStore.sink, defaultViews)
-onInterrupted({ _tag: "ToolCallStarted", id: "x1", name: "bash", params: { command: "sleep 9" } })
+onInterrupted({ _tag: "ToolCallStarted", id: "x1", name: "shell", params: { command: "sleep 9" } })
 const runningEntries = interruptStore.drainSettled().length
 onInterrupted({ _tag: "ToolCallInterrupted", id: "x1", name: "bash" })
 interruptStore.sink.append({
@@ -1472,7 +1472,7 @@ const customBody = bodyOf(extended, "deploy", { url: "https://example.test" }, {
 
 // Replacing one of ours, the way handlers can be replaced. Typed against our
 // own toolkit, so this proves the same inference covers the built-in rules.
-const replaced = withViews(CodingToolkit.tools, { bash: { title: () => "shell" } })
+const replaced = withViews(CodingToolkit.tools, { shell: { title: () => "cmd" } })
 
 checks.push(
   ["unknown tool falls back to a legible title", unknownTitle === "deploy [environment=prod]"],
@@ -1482,7 +1482,7 @@ checks.push(
   // as the model encoded them, results as the handler returned them.
   ["a rule reads its tool's result without narrowing", customBody.type === "text"
     && customBody.content === "rolled out to https://example.test"],
-  ["a registered rule can replace one of ours", titleOf(replaced, "bash", {}) === "shell"],
+  ["a registered rule can replace one of ours", titleOf(replaced, "shell", {}) === "cmd"],
   ["replacing one rule keeps the others", bodyOf(replaced, "list_files", []).type === "structured"],
   ["our own titles still apply", titleOf(defaultViews, "edit_file", { path: "a.ts" }) === "edit a.ts"],
 
@@ -1556,7 +1556,8 @@ checks.push(
     scriptedProvenance.harnessVersion === VERSION],
   ["it lists the agent's tools, not the renderer's views",
     scriptedProvenance.tools?.includes("edit_file") === true
-      && scriptedProvenance.tools?.includes("bash") === true],
+      && scriptedProvenance.tools?.includes("shell") === true
+      && scriptedProvenance.tools?.includes("bash") !== true],
   // Every tool, so an omission from the registry cannot hide one.
   ["it lists every tool the agent has",
     CodingToolkit.tools.every((tool) =>
@@ -1771,8 +1772,8 @@ checks.push(
   // An earlier version said the sandbox bounded "the whole of what it can
   // reach", which was true of the file tools and false of the shell -- the
   // more dangerous half.
-  ["the help says bash is not confined",
-    helpText.includes("bash") && helpText.includes("anything on")],
+  ["the help says shell is not confined",
+    helpText.includes("shell") && helpText.includes("anything on")],
   ["and a live run warns before anything runs",
     liveBackend.warning !== undefined
       && liveBackend.warning.includes("runs as you")],

@@ -78,7 +78,7 @@ const program = Effect.gen(function* () {
         }
       ]
     },
-    { toolCalls: [{ id: "c4", name: "bash", params: { command: "npm test" } }] },
+    { toolCalls: [{ id: "c4", name: "shell", params: { command: "npm test" } }] },
     TestLanguageModel.text("Done. Fixed TODO, edit applied, tests pass.")
   ])
 

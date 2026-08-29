@@ -169,6 +169,24 @@ export const fallbackApproval = (request: Approval): string =>
 // The default rules: our six tools
 // ---------------------------------------------------------------------------
 
+const commandView: ToolView = {
+  body: (result) => {
+    const fields = dict(result)
+    const exitCode = num(fields.exit_code)
+    return exitCode === undefined ? undefined : {
+      type: "structured",
+      snapshot: {
+        kind: "command",
+        exitCode,
+        stdout: str(fields.stdout),
+        stderr: str(fields.stderr)
+      }
+    }
+  },
+  // A command is its own best description; naming the tool adds nothing.
+  approval: (request) => `run: ${request.resource}`
+}
+
 export const defaultViews: Views = {
   list_files: {
     body: (result) => ({
@@ -211,23 +229,15 @@ export const defaultViews: Views = {
       typeof result === "string" ? { type: "code", content: result } : undefined
   },
 
-  bash: {
-    body: (result) => {
-      const fields = dict(result)
-      const exitCode = num(fields.exit_code)
-      return exitCode === undefined ? undefined : {
-        type: "structured",
-        snapshot: {
-          kind: "command",
-          exitCode,
-          stdout: str(fields.stdout),
-          stderr: str(fields.stderr)
-        }
-      }
-    },
-    // A command is its own best description; naming the tool adds nothing.
-    approval: (request) => `run: ${request.resource}`
-  },
+  shell: commandView,
+  /**
+   * Display only. The built-in toolkits renamed their command tool to
+   * `shell`; a transcript persisted before that still holds `bash` rows, and
+   * they should render as the commands they were. Nothing dispatches on this
+   * name -- a view cannot execute anything -- so it is not a compatibility
+   * alias for the tool (SH10 in `docs/plan-shell-tool.md`).
+   */
+  bash: commandView,
 
   edit_file: {
     title: (params) => {

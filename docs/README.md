@@ -43,7 +43,6 @@ reference agent have landed; each file carries its own status line, and
 
 | document | what it is |
 | --- | --- |
-| [plan-shell-tool.md](./plan-shell-tool.md) | Replace the model-facing `bash` identity with a dialect-aware `shell`, keeping the sandbox at the argv boundary. |
 | [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. Phase 1 (the `PromptWire` codec) landed; blob storage and protocol projections (phases 2–5) remain. |
 | [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. Phases 1–7 landed; 8–15 (default summariser, manual `compact()`, branch summaries, durable activities) remain. |
 | [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. |
@@ -59,6 +58,7 @@ Kept because they record *why*, not because there is work left in them. See
 | --- | --- |
 | [plan-opencode-tools-port.md](./plan-opencode-tools-port.md) | `/coding` — opencode's tool engineering. |
 | [plan-pi-toolkit.md](./plan-pi-toolkit.md) | `/pi` — a second toolkit with Pi's contracts. |
+| [plan-shell-tool.md](./plan-shell-tool.md) | The `shell` tool: dialect-aware, resolved at construction, in both batteries. |
 | [plan-session-tree.md](./plan-session-tree.md) | `/tree` — branch and rewind over ordinary sessions. |
 | [plan-snapshot-export.md](./plan-snapshot-export.md) | `/export` — the versioned envelope and JSONL commit log. |
 | [plan-agent-server.md](./plan-agent-server.md) | `AgentServer` — several agents on one HTTP surface. Complete, S5 included. |

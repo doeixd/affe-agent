@@ -77,7 +77,12 @@ Usage:
 - Binary files are skipped, as are build and dependency directories such as \`node_modules\`, \`dist\` and \`.git\`. To search one of those, point \`path\` at it explicitly.
 - It is always better to run several searches as a batch than to search once and wait.`
 
-export const BASH = `Run a command in the workspace with bash.
+/**
+ * The command tool's description, for the dialect the toolkit was built
+ * with. The first sentence names it, so a model writing for PowerShell is
+ * told so before it writes; the rest is shared and dialect-neutral.
+ */
+export const shell = (displayName: string): string => `Run a command in the workspace using ${displayName}.
 
 Usage:
 - This tool is for terminal operations: git, npm, docker and the like. DO NOT use it for file operations -- the dedicated tools are better and cheaper:

@@ -24,6 +24,7 @@ Effect diagnostics, portability and the workerd bundle pass, and
 | `plan-tui-port.md` / `plan-tui-tool-views.md` | V0–V9, W1–W5 landed (W5's diff view shipped once the data existed). |
 | `audit-effect-ecosystem.md` | All actions closed. |
 | `plan-filetypes.txt` phase 1 | `PromptWire` codec at every boundary. |
+| `plan-shell-tool.md` | S0–S5 landed: `shell` tool, construction-time dialect, `configure`. |
 | `plan-branching-and-compaction.md` phases 1–10 | Preparation, token policy, Schema checkpoint, KV persistence, serializer, default model summariser, controller with manual `compact()`, compaction events. |
 | `research-tool-sources.md` first slice | `/tool-source` seam; OpenAPI, GraphQL, MCP sources; per-invocation `headers`. |
 | `plan-mcp-frontend.md` phases 1–3 | Host-based `serverLayer`, nine tools, history/pending resources, stdio elicitation. |
@@ -40,11 +41,9 @@ open, so the next pass does not have to re-derive it.
    / `continuationSummary`, `Compaction.controller` with `compact` /
    `checkpoint` / `clear` / `events`, and the `CompactionEvent` Schema.
    Phases 11–15 are item 22.
-2. **`plan-shell-tool.md` (S0–S5)** — fully specified, zero code. The
-   model-facing tool is still named `bash` in `/coding` and `/pi`
-   (`CodingToolkit.ts`, `PiToolkit.ts`), its prompt says "with bash", and both
-   toolkits resolve `Shell.current()` at execution rather than construction.
-   On a PowerShell host the API lies about itself.
+2. ~~**`plan-shell-tool.md` (S0–S5)**~~ — landed 2026-08-29: the tool is
+   `shell`, described for the dialect the toolkit was built with, resolved
+   once by `configure`; no `bash` alias. Release note in the README.
 3. **Filetypes phases 2–4** — `RemoteResult.content`, `MessageCompleted`
    content parts, and media on A2A / OpenAI `image_url` / AG-UI are text-only
    (`AgentClient.ts`, `AgentEvent.ts`, `AgentA2A.ts`, `AgentAgUi.ts`). The

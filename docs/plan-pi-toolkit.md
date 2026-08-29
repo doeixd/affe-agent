@@ -75,7 +75,7 @@ Grounded in the source, not the README. Ordered by value.
 | `truncateHead` alongside `truncateTail` | **Port** | We only kept tails; a head is right for some output. |
 | `formatSize` + "why it truncated" warnings | **Port** | Names the limit that fired, not just that one did. |
 | `GREP_MAX_LINE_LENGTH = 500` | **Consider** | Pi caps search lines four times tighter than we do. |
-| `powershell.ts` — one implementation, two shells | **Port the design** | Our `bash` hardcodes `bash -lc`, which is a real gap on Windows. |
+| `powershell.ts` — one implementation, two shells | **Port the design** | Our command tool used to hardcode Bash; since `plan-shell-tool.md` landed it is `shell`, built for the configured dialect. |
 | `ls.ts` conventions — `/` suffix, dotfiles, alphabetical, 500-entry cap | **Port** | Exactly the `list_files` work M3 deferred for want of evidence. Now there is evidence. |
 | `output-accumulator.ts` | **Skip for now** | Streaming progress needs a preliminary-results path our tools do not use yet. |
 | `.gitignore` support in `find`/`grep` | **Skip** | Pi gets it from ripgrep (`Default: local filesystem plus ripgrep`), so there is no portable implementation to take. Same conclusion as before, now confirmed twice. |

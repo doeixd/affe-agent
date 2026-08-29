@@ -4,7 +4,7 @@ Written 2026-08-26. This plan replaces the model-facing `bash` identity in the
 two built-in coding toolkits with `shell`, while keeping the sandbox at the
 lower, portable argv boundary.
 
-**Status: specified, not implemented.**
+**Status: implemented 2026-08-29 (S0–S5).** Falsification recorded at the end.
 
 ## Outcome
 
@@ -281,9 +281,9 @@ wiring cannot change its shell implementation behind the model's description.
 **SH5 — Defaults remain useful.** With no option, both toolkits describe Bash
 and execute `bash -c <script>` (no built-in is a login shell since #39).
 
-**SH6 — Every built-in mapping is exact.** Bash uses `-lc`; sh, zsh, fish, and
-Nushell use their declared `-c` form; both PowerShell variants use
-`-NoProfile -Command`; executable names match the table above.
+**SH6 — Every built-in mapping is exact.** Bash, sh, zsh, fish and Nushell
+use their `-c` form; both PowerShell variants use `-NoProfile -Command`;
+executable names match the table above.
 
 **SH7 — Permission remains semantic.** Every command projects to action
 `shell` and resource equal to the exact script string, independent of dialect.
@@ -618,3 +618,44 @@ worse than a visible protocol migration.
 Durable in-flight calls are the operational risk. Release notes must tell
 deployers to drain or version them; the library must not pretend it can safely
 reinterpret an unfinished `bash` call as `shell` across an arbitrary upgrade.
+
+## Done (2026-08-29)
+
+All five milestones landed in one change. What shipped, against the plan:
+
+- `/shell`: `Service.displayName`; options-object `make` that refuses an
+  empty or multi-line `name`/`displayName` (`Shell.make: <field> must be a
+  non-empty single-line string`, thrown at construction); the seven built-in
+  labels from the table; `current` retained for application-authored tools
+  and documented as *not* used by the built-in toolkits.
+- `/coding` and `/pi`: the tool is `shell` (`CodingToolkit.Shell`,
+  `handlers.shell`; same on `PiToolkit`); `ToolkitOptions.shell` resolved
+  once by `configure`, which returns `{ shell, tools, handlers }` built from
+  that one service; `toolkit(options?)` delegates to it; the default
+  `tools`/`handlers` exports come from one module-level Bash configuration.
+  `handlersFor` and the execution-time `Shell.current()` lookup are gone.
+  `Prompts.shell(displayName)` replaces `Prompts.BASH`.
+- Consumers: the TUI registers `shell` and keeps a render-only `bash` view
+  for persisted transcripts; the scripted backend and smoke traffic use
+  `shell`; `examples/ref-coding-agent.ts` scripts `shell`. `Permission.ts`
+  prose and the `perTool` README example updated. Generic user-defined
+  `bash` fixtures (`examples/permissions.ts`, `examples/elicitation.ts`, the
+  permission/export/sugar tests) were classified and kept: they test the
+  core, not either battery.
+
+Tests: `test/Shell.test.ts` is the shared contract, run against both
+toolkits -- SH3 (no `bash`), SH5 (default Bash, `bash -c`), SH2/SH6 (every
+built-in's label and exact argv), a custom service, SH4 (a conflicting
+`Shell.layer("fish")` around a `powershell` toolkit changes nothing), SH7
+(projection), the timeout shape, an end-to-end PowerShell run through a real
+`Agent` with a scripted sandbox that sees `pwsh -NoProfile -Command` and never
+`bash` (AC6), and compile-time assertions that the tool-name union has
+`shell` and not `bash` and that the parameters infer exactly (SH9).
+`test/CodingPrompts.test.ts` pins the first sentence per dialect and that the
+remainder is dialect-neutral.
+
+Falsified once each: SH4 (handler looks the shell up at execution → the
+conflicting-layer test fails), SH6 (`pwsh` loses `-NoProfile` → the argv
+tests fail under both toolkits and the end-to-end run), and the label guard
+(dropping the control-character check → `make` accepts a label with a line
+break). SH3/SH9 are enforced by the type-level assertions and the API pin.

@@ -55,7 +55,7 @@ describe("tool descriptions: quoted limits are real constants", () => {
     ["edit_file", Prompts.EDIT_FILE, []],
     ["list_files", Prompts.LIST_FILES, []],
     ["search", Prompts.SEARCH, [SearchFormat.SEARCH_LIMIT]],
-    ["bash", Prompts.BASH, [Truncate.MAX_LINES, Truncate.MAX_BYTES]]
+    ["shell", Prompts.shell("Bash"), [Truncate.MAX_LINES, Truncate.MAX_BYTES]]
   ]
 
   for (const [name, text, numbers] of allowed) {
@@ -83,10 +83,22 @@ describe("tool descriptions: the limits that matter are actually stated", () => 
     assert.include(Prompts.SEARCH, String(SearchFormat.SEARCH_LIMIT))
   })
 
-  it("bash states its output caps and where full output is kept", () => {
-    assert.include(Prompts.BASH, String(Truncate.MAX_LINES))
-    assert.include(Prompts.BASH, String(Truncate.MAX_BYTES))
-    assert.include(Prompts.BASH, Truncate.OUTPUT_DIR)
+  it("shell states its output caps and where full output is kept", () => {
+    assert.include(Prompts.shell("Bash"), String(Truncate.MAX_LINES))
+    assert.include(Prompts.shell("Bash"), String(Truncate.MAX_BYTES))
+    assert.include(Prompts.shell("Bash"), Truncate.OUTPUT_DIR)
+  })
+
+  it("shell names the configured dialect first, and claims no other", () => {
+    // The first sentence is the one a model reads before choosing syntax.
+    assert.match(Prompts.shell("Bash"), /^Run a command in the workspace using Bash\./)
+    const pwsh = Prompts.shell("PowerShell 7 (pwsh)")
+    assert.match(pwsh, /^Run a command in the workspace using PowerShell 7 \(pwsh\)\./)
+    assert.notInclude(pwsh, "with bash")
+    assert.notInclude(pwsh, "Bash")
+    // The shared remainder is dialect-neutral: identical for every shell.
+    const tail = (text: string) => text.slice(text.indexOf("\n"))
+    assert.strictEqual(tail(pwsh), tail(Prompts.shell("Bash")))
   })
 
   it("the read and edit descriptions agree on the line-number prefix", () => {
@@ -99,12 +111,12 @@ describe("tool descriptions: the limits that matter are actually stated", () => 
     assert.include(Prompts.EDIT_FILE, "never include any part of that prefix")
   })
 
-  it("bash points at the dedicated tools by their real names", () => {
+  it("shell points at the dedicated tools by their real names", () => {
     // A prompt naming a tool that does not exist is worse than no guidance.
     const names = CodingToolkit.tools.map((tool) => tool.name)
     for (const mentioned of ["search", "read_file", "write_file", "edit_file"]) {
       assert.include(names, mentioned)
-      assert.include(Prompts.BASH, `\`${mentioned}\``)
+      assert.include(Prompts.shell("Bash"), `\`${mentioned}\``)
     }
   })
 })

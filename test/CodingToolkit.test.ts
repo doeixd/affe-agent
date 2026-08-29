@@ -241,7 +241,7 @@ describe("CodingToolkit handlers", () => {
       const seen = yield* Ref.make<{ executable: string; args: ReadonlyArray<string> } | undefined>(undefined)
       const result = yield* withSandbox(
         {},
-        H.bash({ command: "echo hi" }, ctx),
+        H.shell({ command: "echo hi" }, ctx),
         (cmd) =>
           Ref.set(seen, { executable: cmd.executable, args: cmd.args }).pipe(
             Effect.as({ exitCode: 0, stdout: "hi\n", stderr: "" })
@@ -258,7 +258,7 @@ describe("CodingToolkit handlers", () => {
       const opts = yield* Ref.make<unknown>(undefined)
       const result = yield* withSandbox(
         {},
-        H.bash({ command: "false", timeout_ms: 500 }, ctx),
+        H.shell({ command: "false", timeout_ms: 500 }, ctx),
         (_cmd, options) =>
           Ref.set(opts, options).pipe(Effect.as({ exitCode: 2, stdout: "", stderr: "boom" }))
       )
@@ -1363,7 +1363,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
 
   it.effect("passes short output through untouched", () =>
     Effect.gen(function* () {
-      const out = yield* withSandbox({}, H.bash({ command: "echo hi" }, ctx), emitting("hi\n"))
+      const out = yield* withSandbox({}, H.shell({ command: "echo hi" }, ctx), emitting("hi\n"))
       assert.deepStrictEqual(out, { exit_code: 0, stdout: "hi\n", stderr: "" })
     })
   )
@@ -1377,7 +1377,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
       const out = yield* withSandbox(
         {},
         Effect.gen(function* () {
-          const result = yield* H.bash({ command: "build" }, ctx)
+          const result = yield* H.shell({ command: "build" }, ctx)
           // Read the saved file back from the *same* sandbox the tool wrote it
           // to. Reading it from a fresh one would only prove the sandbox can
           // round-trip a string.
@@ -1408,7 +1408,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
   it.effect("bounds stderr as well as stdout", () =>
     Effect.gen(function* () {
       const noisy = Array.from({ length: 4000 }, (_, i) => `warn ${i}`).join("\n")
-      const out = yield* withSandbox({}, H.bash({ command: "x" }, ctx), emitting("", noisy))
+      const out = yield* withSandbox({}, H.shell({ command: "x" }, ctx), emitting("", noisy))
       assert.include(out.stderr, "output truncated")
       assert.include(out.stderr, `warn ${4000 - 1}`)
     })
@@ -1419,7 +1419,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
       const out = yield* Effect.flip(
         withSandbox(
           {},
-          H.bash({ command: "sleep 100", timeout_ms: 500 }, ctx),
+          H.shell({ command: "sleep 100", timeout_ms: 500 }, ctx),
           () => Effect.fail(new Sandbox.TimeoutError({ executable: "bash", timeoutMillis: 500 }))
         )
       )
@@ -1441,7 +1441,7 @@ describe("CodingToolkit bash: bounded output and honest failures", () => {
             write: (path) =>
               Effect.fail(new Sandbox.PermissionDeniedError({ path, operation: "write" }))
           }
-          return yield* H.bash({ command: "x" }, ctx).pipe(
+          return yield* H.shell({ command: "x" }, ctx).pipe(
             Effect.provideService(Sandbox.Current, readOnly)
           )
         }),
@@ -1610,7 +1610,7 @@ describe("CodingToolkit permission projections", () => {
       search.describe?.({ pattern: "foo", path: "src/secrets" }),
       "foo in src/secrets"
     )
-    const bash = Permission.projectionOf(CodingToolkit.Bash)
+    const bash = Permission.projectionOf(CodingToolkit.Shell)
     assert.strictEqual(bash.action, "shell")
     assert.strictEqual(bash.resource({ command: "git push" }), "git push")
     return Effect.void

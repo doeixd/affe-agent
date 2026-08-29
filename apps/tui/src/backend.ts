@@ -18,7 +18,7 @@ import * as Checkout from "./checkout.ts"
  *
  * The two are chosen together and in one place, because they have to agree
  * about what is real. A live model pointed at a memory sandbox would confidently
- * describe a workspace that does not exist -- three seeded files and a `bash`
+ * describe a workspace that does not exist -- three seeded files and a `shell`
  * that always prints `hi` -- and the transcript would look plausible while
  * being fiction. So this is one choice with two halves, not two options.
  *
@@ -116,7 +116,7 @@ const defaultTurns: ReadonlyArray<TestLanguageModel.Turn> = [
         text: "That is what the workspace holds.",
         chunks: ["That is ", "what the ", "workspace holds."]
       },
-      { toolCalls: [{ id: "t2", name: "bash", params: { command: "echo hi" } }] },
+      { toolCalls: [{ id: "t2", name: "shell", params: { command: "echo hi" } }] },
       TestLanguageModel.text("The command ran."),
       {
         toolCalls: [{
@@ -143,7 +143,7 @@ const defaultTurns: ReadonlyArray<TestLanguageModel.Turn> = [
         }]
       },
       TestLanguageModel.text("Bumped it."),
-      { toolCalls: [{ id: "t4", name: "bash", params: { command: "rm -rf /" } }] },
+      { toolCalls: [{ id: "t4", name: "shell", params: { command: "rm -rf /" } }] },
       TestLanguageModel.text("I did not run that."),
       TestLanguageModel.text(
         "I am a scripted model. Run with --live to use a real one."
@@ -212,9 +212,9 @@ export const scripted: Backend = scriptedWith(defaultTurns)
  * relative, `..`-free paths and resolves symlinks -- so for those, the
  * directory really is the whole of what the agent can reach.
  *
- * **`bash` is not confined to it, at all.** `LocalSandbox` runs the child with
+ * **`shell` is not confined to it, at all.** `LocalSandbox` runs the child with
  * its `cwd` set to the workspace and nothing else: the process keeps this
- * program's full privileges. An approved `bash` call can read absolute paths,
+ * program's full privileges. An approved `shell` call can read absolute paths,
  * write outside the workspace, reach the network, and read credentials. It is
  * host execution that happens to start in a directory.
  *
@@ -262,7 +262,7 @@ export const live = (options: {
    * A warning that lives only in a docstring warns the person who already read
    * the source.
    */
-  warning: "live: file tools stay inside the workspace; an approved `bash` runs"
+  warning: "live: file tools stay inside the workspace; an approved `shell` runs"
     + " as you, anywhere on this machine."
     + ` This conversation is written unencrypted to ${sessionDirectory(options.workspaceRoot)}`,
   /**
@@ -339,7 +339,7 @@ export const fromArgv = (argv: ReadonlyArray<string>): Backend => {
     throw new Error(
       "--live needs --workspace <dir>: where the agent works.\n" +
         "\n" +
-        "File tools are confined to that directory. An approved `bash` call is\n" +
+        "File tools are confined to that directory. An approved `shell` call is\n" +
         "not: it runs with this program's privileges and can reach anything on\n" +
         "the machine. Every shell call is asked about first.\n" +
         "\n" +

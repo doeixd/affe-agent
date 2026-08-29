@@ -408,7 +408,6 @@ describe("durable and cluster surfaces", () => {
     const pi = await import("../src/pi/index.js")
     assert.deepStrictEqual(Object.keys(pi).sort(), ["PiToolkit"])
     assert.deepStrictEqual(Object.keys(pi.PiToolkit).sort(), [
-      "Bash",
       "EditFile",
       "GREP_MAX_LINE_LENGTH",
       "LS_LIMIT",
@@ -418,10 +417,11 @@ describe("durable and cluster surfaces", () => {
       "MAX_LINES",
       "ReadFile",
       "Search",
+      "Shell",
       "WriteFile",
+      "configure",
       "formatSize",
       "handlers",
-      "handlersFor",
       "head",
       "headNotice",
       "lockRegistrySize",

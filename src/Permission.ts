@@ -108,7 +108,7 @@ export interface Request {
 /**
  * What a tool call *is*, for policy purposes.
  *
- * The tool author knows that `bash({ command })` is the action `shell` on the
+ * The tool author knows that `shell({ command })` is the action `shell` on the
  * resource `command`; the policy engine must not. A tool carries this as an
  * Effect AI annotation, read when the call is evaluated.
  *
@@ -144,7 +144,7 @@ export interface Projection<Params = unknown> {
    * approving.
    *
    * Optional, and defaulted to `resource`: for a tool whose scope already is
-   * the thing being done -- `bash` on a command -- the two are the same
+   * the thing being done -- `shell` on a command -- the two are the same
    * string and there is nothing to separate.
    */
   readonly describe?: ((params: Params) => string) | undefined

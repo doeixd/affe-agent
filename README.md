@@ -419,7 +419,7 @@ independently:
 Agent.make({
   toolkit,
   toolExecution: ToolExecution.perTool({
-    limits: { bash: 1, read_file: 10 },
+    limits: { shell: 1, read_file: 10 },
     defaultLimit: 4
   })
 })
@@ -1474,7 +1474,7 @@ runs with your program's full privileges.
 agent needs — `read_file` (with line numbers and a range), `write_file`,
 `edit_file` (an exact string replace that refuses an ambiguous match),
 `list_files`, `search` (an in-process tree walk, so it works against any
-provider) and `bash`. It is *not* a core capability: every tool is an ordinary
+provider) and `shell`. It is *not* a core capability: every tool is an ordinary
 `Tool` whose handler demands `Sandbox.Current`, exactly like the one above. That
 a serious toolkit needs no change to the agent core is the whole point.
 
@@ -1490,9 +1490,59 @@ const Coder = Agent.make({
 Which sandbox runs — an in-memory world for tests, a real directory on disk —
 arrives through the same one-line layer wiring, invisible to the tools. And
 every tool carries a [permission](#permissions) projection: the file tools
-project to `read`/`write` on the path, `bash` to `shell` on the command, so a
+project to `read`/`write` on the path, `shell` to `shell` on the command, so a
 policy can allow reads, ask before writes and deny `rm -rf` without knowing
 anything about these tools' parameter shapes.
+
+#### The `shell` tool and its dialect
+
+The command tool is named `shell`, and its description tells the model which
+dialect it is writing for. The dialect is chosen when the toolkit is built,
+from `@doeixd/effect-agent/shell`: a built-in `Kind` or a `Service` of your
+own. Default: Bash, executed as `bash -c <script>`.
+
+```ts
+import { Shell } from "@doeixd/effect-agent/shell"
+
+CodingToolkit.toolkit()                       // "…using Bash."       bash -c
+CodingToolkit.toolkit({ shell: "pwsh" })      // "…using PowerShell 7 (pwsh)."  pwsh -NoProfile -Command
+PiToolkit.toolkit({ shell: "nushell" })       // "…using Nushell."    nu -c
+
+// A shell of your own: `displayName` is what the model is told, and it is
+// refused if it could carry a second line of instructions.
+const xonsh = Shell.make({
+  name: "xonsh",
+  displayName: "Xonsh",
+  toCommand: (script) => Sandbox.command("xonsh", ["-c", script])
+})
+CodingToolkit.toolkit({ shell: xonsh })
+
+// Layer-sourced: read the service first, so the requirement is in the type.
+const shell = yield* Shell.Shell
+CodingToolkit.toolkit({ shell })
+
+// Composition from the same resolved shell -- tools and handlers cannot be
+// built for different dialects by accident.
+const configured = CodingToolkit.configure({ shell: "powershell" })
+Agent.toolkit(configured.tools, { ...configured.handlers, read_file: audited })
+```
+
+The description the model sees and the argv that runs come from the *same*
+resolved service, and a `Shell.layer` provided later does not change an
+already-built toolkit -- that is what keeps the advertised dialect and the
+executed one from drifting apart. `Sandbox.exec` stays argv-based and never
+selects a shell.
+
+**Migration note (0.0.1 → next).** The tool used to be named `bash`
+(`CodingToolkit.Bash`, `handlers.bash`, `Prompts.BASH`). There is no alias:
+`shell` / `CodingToolkit.Shell` / `handlers.shell` are the only names, so
+scripted model fixtures and permission `toolName` matches change with the
+code, and a leftover `bash` fails to compile rather than half-migrating.
+Recorded transcripts and exports remain readable -- tool names in them are
+data -- but a durable workflow holding an *unfinished* built-in `bash` call
+cannot dispatch it to a toolkit that no longer declares one: drain or
+version those before deploying. The TUI keeps a display-only view for
+historical `bash` rows; nothing executes under that name.
 
 ## Subagents
 
