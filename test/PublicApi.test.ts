@@ -71,6 +71,7 @@ describe("public API", () => {
     assert.isTrue(typeof Harness.AgentEvent.match === "function")
     assert.deepStrictEqual(Object.keys(Harness.PromptWire).sort(), [
       "Message",
+      "Part",
       "Prompt"
     ])
     // The permission vocabulary (#9): decisions, requests, projections, the
