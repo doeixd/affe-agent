@@ -15,7 +15,9 @@ import { Prompt } from "effect/unstable/ai"
 export const dataUrl = (
   url: string
 ): Option.Option<{ readonly mediaType: string; readonly base64: string }> => {
-  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url)
+  // Parameters between the type and the encoding (`;charset=utf-8`) are
+  // allowed and ignored; a data URL that is not base64 is not a file here.
+  const match = /^data:([^;,]+)(?:;[^,]*?)?;base64,(.*)$/s.exec(url)
   return match === null || match[1] === undefined || match[2] === undefined
     ? Option.none()
     : Option.some({ mediaType: match[1], base64: match[2] })
