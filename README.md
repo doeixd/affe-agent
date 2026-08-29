@@ -829,7 +829,19 @@ to expose.
 It is deliberately narrower: a caller on the far side has no access to the tool
 definitions, and a provider response is not a value a protocol can carry — so
 `RemoteResult` drops it rather than half-encoding it, and a tool's typed failure
-arrives as `AgentExecutionError` carrying the originating tag.
+arrives as `AgentExecutionError` carrying the originating tag. What it does
+carry is `content`: the final assistant message as provider-neutral prompt
+parts -- text, reasoning and files, in order -- so a model that answered with
+an image reaches a remote caller as more than `text`. The same parts appear on
+`MessageCompleted.content`, and under `stream: true` a file that arrives whole
+is announced as `MessagePartCompleted` rather than faked as deltas.
+
+```ts
+const result = yield* session.prompt("draw the architecture")
+for (const part of result.content) {
+  if (part.type === "file") save(part.mediaType, part.data) // Uint8Array | string | URL, as produced
+}
+```
 
 That is deliberately *not* `AgentTransportError`. An agent failure is a property
 of the request and will recur, so wearing the transport tag would turn a
