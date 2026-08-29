@@ -301,7 +301,7 @@ reference is honest and the banner already says the output was truncated -- and
 the alternative would couple the export format to the coding toolkit's banner
 text, which is a worse trade than the gap it closes.
 
-**Not yet done:** E4 (the commit log).
+~~**Not yet done:** E4 (the commit log).~~ E4 landed 2026-08-26 (see below).
 Note that E4's premise has shifted -- T5 landed a `NodeStore` over
 `KeyValueStore` with whole snapshots, so the shared append-only log is now a
 change to one module rather than a new one. Suggestion 7 (`bash` output files

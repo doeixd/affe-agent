@@ -140,7 +140,7 @@ Concretely, when this is done:
 
 ## Why change it
 
-`src/mcp/AgentMcp.ts` today exposes one tool, `ask_agent`, which blocks for the
+`src/mcp/AgentMcp.ts` originally exposed one tool, `ask_agent`, which blocks for the
 whole run. That is a correct one-shot adapter and it should survive. It is not
 a frontend, for three structural reasons.
 
@@ -495,12 +495,9 @@ condition within a phase.
 
 - [ ] The post-resource/example `npm run check` was green: every typecheck and
       build, 329-file Effect diagnostics at zero, portability and workerd,
-      1,389 tests, all 41 packed entry points, and reference/CLI/TUI smoke. A
-      later post-lifecycle rerun is currently blocked at typecheck by concurrent
-      worktree changes in `test/SessionObserve.test.ts` and `test/ZProbe.test.ts`
-      (`Effect.fork` does not exist; requirement channels widen to `unknown`).
-      Focused MCP, session, cast, portability and the 1,390-test pre-arrival
-      suite are green; do not attribute those two files to this plan.
+      1,389 tests, all 41 packed entry points, and reference/CLI/TUI smoke.
+      (An earlier note here blamed a typecheck blocker on `test/ZProbe.test.ts`;
+      that file never existed and the gate is clean as of `b554458`.)
 - [x] `examples/mcp-frontend.ts` is a portable shared-host stdio frontend with
       no casts and no hand-annotated parameters, carrying a compile-time
       assertion that a tool handler's parameters are not `any` — **broken once

@@ -1,171 +1,147 @@
-# Remaining work, easiest first
+# Remaining work
 
-Written 2026-08-26 from a pass over `/docs` against what actually ships.
-Implementation proceeds in the numbered order below.
+Rewritten 2026-08-29 from an audit of every plan in `/docs` against what ships
+at `b554458` (four read-only passes: kernel/durability plans, transport/server
+plans, tools/toolkit plans, and the progress files themselves). This is the
+live list; `STATUS.md` is the chronology and `ROADMAP.md` the capability view.
 
-Most plans in `/docs` are already built. The easy leftover work is **small
-remaining slices**, not the large new plans.
+State of play: issues #1–#3 and #5–#80 are closed; #4 (the roadmap tracker) is
+the only open issue. `npm run check` is green: 1466 tests in 131 files, zero
+Effect diagnostics, portability and the workerd bundle pass, and
+`npm run verify:durability` shows D1–D7 biting (D4b survives by construction).
 
-## Already done (do not restart)
+## Already done — do not restart
 
 | Plan | State |
 | --- | --- |
-| `plan-execution-plan.md` | All milestones checked off |
-| `plan-opencode-tools-port.md` | M1–M5 landed; web tools exist |
-| `plan-session-tree.md` | T1–T5 landed (delta storage deliberately deferred) |
-| `plan-tui-port.md` | V0–V8 landed |
-| `plan-tui-tool-views.md` | W1–W4 landed; W5 is “don’t do speculatively” |
-| `plan-snapshot-export.md` | E1–E5 landed (JSONL commit log in E4) |
-| `audit-effect-ecosystem.md` | All A-0 through A-13 actions and AS1–AS11 done |
+| `plan-execution-plan.md` | Complete (X1–X4, XS1–XS4). |
+| `plan-opencode-tools-port.md` | M1–M6 landed, post-review hardening included. |
+| `plan-pi-toolkit.md` | P0–P5 landed. |
+| `plan-session-tree.md` | T1–T5 landed; delta storage deliberately deferred; ST6 example never written. |
+| `plan-snapshot-export.md` | E1–E5 landed. |
+| `plan-agent-server.md` | S1–S5 landed. |
+| `plan-durability-hardening.md` | H1–H9, SD1–SD6 landed; `scripts/falsify.mjs` is the re-runnable SD2. |
+| `plan-tui-port.md` / `plan-tui-tool-views.md` | V0–V9, W1–W5 landed (W5's diff view shipped once the data existed). |
+| `audit-effect-ecosystem.md` | All actions closed. |
+| `plan-filetypes.txt` phase 1 | `PromptWire` codec at every boundary. |
+| `plan-branching-and-compaction.md` phases 1–7 | Preparation, token policy, Schema checkpoint, KV persistence, serializer. |
+| `research-tool-sources.md` first slice | `/tool-source` seam; OpenAPI, GraphQL, MCP sources; per-invocation `headers`. |
+| `plan-mcp-frontend.md` phases 1–3 | Host-based `serverLayer`, nine tools, history/pending resources, stdio elicitation. |
+| `plan-deployment.md` §10.1 | workerd typecheck + bundle probe in `check`. |
 
-## Order of work
+## Ranked
 
-### 1. `plan-snapshot-export.md` — E4, the JSONL commit log ✅
+Ordered by user-visible value per unit of work. Each row says why it is still
+open, so the next pass does not have to re-derive it.
 
-Landed 2026-08-26. `encodeJsonl` / `parseJsonl` / `headerOf` / `append` on
-`/export`. Header line is picker metadata; remaining lines are messages.
-EventLog was not adopted (H4b). Delta storage for the tree stays deferred.
+### Functional gaps in shipped packages
 
-### 2. `plan-agent-server.md` — S1 through S5 ✅
+1. **Compaction phases 8–10** — a default model summariser
+   (`Compaction.model`), a manual `compact()` controller, and
+   `CompactionEvent`s with usage. Today a user must write their own summariser
+   and cannot trigger compaction; the only functional gap among the landed
+   plans. `src/compaction/Compaction.ts` `make` returns a bare
+   `ContextTransform`.
+2. **`plan-shell-tool.md` (S0–S5)** — fully specified, zero code. The
+   model-facing tool is still named `bash` in `/coding` and `/pi`
+   (`CodingToolkit.ts`, `PiToolkit.ts`), its prompt says "with bash", and both
+   toolkits resolve `Shell.current()` at execution rather than construction.
+   On a PowerShell host the API lies about itself.
+3. **Filetypes phases 2–4** — `RemoteResult.content`, `MessageCompleted`
+   content parts, and media on A2A / OpenAI `image_url` / AG-UI are text-only
+   (`AgentClient.ts`, `AgentEvent.ts`, `AgentA2A.ts`, `AgentAgUi.ts`). The
+   codec exists, so these are mechanical. Phase 5 (blob store) is separate and
+   larger.
+4. **`session.submit` on the remote surfaces + `requestId` idempotency** —
+   the receipt exists on `AgentSession` only; not on `AgentClient`,
+   `AgentSessionHost` or the durable client, and the retention contract for
+   completed outcomes is still undecided (`STATUS.md`, "Three issues from a
+   review pass"). Prerequisite for the `SessionInbox` architecture.
+5. **MCP frontend host seam** — `agent://sessions` and `…/events?after=N`
+   need session enumeration and a finite event-log read on
+   `AgentSessionHost`; neither exists. Also delete the legacy
+   `handlers`/`layer` path in `AgentMcp.ts` once nothing uses it. Progress
+   tokens and native HTTP elicitation stay blocked on upstream `McpServer`;
+   skill prompts wait on a permission-aware `SkillRegistry` load.
+6. **Tool-source gaps** — MCP `readOnly`/`destructiveHint` are not carried
+   into permissions; `bindDiscovered` silently drops invalid names and
+   `skipped` entries; `Permission.annotate` is applied in `bindDiscovered` but
+   not `bind`; headers are not `Redacted`. Then the real design item:
+   per-principal credential resolution (research-tool-sources §7), of which
+   only the per-invocation `headers` hook exists.
+7. **Cluster D7 wire contract** — `AgentEntity`'s RPC error schema is
+   `AgentIdleError` only; a `StorageError` becomes a defect on the wire
+   (`src/cluster/AgentEntity.ts`). Widen it so the cluster is not the weaker
+   D7 cell.
+8. **Elicitation terminal state** — decoding `Response.value` against the
+   request's schema exists; an explicit terminal state guarding against
+   double-resolution does not (`ROADMAP.md`).
 
-Landed 2026-08-26. `AgentHttp.api({ name })`, `AgentServer.mount` / `make` /
-`serverLayer`. Duplicate mounts fail at construction. LayerMap deferred:
-routes register at layer construction, so lazy mounts do not fit option A.
-S3 mixed backing landed 2026-08-26: `AgentHttp.fromGenerated` /
-`agentClientLayer` / `agentClientFromServer` adapt HTTP to `AgentClient`;
-the shared `AgentClientContract` runs against that adapter; one server
-serves a local mount and a remote-backed mount. S4 inventory landed too --
-`/inventory`, the `Inventory` / `MountSnapshot` schemas, and a test that
-reads it before and after creating a session. S5 landed 2026-08-27:
-`examples/agent-server-auth.ts` shows bearer and cookie
-`PrincipalResolver`s with separate per-mount authorization, backed by direct
-resolver/policy tests. This plan is complete.
+### Proof and hygiene
 
-### 3. `plan-pi-toolkit.md` — second toolkit at `/pi` ✅
+9. **`SandboxConformance.suite`** in `/testing` over the real `Sandbox`
+   contract (`read/write/list/stat/canonical/exec`), broken once against a
+   deliberately wrong provider. Unblocks `Sandbox.fromExec` /
+   `fromOperations` and every deployment step that needs a non-local sandbox.
+10. **Cross-adapter conformance matrix** — `AgentClientContract`,
+    `DeliveryLogContract`, `NodeStoreContract` and `McpServerConformance` exist,
+    but nothing holds HTTP, RPC, AG-UI, A2A and MCP to one answer on capacity,
+    auth, idempotency and resumption (design-assessment rec 4).
+11. **Public/SPI boundary** — `MakeOptions.eventSink` / `submissionIds` and
+    `ToolExecution.execute` are public but engine-facing (design-assessment
+    rec 2). Then a maturity label per subpath; README marks only three
+    packages experimental (rec 3).
+12. **TUI** — remove the nine `as never` casts in `apps/tui/src/smoke.tsx`
+    (CLAUDE.md rule; test code counts) and add the missing SV2 render
+    assertions for `search`, `read_file`, `write_file`. Live-region scrolling
+    and syntax highlighting stay blocked on OpenTUI parsers.
+13. **A2A slow-consumer test or bound** — both SSE pumps are
+    `Queue.unbounded` with a rationale (#31); AG-UI is bounded at 256. Either
+    add the slow-consumer test that justifies the asymmetry or bound it.
+14. **Small A2A additions** — `A2A.tool(...)` wrapping `RemoteAgent.send` +
+    `typed()`; there is no equivalent today.
+15. **`examples/session-tree.ts`** (ST6) — write it or strike ST6.
+16. **`ChannelConformance`** packaging — the Slack cases (signature, replay,
+    idempotency) exist ad hoc; threading, attachments and hostile payloads do
+    not.
+17. **Compress `STATUS.md`** — 3k chronological lines; the 2026-08-29 section
+    corrected the flatly wrong sentences, but a short "current truth" document
+    with the chronology moved under `docs/` is still the right end state
+    (design-assessment rec 7).
+18. **Close #4** — mark the shipped items and close the tracker.
 
-P0–P5 landed. `/pi` is a second toolkit: batch `edits[]` (I13–I15), rendered
-`list_files`, injectable `Shell`, truncation that names the limit, shared
-canonical-path lock with `/coding`. `test/PiToolkit.test.ts`.
+### Larger, correctly parked
 
-### 4. TUI leftover — persist the tree across launches ✅
+19. **Real workerd / Durable Object host** — `apps/worker` is a compile-time
+    fence; a DO-hosted `AgentHttp`, a DO-storage `KeyValueStore`, and the
+    `/durable`-on-DO decision are unstarted (`plan-deployment.md` §3, §7).
+20. **Reference gateway and declarative references, presets, LSP/code-mode
+    batteries** (`plan-primitives.md` steps 3–6) — only the coding reference
+    exists.
+21. **Code mode** (`research-code-mode.md`) — signature generation and the
+    budgeted catalog are useful without an interpreter; nothing in `src/`.
+22. **Compaction phases 11–15** — branch-seed seam, `BranchSummary`, `/coding`
+    file details, durable summariser activities, overflow recovery.
+23. **Filetypes phase 5** — blob store, size/MIME policy.
+24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
+    serialisation actually bites.
+25. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
+    — new packages and architecture (Claude Code / OpenCode bridges, relay
+    transport, `SessionInbox` / `ProcessManager`). Preconditions are all met
+    and tested; nothing started. `plan-deployment.md` §6.3 narrows when the
+    relay is the right tool.
 
-Live backend writes the tree to `NodeStore.keyValue` outside the workspace
-(`apps/tui/src/backend.ts`); `restore.ts` paints a recovered `Prompt`. Smoke
-V9 asserts a second launch resumes. Remaining TUI leftovers are live-region
-scrolling and syntax highlighting (blocked on OpenTUI parsers).
+### Known, deliberately left
 
-### 5. Finish the in-progress A2A adapter (`STATUS.md`) ✅
-
-`/a2a` already serves Agent Card, JSON-RPC, streaming and cancel. Two of the
-four gaps this used to list have since closed: **input-required continuation**
-is covered by two tests in `AgentA2A.test.ts` (pause and resume, and asking
-again after a resume), and a **typed client** exists -- `AgentA2A.client`,
-`RemoteAgent`, `TypedExchange`.
-
-Closed 2026-08-27. The reverse peer suite was already present in
-`AgentA2AClient.test.ts`; the earlier inventory was stale. The portable server
-now advertises and serves HTTP+JSON alongside JSON-RPC: blocking and streaming
-send, task get/list/subscribe/cancel, extended-card, and push-configuration
-routes all delegate to the same official SDK request handler and owner-scoped
-stores. The disabled extended-card and push capabilities return their protocol
-errors. `AgentA2A.test.ts` drives the binding through the official REST client
-and covers tenant-prefixed routing, schema/content/version errors, task lookup,
-listing, streaming, cancellation, and SDK error encoding.
-
-### 6. Two export-surface findings — small, and both real ✅
-
-Found 2026-08-27 while writing [MODULES.md](./MODULES.md) §11. Neither is a
-design question; both are gaps between what the library does and what it lets a
-user reach.
-
-Closed 2026-08-27. `Elicitation` is exported from the root and from the explicit
-`/elicitation` subpath; the root vocabulary and the elicitation namespace are
-pinned by `PublicApi.test.ts`. `examples/ref-coding-agent.ts` imports only
-published package paths, uses `Elicitation.memory` for approval, and now runs as
-`smoke:ref-coding` in `npm run check`. That example also closes the first
-acceptance step in [plan-primitives.md](./plan-primitives.md).
-
-### 7. `plan-filetypes.txt` Phase 1 — stable `PromptWire` codec ✅
-
-Landed 2026-08-27 across every current prompt boundary at once: HTTP, shared
-RPC schemas, cluster and workflow payloads, `DurableSessionStore`,
-`DurableChannels`, snapshots/full exports, JSONL messages, and the key-value
-tree store. The decoded types remain exactly Effect AI's `Prompt.Prompt` and
-`Prompt.Message`; the JSON form tags string, bytes/base64, and URL data so the
-runtime variant survives. New writes are explicit, legacy untagged strings are
-still readable, and export format version 2 names the incompatible file shape.
-Tests cover real HTTP/RPC clients, cluster/workflow, SQLite, both durable
-session stores, both export forms, channel storage, and tree reconstruction.
-
-## Durability: complete (2026-08-28)
-
-The plan's milestones are done (H1-H9), and the last two acceptance criteria
-closed on 2026-08-28:
-
-- **SD2 ✅ (2026-08-28).** Re-run against the current tree, and it is now
-  `scripts/falsify.mjs` rather than a one-off: eight of nine breaks bite, and
-  every verdict the 2026-08-24 table recorded still holds. D1 and D2 bite
-  harder than they did, because the breaks now reach both store
-  implementations. **The guarantees enforced in August are still enforced.**
-
-  One survivor, D4b: removing the interrupt discrimination in `DurableAgent`'s
-  `catchCause` changes nothing any of 1389 tests can see, and a probe found the
-  interrupt and failure paths indistinguishable through `poll` in the one
-  scenario that exercises it. Recorded in
-  [plan-durability-hardening.md](./plan-durability-hardening.md) as either dead
-  code or an untested path, with the evidence for both readings — not papered
-  over with a test asserting a difference that may not exist.
-- **SD6 ✅ (2026-08-28).** The three limits `STATUS.md` names were already at
-  their boundaries. The sweep found the gaps in `/toolSource` instead — six
-  bare numeric literals now named and explained, and two options interfaces
-  that had **no JSDoc at all**, so a caller meeting `maxResponseBytes` or
-  `timeout` could not learn the default without reading source. That is the
-  shape SD6 is about: a limit that exists, is reachable, and is written down
-  nowhere the person hitting it will look. Full inventory, including what was
-  checked and found sound, in
-  [plan-durability-hardening.md](./plan-durability-hardening.md).
-
-## Design threads opened 2026-08-27 — not ranked here
-
-Six documents written in one pass, now partly implemented, each stating its own
-sequence. They are listed rather than ranked because
-[plan-primitives.md](./plan-primitives.md) argues the ordering between them, and
-that argument does not compress into a row.
-
-| thread | first step |
-| --- | --- |
-| [plan-primitives.md](./plan-primitives.md) | first reference coding agent ✅; gateway/declarative references remain |
-| [plan-mcp-frontend.md](./plan-mcp-frontend.md) | shared host + controls + status/respond + elicitation + history/pending resources ✅; events need a finite log read, progress/cancellation need MCP fixes, skill prompts need permission-aware loading |
-| [research-tool-sources.md](./research-tool-sources.md) | `ToolSource` seam, OpenAPI, and per-invocation auth headers ✅; GraphQL ✅ — variables instead of interpolation, `$defs` hoisting for recursive input types (#26, #27 closed) |
-| [plan-integrations.md](./plan-integrations.md) | `SandboxConformance`, broken once against a deliberately wrong provider |
-| [plan-deployment.md](./plan-deployment.md) | portable `workerd` typecheck + bundle ✅; a real Worker/DO host remains |
-| [research-code-mode.md](./research-code-mode.md) | signature generation and the budgeted catalog, which are useful with no interpreter at all |
-
-The two cheapest probes both passed. The coding reference exposed the missing
-Elicitation export; the `workerd` bundle found no new portability exception.
-The first integration-axis slice also landed. Its execution test exposed and
-fixed an `any` service requirement in both generic and MCP discovered toolkits.
-
-## Medium, not first
-
-- **`plan-branching-and-compaction.md` phases 1–7** ✅ — landed 2026-08-27.
-  Ten existing behavior tests stayed green; pure cut preparation, token-budget
-  policy, portable approximate estimation, exact error-channel inference, and
-  the Schema checkpoint are covered. The checkpoint keeps token counts in
-  `Option`: the message policy has no tokenizer. Effect `KeyValueStore`
-  persistence survives transform recreation, structured summaries preserve
-  provider-neutral usage, and the transcript serializer bounds tool results
-  without copying file payloads. A separate checkpoint-store noun and generic
-  typed details were rejected until they have real independent consumers.
-  Phases 8–15 remain the larger controller/branch work below.
-
-## Hard / not this pass
-
-| Plan | Why not |
-| --- | --- |
-| ~~`plan-durability-hardening.md` remaining~~ | **Not hard any more: H3, H6 and H9 all landed 2026-08-26.** The multi-node fixture runs. SD2 and SD6 were both closed 2026-08-28. This plan is complete. |
-| `plan-a2a-layers-bridges.txt` | New packages: spawn Claude Code / OpenCode as A2A agents. |
-| `plan-relay.txt` | 16 phases: NAT, WSS, enrollment, RPC-over-relay. After other work. [plan-deployment.md](./plan-deployment.md) §6.3 narrows when it is actually the right tool — and §6.2 covers the fronting cases that do not need it. |
-| [opencode-completion-plan.md](./opencode-completion-plan.md) / [effect-plan-2.txt](./effect-plan-2.txt) | New architecture (`SessionInbox`, `ProcessManager`). Design brief; `effect-plan-2.txt` has the related-docs map and §38 implementation order (ChildProcess and EventLog spikes already closed). |
-| Filetypes phases 2–5 | Blob store, every protocol’s media projection. |
-| Compaction phases 8–15 | Manual compact API, branch summaries, durable summarizer activities. |
+- **D4b** survives the falsification harness by construction:
+  `instance.suspended` carries the correctness and the two remaining
+  disjuncts in `DurableAgent`'s `catchCause` are defence in depth. Recorded in
+  `plan-durability-hardening.md` and `scripts/falsify.mjs`; nobody has decided
+  to delete them, and the harness will say so if that changes.
+- **`DurableAgent.workflow` requirement erasure** claims `never` while
+  resolving `LanguageModel` at runtime (`STATUS.md`, durable client).
+- **Legacy MCP cancellation id mismatch** — upstream; the official client's
+  cancel cannot interrupt the server.
+- **Anthropic example** has never been run live with a key.
+- **`ClusterMultiNode` on real time** (~15 s) — H7 would move it to
+  `TestClock`; cost only.

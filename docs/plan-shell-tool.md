@@ -279,7 +279,7 @@ exactly one command tool named `shell`; neither exposes a tool named `bash`.
 wiring cannot change its shell implementation behind the model's description.
 
 **SH5 — Defaults remain useful.** With no option, both toolkits describe Bash
-and execute `bash -lc <script>`.
+and execute `bash -c <script>` (no built-in is a login shell since #39).
 
 **SH6 — Every built-in mapping is exact.** Bash uses `-lc`; sh, zsh, fish, and
 Nushell use their declared `-c` form; both PowerShell variants use
@@ -446,7 +446,7 @@ Create a small shared contract exercised by both `CodingToolkit` and
 `PiToolkit`:
 
 1. default configuration exposes `shell`, not `bash`;
-2. default description names Bash and execution is `bash -lc`;
+2. default description names Bash and execution is `bash -c`;
 3. each of the seven `Kind`s renders the expected display name and exact argv;
 4. a custom service renders its display name and exact custom argv;
 5. tool success and timeout/failure shapes are unchanged;

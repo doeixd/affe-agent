@@ -1,7 +1,7 @@
 # Module map
 
 Written 2026-08-27 from a pass over `src/`. Every public module, what it is,
-why it exists, and what it composes with. ~28k lines across 33 directories and
+why it exists, and what it composes with. ~39k lines across 34 directories and
 12 root modules.
 
 `PLAN.md` is the design authority and `STATUS.md` records what was built and
@@ -174,7 +174,6 @@ main check rather than merely typechecking.
 - `STATUS.md` — what was built, and what was found wrong along the way.
 - `ROADMAP.md` — the capability roadmap and the package rule quoted above.
 - `AGENTS.md` — the conventions, and the no-casts rule.
-- `flue.md` — the capability correspondence against Flue.
 - [plan-primitives.md](./plan-primitives.md) — the three axes and what is still
   missing.
 - [research-code-mode.md](./research-code-mode.md),

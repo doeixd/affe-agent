@@ -3,7 +3,7 @@
 Written 2026-08-27. Thirty-odd documents accumulated here with no index; this is
 it. Grouped by what the document *is*, because that decides how much to trust it.
 
-**The three at the root are the authorities.** `PLAN.md` is the design
+**The four at the root are the authorities.** `PLAN.md` is the design
 authority, `STATUS.md` records what was built and why, `ROADMAP.md` tracks
 capability against the roadmap issues, and `AGENTS.md` holds the conventions —
 above all, that end-user code must never need a type cast.
@@ -25,7 +25,10 @@ that says what is actually next.
 
 ## Current design threads (2026-08-27)
 
-Written together over one pass; heavily cross-referenced, none implemented.
+Written together over one pass; heavily cross-referenced. Since then
+`/tool-source`, the host-based MCP frontend, the workerd probe and the first
+reference agent have landed; each file carries its own status line, and
+[remaining-work.md](./remaining-work.md) ranks what is left.
 
 | document | what it is |
 | --- | --- |
@@ -36,13 +39,13 @@ Written together over one pass; heavily cross-referenced, none implemented.
 | [plan-integrations.md](./plan-integrations.md) | Sandboxes, channels, stores and deployment providers — matching Flue's reach with a conformance suite and lifts instead of code generation. |
 | [plan-deployment.md](./plan-deployment.md) | Node, Durable Objects, Rivet actors, Alchemy, and how a public server fronts and delegates to any of them. |
 
-## Plans — specified, not implemented
+## Plans — specified, not (or only partly) implemented
 
 | document | what it is |
 | --- | --- |
 | [plan-shell-tool.md](./plan-shell-tool.md) | Replace the model-facing `bash` identity with a dialect-aware `shell`, keeping the sandbox at the argv boundary. |
-| [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality: `Prompt.FilePart` exists; the gaps are wire encoding, blob storage and protocol projections. |
-| [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. Fifteen phases. |
+| [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. Phase 1 (the `PromptWire` codec) landed; blob storage and protocol projections (phases 2–5) remain. |
+| [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. Phases 1–7 landed; 8–15 (default summariser, manual `compact()`, branch summaries, durable activities) remain. |
 | [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. |
 | [plan-relay.txt](./plan-relay.txt) | A secure addressable transport for services behind NAT, as an `RpcClient.Protocol`. Sixteen phases. |
 | [opencode-completion-plan.md](./opencode-completion-plan.md) · [effect-plan-2.txt](./effect-plan-2.txt) | A design brief for `SessionInbox` / `ProcessManager`; the second is the tree-annotated revision with the implementation order. |
@@ -58,9 +61,9 @@ Kept because they record *why*, not because there is work left in them. See
 | [plan-pi-toolkit.md](./plan-pi-toolkit.md) | `/pi` — a second toolkit with Pi's contracts. |
 | [plan-session-tree.md](./plan-session-tree.md) | `/tree` — branch and rewind over ordinary sessions. |
 | [plan-snapshot-export.md](./plan-snapshot-export.md) | `/export` — the versioned envelope and JSONL commit log. |
-| [plan-agent-server.md](./plan-agent-server.md) | `AgentServer` — several agents on one HTTP surface. S5 (the auth example) is still open. |
+| [plan-agent-server.md](./plan-agent-server.md) | `AgentServer` — several agents on one HTTP surface. Complete, S5 included. |
 | [plan-execution-plan.md](./plan-execution-plan.md) | Provider fallback as a combinator, from the ecosystem audit. |
-| [plan-durability-hardening.md](./plan-durability-hardening.md) | The durability guarantees. SD2 and SD6 remain open. |
+| [plan-durability-hardening.md](./plan-durability-hardening.md) | The durability guarantees. Complete; `npm run verify:durability` re-runs SD2. |
 | [plan-tui-port.md](./plan-tui-port.md) · [plan-tui-tool-views.md](./plan-tui-tool-views.md) | `apps/tui`, and per-tool rendering. |
 
 ## Research — other people's code, at a point in time

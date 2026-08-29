@@ -47,7 +47,7 @@ interface RemoteSession {
   readonly pending: Effect<ReadonlyArray<Elicitation.Request>, RemoteError>
   readonly history: Effect<Prompt, RemoteError>
   readonly status: Effect<"idle" | "running" | "closed", RemoteError>
-  readonly events: Stream<AgentEventEnvelope, RemoteError>
+  events(options?: { readonly after?: number }): Stream<AgentEventEnvelope, RemoteError>
 }
 ```
 
@@ -229,10 +229,12 @@ data: {"sessionId":"s","submissionId":{"_tag":"Some","value":"..."},...,"sequenc
 - `cache-control: no-cache, no-store`, `x-accel-buffering: no` are set so
   proxies do not buffer.
 
-The events endpoint is **live-only**: it forwards what the underlying
-client's `events` stream forwards (§7). Reconnecting opens a new
-observation; it does not replay. Replay is the delivery log's job, read
-through the durable client, not through SSE.
+The events endpoint is **live by default**: it forwards what the underlying
+client's `events` stream forwards (§7). A reconnecting client may send
+`Last-Event-ID` (or `?after=`); when the host's client has a delivery log the
+stream resumes from that offset, and when it does not the resume fails typed
+rather than silently restarting live. Replay itself is the delivery log's
+job; SSE only carries the cursor.
 
 ### Principals and hosts
 
@@ -333,9 +335,10 @@ long-poll) without touching the session or the log.
 ## 7. Delivery: live vs. durable
 
 A session's bus is **live**: a subscriber sees events emitted after it
-subscribed, and nothing before. That is what every transport's `events`
-exposes, including over the durable client. It is enough for a UI that is
-connected while the run happens.
+subscribed, and nothing before. That is what the in-process `events`
+exposes. The durable client and HTTP honour `after`, reading the delivery
+log first and then going live. The live bus alone is enough for a UI that
+is connected while the run happens.
 
 It is not enough for a browser that disconnected at event 137, a Slack bot
 that never saw event 1, or a run that outlives the process that started it.

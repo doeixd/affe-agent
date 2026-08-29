@@ -3,7 +3,8 @@
 Built on **Effect v4 (`effect@4.0.0-rc.111`)**. The AI modules live in-tree at
 `effect/unstable/ai`; `@effect/ai` has no v4 line and is not used.
 
-`npm test` — 1260 passing. `npm run lint` — 0 Effect diagnostics.
+`npm test` — 1466 passing in 131 files (2026-08-29; `McpServerConformance` runs
+separately while it is under active edit). `npm run lint` — 0 Effect diagnostics.
 `npm run typecheck` — clean, including all examples. `npm run verify:package`
 imports every published entry point from the packed tarball (42 entries).
 `verify:package` is the source of truth for the entry-point count; regenerate
@@ -307,7 +308,8 @@ replaying turn 1 rather than re-issuing it.
 **Process loss while durably suspended is covered**, and closing it found two
 real bugs. Recovery from a runner dying mid-activity is not covered by this
 test: `SingleRunner` has no real health checks or peer to take over its shard,
-and the multi-node fixture in `test/ClusterMultiNode.test.ts` is still skipped.
+The multi-node fixture in `test/ClusterMultiNode.test.ts` has since landed (H6)
+and runs two real HTTP runners.
 The parked-recovery work found two real bugs. First, `Workflow.suspend` signals
 by setting a flag on the `WorkflowInstance` and
 interrupting the fiber — and a session absorbs interruption by design, so the
@@ -656,8 +658,8 @@ the journalled response rather than re-issuing it.
 Two limitations, stated rather than hidden. Deltas arrive **whole** — the
 original chunking is a property of the provider's connection, not of the turn.
 And they are emitted *inside* the workflow, where a consumer in another process
-cannot see them; live remote streaming needs the delivery log, which does not
-exist. `DurableAgent.workflow` takes `stream` as a definition-level option, so
+cannot see them; live remote streaming needs the delivery log -- which has
+since shipped (`DeliveryLog`, `/durable-streams`; see "#12 consolidation"). `DurableAgent.workflow` takes `stream` as a definition-level option, so
 replay makes the same choice the original run did.
 
 ## Public-surface proof, portable bundle, and external tool sources
@@ -682,7 +684,8 @@ discovered binding uses dynamic tools and honest `unknown` values. MCP,
 OpenAPI JSON operations and GraphQL root fields share that seam. OpenAPI and
 GraphQL invocation is bounded for response size and time and uses web `fetch`,
 so the package stays portable. Authentication and credential ownership are not
-hidden behind a default; those layers remain future work.
+hidden behind a default. A per-invocation `headers` resolver exists (#14);
+per-principal credential resolution (research-tool-sources §7) remains open.
 
 The first execution test found a signature defect in both generic and MCP
 discovered binders: `Record<string, Tool.Any>` leaked an `any` service
@@ -865,10 +868,12 @@ transport failures 503. Expected errors have the canonical machine-readable
 body. Defects remain server defects and are not rendered with an internal stack
 by the adapter.
 
-SSE is deliberately live-only. A subscription receives events published after
-that observation begins; an `id` is the session-local sequence and `event` is
-the harness event tag. Reconnection does not imply replay or a durable cursor.
-A stream failure ends with an `error` SSE carrying the canonical remote-error
+SSE is live by default. A subscription receives events published after that
+observation begins; an `id` is the session-local sequence and `event` is the
+harness event tag. Since H5, a client behind a `DeliveryLog` resumes from
+`Last-Event-ID` / `?after=`; without a log a resume request fails typed rather
+than silently restarting live. A stream failure ends with an
+`event: effect/httpapi/stream/failure` frame carrying the canonical remote-error
 body. The JSON codec is explicit here because domain `Option` values project to
 JSON only at the boundary.
 
@@ -973,8 +978,9 @@ needs, since an answer from a human comes in minutes or days. `respond` derives
 its token from the workflow and execution rather than holding it, because the
 process that asked is typically gone.
 
-Two consequences worth stating. `pending` returns nothing under durability: a
-suspended workflow is not running, so no process holds a list. And request ids
+Two consequences worth stating. `pending` returns nothing from a raw
+`DurableAgent.workflow`: a suspended workflow is not running, so no process
+holds a list (the durable *client* reads `sessionStore.pendingRequests`). And request ids
 are `elicit-N` per session in ask order, which is deterministic by design — that
 determinism is what lets a caller answer without having observed the request,
 since `ElicitationRequested` is emitted inside the workflow where nothing else
@@ -1303,14 +1309,6 @@ Effect diagnostics across 329 files with zero findings, portability and the
 workerd bundle, 1,389 tests in 131 files, all 41 packed entry points, and the
 reference coding-agent, CLI and TUI smoke runs.
 
-After the session-lifecycle refactor, the then-current full suite also passed
-1,390 tests in 131 files, and focused session/cast tests remain green. The next
-aggregate `npm run check` encountered concurrent edits timestamped after that
-run: `test/SessionObserve.test.ts` and new `test/ZProbe.test.ts` currently fail
-typecheck on nonexistent `Effect.fork` and `unknown` requirement channels.
-Those files were left untouched; this is a dirty-worktree gate blocker, not a
-failure introduced by the MCP or session changes.
-
 The shared-host `ask_agent` failure text is pinned through an official client:
 one provider defect produces one model call and the existing
 `AgentExecutionError.message` exactly. The plan's suggested tag/retryability
@@ -1326,7 +1324,8 @@ active submission; blocking callers still interrupt the child they started.
 This is behavior-preserving preparation for asynchronous admission, covered by
 the existing caller-interruption, session, client and durable suites.
 
-The public `session.submit` API remains intentionally unexported. The brief
+`session.submit` is now on the `AgentSession` handle and exported (a receipt
+that owns its execution), but the retention half is still undecided. The brief
 requires later await and request-id idempotency but does not define bounded
 retention or eviction for completed outcomes and request fingerprints.
 `DurableSessionStore.claim({ key })` forgets the key at finish, so it cannot
@@ -2927,3 +2926,66 @@ files and 15 TUI files; portability and the workerd bundle pass; 1,260 tests in
 130 files pass; the public reference coding agent runs; and
 the TUI smoke suite reports `smoke: OK`. The CLI smoke compiles the application
 and renders the real command tree's help from its emitted JavaScript.
+
+## Review passes and fixes (2026-08-28 / 2026-08-29)
+
+Two review passes over everything this file records -- first the recent Codex
+commits, then every module `STATUS.md` names, eight reviewers over eight
+clusters -- filed issues #14-#80. All are closed as of `b554458`; only the
+roadmap tracker #4 is open. Every fix carries a test that was broken once to
+prove it bites, and `npm run verify:durability` is green (D1-D7 bite; D4b
+survives by construction, re-pointed after #77).
+
+What changed, by cluster:
+
+- **Kernel.** `AgentSession.release` takes `inputGate` across its state update
+  and both drains, so an interrupt never acknowledges a follow-up it then
+  discards (#57). `EventBus.events` ends for a subscriber attaching after
+  `SessionClosed` by retaining the close (#58) -- and that retention happens
+  *before* publication so subscribers need no permit: a first version took the
+  emit permit and starved any subscriber queued behind a busy emitter, which
+  the Permission suite caught as a deterministic hang. `Elicitation.memory`
+  only unregisters its own wait on a reused id (#59). `ToolExecution.perTool`
+  documents that limits are per model response, adds `total`, and looks names
+  up with `Object.hasOwn` on a null-prototype map (#55, #56).
+- **Durability (D4/D7).** `DurableAgent.workflow` gained the recorded-intent
+  interrupt `DurableSubmission` already had; an interrupted submission now
+  ends as a typed `SubmissionInterrupted`, and the test that "checked" this
+  could not previously fail (#77). `RemotePromptOptions.idempotencyKey` reaches
+  the durable claim (#78). The two session stores agree that an already-pending
+  request keeps its original payload (#80). `DurableStreamsDeliveryLog` mutates
+  its index in place (O(1) append) and branches a private cursor per
+  consumption (#79). The catch-up read honours `offer`'s failure signal (#80).
+- **Transports.** `AgentClient.RemoteError` is the full 14-member protocol
+  union and HTTP decodes all of them, so a 403 is no longer a retryable
+  transport error; the shared contract holds HTTP and RPC to one answer (#73).
+  A2A writes `: keep-alive` comment frames on idle streams
+  (`sseHeartbeat`, #63) and presents the addressed tenant to the principal
+  resolver (#62). `/inventory`'s `ok` flag is meaningful (#76). AG-UI's
+  per-request queue is bounded at 256 (#75).
+- **Tool sources.** OpenAPI parameter `style`/`explode` serialisation, bounded
+  `$ref` resolution, byte-counted response limits (#64, #65). GraphQL uses
+  variables and hoists `$defs` for recursive input types (#26, #27).
+- **Batteries.** Search skips files over `MAX_SEARCH_FILE_BYTES` and says so;
+  sizes are checked before reads (#68). The multi-occurrence replacer was
+  removed; `Disproportionate` only fires when nothing matched (#70). Sandbox
+  paths refuse NUL bytes (#69). Brave search runs with tracing disabled so the
+  key never lands in a span (#66). Redaction guards cycles and prototypes
+  (#60, #61). Subagent scoping goes through `Layer.build` (#67).
+- **Tree.** `SessionTree.activate` reads the *live* session's history after
+  subscribing, so re-activating a running branch paints every turn taken since,
+  with no replay and no gap; `options.sessionIds` names activation sessions too
+  (#71). `NodeStore.keyValue` reconciles its indexes on first use after a torn
+  write (#72); the one unrecoverable window -- a crash between the entry and
+  its first index write -- is documented as needing an enumerable backing.
+
+Casts: the last three in `test/AgentServer.test.ts` and the dead one in
+`test/PiToolkit.test.ts` are gone; `test/Casts.test.ts` still pins the single
+documented `as never` in `src/Agent.ts`.
+
+What is *still* open after this pass is ranked in
+[docs/remaining-work.md](./docs/remaining-work.md), which is the live list;
+this file is the chronology. Several earlier sections above describe states
+that later sections superseded (streaming, Schema events, the delivery log,
+SSE resumption); where a sentence was flatly wrong it has been corrected in
+place, otherwise the later section wins.

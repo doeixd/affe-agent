@@ -322,12 +322,6 @@ constraint 'true'"*. This is the "compiling is not proof" rule applying to an
 *example* rather than to library code -- the demonstration needed an assertion
 for the same reason the library does.
 
-### X4 — Documentation and one example
-
-`examples/execution-plan.ts`: two providers, a retry schedule on the first, and
-the budget-driven-selection note from above showing the thing this *is not*.
-The example is where "the agent still names no provider" becomes visible.
-
 ## Success conditions
 
 - **XS1:** An agent whose primary provider fails every call completes its run on

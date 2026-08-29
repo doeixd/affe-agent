@@ -222,7 +222,8 @@ file.
 Only if W4 goes further than a summary and a real diff is available. Their
 diff renderer is worth reading at that point — line numbering, added/removed
 backgrounds, the `RunBlockTheme` diff tokens V1 already ported the names of.
-**Do not do this speculatively.**
+**Do not do this speculatively.** *(Postscript: it was done once the data
+existed -- `apps/tui/src/diff.ts`, and `edit_file` returns `matched`.)*
 
 ## What not to port
 

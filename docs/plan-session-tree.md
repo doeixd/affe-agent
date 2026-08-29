@@ -209,7 +209,8 @@ decision T5 cannot afford to have made wrongly. `historyOf` is an `Effect`, so
 a later store can hold whole snapshots, walk deltas, or read a database without
 any caller noticing.
 
-**Deliberately not exported.** `src/tree/` is absent from `src/index.ts` and
+**Deliberately not exported -- at the time.** (Since T5 the module ships as
+`@doeixd/effect-agent/tree`; this paragraph is history.) `src/tree/` was absent from `src/index.ts` and
 from `package.json`. The scope rule that held M6 applies here too -- a new
 exported concept wants a second consumer or a recorded decision in `PLAN.md` --
 so the module is built and tested while the *export* stays an open decision.

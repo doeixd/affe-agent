@@ -149,7 +149,7 @@ normalised path, since its world has no links and no case folding. The lock
 itself moved to `src/coding/internal/fileLock.ts` and is shared by `/coding`
 and `/pi` — one process-wide registry, so the two toolkits serialise against
 each other rather than each holding a private lock over the same file. If
-`canonical` fails the lock falls back to the spelled path: the operation is
+`canonical` fails the operation fails (#40 reversed the earlier fallback to the spelled path): the operation is
 about to fail with the same error, and an ordering step should not add a
 failure mode of its own. The paragraphs below record why the cleanup was built
 the way it was.
@@ -230,7 +230,7 @@ explicitly and record, not to drift into.
 ### P5 — Shell selection ✅
 
 Landed: `toolkit({ shell: "powershell" })` / `Shell.layer`; default remains
-`bash -lc`. SP5 is the scripted-exec test in `test/PiToolkit.test.ts`.
+`bash -c` (was `-lc`; #39). SP5 is the scripted-exec test in `test/PiToolkit.test.ts`.
 
 Follow `powershell.ts`: one implementation, the shell injected. Our `bash`
 hardcodes `bash -lc`, which fails on a Windows host without bash — a real gap

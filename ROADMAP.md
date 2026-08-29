@@ -31,7 +31,7 @@ end-to-end integration proving they compose.
 | 4 | Subagent / delegation | `/subagent` |
 | 5 | Persistent typed state | `/state` |
 | 6 | Generic interrupt / HITL | `Elicitation` (Deferred local, DurableDeferred durable) + `Permission.ask` |
-| 7 | Dynamic capability-set | toolkit-as-Effect, resolved per turn (mechanism exists; undocumented) |
+| 7 | Dynamic capability-set | toolkit-as-Effect, resolved per turn (documented: README "Dynamic capabilities", `examples/dynamic-capabilities.ts`) |
 | 8 | Reconnectable streaming | `/durable-streams` + DeliveryLog |
 | 11 | Evals | `/evals` |
 | 9 | Structured client/UI data | `/data` |
@@ -66,26 +66,27 @@ is ecosystem polish, not capability:
 
 ### Small refinements worth folding in
 
-- **Schema-typed elicitation resolution** — `Elicitation.Response.value` is
-  `Schema.Unknown`; validate it against the request's schema, and guard against
-  double-resolution with an explicit terminal state.
-- **Document the dynamic-capability story** (#7) — the toolkit-as-Effect
-  mechanism exists; it needs a short section, not code.
-- **Getting-started / package-map** at the top of the README. *(Partly done
-  2026-08-27: [docs/MODULES.md](./docs/MODULES.md) is the package map. The
-  README still needs the short version at its top.)*
+- **Elicitation terminal state** — decoding `Response.value` against the
+  request's schema exists; an explicit terminal state guarding against
+  double-resolution does not.
+- ~~Document the dynamic-capability story~~ — done (README section + example).
+- ~~Getting-started / package-map~~ — done: README "Package map" and
+  [docs/MODULES.md](./docs/MODULES.md).
 
 ## Design threads opened 2026-08-27
 
-Six documents, none implemented, indexed in [docs/README.md](./docs/README.md)
+Six documents, now partly implemented (see
+[docs/remaining-work.md](./docs/remaining-work.md) for exactly which slices), indexed in [docs/README.md](./docs/README.md)
 and argued between in
 [docs/plan-primitives.md](./docs/plan-primitives.md).
 
 One of them qualifies the assessment above. "Ecosystem polish, not capability"
 holds for issue #4's scope, but the **integration axis** — a `ToolSource` seam
 over OpenAPI/GraphQL/WebMCP/CLI sources, plus credential resolution per
-principal — is capability work by this document's own definition, and it is
-absent. See [docs/research-tool-sources.md](./docs/research-tool-sources.md).
+principal — is capability work by this document's own definition. The seam
+and the OpenAPI/GraphQL/MCP sources have since shipped as `/tool-source`;
+per-principal credential resolution has not. See
+[docs/research-tool-sources.md](./docs/research-tool-sources.md).
 The rest of the threads (MCP frontend, code mode, integrations, deployment) are
 adapters, batteries and entry points, and do fit "polish".
 
@@ -94,5 +95,6 @@ adapters, batteries and entry points, and do fit "polish".
 **Superseded.** The three steps that used to sit here — build `/observability`,
 then `/data`, then a first channel adapter — all shipped and are listed under
 *Done* above. The live ranking is
-[docs/remaining-work.md](./docs/remaining-work.md); the tracker item (mark #4's
-shipped items, finalize/close #1) is still open.
+[docs/remaining-work.md](./docs/remaining-work.md). #1 is closed; #4 is the
+only open issue and stays open as the tracker until its shipped items are
+marked off and it is closed.
