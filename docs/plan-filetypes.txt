@@ -391,7 +391,7 @@ For Effect RPC's binary protocol we can later optimize actual bytes, but **the s
 
 ---
 
-# Phase 2 — expose non-text output remotely
+# Phase 2 — expose non-text output remotely ✅ (2026-08-29)
 
 Change the remote result from:
 
@@ -453,7 +453,7 @@ fully discriminated and type-safe.
 
 ---
 
-# Phase 3 — fix `AgentEvent`
+# Phase 3 — fix `AgentEvent` ✅ (2026-08-29)
 
 I would enrich:
 
@@ -937,3 +937,44 @@ The plan should be:
 ```
 
 After that, images, PDFs, generated files, screenshots from browser tools, artifacts from remote coding agents, and files passed between machines can all use the **same typed content path** rather than becoming five unrelated attachment systems.
+
+## Progress: phases 2-3 (2026-08-29)
+
+Landed together, with one finding that changes the "Current state" section
+above: **Effect AI rc.111's `Prompt.fromResponseParts` has no `file` case**.
+It converts text, reasoning, tool calls and tool results and silently drops a
+file the model returned, so canonical history did *not* preserve multimodal
+output -- an image the model produced was not in the transcript at all. The
+kernel's own conversion (`src/internal/history.ts` `fromResponseParts`) now
+re-attaches the files to the assistant message, after its other parts and in
+the order the model produced them; a response that was only files becomes an
+assistant message of files rather than nothing. Everything below derives
+from that corrected conversion, so history, the events and the remote result
+agree.
+
+- `PromptWire.Part`: the JSON-safe codec for one `Prompt.Part`, with the same
+  file-data tagging as the message and prompt codecs; decoded type is exactly
+  `Prompt.Part` (declared through `Prompt.isPart`, because Effect AI's `Part`
+  schema union is not identical to the interface).
+- `RemoteResult.content: Array<PromptWire.Part>` -- the final assistant
+  message's text, reasoning and files, in order. Not tool calls: those are
+  the model asking for work and are already `ToolCallStarted`. Required, not
+  optional: an honest type that every consumer can rely on beats one every
+  consumer must guard. Every transport carries it (the shared
+  `AgentClientContract` case runs over local, HTTP, RPC and durable); the
+  durable journal's `Succeeded` outcome gained an *optional* `content` so a
+  journal from before it still decodes.
+- `MessageCompleted.content` (optional on the wire, so builds either side of
+  this change decode each other -- pinned both ways) and a new
+  `MessagePartCompleted { part }` emitted under `stream: true` when a file
+  arrives whole. Files are not invented as deltas. A message that is only a
+  file is now announced; one that is only reasoning still is not.
+- `TestLanguageModel.Turn.files` scripts a model that returns files, in both
+  the batch and the stream shape.
+
+Tests: `test/MessageContent.test.ts`, the `PromptWire.Part` suite in
+`test/PromptWire.test.ts`, and the contract case. Broken once: the file
+re-attachment (every content assertion fails, across transports) and the
+streamed announcement.
+
+Phase 4 (A2A, OpenAI, AG-UI projections) and phase 5 (blob store) remain.

@@ -189,13 +189,25 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
             })
           )
         }
+        // A file arrives whole, so it is announced whole; see the event.
+        const announced = part.type === "file"
+          ? EventBus.emit(session.bus, correlation, {
+              _tag: "MessagePartCompleted",
+              part: History.filePart(part)
+            })
+          : Effect.void
         return next.delta === undefined
-          ? Effect.succeed(next.state)
-          : EventBus.emit(session.bus, correlation, {
-              _tag: "MessageDelta",
-              kind: next.delta.kind,
-              delta: next.delta.delta
-            }).pipe(Effect.as(next.state))
+          ? Effect.as(announced, next.state)
+          : announced.pipe(
+              Effect.andThen(
+                EventBus.emit(session.bus, correlation, {
+                  _tag: "MessageDelta",
+                  kind: next.delta.kind,
+                  delta: next.delta.delta
+                })
+              ),
+              Effect.as(next.state)
+            )
       }
     )
 
@@ -385,14 +397,20 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
      * committed turn is always a turn the tree saw.
      */
     const text = response.text
+    const content = History.assistantContent(response.content)
     yield* Effect.uninterruptible(
       Effect.gen(function*() {
         yield* History.commit(session.history, committed)
 
-        if (text.length > 0) {
+        // A message is worth announcing when it says something or carries a
+        // file. Reasoning alone is not one: it is the model's working, and a
+        // turn that produced only that and a tool call was never reported as
+        // a message before.
+        if (text.length > 0 || content.some((part) => part.type === "file")) {
           yield* EventBus.emit(session.bus, correlation, {
             _tag: "MessageCompleted",
-            text
+            text,
+            content
           })
         }
 

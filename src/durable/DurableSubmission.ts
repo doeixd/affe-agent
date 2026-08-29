@@ -1,4 +1,6 @@
 import { Cause, Deferred, Duration, Effect, Exit, Option, Ref, Schedule, Schema } from "effect"
+import * as PromptWire from "../PromptWire.js"
+import * as History from "../internal/history.js"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import {
@@ -88,7 +90,9 @@ export const Outcome = Schema.Union([
     status: Schema.Literals(["completed", "interrupted"]),
     runs: Schema.Number,
     turns: Schema.Number,
-    text: Schema.String
+    text: Schema.String,
+    /** Optional so a journal written before it existed still decodes. */
+    content: Schema.optional(Schema.Array(PromptWire.Part))
   }),
   Schema.TaggedStruct("Failed", {
     submissionId: Schema.String,
@@ -511,7 +515,11 @@ const succeededOutcome = (
   status: result.status === "interrupted" ? "interrupted" : "completed",
   runs: result.runs,
   turns: result.turns,
-  text: result.text
+  text: result.text,
+  content: Option.match(result.response, {
+    onNone: () => [],
+    onSome: (response) => History.assistantContent(response.content)
+  })
 })
 
 /** Map an agent failure onto the wire-safe outcome. */

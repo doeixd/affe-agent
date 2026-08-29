@@ -130,7 +130,8 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
                   status: "completed" as const,
                   runs: 1,
                   turns: 1,
-                  text: "rpc answer"
+                  text: "rpc answer",
+                  content: []
                 }
               }),
             steer: () => record("steer"),

@@ -84,7 +84,8 @@ const clientFixture = (options?: {
                   status: completed,
                   runs: 1,
                   turns: 1,
-                  text: "ok"
+                  text: "ok",
+                  content: []
                 }
               }),
             steer: () => Effect.void,

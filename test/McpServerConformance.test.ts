@@ -160,7 +160,8 @@ const serverFixture = Effect.fn("McpServerConformance.serverFixture")(
                   status: "completed",
                   runs: 1,
                   turns: count,
-                  text: `${id}:${count}:${text}`
+                  text: `${id}:${count}:${text}`,
+                  content: []
                 }
               }),
             steer: () => Effect.void,

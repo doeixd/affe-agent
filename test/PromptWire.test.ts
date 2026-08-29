@@ -125,3 +125,48 @@ describe("PromptWire", () => {
     })
   )
 })
+
+describe("PromptWire.Part", () => {
+  type PartWireTypeIsPart = Assert<Equal<typeof PromptWire.Part.Type, Prompt.Part>>
+  type PartWireTypeIsNotAny = Assert<Not<IsAny<typeof PromptWire.Part.Type>>>
+  const partProof: readonly [PartWireTypeIsPart, PartWireTypeIsNotAny] = [true, true]
+  void partProof
+
+  const json = Schema.fromJsonString(Schema.toCodecJson(PromptWire.Part))
+
+  it.effect("round-trips every part shape with its runtime file variant intact", () =>
+    Effect.gen(function* () {
+      const parts: ReadonlyArray<Prompt.Part> = [
+        Prompt.textPart({ text: "hello" }),
+        Prompt.reasoningPart({ text: "thinking" }),
+        Prompt.filePart({ mediaType: "text/plain", fileName: "a.txt", data: "SGVsbG8=" }),
+        Prompt.filePart({ mediaType: "application/octet-stream", data: new Uint8Array([0, 1, 254, 255]) }),
+        Prompt.filePart({ mediaType: "image/png", data: new URL("https://example.test/a.png") }),
+        Prompt.toolCallPart({ id: "c1", name: "search", params: { q: "x" }, providerExecuted: false })
+      ]
+      for (const part of parts) {
+        const encoded = yield* Schema.encodeEffect(json)(part)
+        assert.strictEqual(typeof encoded, "string")
+        const decoded = yield* Schema.decodeEffect(json)(encoded)
+        assert.deepStrictEqual(decoded, part)
+        if (part.type === "file" && decoded.type === "file") {
+          // The variant, not just the value: bytes come back as bytes, a URL
+          // as a URL, a string as a string.
+          assert.strictEqual(decoded.data.constructor, part.data.constructor)
+        }
+      }
+    })
+  )
+
+  it.effect("a file part written by the pre-codec shape is still readable", () =>
+    Effect.gen(function* () {
+      const decoded = yield* Schema.decodeUnknownEffect(PromptWire.Part)({
+        type: "file",
+        mediaType: "text/plain",
+        data: "legacy string"
+      })
+      assert.strictEqual(decoded.type, "file")
+      if (decoded.type === "file") assert.strictEqual(decoded.data, "legacy string")
+    })
+  )
+})

@@ -382,7 +382,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                     status: "completed" as const,
                     runs: 1,
                     turns: count,
-                    text: finalText
+                    text: finalText,
+                    content: []
                   }
                 }
                 return {
@@ -392,7 +393,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   status: "completed" as const,
                   runs: 1,
                   turns: count,
-                  text: `${id}:${count}:${text}`
+                  text: `${id}:${count}:${text}`,
+                  content: []
                 }
               }),
             steer: () => Effect.void,

@@ -587,7 +587,8 @@ const serverFixture = (fixtureOptions?: {
                 status: "completed" as const,
                 runs: 1,
                 turns: 1,
-                text: "approved answer"
+                text: "approved answer",
+                content: []
               }
             }
             if (fixtureOptions?.blocked === true) {
@@ -613,7 +614,8 @@ const serverFixture = (fixtureOptions?: {
               status: "completed" as const,
               runs: 1,
               turns: 1,
-              text: "official answer"
+              text: "official answer",
+              content: []
             }
           }),
         steer: () => Effect.void,

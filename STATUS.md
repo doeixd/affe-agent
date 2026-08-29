@@ -3061,3 +3061,30 @@ and the fix is the rename the plan specified rather than a softer alias.
 SH4, SH6 and the label guard were each broken once. Focused suites: 263
 tests across the shell, coding, pi, prompts, composition and public-API
 files; the full gate below.
+
+## Multimodal output reaches the observation side (2026-08-29)
+
+`docs/plan-filetypes.txt` phases 2-3. A model that answered with an image
+reached a remote caller, and the event stream, as a sentence and nothing
+else. Worse, and only found by testing it: **canonical history did not have
+the image either.** Effect AI rc.111's `Prompt.fromResponseParts` has no
+`file` case and drops the part silently, so the claim that history preserved
+multimodal output was false. The kernel's conversion
+(`src/internal/history.ts`) now re-attaches a response's files to the
+assistant message, and everything downstream derives from it.
+
+- `PromptWire.Part` -- one prompt part, JSON-safe, decoded exactly as
+  `Prompt.Part`.
+- `RemoteResult.content` -- the final message as text, reasoning and file
+  parts, required, carried by every transport; the durable journal's
+  `Succeeded` outcome gained an optional `content` so old journals decode.
+- `MessageCompleted.content` (optional on the wire, compatible both ways)
+  and `MessagePartCompleted` for a file that arrives whole in a stream.
+- `TestLanguageModel.Turn.files`.
+
+Tests in `test/MessageContent.test.ts`, `test/PromptWire.test.ts` and the
+shared `AgentClientContract` (local, HTTP, RPC, durable-memory); the file
+re-attachment and the streamed announcement each broken once. Thirteen test
+fakes that built a `RemoteResult` literal gained `content: []`.
+
+Phase 4 -- the A2A, OpenAI and AG-UI projections -- is the next slice.

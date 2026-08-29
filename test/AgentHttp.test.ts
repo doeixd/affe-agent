@@ -130,7 +130,8 @@ const fixture = (options?: {
                   status: "completed" as const,
                   runs: 1,
                   turns: 1,
-                  text: "http answer"
+                  text: "http answer",
+                  content: []
                 }
               }),
             steer: () => record("steer"),
@@ -183,7 +184,8 @@ const fixture = (options?: {
                     status: "completed" as const,
                     runs: 1,
                     turns: 1,
-                    text: `adopted ${id}`
+                    text: `adopted ${id}`,
+                    content: []
                   }),
                 steer: () => Effect.void,
                 followUp: () => Effect.void,

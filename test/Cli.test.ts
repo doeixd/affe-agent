@@ -49,7 +49,8 @@ const remoteSession: AgentClient.RemoteSession = {
       status: "completed",
       runs: 1,
       turns: 1,
-      text: typeof input === "string" ? `answer: ${input}` : "answer"
+      text: typeof input === "string" ? `answer: ${input}` : "answer",
+      content: []
     }),
   steer: () => Effect.void,
   followUp: () => Effect.void,

@@ -1,4 +1,6 @@
 import { Cause, Context, Effect, Layer, Option, Ref, Schema, Scope, Stream } from "effect"
+import * as History from "../internal/history.js"
+import * as PromptWire from "../PromptWire.js"
 import * as AgentEvent from "../AgentEvent.js"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -45,16 +47,21 @@ import {
  * A submission's outcome, in terms a protocol can carry.
  *
  * The local `Result` also holds the final `GenerateTextResponse`, which keeps
- * usage, finish reason and typed content parts. That is genuinely useful
- * locally and genuinely not transportable, so it is dropped here rather than
- * half-encoded: a caller who needs it is asking for a local session.
+ * usage, finish reason and the provider's own parts. That is genuinely useful
+ * locally and genuinely not transportable, so it is not carried here: a
+ * caller who needs it is asking for a local session. What *is* carried is
+ * `content` -- the final message as provider-neutral prompt parts, through
+ * the wire codec -- so a model that answered with an image no longer reaches
+ * a remote caller as a sentence and nothing else.
  */
 export const RemoteResult = Schema.Struct({
   submissionId: SubmissionId,
   status: Schema.Literals(["completed", "interrupted"]),
   runs: Schema.Number,
   turns: Schema.Number,
-  text: Schema.String
+  text: Schema.String,
+  /** The final assistant message: text, reasoning and files, in order. */
+  content: Schema.Array(PromptWire.Part)
 })
 export type RemoteResult = typeof RemoteResult.Type
 
@@ -395,7 +402,11 @@ export const fromSession = (
         status: result.status,
         runs: result.runs,
         turns: result.turns,
-        text: result.text
+        text: result.text,
+        content: Option.match(result.response, {
+          onNone: () => [],
+          onSome: (response) => History.assistantContent(response.content)
+        })
       }))
     ),
   steer: (input) => session.steer(input),

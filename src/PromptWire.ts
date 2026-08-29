@@ -155,6 +155,37 @@ const encodePromptValue = (
     Effect.flatMap((content) => decodeJsonUnknown({ content }).pipe(Effect.mapError(issueOf)))
   )
 
+const decodePartUnknown = Schema.decodeUnknownEffect(AiPrompt.Part)
+const encodePartEffect = Schema.encodeEffect(AiPrompt.Part)
+
+/**
+ * The exact `Prompt.Part` interface as the decoded type, the way `Message`
+ * is typed by its own codec. Effect AI's `Part` schema is a union of
+ * structs whose `options` is the generic record, so `Schema.toType` of it is
+ * not *identical* to the interface; the guard is what the interface means.
+ */
+const PartType = Schema.declare<AiPrompt.Part>(AiPrompt.isPart)
+const decodeDeclaredPart = Schema.decodeUnknownEffect(PartType)
+
+const decodeSinglePart = (
+  part: Schema.Json
+): Effect.Effect<AiPrompt.Part, SchemaIssue.Issue> =>
+  decodePart(part).pipe(
+    Effect.flatMap((value) => decodePartUnknown(value).pipe(Effect.mapError(issueOf))),
+    // Through the declared schema, so the guard's refusal is an ordinary
+    // schema issue rather than one built by hand here.
+    Effect.flatMap((decoded) => decodeDeclaredPart(decoded).pipe(Effect.mapError(issueOf)))
+  )
+
+const encodeSinglePart = (
+  part: AiPrompt.Part
+): Effect.Effect<Schema.Json, SchemaIssue.Issue> =>
+  encodePartEffect(part).pipe(
+    Effect.mapError(issueOf),
+    Effect.flatMap(encodePart),
+    Effect.flatMap((value) => decodeJsonUnknown(value).pipe(Effect.mapError(issueOf)))
+  )
+
 const decodeMessage = (
   message: Schema.Json
 ): Effect.Effect<AiPrompt.Message, SchemaIssue.Issue> =>
@@ -170,6 +201,21 @@ const encodeMessage = (
     Effect.flatMap(encodeMessageValue),
     Effect.flatMap((value) => decodeJsonUnknown(value).pipe(Effect.mapError(issueOf)))
   )
+
+/**
+ * A JSON-safe codec whose decoded type is exactly `Prompt.Part`.
+ *
+ * One part on its own, for the places a message is not the unit: the
+ * content of a remote result, a file that arrived whole in a stream. The
+ * same file-data tagging as the message and prompt codecs, so a part crosses
+ * a boundary with its runtime variant intact.
+ */
+export const Part = Schema.Json.pipe(
+  Schema.decodeTo(PartType, {
+    decode: SchemaGetter.transformOrFail(decodeSinglePart),
+    encode: SchemaGetter.transformOrFail(encodeSinglePart)
+  })
+)
 
 /** A JSON-safe codec whose decoded type is exactly `Prompt.Message`. */
 export const Message = Schema.Json.pipe(

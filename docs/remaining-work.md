@@ -23,7 +23,7 @@ Effect diagnostics, portability and the workerd bundle pass, and
 | `plan-durability-hardening.md` | H1–H9, SD1–SD6 landed; `scripts/falsify.mjs` is the re-runnable SD2. |
 | `plan-tui-port.md` / `plan-tui-tool-views.md` | V0–V9, W1–W5 landed (W5's diff view shipped once the data existed). |
 | `audit-effect-ecosystem.md` | All actions closed. |
-| `plan-filetypes.txt` phase 1 | `PromptWire` codec at every boundary. |
+| `plan-filetypes.txt` phases 1–3 | `PromptWire` codec at every boundary; `content` on the remote result and the completed-message event; streamed files announced whole. |
 | `plan-shell-tool.md` | S0–S5 landed: `shell` tool, construction-time dialect, `configure`. |
 | `plan-branching-and-compaction.md` phases 1–10 | Preparation, token policy, Schema checkpoint, KV persistence, serializer, default model summariser, controller with manual `compact()`, compaction events. |
 | `research-tool-sources.md` first slice | `/tool-source` seam; OpenAPI, GraphQL, MCP sources; per-invocation `headers`. |
@@ -44,10 +44,11 @@ open, so the next pass does not have to re-derive it.
 2. ~~**`plan-shell-tool.md` (S0–S5)**~~ — landed 2026-08-29: the tool is
    `shell`, described for the dialect the toolkit was built with, resolved
    once by `configure`; no `bash` alias. Release note in the README.
-3. **Filetypes phases 2–4** — `RemoteResult.content`, `MessageCompleted`
-   content parts, and media on A2A / OpenAI `image_url` / AG-UI are text-only
-   (`AgentClient.ts`, `AgentEvent.ts`, `AgentA2A.ts`, `AgentAgUi.ts`). The
-   codec exists, so these are mechanical. Phase 5 (blob store) is separate and
+3. **Filetypes phase 4** — media on A2A / OpenAI `image_url` / AG-UI are
+   still text-only (`AgentA2A.ts`, `OpenAiAgent.ts`, `AgentAgUi.ts`). Phases
+   2–3 landed 2026-08-29 (`RemoteResult.content`, `MessageCompleted.content`,
+   `MessagePartCompleted`, `PromptWire.Part`), and fixed the kernel dropping
+   file parts from history on the way. Phase 5 (blob store) is separate and
    larger.
 4. **`session.submit` on the remote surfaces + `requestId` idempotency** —
    the receipt exists on `AgentSession` only; not on `AgentClient`,

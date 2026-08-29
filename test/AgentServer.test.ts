@@ -45,7 +45,8 @@ const idleSession = (id: AgentProtocol.SessionId): AgentClient.RemoteSession => 
       status: "completed",
       runs: 1,
       turns: 1,
-      text: "ok"
+      text: "ok",
+      content: []
     }),
   steer: () => Effect.void,
   followUp: () => Effect.void,

@@ -472,7 +472,10 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           status: exit.value.status,
           runs: exit.value.runs,
           turns: exit.value.turns,
-          text: exit.value.text
+          text: exit.value.text,
+          // A journal from before `content` existed reports none, which is
+          // what it recorded.
+          content: exit.value.content ?? []
         }
       }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 

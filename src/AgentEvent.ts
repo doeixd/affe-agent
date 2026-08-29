@@ -1,6 +1,7 @@
 import { Cause, Effect, Option, Schema, SchemaGetter, SchemaIssue } from "effect"
 import { Response } from "effect/unstable/ai"
 import { RunId, SessionId, SubmissionId } from "./internal/ids.js"
+import * as PromptWire from "./PromptWire.js"
 
 export { RunId, SessionId, SubmissionId }
 
@@ -182,8 +183,42 @@ export const ModelCallCompleted = Schema.TaggedStruct("ModelCallCompleted", {
   finishReason: Response.FinishReason
 })
 
+/**
+ * The model's message content: text, reasoning and files, in order.
+ *
+ * Provider-neutral prompt parts through the wire codec, not the provider's
+ * response parts -- the same decision `RemoteResult` made. A consumer
+ * switches on `part.type` and gets a real `Prompt.FilePart`, bytes and all.
+ */
+export const MessageContent = Schema.Array(PromptWire.Part)
+export type MessageContent = typeof MessageContent.Type
+
+/**
+ * The model's message, as committed.
+ *
+ * `text` is the joined text, as it always was. `content` is the whole message
+ * -- a model that returned an image alongside its sentence used to report
+ * only the sentence here, and a consumer had to read history to learn there
+ * was an image. Optional on the wire, so a build that predates it still
+ * decodes this event, and a build that has it still decodes a stream from
+ * one that does not.
+ */
 export const MessageCompleted = Schema.TaggedStruct("MessageCompleted", {
-  text: Schema.String
+  text: Schema.String,
+  content: Schema.optional(MessageContent)
+})
+
+/**
+ * A part that arrived whole while the message was streaming.
+ *
+ * Text and reasoning stream as `MessageDelta`s; a file does not stream -- a
+ * provider emits it complete -- and inventing deltas for it would be a lie
+ * about what happened. So it is announced once, as the part it is, and is
+ * also in the `MessageCompleted` that follows. Only emitted under
+ * `stream: true`.
+ */
+export const MessagePartCompleted = Schema.TaggedStruct("MessagePartCompleted", {
+  part: PromptWire.Part
 })
 
 /**
@@ -363,6 +398,7 @@ export const AgentEvent = Schema.Union([
   MessageCompleted,
   MessageStarted,
   MessageDelta,
+  MessagePartCompleted,
   MessageStreamCompleted,
   MessageInterrupted,
   MessageFailed,

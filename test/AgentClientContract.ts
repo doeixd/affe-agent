@@ -108,6 +108,44 @@ export const run = (harness: Harness): void => {
       )
     )
 
+    it.live("the result carries the final message as prompt parts, files included", () =>
+      withClient(
+        harness,
+        {
+          agent: Agent.make({ loop: AgentLoop.bounded(2) }),
+          turns: [
+            {
+              text: "here you go",
+              files: [{ mediaType: "image/png", data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) }]
+            }
+          ]
+        },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* client.createSession()
+              const result = yield* session.prompt("draw it")
+              assert.strictEqual(result.text, "here you go")
+              // Text and file, in order, and the file crossed the transport
+              // as bytes -- the wire codec's job, and the same answer from
+              // every transport.
+              assert.deepStrictEqual(result.content.map((part) => part.type), ["text", "file"])
+              const file = result.content[1]
+              if (file?.type === "file") {
+                assert.strictEqual(file.mediaType, "image/png")
+                assert.isTrue(file.data instanceof Uint8Array)
+                assert.deepStrictEqual(
+                  Array.from(file.data instanceof Uint8Array ? file.data : []),
+                  [0x89, 0x50, 0x4e, 0x47]
+                )
+              } else {
+                assert.fail("expected a file part")
+              }
+            })
+          )
+      )
+    )
+
     it.live("runs a tool-calling prompt and exposes observations", () =>
       withClient(
         harness,

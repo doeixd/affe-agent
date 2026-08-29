@@ -1,5 +1,5 @@
 import { AiError, IdGenerator, LanguageModel, Prompt, Response } from "effect/unstable/ai"
-import { Deferred, Effect, Layer, Ref, Schedule, Stream } from "effect"
+import { Deferred, Effect, Encoding, Layer, Ref, Schedule, Stream } from "effect"
 
 /**
  * A `LanguageModel` that replays a fixed script.
@@ -65,6 +65,12 @@ export interface Turn {
    * anything that reads `response.usage` (e.g. `/budget`, `Evals.tokens`).
    */
   readonly usage?: { readonly input?: number; readonly output?: number }
+  /**
+   * Files the model returns alongside its text -- an image, a PDF. Emitted
+   * whole in both the batch and the stream shape, since providers do not
+   * stream file bytes as deltas.
+   */
+  readonly files?: ReadonlyArray<{ readonly mediaType: string; readonly data: Uint8Array }>
 }
 
 export interface Recorder {
@@ -93,6 +99,9 @@ const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
   const parts: Array<Response.PartEncoded> = []
   if (turn.text !== undefined) {
     parts.push({ type: "text", text: turn.text })
+  }
+  for (const file of turn.files ?? []) {
+    parts.push({ type: "file", mediaType: file.mediaType, data: Encoding.encodeBase64(file.data) })
   }
   for (const call of turn.toolCalls ?? []) {
     parts.push({
@@ -125,6 +134,9 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
       parts.push({ type: "text-delta", id, delta: chunk })
     }
     parts.push({ type: "text-end", id })
+  }
+  for (const file of turn.files ?? []) {
+    parts.push({ type: "file", mediaType: file.mediaType, data: Encoding.encodeBase64(file.data) })
   }
   for (const call of turn.toolCalls ?? []) {
     parts.push({
