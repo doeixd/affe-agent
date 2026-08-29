@@ -1,5 +1,5 @@
-import { Effect, Option, Ref, Schema } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import { Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
+import { AiError, LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as AgentEvent from "../AgentEvent.js"
 import * as ContextTransform from "../ContextTransform.js"
@@ -284,6 +284,13 @@ export const estimate: { readonly approximate: EstimateTokens } = {
 export type Summarise<E = never, R = never> = (options: {
   readonly messages: Prompt.Prompt
   readonly previous: Option.Option<string>
+  /**
+   * Focus text from a manual `compact({ instructions })`; `None` when the
+   * policy triggered compaction on its own. A summariser that ignores it is
+   * still correct -- it is guidance about what to keep, not a change to what
+   * is being summarised.
+   */
+  readonly instructions: Option.Option<string>
 }) => Effect.Effect<string | SummaryResult, E, R>
 
 const normalizeSummary = (result: string | SummaryResult): SummaryResult =>
@@ -458,6 +465,120 @@ const natural = (operation: string, value: number): number => {
   return value
 }
 
+/** What a summary prompt is built from. */
+export interface TemplateInput {
+  /** The stretch to summarise, rendered by `serialize`. */
+  readonly transcript: string
+  /** The checkpoint this summary replaces, when there is one. */
+  readonly previous: Option.Option<string>
+  /** Manual focus text, when compaction was requested with some. */
+  readonly instructions: Option.Option<string>
+}
+
+/**
+ * Builds the prompt a summarising model is asked.
+ *
+ * A function rather than a string with placeholders, so a template can put
+ * the previous summary and the instructions wherever its model responds to
+ * them best, and can use a system message or not.
+ */
+export type Template = (input: TemplateInput) => Prompt.Prompt
+
+const CONTINUATION_INSTRUCTIONS = [
+  "You are producing a handover summary of an in-progress conversation between a user and an assistant, so that the assistant can continue the work without the original messages.",
+  "",
+  "Write Markdown under exactly these headings, in this order:",
+  "",
+  "## Goal",
+  "## Constraints and preferences",
+  "## Progress",
+  "## Decisions",
+  "## Next steps",
+  "## Critical context",
+  "## Files",
+  "",
+  "Be specific and literal: keep identifiers, paths, commands, numbers, error text and quoted requirements exactly as they appeared. Under Files, list every file that was read or modified and what was done to it. Under Decisions, record what was chosen and why, including options that were rejected. Do not add advice, commentary or anything that did not happen. If a section has nothing, write \"None.\"",
+  "",
+  "If an earlier summary is supplied, fold it in: the summary you write replaces it and must stand alone."
+].join("\n")
+
+/**
+ * The default continuation-oriented summary.
+ *
+ * Goal, constraints, progress, decisions, next steps, critical context, files
+ * -- the shape a session needs to *resume* from, as opposed to a prose recap
+ * of what was said. Exported so a caller can wrap it (a domain-specific
+ * preamble) rather than start from nothing.
+ */
+export const continuationSummary: Template = ({ transcript, previous, instructions }) => {
+  const sections: Array<string> = []
+  if (Option.isSome(previous)) {
+    sections.push(`Earlier summary, to be folded in and replaced:\n\n${previous.value}`)
+  }
+  if (Option.isSome(instructions)) {
+    sections.push(`The user asked that this summary in particular: ${instructions.value}`)
+  }
+  sections.push(`Conversation to summarise:\n\n${transcript}`)
+  return Prompt.fromMessages([
+    Prompt.systemMessage({ content: CONTINUATION_INSTRUCTIONS }),
+    Prompt.userMessage({
+      content: [Prompt.textPart({ text: sections.join("\n\n---\n\n") })]
+    })
+  ])
+}
+
+/** Provider-neutral usage from a text response; missing totals count as zero. */
+const usageOf = (usage: Response.Usage): AgentEvent.ModelUsage => {
+  const inputTokens = usage.inputTokens.total ?? 0
+  const outputTokens = usage.outputTokens.total ?? 0
+  const reported = Reflect.get(usage, "totalTokens")
+  const totalTokens = typeof reported === "number" &&
+      Number.isSafeInteger(reported) && reported >= 0
+    ? reported
+    : inputTokens + outputTokens
+  return { inputTokens, outputTokens, totalTokens }
+}
+
+/**
+ * A summariser that asks the ambient `LanguageModel`.
+ *
+ * The model is a *requirement*, not an argument, which is what lets the
+ * summarising model differ from the agent's: provide a cheaper one to the
+ * transform (`Effect.provide` around `Compaction.make`'s result, or a layer
+ * scoped to the session) and the agent's own model is untouched. Left alone,
+ * it is whatever model the session runs on.
+ *
+ * ```ts
+ * summarise: Compaction.model({ template: Compaction.continuationSummary })
+ * ```
+ *
+ * Usage is returned with the text, so the checkpoint records what the
+ * summary cost and `CompactionCompleted` can report it.
+ */
+export const model = (options?: {
+  /** Defaults to `continuationSummary`. */
+  readonly template?: Template | undefined
+  /** Passed to `serialize`. Defaults to its 2,000. */
+  readonly maxToolResultChars?: number | undefined
+}): Summarise<AiError.AiError, LanguageModel.LanguageModel> => {
+  const template = options?.template ?? continuationSummary
+  const maxToolResultChars = options?.maxToolResultChars
+  return ({ messages, previous, instructions }) =>
+    Effect.map(
+      LanguageModel.generateText({
+        prompt: template({
+          transcript: serialize(messages, { maxToolResultChars }),
+          previous,
+          instructions
+        })
+      }),
+      (response): SummaryResult => ({
+        text: response.text,
+        usage: Option.some(usageOf(response.usage))
+      })
+    )
+}
+
 const resolveBudget = <E, R>(
   budget: ContextBudget | ResolveBudget<E, R>,
   context: ContextTransform.Context
@@ -623,6 +744,107 @@ const tokenPreparation = <E, R>(
     })
   })
 
+/** Why a compaction ran. */
+export const Trigger = Schema.Literals(["automatic", "manual"])
+export type Trigger = typeof Trigger.Type
+
+/** A summary is about to be requested for `messages` canonical messages. */
+export const CompactionStarted = Schema.TaggedStruct("CompactionStarted", {
+  sessionId: Schema.String,
+  trigger: Trigger,
+  messages: Schema.Natural
+})
+/** A checkpoint was written; `checkpoint.usage` is what the summary cost. */
+export const CompactionCompleted = Schema.TaggedStruct("CompactionCompleted", {
+  sessionId: Schema.String,
+  trigger: Trigger,
+  checkpoint: Checkpoint
+})
+/**
+ * The summariser failed, or compaction could not help. The previous
+ * checkpoint, if any, is unchanged.
+ */
+export const CompactionFailed = Schema.TaggedStruct("CompactionFailed", {
+  sessionId: Schema.String,
+  trigger: Trigger,
+  reason: Schema.String
+})
+
+/**
+ * What a controller reports.
+ *
+ * Deliberately *not* part of `AgentEvent`. That union is the session's wire
+ * vocabulary -- every transport projects it and every client decodes it --
+ * and compaction is one transform among many, owned by whoever built it.
+ * Its events belong on the handle that owns the checkpoints, where an
+ * application can render a "context compacted" line or account for the
+ * summary's tokens without every remote client learning a new tag.
+ */
+export const CompactionEvent = Schema.Union([
+  CompactionStarted,
+  CompactionCompleted,
+  CompactionFailed
+])
+export type CompactionEvent = typeof CompactionEvent.Type
+
+/**
+ * The handle that owns checkpoint state.
+ *
+ * `transform` is what an agent composes; the rest is what an application
+ * does around it: compact on request (`/compact`), inspect, forget, observe.
+ * Type parameters are the three distinct error channels -- the transform's,
+ * manual compaction's (which never resolves a budget, so never carries the
+ * policy's error), and the store's -- so a memory-backed controller shows
+ * `never` where nothing can fail.
+ */
+export interface Controller<TE, CE, SE, R> {
+  readonly transform: ContextTransform.ContextTransform<TE, R>
+  /**
+   * Summarise now, regardless of the policy's threshold.
+   *
+   * Folds everything before the retained tail into a new checkpoint, so the
+   * *next* turn's projection is the summary plus the tail. `history` is the
+   * session's canonical history (`session.history`); passing it rather than
+   * reading it keeps the controller ignorant of sessions, which is what lets
+   * it serve many.
+   *
+   * The tail is `retain` messages. There is no turn in flight and therefore
+   * no projection to measure, so the cut is chosen by message count even
+   * under a token policy: the default is the policy's own `retain` under
+   * `whenLongerThan`, and six -- `whenLongerThan`'s default -- under
+   * `tokens`. Aligned off tool results like every other cut.
+   *
+   * Fails with `nothing-to-fold` when the tail already reaches back to the
+   * previous checkpoint.
+   */
+  readonly compact: (options: {
+    readonly sessionId: string
+    readonly history: Prompt.Prompt
+    readonly instructions?: string | undefined
+    readonly retain?: number | undefined
+  }) => Effect.Effect<Checkpoint, CE, R>
+  /**
+   * The stored checkpoint, as stored.
+   *
+   * Not validated against a history, because none is given: the transform
+   * checks the fingerprint against the transcript it is projecting, and
+   * this reports what would be checked.
+   */
+  readonly checkpoint: (sessionId: string) => Effect.Effect<Option.Option<Checkpoint>, SE>
+  /** Forget a session's checkpoint; its next turn starts from the transcript. */
+  readonly clear: (sessionId: string) => Effect.Effect<void, SE>
+  /**
+   * Started, completed and failed compactions, automatic and manual.
+   *
+   * Observational, so a slow subscriber loses old events rather than
+   * stalling compaction: a sliding buffer of 64 per controller.
+   */
+  readonly events: Stream.Stream<CompactionEvent>
+}
+
+/** Events a subscriber can fall behind by before the oldest are dropped. */
+const eventBuffer = 64
+
 type PersistenceError =
   | KeyValueStore.KeyValueStoreError
   | Schema.SchemaError
@@ -635,7 +857,7 @@ interface MakeOptions<PE, PR, SE, SR> {
 }
 
 /** Persistent checkpoints over Effect's existing schema-aware key/value store. */
-export function make<PE = never, PR = never, SE = never, SR = never>(
+export function controller<PE = never, PR = never, SE = never, SR = never>(
   options: MakeOptions<PE, PR, SE, SR> & {
     readonly checkpointStore: KeyValueStore.KeyValueStore
     /** Prefix applied verbatim. Defaults to `effect-agent:compaction:`. */
@@ -643,47 +865,74 @@ export function make<PE = never, PR = never, SE = never, SR = never>(
     readonly maxSessions?: undefined
   }
 ): Effect.Effect<
-  ContextTransform.ContextTransform<PE | SE | PersistenceError | CompactionCannotHelpError, PR | SR>
+  Controller<
+    PE | SE | PersistenceError | CompactionCannotHelpError,
+    SE | PersistenceError | CompactionCannotHelpError,
+    PersistenceError,
+    PR | SR
+  >
 >
 /** Default bounded in-memory checkpoints. */
-export function make<PE = never, PR = never, SE = never, SR = never>(
+export function controller<PE = never, PR = never, SE = never, SR = never>(
   options: MakeOptions<PE, PR, SE, SR> & {
     readonly checkpointStore?: undefined
     readonly checkpointPrefix?: undefined
   }
-): Effect.Effect<ContextTransform.ContextTransform<PE | SE | CompactionCannotHelpError, PR | SR>>
+): Effect.Effect<
+  Controller<
+    PE | SE | CompactionCannotHelpError,
+    SE | CompactionCannotHelpError,
+    never,
+    PR | SR
+  >
+>
 /** A value with an optional store has the honest union of both possibilities. */
-export function make<PE = never, PR = never, SE = never, SR = never>(
+export function controller<PE = never, PR = never, SE = never, SR = never>(
   options: MakeOptions<PE, PR, SE, SR> & {
     readonly checkpointStore?: KeyValueStore.KeyValueStore | undefined
     readonly checkpointPrefix?: string | undefined
   }
 ): Effect.Effect<
-  ContextTransform.ContextTransform<PE | SE | PersistenceError | CompactionCannotHelpError, PR | SR>
+  Controller<
+    PE | SE | PersistenceError | CompactionCannotHelpError,
+    SE | PersistenceError | CompactionCannotHelpError,
+    PersistenceError,
+    PR | SR
+  >
 >
 /**
- * Build a compacting `ContextTransform`.
- *
- * Checkpoints are held per session, so one transform can serve many sessions —
- * an `Agent` is a value and may well be shared. Checkpoints are isolated per
- * session.
+ * Build a compaction controller: the transform plus the handle that owns its
+ * checkpoints.
  *
  * ```ts
- * const agent = Agent.make({
- *   contextTransform: yield* Compaction.make({
- *     policy: Compaction.whenLongerThan(40, { retain: 10 }),
- *     summarise: ({ messages }) => summariseWithModel(messages)
- *   })
+ * const compaction = yield* Compaction.controller({
+ *   policy: Compaction.tokens({ budget, estimate: Compaction.estimate.approximate }),
+ *   summarise: Compaction.model()
+ * })
+ * const agent = Agent.make({ contextTransform: compaction.transform })
+ * // later, from a slash command:
+ * yield* compaction.compact({
+ *   sessionId: session.id,
+ *   history: yield* session.history,
+ *   instructions: "Keep the migration plan."
  * })
  * ```
+ *
+ * Checkpoints are held per session, so one controller can serve many -- an
+ * `Agent` is a value and may well be shared.
  */
-export function make<PE = never, PR = never, SE = never, SR = never>(
+export function controller<PE = never, PR = never, SE = never, SR = never>(
   options: MakeOptions<PE, PR, SE, SR> & {
     readonly checkpointStore?: KeyValueStore.KeyValueStore | undefined
     readonly checkpointPrefix?: string | undefined
   }
 ): Effect.Effect<
-  ContextTransform.ContextTransform<PE | SE | PersistenceError | CompactionCannotHelpError, PR | SR>
+  Controller<
+    PE | SE | PersistenceError | CompactionCannotHelpError,
+    SE | PersistenceError | CompactionCannotHelpError,
+    PersistenceError,
+    PR | SR
+  >
 > {
   return Effect.gen(function* () {
     const maxSessions = yield* Effect.sync(() => {
@@ -707,6 +956,8 @@ export function make<PE = never, PR = never, SE = never, SR = never>(
     // `estimate` is per instance, and the messages are the same objects across
     // sessions' histories only when they are the same canonical objects.
     const singleMessageCache = new WeakMap<Prompt.Message, number>()
+    const bus = yield* PubSub.sliding<CompactionEvent>(eventBuffer)
+    const emit = (event: CompactionEvent) => PubSub.publish(bus, event)
     const persisted = options.checkpointStore === undefined
       ? undefined
       : KeyValueStore.toSchemaStore(
@@ -741,29 +992,131 @@ export function make<PE = never, PR = never, SE = never, SR = never>(
           })
         : persisted.set(sessionId, checkpoint)
 
-    return ContextTransform.make((context) =>
+    const remove = (sessionId: string) =>
+      persisted === undefined
+        ? Ref.update(checkpoints, (all) => {
+            if (!all.has(sessionId)) return all
+            const next = new Map(all)
+            next.delete(sessionId)
+            return next
+          })
+        : persisted.remove(sessionId)
+
+    // A checkpoint is used only if it still describes *this* transcript.
+    //
+    // Session ids are reused: a snapshot is restored, a durable submission
+    // replays, a server hands the same id to a new conversation after
+    // evicting the old one. The transform outlives all of that.
+    //
+    // Length is the necessary condition — a checkpoint claiming more
+    // messages than exist sliced past the end of history and produced a
+    // prompt of nothing but a summary, every actual message dropped. The
+    // fingerprint is the sufficient one: an unrelated conversation that
+    // happens to be longer would otherwise look like a perfect match and
+    // receive a summary it never earned.
+    const validated = (
+      stored: Option.Option<Checkpoint>,
+      messages: ReadonlyArray<Prompt.Message>
+    ): Option.Option<Checkpoint> =>
+      Option.isNone(stored) ||
+        stored.value.coveredThrough > messages.length ||
+        stored.value.prefix !==
+          fingerprint(messages.slice(0, stored.value.coveredThrough))
+        ? Option.none()
+        : stored
+
+    /**
+     * Ask the summariser, reporting around it.
+     *
+     * The failure event goes out before the error propagates, and carries the
+     * cause's message rather than the cause, because the stream is
+     * observational: a renderer wants a line, and the typed error is already
+     * on its way to the caller who can act on it.
+     */
+    const summariseWith = (
+      sessionId: string,
+      trigger: Trigger,
+      preparation: Preparation<Checkpoint>,
+      instructions: Option.Option<string>
+    ) =>
+      emit({
+        _tag: "CompactionStarted",
+        sessionId,
+        trigger,
+        messages: preparation.messagesToSummarise.content.length
+      }).pipe(
+        Effect.andThen(
+          options.summarise({
+            messages: preparation.messagesToSummarise,
+            previous: Option.map(preparation.previous, (checkpoint) => checkpoint.summary),
+            instructions
+          })
+        ),
+        Effect.map(normalizeSummary),
+        Effect.tapCause((cause) =>
+          emit({
+            _tag: "CompactionFailed",
+            sessionId,
+            trigger,
+            reason: String(cause)
+          })
+        )
+      )
+
+    const completed = (sessionId: string, trigger: Trigger, checkpoint: Checkpoint) =>
+      Effect.andThen(
+        save(sessionId, checkpoint),
+        emit({ _tag: "CompactionCompleted", sessionId, trigger, checkpoint })
+      )
+
+    const manualRetain = options.policy._tag === "Messages"
+      ? options.policy.retain
+      : 6
+
+    const compact: Controller<never, SE | PersistenceError | CompactionCannotHelpError, PersistenceError, SR>["compact"] = ({ sessionId, history, instructions, retain }) =>
+      Effect.gen(function* () {
+        const keep = yield* Effect.sync(() =>
+          positiveInteger("Compaction.compact retain", retain ?? manualRetain)
+        )
+        const messages = history.content
+        const existing = validated(yield* load(sessionId), messages)
+        const covered = Option.match(existing, {
+          onNone: () => 0,
+          onSome: (checkpoint) => checkpoint.coveredThrough
+        })
+        const preparation = prepare({
+          messages,
+          previous: existing,
+          previouslyCovered: covered,
+          rawBoundary: Math.max(covered, messages.length - keep)
+        })
+        if (Option.isNone(preparation)) {
+          const reason = `manual compaction has nothing to fold: ${messages.length} message(s), ${covered} already covered, ${keep} retained`
+          yield* emit({ _tag: "CompactionFailed", sessionId, trigger: "manual", reason })
+          return yield* new CompactionCannotHelpError({ kind: "nothing-to-fold", reason })
+        }
+        const summary = yield* summariseWith(
+          sessionId,
+          "manual",
+          preparation.value,
+          Option.fromUndefinedOr(instructions)
+        )
+        const checkpoint: Checkpoint = {
+          coveredThrough: preparation.value.coveredThrough,
+          summary: summary.text,
+          prefix: fingerprint(messages.slice(0, preparation.value.coveredThrough)),
+          tokensBefore: Option.none(),
+          tokensAfter: Option.none(),
+          usage: summary.usage
+        }
+        yield* completed(sessionId, "manual", checkpoint)
+        return checkpoint
+      })
+
+    const transform = ContextTransform.make((context) =>
       Effect.gen(function* () {
         const messages = context.canonicalPrompt.content
-        const stored = yield* load(context.sessionId)
-        // A checkpoint is used only if it still describes *this* transcript.
-        //
-        // Session ids are reused: a snapshot is restored, a durable submission
-        // replays, a server hands the same id to a new conversation after
-        // evicting the old one. The transform outlives all of that.
-        //
-        // Length is the necessary condition — a checkpoint claiming more
-        // messages than exist sliced past the end of history and produced a
-        // prompt of nothing but a summary, every actual message dropped. The
-        // fingerprint is the sufficient one: an unrelated conversation that
-        // happens to be longer would otherwise look like a perfect match and
-        // receive a summary it never earned.
-        const existing: Option.Option<Checkpoint> =
-          Option.isNone(stored) ||
-            stored.value.coveredThrough > messages.length ||
-            stored.value.prefix !==
-              fingerprint(messages.slice(0, stored.value.coveredThrough))
-            ? Option.none()
-            : stored
+        const existing = validated(yield* load(context.sessionId), messages)
         const covered = Option.match(existing, {
           onNone: () => 0,
           onSome: (checkpoint) => checkpoint.coveredThrough
@@ -805,13 +1158,12 @@ export function make<PE = never, PR = never, SE = never, SR = never>(
           return projectedBefore
         }
 
-        const summary = normalizeSummary(yield* options.summarise({
-          messages: preparation.value.messagesToSummarise,
-          previous: Option.map(
-            preparation.value.previous,
-            (checkpoint) => checkpoint.summary
-          )
-        }))
+        const summary = yield* summariseWith(
+          context.sessionId,
+          "automatic",
+          preparation.value,
+          Option.none()
+        )
         const projected = substitute(context.prompt, messages, [
           summaryMessage(summary.text),
           ...preparation.value.retained.content
@@ -852,9 +1204,72 @@ export function make<PE = never, PR = never, SE = never, SR = never>(
           usage: summary.usage
         }
 
-        yield* save(context.sessionId, checkpoint)
+        yield* completed(context.sessionId, "automatic", checkpoint)
         return projected
       })
     )
+
+    return {
+      transform,
+      compact,
+      checkpoint: (sessionId) => load(sessionId),
+      clear: remove,
+      events: Stream.fromPubSub(bus)
+    }
   })
+}
+
+/** Persistent checkpoints over Effect's existing schema-aware key/value store. */
+export function make<PE = never, PR = never, SE = never, SR = never>(
+  options: MakeOptions<PE, PR, SE, SR> & {
+    readonly checkpointStore: KeyValueStore.KeyValueStore
+    /** Prefix applied verbatim. Defaults to `effect-agent:compaction:`. */
+    readonly checkpointPrefix?: string | undefined
+    readonly maxSessions?: undefined
+  }
+): Effect.Effect<
+  ContextTransform.ContextTransform<PE | SE | PersistenceError | CompactionCannotHelpError, PR | SR>
+>
+/** Default bounded in-memory checkpoints. */
+export function make<PE = never, PR = never, SE = never, SR = never>(
+  options: MakeOptions<PE, PR, SE, SR> & {
+    readonly checkpointStore?: undefined
+    readonly checkpointPrefix?: undefined
+  }
+): Effect.Effect<ContextTransform.ContextTransform<PE | SE | CompactionCannotHelpError, PR | SR>>
+/** A value with an optional store has the honest union of both possibilities. */
+export function make<PE = never, PR = never, SE = never, SR = never>(
+  options: MakeOptions<PE, PR, SE, SR> & {
+    readonly checkpointStore?: KeyValueStore.KeyValueStore | undefined
+    readonly checkpointPrefix?: string | undefined
+  }
+): Effect.Effect<
+  ContextTransform.ContextTransform<PE | SE | PersistenceError | CompactionCannotHelpError, PR | SR>
+>
+/**
+ * Build a compacting `ContextTransform`.
+ *
+ * The transform-only convenience over `controller`: the same policy, the
+ * same summariser, the same checkpoints, without a handle. Use `controller`
+ * when the application needs to compact on request, inspect a checkpoint,
+ * or observe compactions.
+ *
+ * ```ts
+ * const agent = Agent.make({
+ *   contextTransform: yield* Compaction.make({
+ *     policy: Compaction.whenLongerThan(40, { retain: 10 }),
+ *     summarise: ({ messages }) => summariseWithModel(messages)
+ *   })
+ * })
+ * ```
+ */
+export function make<PE = never, PR = never, SE = never, SR = never>(
+  options: MakeOptions<PE, PR, SE, SR> & {
+    readonly checkpointStore?: KeyValueStore.KeyValueStore | undefined
+    readonly checkpointPrefix?: string | undefined
+  }
+): Effect.Effect<
+  ContextTransform.ContextTransform<PE | SE | PersistenceError | CompactionCannotHelpError, PR | SR>
+> {
+  return Effect.map(controller(options), (handle) => handle.transform)
 }

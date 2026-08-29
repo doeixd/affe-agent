@@ -2989,3 +2989,34 @@ this file is the chronology. Several earlier sections above describe states
 that later sections superseded (streaming, Schema events, the delivery log,
 SSE resumption); where a sentence was flatly wrong it has been corrected in
 place, otherwise the later section wins.
+
+## Compaction: default summariser, controller, events (2026-08-29)
+
+Phases 8-10 of `docs/plan-branching-and-compaction.md`, the one functional gap
+the 2026-08-29 audit found in a landed package: `/compaction` was a seam that
+required its user to write a summariser and gave them no way to compact on
+request or see it happen.
+
+- `Compaction.model({ template?, maxToolResultChars? })` is a `Summarise` over
+  the ambient `LanguageModel`, rendering the stretch with `serialize` and
+  asking for `continuationSummary` -- goal, constraints, progress, decisions,
+  next steps, critical context, files. It returns the response's usage, so
+  the checkpoint records what the summary cost. The model is a requirement,
+  not an argument: provide a cheaper one to the summariser and the agent's is
+  untouched.
+- `Compaction.controller(options)` returns `{ transform, compact, checkpoint,
+  clear, events }`; `make` is now the transform-only convenience over it.
+  `compact({ sessionId, history, instructions?, retain? })` folds on request
+  regardless of the threshold and the next turn projects the result; the
+  focus text reaches the summariser as the new `instructions` field on
+  `Summarise` (`None` when automatic). Manual compaction cuts by message count
+  because there is no turn to measure a budget against.
+- `CompactionEvent` -- `Started` / `Completed` (with the checkpoint) /
+  `Failed`, each tagged `automatic` or `manual` -- is a Schema on the
+  controller, deliberately not an `AgentEvent`: the session union is every
+  transport's wire vocabulary, and compaction is owned by whoever built the
+  transform. Sliding buffer of 64 per controller.
+
+Seven tests in `test/Compaction.test.ts` ("compaction controller (phases
+8-10)"), two of them broken once. The public-API pin in `PublicApi.test.ts`
+lists the eight new names. 25/25 in the file; lint clean.

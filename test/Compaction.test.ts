@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Option, Ref, Schema } from "effect"
-import { Prompt, Tool } from "effect/unstable/ai"
+import { Cause, Effect, Exit, Option, Ref, Schema, Stream } from "effect"
+import { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -983,4 +983,303 @@ describe("compaction", () => {
       "must leave room"
     )
   })
+})
+
+describe("compaction controller (phases 8-10)", () => {
+  /** A short user/assistant conversation as canonical history. */
+  const conversation = (turns: number): Prompt.Prompt =>
+    Prompt.fromMessages(
+      Array.from({ length: turns }, (_, i) => [
+        Prompt.userMessage({ content: [Prompt.textPart({ text: `question ${i + 1}` })] }),
+        Prompt.assistantMessage({ content: [Prompt.textPart({ text: `answer ${i + 1}` })] })
+      ]).flat()
+    )
+
+  it.effect("model() asks the ambient model with the continuation template and returns its usage", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        { text: "## Goal\nFinish the migration.", usage: { input: 120, output: 30 } }
+      ])
+      const summarise = Compaction.model()
+      // The summariser's requirement is the model, and nothing else: that is
+      // what lets it be satisfied by a model other than the agent's.
+      type _R = Assert<Equal<
+        typeof summarise,
+        Compaction.Summarise<AiError.AiError, LanguageModel.LanguageModel>
+      >>
+
+      const result = yield* summarise({
+        messages: conversation(2),
+        previous: Option.some("Earlier: the schema was chosen."),
+        instructions: Option.some("Keep the migration plan.")
+      }).pipe(Effect.provide(layer))
+
+      assert.deepStrictEqual(result, {
+        text: "## Goal\nFinish the migration.",
+        usage: Option.some({ inputTokens: 120, outputTokens: 30, totalTokens: 150 })
+      })
+
+      // What the model was actually asked: the structured headings in the
+      // system message; the previous summary, the instructions and the
+      // serialised transcript in the user message.
+      const asked = (yield* recorder.prompts)[0]!
+      const system = asked.content.find((m) => m.role === "system")
+      assert.isDefined(system)
+      if (system?.role === "system") {
+        for (const heading of ["## Goal", "## Constraints and preferences", "## Progress", "## Decisions", "## Next steps", "## Critical context", "## Files"]) {
+          assert.include(system.content, heading)
+        }
+      }
+      const user = TestLanguageModel.userTexts(asked).join("\n")
+      assert.include(user, "Earlier: the schema was chosen.")
+      assert.include(user, "Keep the migration plan.")
+      assert.include(user, "[User]\nquestion 1")
+      assert.include(user, "[Assistant]\nanswer 2")
+    })
+  )
+
+  it.effect("compact() folds on request, regardless of the threshold, and the next turn projects it", () =>
+    Effect.gen(function* () {
+      const asked = yield* Ref.make<Array<{ messages: number; previous: Option.Option<string>; instructions: Option.Option<string> }>>([])
+      const compaction = yield* Compaction.controller({
+        // A threshold the conversation never reaches: only a manual compact
+        // can fold anything.
+        policy: Compaction.whenLongerThan(1_000, { retain: 2 }),
+        summarise: ({ messages, previous, instructions }) =>
+          Ref.update(asked, (all) => [...all, { messages: messages.content.length, previous, instructions }]).pipe(
+            Effect.as(`summary of ${messages.content.length}`)
+          )
+      })
+      // The memory-backed controller cannot fail to load or forget.
+      type _Store = Assert<Equal<
+        ReturnType<typeof compaction.checkpoint>,
+        Effect.Effect<Option.Option<Compaction.Checkpoint>, never>
+      >>
+
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("one"),
+        TestLanguageModel.text("two"),
+        TestLanguageModel.text("three"),
+        TestLanguageModel.text("after")
+      ])
+
+      const out = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ contextTransform: compaction.transform, loop: AgentLoop.bounded(1) })
+          )
+          for (const input of ["a", "b", "c"]) yield* session.prompt(input)
+          assert.isTrue(Option.isNone(yield* compaction.checkpoint(session.id)))
+
+          const checkpoint = yield* compaction.compact({
+            sessionId: session.id,
+            history: yield* session.history,
+            instructions: "Keep the plan."
+          })
+          const stored = yield* compaction.checkpoint(session.id)
+
+          yield* session.prompt("d")
+          return { checkpoint, stored, historyLength: (yield* session.history).content.length }
+        })
+      ).pipe(Effect.provide(layer))
+
+      // Six messages, two retained: four folded, with the instructions.
+      assert.deepStrictEqual(yield* Ref.get(asked), [
+        { messages: 4, previous: Option.none(), instructions: Option.some("Keep the plan.") }
+      ])
+      assert.strictEqual(out.checkpoint.coveredThrough, 4)
+      assert.strictEqual(out.checkpoint.summary, "summary of 4")
+      assert.deepStrictEqual(out.stored, Option.some(out.checkpoint))
+      // Canonical history is untouched by the fold.
+      assert.strictEqual(out.historyLength, 8)
+
+      // The turn after the manual compaction saw the summary plus the tail,
+      // not the transcript, and did not summarise again.
+      const prompts = yield* recorder.prompts
+      const last = prompts[prompts.length - 1]!
+      assert.deepStrictEqual(summaryOf(last), ["Summary of the earlier conversation:\n\nsummary of 4"])
+      assert.strictEqual(last.content.length, 1 + 2 + 1)
+      assert.strictEqual((yield* Ref.get(asked)).length, 1)
+    })
+  )
+
+  it.effect("compact() with nothing to fold fails typed, leaves the checkpoint, and says so on the stream", () =>
+    Effect.gen(function* () {
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(1, { retain: 2 }),
+        summarise: () => Effect.succeed("unreachable")
+      })
+      const seen = yield* Ref.make<Array<Compaction.CompactionEvent>>([])
+      yield* Effect.forkScoped(
+        Stream.runForEach(compaction.events, (event) => Ref.update(seen, (all) => [...all, event]))
+      )
+      yield* Effect.yieldNow
+
+      const exit = yield* Effect.exit(
+        compaction.compact({ sessionId: "s", history: conversation(1) })
+      )
+      assert.isTrue(Exit.isFailure(exit))
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause)
+        assert.instanceOf(error, Compaction.CompactionCannotHelpError)
+        if (error instanceof Compaction.CompactionCannotHelpError) {
+          assert.strictEqual(error.kind, "nothing-to-fold")
+        }
+      }
+      assert.isTrue(Option.isNone(yield* compaction.checkpoint("s")))
+      const events = yield* Ref.get(seen)
+      assert.strictEqual(events.length, 1)
+      assert.strictEqual(events[0]?._tag, "CompactionFailed")
+      if (events[0]?._tag === "CompactionFailed") {
+        assert.strictEqual(events[0].trigger, "manual")
+        assert.include(events[0].reason, "nothing to fold")
+      }
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("events report started and completed, with usage, for automatic and manual compactions", () =>
+    Effect.gen(function* () {
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: ({ messages }) =>
+          Effect.succeed<Compaction.SummaryResult>({
+            text: `folded ${messages.content.length}`,
+            usage: Option.some({ inputTokens: 40, outputTokens: 8, totalTokens: 48 })
+          })
+      })
+      const seen = yield* Ref.make<Array<Compaction.CompactionEvent>>([])
+      yield* Effect.forkScoped(
+        Stream.runForEach(compaction.events, (event) => Ref.update(seen, (all) => [...all, event]))
+      )
+      yield* Effect.yieldNow
+
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("one"),
+        TestLanguageModel.text("two"),
+        TestLanguageModel.text("three")
+      ])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ contextTransform: compaction.transform, loop: AgentLoop.bounded(1) })
+          )
+          // Turn three runs the transform over five canonical messages (the
+          // reply is not committed yet): two retained, three foldable > 2.
+          for (const input of ["a", "b", "c"]) yield* session.prompt(input)
+          // Then a manual one over the committed six: the checkpoint covers
+          // three, the tail is two, so exactly one message is left to fold.
+          yield* compaction.compact({ sessionId: session.id, history: yield* session.history })
+        })
+      ).pipe(Effect.provide(layer))
+      yield* Effect.yieldNow
+
+      const events = yield* Ref.get(seen)
+      assert.deepStrictEqual(events.map((e) => [e._tag, e.trigger]), [
+        ["CompactionStarted", "automatic"],
+        ["CompactionCompleted", "automatic"],
+        ["CompactionStarted", "manual"],
+        ["CompactionCompleted", "manual"]
+      ])
+      const completed = events[1]
+      if (completed?._tag === "CompactionCompleted") {
+        assert.strictEqual(completed.checkpoint.coveredThrough, 3)
+        assert.strictEqual(completed.checkpoint.summary, "folded 3")
+        assert.deepStrictEqual(
+          completed.checkpoint.usage,
+          Option.some({ inputTokens: 40, outputTokens: 8, totalTokens: 48 })
+        )
+      }
+      const started = events[0]
+      if (started?._tag === "CompactionStarted") assert.strictEqual(started.messages, 3)
+      const manual = events[3]
+      if (manual?._tag === "CompactionCompleted") {
+        assert.strictEqual(manual.checkpoint.coveredThrough, 4)
+        assert.strictEqual(manual.checkpoint.summary, "folded 1")
+      }
+      // The event vocabulary is a Schema: it round-trips through JSON, by
+      // the same codec the key-value checkpoint store uses.
+      const json = Schema.fromJsonString(Schema.toCodecJson(Schema.Array(Compaction.CompactionEvent)))
+      const encoded = yield* Schema.encodeEffect(json)(events)
+      assert.strictEqual(typeof encoded, "string")
+      assert.deepStrictEqual(yield* Schema.decodeEffect(json)(encoded), events)
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("clear() forgets the checkpoint, so the next turn summarises again", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: ({ messages }) =>
+          Ref.update(calls, (n) => n + 1).pipe(Effect.as(`folded ${messages.content.length}`))
+      })
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("one"),
+        TestLanguageModel.text("two"),
+        TestLanguageModel.text("three"),
+        TestLanguageModel.text("four")
+      ])
+      const out = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ contextTransform: compaction.transform, loop: AgentLoop.bounded(1) })
+          )
+          for (const input of ["a", "b", "c"]) yield* session.prompt(input)
+          const before = yield* Ref.get(calls)
+          const had = Option.isSome(yield* compaction.checkpoint(session.id))
+          yield* compaction.clear(session.id)
+          const cleared = Option.isNone(yield* compaction.checkpoint(session.id))
+          yield* session.prompt("d")
+          return { before, had, cleared, after: yield* Ref.get(calls) }
+        })
+      ).pipe(Effect.provide(layer))
+      assert.strictEqual(out.before, 1)
+      assert.isTrue(out.had)
+      assert.isTrue(out.cleared)
+      // Without `clear`, turn four would have folded nothing new (two fresh
+      // messages, threshold two) and reused the checkpoint. With it, the
+      // whole foldable stretch is summarised from scratch.
+      assert.strictEqual(out.after, 2)
+    })
+  )
+
+  it.effect("the summarising model can differ from the agent's", () =>
+    Effect.gen(function* () {
+      const agentModel = yield* TestLanguageModel.script([
+        TestLanguageModel.text("one"),
+        TestLanguageModel.text("two"),
+        TestLanguageModel.text("three")
+      ])
+      const cheap = yield* TestLanguageModel.script([
+        { text: "CHEAP SUMMARY", usage: { input: 10, output: 2 } }
+      ])
+      const summarise = Compaction.model()
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        // The summariser's model requirement is discharged here, by the
+        // cheap model, so the transform asks nothing of the session's.
+        summarise: (input) => summarise(input).pipe(Effect.provide(cheap.layer))
+      })
+      const { layer, recorder } = agentModel
+      const checkpoint = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ contextTransform: compaction.transform, loop: AgentLoop.bounded(1) })
+          )
+          for (const input of ["a", "b", "c"]) yield* session.prompt(input)
+          return yield* compaction.checkpoint(session.id)
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.isTrue(Option.isSome(checkpoint))
+      if (Option.isSome(checkpoint)) {
+        assert.strictEqual(checkpoint.value.summary, "CHEAP SUMMARY")
+        assert.deepStrictEqual(checkpoint.value.usage, Option.some({ inputTokens: 10, outputTokens: 2, totalTokens: 12 }))
+      }
+      // The agent's model answered three prompts and was never asked to
+      // summarise; the cheap one was asked exactly once.
+      assert.strictEqual((yield* recorder.prompts).length, 3)
+      assert.strictEqual((yield* cheap.recorder.prompts).length, 1)
+    })
+  )
 })

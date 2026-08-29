@@ -1457,9 +1457,9 @@ details with their schemas when the use cases are concrete.
 | **5** ✅ | Add memory/KeyValueStore checkpoint persistence                     |
 | **6** ✅ | Enrich `Summarise` with structured text + usage (typed details deferred until consumers exist) |
 | **7** ✅ | Add transcript serializer + truncation                              |
-| **8**  | Add default continuation-oriented model summarizer                     |
-| **9**  | Add controller/manual `compact()` API                                  |
-| **10** | Add `CompactionEvent` stream and usage reporting                       |
+| **8** ✅ | Add default continuation-oriented model summarizer (`Compaction.model`, `continuationSummary`, `Template`) |
+| **9** ✅ | Add controller/manual `compact()` API (`Compaction.controller`; `make` delegates to it) |
+| **10** ✅ | Add `CompactionEvent` stream and usage reporting (controller-scoped Schema, not `AgentEvent`) |
 | **11** | Add generic branch-seed decoration seam to `/tree`                     |
 | **12** | Implement `BranchSummary` from `tree.divergence`                       |
 | **13** | Add `/coding` cumulative file-operation details                        |
@@ -1483,15 +1483,15 @@ The implementation agent should treat these as acceptance criteria:
 | Prefix mismatch            | Stale checkpoint is rejected                                                   |
 | Durable restart            | Persistent checkpoint prevents unnecessary re-summarization                    |
 | Summary failure            | Existing checkpoint remains unchanged                                          |
-| Manual instructions        | Manual focus text reaches summarizer                                           |
-| Usage                      | Summarization tokens appear in compaction/session statistics                   |
+| Manual instructions ✅     | Manual focus text reaches summarizer (`Summarise` gained `instructions`)      |
+| Usage ✅                   | Summarization tokens appear on the checkpoint and `CompactionCompleted`       |
 | Tree divergence            | Only abandoned work after common ancestor is summarized                        |
 | Target branch              | Original target history remains intact                                         |
 | Branch carryover           | Summary persists into descendants of the new branch                            |
 | Original branch            | Abandoned branch is unchanged                                                  |
 | File details               | read/modified files accumulate across repeated compactions                     |
 | Nested summaries           | prior typed details survive branch-summary → later compaction                  |
-| Different summarizer model | Summary model can differ entirely from agent model                             |
+| Different summarizer model ✅ | `Compaction.model()` requires `LanguageModel`; discharge it with a different layer |
 | Durable summary            | Workflow replay does not repeat a completed summary model call                 |
 | Storage portability        | Persistent implementation depends on Effect persistence, not a database driver |
 
@@ -1557,3 +1557,34 @@ So the answer to the original question is **yes: we already chose the right foun
 The only meaningful architectural additions I see are **persistent compaction state, real token budgeting, a manual controller, and a generic way for `SessionTree` to seed a newly created branch with deliberately derived context**. Almost everything else is functionality built out of primitives that already exist.
 
 That is exactly the outcome we'd want: Pi gives us useful product semantics to borrow, without revealing that our kernel needs to become Pi-shaped.
+
+## Progress: phases 8-10 (2026-08-29)
+
+Landed together. Three decisions worth recording because the sketches above
+left them open:
+
+- **Events are not `AgentEvent`s.** §13 sketched `events` on the controller
+  and that is where they went. Adding tags to the session union is a wire
+  change every transport and client pays for, and compaction is owned by
+  whoever built the transform, not by the session. `CompactionEvent` is a
+  Schema (`Started` / `Completed` / `Failed`, each with `trigger:
+  "automatic" | "manual"`), delivered on a sliding buffer of 64 so a slow
+  subscriber loses old events rather than stalling a turn.
+- **Manual compaction cuts by message count.** There is no turn in flight,
+  so no projection to measure a token budget against, and a `ResolveBudget`
+  takes a `ContextTransform.Context` that does not exist outside a turn.
+  `compact({ retain })` defaults to the policy's `retain` under
+  `whenLongerThan` and to six under `tokens`; the cut is aligned off tool
+  results like every other. `compact` therefore never carries the policy's
+  error, which the `Controller` type states by giving it its own channel.
+- **`model()` takes the model as a requirement.** That is what makes "a
+  different summarising model" a one-liner (`Effect.provide` on the
+  summariser) instead of a second configuration surface.
+
+`Summarise` gained an `instructions: Option<string>` argument; existing
+summarisers that destructure two fields compile unchanged. `make` is now
+`controller(...).transform`. Tests: `test/Compaction.test.ts` "compaction
+controller (phases 8-10)" -- template content and usage, manual fold and the
+next-turn projection, `nothing-to-fold`, the event stream for both triggers
+with a JSON round-trip, `clear`, and a summariser on a different model; two
+of them broken once (instructions dropped; `clear` a no-op).

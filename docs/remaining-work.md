@@ -24,7 +24,7 @@ Effect diagnostics, portability and the workerd bundle pass, and
 | `plan-tui-port.md` / `plan-tui-tool-views.md` | V0–V9, W1–W5 landed (W5's diff view shipped once the data existed). |
 | `audit-effect-ecosystem.md` | All actions closed. |
 | `plan-filetypes.txt` phase 1 | `PromptWire` codec at every boundary. |
-| `plan-branching-and-compaction.md` phases 1–7 | Preparation, token policy, Schema checkpoint, KV persistence, serializer. |
+| `plan-branching-and-compaction.md` phases 1–10 | Preparation, token policy, Schema checkpoint, KV persistence, serializer, default model summariser, controller with manual `compact()`, compaction events. |
 | `research-tool-sources.md` first slice | `/tool-source` seam; OpenAPI, GraphQL, MCP sources; per-invocation `headers`. |
 | `plan-mcp-frontend.md` phases 1–3 | Host-based `serverLayer`, nine tools, history/pending resources, stdio elicitation. |
 | `plan-deployment.md` §10.1 | workerd typecheck + bundle probe in `check`. |
@@ -36,12 +36,10 @@ open, so the next pass does not have to re-derive it.
 
 ### Functional gaps in shipped packages
 
-1. **Compaction phases 8–10** — a default model summariser
-   (`Compaction.model`), a manual `compact()` controller, and
-   `CompactionEvent`s with usage. Today a user must write their own summariser
-   and cannot trigger compaction; the only functional gap among the landed
-   plans. `src/compaction/Compaction.ts` `make` returns a bare
-   `ContextTransform`.
+1. ~~**Compaction phases 8–10**~~ — landed 2026-08-29: `Compaction.model`
+   / `continuationSummary`, `Compaction.controller` with `compact` /
+   `checkpoint` / `clear` / `events`, and the `CompactionEvent` Schema.
+   Phases 11–15 are item 22.
 2. **`plan-shell-tool.md` (S0–S5)** — fully specified, zero code. The
    model-facing tool is still named `bash` in `/coding` and `/pi`
    (`CodingToolkit.ts`, `PiToolkit.ts`), its prompt says "with bash", and both

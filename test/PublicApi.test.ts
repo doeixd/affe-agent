@@ -228,9 +228,17 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(compaction.Compaction).sort(), [
       "Checkpoint",
       "CompactionCannotHelpError",
+      "CompactionCompleted",
+      "CompactionEvent",
+      "CompactionFailed",
+      "CompactionStarted",
       "SummaryResult",
+      "Trigger",
+      "continuationSummary",
+      "controller",
       "estimate",
       "make",
+      "model",
       "serialize",
       "tokens",
       "whenLongerThan"

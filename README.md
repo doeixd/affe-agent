@@ -1884,6 +1884,46 @@ checkpoint. `Compaction.serialize(messages)` is the safe starting point for a
 model summarizer: it labels every prompt part, truncates oversized tool results,
 and describes file payloads instead of copying them into the summary request.
 
+The default summariser is `Compaction.model()`. It asks the ambient
+`LanguageModel` for a continuation summary — goal, constraints, progress,
+decisions, next steps, critical context, files — using
+`Compaction.continuationSummary`, or a `Template` of your own. The model is a
+requirement rather than an argument, so the summarising model can differ from
+the agent's: discharge it yourself and the agent's model is untouched.
+
+```ts
+summarise: (input) => Compaction.model()(input).pipe(Effect.provide(cheapModel))
+```
+
+`Compaction.controller` returns the transform together with the handle that
+owns its checkpoints, for the things an application does around compaction:
+
+```ts
+const compaction = yield* Compaction.controller({ policy, summarise: Compaction.model() })
+const agent = Agent.make({ contextTransform: compaction.transform })
+
+// A `/compact` command: fold now, regardless of the threshold, with focus text
+// the summariser receives as `instructions`. The next turn projects the result.
+yield* compaction.compact({
+  sessionId: session.id,
+  history: yield* session.history,
+  instructions: "Keep the migration plan."
+})
+yield* compaction.checkpoint(session.id) // Option<Checkpoint>, as stored
+yield* compaction.clear(session.id)      // the next turn starts from the transcript
+compaction.events                        // Stream<CompactionEvent>
+```
+
+`CompactionStarted`, `CompactionCompleted` (carrying the checkpoint and the
+summary's usage) and `CompactionFailed` are reported for automatic and manual
+compactions alike. They are a Schema on the controller, not new session events:
+compaction is one transform among many, and its reporting belongs to whoever
+built it rather than to every remote client's wire vocabulary. Manual
+compaction has no turn in flight to measure, so it cuts by message count —
+`retain`, defaulting to the policy's own under `whenLongerThan` and to six under
+`tokens` — aligned off tool results like every other cut. `Compaction.make`
+remains the transform-only convenience over the same controller.
+
 ## Testing
 
 The deterministic model and lifecycle probe the library tests itself with ship
