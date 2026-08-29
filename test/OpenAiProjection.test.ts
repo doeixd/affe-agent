@@ -193,19 +193,18 @@ describe("OpenAiAgent message rules", () => {
     { role: "user", content: "three" }
   ] as const
 
-  it.effect("strict mode keeps every message, roles intact", () => {
-    const prompt = OpenAiAgent.strictPrompt(messages)
+  it.effect("strict mode keeps every message, roles intact", () => Effect.gen(function* () {
+    const prompt = yield* OpenAiAgent.strictPrompt(messages)
     assert.deepStrictEqual(
       prompt.content.map((m) => m.role),
       ["system", "user", "assistant", "user", "user"]
     )
     const first = prompt.content[0]
     assert.isTrue(first?.role === "system" && first.content === "be brief")
-    return Effect.void
-  })
+  }))
 
-  it.effect("stateful mode submits only the user messages after the last assistant message", () => {
-    const delta = OpenAiAgent.statefulDelta(messages)
+  it.effect("stateful mode submits only the user messages after the last assistant message", () => Effect.gen(function* () {
+    const delta = yield* OpenAiAgent.statefulDelta(messages)
     assert.isTrue(Option.isSome(delta))
     const texts = Option.isSome(delta)
       ? delta.value.content.map((m) =>
@@ -224,22 +223,21 @@ describe("OpenAiAgent message rules", () => {
       { role: "assistant", content: "2" },
       { role: "user", content: "c" }
     ] as const
-    const twoDelta = OpenAiAgent.statefulDelta(twoTurns)
+    const twoDelta = yield* OpenAiAgent.statefulDelta(twoTurns)
     assert.isTrue(
       Option.isSome(twoDelta) &&
         twoDelta.value.content.every((m) => m.role === "user") &&
         twoDelta.value.content.length === 1
     )
     // Nothing after the last assistant message: nothing to submit.
-    assert.isTrue(Option.isNone(OpenAiAgent.statefulDelta(messages.slice(0, 3))))
+    assert.isTrue(Option.isNone(yield* OpenAiAgent.statefulDelta(messages.slice(0, 3))))
     // A trailing system message alone is not input either.
     assert.isTrue(
       Option.isNone(
-        OpenAiAgent.statefulDelta([...messages.slice(0, 3), { role: "system", content: "x" }])
+        yield* OpenAiAgent.statefulDelta([...messages.slice(0, 3), { role: "system", content: "x" }])
       )
     )
-    return Effect.void
-  })
+  }))
 
   it.effect("every RemoteError has an honest OpenAI status and keeps its tag as the code", () => {
     const sessionId = AgentEvent.SessionId.make("s")

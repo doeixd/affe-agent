@@ -514,3 +514,73 @@ describe("OpenAiAgent over the in-process client", () => {
   )
 })
 
+describe("OpenAiAgent multimodal input", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const base64 = Buffer.from(png).toString("base64")
+
+  it.live("image_url, input_audio and file parts reach the agent as file parts", () =>
+    Effect.gen(function* () {
+      const { address, recorder } = yield* makeServer(
+        Agent.make({ loop: AgentLoop.bounded(1) }),
+        [TestLanguageModel.text("a diagram")]
+      )
+      const response = yield* post(address, {
+        model: "agent",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "what is this?" },
+            { type: "image_url", image_url: { url: `data:image/png;base64,${base64}` } },
+            { type: "image_url", image_url: { url: "https://example.test/photo.jpg" } },
+            { type: "input_audio", input_audio: { data: base64, format: "mp3" } },
+            { type: "file", file: { file_data: `data:application/pdf;base64,${base64}`, filename: "report.pdf" } }
+          ]
+        }]
+      })
+      assert.strictEqual(response.status, 200)
+      const seen = (yield* recorder.prompts)[0]!
+      const user = seen.content.find((message) => message.role === "user")
+      assert.isDefined(user)
+      if (user?.role !== "user") return
+      assert.deepStrictEqual(user.content.map((part) => part.type), ["text", "file", "file", "file", "file"])
+      const files = user.content.flatMap((part) => (part.type === "file" ? [part] : []))
+      // A data URL is decoded to the bytes it carries, with its own type.
+      assert.strictEqual(files[0]?.mediaType, "image/png")
+      assert.deepStrictEqual(Array.from(files[0]?.data instanceof Uint8Array ? files[0].data : []), Array.from(png))
+      // A remote image stays a URL; its subtype is not ours to guess.
+      assert.strictEqual(files[1]?.mediaType, "image/*")
+      assert.isTrue(files[1]?.data instanceof URL)
+      // Audio takes the format's media type.
+      assert.strictEqual(files[2]?.mediaType, "audio/mpeg")
+      // A file keeps its name.
+      assert.strictEqual(files[3]?.mediaType, "application/pdf")
+      assert.strictEqual(files[3]?.fileName, "report.pdf")
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("a file_id reference is refused as an invalid request, not silently dropped", () =>
+    Effect.gen(function* () {
+      const { address, recorder } = yield* makeServer(
+        Agent.make({ loop: AgentLoop.bounded(1) }),
+        [TestLanguageModel.text("never")]
+      )
+      const response = yield* post(address, {
+        model: "agent",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "summarise the attached" },
+            { type: "file", file: { file_id: "file-abc123" } }
+          ]
+        }]
+      })
+      assert.strictEqual(response.status, 400)
+      const body = yield* errorBody(response)
+      assert.strictEqual(body.error.code, "unsupported_file_id")
+      assert.strictEqual(body.error.param, "messages")
+      // The model was never asked: an answer to a prompt missing its document
+      // is worse than a refusal.
+      assert.strictEqual(yield* recorder.calls, 0)
+    }).pipe(Effect.scoped)
+  )
+})

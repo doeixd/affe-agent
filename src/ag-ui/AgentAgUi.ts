@@ -1,13 +1,4 @@
-import {
-  Deferred,
-  Effect,
-  Layer,
-  Option,
-  Queue,
-  Ref,
-  Schema,
-  Stream
-} from "effect"
+import { Deferred, Effect, Layer, Option, Queue, Ref, Result, Schema, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { Sse } from "effect/unstable/encoding"
 import {
@@ -20,7 +11,33 @@ import {
 import { AgentClosedError } from "../Errors.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
+import * as Media from "../internal/media.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
+
+/**
+ * The user-message content shapes this adapter converts: AG-UI's text and
+ * binary input parts. Binary content arrives inline as base64 `data`, by
+ * `url`, or by `id` -- a reference into a store this adapter does not have,
+ * which is refused as unsupported rather than dropped.
+ */
+export const InputContent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("binary"),
+    mimeType: Schema.String,
+    id: Schema.optional(Schema.String),
+    url: Schema.optional(Schema.String),
+    data: Schema.optional(Schema.String),
+    filename: Schema.optional(Schema.String)
+  })
+])
+export type InputContent = typeof InputContent.Type
+
+/** A user message's content: a string, or the typed input parts. */
+export const UserContent = Schema.Union([Schema.String, Schema.Array(InputContent)])
+export type UserContent = typeof UserContent.Type
+
+const decodeUserContent = Schema.decodeUnknownOption(UserContent)
 
 /** AG-UI message input accepted by the adapter. */
 export const Message = Schema.Struct({
@@ -34,9 +51,11 @@ export const Message = Schema.Struct({
     "activity",
     "reasoning"
   ]),
-  // Role-specific validation remains the official protocol's concern. The
-  // adapter accepts every official content shape, then narrows the user input
-  // capabilities it can faithfully convert to a Harness prompt.
+  // Role-specific validation remains the official protocol's concern: every
+  // role's content is accepted here, and the *user* message's is decoded
+  // against `UserContent` where it is converted. `Unknown` is what the
+  // protocol's other roles genuinely are to this adapter, not a shortcut past
+  // the shapes it does handle.
   content: Schema.optional(Schema.Unknown),
   toolCallId: Schema.optional(Schema.String)
 })
@@ -856,14 +875,35 @@ const promptInput = (
       new AgentAgUiInvalidInputError({ detail: "a user message is required" })
     )
   }
-  if (typeof latest.content !== "string") {
+  const content = decodeUserContent(latest.content)
+  if (Option.isNone(content)) {
     return Effect.fail(
-      new AgentAgUiUnsupportedError({
-        capabilities: ["multimodal-user-message"]
-      })
+      new AgentAgUiInvalidInputError({ detail: "the user message's content is not text or input parts" })
     )
   }
-  return Effect.succeed(Prompt.make(latest.content))
+  if (typeof content.value === "string") {
+    return Effect.succeed(Prompt.make(content.value))
+  }
+  const parts: Array<Prompt.UserMessagePart> = []
+  for (const part of content.value) {
+    if (part.type === "text") {
+      parts.push(Prompt.textPart({ text: part.text }))
+      continue
+    }
+    const file = part.data !== undefined
+      ? Media.fileFromBase64({ mediaType: part.mimeType, base64: part.data, fileName: part.filename })
+      : part.url !== undefined
+      ? Media.fileFromUrl({ mediaType: part.mimeType, url: part.url, fileName: part.filename })
+      : undefined
+    if (file === undefined) {
+      return Effect.fail(new AgentAgUiUnsupportedError({ capabilities: ["binary-input-by-id"] }))
+    }
+    if (Result.isFailure(file)) {
+      return Effect.fail(new AgentAgUiInvalidInputError({ detail: `binary input: ${file.failure}` }))
+    }
+    parts.push(file.success)
+  }
+  return Effect.succeed(Prompt.make([Prompt.userMessage({ content: parts })]))
 }
 
 const requestId = (input: RunAgentInput, suffix: string) =>

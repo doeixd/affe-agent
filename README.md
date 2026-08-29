@@ -890,6 +890,13 @@ value stays `Redacted` until the HTTP authorization header is built. See
 
 ## AG-UI
 
+A user message may carry AG-UI's typed input parts as well as a string:
+`text`, and `binary` with inline base64 `data` or a `url`, which become
+`Prompt.FilePart`s with the declared `mimeType` and `filename`. A binary part
+referenced only by `id` is refused as `binary-input-by-id` -- there is no
+upload store behind this adapter -- and malformed base64 is an invalid
+input. Output stays AG-UI's text event vocabulary.
+
 `@doeixd/effect-agent/ag-ui` projects that same session contract onto the
 official AG-UI HTTP/SSE protocol:
 
@@ -1117,6 +1124,13 @@ what an approved call can physically touch is the sandbox.
 
 ## OpenAI-compatible chat completions
 
+Message content may be the typed parts Chat Completions defines: `text`,
+`image_url` (a `data:` URL is decoded to bytes with its own type; a remote
+image stays a URL typed `image/*`), `input_audio`, and `file` with inline
+`file_data`. A `file_id` is refused as an `invalid_request_error`
+(`unsupported_file_id`) rather than silently dropped. The assistant's reply
+is text, as the protocol defines it.
+
 `@doeixd/effect-agent/openai` serves `POST /v1/chat/completions` over any
 `AgentClient`, so an OpenAI SDK -- or anything that speaks to one -- can talk
 to an agent without knowing the harness exists. It is an *inference* surface,
@@ -1168,6 +1182,12 @@ Authentication is not agent semantics: compose HTTP middleware around the
 router. The layer is host-independent and lives on Effect's `HttpRouter`.
 
 ## A2A v1
+
+Messages carry `raw` bytes and `url` parts as well as text, in and out: a
+file the model returns is a `raw` (or `url`) part of the response message and
+artifact with its media type and filename, and file parts in an incoming
+message reach the agent as `Prompt.FilePart`s. Structured `data` parts are
+refused by name.
 
 `@doeixd/effect-agent/a2a` exposes a Harness agent through the official A2A v1
 JSON-RPC and HTTP+JSON protocols:

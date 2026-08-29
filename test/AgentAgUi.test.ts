@@ -542,6 +542,7 @@ const serverFixture = (fixtureOptions?: {
   const allowPrompt = yield* Deferred.make<void>()
   const promptStarted = yield* Deferred.make<void>()
   const promptCalls = yield* Ref.make(0)
+  const lastInput = yield* Ref.make<Option.Option<Prompt.Prompt>>(Option.none())
 
   const emit = (event: AgentEvent.AgentEvent) =>
     Ref.updateAndGet(sequence, (value) => value + 1).pipe(
@@ -553,9 +554,10 @@ const serverFixture = (fixtureOptions?: {
     createSession: (options) =>
       Effect.succeed({
         id: options?.sessionId ?? sessionId,
-        prompt: () =>
+        prompt: (input) =>
           Effect.gen(function* () {
             yield* Ref.update(promptCalls, (count) => count + 1)
+            yield* Ref.set(lastInput, Option.some(Prompt.make(input)))
             yield* Deferred.succeed(promptStarted, void 0)
             if (fixtureOptions?.elicitation === true) {
               yield* Effect.forEach(
@@ -677,7 +679,7 @@ const serverFixture = (fixtureOptions?: {
     )
   )
 
-  return { server, allowPrompt, promptCalls, promptStarted }
+  return { server, allowPrompt, promptCalls, promptStarted, lastInput }
   })
 
 describe("AgentAgUi HTTP server", () => {
@@ -931,6 +933,95 @@ describe("AgentAgUi HTTP server", () => {
             assert.isTrue(EventSchemas.safeParse(event).success)
           }
           assert.strictEqual(yield* Ref.get(test.promptCalls), 1)
+        }).pipe(Effect.provide(test.server))
+      )
+    })
+  )
+})
+
+describe("AgentAgUi multimodal input", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const base64 = Buffer.from(png).toString("base64")
+  const runInput = (content: unknown) => ({
+    threadId: "media-thread",
+    runId: "media-run",
+    state: {},
+    messages: [{ id: "user-1", role: "user", content }],
+    tools: [],
+    context: [],
+    forwardedProps: {}
+  })
+
+  it.effect("text and binary input parts reach the agent as prompt parts", () =>
+    Effect.gen(function* () {
+      const test = yield* serverFixture()
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          yield* Deferred.succeed(test.allowPrompt, void 0)
+          const response = yield* promise(() =>
+            fetch(`${HttpServer.formatAddress(httpServer.address)}/ag-ui`, {
+              method: "POST",
+              headers: { authorization: "Bearer test", "content-type": "application/json" },
+              body: JSON.stringify(runInput([
+                { type: "text", text: "what is in this image?" },
+                { type: "binary", mimeType: "image/png", data: base64, filename: "shot.png" },
+                { type: "binary", mimeType: "application/pdf", url: "https://example.test/spec.pdf" }
+              ]))
+            })
+          )
+          assert.strictEqual(response.status, 200)
+          yield* promise(() => response.text())
+          const input = yield* Ref.get(test.lastInput)
+          assert.isTrue(Option.isSome(input))
+          if (Option.isNone(input)) return
+          const user = input.value.content.find((message) => message.role === "user")
+          if (user?.role !== "user") {
+            assert.fail("expected a user message")
+          }
+          assert.deepStrictEqual(user.content.map((part) => part.type), ["text", "file", "file"])
+          const files = user.content.flatMap((part) => (part.type === "file" ? [part] : []))
+          assert.strictEqual(files[0]?.mediaType, "image/png")
+          assert.strictEqual(files[0]?.fileName, "shot.png")
+          assert.deepStrictEqual(Array.from(files[0]?.data instanceof Uint8Array ? files[0].data : []), Array.from(png))
+          assert.isTrue(files[1]?.data instanceof URL)
+        }).pipe(Effect.provide(test.server))
+      )
+    })
+  )
+
+  it.effect("binary input by id alone is refused as unsupported; malformed base64 as invalid", () =>
+    Effect.gen(function* () {
+      const test = yield* serverFixture()
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const httpServer = yield* HttpServer.HttpServer
+          const post = (content: unknown) =>
+            promise(() =>
+              fetch(`${HttpServer.formatAddress(httpServer.address)}/ag-ui`, {
+                method: "POST",
+                headers: { authorization: "Bearer test", "content-type": "application/json" },
+                body: JSON.stringify(runInput(content))
+              })
+            )
+          const byId = yield* post([{ type: "binary", mimeType: "image/png", id: "upload-1" }])
+          assert.strictEqual(byId.status, 400)
+          const refused = yield* promise(() => byId.json()).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(AgentAgUi.Error)))
+          )
+          assert.strictEqual(refused._tag, "AgentAgUiUnsupportedError")
+          if (refused._tag === "AgentAgUiUnsupportedError") {
+            assert.deepStrictEqual(refused.capabilities, ["binary-input-by-id"])
+          }
+
+          const malformed = yield* post([{ type: "binary", mimeType: "image/png", data: "not base64!" }])
+          assert.strictEqual(malformed.status, 400)
+          const invalid = yield* promise(() => malformed.json()).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(AgentAgUi.Error)))
+          )
+          assert.strictEqual(invalid._tag, "AgentAgUiInvalidInputError")
+          // Neither reached the agent.
+          assert.strictEqual(yield* Ref.get(test.promptCalls), 0)
         }).pipe(Effect.provide(test.server))
       )
     })

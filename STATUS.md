@@ -3087,4 +3087,26 @@ shared `AgentClientContract` (local, HTTP, RPC, durable-memory); the file
 re-attachment and the streamed announcement each broken once. Thirteen test
 fakes that built a `RemoteResult` literal gained `content: []`.
 
-Phase 4 -- the A2A, OpenAI and AG-UI projections -- is the next slice.
+Phase 4 -- the A2A, OpenAI and AG-UI projections -- landed the same day, below.
+
+## Multimodal transport adapters (2026-08-29)
+
+`docs/plan-filetypes.txt` phase 4. Each adapter now converts media in its
+own vocabulary, explicitly, through one internal helper for base64/`data:`
+URL plumbing (`src/internal/media.ts`).
+
+- A2A: `raw` and `url` parts in, with media type and filename; the response
+  message and artifact built from `RemoteResult.content`, files as `raw`
+  bytes or `url`. `data` parts still refused by name.
+- OpenAI: `image_url` (data URL decoded; remote image kept as a URL typed
+  `image/*`), `input_audio`, `file.file_data`; `file_id` refused as
+  `unsupported_file_id` rather than dropped. Prompt conversion is fallible
+  now. Output remains text, as Chat Completions defines it.
+- AG-UI: explicit `InputContent` / `UserContent` schemas for the user
+  message; inline `data` and `url` binaries become file parts; `id`-only is
+  `binary-input-by-id`, malformed base64 an invalid input.
+
+One test per adapter drives the real protocol client or a raw request and
+asserts the prompt the agent received and, for A2A, the artifact it sent
+back; each conversion broken once. The A2A test fixture was made honest
+(`content` matching its `text`).

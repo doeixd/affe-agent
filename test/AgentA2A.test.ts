@@ -229,6 +229,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     readonly askAgain?: boolean
     /** Passed straight through to `serverLayer`; otherwise its own default. */
     readonly sseHeartbeat?: Duration.Duration | false
+    /** The parts the fake run answers with; default: one text part of its text. */
+    readonly replyContent?: ReadonlyArray<Prompt.Part>
   }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
@@ -244,6 +246,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
   const secondAnswer = yield* Deferred.make<Elicitation.Response>()
   const waiting = yield* Ref.make(new Map<string, Elicitation.Request>())
   const lastText = yield* Ref.make<string | undefined>(undefined)
+  const lastInput = yield* Ref.make<Option.Option<Prompt.Prompt>>(Option.none())
   const eventQueue = yield* Queue.unbounded<AgentProtocol.AgentEventEnvelope>()
   /** Every addressed tenant the principal resolver was shown, in order. */
   const resolvedTenants = yield* Ref.make<ReadonlyArray<string | undefined>>([])
@@ -281,6 +284,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
             prompt: (input) =>
               Effect.gen(function* () {
                 const text = promptText(Prompt.make(input))
+                yield* Ref.set(lastInput, Option.some(Prompt.make(input)))
                 const count = yield* Ref.updateAndGet(
                   promptCount,
                   (current) => current + 1
@@ -383,7 +387,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                     runs: 1,
                     turns: count,
                     text: finalText,
-                    content: []
+                    content: fixtureOptions?.replyContent ?? [Prompt.textPart({ text: finalText })]
                   }
                 }
                 return {
@@ -394,7 +398,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   runs: 1,
                   turns: count,
                   text: `${id}:${count}:${text}`,
-                  content: []
+                  content: fixtureOptions?.replyContent ??
+                    [Prompt.textPart({ text: `${id}:${count}:${text}` })]
                 }
               }),
             steer: () => Effect.void,
@@ -540,7 +545,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     /** Releases a `blockFirstPrompt` run, so a test can end it cleanly. */
     promptInterrupted,
     asked,
-    resolvedTenants
+    resolvedTenants,
+    lastInput
   }
 })
 
@@ -1760,4 +1766,119 @@ describe("AgentA2A v1 server", () => {
       })
     )
   })
+})
+
+describe("AgentA2A multimodal parts", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+  it.effect("file parts in a message reach the agent, and a file in the answer is a raw part of the artifact", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({
+        replyContent: [
+          Prompt.textPart({ text: "here is the diagram" }),
+          Prompt.filePart({ mediaType: "image/png", data: png, fileName: "diagram.png" }),
+          Prompt.filePart({ mediaType: "image/svg+xml", data: new URL("https://example.test/diagram.svg") })
+        ]
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(HttpServer.formatAddress(server.address))
+          )
+          const task = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: {
+                messageId: "media-1",
+                contextId: "",
+                taskId: "",
+                role: Role.ROLE_USER,
+                parts: [
+                  { content: { $case: "text", value: "describe this" }, metadata: undefined, filename: "", mediaType: "text/plain" },
+                  { content: { $case: "raw", value: Buffer.from(png) }, metadata: undefined, filename: "shot.png", mediaType: "image/png" },
+                  { content: { $case: "url", value: "https://example.test/spec.pdf" }, metadata: undefined, filename: "", mediaType: "application/pdf" }
+                ],
+                metadata: undefined,
+                extensions: [],
+                referenceTaskIds: []
+              },
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          if (!("id" in task)) assert.fail("expected a task")
+          assert.strictEqual(task.status?.state, TaskState.TASK_STATE_COMPLETED)
+
+          // In: text, bytes with their name and type, a URL with its type.
+          const input = yield* Ref.get(fixture.lastInput)
+          if (Option.isNone(input)) assert.fail("the agent was not prompted")
+          const user = input.value.content[input.value.content.length - 1]
+          if (user?.role !== "user") assert.fail("expected a user message")
+          assert.deepStrictEqual(user.content.map((part) => part.type), ["text", "file", "file"])
+          const files = user.content.flatMap((part) => (part.type === "file" ? [part] : []))
+          assert.strictEqual(files[0]?.mediaType, "image/png")
+          assert.strictEqual(files[0]?.fileName, "shot.png")
+          assert.deepStrictEqual(Array.from(files[0]?.data instanceof Uint8Array ? files[0].data : []), Array.from(png))
+          assert.strictEqual(files[1]?.mediaType, "application/pdf")
+          assert.isTrue(files[1]?.data instanceof URL)
+
+          // Out: the artifact carries the text, the bytes as `raw`, the URL as `url`.
+          const parts = task.artifacts[0]?.parts ?? []
+          assert.deepStrictEqual(parts.map((part) => part.content?.$case), ["text", "raw", "url"])
+          const raw = parts[1]
+          assert.strictEqual(raw?.mediaType, "image/png")
+          assert.strictEqual(raw?.filename, "diagram.png")
+          if (raw?.content?.$case === "raw") {
+            assert.deepStrictEqual(Array.from(raw.content.value), Array.from(png))
+          }
+          const url = parts[2]
+          assert.strictEqual(url?.mediaType, "image/svg+xml")
+          if (url?.content?.$case === "url") {
+            assert.strictEqual(url.content.value, "https://example.test/diagram.svg")
+          }
+        }).pipe(Effect.provide(fixture.server))
+      )
+    })
+  )
+
+  it.effect("a structured data part is still refused, naming it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture()
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(HttpServer.formatAddress(server.address))
+          )
+          const task = yield* promise(() =>
+            client.sendMessage({
+              tenant: "",
+              message: {
+                messageId: "data-1",
+                contextId: "",
+                taskId: "",
+                role: Role.ROLE_USER,
+                parts: [{ content: { $case: "data", value: { a: 1 } }, metadata: undefined, filename: "", mediaType: "application/json" }],
+                metadata: undefined,
+                extensions: [],
+                referenceTaskIds: []
+              },
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          // The SDK reports it as a failed task whose status message names
+          // the kind, so a client sees what was refused, not a bare error.
+          if (!("id" in task)) assert.fail("expected a task")
+          assert.strictEqual(task.status?.state, TaskState.TASK_STATE_FAILED)
+          const said = task.status?.message?.parts
+            .map((part) => (part.content?.$case === "text" ? part.content.value : ""))
+            .join(" ") ?? ""
+          assert.include(said, "data")
+          assert.isTrue(Option.isNone(yield* Ref.get(fixture.lastInput)))
+        }).pipe(Effect.provide(fixture.server))
+      )
+    })
+  )
 })

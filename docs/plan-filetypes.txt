@@ -531,7 +531,7 @@ would probably be cleaner than stuffing binary into a text delta.
 
 ---
 
-# Phase 4 — multimodal transport adapters
+# Phase 4 — multimodal transport adapters ✅ (2026-08-29)
 
 Then fix each adapter independently.
 
@@ -977,4 +977,46 @@ Tests: `test/MessageContent.test.ts`, the `PromptWire.Part` suite in
 re-attachment (every content assertion fails, across transports) and the
 streamed announcement.
 
-Phase 4 (A2A, OpenAI, AG-UI projections) and phase 5 (blob store) remain.
+Phase 4 landed the same day (below); phase 5 (blob store) remains.
+
+## Progress: phase 4 (2026-08-29)
+
+Each adapter converts explicitly, in its own vocabulary, through one small
+internal helper (`src/internal/media.ts`: base64 and `data:` URLs to bytes,
+and a prompt file part back to bytes-or-URL). No protocol shape escapes its
+adapter.
+
+- **A2A** (`AgentA2A.ts`). In: `text` → text part; `raw` → file part (bytes,
+  the part's media type and filename); `url` → file part with a `URL`; `data`
+  (structured JSON) is still refused as unsupported, naming it -- nothing in a
+  prompt means "here is an arbitrary object". Out: the response message and
+  artifact are built from `RemoteResult.content` (and, for a resumed run,
+  from the last assistant message in history): text as `text`, a file as
+  `raw` bytes or `url`, with media type and name; reasoning stays off the
+  wire; an answer with nothing to say is one empty text part, as before.
+  Elicitation *answers* are still text (`inputText`): a file is not an
+  answer to a question.
+- **OpenAI** (`OpenAiSchema.ts`, `OpenAiAgent.ts`). `MessageContent` parts
+  gained `image_url`, `input_audio` and `file`. A `data:` URL is decoded to
+  bytes with its own media type; an `https:` image stays a URL with media
+  type `image/*` (its subtype is not ours to guess); audio takes the
+  format's type; `file.file_data` is inline content with its filename;
+  `file.file_id` is refused as an `invalid_request_error` with code
+  `unsupported_file_id` rather than dropped -- an answer to a prompt missing
+  its document is worse than a refusal. `strictPrompt` / `statefulDelta` are
+  therefore effects that can fail. Output stays text: a Chat Completions
+  assistant message has no media form to project onto.
+- **AG-UI** (`AgentAgUi.ts`). `InputContent` (`text`, `binary`) and
+  `UserContent` are explicit schemas; the user message's content is decoded
+  against them where it is converted, while `Message.content` stays
+  `Unknown` for the roles this adapter does not interpret -- that is what
+  they genuinely are to it. Inline base64 `data` and `url` become file parts;
+  `id`-only binary content is refused as `binary-input-by-id`; malformed
+  base64 is an invalid input. Output stays the text event vocabulary AG-UI
+  defines.
+
+Tests: `AgentA2A multimodal parts`, `OpenAiAgent multimodal input`,
+`AgentAgUi multimodal input`; the A2A fixture now answers with honest
+`content` (it used to return text with an empty `content`, which a real host
+never does). Broken once per adapter: files dropped from the A2A artifact,
+`image_url` never decoded, AG-UI inline data ignored.

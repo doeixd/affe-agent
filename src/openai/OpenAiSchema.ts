@@ -16,10 +16,47 @@ const TextContentPart = Schema.Struct({
   text: Schema.String
 })
 
+/** An image by URL -- `https:` or a `data:` URL -- as Chat Completions takes it. */
+const ImageUrlContentPart = Schema.Struct({
+  type: Schema.Literal("image_url"),
+  image_url: Schema.Struct({
+    url: Schema.String,
+    detail: Schema.optional(Schema.String)
+  })
+})
+
+/** Audio as base64 with its container format (`wav`, `mp3`). */
+const InputAudioContentPart = Schema.Struct({
+  type: Schema.Literal("input_audio"),
+  input_audio: Schema.Struct({
+    data: Schema.String,
+    format: Schema.String
+  })
+})
+
+/** A file inline as a `data:` URL (`file_data`) or by reference (`file_id`). */
+const FileContentPart = Schema.Struct({
+  type: Schema.Literal("file"),
+  file: Schema.Struct({
+    file_data: Schema.optional(Schema.String),
+    file_id: Schema.optional(Schema.String),
+    filename: Schema.optional(Schema.String)
+  })
+})
+
+/** The typed content parts a message may carry. */
+export const ContentPart = Schema.Union([
+  TextContentPart,
+  ImageUrlContentPart,
+  InputAudioContentPart,
+  FileContentPart
+])
+export type ContentPart = typeof ContentPart.Type
+
 /** Content as OpenAI accepts it: a string, or an array of typed parts. */
 export const MessageContent = Schema.Union([
   Schema.String,
-  Schema.Array(TextContentPart),
+  Schema.Array(ContentPart),
   Schema.Null
 ])
 export type MessageContent = typeof MessageContent.Type

@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect, Exit, Layer, Option, Schema, Scope, Semaphore, Stream } from "effect"
+import { Clock, Deferred, Effect, Exit, Layer, Option, Result, Schema, Scope, Semaphore, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { Sse } from "effect/unstable/encoding"
 import {
@@ -10,6 +10,7 @@ import {
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import type * as AgentProtocol from "../client/AgentProtocol.js"
+import * as Media from "../internal/media.js"
 import * as Projection from "./OpenAiProjection.js"
 import * as OpenAiSchema from "./OpenAiSchema.js"
 
@@ -205,31 +206,109 @@ export const fromRemoteError = (error: AgentProtocol.RemoteError): OpenAiError =
   }
 }
 
+/** The text of a message's content; media parts contribute nothing here. */
 const contentText = (content: OpenAiSchema.MessageContent): string =>
   content === null
     ? ""
     : typeof content === "string"
       ? content
-      : content.map((part) => part.text).join("")
+      : content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
+
+const audioMediaType = (format: string): string =>
+  format === "mp3" ? "audio/mpeg" : format === "wav" ? "audio/wav" : `audio/${format}`
+
+/**
+ * A user message's content as prompt parts.
+ *
+ * Each OpenAI content shape has one conversion and no OpenAI shape escapes
+ * this module: `image_url` is a `data:` URL decoded to bytes or an `https:`
+ * URL kept as one (its subtype is unknown to us, so the media type is
+ * `image/*`); `input_audio` is bytes with the format's media type; `file` is
+ * its inline `file_data`. A `file_id` names an upload this endpoint has no
+ * store for, and is refused as an invalid request rather than silently
+ * dropped -- the caller would otherwise get an answer to a prompt missing
+ * the document it asked about.
+ */
+const userParts = (
+  content: OpenAiSchema.MessageContent
+): Effect.Effect<ReadonlyArray<Prompt.UserMessagePart>, OpenAiError> => {
+  if (content === null) return Effect.succeed([])
+  if (typeof content === "string") return Effect.succeed([Prompt.textPart({ text: content })])
+  const parts: Array<Prompt.UserMessagePart> = []
+  for (const part of content) {
+    switch (part.type) {
+      case "text":
+        parts.push(Prompt.textPart({ text: part.text }))
+        break
+      case "image_url": {
+        const file = Media.fileFromUrl({ mediaType: "image/*", url: part.image_url.url })
+        if (Result.isFailure(file)) {
+          return Effect.fail(invalid(`image_url.url: ${file.failure}`, "invalid_image_url", "messages"))
+        }
+        parts.push(file.success)
+        break
+      }
+      case "input_audio": {
+        const file = Media.fileFromBase64({
+          mediaType: audioMediaType(part.input_audio.format),
+          base64: part.input_audio.data
+        })
+        if (Result.isFailure(file)) {
+          return Effect.fail(invalid(`input_audio.data: ${file.failure}`, "invalid_base64", "messages"))
+        }
+        parts.push(file.success)
+        break
+      }
+      case "file": {
+        if (part.file.file_data === undefined) {
+          return Effect.fail(
+            invalid(
+              "file.file_id references an upload this endpoint cannot resolve; send the content inline as file.file_data",
+              "unsupported_file_id",
+              "messages"
+            )
+          )
+        }
+        const inline = Media.dataUrl(part.file.file_data)
+        const file = Option.isSome(inline)
+          ? Media.fileFromBase64({ ...inline.value, fileName: part.file.filename })
+          : Media.fileFromBase64({
+            mediaType: "application/octet-stream",
+            base64: part.file.file_data,
+            fileName: part.file.filename
+          })
+        if (Result.isFailure(file)) {
+          return Effect.fail(invalid(`file.file_data: ${file.failure}`, "invalid_base64", "messages"))
+        }
+        parts.push(file.success)
+        break
+      }
+    }
+  }
+  return Effect.succeed(parts)
+}
 
 /** Strict mode: the whole message list, as the prompt. */
+const toMessage = (
+  message: OpenAiSchema.ChatMessage
+): Effect.Effect<Prompt.Message, OpenAiError> => {
+  switch (message.role) {
+    case "system":
+    case "developer":
+      return Effect.succeed(Prompt.systemMessage({ content: contentText(message.content) }))
+    case "user":
+      return Effect.map(userParts(message.content), (content) => Prompt.userMessage({ content }))
+    case "assistant":
+      return Effect.succeed(
+        Prompt.assistantMessage({ content: [Prompt.textPart({ text: contentText(message.content) })] })
+      )
+  }
+}
+
 export const strictPrompt = (
   messages: ReadonlyArray<OpenAiSchema.ChatMessage>
-): Prompt.Prompt =>
-  Prompt.make(
-    messages.map((message) => {
-      const text = contentText(message.content)
-      switch (message.role) {
-        case "system":
-        case "developer":
-          return Prompt.systemMessage({ content: text })
-        case "user":
-          return Prompt.userMessage({ content: [Prompt.textPart({ text })] })
-        case "assistant":
-          return Prompt.assistantMessage({ content: [Prompt.textPart({ text })] })
-      }
-    })
-  )
+): Effect.Effect<Prompt.Prompt, OpenAiError> =>
+  Effect.map(Effect.forEach(messages, toMessage), (converted) => Prompt.make(converted))
 
 /**
  * Stateful mode: only the trailing input. Everything up to and including the
@@ -238,7 +317,7 @@ export const strictPrompt = (
  */
 export const statefulDelta = (
   messages: ReadonlyArray<OpenAiSchema.ChatMessage>
-): Option.Option<Prompt.Prompt> => {
+): Effect.Effect<Option.Option<Prompt.Prompt>, OpenAiError> => {
   let start = 0
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]!.role === "assistant") {
@@ -246,15 +325,13 @@ export const statefulDelta = (
       break
     }
   }
-  const trailing = messages
-    .slice(start)
-    .filter((message) => message.role === "user")
-    .map((message) =>
-      Prompt.userMessage({
-        content: [Prompt.textPart({ text: contentText(message.content) })]
-      })
-    )
-  return trailing.length === 0 ? Option.none() : Option.some(Prompt.make(trailing))
+  return Effect.map(
+    Effect.forEach(
+      messages.slice(start).filter((message) => message.role === "user"),
+      (message) => Effect.map(userParts(message.content), (content) => Prompt.userMessage({ content }))
+    ),
+    (trailing) => trailing.length === 0 ? Option.none() : Option.some(Prompt.make(trailing))
+  )
 }
 
 /** The text of the last assistant message, when there is one. */
@@ -380,7 +457,7 @@ export const serverLayer = (
         idempotencyKey: Option.Option<string>
       ) {
         if (Option.isSome(sessionId)) {
-          const input = statefulDelta(request.messages)
+          const input = yield* statefulDelta(request.messages)
           if (Option.isNone(input)) {
             return yield* invalid(
               "stateful mode submits the user messages after the last assistant message, and there are none",
@@ -406,7 +483,7 @@ export const serverLayer = (
           const session = yield* client
             .createSession()
             .pipe(Effect.mapError(fromRemoteError))
-          return { session, input: strictPrompt(request.messages), done: Option.none() }
+          return { session, input: yield* strictPrompt(request.messages), done: Option.none() }
         }
         // The key names the session. A backend whose sessions are shared
         // across processes hands back the *same* session to a retry landing
@@ -419,7 +496,7 @@ export const serverLayer = (
         const history = yield* session.history.pipe(Effect.mapError(fromRemoteError))
         return {
           session,
-          input: strictPrompt(request.messages),
+          input: yield* strictPrompt(request.messages),
           done: lastAssistantText(history)
         }
       })

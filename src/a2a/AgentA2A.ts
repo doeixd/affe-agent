@@ -20,7 +20,7 @@ import {
   type AgentSkill,
   type Artifact,
   type Message,
-  type Part,
+  Part,
   type SendMessageResult,
   type StreamResponse,
   type Task,
@@ -55,22 +55,7 @@ import {
   type RequestContext,
   type RequestHeaders
 } from "@a2a-js/sdk/server"
-import {
-  Clock,
-  Deferred,
-  Duration,
-  Effect,
-  Fiber,
-  Exit,
-  FiberSet,
-  Layer,
-  Option,
-  Predicate,
-  Queue,
-  Ref,
-  Schema,
-  Stream
-} from "effect"
+import { Clock, Deferred, Duration, Effect, Encoding, Exit, Fiber, FiberSet, Layer, Option, Predicate, Queue, Ref, Result, Schema, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import {
   HttpIncomingMessage,
@@ -79,6 +64,7 @@ import {
   HttpServerResponse
 } from "effect/unstable/http"
 import * as AgentProtocol from "../client/AgentProtocol.js"
+import * as Media from "../internal/media.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import { is as isEvent } from "../AgentEvent.js"
 
@@ -332,6 +318,50 @@ const timestamp = Effect.map(
   (millis) => new Date(millis).toISOString()
 )
 
+/**
+ * An A2A message as a user prompt: `text` parts become text, `raw` and `url`
+ * parts become file parts with the message's media type, `data` (structured
+ * JSON) is refused as unsupported -- nothing in a prompt means "here is an
+ * arbitrary object". An empty message is refused too.
+ */
+const inputPrompt = (
+  message: Message
+): Effect.Effect<Prompt.Prompt, AgentA2AUnsupportedContentError> => {
+  const parts: Array<Prompt.UserMessagePart> = []
+  const unsupported: Array<string> = []
+  for (const part of message.parts) {
+    const content = part.content
+    const mediaType = part.mediaType === "" ? "application/octet-stream" : part.mediaType
+    const fileName = part.filename === "" ? undefined : part.filename
+    if (content?.$case === "text") {
+      parts.push(Prompt.textPart({ text: content.value }))
+    } else if (content?.$case === "raw") {
+      parts.push(
+        Prompt.filePart({
+          mediaType,
+          data: Uint8Array.from(content.value),
+          ...(fileName === undefined ? {} : { fileName })
+        })
+      )
+    } else if (content?.$case === "url") {
+      const file = Media.fileFromUrl({ mediaType, url: content.value, fileName })
+      if (Result.isSuccess(file)) parts.push(file.success)
+      else unsupported.push("url")
+    } else {
+      unsupported.push(content?.$case ?? "empty")
+    }
+  }
+  if (unsupported.length > 0 || parts.length === 0) {
+    return Effect.fail(
+      new AgentA2AUnsupportedContentError({
+        kinds: unsupported.length === 0 ? ["empty"] : unsupported
+      })
+    )
+  }
+  return Effect.succeed(Prompt.make([Prompt.userMessage({ content: parts })]))
+}
+
+/** The text of a message, for an answer to a question: a file is not one. */
 const inputText = (
   message: Message
 ): Effect.Effect<string, AgentA2AUnsupportedContentError> => {
@@ -464,26 +494,63 @@ const statusUpdate = (
   metadata: undefined
 })
 
+/**
+ * The agent's answer as A2A parts: text as `text`, a file as `raw` bytes or a
+ * `url`, with its media type and name. Reasoning is not for the wire, and a
+ * file whose string data is not base64 is dropped rather than sent as a
+ * text part claiming to be an image. An answer with nothing to say is one
+ * empty text part, as it always was.
+ */
+const outputParts = (content: ReadonlyArray<Prompt.Part>): Array<Part> => {
+  const parts: Array<Part> = []
+  for (const part of content) {
+    if (part.type === "text") {
+      parts.push(textPart(part.text))
+    } else if (part.type === "file") {
+      const data = Media.outgoing(part)
+      if (Result.isFailure(data)) continue
+      // Through the SDK's own JSON codec rather than a `Buffer` of ours: the
+      // raw variant is typed as one, and this module is portable -- it
+      // reaches the host through nothing but the SDK.
+      parts.push(
+        data.success._tag === "bytes"
+          ? Part.fromJSON({
+            raw: Encoding.encodeBase64(data.success.bytes),
+            filename: part.fileName ?? "",
+            mediaType: part.mediaType
+          })
+          : {
+            content: { $case: "url", value: data.success.url.href },
+            metadata: undefined,
+            filename: part.fileName ?? "",
+            mediaType: part.mediaType
+          }
+      )
+    }
+  }
+  return parts.length === 0 ? [textPart("")] : parts
+}
+
 const responseMessage = (
   taskId: string,
   contextId: string,
-  text: string
+  content: ReadonlyArray<Prompt.Part>
 ): Message => ({
   messageId: `${taskId}:response`,
   contextId,
   taskId,
   role: Role.ROLE_AGENT,
-  parts: [textPart(text)],
+  parts: outputParts(content),
   metadata: undefined,
   extensions: [],
   referenceTaskIds: []
 })
 
-const responseArtifact = (taskId: string, text: string): Artifact => ({
+const responseArtifact = (taskId: string, content: ReadonlyArray<Prompt.Part>): Artifact => ({
   artifactId: `${taskId}:result`,
   name: "Agent response",
   description: "The completed Effect Harness agent response",
-  parts: [textPart(text)],
+  parts: outputParts(content),
   metadata: undefined,
   extensions: []
 })
@@ -520,18 +587,13 @@ const describeRequest = (request: {
 }
 
 /** The run's final answer, read from canonical history once it reaches quiescence. */
-const lastAssistantText = (prompt: Prompt.Prompt): string => {
+const lastAssistantContent = (prompt: Prompt.Prompt): ReadonlyArray<Prompt.Part> => {
   for (let index = prompt.content.length - 1; index >= 0; index--) {
     const message = prompt.content[index]
     if (message === undefined || message.role !== "assistant") continue
-    const content = message.content
-    if (typeof content === "string") return content
-    return content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
+    return message.content
   }
-  return ""
+  return []
 }
 
 /** Submission-level events whose arrival means the paused run has settled. */
@@ -714,12 +776,12 @@ export const serverLayer = <Principal>(
           sessionId: entry.sessionId
         })
         const completedAt = settledAt
-        const text = lastAssistantText(history.history)
+        const content = lastAssistantContent(history.history)
         yield* Effect.sync(() => {
           eventBus.publish(AgentEvent.artifactUpdate({
             taskId: entry.taskId,
             contextId: entry.contextId,
-            artifact: responseArtifact(entry.taskId, text),
+            artifact: responseArtifact(entry.taskId, content),
             append: false,
             lastChunk: true,
             metadata: undefined
@@ -729,7 +791,7 @@ export const serverLayer = <Principal>(
             entry.contextId,
             TaskState.TASK_STATE_COMPLETED,
             completedAt,
-            responseMessage(entry.taskId, entry.contextId, text)
+            responseMessage(entry.taskId, entry.contextId, content)
           )))
         })
       })
@@ -823,7 +885,7 @@ export const serverLayer = <Principal>(
           return
         }
 
-        const prompt = yield* inputText(requestContext.userMessage)
+        const input = yield* inputPrompt(requestContext.userMessage)
 
         // Subscribed before the prompt starts so the pause cannot slip past it.
         const eventsStream = yield* host.events(principal, { sessionId })
@@ -851,7 +913,7 @@ export const serverLayer = <Principal>(
             const result = yield* Effect.exit(host.prompt(principal, {
               requestId: AgentProtocol.RequestId.make(`a2a:${taskId}:prompt`),
               sessionId,
-              input: Prompt.make(prompt)
+              input
             }))
             // A cancellation must publish its terminal event before this
             // request can wake and settle the bus, or the CANCELED update is
@@ -906,14 +968,14 @@ export const serverLayer = <Principal>(
           return yield* Effect.failCause(outcome.exit.cause)
         }
 
-        const text = outcome.exit.value.result.text
+        const content = outcome.exit.value.result.content
         const completedAt = yield* timestamp
-        const message = responseMessage(taskId, requestContext.contextId, text)
+        const message = responseMessage(taskId, requestContext.contextId, content)
         yield* Effect.sync(() => {
           eventBus.publish(AgentEvent.artifactUpdate({
             taskId,
             contextId: requestContext.contextId,
-            artifact: responseArtifact(taskId, text),
+            artifact: responseArtifact(taskId, content),
             append: false,
             lastChunk: true,
             metadata: undefined
