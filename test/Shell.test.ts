@@ -89,6 +89,8 @@ describe("Shell", () => {
       () => Shell.make({ name: "", displayName: "X", toCommand }),
       /Shell\.make: name must be a non-empty single-line string/
     )
+    // A control character other than a line break is refused too: written as
+    // an escape so the test is readable, not as the raw byte.
     assert.throws(
       () => Shell.make({ name: "ab", displayName: "X", toCommand }),
       /Shell\.make: name/

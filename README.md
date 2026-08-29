@@ -1503,6 +1503,7 @@ own. Default: Bash, executed as `bash -c <script>`.
 
 ```ts
 import { Shell } from "@doeixd/effect-agent/shell"
+import { Sandbox } from "@doeixd/effect-agent/sandbox"
 
 CodingToolkit.toolkit()                       // "…using Bash."       bash -c
 CodingToolkit.toolkit({ shell: "pwsh" })      // "…using PowerShell 7 (pwsh)."  pwsh -NoProfile -Command
