@@ -78,9 +78,11 @@ open, so the next pass does not have to re-derive it.
    and `followUp` declare `StorageError` beside `AgentIdleError`; the entity
    no longer turns a store failure into a defect, and `EntityClient.wrap`
    folds it into `AgentTransportError` as the durable client does.
-8. **Elicitation terminal state** — decoding `Response.value` against the
-   request's schema exists; an explicit terminal state guarding against
-   double-resolution does not (`ROADMAP.md`).
+8. ~~**Elicitation terminal state**~~ — verified 2026-08-30 rather than
+   built: the memory elicitor already refuses a second answer (the
+   `Deferred` is the terminal state; a racing pair is pinned), and the
+   durable engine journals the observed answer. See `ROADMAP.md` and the
+   note at `DurableElicitation.respond`.
 
 ### Proof and hygiene
 

@@ -66,9 +66,13 @@ is ecosystem polish, not capability:
 
 ### Small refinements worth folding in
 
-- **Elicitation terminal state** — decoding `Response.value` against the
-  request's schema exists; an explicit terminal state guarding against
-  double-resolution does not.
+- ~~Elicitation terminal state~~ — verified 2026-08-30: the in-memory
+  elicitor's terminal state is the `Deferred` (first answer wins, a second
+  is refused even before the run observes the first; pinned in
+  `test/Elicitation.test.ts`). Durably, `WorkflowEngine` journals the
+  observation, so an answer already seen by the run cannot be re-resolved;
+  the only window is pending-before-replay, documented at
+  `DurableElicitation.respond`.
 - ~~Document the dynamic-capability story~~ — done (README section + example).
 - ~~Getting-started / package-map~~ — done: README "Package map" and
   [docs/MODULES.md](./docs/MODULES.md).

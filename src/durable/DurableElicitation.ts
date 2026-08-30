@@ -97,6 +97,18 @@ export const factory: Effect.Effect<
  * and execution rather than stored. That is what makes this usable at all: the
  * process that asked the question is typically gone.
  */
+/**
+ * Terminal state, durably: the deferred is completed by name against the
+ * execution. `WorkflowEngine` keeps the completion pending until the run's
+ * replay observes it, and the observation is journaled -- so once the run
+ * has seen an answer, a later `respond` for the same id is a no-op for that
+ * run. Before it has (the window between an answer landing and the
+ * suspended run replaying), a second answer overwrites the pending value
+ * and the run sees the last one. That window is the engine's, not this
+ * module's, and it does not survive the run observing the answer. The
+ * in-memory elicitor's terminal state is the `Deferred` itself, where the
+ * first answer wins; `test/Elicitation.test.ts` pins both halves of that.
+ */
 export const respond = (options: {
   readonly workflow: Workflow.Any
   readonly executionId: string

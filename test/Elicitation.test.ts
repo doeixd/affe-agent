@@ -355,6 +355,29 @@ describe("Elicitation.elicitValue and the terminal answer state", () => {
     })
   )
 
+  it.effect("two answers racing before the run observes either: exactly one lands, the run sees the first", () =>
+    Effect.gen(function* () {
+      const elicitor = yield* Elicitation.memory.make("s")
+      const fiber = yield* Effect.forkChild(elicitor.elicit(request, Effect.void))
+      yield* Effect.yieldNow
+      // Both answers arrive before the waiting fiber has run again, so the
+      // registration is still present for the second one; the terminal
+      // state is the deferred itself, not the registry.
+      const first = yield* elicitor.respond({ id: "q1", granted: true })
+      const second = yield* elicitor.respond({ id: "q1", granted: false })
+      const seen = yield* Fiber.join(fiber)
+
+      assert.isTrue(first)
+      assert.isFalse(second)
+      assert.strictEqual(seen.granted, true)
+      // And an id nobody ever asked about is the same `false`: the seam
+      // reports "nothing was waiting", and the two cases are told apart by
+      // `pending` and the `ElicitationRequested` / `ElicitationResolved`
+      // events, not by the boolean.
+      assert.isFalse(yield* elicitor.respond({ id: "never-asked", granted: true }))
+    })
+  )
+
   it.effect("one wait's teardown does not unregister another wait on the same id", () =>
     Effect.gen(function* () {
       // `Elicitor` is a public seam and the id comes from the caller, so a
