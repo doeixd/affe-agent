@@ -355,14 +355,17 @@ describe("Elicitation.elicitValue and the terminal answer state", () => {
     })
   )
 
-  it.effect("two answers racing before the run observes either: exactly one lands, the run sees the first", () =>
+  it.effect("a second answer, sent back-to-back with the first, is refused and the run sees only the first", () =>
     Effect.gen(function* () {
       const elicitor = yield* Elicitation.memory.make("s")
       const fiber = yield* Effect.forkChild(elicitor.elicit(request, Effect.void))
       yield* Effect.yieldNow
-      // Both answers arrive before the waiting fiber has run again, so the
-      // registration is still present for the second one; the terminal
-      // state is the deferred itself, not the registry.
+      // Two guards stand behind this, and the test holds whichever is
+      // reached: `Deferred.succeed` resumes the waiter inline, whose
+      // teardown removes the registration before the second `respond`
+      // looks -- and were the registration still there, the settled
+      // deferred refuses the second value itself. Breaking either one alone
+      // does not fail this test, and that is the point of having two.
       const first = yield* elicitor.respond({ id: "q1", granted: true })
       const second = yield* elicitor.respond({ id: "q1", granted: false })
       const seen = yield* Fiber.join(fiber)
@@ -370,10 +373,10 @@ describe("Elicitation.elicitValue and the terminal answer state", () => {
       assert.isTrue(first)
       assert.isFalse(second)
       assert.strictEqual(seen.granted, true)
-      // And an id nobody ever asked about is the same `false`: the seam
-      // reports "nothing was waiting", and the two cases are told apart by
-      // `pending` and the `ElicitationRequested` / `ElicitationResolved`
-      // events, not by the boolean.
+      // An id nobody ever asked about is the same `false`: the seam reports
+      // "nothing was waiting", and the two cases are told apart by `pending`
+      // and the `ElicitationRequested` / `ElicitationResolved` events, not by
+      // the boolean.
       assert.isFalse(yield* elicitor.respond({ id: "never-asked", granted: true }))
     })
   )

@@ -106,8 +106,9 @@ export const factory: Effect.Effect<
  * suspended run replaying), a second answer overwrites the pending value
  * and the run sees the last one. That window is the engine's, not this
  * module's, and it does not survive the run observing the answer. The
- * in-memory elicitor's terminal state is the `Deferred` itself, where the
- * first answer wins; `test/Elicitation.test.ts` pins both halves of that.
+ * in-memory elicitor has two guards -- the registration is torn down as the
+ * waiter resumes, and the settled `Deferred` refuses a second value --
+ * pinned in `test/Elicitation.test.ts`.
  */
 export const respond = (options: {
   readonly workflow: Workflow.Any

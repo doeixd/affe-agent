@@ -67,9 +67,9 @@ is ecosystem polish, not capability:
 ### Small refinements worth folding in
 
 - ~~Elicitation terminal state~~ — verified 2026-08-30: the in-memory
-  elicitor's terminal state is the `Deferred` (first answer wins, a second
-  is refused even before the run observes the first; pinned in
-  `test/Elicitation.test.ts`). Durably, `WorkflowEngine` journals the
+  elicitor refuses a second answer behind two guards (the registration is
+  torn down as the waiter resumes; the settled `Deferred` refuses a second
+  value), pinned in `test/Elicitation.test.ts`. Durably, `WorkflowEngine` journals the
   observation, so an answer already seen by the run cannot be re-resolved;
   the only window is pending-before-replay, documented at
   `DurableElicitation.respond`.
