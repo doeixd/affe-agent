@@ -3371,8 +3371,9 @@ exports them as `ChannelConformance` over a small `Channel` driver (`sign`,
 `verify`, the tolerance, the two header names): a correct signature is
 accepted; a tampered body, the wrong secret, a request outside the replay
 window in either direction, a missing or mangled header are refused without
-throwing; a 1 MiB or unicode body is a body like any other. `run` executes
-under a test clock and reports; a verifier that throws is a line in the
+throwing; a 1 MiB or unicode body is a body like any other. `run` executes them and reports (cases sign relative to the `Clock` the
+verifier reads -- `effect/testing` is not imported, because its barrel reaches
+`node:assert` and `/testing` is a portable entry, which `verify:package` caught); a verifier that throws is a line in the
 report naming the case, not a crash.
 
 Slack passes. So does a second channel written in the test in a dozen

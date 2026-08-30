@@ -135,8 +135,8 @@ open, so the next pass does not have to re-derive it.
     (`npx tsx examples/session-tree.ts`), typechecked with the rest of
     `examples/`.
 16. ~~**`ChannelConformance`** packaging~~ — 2026-08-30: `/testing` exports
-    `ChannelConformance` (`cases(channel)` / `run(channel)` under a test
-    clock): signature, wrong secret, tampered body, the replay window in both
+    `ChannelConformance` (`cases(channel)` / `run(channel)`, signing relative
+    to whatever `Clock` the verifier reads): signature, wrong secret, tampered body, the replay window in both
     directions, missing/mangled headers without throwing, and large/unusual
     bodies. Slack passes; a second in-test HMAC channel proves it
     generalises; a clockless channel fails exactly the replay case and a
