@@ -52,6 +52,8 @@ const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
  */
 const harness: Contract.Harness = {
   name: "durable-memory",
+  // The engine's journal keeps every outcome; there is no eviction to test.
+  outcomeRetention: "journal",
   layer: ({ agent, turns }) =>
     Effect.gen(function* () {
       const store = yield* DurableChannels.memoryStore

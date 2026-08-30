@@ -48,6 +48,8 @@ const idleSession = (id: AgentProtocol.SessionId): AgentClient.RemoteSession => 
       text: "ok",
       content: []
     }),
+  submit: () => Effect.succeed({ submissionId: AgentProtocol.SubmissionId.make("sub") }),
+  awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
   steer: () => Effect.void,
   followUp: () => Effect.void,
   interrupt: () => Effect.void,
@@ -344,6 +346,8 @@ describe("AgentServer", () => {
       closeSession: () => unused,
       session: () => unused,
       prompt: () => unused,
+      submit: () => unused,
+      awaitSubmission: () => unused,
       steer: () => unused,
       followUp: () => unused,
       interrupt: () => unused,

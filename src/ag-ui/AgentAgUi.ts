@@ -954,6 +954,7 @@ const errorStatus = (error: Error): number => {
     case "AgentForbiddenError":
       return 403
     case "AgentSessionNotFoundError":
+    case "AgentSubmissionNotFoundError":
       return 404
     case "AgentSessionAlreadyExistsError":
     case "AgentRequestConflictError":

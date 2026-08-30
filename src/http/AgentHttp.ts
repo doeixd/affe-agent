@@ -48,6 +48,10 @@ export interface ServerOptions<Principal> {
 }
 
 const SessionPath = Schema.Struct({ id: AgentProtocol.SessionId })
+const SubmissionPath = Schema.Struct({
+  id: AgentProtocol.SessionId,
+  submissionId: AgentProtocol.SubmissionId
+})
 
 const CloseBody = Schema.Struct({ requestId: AgentProtocol.RequestId })
 const PromptBody = Schema.Struct({
@@ -79,9 +83,10 @@ const UnauthorizedError = AgentProtocol.AgentUnauthorizedError.pipe(
 const ForbiddenError = AgentProtocol.AgentForbiddenError.pipe(
   HttpApiSchema.status(403)
 )
-const NotFoundError = AgentProtocol.AgentSessionNotFoundError.pipe(
-  HttpApiSchema.status(404)
-)
+const NotFoundErrors = Schema.Union([
+  AgentProtocol.AgentSessionNotFoundError,
+  AgentProtocol.AgentSubmissionNotFoundError
+]).pipe(HttpApiSchema.status(404))
 const ConflictErrors = Schema.Union([
   AgentProtocol.AgentSessionAlreadyExistsError,
   AgentProtocol.AgentRequestConflictError,
@@ -103,7 +108,7 @@ const HttpErrors = [
   BadRequestErrors,
   UnauthorizedError,
   ForbiddenError,
-  NotFoundError,
+  NotFoundErrors,
   ConflictErrors,
   CapacityErrors,
   ExecutionError,
@@ -136,6 +141,19 @@ const sessionsGroup = <const Id extends string>(identifier: Id) =>
     headers: RequestHeaders,
     payload: PromptBody,
     success: AgentProtocol.PromptResponse,
+    error: HttpErrors
+  }),
+  HttpApiEndpoint.post("submit", "/sessions/:id/submit", {
+    params: SessionPath.fields,
+    headers: RequestHeaders,
+    payload: PromptBody,
+    success: AgentProtocol.SubmitResponse,
+    error: HttpErrors
+  }),
+  HttpApiEndpoint.get("awaitSubmission", "/sessions/:id/submissions/:submissionId", {
+    params: SubmissionPath.fields,
+    headers: RequestHeaders,
+    success: AgentProtocol.AwaitSubmissionResponse,
     error: HttpErrors
   }),
   HttpApiEndpoint.post("steer", "/sessions/:id/steer", {
@@ -293,7 +311,8 @@ const ClientFailure = Schema.Union([
   AgentProtocol.AgentForbiddenError,
   AgentProtocol.AgentCapacityExceededError,
   AgentProtocol.AgentInvalidRequestError,
-  AgentProtocol.AgentProtocolCodecError
+  AgentProtocol.AgentProtocolCodecError,
+  AgentClient.AgentSubmissionNotFoundError
 ])
 const decodeClientFailure = Schema.decodeUnknownOption(ClientFailure)
 
@@ -380,6 +399,27 @@ export const fromGenerated = (
             input: Prompt.make(input),
             options: { stream: promptOptions?.stream === true }
           }
+        })
+      ).pipe(Effect.map((response) => response.result)),
+    submit: (input, promptOptions) =>
+      lift(id)(
+        client.sessions.submit({
+          params: params(id),
+          headers,
+          payload: {
+            requestId: promptOptions?.idempotencyKey === undefined
+              ? nextRequestId()
+              : AgentProtocol.RequestId.make(promptOptions.idempotencyKey),
+            input: Prompt.make(input),
+            options: { stream: promptOptions?.stream === true }
+          }
+        })
+      ).pipe(Effect.map((response) => ({ submissionId: response.submissionId }))),
+    awaitSubmission: (submissionId) =>
+      lift(id)(
+        client.sessions.awaitSubmission({
+          params: { ...params(id), submissionId: AgentProtocol.SubmissionId.make(submissionId) },
+          headers
         })
       ).pipe(Effect.map((response) => response.result)),
     steer: (input) =>
@@ -520,6 +560,7 @@ export const errorStatus = (error: AgentProtocol.RemoteError): number => {
     case "AgentForbiddenError":
       return 403
     case "AgentSessionNotFoundError":
+    case "AgentSubmissionNotFoundError":
       return 404
     case "AgentSessionAlreadyExistsError":
     case "AgentRequestConflictError":
@@ -861,6 +902,41 @@ export const serverLayer = <Principal>(
         )
       })
 
+      const submit = Effect.fn("AgentHttp.submit")(function* (
+        request: HttpServerRequest.HttpServerRequest
+      ) {
+        const sessionId = yield* decodeSessionId("submit")
+        const body = yield* decodeBody("submit", PromptBody, request)
+        const identity = yield* principal(
+          request,
+          "submit",
+          Option.some(sessionId)
+        )
+        return yield* complete(
+          "submit",
+          AgentProtocol.SubmitResponse,
+          host.submit(identity, { ...body, sessionId })
+        )
+      })
+
+      const awaitSubmission = Effect.fn("AgentHttp.awaitSubmission")(function* (
+        request: HttpServerRequest.HttpServerRequest
+      ) {
+        const path = yield* HttpRouter.schemaPathParams(SubmissionPath).pipe(
+          Effect.mapError((error) => invalidRequest("awaitSubmission", error.message))
+        )
+        const identity = yield* principal(
+          request,
+          "awaitSubmission",
+          Option.some(path.id)
+        )
+        return yield* complete(
+          "awaitSubmission",
+          AgentProtocol.AwaitSubmissionResponse,
+          host.awaitSubmission(identity, { sessionId: path.id, submissionId: path.submissionId })
+        )
+      })
+
       const steer = Effect.fn("AgentHttp.steer")(function* (
         request: HttpServerRequest.HttpServerRequest
       ) {
@@ -1012,6 +1088,10 @@ export const serverLayer = <Principal>(
             handled(getSession(request))),
           router.add("POST", route("/sessions/:id/prompt"), (request) =>
             handled(prompt(request))),
+          router.add("POST", route("/sessions/:id/submit"), (request) =>
+            handled(submit(request))),
+          router.add("GET", route("/sessions/:id/submissions/:submissionId"), (request) =>
+            handled(awaitSubmission(request))),
           router.add("POST", route("/sessions/:id/steer"), (request) =>
             handled(steer(request))),
           router.add("POST", route("/sessions/:id/follow-up"), (request) =>

@@ -94,6 +94,12 @@ export type Session = typeof Session.Type
 export const AgentSessionNotFoundError = AgentClient.AgentSessionNotFoundError
 export type AgentSessionNotFoundError = AgentClient.AgentSessionNotFoundError
 
+import { AgentSubmissionNotFoundError } from "../Errors.js"
+export { AgentSubmissionNotFoundError }
+
+export const SubmissionReceipt = AgentClient.SubmissionReceipt
+export type SubmissionReceipt = AgentClient.SubmissionReceipt
+
 /** A create request named a session that is already open. */
 export const AgentSessionAlreadyExistsError = ProtocolErrors.AgentSessionAlreadyExistsError
 export type AgentSessionAlreadyExistsError = ProtocolErrors.AgentSessionAlreadyExistsError
@@ -141,7 +147,8 @@ export const RemoteError = Schema.Union([
   AgentForbiddenError,
   AgentCapacityExceededError,
   AgentInvalidRequestError,
-  AgentProtocolCodecError
+  AgentProtocolCodecError,
+  AgentSubmissionNotFoundError
 ])
 export type RemoteError = typeof RemoteError.Type
 
@@ -188,6 +195,30 @@ export const PromptResponse = Schema.Struct({
   result: RemoteResult
 })
 export type PromptResponse = typeof PromptResponse.Type
+
+/** The same request as a prompt; the difference is when the caller gets an answer. */
+export const SubmitRequest = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  input: PromptWire.Prompt,
+  options: Schema.optional(RemotePromptOptions)
+})
+export type SubmitRequest = typeof SubmitRequest.Type
+
+export const SubmitResponse = Schema.Struct({
+  requestId: RequestId,
+  submissionId: SubmissionId
+})
+export type SubmitResponse = typeof SubmitResponse.Type
+
+export const AwaitSubmissionRequest = Schema.Struct({
+  sessionId: SessionId,
+  submissionId: SubmissionId
+})
+export type AwaitSubmissionRequest = typeof AwaitSubmissionRequest.Type
+
+export const AwaitSubmissionResponse = Schema.Struct({ result: RemoteResult })
+export type AwaitSubmissionResponse = typeof AwaitSubmissionResponse.Type
 
 export const SteerRequest = Schema.Struct({
   requestId: RequestId,

@@ -44,6 +44,10 @@ export const Operation = Schema.Literals([
   "closeSession",
   "getSession",
   "prompt",
+  /** Admit a submission and return its receipt. A write, like `prompt`. */
+  "submit",
+  /** Wait for a submission's outcome. A read: it changes nothing. */
+  "awaitSubmission",
   "steer",
   "followUp",
   "interrupt",

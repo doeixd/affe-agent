@@ -1325,7 +1325,9 @@ This is behavior-preserving preparation for asynchronous admission, covered by
 the existing caller-interruption, session, client and durable suites.
 
 `session.submit` is now on the `AgentSession` handle and exported (a receipt
-that owns its execution), but the retention half is still undecided. The brief
+that owns its execution). The retention half was decided and built on
+2026-08-29 -- see "Submit and await" below and `docs/plan-submit-await.md`;
+what follows is the state of the question at the time. The brief
 requires later await and request-id idempotency but does not define bounded
 retention or eviction for completed outcomes and request fingerprints.
 `DurableSessionStore.claim({ key })` forgets the key at finish, so it cannot
@@ -3110,3 +3112,38 @@ One test per adapter drives the real protocol client or a raw request and
 asserts the prompt the agent received and, for A2A, the artifact it sent
 back; each conversion broken once. The A2A test fixture was made honest
 (`content` matching its `text`).
+
+## Submit and await, with a retention contract (2026-08-29)
+
+`docs/plan-submit-await.md`. `submit` returns at admission with a receipt;
+`awaitSubmission` returns what `prompt` would have -- joining a running
+submission, or the retained outcome of a settled one, failure and
+interruption included. On every surface: `AgentSession`, the in-process
+`AgentClient`, HTTP (`POST /sessions/:id/submit`,
+`GET /sessions/:id/submissions/:submissionId`), RPC, the durable client, and
+`AgentSessionHost` between them.
+
+The contract that was missing: outcomes are retained per session by the
+client that owns the session, under `maxRetainedSubmissions` (default 64); a
+settled outcome is evicted only to admit a newer submission, oldest first,
+never while it runs; the idempotency key is remembered for exactly as long
+as its outcome; after eviction `awaitSubmission` is
+`AgentSubmissionNotFoundError`, never a re-run. The bound is in submissions,
+not time, because that is what a retrying caller can size. The host adds no
+second table -- its request table dedupes the submit itself and
+`awaitSubmission` delegates. The durable client's retention is the journal:
+the workflow's idempotency key is `name:sessionId:submissionId`, so a settled
+submission's execution is addressable from its ids, and existence is the
+session store's to answer.
+
+In the kernel, `AgentSession.awaitSubmission` joins the running submission or
+the most recently settled one -- one retained fibre, replaced when the next
+submission starts -- which is what makes `submit` then `awaitSubmission` safe
+when the run finishes first.
+
+Tests: the shared `AgentClientContract` gained a "submit and awaitSubmission"
+suite (admission and await; await twice; key join and key conflict; unknown
+id; interrupted; failed; eviction on the bounded clients and journal
+persistence on the durable one), run over local, HTTP and durable-memory;
+the fifteenth protocol error in the HTTP and RPC error contracts. Broken
+once: eviction, and the kernel's settled fibre.

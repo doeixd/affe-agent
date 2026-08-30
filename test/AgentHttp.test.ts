@@ -134,6 +134,8 @@ const fixture = (options?: {
                   content: []
                 }
               }),
+            submit: () => Effect.die("submit is not part of this fixture"),
+            awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
             steer: () => record("steer"),
             followUp: () => record("followUp"),
             interrupt: () => record("interrupt"),
@@ -187,6 +189,8 @@ const fixture = (options?: {
                     text: `adopted ${id}`,
                     content: []
                   }),
+                submit: () => Effect.die("submit is not part of this fixture"),
+                awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
                 steer: () => Effect.void,
                 followUp: () => Effect.void,
                 interrupt: () => Effect.void,

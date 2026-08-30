@@ -44,6 +44,8 @@ export interface Harness {
     readonly turns: ReadonlyArray<TestLanguageModel.Turn>
     /** Where a paused run waits for an answer. Default: refuse everything. */
     readonly elicitation?: Elicitation.Factory | undefined
+    /** For the retention cases: how many outcomes a session keeps. */
+    readonly maxRetainedSubmissions?: number | undefined
   }) => Effect.Effect<Layer.Layer<AgentClient.AgentClient>>
   /**
    * `false` when this transport cannot deliver `MessageDelta` to an observer
@@ -52,6 +54,12 @@ export interface Harness {
    * the contract still runs.
    */
   readonly observesStreamDeltas?: boolean | undefined
+  /**
+   * Where settled outcomes live. `bounded` is the in-process table with the
+   * eviction rule; `journal` is the durable engine, which keeps every
+   * outcome. The eviction case runs only against `bounded`.
+   */
+  readonly outcomeRetention?: "bounded" | "journal" | undefined
 }
 
 const Search = Tool.make("search", {
@@ -72,6 +80,8 @@ const withClient = <A, E>(
     readonly agent: AgentDefinition<any, any, never>
     readonly turns: ReadonlyArray<TestLanguageModel.Turn>
     readonly elicitation?: Elicitation.Factory | undefined
+    /** For the retention cases: how many outcomes a session keeps. */
+    readonly maxRetainedSubmissions?: number | undefined
   },
   use: (client: AgentClient.Service) => Effect.Effect<A, E>
 ): Effect.Effect<A, E> =>
@@ -145,6 +155,173 @@ export const run = (harness: Harness): void => {
           )
       )
     )
+
+    describe("submit and awaitSubmission", () => {
+      /** A model held at a gate, so a submission is observably in flight. */
+      const gated = Effect.map(Deferred.make<void>(), (gate) => ({
+        gate,
+        turns: [{ text: "done", during: Deferred.await(gate) }] as const
+      }))
+
+      it.live("submit returns at admission; awaitSubmission returns what prompt would, and again", () =>
+        Effect.gen(function* () {
+          const { gate, turns } = yield* gated
+          yield* withClient(
+            harness,
+            { agent: Agent.make({ loop: AgentLoop.bounded(1) }), turns },
+            (client) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const session = yield* client.createSession()
+                  const receipt = yield* session.submit("go")
+                  // Admitted, not finished: the model is still at the gate.
+                  assert.strictEqual(yield* session.status, "running")
+                  yield* Deferred.succeed(gate, void 0)
+                  const result = yield* session.awaitSubmission(receipt.submissionId)
+                  assert.strictEqual(result.submissionId, receipt.submissionId)
+                  assert.strictEqual(result.text, "done")
+                  assert.strictEqual(result.status, "completed")
+                  assert.strictEqual((yield* session.history).content.length, 2)
+                  // Retained: the same outcome again, and no second run.
+                  const again = yield* session.awaitSubmission(receipt.submissionId)
+                  assert.deepStrictEqual(again, result)
+                  assert.strictEqual((yield* session.history).content.length, 2)
+                })
+              )
+          )
+        })
+      )
+
+      it.live("the same idempotency key and input is the same submission; a different input is a conflict", () =>
+        Effect.gen(function* () {
+          const { gate, turns } = yield* gated
+          yield* withClient(
+            harness,
+            { agent: Agent.make({ loop: AgentLoop.bounded(1) }), turns },
+            (client) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const session = yield* client.createSession()
+                  const first = yield* session.submit("go", { idempotencyKey: "k1" })
+                  const retry = yield* session.submit("go", { idempotencyKey: "k1" })
+                  assert.strictEqual(retry.submissionId, first.submissionId)
+                  const conflict = yield* Effect.flip(session.submit("something else", { idempotencyKey: "k1" }))
+                  assert.strictEqual(conflict._tag, "AgentRequestConflictError")
+                  yield* Deferred.succeed(gate, void 0)
+                  yield* session.awaitSubmission(first.submissionId)
+                  // One execution: one exchange in history.
+                  assert.strictEqual((yield* session.history).content.length, 2)
+                })
+              )
+          )
+        })
+      )
+
+      it.live("awaitSubmission on a submission the session never made is not-found", () =>
+        withClient(
+          harness,
+          { agent: Agent.make({ loop: AgentLoop.bounded(1) }), turns: [TestLanguageModel.text("done")] },
+          (client) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const session = yield* client.createSession()
+                const error = yield* Effect.flip(session.awaitSubmission("never-submitted"))
+                assert.strictEqual(error._tag, "AgentSubmissionNotFoundError")
+              })
+            )
+        )
+      )
+
+      it.live("an interrupted submission's outcome is retained as interrupted", () =>
+        Effect.gen(function* () {
+          const { turns } = yield* gated
+          yield* withClient(
+            harness,
+            { agent: Agent.make({ loop: AgentLoop.bounded(1) }), turns },
+            (client) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const session = yield* client.createSession()
+                  const receipt = yield* session.submit("go")
+                  yield* session.interrupt()
+                  const result = yield* session.awaitSubmission(receipt.submissionId)
+                  assert.strictEqual(result.status, "interrupted")
+                  assert.strictEqual((yield* session.awaitSubmission(receipt.submissionId)).status, "interrupted")
+                })
+              )
+          )
+        })
+      )
+
+      it.live("a failed submission's outcome is the typed failure, retained", () =>
+        withClient(
+          harness,
+          { agent: Agent.make({ loop: AgentLoop.bounded(1) }), turns: [{ fail: "provider down" }] },
+          (client) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const session = yield* client.createSession()
+                const receipt = yield* session.submit("go")
+                const first = yield* Effect.flip(session.awaitSubmission(receipt.submissionId))
+                assert.strictEqual(first._tag, "AgentExecutionError")
+                const second = yield* Effect.flip(session.awaitSubmission(receipt.submissionId))
+                assert.strictEqual(second._tag, "AgentExecutionError")
+              })
+            )
+        )
+      )
+
+      if ((harness.outcomeRetention ?? "bounded") === "bounded") {
+        it.live("an outcome is evicted only after enough newer submissions settle, and is then not-found rather than re-run", () =>
+          withClient(
+            harness,
+            {
+              agent: Agent.make({ loop: AgentLoop.bounded(1) }),
+              turns: [TestLanguageModel.text("one"), TestLanguageModel.text("two"), TestLanguageModel.text("three")],
+              maxRetainedSubmissions: 2
+            },
+            (client) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const session = yield* client.createSession()
+                  const first = yield* session.submit("a")
+                  yield* session.awaitSubmission(first.submissionId)
+                  // One newer settled submission: still retained.
+                  yield* session.prompt("b")
+                  assert.strictEqual((yield* session.awaitSubmission(first.submissionId)).text, "one")
+                  // Two newer: the slot is needed, and the oldest goes.
+                  yield* session.prompt("c")
+                  const gone = yield* Effect.flip(session.awaitSubmission(first.submissionId))
+                  assert.strictEqual(gone._tag, "AgentSubmissionNotFoundError")
+                  // Nothing re-ran: three exchanges, no more.
+                  assert.strictEqual((yield* session.history).content.length, 6)
+                })
+              )
+          )
+        )
+      } else {
+        it.live("the journal keeps every outcome: an early submission is still there after many newer ones", () =>
+          withClient(
+            harness,
+            {
+              agent: Agent.make({ loop: AgentLoop.bounded(1) }),
+              turns: [TestLanguageModel.text("one"), TestLanguageModel.text("two"), TestLanguageModel.text("three")]
+            },
+            (client) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const session = yield* client.createSession()
+                  const first = yield* session.submit("a")
+                  yield* session.awaitSubmission(first.submissionId)
+                  yield* session.prompt("b")
+                  yield* session.prompt("c")
+                  assert.strictEqual((yield* session.awaitSubmission(first.submissionId)).text, "one")
+                })
+              )
+          )
+        )
+      }
+    })
 
     it.live("runs a tool-calling prompt and exposes observations", () =>
       withClient(
@@ -536,8 +713,8 @@ const deltasFor = (
 /**
  * The second contract: every protocol failure arrives as itself.
  *
- * `AgentClient.RemoteError` names fourteen errors and the HTTP `Api` declares
- * all fourteen, but the HTTP client used to decode six of them and fold the
+ * `AgentClient.RemoteError` names fifteen errors and the HTTP `Api` declares
+ * all fifteen, but the HTTP client used to decode six of them and fold the
  * rest into `AgentTransportError` -- the one tag whose documented meaning is
  * "retrying is reasonable". A caller with an ordinary retry policy therefore
  * retried a 403 for as long as it was willing to keep asking, and the contract
@@ -583,6 +760,8 @@ export const failingHost = <Principal>(
     closeSession: () => fail,
     session: () => fail,
     prompt: () => fail,
+    submit: () => fail,
+    awaitSubmission: () => fail,
     steer: () => fail,
     followUp: () => fail,
     interrupt: () => fail,
@@ -601,7 +780,7 @@ export const failingHost = <Principal>(
 const contractSessionId = AgentProtocol.SessionId.make("protocol-errors")
 
 /**
- * One instance of each of the fourteen, with fields worth checking survived.
+ * One instance of each of the fifteen, with fields worth checking survived.
  *
  * Listed rather than generated: a generated list would be derived from the
  * same union the code under test uses, so it would shrink silently along with
@@ -648,6 +827,10 @@ export const protocolErrors: ReadonlyArray<AgentProtocol.RemoteError> = [
     operation: "getSession",
     phase: "response",
     detail: "unencodable"
+  }),
+  new AgentProtocol.AgentSubmissionNotFoundError({
+    sessionId: contractSessionId,
+    submissionId: AgentProtocol.SubmissionId.make("sub-1")
   })
 ]
 

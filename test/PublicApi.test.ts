@@ -17,6 +17,8 @@ describe("public API", () => {
       "AgentRun",
       "AgentSession",
       "AgentSubmission",
+      // Raised by awaitSubmission for a submission the session does not hold.
+      "AgentSubmissionNotFoundError",
       "ContextTransform",
       "Elicitation",
       "InputChannel",
@@ -106,6 +108,9 @@ describe("public API", () => {
       [
         "Id",
         "Snapshot",
+        // Join a submitted run, or the most recently settled one; see
+        // docs/plan-submit-await.md for what is retained where.
+        "awaitSubmission",
         "events",
         "followUp",
         "history",

@@ -134,6 +134,8 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
                   content: []
                 }
               }),
+            submit: () => Effect.die("submit is not part of this fixture"),
+            awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
             steer: () => record("steer"),
             followUp: () => record("followUp"),
             interrupt: () => record("interrupt"),

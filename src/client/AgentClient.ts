@@ -1,5 +1,6 @@
-import { Cause, Context, Effect, Layer, Option, Ref, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Layer, Option, Ref, Schema, Scope, Stream } from "effect"
 import * as History from "../internal/history.js"
+import { positiveInteger } from "../internal/positive.js"
 import * as PromptWire from "../PromptWire.js"
 import * as AgentEvent from "../AgentEvent.js"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
@@ -12,7 +13,8 @@ import { SubmissionId } from "../internal/ids.js"
 import {
   AgentBusyError,
   AgentClosedError,
-  AgentIdleError
+  AgentIdleError,
+  AgentSubmissionNotFoundError
 } from "../Errors.js"
 import {
   AgentCapacityExceededError,
@@ -22,7 +24,8 @@ import {
   AgentRequestCapacityExceededError,
   AgentRequestConflictError,
   AgentSessionAlreadyExistsError,
-  AgentUnauthorizedError
+  AgentUnauthorizedError,
+  RequestId
 } from "./internal/protocolErrors.js"
 
 /**
@@ -167,6 +170,7 @@ export type RemoteError =
   | AgentCapacityExceededError
   | AgentInvalidRequestError
   | AgentProtocolCodecError
+  | AgentSubmissionNotFoundError
 
 /**
  * The wire contract, as a schema rather than as six strings.
@@ -194,7 +198,8 @@ const RemoteErrorSchema = Schema.Union([
   AgentForbiddenError,
   AgentCapacityExceededError,
   AgentInvalidRequestError,
-  AgentProtocolCodecError
+  AgentProtocolCodecError,
+  AgentSubmissionNotFoundError
 ])
 
 const decodeRemote = Schema.decodeUnknownOption(RemoteErrorSchema)
@@ -273,11 +278,38 @@ export interface RemotePromptOptions {
   readonly idempotencyKey?: string | undefined
 }
 
+/** What `submit` hands back: the admitted submission's id, and nothing else. */
+export const SubmissionReceipt = Schema.Struct({ submissionId: SubmissionId })
+export type SubmissionReceipt = typeof SubmissionReceipt.Type
+
 export interface RemoteSession {
   readonly id: string
   readonly prompt: (
     input: Prompt.RawInput,
     options?: RemotePromptOptions
+  ) => Effect.Effect<RemoteResult, RemoteError>
+  /**
+   * Admit a submission and return at admission, not at quiescence.
+   *
+   * `idempotencyKey` makes a retry the same submission: same key and same
+   * request join the receipt already given, a different request under the
+   * same key is `AgentRequestConflictError`.
+   */
+  readonly submit: (
+    input: Prompt.RawInput,
+    options?: RemotePromptOptions
+  ) => Effect.Effect<SubmissionReceipt, RemoteError>
+  /**
+   * What `prompt` would have returned for a submitted submission.
+   *
+   * Joins one still running; returns the retained outcome of one that
+   * settled, failure included; `AgentSubmissionNotFoundError` for one this
+   * session does not hold, which after enough newer submissions includes
+   * ones it once did -- retention is bounded, and stated, in
+   * `docs/plan-submit-await.md`.
+   */
+  readonly awaitSubmission: (
+    submissionId: string
   ) => Effect.Effect<RemoteResult, RemoteError>
   readonly steer: (input: Prompt.RawInput) => Effect.Effect<void, RemoteError>
   readonly followUp: (
@@ -382,11 +414,23 @@ export class AgentClient extends Context.Service<AgentClient, Service>()(
  * model call on every attempt.
  */
 export const fromSession = (
-  session: AgentSession.AgentSession<any, any>
-): RemoteSession => ({
-  id: session.id,
-  prompt: (input, options) =>
-    session.prompt(input, { stream: options?.stream === true }).pipe(
+  session: AgentSession.AgentSession<any, any>,
+  options: {
+    /** Where settled outcomes are observed; the session's own scope. */
+    readonly scope: Scope.Scope
+    /** How many submissions' outcomes this session keeps. */
+    readonly maxRetainedSubmissions: number
+  }
+): RemoteSession => {
+  const capacity = positiveInteger(
+    "AgentClient maxRetainedSubmissions",
+    options.maxRetainedSubmissions
+  )
+  const sessionId = session.id
+
+  /** An agent failure, or an interruption, as the protocol reports it. */
+  const remote = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, RemoteError> =>
+    effect.pipe(
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause) && !isRemoteCause(cause),
         (cause) =>
@@ -396,47 +440,171 @@ export const fromSession = (
               ...describe(cause)
             })
           )
-      ),
-      Effect.map((result) => ({
-        submissionId: result.submissionId,
-        status: result.status,
-        runs: result.runs,
-        turns: result.turns,
-        text: result.text,
-        content: Option.match(result.response, {
-          onNone: () => [],
-          onSome: (response) => History.assistantContent(response.content)
-        })
-      }))
-    ),
-  steer: (input) => session.steer(input),
-  followUp: (input) => session.followUp(input),
-  interrupt: () => session.interrupt(),
-  respond: (response) => AgentSession.respond(session, response),
-  pending: AgentSession.pending(session),
-  history: session.history,
-  status: session.status,
-  /**
-   * Live only, and explicit about it.
-   *
-   * An in-process session's events come from a `PubSub` that exists for as
-   * long as the session does and remembers nothing. There is no log to read a
-   * cursor from, so `after` cannot be honoured -- and answering it with a live
-   * stream would hand a reconnecting caller a silent gap. Refusing names the
-   * missing capability instead, which is something a deployment can act on:
-   * the durable client is the one that can do this.
-   */
-  events: (options) =>
-    options?.after === undefined
-      ? session.events
-      : Stream.fail(
-        new AgentTransportError({
-          sessionId: session.id,
-          detail:
-            "this session has no delivery log, so events cannot be resumed from a sequence; use the durable client for resumable delivery"
-        })
       )
-})
+    ) as Effect.Effect<A, RemoteError>
+
+  const toRemoteResult = (result: AgentSession.Result<any>): RemoteResult => ({
+    submissionId: result.submissionId,
+    status: result.status,
+    runs: result.runs,
+    turns: result.turns,
+    text: result.text,
+    content: Option.match(result.response, {
+      onNone: () => [],
+      onSome: (response) => History.assistantContent(response.content)
+    })
+  })
+
+  /**
+   * The retained outcomes, oldest first.
+   *
+   * The retention contract, as implemented: an outcome is kept until it has
+   * settled *and* the table needs its slot for a newer submission; a slot is
+   * never taken from a submission still running -- with the table full of
+   * those, admission fails with `AgentRequestCapacityExceededError` rather
+   * than evicting live work. `Map` iteration is insertion order, which is
+   * age.
+   */
+  const retained = new Map<
+    string,
+    {
+      readonly outcome: Deferred.Deferred<RemoteResult, RemoteError>
+      settled: boolean
+      /** The idempotency key this submission was admitted under, if any. */
+      readonly key: string | undefined
+    }
+  >()
+  /**
+   * Idempotency keys, for as long as their submission is retained: a retry
+   * under a key joins its receipt, a different request under it is a
+   * conflict. Lives and dies with the outcome table, so the two make one
+   * promise -- see `docs/plan-submit-await.md`.
+   */
+  const byKey = new Map<string, { readonly fingerprint: string; readonly submissionId: string }>()
+
+  const fingerprintOf = (input: Prompt.RawInput, stream: boolean): Effect.Effect<string, RemoteError> =>
+    Schema.encodeEffect(PromptWire.Prompt)(Prompt.make(input)).pipe(
+      Effect.map((encoded) => JSON.stringify({ input: encoded, stream })),
+      Effect.mapError((error) =>
+        new AgentInvalidRequestError({ operation: "submit", detail: error.message })
+      )
+    )
+
+  const remember = (
+    submissionId: string,
+    outcome: Effect.Effect<RemoteResult, RemoteError>,
+    key?: string
+  ): Effect.Effect<void, RemoteError> =>
+    Effect.gen(function* () {
+      if (retained.has(submissionId)) return
+      while (retained.size >= capacity) {
+        const evictable = Array.from(retained).find(([, entry]) => entry.settled)
+        if (evictable === undefined) {
+          return yield* new AgentRequestCapacityExceededError({
+            sessionId: Option.some(sessionId),
+            capacity
+          })
+        }
+        const [evictedId, evicted] = evictable
+        retained.delete(evictedId)
+        if (evicted.key !== undefined) byKey.delete(evicted.key)
+      }
+      const entry = { outcome: yield* Deferred.make<RemoteResult, RemoteError>(), settled: false, key }
+      retained.set(submissionId, entry)
+      // Observed in the session's scope, not the submitter's: the submitter
+      // returned at admission and may be long gone when the outcome lands.
+      yield* Effect.forkIn(
+        Deferred.complete(entry.outcome, outcome).pipe(
+          Effect.ensuring(Effect.sync(() => { entry.settled = true }))
+        ),
+        options.scope
+      )
+    })
+
+  const awaitSubmission = (submissionId: string): Effect.Effect<RemoteResult, RemoteError> => {
+    const entry = retained.get(submissionId)
+    return entry === undefined
+      ? Effect.fail(new AgentSubmissionNotFoundError({ sessionId, submissionId: SubmissionId.make(submissionId) }))
+      : Deferred.await(entry.outcome)
+  }
+
+  return {
+    id: session.id,
+    prompt: (input, promptOptions) =>
+      remote(session.prompt(input, { stream: promptOptions?.stream === true })).pipe(
+        Effect.map(toRemoteResult),
+        // A prompted outcome is retained like a submitted one, so the two
+        // surfaces tell one story about what this session has done.
+        Effect.tap((result) => remember(result.submissionId, Effect.succeed(result)))
+      ),
+    submit: (input, promptOptions) =>
+      Effect.gen(function* () {
+        const stream = promptOptions?.stream === true
+        const key = promptOptions?.idempotencyKey
+        if (key !== undefined) {
+          const fingerprint = yield* fingerprintOf(input, stream)
+          const known = byKey.get(key)
+          if (known !== undefined) {
+            if (known.fingerprint !== fingerprint) {
+              return yield* new AgentRequestConflictError({
+                sessionId: Option.some(sessionId),
+                requestId: RequestId.make(key)
+              })
+            }
+            return { submissionId: SubmissionId.make(known.submissionId) }
+          }
+          const receipt = yield* remote(session.submit(input, { stream }))
+          yield* remember(
+            receipt.submissionId,
+            remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.map(toRemoteResult)),
+            key
+          )
+          byKey.set(key, { fingerprint, submissionId: receipt.submissionId })
+          return receipt
+        }
+        const receipt = yield* remote(session.submit(input, { stream }))
+        yield* remember(
+          receipt.submissionId,
+          remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.map(toRemoteResult))
+        )
+        return receipt
+      }),
+    awaitSubmission,
+    steer: (input) => session.steer(input),
+    followUp: (input) => session.followUp(input),
+    interrupt: () => session.interrupt(),
+    respond: (response) => AgentSession.respond(session, response),
+    pending: AgentSession.pending(session),
+    history: session.history,
+    status: session.status,
+    /**
+     * Live only, and explicit about it.
+     *
+     * An in-process session's events come from a `PubSub` that exists for as
+     * long as the session does and remembers nothing. There is no log to read a
+     * cursor from, so `after` cannot be honoured -- and answering it with a live
+     * stream would hand a reconnecting caller a silent gap. Refusing names the
+     * missing capability instead, which is something a deployment can act on:
+     * the durable client is the one that can do this.
+     */
+    events: (eventOptions) =>
+      eventOptions?.after === undefined
+        ? session.events
+        : Stream.fail(
+          new AgentTransportError({
+            sessionId: session.id,
+            detail:
+              "this session has no delivery log, so events cannot be resumed from a sequence; use the durable client for resumable delivery"
+          })
+        )
+  }
+}
+
+/** Re-exported so the protocol modules can name it beside the other client errors. */
+export { AgentSubmissionNotFoundError }
+
+/** Outcomes a session keeps by default; see `layer`. */
+const defaultRetainedSubmissions = 64
 
 /**
  * The in-process transport: no transport at all.
@@ -454,7 +622,15 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
    * `sessionId` is excluded because the transport assigns it per session, not
    * per client.
    */
-  options?: Omit<AgentSession.MakeOptions, "sessionId" | "history">
+  options?: Omit<AgentSession.MakeOptions, "sessionId" | "history"> & {
+    /**
+     * How many submissions' outcomes each session keeps for
+     * `awaitSubmission`. Default 64. A settled outcome is evicted only to
+     * admit a newer submission; a running one never is. See
+     * `docs/plan-submit-await.md`.
+     */
+    readonly maxRetainedSubmissions?: number | undefined
+  }
 ): Layer.Layer<AgentClient, never, LanguageModel.LanguageModel | R> =>
   Layer.effect(
     AgentClient,
@@ -464,14 +640,18 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
 
       const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
+          const { maxRetainedSubmissions, ...sessionMake } = options ?? {}
           const session = yield* AgentSession.make(agent, {
-            ...options,
+            ...sessionMake,
             ...(sessionOptions?.sessionId === undefined
               ? {}
               : { sessionId: sessionOptions.sessionId })
           }).pipe(Effect.provide(env))
 
-          const remote = fromSession(session)
+          const remote = fromSession(session, {
+            scope: yield* Effect.scope,
+            maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions
+          })
           yield* Ref.update(open, (all) => new Map(all).set(remote.id, remote))
           // Forgotten when the caller's scope closes, so a client does not
           // accumulate handles to sessions that no longer exist.

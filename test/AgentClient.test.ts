@@ -16,11 +16,12 @@ import * as Contract from "./AgentClientContract.js"
  */
 const harness: Contract.Harness = {
   name: "local",
-  layer: ({ agent, turns, elicitation }) =>
+  layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
     Effect.map(TestLanguageModel.script(turns), ({ layer: model }) =>
-      AgentClient.layer(agent, elicitation ? { elicitation } : undefined).pipe(
-        Layer.provide(model)
-      )
+      AgentClient.layer(agent, {
+        ...(elicitation ? { elicitation } : {}),
+        ...(maxRetainedSubmissions === undefined ? {} : { maxRetainedSubmissions })
+      }).pipe(Layer.provide(model))
     )
 }
 

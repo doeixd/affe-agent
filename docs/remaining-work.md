@@ -49,11 +49,12 @@ open, so the next pass does not have to re-derive it.
    and media in/out of A2A, OpenAI (`image_url`, `input_audio`, `file`) and
    AG-UI (`binary` input); fixed the kernel dropping file parts from history
    on the way. Phase 5 (blob store) is item 23.
-4. **`session.submit` on the remote surfaces + `requestId` idempotency** —
-   the receipt exists on `AgentSession` only; not on `AgentClient`,
-   `AgentSessionHost` or the durable client, and the retention contract for
-   completed outcomes is still undecided (`STATUS.md`, "Three issues from a
-   review pass"). Prerequisite for the `SessionInbox` architecture.
+4. ~~**`session.submit` on the remote surfaces + `requestId` idempotency**~~
+   — landed 2026-08-29 with the retention contract
+   ([plan-submit-await.md](./plan-submit-await.md)): `submit` /
+   `awaitSubmission` on every client, bounded per-session retention in the
+   in-process client, the journal for the durable one,
+   `AgentSubmissionNotFoundError`.
 5. **MCP frontend host seam** — `agent://sessions` and `…/events?after=N`
    need session enumeration and a finite event-log read on
    `AgentSessionHost`; neither exists. Also delete the legacy

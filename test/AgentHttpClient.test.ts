@@ -23,7 +23,7 @@ const harness: Contract.Harness = {
   // SSE connects asynchronously; the contract's one `yieldNow` before
   // `prompt` is not a connection latch. Lifecycle events still run.
   observesStreamDeltas: false,
-  layer: ({ agent, turns, elicitation }) =>
+  layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
     Effect.gen(function* () {
       const { layer: model } = yield* TestLanguageModel.script(turns)
       const Host = AgentSessionHost.Tag<string>(
@@ -36,7 +36,10 @@ const harness: Contract.Harness = {
         maxRequestsPerSession: 256
       }).pipe(
         Layer.provide(
-          AgentClient.layer(agent, elicitation ? { elicitation } : undefined)
+          AgentClient.layer(agent, {
+            ...(elicitation ? { elicitation } : {}),
+            ...(maxRetainedSubmissions === undefined ? {} : { maxRetainedSubmissions })
+          })
         ),
         Layer.provide(model)
       )

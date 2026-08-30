@@ -134,6 +134,8 @@ const client = Layer.effect(
                   content: []
                 }
               }),
+            submit: () => Effect.die("submit is not part of this fixture"),
+            awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
             steer: () => Effect.void,
             followUp: () => Effect.void,
             interrupt: () => Effect.void,

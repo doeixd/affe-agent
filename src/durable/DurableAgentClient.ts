@@ -7,6 +7,7 @@ import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
+import { AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
 import * as History from "../internal/history.js"
 import * as Ids from "../internal/ids.js"
 import * as DurableAgent from "./DurableAgent.js"
@@ -68,6 +69,8 @@ const initialHistory = (
  * design: a submission parked for a human may take days, and the caller asked
  * for its terminal outcome.
  */
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
 const awaitOutcome = (
   definition: DurableSubmission.Definition,
   executionId: string,
@@ -383,10 +386,13 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
     // *process*, not of each call, and the client contract requires no
     // requirements. Providing it here is what keeps `RemoteSession` inert.
     env: Context.Context<WorkflowEngine.WorkflowEngine>
-  ): AgentClient.RemoteSession => ({
-    id: sessionId,
-
-    prompt: (input, promptOptions) =>
+  ): AgentClient.RemoteSession => {
+    /**
+     * Claim and dispatch, as one uninterruptible step. Shared by `prompt`
+     * and `submit`: the only difference between them is whether the caller
+     * then waits.
+     */
+    const admit = (input: Prompt.RawInput, promptOptions: AgentClient.RemotePromptOptions | undefined) =>
       Effect.gen(function* () {
         // Claim and dispatch are one uninterruptible step. The claim is the
         // atomic transition — idle -> running plus the allocated submission
@@ -422,6 +428,33 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
             // History as of the claim — the transcript the previous
             // submission left behind, read in the same transition so it
             // cannot be stale.
+            // A claim that already carries an execution is a retry of one
+            // this or another process dispatched: hand back what it has.
+            // Dispatching again would wait on the running execution, which
+            // is not what admission means.
+            // A retry under a key is the claim already made -- provided it
+            // is the *same* request. The store recognises the key, not the
+            // content; a different request under a known key is a conflict
+            // here, exactly as the host's request table would report it.
+            if (
+              promptOptions?.idempotencyKey !== undefined &&
+              outcome.claim.key === promptOptions.idempotencyKey
+            ) {
+              const recorded = yield* DurableSessionStore.encodeHistory(Prompt.make(input))
+              if (recorded !== outcome.claim.prompt) {
+                return yield* new AgentRequestConflictError({
+                  sessionId: Option.some(Ids.sessionId(sessionId)),
+                  requestId: RequestId.make(promptOptions.idempotencyKey)
+                })
+              }
+            }
+            // A claim that already carries an execution is a retry of one
+            // this or another process dispatched: hand back what it has.
+            // Dispatching again would wait on the running execution, which
+            // is not what admission means.
+            if (outcome.claim.executionId !== undefined) {
+              return { executionId: outcome.claim.executionId, claim: outcome.claim }
+            }
             const history = yield* DurableSessionStore.decodeHistory(
               outcome.history
             )
@@ -429,14 +462,13 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
             return { executionId, claim: outcome.claim }
           })
         )
-        const claim = dispatched.claim
+        return dispatched
+      })
 
-        const exit = yield* awaitOutcome(
-          submission.definition,
-          dispatched.executionId,
-          pollInterval
-        )
-
+    /** The outcome of an execution, as `prompt` reports it. */
+    const settled = (submissionId: string, executionId: string) =>
+      Effect.gen(function* () {
+        const exit = yield* awaitOutcome(submission.definition, executionId, pollInterval)
         if (Exit.isFailure(exit)) {
           // Only infrastructure lands in the error channel: agent failures
           // crossed as data on the success channel. Reporting infrastructure
@@ -468,7 +500,7 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           })
         }
         return {
-          submissionId: Ids.submissionId(claim.submissionId),
+          submissionId: Ids.submissionId(submissionId),
           status: exit.value.status,
           runs: exit.value.runs,
           turns: exit.value.turns,
@@ -477,6 +509,59 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           // what it recorded.
           content: exit.value.content ?? []
         }
+      })
+
+    return {
+    id: sessionId,
+
+    prompt: (input, promptOptions) =>
+      Effect.gen(function* () {
+        const dispatched = yield* admit(input, promptOptions)
+        return yield* settled(dispatched.claim.submissionId, dispatched.executionId)
+      }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
+
+    submit: (input, promptOptions) =>
+      Effect.gen(function* () {
+        const dispatched = yield* admit(input, promptOptions)
+        return { submissionId: Ids.submissionId(dispatched.claim.submissionId) }
+      }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
+
+    /**
+     * The journal is the retention. The workflow's idempotency key is
+     * `name:sessionId:submissionId`, so a settled submission's execution is
+     * addressable from its ids alone -- the payload's other fields do not
+     * enter the key -- and the engine keeps a completed execution's result
+     * without evicting it. Nothing needs to be indexed in the session store.
+     * An execution the engine has never seen is a submission this session
+     * never made.
+     */
+    awaitSubmission: (submissionId) =>
+      Effect.gen(function* () {
+        // Existence is the store's to answer, not the engine's: a freshly
+        // dispatched execution can be invisible to `poll` for a moment, so
+        // `None` there is "not yet", not "never". The store minted the id --
+        // `<session>:submission-<n>` with `n` at most its submission count
+        // -- so it can say whether this session ever made it.
+        const record = yield* options.sessionStore.get(sessionId)
+        if (Option.isNone(record)) return yield* noSuchSession(sessionId)
+        const running = Option.isSome(record.value.claim) &&
+          record.value.claim.value.submissionId === submissionId
+        const minted = new RegExp(`^${escapeRegExp(sessionId)}:submission-(\\d+)$`).exec(submissionId)
+        const ordinal = minted === null ? Number.NaN : Number(minted[1])
+        if (!running && !(Number.isSafeInteger(ordinal) && ordinal >= 1 && ordinal <= record.value.submissionCount)) {
+          return yield* new AgentClient.AgentSubmissionNotFoundError({
+            sessionId: Ids.sessionId(sessionId),
+            submissionId: Ids.submissionId(submissionId)
+          })
+        }
+        const executionId = yield* submission.definition.executionId({
+          sessionId,
+          submissionId,
+          prompt: Prompt.empty,
+          initialHistory: Prompt.empty,
+          stream: false
+        })
+        return yield* settled(submissionId, executionId)
       }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
     steer: (input) =>
@@ -661,7 +746,8 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
         })
       )
     }
-  })
+  }
+  }
 
   return Layer.effect(
     AgentClient.AgentClient,

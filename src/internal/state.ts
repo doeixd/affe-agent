@@ -141,6 +141,23 @@ export interface Session<
       readonly fiber: Fiber.Fiber<any, any>
     }>
   >
+  /**
+   * The most recently settled submission's fibre, kept until the next one
+   * starts.
+   *
+   * A session runs one submission at a time, so "the last one" is
+   * well-defined, and it is what makes `awaitSubmission` safe to call after
+   * `submit` returned: a fast run can settle before a waiter attaches, and
+   * without this the waiter would find nothing to join. One entry, never
+   * more -- retention beyond that is the client boundary's, where it can be
+   * bounded and stated.
+   */
+  readonly settledFiber: Ref.Ref<
+    Option.Option<{
+      readonly submissionId: SubmissionId
+      readonly fiber: Fiber.Fiber<any, any>
+    }>
+  >
   readonly scope: Scope.Scope
   /**
    * The environment captured when the session was constructed, so that the

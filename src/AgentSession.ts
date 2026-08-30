@@ -22,11 +22,7 @@ import * as AgentEvent from "./AgentEvent.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
 import * as PromptWire from "./PromptWire.js"
-import {
-  AgentBusyError,
-  AgentClosedError,
-  AgentIdleError
-} from "./Errors.js"
+import { AgentBusyError, AgentClosedError, AgentIdleError, AgentSubmissionNotFoundError } from "./Errors.js"
 import type * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
@@ -108,6 +104,27 @@ export interface AgentSession<
     input: Prompt.RawInput,
     options?: PromptOptions
   ) => Effect.Effect<SubmissionReceipt, SubmitError>
+
+  /**
+   * Wait for a submission admitted by `submit`, and get what `prompt` would
+   * have returned for it.
+   *
+   * Joins the submission that is running now, or the one that settled most
+   * recently -- a session runs one at a time, so a caller who submitted and
+   * then asked is answered even when the run finished first. Anything older
+   * is `AgentSubmissionNotFoundError`: the in-process session retains no
+   * outcomes beyond that one, because an `Agent` is a value and this handle
+   * lives in the caller's scope. Retention across submissions is the client
+   * boundary's job (`AgentClient`, the durable client), where a bound can be
+   * stated; see `docs/plan-submit-await.md`.
+   *
+   * Unlike `prompt`, interrupting the waiter does not interrupt the run: the
+   * submission was detached by `submit`, and a caller giving up on waiting is
+   * not a caller cancelling the work.
+   */
+  readonly awaitSubmission: (
+    submissionId: Ids.SubmissionId
+  ) => Effect.Effect<Result<Tools>, PromptError<Tools, E> | AgentSubmissionNotFoundError>
 
   /** Insert guidance into the active run, applied at the next turn boundary. */
   readonly steer: (
@@ -289,6 +306,14 @@ export const make = <
     >(
       Option.none()
     )
+    const settledFiber = yield* Ref.make<
+      Option.Option<{
+        readonly submissionId: SubmissionId
+        readonly fiber: Fiber.Fiber<any, any>
+      }>
+    >(
+      Option.none()
+    )
     // Live progress of the active submission, so an interrupt can still report
     // the runs/turns/text/usage that committed before it. Reset per submission.
     const progress = yield* Ref.make<SubmissionProgress<Tools>>({
@@ -316,6 +341,7 @@ export const make = <
       admit,
       admitSteering,
       activeFiber,
+      settledFiber,
       scope,
       env,
       ids,
@@ -359,6 +385,7 @@ export const make = <
       id,
       prompt: (input, options) => prompt(handle, input, options),
       submit: (input, options) => submit(handle, input, options),
+      awaitSubmission: (submissionId) => awaitSubmission(handle, submissionId),
       steer: (input) => steer(handle, input),
       followUp: (input) => followUp(handle, input),
       interrupt: () => interrupt(handle),
@@ -452,6 +479,10 @@ const claim = (self: Session<any>): Effect.Effect<Claim> =>
 /** Return the session to idle and drop anything queued for the submission. */
 const release = (self: Session<any>): Effect.Effect<void> =>
   Effect.gen(function* () {
+    // The settled fibre stays joinable until the next submission replaces
+    // it; see `settledFiber`.
+    const active = yield* Ref.get(self.activeFiber)
+    if (Option.isSome(active)) yield* Ref.set(self.settledFiber, active)
     yield* Ref.set(self.activeFiber, Option.none())
     // The withdrawal and the drain are one step, under the same permit
     // `followUp` and `steer` hold across their check-and-offer.
@@ -630,16 +661,31 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
       return yield* new AgentBusyError({ sessionId: self.id })
     }
     const { fiber, submissionId } = started
-    const exit = yield* Fiber.await(fiber).pipe(
-      Effect.onInterrupt(() => Fiber.interrupt(fiber).pipe(Effect.asVoid))
-    )
+    return yield* settle(self, submissionId, fiber, { interruptWithCaller: true })
+  })
+
+/**
+ * A submission's fibre, turned into `prompt`'s result.
+ *
+ * Shared by `prompt` and `awaitSubmission`; the one difference between them
+ * is whether the caller's interruption reaches the run. For `prompt` it does
+ * -- the caller *is* the submission. For `awaitSubmission` it does not: the
+ * run was detached by `submit`, and a waiter leaving is not the work being
+ * cancelled.
+ */
+const settle = <Tools extends Record<string, Tool.Any>, E>(
+  self: Session<Tools, E, never>,
+  submissionId: Ids.SubmissionId,
+  fiber: Fiber.Fiber<any, any>,
+  options: { readonly interruptWithCaller: boolean }
+): Effect.Effect<Result<Tools>, PromptError<Tools, E>> =>
+  Effect.gen(function* () {
+    const awaited = Fiber.await(fiber)
+    const exit = yield* (options.interruptWithCaller
+      ? awaited.pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber).pipe(Effect.asVoid)))
+      : awaited)
 
     if (Exit.isFailure(exit)) {
-      // Interruption is a terminal state, not a caller-level failure: the
-      // caller learns about it from the result rather than being interrupted.
-      // The runs/turns/text/usage reported are those that committed before the
-      // interrupt (turns commit atomically, so a rolled-back partial turn is not
-      // counted), read from the live submission progress.
       if (Cause.hasInterruptsOnly(exit.cause)) {
         const landed = yield* Ref.get(self.progress)
         return {
@@ -655,6 +701,26 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     }
 
     return { ...exit.value, status: "completed" } satisfies Result<Tools>
+  })
+
+export const awaitSubmission = Effect.fn("AgentSession.awaitSubmission")(function* <
+  Tools extends Record<string, Tool.Any>,
+  E
+>(
+  session: AgentSession<Tools, E>,
+  submissionId: Ids.SubmissionId
+) {
+    const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
+    const active = yield* Ref.get(self.activeFiber)
+    if (Option.isSome(active) && active.value.submissionId === submissionId) {
+      return yield* settle(self, submissionId, active.value.fiber, { interruptWithCaller: false })
+    }
+    const last = yield* Ref.get(self.settledFiber)
+    if (Option.isSome(last) && last.value.submissionId === submissionId) {
+      return yield* settle(self, submissionId, last.value.fiber, { interruptWithCaller: false })
+    }
+    return yield* new AgentSubmissionNotFoundError({ sessionId: self.id, submissionId })
   })
 
 const requireRunning = (

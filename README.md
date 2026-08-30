@@ -843,6 +843,27 @@ for (const part of result.content) {
 }
 ```
 
+`prompt` waits for quiescence. When the caller cannot -- a webhook that must
+answer now, a queue worker that will come back -- `submit` returns at
+admission with a receipt, and `awaitSubmission` later returns exactly what
+`prompt` would have:
+
+```ts
+const { submissionId } = yield* session.submit("index the repository", {
+  idempotencyKey: "job-42"   // a retry joins this submission; a different request under it conflicts
+})
+// ... later, from anywhere holding the session id ...
+const result = yield* session.awaitSubmission(submissionId)
+```
+
+Outcomes are retained per session under a stated bound
+(`maxRetainedSubmissions`, default 64): a settled outcome is evicted only to
+admit a newer submission, never while it runs, and after eviction
+`awaitSubmission` fails with `AgentSubmissionNotFoundError` rather than
+re-running anything. The idempotency key lives exactly as long as the
+outcome. The durable client's retention is the journal, which keeps every
+outcome. The rule in full: [docs/plan-submit-await.md](./docs/plan-submit-await.md).
+
 That is deliberately *not* `AgentTransportError`. An agent failure is a property
 of the request and will recur, so wearing the transport tag would turn a
 caller's retry policy into a loop with a model call per attempt. The same

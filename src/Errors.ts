@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { SessionId } from "./internal/ids.js"
+import { SessionId, SubmissionId } from "./internal/ids.js"
 
 /**
  * Harness errors are Schema classes rather than plain `Data.TaggedError`.
@@ -166,3 +166,18 @@ export const isStorageError = (u: unknown): u is StorageError =>
   u !== null &&
   (u as { readonly _tag?: unknown })._tag === "StorageError"
 
+/**
+ * `awaitSubmission` named a submission the session does not hold.
+ *
+ * Either it never existed here, or its outcome has been evicted: retention
+ * is bounded (`docs/plan-submit-await.md`), and an evicted outcome is
+ * reported as gone rather than re-run or confused with another's.
+ */
+export class AgentSubmissionNotFoundError extends Schema.TaggedError<AgentSubmissionNotFoundError>()(
+  "AgentSubmissionNotFoundError",
+  { sessionId: SessionId, submissionId: SubmissionId }
+) {
+  override get message() {
+    return `Session ${this.sessionId} holds no submission ${this.submissionId}`
+  }
+}

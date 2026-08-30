@@ -55,6 +55,14 @@ export interface Host<Principal> {
     principal: Principal,
     request: AgentProtocol.PromptRequest
   ) => Effect.Effect<AgentProtocol.PromptResponse, AgentProtocol.RemoteError>
+  readonly submit: (
+    principal: Principal,
+    request: AgentProtocol.SubmitRequest
+  ) => Effect.Effect<AgentProtocol.SubmitResponse, AgentProtocol.RemoteError>
+  readonly awaitSubmission: (
+    principal: Principal,
+    request: AgentProtocol.AwaitSubmissionRequest
+  ) => Effect.Effect<AgentProtocol.AwaitSubmissionResponse, AgentProtocol.RemoteError>
   readonly steer: (
     principal: Principal,
     request: AgentProtocol.SteerRequest
@@ -114,6 +122,7 @@ interface HostedSession {
 type MutationOperation = Extract<
   AgentProtocol.Operation,
   | "createSession"
+  | "submit"
   | "closeSession"
   | "prompt"
   | "steer"
@@ -670,6 +679,52 @@ export const make = <Principal>(
       )
     })
 
+    /**
+     * `prompt`'s admission half. The request table dedupes the *submit*: a
+     * retry under the same id joins the receipt. The outcome is retained by
+     * the session's own client (`awaitSubmission` below reads it there), so
+     * the host adds no second table for it -- one place, one bound.
+     */
+    const submit = Effect.fn("AgentSessionHost.submit")(function* (
+      principal: Principal,
+      request: AgentProtocol.SubmitRequest
+    ) {
+      const sessionId = Option.some(request.sessionId)
+      yield* authorize(principal, "submit", sessionId)
+      const requestFingerprint = yield* fingerprint(
+        "submit",
+        AgentProtocol.SubmitRequest,
+        request
+      )
+      const mutation = Effect.flatMap(findSession(request.sessionId), (hosted) =>
+        Effect.map(
+          hosted.session.submit(request.input, {
+            ...request.options,
+            idempotencyKey: request.requestId
+          }),
+          (receipt) => ({ requestId: request.requestId, submissionId: receipt.submissionId })
+        )
+      )
+      return yield* mutate(
+        "submit",
+        sessionId,
+        request.requestId,
+        requestFingerprint,
+        AgentProtocol.SubmitResponse,
+        mutation
+      )
+    })
+
+    const awaitSubmission = Effect.fn("AgentSessionHost.awaitSubmission")(function* (
+      principal: Principal,
+      request: AgentProtocol.AwaitSubmissionRequest
+    ) {
+      const sessionId = Option.some(request.sessionId)
+      yield* authorize(principal, "awaitSubmission", sessionId)
+      const hosted = yield* findSession(request.sessionId)
+      return { result: yield* hosted.session.awaitSubmission(request.submissionId) }
+    })
+
     const steer = Effect.fn("AgentSessionHost.steer")(function* (
       principal: Principal,
       request: AgentProtocol.SteerRequest
@@ -828,6 +883,8 @@ export const make = <Principal>(
       closeSession,
       session: getSession,
       prompt,
+      submit,
+      awaitSubmission,
       steer,
       followUp,
       interrupt,

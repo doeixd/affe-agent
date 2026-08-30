@@ -47,6 +47,8 @@ interface RemoteSession {
   readonly pending: Effect<ReadonlyArray<Elicitation.Request>, RemoteError>
   readonly history: Effect<Prompt, RemoteError>
   readonly status: Effect<"idle" | "running" | "closed", RemoteError>
+  submit(input, options?): Effect<SubmissionReceipt, RemoteError>      // returns at admission
+  awaitSubmission(submissionId): Effect<RemoteResult, RemoteError>    // what prompt would have returned
   events(options?: { readonly after?: number }): Stream<AgentEventEnvelope, RemoteError>
 }
 ```
@@ -175,6 +177,9 @@ POST   /sessions                    createSession
 DELETE /sessions/:id                closeSession
 GET    /sessions/:id                getSession
 POST   /sessions/:id/prompt         prompt        { requestId, input, options? }
+POST   /sessions/:id/submit         submit        { requestId, input, options? }  -> { requestId, submissionId }
+GET    /sessions/:id/submissions/:submissionId
+                                    awaitSubmission                        -> { result }, held until settled
 POST   /sessions/:id/steer          steer         { requestId, input }
 POST   /sessions/:id/follow-up      followUp      { requestId, input }
 POST   /sessions/:id/interrupt      interrupt     { requestId }

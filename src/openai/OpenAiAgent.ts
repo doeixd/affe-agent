@@ -189,6 +189,7 @@ export const fromRemoteError = (error: AgentProtocol.RemoteError): OpenAiError =
     case "AgentForbiddenError":
       return envelope(403, "permission_error")
     case "AgentSessionNotFoundError":
+    case "AgentSubmissionNotFoundError":
       return envelope(404, "not_found_error")
     case "AgentBusyError":
     case "AgentIdleError":

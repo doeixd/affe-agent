@@ -37,6 +37,16 @@ export const Protocol = RpcGroup.make(
     success: AgentProtocol.PromptResponse,
     error: AgentProtocol.RemoteError
   }),
+  Rpc.make("submit", {
+    payload: AgentProtocol.SubmitRequest,
+    success: AgentProtocol.SubmitResponse,
+    error: AgentProtocol.RemoteError
+  }),
+  Rpc.make("awaitSubmission", {
+    payload: AgentProtocol.AwaitSubmissionRequest,
+    success: AgentProtocol.AwaitSubmissionResponse,
+    error: AgentProtocol.RemoteError
+  }),
   Rpc.make("steer", {
     payload: AgentProtocol.SteerRequest,
     success: AgentProtocol.SteerResponse,
@@ -173,6 +183,22 @@ export const serverLayer = <Principal>(
             context.headers
           ).pipe(
             Effect.flatMap((identity) => host.prompt(identity, request))
+          ),
+        submit: (request, context) =>
+          principal(
+            "submit",
+            Option.some(request.sessionId),
+            context.headers
+          ).pipe(
+            Effect.flatMap((identity) => host.submit(identity, request))
+          ),
+        awaitSubmission: (request, context) =>
+          principal(
+            "awaitSubmission",
+            Option.some(request.sessionId),
+            context.headers
+          ).pipe(
+            Effect.flatMap((identity) => host.awaitSubmission(identity, request))
           ),
         steer: (request, context) =>
           principal(

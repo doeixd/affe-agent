@@ -402,6 +402,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                     [Prompt.textPart({ text: `${id}:${count}:${text}` })]
                 }
               }),
+            submit: () => Effect.die("submit is not part of this fixture"),
+            awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
             steer: () => Effect.void,
             followUp: () => Effect.void,
             interrupt: () =>
