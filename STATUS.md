@@ -81,6 +81,8 @@ dialects; `/tool-source` (OpenAPI, GraphQL, MCP; approval hints become
 `needsApproval`; `Credentials` -- method, binding, provider -- `Redacted`
 until the header is written); `/subagent`; `/state`; `/skills`; `/memory`; `/evals`;
 `/observability`; `/export` (JSON envelope + JSONL commit log); `/compaction`
+(+ branch carryover: `BranchSummary` over the tree's seed seam, and
+`CodingSummary`'s cumulative file details);
 (token policy, checkpoints, controller, events); `/redaction`; `/budget`;
 `/data`; `/hooks`; `/scheduling`; `/connectors` (+ Slack, with a channel
 conformance suite); `/plugins`; `/tree` (sessions as a tree: branch, lanes,
@@ -131,7 +133,7 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
   wires a real one; the Alchemy stack is written but has not been run
   against a real account.
 
-The larger parked work -- a real workerd host, the reference gateway, code
-mode, compaction phases 11–15, filetypes phase 5, the relay and bridge
-packages -- is listed with its preconditions in
+The larger parked work -- the reference gateway, code mode, filetypes
+phase 5, the relay and bridge packages, compaction's overflow-recovery
+phase 15 -- is listed with its preconditions in
 [remaining-work.md](./docs/remaining-work.md#larger-correctly-parked).

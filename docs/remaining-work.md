@@ -26,7 +26,7 @@ Effect diagnostics, portability and the workerd bundle pass, and
 | `audit-effect-ecosystem.md` | All actions closed. |
 | `plan-filetypes.txt` phases 1–4 | `PromptWire` codec at every boundary; `content` on the remote result and the completed-message event; streamed files announced whole; media through A2A, OpenAI and AG-UI. |
 | `plan-shell-tool.md` | S0–S5 landed: `shell` tool, construction-time dialect, `configure`. |
-| `plan-branching-and-compaction.md` phases 1–10 | Preparation, token policy, Schema checkpoint, KV persistence, serializer, default model summariser, controller with manual `compact()`, compaction events. |
+| `plan-branching-and-compaction.md` phases 1–14 | Preparation, token policy, Schema checkpoint, KV persistence, serializer, default model summariser, controller with manual `compact()`, compaction events; branch-seed seam, `BranchSummary` carryover, `/coding` cumulative file details, durable replay pin. Only phase 15 (overflow recovery) remains, deliberately parked. |
 | `research-tool-sources.md` first slice | `/tool-source` seam; OpenAPI, GraphQL, MCP sources; per-invocation `headers`. |
 | `plan-mcp-frontend.md` phases 1–3 | Host-based `serverLayer`, nine tools, history/pending resources, stdio elicitation. |
 | `plan-deployment.md` §10.1 | workerd typecheck + bundle probe in `check`. |
@@ -179,8 +179,13 @@ open, so the next pass does not have to re-derive it.
     exists.
 21. **Code mode** (`research-code-mode.md`) — signature generation and the
     budgeted catalog are useful without an interpreter; nothing in `src/`.
-22. **Compaction phases 11–15** — branch-seed seam, `BranchSummary`, `/coding`
-    file details, durable summariser activities, overflow recovery.
+22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
+    branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
+    with canonical carryover, `CodingSummary.wrap`'s cumulative file
+    details, and the replay-not-repaid durable summariser pin. Phase 15
+    (provider-overflow recovery) stays parked as the plan's own "later,
+    narrow phase" — it needs a model-invocation recovery seam justified
+    independently, not a compaction special case.
 23. **Filetypes phase 5** — blob store, size/MIME policy.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.

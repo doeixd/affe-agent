@@ -82,7 +82,10 @@ const filesIn = (messages: Prompt.Prompt): FilesTouched => {
     }
     for (const part of message.content) {
       if (part.type !== "tool-call") continue
-      const path = (part.params as { readonly path?: unknown }).path
+      // `params` is `unknown` on the wire; narrow it rather than cast it.
+      const params: unknown = part.params
+      if (typeof params !== "object" || params === null || !("path" in params)) continue
+      const path: unknown = params.path
       if (typeof path !== "string") continue
       if (READS.has(part.name)) read.push(path)
       else if (MODIFIES.has(part.name)) modified.push(path)
@@ -116,8 +119,8 @@ export const wrap = <E, R>(
 ): Compaction.Summarise<E, R> =>
 (options) =>
   Effect.map(inner(options), (result) => {
-    const summary = typeof result === "string"
-      ? { text: result, usage: Option.none<never>() as Compaction.SummaryResult["usage"] }
+    const summary: Compaction.SummaryResult = typeof result === "string"
+      ? { text: result, usage: Option.none() }
       : result
     const accumulated = union(
       Option.match(options.previous, {
