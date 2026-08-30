@@ -3382,3 +3382,36 @@ suite rather than a Slack test with a new name. A channel that forgets the
 clock fails exactly the replay case. Left out on purpose: threading and
 attachments, because `/connectors` has no decoder seam for them yet, and
 idempotency, which is the host's dedupe and already tested there.
+
+## Tool credentials: the contract and its single-user slice (2026-08-30)
+
+`docs/plan-tool-credentials.md` is the contract, written from
+`research-tool-sources.md` §7: three layers kept apart because their
+lifetimes differ -- the *method* (how a credential is applied: header or
+query carrier, name, prefix, variable, or a literal), derived and holding no
+secret; the *binding* (which method, and an opaque handle per variable),
+configuration; the *provider* (handle → `Redacted` value), per call. Seven
+invariants, of which the first is the one that matters: a credential never
+becomes model-visible, and `Redacted` is defence in depth rather than the
+mechanism -- the value exists in the clear only inside `render`.
+
+Shipped: `Credentials` in `/tool-source`. `render` is total and skips a
+variable that resolved to nothing; `requiredVariables` says which inputs a
+binding must supply (two placements naming one variable share it; a literal
+is none). Providers: `fromValues` (memory, writable), `fromConfig` (handles
+are `Config` keys, read-only by construction), `readOnly`. `resolve` is
+`CredentialError` `missing` for a binding with no handle (`reauthRequired:
+false` -- misconfiguration) and for a handle the provider does not hold
+(`reauthRequired: true` -- the credential is gone). `headers(binding)`
+plugs into the OpenAPI/GraphQL `headers` hook, whose type widened to accept
+a failing effect; the sources already mapped a failure there into
+`InvocationError`. The test drives a real OpenAPI source through a fake
+fetch: the credential reaches the wire and appears nowhere in the
+extraction. Broken once by rendering `String(value)` instead of
+`Redacted.value(value)`: four cases fail.
+
+Not built, and said so in the plan: per-principal bindings. The host knows
+the principal per request; the session does not carry it; a tool handler
+sees `TurnContext`, not the request. Threading it is a new kernel noun and a
+design review, not a task -- the seam (`Provider.get` takes only a handle)
+is ready for it.

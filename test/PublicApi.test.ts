@@ -611,7 +611,7 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the tool-source vocabulary and nothing beyond it", async () => {
     const toolSource = await import("../src/toolSource/index.js")
-    assert.deepStrictEqual(Object.keys(toolSource).sort(), ["GraphQL", "OpenApi", "ToolSource"])
+    assert.deepStrictEqual(Object.keys(toolSource).sort(), ["Credentials", "GraphQL", "OpenApi", "ToolSource"])
     assert.deepStrictEqual(Object.keys(toolSource.ToolSource).sort(), [
       "ExtractionError",
       "InvocationError",

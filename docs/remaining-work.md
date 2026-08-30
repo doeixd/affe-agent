@@ -71,10 +71,14 @@ open, so the next pass does not have to re-derive it.
    `needsApproval` -- the thing `intrinsicApproval` actually reads; before,
    `requiresApproval` was only a permission *projection*, and no approval was
    ever asked. Declared tools are floored, never loosened. Dropped names and
-   `skipped` entries are logged. Left: headers are not `Redacted`, and the
-   real design item -- per-principal credential resolution
-   (research-tool-sources §7), of which only the per-invocation `headers`
-   hook exists.
+   `skipped` entries are logged. The credential design item now has its contract
+   (`docs/plan-tool-credentials.md`, 2026-08-30) and its single-user slice:
+   `Credentials` in `/tool-source` -- method (placements), binding
+   (opaque handles, `owner` a role), provider service (`fromValues`,
+   `fromConfig`, `readOnly`), `Redacted` until `render`, typed
+   `CredentialError` with `reauthRequired`, `headers(binding)` into the
+   sources' hook (now typed to accept a failing effect). Multi-user is
+   blocked on the principal reaching the tool fibre; see the parked list.
 7. ~~**Cluster D7 wire contract**~~ — landed 2026-08-30: `submit`, `steer`
    and `followUp` declare `StorageError` beside `AgentIdleError`; the entity
    no longer turns a store failure into a defect, and `EntityClient.wrap`
@@ -169,7 +173,12 @@ open, so the next pass does not have to re-derive it.
 23. **Filetypes phase 5** — blob store, size/MIME policy.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.
-25. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
+25. **Per-principal credentials** (`plan-tool-credentials.md` §6) — the
+    binding must be chosen per principal per call, and the session does not
+    carry the principal to the tool fibre. A kernel noun; design-review it
+    (design-assessment rec 1) before building the `Bindings` store, reauth
+    via elicitation and `securitySchemes` derivation that wait on it.
+26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
     — new packages and architecture (Claude Code / OpenCode bridges, relay
     transport, `SessionInbox` / `ProcessManager`). Preconditions are all met
     and tested; nothing started. `plan-deployment.md` §6.3 narrows when the

@@ -37,6 +37,7 @@ reference agent have landed; each file carries its own status line, and
 | [plan-mcp-frontend.md](./plan-mcp-frontend.md) | Growing `/mcp`'s outbound half from one blocking tool into a real frontend — start/await, elicitation, resources, cancellation. |
 | [research-code-mode.md](./research-code-mode.md) | Code mode — one `execute` tool over a confined interpreter — as opencode and executor each implement it, and how it would fit here. |
 | [research-tool-sources.md](./research-tool-sources.md) | Turning OpenAPI, GraphQL, MCP, WebMCP, CLIs and typed SDKs into tools: the source seam, three tiers of type safety, laziness, and auth. |
+| [plan-tool-credentials.md](./plan-tool-credentials.md) | The credential contract for tool sources (method / binding / provider, `Redacted` end to end, invariants), its shipped single-user slice, and the one kernel decision the multi-user half is blocked on. |
 | [plan-integrations.md](./plan-integrations.md) | Sandboxes, channels, stores and deployment providers — matching Flue's reach with a conformance suite and lifts instead of code generation. |
 | [plan-deployment.md](./plan-deployment.md) | Node, Durable Objects, Rivet actors, Alchemy, and how a public server fronts and delegates to any of them. |
 

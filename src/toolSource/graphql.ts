@@ -82,7 +82,7 @@ interface GraphQLOptions {
    * Resolved per invocation, so a rotating credential is picked up between
    * calls. Never part of a tool's parameter schema.
    */
-  readonly headers?: Effect.Effect<Headers.Headers> | undefined
+  readonly headers?: Effect.Effect<Headers.Headers, unknown> | undefined
   /** Per request, including the body read. Defaults to 30 seconds. */
   readonly timeout?: Duration.Duration | undefined
   /** Cap on the serialised request. Defaults to 1 MiB. */
@@ -592,7 +592,7 @@ export const makeGraphQLSource = (
   introspection: unknown,
   endpoint?: string | GraphQLOptions | undefined,
   fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis) as typeof fetch,
-  headers?: Effect.Effect<Headers.Headers>
+  headers?: Effect.Effect<Headers.Headers, unknown>
 ): ToolSource => {
   const resolvedEndpoint = isGraphQLOptions(endpoint) ? endpoint.endpoint : typeof endpoint === "string" ? endpoint : undefined
   const resolvedFetchImpl = isGraphQLOptions(endpoint) ? (endpoint.fetchImpl ?? (globalThis.fetch.bind(globalThis) as typeof fetch)) : fetchImpl

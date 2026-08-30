@@ -76,7 +76,8 @@ delivers events across nodes.
 **Batteries.** `/sandbox` (+ `/sandbox/local`) with a conformance suite;
 `/coding` and `/pi` tool batteries over it; `/shell` with construction-time
 dialects; `/tool-source` (OpenAPI, GraphQL, MCP; approval hints become
-`needsApproval`); `/subagent`; `/state`; `/skills`; `/memory`; `/evals`;
+`needsApproval`; `Credentials` -- method, binding, provider -- `Redacted`
+until the header is written); `/subagent`; `/state`; `/skills`; `/memory`; `/evals`;
 `/observability`; `/export` (JSON envelope + JSONL commit log); `/compaction`
 (token policy, checkpoints, controller, events); `/redaction`; `/budget`;
 `/data`; `/hooks`; `/scheduling`; `/connectors` (+ Slack, with a channel
@@ -114,8 +115,10 @@ compile-time portability fence), and `examples/` -- every one typechecked;
   eviction-versus-refusal policy is decided explicitly.
 - **The Anthropic example** has never been run live with a key;
   **`ClusterMultiNode`** runs on real time (~15 s).
-- **Per-principal credential resolution** for tool sources, and `Redacted`
-  headers, are the open design item in `research-tool-sources.md` §7.
+- **Per-principal credential resolution.** The contract is
+  `docs/plan-tool-credentials.md` and its single-user slice ships
+  (`Credentials` in `/tool-source`); the multi-user half waits on one
+  kernel decision -- the principal reaching the tool fibre.
 - **Threading and attachments** in channels wait on a decoder seam
   `/connectors` does not have.
 
