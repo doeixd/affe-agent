@@ -59,8 +59,8 @@ open, so the next pass does not have to re-derive it.
 5. ~~**MCP frontend host seam**~~ — landed 2026-08-30: `host.sessions` and
    `host.eventLog` (bounded tail, `oldest`/`latest`, refusal behind the
    bound), `agent://sessions` and `agent://session/{id}/events[/after/{n}]`.
-   Left: delete the legacy `AgentMcp.layer`/`handlers` path (still used by
-   the stdio fixture, the conformance suite and `examples/mcp.ts`); serve
+   The legacy `AgentMcp.layer`/`handlers` path was deleted 2026-08-30 (the
+   policy decided: refuse at capacity, never evict a live conversation); serve
    `eventLog` from the durable `DeliveryLog` on durable-backed hosts;
    progress tokens and native HTTP elicitation stay blocked upstream; skill
    prompts wait on a permission-aware `SkillRegistry` load.

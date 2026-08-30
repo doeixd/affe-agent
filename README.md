@@ -582,7 +582,6 @@ constant it names.
 | Sandbox | `ExecOptions.timeout` | `10 seconds` | `Sandbox.timeoutMillis` / `Sandbox.ExecOptions` | `TimeoutError` after `SIGTERM` + 1 s `SIGKILL` grace, awaited on `close` |
 | Sandbox | `ExecOptions.maxOutputBytes` | `1 MiB` | `Sandbox.ExecOptions` | `OutputLimitError` |
 | Compaction | `maxSessions` | `1024` | `Compaction.make({ maxSessions })` | oldest checkpoint evicted; session re-summarises next turn |
-| MCP | `maxSessions` | `128` | `AgentMcp.handlers({ maxSessions })` | refuses newcomer with `session capacity of N reached` when every session busy |
 | MCP shared-host tickets | host `maxSessions` × `maxRequestsPerSession` | required by host | `AgentMcp.serverLayer({ host })` | evicts oldest settled ticket/bucket; refuses while every eligible slot is in flight |
 | Memory | `limit` | `5` | `Memory.layer({ limit })` | recall returns best 5 |
 | Truncation | `MAX_BYTES` / `MAX_LINES` | `50 KB` / `2000 lines` | `PiToolkit.MAX_BYTES`, `coding/internal/truncate.ts` | tail kept, banner names `50.0KB` or `2000 lines` limit and spills full output to `.effect-agent/tool-output/` |
@@ -1373,33 +1372,13 @@ calling native elicitation there would hang. This restriction is transport
 gating, not a permission fallback, and can be removed when the upstream
 transport supports the full-duplex exchange.
 
-The client-backed compatibility path remains available when MCP is the only
-frontend. It intentionally keeps the original one-tool `ask_agent` surface and
-idle-session eviction policy:
-
-```ts
-import { AgentMcp } from "@doeixd/effect-agent/mcp"
-import { McpProtocol, McpServer } from "effect/unstable/ai"
-
-AgentMcp.layer.pipe(
-  Layer.provide(McpServer.layerStdio({
-    name: "researcher",
-    version: "1.0.0",
-    protocols: [
-      McpProtocol.v2025_11_25,
-      McpProtocol.v2025_06_18,
-      McpProtocol.v2025_03_26,
-      McpProtocol.v2024_11_05
-    ]
-  })),
-  Layer.provide(AgentClient.layer(Researcher))
-)
-```
-
-The handler talks to `AgentClient`, not to the harness, so MCP is a protocol
-adapter over the transport seam rather than a second way in. Passing a
-`sessionId` continues a conversation across calls; omitting it gives a one-shot
-session, which is the right default for an unrelated question.
+There is one way in. The client-backed `AgentMcp.layer` / `handlers` path,
+which kept a one-tool `ask_agent` surface and evicted the oldest idle
+conversation at capacity, was removed on 2026-08-30: a conversation a client
+can still address must not vanish because another client opened one, so the
+host *refuses* a newcomer at `maxSessions` and the operator raises the number.
+A stdio server with one caller is a host with a constant principal and
+`allowAll` -- see `examples/mcp.ts`.
 
 The pinned Effect server supports the legacy revisions shown above, latest
 first. Official SDK v1.30 and v2.0 clients exercise this server over real

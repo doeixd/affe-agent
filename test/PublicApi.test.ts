@@ -376,7 +376,6 @@ describe("durable and cluster surfaces", () => {
       "McpToolkit"
     ])
     assert.deepStrictEqual(Object.keys(mcp.AgentMcp).sort(), [
-      "AgentToolkit",
       "AskAgent",
       "AwaitAgent",
       "CloseAgent",
@@ -388,8 +387,8 @@ describe("durable and cluster surfaces", () => {
       "StatusAgent",
       "SteerAgent",
       "ToolFailure",
-      "handlers",
-      "layer",
+      // The client-backed `layer` / `handlers` path was removed 2026-08-30;
+      // the host path is the one way in.
       "serverLayer"
     ])
     assert.deepStrictEqual(Object.keys(mcp.McpClient).sort(), [

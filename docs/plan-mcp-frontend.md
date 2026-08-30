@@ -600,9 +600,10 @@ MCP frontend registers the resources over them.
   than a query string). Still poll-with-cursor: Effect's `McpServer` exposes
   no resource subscription, as anticipated above.
 
-Not done here, deliberately: the legacy `AgentMcp.layer` / `handlers` path
-is still used by the stdio fixture, the conformance suite and
-`examples/mcp.ts`, so its deletion is its own migration; and the durable
+The legacy `AgentMcp.layer` / `handlers` path was deleted on 2026-08-30 once
+its policy was decided -- refuse at capacity, never evict -- and the stdio
+fixture, the conformance suite and `examples/mcp.ts` moved to the host path.
+Still not done: the durable
 client does not yet serve `eventLog` from its `DeliveryLog` (the host's tail
 is what every backing gets today -- a durable-backed host could answer from
 the log with no bound, and should).

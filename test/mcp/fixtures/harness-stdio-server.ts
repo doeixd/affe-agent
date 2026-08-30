@@ -17,7 +17,6 @@ if (lifecycleDirectory === undefined) {
 
 const lifecyclePath = join(lifecycleDirectory, `${process.pid}.log`)
 const record = (event: string) => appendFileSync(lifecyclePath, `${event}\n`)
-const approvalMode = process.argv[3] === "approval"
 
 const client = Layer.effect(
   AgentClient.AgentClient,
@@ -55,7 +54,7 @@ const client = Layer.effect(
                   (current) => current + 1
                 )
                 yield* Effect.sync(() => record(`call:${id}:${count}:${text}`))
-                if (approvalMode && text === "approval") {
+                if (text === "approval") {
                   const request: Elicitation.Request = {
                     id: `${id}-approval-${count}`,
                     kind: "tool-approval",
@@ -184,9 +183,7 @@ const host = AgentSessionHost.layer(HarnessHost, {
   maxRequestsPerSession: 16
 }).pipe(Layer.provide(client))
 
-const frontend = approvalMode
-  ? AgentMcp.serverLayer({ host: HarnessHost }).pipe(Layer.provide(host))
-  : AgentMcp.layer.pipe(Layer.provide(client))
+const frontend = AgentMcp.serverLayer({ host: HarnessHost }).pipe(Layer.provide(host))
 
 const server = frontend.pipe(
   Layer.provide(transport),

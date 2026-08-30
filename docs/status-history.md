@@ -3415,3 +3415,23 @@ the principal per request; the session does not carry it; a tool handler
 sees `TurnContext`, not the request. Threading it is a new kernel noun and a
 design review, not a task -- the seam (`Provider.get` takes only a handle)
 is ready for it.
+
+## The legacy MCP path is gone; the policy is refusal (2026-08-30)
+
+Design-assessment rec 5 asked that the client-backed `AgentMcp.layer` /
+`handlers` path stay until its eviction-versus-refusal policy was decided
+explicitly rather than disguised as a refactor. Decided: at `maxSessions`
+the host *refuses* a newcomer and never evicts a live conversation. The old
+path evicted the oldest idle session to admit a new one, which reads
+friendlier and is wrong for a protocol whose clients address conversations
+by id: a session a client can still name must not vanish because another
+client opened one. Capacity is the operator's number to raise, and
+`agent_close` is how a client gives a slot back.
+
+Removed: `handlers`, `layer`, `AgentToolkit`. Moved to the host path: the
+stdio conformance fixture (no more approval-mode switch), the HTTP
+conformance fixture, `examples/mcp.ts`. `test/AgentMcp.test.ts` is rewritten
+over `serverLayer` through the official v2 client and pins the policy: a
+third session at `maxSessions: 2` is refused with the capacity reason, the
+two admitted ones are exactly what `agent://sessions` lists, the first is
+still its conversation, and closing one admits the next.

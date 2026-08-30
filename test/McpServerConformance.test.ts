@@ -136,7 +136,9 @@ const serverFixture = Effect.fn("McpServerConformance.serverFixture")(
             id,
             prompt: (input) =>
               Effect.gen(function* () {
-                const text = typeof input === "string" ? input : "non-text"
+                // The host hands the session a `Prompt`; read its last user text.
+                const texts = TestLanguageModel.userTexts(Prompt.make(input))
+                const text = texts[texts.length - 1] ?? "non-text"
                 const count = yield* Ref.updateAndGet(
                   promptCount,
                   (current) => current + 1
@@ -194,9 +196,17 @@ const serverFixture = Effect.fn("McpServerConformance.serverFixture")(
         McpProtocol.v2024_11_05
       ]
     })
-    const routes = AgentMcp.layer.pipe(
+    const ClientHost = AgentSessionHost.Tag<string>("test/McpServerConformance/client-host")
+    const routes = AgentMcp.serverLayer({ host: ClientHost }).pipe(
       Layer.provide(mcp),
-      Layer.provide(client)
+      Layer.provide(
+        AgentSessionHost.layer(ClientHost, {
+          principal: { resolve: () => Effect.succeed("conformance") },
+          authorization: AgentSessionHost.allowAll(),
+          maxSessions: 128,
+          maxRequestsPerSession: 16
+        }).pipe(Layer.provide(client))
+      )
     )
     const server = HttpRouter.serve(routes, {
       disableLogger: true,
@@ -432,9 +442,20 @@ describe("Harness MCP server conformance", () => {
             url: new URL("/mcp", HttpServer.formatAddress(server.address)),
             clientInfo: { name: "official-v1", version: "1.0.0" }
           })
+          // The host path's nine tools, on every transport and revision.
           assert.deepStrictEqual(
-            (yield* client.listTools).map((tool) => tool.name),
-            ["ask_agent"]
+            (yield* client.listTools).map((tool) => tool.name).sort(),
+            [
+              "agent_await",
+              "agent_close",
+              "agent_follow_up",
+              "agent_interrupt",
+              "agent_respond",
+              "agent_start",
+              "agent_status",
+              "agent_steer",
+              "ask_agent"
+            ]
           )
           assert.strictEqual(
             yield* client.callTool("ask_agent", {
@@ -1364,7 +1385,9 @@ describe("Harness MCP server conformance", () => {
             arguments: { prompt: 42 }
           }))
           assert.isTrue(malformed.isError)
-          assert.include(callText(malformed), "Invalid parameters")
+          // The host path reports the schema's own reason, naming the field,
+          // rather than the generic "Invalid parameters" the removed path did.
+          assert.include(callText(malformed), "prompt")
         }).pipe(Effect.provide(fixture.server))
       )
     })
@@ -1383,8 +1406,18 @@ describe("Harness MCP server conformance", () => {
               clientInfo: { name: "official-v1", version: "1.0.0" }
             })
             assert.deepStrictEqual(
-              (yield* connection.listTools).map((tool) => tool.name),
-              ["ask_agent"]
+              (yield* connection.listTools).map((tool) => tool.name).sort(),
+              [
+              "agent_await",
+              "agent_close",
+              "agent_follow_up",
+              "agent_interrupt",
+              "agent_respond",
+              "agent_start",
+              "agent_status",
+              "agent_steer",
+              "ask_agent"
+            ]
             )
             assert.strictEqual(
               yield* connection.callTool("ask_agent", {

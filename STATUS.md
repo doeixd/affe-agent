@@ -111,8 +111,6 @@ compile-time portability fence), and `examples/` -- every one typechecked;
   resolving `LanguageModel` at runtime.
 - **Legacy MCP cancellation id mismatch** is upstream: the official client's
   cancel cannot interrupt the server.
-- **The legacy `AgentMcp.layer` / `handlers` path** stays until its
-  eviction-versus-refusal policy is decided explicitly.
 - **The Anthropic example** has never been run live with a key;
   **`ClusterMultiNode`** runs on real time (~15 s).
 - **Per-principal credential resolution.** The contract is

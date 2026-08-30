@@ -1,355 +1,195 @@
+import { NodeHttpServer } from "@effect/platform-node"
+import { Client as V2Client, StreamableHTTPClientTransport as V2HttpTransport } from "@modelcontextprotocol/client"
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { McpProtocol, McpServer } from "effect/unstable/ai"
+import { HttpRouter, HttpServer } from "effect/unstable/http"
+import { createServer } from "node:http"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
-import { Prompt } from "effect/unstable/ai"
-import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentMcp } from "../src/mcp/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
- * The MCP adapter is tested at its handler rather than through a protocol
- * transport. The transport is Effect's code; what belongs to this project is
- * the mapping from an MCP tool call onto a session — in particular whether
- * `sessionId` really continues a conversation, which is the part a client can
- * observe and the part that is easy to get subtly wrong.
+ * The agent as MCP tools, over the shared host -- the only path since the
+ * client-backed `AgentMcp.layer` / `handlers` were removed (2026-08-30).
+ * What that removal decided: at capacity the host *refuses* a newcomer and
+ * never evicts a live session, where the old path evicted the oldest idle
+ * one. A conversation a client can still address must not vanish because
+ * another client opened one; capacity is the operator's number to raise.
  */
-const withAgent = <A, E>(
+const promise = <A>(evaluate: () => PromiseLike<A>) => Effect.promise(evaluate)
+
+const Host = AgentSessionHost.Tag<string>("test/AgentMcp/host")
+
+const fixture = Effect.fn("AgentMcp.fixture")(function* (
   turns: ReadonlyArray<TestLanguageModel.Turn>,
-  use: (
-    ask: (params: {
-      readonly prompt: string
-      readonly sessionId?: string
-    }) => Effect.Effect<string, unknown>,
-    recorder: TestLanguageModel.Recorder
-  ) => Effect.Effect<A, E>
-) =>
-  Effect.gen(function* () {
-    const { layer: model, recorder } = yield* TestLanguageModel.script(turns)
-
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const bound = yield* AgentMcp.AgentToolkit.pipe(
-          Effect.provide(Layer.unwrap(AgentMcp.handlers()))
-        )
-
-        // A tool handler returns a stream of results; the final one is the
-        // answer, exactly as `ToolExecution` treats it.
-        const ask = (params: {
-          readonly prompt: string
-          readonly sessionId?: string
-        }) =>
-          bound.handle("ask_agent", params).pipe(
-            Effect.flatMap(Stream.runCollect),
-            Effect.map((results) => String(results[results.length - 1]?.result))
-          )
-
-        return yield* use(ask, recorder)
-      })
-    ).pipe(
-      Effect.provide(
-        AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(
-          Layer.provide(model)
-        )
-      )
-    )
+  options?: { readonly maxSessions?: number }
+) {
+  const { layer: model, recorder } = yield* TestLanguageModel.script(turns)
+  const client = AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(Layer.provide(model))
+  const host = AgentSessionHost.layer(Host, {
+    principal: { resolve: () => Effect.succeed("mcp") },
+    authorization: AgentSessionHost.allowAll(),
+    maxSessions: options?.maxSessions ?? 8,
+    maxRequestsPerSession: 16
+  }).pipe(Layer.provide(client))
+  const mcp = McpServer.layerHttp({
+    name: "effect-harness-agent-mcp",
+    version: "1.0.0",
+    path: "/mcp",
+    protocols: [McpProtocol.v2025_11_25]
   })
+  const routes = AgentMcp.serverLayer({ host: Host }).pipe(Layer.provide(mcp), Layer.provide(host))
+  const server = HttpRouter.serve(routes, { disableLogger: true, disableListenLog: true }).pipe(
+    Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, gracefulShutdownTimeout: 100 }))
+  )
+  return { server, recorder }
+})
+
+const connect = Effect.fn("AgentMcp.connect")(function* () {
+  const address = HttpServer.formatAddress((yield* HttpServer.HttpServer).address)
+  return yield* Effect.acquireRelease(
+    Effect.gen(function* () {
+      const client = new V2Client({ name: "agent-mcp-test", version: "1.0.0" }, { versionNegotiation: { mode: "auto" } })
+      yield* promise(() => client.connect(new V2HttpTransport(new URL("/mcp", address))))
+      return client
+    }),
+    (client) => promise(() => client.close()).pipe(Effect.ignore)
+  )
+})
+
+const textOf = (result: { readonly content?: unknown }): string => {
+  const first: unknown = Array.isArray(result.content) ? result.content[0] : undefined
+  return typeof first === "object" && first !== null && "text" in first && typeof first.text === "string" ? first.text : ""
+}
+
+// `ask_agent` succeeds with a `Schema.String`, which the MCP server encodes as
+// JSON text; a failure's text is the reason, verbatim.
+const ask = (client: V2Client, args: { readonly prompt: string; readonly sessionId?: string }) =>
+  promise(() => client.callTool({ name: "ask_agent", arguments: args })).pipe(
+    Effect.map((result) => {
+      const isError = result.isError === true
+      const text = textOf(result)
+      return { text: isError ? text : String(JSON.parse(text)), isError }
+    })
+  )
+
+const decodeSessions = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(AgentProtocol.SessionSummary)))
+const listSessions = (client: V2Client) =>
+  promise(() => client.readResource({ uri: "agent://sessions" })).pipe(
+    Effect.map((result) => {
+      const first: unknown = result.contents[0]
+      return decodeSessions(typeof first === "object" && first !== null && "text" in first ? String(first.text) : "[]")
+    })
+  )
+
+const over = <A, E, LE>(server: Layer.Layer<HttpServer.HttpServer, LE>, use: (client: V2Client) => Effect.Effect<A, E>) =>
+  Effect.scoped(Effect.flatMap(connect(), use).pipe(Effect.provide(server)))
 
 describe("agent over MCP", () => {
-  it.effect("answers a one-shot question", () =>
-    withAgent([TestLanguageModel.text("the answer is 42")], (ask) =>
-      Effect.gen(function* () {
-        assert.strictEqual(
-          yield* ask({ prompt: "what is the answer?" }),
-          "the answer is 42"
-        )
-      })
-    )
-  )
-
-  it.effect("continues a conversation when given the same session id", () =>
-    withAgent(
-      [TestLanguageModel.text("noted"), TestLanguageModel.text("you said 41")],
-      (ask, recorder) =>
-        Effect.gen(function* () {
-          yield* ask({ prompt: "remember 41", sessionId: "chat-1" })
-          yield* ask({ prompt: "what did I say?", sessionId: "chat-1" })
-
-          // Asserting the *answer* proves nothing: a scripted model returns
-          // turn 2's text whether or not the session was reused. What
-          // discriminates is the prompt the model was given -- the second call
-          // must have carried the first exchange.
-          const second = (yield* recorder.prompts)[1]
-          assert.isDefined(second)
-          assert.deepStrictEqual(TestLanguageModel.userTexts(second), [
-            "remember 41",
-            "what did I say?"
-          ])
-        })
-    )
-  )
-
-  it.effect("gives an unnamed call its own session", () =>
-    withAgent(
-      [TestLanguageModel.text("first"), TestLanguageModel.text("second")],
-      (ask, recorder) =>
-        Effect.gen(function* () {
-          // Omitting `sessionId` is the one-shot case: two calls must not see
-          // each other, or an MCP client asking unrelated questions would
-          // accumulate a conversation it never asked for.
-          yield* ask({ prompt: "unrelated one" })
-          yield* ask({ prompt: "unrelated two" })
-
-          const second = (yield* recorder.prompts)[1]
-          assert.isDefined(second)
-          assert.deepStrictEqual(TestLanguageModel.userTexts(second), [
-            "unrelated two"
-          ])
-        })
-    )
-  )
-
-  it.effect("concurrent calls for one session id reach one session", () =>
-    withAgent(
-      [TestLanguageModel.text("a"), TestLanguageModel.text("b")],
-      (ask) =>
-        Effect.gen(function* () {
-          // Sharing is the claim, and the discriminator is precise: reaching
-          // one session means the second call meets the
-          // one-submission-per-session rule and is refused, whereas two
-          // separate sessions would both have succeeded.
-          //
-          // This does not prove the serialisation in `handlers` -- forcing two
-          // fibres to interleave inside session creation is not something a
-          // test can arrange on demand, and unserialised code passes this too.
-          // The lock is there for the window it closes, not for this test.
-          const outcomes = yield* Effect.all(
-            [
-              Effect.exit(ask({ prompt: "one", sessionId: "shared" })),
-              Effect.exit(ask({ prompt: "two", sessionId: "shared" }))
-            ],
-            { concurrency: "unbounded" }
-          )
-
-          const failures = outcomes.filter((outcome) => outcome._tag === "Failure")
-          assert.strictEqual(
-            failures.length,
-            1,
-            "concurrent calls did not reach the same session"
-          )
-        })
-    )
-  )
-
-  it.effect("bounds the session registry, dropping the oldest", () =>
+  it.live("answers a one-shot question", () =>
     Effect.gen(function* () {
-      // Every distinct id a client sends used to open a session that lived for
-      // the server's lifetime: unbounded memory driven by input from outside.
-      const { layer: model, recorder } = yield* TestLanguageModel.script(
-        Array.from({ length: 8 }, (_, i) => TestLanguageModel.text(`r${i}`))
-      )
-
-      yield* Effect.scoped(
+      const { server } = yield* fixture([TestLanguageModel.text("the answer is 42")])
+      yield* over(server, (client) =>
         Effect.gen(function* () {
-          const bound = yield* AgentMcp.AgentToolkit.pipe(
-            Effect.provide(Layer.unwrap(AgentMcp.handlers({ maxSessions: 2 })))
-          )
-          const ask = (sessionId: string, prompt: string) =>
-            bound
-              .handle("ask_agent", { prompt, sessionId })
-              .pipe(Effect.flatMap(Stream.runCollect))
-
-          yield* ask("one", "first")
-          yield* ask("two", "second")
-          // A third opens past the limit, evicting the oldest.
-          yield* ask("three", "third")
-          // Asking under the evicted id again must start over. If the registry
-          // were unbounded, this would resume and carry "first" with it.
-          yield* ask("one", "again")
-        })
-      ).pipe(
-        Effect.provide(
-          AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(
-            Layer.provide(model)
-          )
-        )
-      )
-
-      const fourth = (yield* recorder.prompts)[3]
-      assert.isDefined(fourth)
-      assert.deepStrictEqual(
-        TestLanguageModel.userTexts(fourth),
-        ["again"],
-        "the evicted session was resumed instead of dropped"
-      )
+          const answer = yield* ask(client, { prompt: "what is the answer?" })
+          assert.deepStrictEqual(answer, { text: "the answer is 42", isError: false })
+        }))
     })
   )
-})
 
-describe("eviction and in-flight calls", () => {
-  it.effect("never evicts a session with a call in flight", () =>
+  it.live("continues a conversation when given the same session id", () =>
     Effect.gen(function* () {
-      // Session "one" is mid-prompt when "two" arrives past the limit of 1.
-      // Evicting "one" would close its scope under the running call, which
-      // then fails for its caller with an interruption. The bound holds by
-      // refusing "two" instead, and "one" finishes.
+      const { server, recorder } = yield* fixture([TestLanguageModel.text("noted"), TestLanguageModel.text("you said 41")])
+      yield* over(server, (client) =>
+        Effect.gen(function* () {
+          yield* ask(client, { prompt: "remember 41", sessionId: "chat-1" })
+          yield* ask(client, { prompt: "what did I say?", sessionId: "chat-1" })
+        }))
+      const second = (yield* recorder.prompts)[1]
+      assert.isDefined(second)
+      assert.deepStrictEqual(TestLanguageModel.userTexts(second!), ["remember 41", "what did I say?"])
+    })
+  )
+
+  it.live("gives an unnamed call its own session, released when the call returns", () =>
+    Effect.gen(function* () {
+      const { server, recorder } = yield* fixture([TestLanguageModel.text("first"), TestLanguageModel.text("second")])
+      yield* over(server, (client) =>
+        Effect.gen(function* () {
+          yield* ask(client, { prompt: "unrelated one" })
+          yield* ask(client, { prompt: "unrelated two" })
+          // Nothing named, nothing kept: the host holds no session afterwards.
+          assert.deepStrictEqual(yield* listSessions(client), [])
+        }))
+      const second = (yield* recorder.prompts)[1]
+      assert.isDefined(second)
+      assert.deepStrictEqual(TestLanguageModel.userTexts(second!), ["unrelated two"])
+    })
+  )
+
+  it.live("a named call keeps its session alive between calls", () =>
+    Effect.gen(function* () {
+      const { server } = yield* fixture([TestLanguageModel.text("kept")])
+      yield* over(server, (client) =>
+        Effect.gen(function* () {
+          yield* ask(client, { prompt: "hold this", sessionId: "durable-chat" })
+          const sessions = yield* listSessions(client)
+          assert.deepStrictEqual(sessions.map((entry) => [entry.sessionId, entry.status]), [["durable-chat", "idle"]])
+        }))
+    })
+  )
+
+  it.live("concurrent calls for one session id reach one session: the second is busy, not a second run", () =>
+    Effect.gen(function* () {
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
-      const { layer: model } = yield* TestLanguageModel.script([
-        { text: "one done", started: entered, during: Deferred.await(release) },
-        TestLanguageModel.text("two done")
+      const { server } = yield* fixture([
+        { text: "a", started: entered, during: Deferred.await(release) },
+        TestLanguageModel.text("b")
       ])
-
-      yield* Effect.scoped(
+      yield* over(server, (client) =>
         Effect.gen(function* () {
-          const bound = yield* AgentMcp.AgentToolkit.pipe(
-            Effect.provide(Layer.unwrap(AgentMcp.handlers({ maxSessions: 1 })))
-          )
-          const ask = (sessionId: string, prompt: string) =>
-            bound
-              .handle("ask_agent", { prompt, sessionId })
-              .pipe(
-                Effect.flatMap(Stream.runCollect),
-                Effect.map((results) => String(results[results.length - 1]?.result))
-              )
-
-          const first = yield* Effect.forkChild(ask("one", "first"))
+          const first = yield* Effect.forkChild(ask(client, { prompt: "one", sessionId: "shared" }))
           yield* Deferred.await(entered)
-          const refused = yield* Effect.flip(ask("two", "second"))
-          assert.include(String(refused), "capacity")
-
+          const second = yield* ask(client, { prompt: "two", sessionId: "shared" })
+          assert.isTrue(second.isError, "the second call ran instead of being refused as busy")
+          assert.include(second.text, "already running")
           yield* Deferred.succeed(release, void 0)
-          assert.strictEqual(yield* Fiber.join(first), "one done")
-          // Idle now: the newcomer evicts it and runs.
-          assert.strictEqual(yield* ask("two", "second"), "two done")
-        })
-      ).pipe(
-        Effect.provide(
-          AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(
-            Layer.provide(model)
-          )
-        )
-      )
+          const firstOutcome = yield* Fiber.join(first)
+          assert.deepStrictEqual(firstOutcome, { text: "a", isError: false })
+        }))
     })
   )
-})
 
-describe("session lifetime", () => {
-  const submissionId = Schema.decodeSync(AgentProtocol.SubmissionId)("s")
-
-  /** A client that counts how many sessions are opened and released. */
-  const countingClient = (
-    opened: Ref.Ref<number>,
-    released: Ref.Ref<number>
-  ) =>
-    Layer.succeed(AgentClient.AgentClient, {
-      createSession: (options) =>
-        Effect.gen(function* () {
-          yield* Ref.update(opened, (n) => n + 1)
-          yield* Effect.addFinalizer(() =>
-            Ref.update(released, (n) => n + 1)
-          )
-          return {
-            id: options?.sessionId ?? "anon",
-            prompt: () =>
-              Effect.succeed({
-                submissionId,
-                status: "completed" as const,
-                runs: 1,
-                turns: 1,
-                text: "ok",
-                content: []
-              }),
-            submit: () => Effect.die("submit is not part of this fixture"),
-            awaitSubmission: () => Effect.die("awaitSubmission is not part of this fixture"),
-            steer: () => Effect.void,
-            followUp: () => Effect.void,
-            interrupt: () => Effect.void,
-            respond: () => Effect.succeed(false),
-            pending: Effect.succeed([]),
-            history: Effect.succeed(Prompt.make([])),
-            status: Effect.succeed("idle" as const),
-            events: () => Stream.empty
-          }
-        }),
-      session: () =>
-        Effect.fail(
-          new AgentClient.AgentTransportError({
-            sessionId: "?",
-            detail: "not used"
-          })
-        )
-    })
-
-  const withCounts = <A, E>(
-    use: (
-      ask: (
-        sessionId: string | undefined
-      ) => Effect.Effect<unknown, unknown>,
-      counts: {
-        readonly opened: Ref.Ref<number>
-        readonly released: Ref.Ref<number>
-      }
-    ) => Effect.Effect<A, E>
-  ) =>
+  it.live("at capacity the host refuses a newcomer and never evicts a live conversation", () =>
     Effect.gen(function* () {
-      const opened = yield* Ref.make(0)
-      const released = yield* Ref.make(0)
-
-      return yield* Effect.scoped(
+      const { server, recorder } = yield* fixture(
+        Array.from({ length: 6 }, (_, i) => TestLanguageModel.text(`r${i}`)),
+        { maxSessions: 2 }
+      )
+      yield* over(server, (client) =>
         Effect.gen(function* () {
-          const bound = yield* AgentMcp.AgentToolkit
-          const ask = (sessionId: string | undefined) =>
-            bound
-              .handle("ask_agent", {
-                prompt: "hello",
-                ...(sessionId === undefined ? {} : { sessionId })
-              })
-              .pipe(Effect.flatMap(Stream.runCollect))
-          return yield* use(ask, { opened, released })
-        }).pipe(
-          // Provided around the *whole* block, so the handler layer's scope
-          // stays open across calls -- which is the shape a running server
-          // has. Providing it only to the toolkit construction closes that
-          // scope immediately, and a session parked in it is released at once:
-          // the leak becomes unobservable and the test proves nothing.
-          Effect.provide(Layer.unwrap(AgentMcp.handlers()))
-        )
-      ).pipe(Effect.provide(countingClient(opened, released)))
+          yield* ask(client, { prompt: "first", sessionId: "one" })
+          yield* ask(client, { prompt: "second", sessionId: "two" })
+          const third = yield* ask(client, { prompt: "third", sessionId: "three" })
+          assert.isTrue(third.isError)
+          assert.include(third.text, "capacity")
+          // The sessions that exist are exactly the ones that were admitted;
+          // nothing was dropped to make room.
+          const held = (yield* listSessions(client)).map((entry) => entry.sessionId).sort()
+          assert.deepStrictEqual(held, ["one", "two"])
+          // And "one" is still the conversation it was.
+          yield* ask(client, { prompt: "again", sessionId: "one" })
+          // Releasing one explicitly is what makes room.
+          yield* promise(() => client.callTool({ name: "agent_close", arguments: { sessionId: "two" } }))
+          const admitted = yield* ask(client, { prompt: "now", sessionId: "three" })
+          assert.isFalse(admitted.isError)
+        }))
+      const prompts = yield* recorder.prompts
+      assert.deepStrictEqual(TestLanguageModel.userTexts(prompts[2]!), ["first", "again"])
     })
-
-  it.effect("an anonymous call releases its session when it returns", () =>
-    withCounts((ask, counts) =>
-      Effect.gen(function* () {
-        // "One-shot" has to mean lifetime, not just reachability. These
-        // sessions were created in the *server's* scope, so every anonymous
-        // call left one alive until the server shut down -- and in the
-        // client's registry too, since that finalizer hangs off the same
-        // scope. Unbounded growth driven entirely by input from outside.
-        yield* ask(undefined)
-        yield* ask(undefined)
-
-        assert.strictEqual(yield* Ref.get(counts.opened), 2)
-        assert.strictEqual(
-          yield* Ref.get(counts.released),
-          2,
-          "an anonymous session outlived the call that created it"
-        )
-      })
-    )
-  )
-
-  it.effect("a named call keeps its session alive between calls", () =>
-    withCounts((ask, counts) =>
-      Effect.gen(function* () {
-        // The other half: a named session outlives the call on purpose, which
-        // is what makes `sessionId` mean anything.
-        yield* ask("chat-1")
-        yield* ask("chat-1")
-
-        assert.strictEqual(yield* Ref.get(counts.opened), 1)
-        assert.strictEqual(yield* Ref.get(counts.released), 0)
-      })
-    )
   )
 })
