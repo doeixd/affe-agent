@@ -133,9 +133,17 @@ open, so the next pass does not have to re-derive it.
     switches and renders to stdout, runnable against the scripted model
     (`npx tsx examples/session-tree.ts`), typechecked with the rest of
     `examples/`.
-16. **`ChannelConformance`** packaging — the Slack cases (signature, replay,
-    idempotency) exist ad hoc; threading, attachments and hostile payloads do
-    not.
+16. ~~**`ChannelConformance`** packaging~~ — 2026-08-30: `/testing` exports
+    `ChannelConformance` (`cases(channel)` / `run(channel)` under a test
+    clock): signature, wrong secret, tampered body, the replay window in both
+    directions, missing/mangled headers without throwing, and large/unusual
+    bodies. Slack passes; a second in-test HMAC channel proves it
+    generalises; a clockless channel fails exactly the replay case and a
+    throwing one is reported, not crashed. Idempotency stays where it is
+    (`Connectors.test.ts`: it is the host's dedupe, not the channel's).
+    Threading and attachments are *not* in the suite: `/connectors` has no
+    decoder seam to hold them to (a `Delivery` is text in a conversation), and
+    asserting a shape that does not exist would be the wrong kind of test.
 17. **Compress `STATUS.md`** — 3k chronological lines; the 2026-08-29 section
     corrected the flatly wrong sentences, but a short "current truth" document
     with the chronology moved under `docs/` is still the right end state

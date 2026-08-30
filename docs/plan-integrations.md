@@ -369,8 +369,11 @@ command that provisions infrastructure.** That is a product, per
       finding is more valuable than the adapter.
 - [ ] Flue's ~250-line Daytona adapter is reproduced in tier 1, and the
       line-count difference is recorded in `STATUS.md`.
-- [ ] `ChannelConformance.suite` exists with the hostile-payload and
-      replay-window cases, and Slack passes it.
+- [x] `ChannelConformance` exists (2026-08-30; `cases` + `run`, framework-
+      agnostic like `SandboxConformance`) with the hostile-payload and
+      replay-window cases; Slack passes it, and a second channel written in
+      the test proves it generalises. Threading and attachments wait on a
+      decoder seam in `/connectors` that does not exist yet.
 - [ ] A Cloudflare Worker entry point runs an agent, or the attempt produces a
       written finding about the portability guardrail.
 - [ ] `npm run check` stays green; `lint:portability` unchanged.

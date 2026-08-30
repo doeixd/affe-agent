@@ -236,6 +236,7 @@ describe("durable and cluster surfaces", () => {
     const testing = await import("../src/testing/index.js")
     assert.deepStrictEqual(Object.keys(testing).sort(), [
       "AgentProbe",
+      "ChannelConformance",
       "SandboxConformance",
       "TestLanguageModel",
       "TestWebFetch",

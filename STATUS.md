@@ -3351,3 +3351,22 @@ failure instead of naming it.
 point, an activation's transcript, and the lane advancing -- rendered with
 `console.log`, which is the point: the tree is the substrate, the UI is
 whatever prints it.
+
+## ChannelConformance (2026-08-30)
+
+Item 16 of the remaining-work ranking. The Slack verifier's cases were the
+right list and lived in one test file; `@doeixd/effect-agent/testing` now
+exports them as `ChannelConformance` over a small `Channel` driver (`sign`,
+`verify`, the tolerance, the two header names): a correct signature is
+accepted; a tampered body, the wrong secret, a request outside the replay
+window in either direction, a missing or mangled header are refused without
+throwing; a 1 MiB or unicode body is a body like any other. `run` executes
+under a test clock and reports; a verifier that throws is a line in the
+report naming the case, not a crash.
+
+Slack passes. So does a second channel written in the test in a dozen
+lines (`sha256=` over `{timestamp}.{body}`), which is what makes this a
+suite rather than a Slack test with a new name. A channel that forgets the
+clock fails exactly the replay case. Left out on purpose: threading and
+attachments, because `/connectors` has no decoder seam for them yet, and
+idempotency, which is the host's dedupe and already tested there.
