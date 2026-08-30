@@ -14,10 +14,13 @@ Resources, progress and prompts remain.
 Phase 1 is not the pure, behavior-preserving refactor described below. The two
 registries have different, tested capacity policies:
 
-- `AgentMcp.handlers({ maxSessions })` evicts the oldest **idle** named session
-  and only refuses when every session is busy;
+- `AgentMcp.handlers({ maxSessions })` evicted the oldest **idle** named session
+  and only refused when every session was busy;
 - `AgentSessionHost` never evicts a live session and always refuses a newcomer
   at `maxSessions`.
+
+*Resolved 2026-08-30: refusal is the policy, and the client-backed path is
+gone (see the progress note at the end).*
 
 Deleting the MCP registry therefore changes observable continuation semantics;
 the existing MCP tests correctly catch it. A first implementation attempt also
@@ -189,10 +192,10 @@ Deleted from `AgentMcp`: the `sessions` `Ref`, the `creating` semaphore, the
 closes every scope, and the `maxSessions` option. Those become
 `AgentSessionHost.layer`'s `maxSessions` and `maxRequestsPerSession`.
 
-The existing `AgentMcp.layer` — client-backed, no principal, one tool — is kept
-as the zero-configuration path and reimplemented on top of a host built with
-`AgentSessionHost.allowAll`, so there is one registry implementation and not
-two.
+The client-backed `AgentMcp.layer` was kept while its policy was undecided and
+removed on 2026-08-30. The zero-configuration shape it offered is a host with a
+constant principal and `AgentSessionHost.allowAll` (`examples/mcp.ts`), so
+there is one registry implementation and not two.
 
 MCP has no headers on a stdio transport, so `PrincipalContext.headers` is empty
 there. That is honest rather than a gap: a stdio server is a single-user
