@@ -71,6 +71,12 @@ export interface Options<Principal> {
   readonly maxSessions: number
   /** Completed request records are evicted FIFO when this bound is reached. */
   readonly maxRequestsPerSession: number
+  /**
+   * Events kept per session for the finite `eventLog` read; newest wins.
+   * Default 256. A read from before what is held is refused, never served
+   * with a gap.
+   */
+  readonly maxRetainedEvents?: number | undefined
 }
 
 /** The host's operations, plus request authentication. */

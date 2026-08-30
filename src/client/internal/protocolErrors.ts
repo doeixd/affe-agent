@@ -56,6 +56,10 @@ export const Operation = Schema.Literals([
   "history",
   "status",
   "events",
+  /** Enumerate the host's sessions. A read, addressed to the host, not a session. */
+  "listSessions",
+  /** Read the retained event log of one session, finitely. A read. */
+  "eventLog",
   /**
    * Change delivery configuration -- push notification targets and the like.
    *

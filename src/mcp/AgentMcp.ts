@@ -905,6 +905,50 @@ const handlersFromHost = <Principal>(
         })
     })
 
+    const sessionsResource = McpServer.registerResource({
+      uri: "agent://sessions",
+      name: "agent-sessions",
+      description: "Every session this host holds, with its status.",
+      mimeType: "application/json",
+      content: Effect.gen(function* () {
+        const principal = yield* authenticate("listSessions", Option.none())
+        const response = yield* host.sessions(principal)
+        return JSON.stringify(response.sessions)
+      })
+    })
+
+    /**
+     * The event log, read finitely. `after` is the last sequence the reader
+     * has; the read is refused, not downgraded, when the host no longer
+     * holds what follows it (`AgentSessionHost.maxRetainedEvents`). Two
+     * templates because a URI template cannot make a segment optional: the
+     * bare form is "everything you hold".
+     */
+    const encodeEventLog = Schema.encodeEffect(Schema.toCodecJson(AgentProtocol.EventLogResponse))
+    const readEventLog = (sessionId: AgentProtocol.SessionId, after: number | undefined) =>
+      Effect.gen(function* () {
+        const principal = yield* authenticate("eventLog", Option.some(sessionId))
+        const response = yield* host.eventLog(principal, {
+          sessionId,
+          ...(after === undefined ? {} : { after })
+        })
+        return JSON.stringify(yield* encodeEventLog(response))
+      })
+
+    const eventsResource = McpServer.registerResource`agent://session/${AgentProtocol.SessionId}/events`({
+      name: "agent-session-events",
+      description: "The retained events of an agent session, oldest first, with the latest sequence.",
+      mimeType: "application/json",
+      content: (_uri, sessionId) => readEventLog(sessionId, undefined)
+    })
+
+    const eventsAfterResource = McpServer.registerResource`agent://session/${AgentProtocol.SessionId}/events/after/${Schema.NumberFromString}`({
+      name: "agent-session-events-after",
+      description: "The retained events of an agent session after a sequence the reader already has.",
+      mimeType: "application/json",
+      content: (_uri, sessionId, after) => readEventLog(sessionId, after)
+    })
+
     const pendingResource = McpServer.registerResource`agent://session/${AgentProtocol.SessionId}/pending`({
       name: "agent-session-pending",
       description: "Pending elicitation requests for an agent session.",
@@ -1026,6 +1070,9 @@ const handlersFromHost = <Principal>(
         McpServer.registerToolkit(RegisteredToolkit),
         historyResource,
         pendingResource,
+        sessionsResource,
+        eventsResource,
+        eventsAfterResource,
         registerInteractive(
           SharedAskAgent,
           handlers.ask_agent

@@ -30,6 +30,15 @@ export interface Options<Principal> {
   readonly maxSessions: number
   /** Completed request records are evicted FIFO when this bound is reached. */
   readonly maxRequestsPerSession: number
+  /**
+   * Events kept per session for `eventLog`, newest wins. Default 256.
+   *
+   * A finite read needs something finite to read. An in-process session's
+   * bus remembers nothing, so the host keeps the tail of what each hosted
+   * session emitted, bounded, and refuses a read that would start before
+   * what it still holds rather than answer with a gap.
+   */
+  readonly maxRetainedEvents?: number | undefined
 }
 
 export interface Host<Principal> {
@@ -91,6 +100,15 @@ export interface Host<Principal> {
     principal: Principal,
     request: AgentProtocol.StatusRequest
   ) => Effect.Effect<AgentProtocol.StatusResponse, AgentProtocol.RemoteError>
+  /** Every session this host holds, with its status. */
+  readonly sessions: (
+    principal: Principal
+  ) => Effect.Effect<AgentProtocol.SessionsResponse, AgentProtocol.RemoteError>
+  /** The retained events of one session after a sequence, finitely. */
+  readonly eventLog: (
+    principal: Principal,
+    request: AgentProtocol.EventLogRequest
+  ) => Effect.Effect<AgentProtocol.EventLogResponse, AgentProtocol.RemoteError>
   readonly events: (
     principal: Principal,
     request: AgentProtocol.EventsRequest
@@ -114,8 +132,21 @@ export interface Host<Principal> {
   readonly maxRequestsPerSession: number
 }
 
+/**
+ * The tail of a session's events, bounded.
+ *
+ * `oldest` is the sequence of the first entry still held, or `undefined`
+ * while nothing has been dropped; the read below uses it to tell "nothing
+ * after that yet" from "that has been evicted".
+ */
+interface EventTail {
+  readonly entries: Array<AgentProtocol.AgentEventEnvelope>
+  dropped: number
+}
+
 interface HostedSession {
   readonly session: AgentClient.RemoteSession
+  readonly tail: EventTail
   readonly scope: Scope.Closeable
 }
 
@@ -222,6 +253,47 @@ export const make = <Principal>(
       "AgentSessionHost maxRequestsPerSession",
       options.maxRequestsPerSession
     )
+    const maxRetainedEvents = positiveInteger(
+      "AgentSessionHost maxRetainedEvents",
+      options.maxRetainedEvents ?? 256
+    )
+
+    /**
+     * Host a session: start keeping its event tail in its own scope.
+     *
+     * Observational, like every other consumer of the bus: a failure of the
+     * event stream ends the tail and is logged, and does not touch the
+     * session. The subscription starts at hosting, so a session adopted
+     * mid-life is retained from that point; sequences are the session's
+     * own, so a reader can still tell what it is missing.
+     */
+    const host = (
+      session: AgentClient.RemoteSession,
+      scope: Scope.Closeable
+    ): Effect.Effect<HostedSession> =>
+      Effect.gen(function* () {
+        const tail: EventTail = { entries: [], dropped: 0 }
+        yield* Effect.forkIn(
+          Stream.runForEach(session.events(), (envelope) =>
+            Effect.sync(() => {
+              tail.entries.push(envelope)
+              if (tail.entries.length > maxRetainedEvents) {
+                tail.entries.shift()
+                tail.dropped += 1
+              }
+            })
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("stopped retaining a hosted session's events", {
+                sessionId: session.id,
+                cause
+              })
+            )
+          ),
+          scope
+        )
+        return { session, tail, scope }
+      })
     const sessions = yield* Ref.make(
       new Map<AgentProtocol.SessionId, HostedSession>()
     )
@@ -301,7 +373,7 @@ export const make = <Principal>(
             })
           }
           const childScope = yield* Scope.fork(parentScope)
-          const hosted: HostedSession = { session: addressable, scope: childScope }
+          const hosted = yield* host(addressable, childScope)
           yield* Ref.update(sessions, (all) => new Map(all).set(sessionId, hosted))
           return hosted
         })
@@ -521,9 +593,8 @@ export const make = <Principal>(
             })
           }
 
-          yield* Ref.update(sessions, (all) =>
-            new Map(all).set(sessionId, { session, scope: childScope })
-          )
+          const hosted = yield* host(session, childScope)
+          yield* Ref.update(sessions, (all) => new Map(all).set(sessionId, hosted))
           return {
             requestId: request.requestId,
             session: { sessionId, status }
@@ -833,6 +904,49 @@ export const make = <Principal>(
       )
     })
 
+    const listSessions = Effect.fn("AgentSessionHost.sessions")(function* (
+      principal: Principal
+    ) {
+      yield* authorize(principal, "listSessions", Option.none())
+      const all = Array.from(yield* Ref.get(sessions))
+      const summaries = yield* Effect.forEach(all, ([sessionId, hosted]) =>
+        Effect.map(hosted.session.status, (status) => ({ sessionId, status }))
+      )
+      return { sessions: summaries }
+    })
+
+    const eventLog = Effect.fn("AgentSessionHost.eventLog")(function* (
+      principal: Principal,
+      request: AgentProtocol.EventLogRequest
+    ) {
+      const sessionId = Option.some(request.sessionId)
+      yield* authorize(principal, "eventLog", sessionId)
+      const hosted = yield* findSession(request.sessionId)
+      const { entries, dropped } = hosted.tail
+      const after = request.after ?? 0
+      const oldest = entries[0]?.sequence
+      // Two reasons the tail can start after the cursor, told apart on
+      // purpose. Events emitted before the host held the session were never
+      // this host's to keep, and the response says so (`oldest`); a reader
+      // can see the boundary. Events the *bound* evicted were once readable
+      // here, and a cursor behind them is refused rather than answered with a
+      // hole -- `after` is never silently downgraded.
+      if (dropped > 0 && oldest !== undefined && after < oldest - 1) {
+        return yield* new AgentProtocol.AgentInvalidRequestError({
+          operation: "eventLog",
+          detail: `events after ${after} are no longer retained; the oldest held is ${oldest}` +
+            ` (maxRetainedEvents is ${maxRetainedEvents})`
+        })
+      }
+      const events = entries.filter((envelope) => envelope.sequence > after)
+      const last = entries[entries.length - 1]
+      return {
+        events,
+        ...(oldest === undefined ? {} : { oldest }),
+        latest: last?.sequence ?? 0
+      }
+    })
+
     const pending = Effect.fn("AgentSessionHost.pending")(function* (
       principal: Principal,
       request: AgentProtocol.PendingRequest
@@ -893,6 +1007,8 @@ export const make = <Principal>(
       history,
       status,
       events,
+      sessions: listSessions,
+      eventLog,
       size: Effect.map(Ref.get(sessions), (all) => all.size),
       requestBuckets: Effect.map(Ref.get(requests), (all) => all.size),
       maxSessions,

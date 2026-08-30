@@ -282,6 +282,13 @@ export type HistoryRequest = typeof HistoryRequest.Type
 export const HistoryResponse = Schema.Struct({ history: PromptWire.Prompt })
 export type HistoryResponse = typeof HistoryResponse.Type
 
+/** One hosted session, as the registry lists it. */
+export const SessionSummary = Schema.Struct({ sessionId: SessionId, status: SessionStatus })
+export type SessionSummary = typeof SessionSummary.Type
+
+export const SessionsResponse = Schema.Struct({ sessions: Schema.Array(SessionSummary) })
+export type SessionsResponse = typeof SessionsResponse.Type
+
 export const StatusRequest = Schema.Struct({ sessionId: SessionId })
 export type StatusRequest = typeof StatusRequest.Type
 
@@ -310,6 +317,34 @@ export type EventsRequest = typeof EventsRequest.Type
 /** The existing event envelope is already schema-defined and session ordered. */
 export const AgentEventEnvelope = AgentEvent.AgentEventEnvelope
 export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
+
+/**
+ * A finite read of a session's retained events.
+ *
+ * `after` is the same number `Last-Event-ID` and `DeliveryLog.read` carry:
+ * the last sequence the caller has. It is never silently downgraded -- a
+ * caller resuming from before what the host still holds is refused, not
+ * handed a stream with a gap in it.
+ */
+export const EventLogRequest = Schema.Struct({
+  sessionId: SessionId,
+  after: Schema.optional(Schema.Number)
+})
+export type EventLogRequest = typeof EventLogRequest.Type
+
+export const EventLogResponse = Schema.Struct({
+  events: Schema.Array(AgentEventEnvelope),
+  /**
+   * The first sequence the host holds for this session; absent while it
+   * holds nothing. A session emits `SessionStarted` before a host can begin
+   * retaining it, so this is normally 2 -- stated here rather than left for
+   * the reader to infer from a first event that is not the first.
+   */
+  oldest: Schema.optional(Schema.Number),
+  /** The newest sequence the host holds; what to pass as `after` next time. */
+  latest: Schema.Number
+})
+export type EventLogResponse = typeof EventLogResponse.Type
 
 export const EventsResponse = AgentEventEnvelope
 export type EventsResponse = typeof EventsResponse.Type

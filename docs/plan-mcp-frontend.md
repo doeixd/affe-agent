@@ -304,7 +304,7 @@ authenticated `history` and `pending` templates, and an official v2 HTTP
 client reads both after an MCP prompt. The events resource remains poll-with-
 `after` work: subscription registration is not exposed by the pinned Effect
 MCP server API. The sessions index is also deferred because
-`AgentSessionHost` intentionally has no enumeration seam.
+`AgentSessionHost` had no enumeration seam until 2026-08-30 (`host.sessions`; see the progress note at the end).
 
 Two further constraints make the original events/progress wording
 unimplementable as written. An MCP resource read must return one finite value,
@@ -574,3 +574,41 @@ Each phase is shippable and leaves the tree green.
 - **The `ask_agent` name.** It is the shipped surface and it stays. If the tool
   list ever gets renamed wholesale, that is a major version and a migration
   note, not a quiet change.
+
+## Progress: the host seam and the two remaining resources (2026-08-30)
+
+`AgentSessionHost` gained the two operations phase 4 was blocked on, and the
+MCP frontend registers the resources over them.
+
+- **`sessions(principal)`** -- every hosted session with its status.
+  Operation `listSessions`, addressed to the host rather than a session.
+- **`eventLog(principal, { sessionId, after? })`** -- a *finite* read. The
+  host keeps the tail of each hosted session's events, bounded by
+  `maxRetainedEvents` (default 256, newest wins), fed by a subscription in
+  the session's own scope from the moment the host holds it. The response
+  carries `oldest` and `latest` beside the events. Two boundaries are told
+  apart on purpose: `SessionStarted` goes out inside `AgentSession.make`,
+  before any host can subscribe, so the tail normally begins at sequence 2
+  and the response *says so* through `oldest`; events the bound has evicted
+  were once readable here, and a cursor behind them is refused
+  (`AgentInvalidRequestError` naming the bound), never answered with a hole.
+  `after` is therefore never silently downgraded, as this plan required.
+  Operation `eventLog`.
+- **Resources**: `agent://sessions`; `agent://session/{id}/events` (all
+  held); `agent://session/{id}/events/after/{n}` (a cursor -- a URI template
+  cannot make a segment optional, so the cursor is a second template rather
+  than a query string). Still poll-with-cursor: Effect's `McpServer` exposes
+  no resource subscription, as anticipated above.
+
+Not done here, deliberately: the legacy `AgentMcp.layer` / `handlers` path
+is still used by the stdio fixture, the conformance suite and
+`examples/mcp.ts`, so its deletion is its own migration; and the durable
+client does not yet serve `eventLog` from its `DeliveryLog` (the host's tail
+is what every backing gets today -- a durable-backed host could answer from
+the log with no bound, and should).
+
+Tests: `test/AgentSessionHostLog.test.ts` (enumeration; the finite read with a
+cursor; `oldest`/`latest`; the bound; refusal behind it, with the earliest
+honest cursor accepted) and `test/AgentMcpResources.test.ts` (both resources
+and the cursor template through the official v2 client over Streamable
+HTTP; refusal surfaces as a failed read). Broken once: the refusal gate.

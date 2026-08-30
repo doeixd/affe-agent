@@ -770,6 +770,8 @@ export const failingHost = <Principal>(
     history: () => fail,
     status: () => fail,
     events: () => fail,
+    sessions: () => fail,
+    eventLog: () => fail,
     size: Effect.succeed(0),
     requestBuckets: Effect.succeed(0),
     maxSessions: 4,

@@ -3147,3 +3147,23 @@ id; interrupted; failed; eviction on the bounded clients and journal
 persistence on the durable one), run over local, HTTP and durable-memory;
 the fifteenth protocol error in the HTTP and RPC error contracts. Broken
 once: eviction, and the kernel's settled fibre.
+
+## The host seam the MCP frontend was waiting for (2026-08-30)
+
+`docs/plan-mcp-frontend.md` phase 4, item 5 of the remaining-work ranking.
+`AgentSessionHost` gained `sessions` (enumeration) and `eventLog` (a finite
+read of a bounded per-session event tail, `maxRetainedEvents`, default 256),
+and `AgentMcp.serverLayer` registers `agent://sessions`,
+`agent://session/{id}/events` and `agent://session/{id}/events/after/{n}`
+over them.
+
+The read is honest about its two edges. `SessionStarted` is emitted inside
+`AgentSession.make`, before a host can subscribe, so a tail normally begins
+at sequence 2 -- the response carries `oldest` so the reader sees the
+boundary rather than inferring it. Events the bound evicted were once
+readable here, so a cursor behind them is refused, naming the bound, never
+served with a hole. `after` is never silently downgraded.
+
+Tests over the real in-process client and the official MCP v2 client; the
+refusal gate broken once. The legacy `AgentMcp.layer` path remains, still
+used by fixtures and an example; its removal is a separate migration.

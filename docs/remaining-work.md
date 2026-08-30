@@ -55,12 +55,14 @@ open, so the next pass does not have to re-derive it.
    `awaitSubmission` on every client, bounded per-session retention in the
    in-process client, the journal for the durable one,
    `AgentSubmissionNotFoundError`.
-5. **MCP frontend host seam** — `agent://sessions` and `…/events?after=N`
-   need session enumeration and a finite event-log read on
-   `AgentSessionHost`; neither exists. Also delete the legacy
-   `handlers`/`layer` path in `AgentMcp.ts` once nothing uses it. Progress
-   tokens and native HTTP elicitation stay blocked on upstream `McpServer`;
-   skill prompts wait on a permission-aware `SkillRegistry` load.
+5. ~~**MCP frontend host seam**~~ — landed 2026-08-30: `host.sessions` and
+   `host.eventLog` (bounded tail, `oldest`/`latest`, refusal behind the
+   bound), `agent://sessions` and `agent://session/{id}/events[/after/{n}]`.
+   Left: delete the legacy `AgentMcp.layer`/`handlers` path (still used by
+   the stdio fixture, the conformance suite and `examples/mcp.ts`); serve
+   `eventLog` from the durable `DeliveryLog` on durable-backed hosts;
+   progress tokens and native HTTP elicitation stay blocked upstream; skill
+   prompts wait on a permission-aware `SkillRegistry` load.
 6. **Tool-source gaps** — MCP `readOnly`/`destructiveHint` are not carried
    into permissions; `bindDiscovered` silently drops invalid names and
    `skipped` entries; `Permission.annotate` is applied in `bindDiscovered` but

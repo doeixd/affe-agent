@@ -356,6 +356,8 @@ describe("AgentServer", () => {
       history: () => unused,
       status: () => unused,
       events: () => unused,
+      sessions: () => unused,
+      eventLog: () => unused,
       size,
       requestBuckets: Effect.succeed(0),
       maxSessions: 4,
