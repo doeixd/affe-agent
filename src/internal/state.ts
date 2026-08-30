@@ -121,7 +121,7 @@ export interface Session<
   readonly inputGate: Semaphore.Semaphore
   /**
    * Internal seam run once per run, in the window between the first follow-up
-   * drain and the close decision (see `AgentSession.MakeOptions.beforeClose`).
+   * drain and the close decision (see `AgentSession.EngineOptions.beforeClose`).
    * Defaults to `Effect.void`.
    */
   readonly beforeClose: Effect.Effect<void>
@@ -173,6 +173,6 @@ export interface Session<
    */
   readonly env: Context.Context<any>
   readonly ids: IdSource
-  /** How the n-th submission is named. See `AgentSession.MakeOptions.submissionIds`. */
+  /** How the n-th submission is named. See `AgentSession.EngineOptions.submissionIds`. */
   readonly submissionName: (count: number) => string
 }

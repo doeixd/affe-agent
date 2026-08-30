@@ -398,7 +398,7 @@ something it could report or retry from its last sequence. `append`, `live` and
 `AgentTransportError` instead of a defect.
 
 One `orDie` in this path stays, deliberately.
-`AgentSession.MakeOptions.eventSink` is a core seam declaring `Effect<void>`, so
+`AgentSession.EngineOptions.eventSink` (engine-facing since 2026-08-30; formerly on `MakeOptions`) is a core seam declaring `Effect<void>`, so
 `DurableSubmission`'s recorder cannot report a failed append through it — and
 dying is also the right outcome, because a submission whose events were not
 recorded has a gap in the client's stream and must not be reported as having

@@ -186,16 +186,6 @@ export interface MakeOptions {
    */
   readonly history?: Prompt.Prompt | undefined
   /**
-   * How submissions are named. Defaults to `submission-${n}`.
-   *
-   * Elicitation ids are namespaced by the submission id, so the name is
-   * what makes a question's id unique across submissions. The durable
-   * workflow names its one in-workflow submission after the *durable*
-   * submission, which is what makes a question asked in one durable
-   * submission unanswerable with an id from another.
-   */
-  readonly submissionIds?: ((count: number) => string) | undefined
-  /**
    * Where a paused run waits for an answer from outside.
    *
    * Defaults to refusing every request, which keeps an approval-requiring tool
@@ -212,6 +202,25 @@ export interface MakeOptions {
    * one seam that Layer substitution could not already provide.
    */
   readonly channels?: InputChannel.Factory | undefined
+}
+
+/**
+ * What an *engine* -- a durable interpreter, this library's own tests --
+ * may set that an application never needs to. Accepted by `makeEngine`
+ * only; `make`, the public constructor, takes `MakeOptions` alone, so these
+ * cannot become something a user depends on (design-assessment rec 2).
+ */
+export interface EngineOptions {
+  /**
+   * How submissions are named. Defaults to `submission-${n}`.
+   *
+   * Elicitation ids are namespaced by the submission id, so the name is
+   * what makes a question's id unique across submissions. The durable
+   * workflow names its one in-workflow submission after the *durable*
+   * submission, which is what makes a question asked in one durable
+   * submission unanswerable with an id from another.
+   */
+  readonly submissionIds?: ((count: number) => string) | undefined
   /**
    * Observes every envelope this session emits, synchronously, in sequence
    * order — before `prompt` can report the outcome those events describe.
@@ -237,6 +246,7 @@ export interface MakeOptions {
   readonly beforeClose?: Effect.Effect<void> | undefined
 }
 
+/** Open a session. The public constructor: `MakeOptions` and nothing engine-facing. */
 export const make = <
   Tools extends Record<string, Tool.Any>,
   E,
@@ -245,6 +255,23 @@ export const make = <
 >(
   agent: AgentDefinition<Tools, E, R, Model>,
   options?: MakeOptions
+): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> => makeEngine(agent, options)
+
+/**
+ * `make` for an engine: the same session, with `EngineOptions` accepted.
+ *
+ * Not on the public `AgentSession` namespace (`src/AgentSessionPublic.ts`
+ * is what `@doeixd/effect-agent` re-exports); reachable to `/durable` and to
+ * this repository's tests by module path.
+ */
+export const makeEngine = <
+  Tools extends Record<string, Tool.Any>,
+  E,
+  R,
+  Model = LanguageModel.LanguageModel
+>(
+  agent: AgentDefinition<Tools, E, R, Model>,
+  options?: MakeOptions & EngineOptions
 ): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> =>
   Effect.gen(function* () {
     // Captured once, so the session handle carries no residual requirements
@@ -1115,7 +1142,7 @@ export const events = (
  * observer misbehaving.
  *
  * If you need a participant whose failure *is* the agent's failure -- an event
- * log a restart depends on -- that is `MakeOptions.eventSink`, which is
+ * log a restart depends on -- that is `EngineOptions.eventSink`, which is
  * deliberately a different seam with the opposite coupling.
  */
 export const observe = (

@@ -83,6 +83,25 @@ Core is the default import; everything else is an explicit subpath.
 : `apps/tui` — the full-screen local coding harness · `apps/cli` — a
 conventional `effect/unstable/cli` client for any mounted HTTP agent.
 
+### Maturity map
+
+Every subpath is public, but not every subpath is equally settled. The label
+says what a change there means for you, not how good the code is.
+
+| label | meaning | subpaths |
+| --- | --- | --- |
+| **core** | the vocabulary; a breaking change here is a major version | root (`Agent`, `AgentSession`, `AgentLoop`, `AgentEvent`, `Permission`, `Elicitation`, `ContextTransform`, `Snapshot`), `/client`, `/elicitation`, `/testing` |
+| **supported** | contract-tested against the reference apps and the cross-adapter matrix; changes are deliberate and noted in `STATUS.md` | `/http`, `/rpc`, `/mcp`, `/ag-ui`, `/a2a`, `/coding`, `/sandbox`, `/sandbox/local`, `/shell`, `/state`, `/hooks`, `/observability`, `/export`, `/compaction`, `/redaction`, `/budget`, `/subagent` |
+| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/pi` |
+| **reference** | illustrative, not a dependency: read it, copy it, do not import it | `apps/tui`, `apps/cli`, `examples/` |
+
+Engine-facing seams are not on any of these namespaces. What a durable
+interpreter or this repository's tests need -- `AgentSession.makeEngine` with
+`EngineOptions`, `ToolExecution.execute` -- is reachable by module path and
+deliberately absent from `@doeixd/effect-agent`
+(`src/AgentSessionPublic.ts`, `src/ToolExecutionPublic.ts`;
+`test/PublicApi.test.ts` pins both).
+
 ## Install
 
 ```bash

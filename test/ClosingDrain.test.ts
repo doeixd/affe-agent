@@ -41,7 +41,7 @@ describe("closing-drain invariant", () => {
 
       const result = yield* Effect.scoped(
         Effect.gen(function* () {
-          const session = yield* AgentSession.make(Simple, { beforeClose })
+          const session = yield* AgentSession.makeEngine(Simple, { beforeClose })
           yield* Deferred.succeed(sessionRef, session)
           return yield* AgentSession.prompt(session, "go")
         })

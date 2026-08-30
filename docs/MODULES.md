@@ -149,7 +149,14 @@ These all speak `AgentClient`, not `AgentSession`.
 
 `src/internal/` — `eventBus`, `history`, `ids`, `state`, `streamAccumulator`,
 `telemetry`, `toolActivity`, `toolkit`, `detail`, `positive`, `schedules`. Not
-in the export map; no stability guarantee. `src/coding/internal/` likewise holds
+in the export map; no stability guarantee.
+
+Two engine-facing seams live in public modules but off the public namespaces:
+`AgentSession.makeEngine` / `EngineOptions` (`submissionIds`, `eventSink`,
+`beforeClose`) and `ToolExecution.execute`. `src/AgentSessionPublic.ts` and
+`src/ToolExecutionPublic.ts` are what the package re-exports;
+`test/PublicApi.test.ts` pins the lists. The README's maturity map labels
+every subpath. `src/coding/internal/` likewise holds
 the replacer chain, glob, line endings, prompts, read/search formatting, regex
 safety and truncation shared by `/coding` and `/pi`.
 

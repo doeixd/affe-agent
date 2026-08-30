@@ -376,7 +376,7 @@ const recordingSink = (
   /**
    * A failed append dies here, and that is the third triage bucket again.
    *
-   * `AgentSession.MakeOptions.eventSink` is a *core* seam declaring
+   * `AgentSession.EngineOptions.eventSink` is a *core* seam declaring
    * `Effect<void>`: an interpreter recording events cannot report a failure
    * through it without durability's concerns reaching the kernel.
    *
@@ -666,7 +666,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
-          const session = yield* AgentSession.make(durableAgent, {
+          const session = yield* AgentSession.makeEngine(durableAgent, {
             channels,
             elicitation,
             sessionId: payload.sessionId,

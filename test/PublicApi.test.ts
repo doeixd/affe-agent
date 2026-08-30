@@ -131,6 +131,20 @@ describe("public API", () => {
         "subscribe"
       ]
     )
+    // The public/SPI boundary (design-assessment rec 2): what an engine
+    // needs -- `makeEngine` with `EngineOptions`, `ToolExecution.execute` --
+    // is reachable by module path and absent from the package's namespaces.
+    assert.notProperty(Harness.AgentSession, "makeEngine")
+    assert.deepStrictEqual(Object.keys(Harness.ToolExecution).sort(), [
+      "FailRun",
+      "Parallel",
+      "ReturnToModel",
+      "Sequential",
+      "concurrency",
+      "decide",
+      "intrinsicApproval",
+      "perTool"
+    ])
     assert.deepStrictEqual(Object.keys(Harness.AgentLoop).sort(), [
       "Continue",
       "Stop",

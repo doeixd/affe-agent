@@ -101,10 +101,13 @@ open, so the next pass does not have to re-derive it.
     every declared limitation is `docs/conformance-matrix.md`. It found and
     fixed an MCP defect (host refusals rendered as "internal server error";
     now `AgentMcp.ToolFailure`).
-11. **Public/SPI boundary** — `MakeOptions.eventSink` / `submissionIds` and
-    `ToolExecution.execute` are public but engine-facing (design-assessment
-    rec 2). Then a maturity label per subpath; README marks only three
-    packages experimental (rec 3).
+11. ~~**Public/SPI boundary**~~ — 2026-08-30: `submissionIds`, `eventSink`
+    and `beforeClose` moved to `AgentSession.EngineOptions`, accepted by
+    `makeEngine` only; `make` takes `MakeOptions`. `makeEngine` and
+    `ToolExecution.execute` are off the package namespaces
+    (`src/*Public.ts` re-export lists, pinned by `PublicApi.test.ts`). The
+    README has a maturity map (core / supported / experimental / reference)
+    for every subpath (rec 3).
 12. ~~**TUI**~~ — 2026-08-30: the nine `as never` casts in
     `apps/tui/src/smoke.tsx` are gone (the fakes now carry the fields the
     event union requires; the restored history is built from typed

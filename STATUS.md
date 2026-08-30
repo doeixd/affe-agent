@@ -3314,3 +3314,21 @@ tried first and did *not* bite: the response writer drains the queue into
 the socket buffer whether or not the client reads, so a few-KB protocol
 response never fills any queue -- which is exactly why the bound is moot
 for A2A and material for AG-UI, whose live deltas can outrun a reader.
+
+## Public/SPI boundary and the maturity map (2026-08-30)
+
+Item 11 of the remaining-work ranking; design-assessment recs 2 and 3.
+`AgentSession.MakeOptions` carried three things only an engine sets --
+`submissionIds`, `eventSink`, `beforeClose` -- and `ToolExecution.execute`
+sat on the public namespace with one caller, `AgentTurn`. They now live on
+`AgentSession.EngineOptions`, accepted by `makeEngine`; `make` takes
+`MakeOptions` alone. The package's `AgentSession` and `ToolExecution`
+namespaces are built from explicit re-export lists
+(`src/AgentSessionPublic.ts`, `src/ToolExecutionPublic.ts`), so the engine
+entry points stay reachable by module path to `/durable` and to this
+repository's tests and absent from `@doeixd/effect-agent`.
+`test/PublicApi.test.ts` pins both lists and asserts `makeEngine` is not
+there.
+
+The README gained a maturity map -- core, supported, experimental, reference
+-- with the criterion for each label and every subpath placed.
