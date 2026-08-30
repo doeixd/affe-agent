@@ -3567,3 +3567,27 @@ replay-stability is the entire contract -- broken once with a random
 suffix, the execution count reaches 2 and the pin fails. Phase 15
 (provider-overflow recovery) stays deliberately unstarted: the plan itself
 marks it a later, narrow seam to justify independently.
+
+## Cumulative file details for coding agents (2026-08-30)
+
+Phase 13 of `plan-branching-and-compaction.md`, done as the composition
+§21 asked for rather than the generic it first sketched.
+`CodingSummary.wrap(inner)` in `/coding` returns a `Summarise` whose output
+ends with a machine-owned `## Files touched` section -- never the model's
+prose, always computed: the folded stretch's own `read_file` /
+`write_file` / `edit_file` calls (§22's stated first-version compromise:
+these are our toolkit's names), unioned with the previous summary's
+section (repeated compaction) and with sections inside folded system
+messages (a branch carryover later compacted -- §23's nested case).
+Accumulation deliberately travels through the summary *text*: a checkpoint
+persists the string and nothing else, so the details survive every store,
+every carryover and a summary of a summary without widening
+`SummaryResult` or the checkpoint schema -- the narrowing the phase-1–7
+implementation note made now has its two consumers and still holds. Only
+the machine line format parses back, so prose "you modified secrets.env"
+cannot inject an entry (pinned). Broken once: dropping `edit_file` from
+the modifies set fails two of the four tests.
+
+With 11–14 landed and 15 (provider-overflow recovery) deliberately parked
+as the plan's own "later, narrow phase", the branching-and-compaction plan
+is complete.
