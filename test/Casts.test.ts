@@ -136,6 +136,17 @@ const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
     "the same service-wrapping shape, for a toolkit handler"
   ],
   [
+    "src/mcp/McpToolkit.ts",
+    1,
+    "mapping a declared tool tuple element-wise through a type-preserving " +
+      "function (`withRemoteFloor`): `Array.map` widens the tuple to an array"
+  ],
+  [
+    "src/toolSource/ToolSource.ts",
+    1,
+    "the same tuple-preserving map, through `withSourceFloor`"
+  ],
+  [
     "src/testing/TestLanguageModel.ts",
     6,
     "the same service-wrapping shape: four for the scripted model, two for " +

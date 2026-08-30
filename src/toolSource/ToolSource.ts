@@ -28,8 +28,19 @@ export interface Descriptor {
 }
 
 export interface ToolAnnotations {
+  /**
+   * The source says a person should be in the loop. Binding turns this into
+   * the tool's `needsApproval`, so the harness's intrinsic approval floor
+   * applies; it never loosens a declared tool that already carries one.
+   */
   readonly requiresApproval?: boolean | undefined
 }
+
+/** Raise a declared tool's floor when the source asks for it; never lower it. */
+const withSourceFloor = <T extends Tool.Any>(tool: T, descriptor: Descriptor | undefined): T =>
+  tool.needsApproval === undefined && descriptor?.annotations?.requiresApproval === true
+    ? (tool.setNeedsApproval(true) as T)
+    : tool
 
 export interface Skipped {
   readonly name: string
@@ -184,7 +195,10 @@ export const bind = <const Tools extends ReadonlyArray<Tool.Any>>(
       })
     }
 
-    const built = Toolkit.make(...tools)
+    const byName = new Map(validExtractionTools.map((tool) => [tool.name, tool] as const))
+    // `map` widens the tuple; each element keeps its own type, so the tuple does too.
+    const floored = tools.map((tool) => withSourceFloor(tool, byName.get(tool.name))) as unknown as Tools
+    const built = Toolkit.make(...floored)
 
     const handlers = Object.fromEntries(
       tools.map((tool) => [
@@ -268,20 +282,23 @@ export const bindDiscovered = (
     // never a defect. Filter invalid tools to `skipped`-like handling so the
     // fiber stays typed and the toolkit is built only from valid names.
     const validToolsRaw: Array<Descriptor> = []
+    const dropped: Array<string> = []
     for (const tool of extraction.tools) {
       if (isValidName(tool.name)) {
         validToolsRaw.push(tool)
       } else {
-        // Keep the bad name in the reason, but do not use it as a `Tool` name;
-        // the toolkit will not contain it, which is the `skipped` semantics.
+        // The toolkit will not contain it, which is the `skipped` semantics;
+        // the name reaches the log for the operator, never the model.
+        dropped.push(JSON.stringify(tool.name))
       }
     }
-    for (const skipped of extraction.skipped) {
-      if (!isValidName(skipped.name)) {
-        // Invalid `skipped` names are also untrusted remote input; dropping the
-        // entry keeps the `skipped` array itself valid without crashing. The
-        // corresponding tool (if any) was already filtered above.
-      }
+    if (dropped.length > 0) {
+      yield* Effect.logWarning(`ToolSource.bindDiscovered(${source.id}) dropped ${dropped.length} tool(s) with unusable names: ${dropped.join(", ")}`)
+    }
+    // What the source deliberately left out is worth a line too: a plugin
+    // loader has no other place to learn that half an API was skipped.
+    if (extraction.skipped.length > 0) {
+      yield* Effect.logDebug(`ToolSource.bindDiscovered(${source.id}) skipped ${extraction.skipped.length} operation(s): ${extraction.skipped.map((entry) => `${JSON.stringify(entry.name)} (${entry.reason})`).join("; ")}`)
     }
 
     const seen = new Set<string>()
@@ -296,16 +313,19 @@ export const bindDiscovered = (
         descriptor.input ?? Schema.Unknown
       // Discovered tools carry no output contract; failure is `unknown` so any
       // source-reported failure can surface.
+      const asksApproval = descriptor.annotations?.requiresApproval === true
       const dynamic = Tool.dynamic(descriptor.name, {
         ...(descriptor.description === undefined
           ? {}
           : { description: descriptor.description }),
         parameters,
-        failure: Schema.Unknown
+        failure: Schema.Unknown,
+        // The source's hint as the tool's own requirement: this is what the
+        // harness's intrinsic floor reads. The projection below only names
+        // the call for policy; it never asked anything by itself.
+        ...(asksApproval ? { needsApproval: true } : {})
       })
-      if (descriptor.annotations?.requiresApproval === true) {
-        // Preserve the source's approval hint via Permission — the policy will
-        // see an `ask` floor without the application hand-writing one.
+      if (asksApproval) {
         // `Permission.annotate` keeps the tool's exact type; the dynamic tool is
         // already `unknown` parameters, so the annotation is structural.
         return Permission.annotate(dynamic, {
@@ -362,7 +382,8 @@ export const fromMcpConnection = (
       tools: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        input: isJsonSchema(tool.inputSchema) ? tool.inputSchema : undefined
+        input: isJsonSchema(tool.inputSchema) ? tool.inputSchema : undefined,
+        ...(McpToolkit.requiresApproval(tool.annotations) ? { annotations: { requiresApproval: true } } : {})
       })),
       skipped: []
     }))

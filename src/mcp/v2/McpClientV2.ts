@@ -92,7 +92,8 @@ const adaptClient = Effect.fn("McpClientV2.adaptClient")(function* (
           ...(tool.description === undefined
             ? {}
             : { description: tool.description }),
-          inputSchema: tool.inputSchema
+          inputSchema: tool.inputSchema,
+          ...(tool.annotations === undefined ? {} : { annotations: tool.annotations })
         })),
         nextCursor: Option.fromUndefinedOr(result.nextCursor)
       } satisfies ClientPort.ToolPage

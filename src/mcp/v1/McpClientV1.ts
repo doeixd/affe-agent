@@ -83,7 +83,8 @@ export const fromSdkClient = Effect.fn("McpClientV1.fromSdkClient")(
           ...(tool.description === undefined
             ? {}
             : { description: tool.description }),
-          inputSchema: tool.inputSchema
+          inputSchema: tool.inputSchema,
+          ...(tool.annotations === undefined ? {} : { annotations: tool.annotations })
         })),
         nextCursor: Option.fromUndefinedOr(result.nextCursor)
       } satisfies ClientPort.ToolPage

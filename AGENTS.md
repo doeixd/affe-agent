@@ -43,6 +43,11 @@ The erasing casts in `src/` are structural, and each is documented at the site:
 * merging two handled toolkits by delegation (`mergeHandled`), because Effect
   AI composes toolkits before handlers are bound and a `WithHandler` is a
   closed value;
+* **mapping a declared tool tuple element-wise** through a function that
+  returns each element's own type -- `McpToolkit.bind` (1) and
+  `ToolSource.bind` (1) raise a declared tool's approval floor from the
+  source's hints. `Array.map` widens the tuple `Tools` to `Tool.Any[]`, and
+  nothing but an erasure restores the tuple the elements never left;
 * **wrapping a service whose method types are closed** — `DurableModel` (5),
   `DurableToolkit` (3) and `TestLanguageModel` (6). Each replaces a method on a
   `LanguageModel.Service` or a `Toolkit.WithHandler` with one that journals,

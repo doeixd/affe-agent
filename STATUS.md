@@ -3183,3 +3183,36 @@ object as a boolean, so its "no run was waiting" branch was dead; fixed.
 The host's own subscription is forked and yielded to (`toPull` was tried
 and subscribes on the first pull, not on the call), with `oldest` reporting
 the truth whatever the scheduling.
+
+## Tool-source approval hints reach the harness (2026-08-30)
+
+Item 6 of the remaining-work ranking, the part that was a defect rather
+than a design. `ToolSource.Descriptor.annotations.requiresApproval` (set by
+the OpenAPI extractor for every non-`GET` operation and by the GraphQL one
+for every mutation) was preserved at bind time as a `Permission.annotate`
+projection -- which only *names* a call for policy. The harness's approval
+floor is `ToolExecution.intrinsicApproval`, and that reads the tool's own
+`needsApproval`. Nothing set it, so a POST discovered from a spec was never
+asked about unless the application hand-wrote a rule.
+
+Now: every bind path sets `needsApproval: true` from the hint. Discovered
+tools carry it directly; declared tools (`bind`) are *floored* -- a
+declaration with no `needsApproval` of its own gains one when the source
+asks, and a declaration that set it (either way) keeps its own answer. MCP's
+`ToolAnnotations` ride on `McpToolkit.RemoteTool.annotations` through both
+official-client generations, and `McpToolkit.requiresApproval` reads them
+the conservative way the specification defines the defaults: a tool that
+sent hints and did not call itself read-only or non-destructive is
+destructive by the server's own account. A tool that sent no hints gets no
+floor, because a guess in either direction is still a guess. Hints only
+tighten; that is the one direction the specification's "do not rely on
+hints for safety" leaves open.
+
+`bindDiscovered` (both) no longer drops invalid names silently -- a warning
+names them for the operator; the model never sees them -- and logs the
+source's `skipped` entries at debug.
+
+`test/ToolApprovalFloor.test.ts`; broken once by inverting the hint rule and
+removing the dynamic floor (all five fail). Left for a design pass: headers
+as `Redacted`, and per-principal credential resolution
+(`docs/research-tool-sources.md` §7).

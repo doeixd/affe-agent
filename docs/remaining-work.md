@@ -63,12 +63,17 @@ open, so the next pass does not have to re-derive it.
    `eventLog` from the durable `DeliveryLog` on durable-backed hosts;
    progress tokens and native HTTP elicitation stay blocked upstream; skill
    prompts wait on a permission-aware `SkillRegistry` load.
-6. **Tool-source gaps** — MCP `readOnly`/`destructiveHint` are not carried
-   into permissions; `bindDiscovered` silently drops invalid names and
-   `skipped` entries; `Permission.annotate` is applied in `bindDiscovered` but
-   not `bind`; headers are not `Redacted`. Then the real design item:
-   per-principal credential resolution (research-tool-sources §7), of which
-   only the per-invocation `headers` hook exists.
+6. **Tool-source gaps** — mostly landed 2026-08-30: MCP hints ride on
+   `RemoteTool.annotations` through both real clients, and every bind path
+   (`McpToolkit.bind`/`bindDiscovered`, `ToolSource.bind`/`bindDiscovered`,
+   `fromMcpConnection`) turns a source's approval hint into the tool's own
+   `needsApproval` -- the thing `intrinsicApproval` actually reads; before,
+   `requiresApproval` was only a permission *projection*, and no approval was
+   ever asked. Declared tools are floored, never loosened. Dropped names and
+   `skipped` entries are logged. Left: headers are not `Redacted`, and the
+   real design item -- per-principal credential resolution
+   (research-tool-sources §7), of which only the per-invocation `headers`
+   hook exists.
 7. **Cluster D7 wire contract** — `AgentEntity`'s RPC error schema is
    `AgentIdleError` only; a `StorageError` becomes a defect on the wire
    (`src/cluster/AgentEntity.ts`). Widen it so the cluster is not the weaker

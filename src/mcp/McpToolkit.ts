@@ -69,7 +69,49 @@ export interface RemoteTool {
   readonly description?: string | undefined
   /** JSON Schema. Carried for inspection and codegen, not used for binding. */
   readonly inputSchema?: unknown
+  /** The server's behavioural hints, when it sent any. See `requiresApproval`. */
+  readonly annotations?: RemoteToolAnnotations | undefined
 }
+
+/**
+ * MCP `ToolAnnotations`, as far as binding cares. The specification calls
+ * these hints and says a client must not rely on them for safety; this
+ * adapter uses them in the one direction that is safe -- to *tighten*.
+ */
+export interface RemoteToolAnnotations {
+  readonly title?: string | undefined
+  readonly readOnlyHint?: boolean | undefined
+  readonly destructiveHint?: boolean | undefined
+  readonly idempotentHint?: boolean | undefined
+  readonly openWorldHint?: boolean | undefined
+}
+
+/**
+ * Whether a remote tool's hints ask for a person in the loop.
+ *
+ * MCP's defaults are the conservative ones: `readOnlyHint` is false and
+ * `destructiveHint` is true unless the server says otherwise. So a tool that
+ * sent hints and did not call itself read-only or non-destructive is a
+ * destructive one by the server's own account, and binding it turns that
+ * into `needsApproval` so the harness's intrinsic floor applies without the
+ * application hand-writing a policy. A tool that sent no hints gets no floor:
+ * the server said nothing, and inventing an answer either way is a guess.
+ * Hints only ever add a floor; a declared tool's own `needsApproval` is never
+ * loosened by them.
+ */
+export const requiresApproval = (annotations: RemoteToolAnnotations | undefined): boolean =>
+  annotations !== undefined &&
+  annotations.readOnlyHint !== true &&
+  annotations.destructiveHint !== false
+
+/**
+ * Raise a declared tool's approval floor when the server's hints ask for it.
+ * A tool that already carries `needsApproval` keeps its own, whatever it is.
+ */
+const withRemoteFloor = <T extends Tool.Any>(tool: T, remote: RemoteTool | undefined): T =>
+  tool.needsApproval === undefined && requiresApproval(remote?.annotations)
+    ? (tool.setNeedsApproval(true) as T)
+    : tool
 
 /** The transport failed, as distinct from the tool or the server's answer. */
 export class McpTransportError extends Schema.TaggedError<McpTransportError>()(
@@ -202,15 +244,24 @@ export const bindDiscovered = (
       Effect.map(connection.listTools, (tools) => tools.map((tool) => ({ tool, connection }))))
 
     const seen = new Set<string>()
+    const dropped: Array<string> = []
     const unique = listings.flat().filter(({ tool }) => {
       // Dropped, not raised: a server offering one unusable name alongside
       // twenty good ones should cost the caller that one tool, which is the
       // same rule a name collision already follows. See `isBindableName`.
-      if (!isBindableName(tool.name)) return false
+      if (!isBindableName(tool.name)) {
+        dropped.push(JSON.stringify(tool.name))
+        return false
+      }
       if (seen.has(tool.name)) return false
       seen.add(tool.name)
       return true
     })
+    // Dropped, but never silently: the operator reads the log, the model
+    // never sees the name.
+    if (dropped.length > 0) {
+      yield* Effect.logWarning(`McpToolkit.bindDiscovered dropped ${dropped.length} tool(s) with unusable names: ${dropped.join(", ")}`)
+    }
 
     const tools: Array<DiscoveredTool> = unique.map(({ tool }) => {
       const parameters: Schema.Constraint | JsonSchema.JsonSchema =
@@ -223,7 +274,9 @@ export const bindDiscovered = (
         // that is exactly what `Tool.dynamic`'s JSON-Schema mode consumes.
         parameters,
         // Unknown, so a server-reported failure can surface as the tool's failure.
-        failure: Schema.Unknown
+        failure: Schema.Unknown,
+        // The server's own hints, as a floor. See `requiresApproval`.
+        ...(requiresApproval(tool.annotations) ? { needsApproval: true } : {})
       })
     })
 
@@ -287,7 +340,11 @@ export const bind = <const Tools extends ReadonlyArray<Tool.Any>>(
       })
     }
 
-    const built = Toolkit.make(...tools)
+    // The server's hints raise a declared tool's floor and never lower it.
+    const byName = new Map(offered.map((tool) => [tool.name, tool] as const))
+    // `map` widens the tuple; each element keeps its own type, so the tuple does too.
+    const floored = tools.map((tool) => withRemoteFloor(tool, byName.get(tool.name))) as unknown as Tools
+    const built = Toolkit.make(...floored)
 
     const handlers = Object.fromEntries(
       tools.map((tool) => [
