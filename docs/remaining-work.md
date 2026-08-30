@@ -111,9 +111,15 @@ open, so the next pass does not have to re-derive it.
     messages), and SV2 has its `search`, `read_file` and `write_file`
     assertions, each named in the smoke. Live-region scrolling and syntax
     highlighting stay blocked on OpenTUI parsers.
-13. **A2A slow-consumer test or bound** — both SSE pumps are
-    `Queue.unbounded` with a rationale (#31); AG-UI is bounded at 256. Either
-    add the slow-consumer test that justifies the asymmetry or bound it.
+13. ~~**A2A slow-consumer test or bound**~~ — 2026-08-30: the test
+    justifies the asymmetry. On both the REST and JSON-RPC stream paths an
+    unread stream's task completes and reading it late yields exactly the
+    frames a prompt reader got (`test/AgentA2A.test.ts`, "stream
+    backpressure"; broken once by dropping the pump's first frame -- a
+    queue bound itself is not observable through a socket that buffers a
+    whole few-KB response, which is the point). The A2A pump holds one
+    finite protocol response; AG-UI's bound is backpressure on a live run's
+    deltas. Both rationales now cite the test.
 14. **Small A2A additions** — `A2A.tool(...)` wrapping `RemoteAgent.send` +
     `typed()`; there is no equivalent today.
 15. **`examples/session-tree.ts`** (ST6) — write it or strike ST6.

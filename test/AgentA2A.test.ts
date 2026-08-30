@@ -15,6 +15,7 @@ import {
   Option,
   PubSub,
   Ref,
+  Schedule,
   Schema,
   Stream
 } from "effect"
@@ -112,10 +113,33 @@ const taskText = (task: Task): string => {
  * client is undisturbed by these frames is what the other REST tests in this
  * file assert; this one has to see the wire.
  */
-const sseFrames = Effect.fn("AgentA2A.test.sseFrames")(function* (
-  url: string,
-  messageId: string,
-  text: string
+const sseFrames = (url: string, messageId: string, text: string) =>
+  sseFramesOf(`${url}/a2a/message:stream`, {
+    message: {
+      messageId,
+      role: "ROLE_USER",
+      parts: [{ text, mediaType: "text/plain" }]
+    }
+  })
+
+/** The JSON-RPC binding's streaming form of the same request (v1 names it `SendStreamingMessage`). */
+const jsonRpcFrames = (url: string, messageId: string, text: string) =>
+  sseFramesOf(`${url}/a2a`, {
+    jsonrpc: "2.0",
+    id: messageId,
+    method: "SendStreamingMessage",
+    params: {
+      message: {
+        messageId,
+        role: "ROLE_USER",
+        parts: [{ text, mediaType: "text/plain" }]
+      }
+    }
+  })
+
+const sseFramesOf = Effect.fn("AgentA2A.test.sseFramesOf")(function* (
+  endpoint: string,
+  payload: unknown
 ) {
   // One controller owns the connection. Aborting it on scope close is what
   // ends a read the server would otherwise keep pending forever -- a
@@ -125,20 +149,14 @@ const sseFrames = Effect.fn("AgentA2A.test.sseFrames")(function* (
   yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()))
   const response = yield* Effect.tryPromise({
     try: () =>
-    fetch(`${url}/a2a/message:stream`, {
+    fetch(endpoint, {
       signal: controller.signal,
       method: "POST",
       headers: {
         "A2A-Version": "1.0",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        message: {
-          messageId,
-          role: "ROLE_USER",
-          parts: [{ text, mediaType: "text/plain" }]
-        }
-      })
+      body: JSON.stringify(payload)
     }),
     catch: (cause) =>
       new AgentA2A.AgentA2ATransportError({ detail: String(cause) })
@@ -1772,6 +1790,59 @@ describe("AgentA2A v1 server", () => {
       })
     )
   })
+})
+
+describe("AgentA2A stream backpressure", () => {
+  /**
+   * Both stream pumps are `Queue.unbounded` while AG-UI bounds its queue at
+   * 256 (#31; remaining-work item 13). The asymmetry is justified only if an
+   * A2A stream is a *finite replay of one task* that never backpressures
+   * the run: the task must complete while nobody reads, and reading late
+   * must yield exactly the frames a prompt reader gets. AG-UI, by contrast,
+   * streams a live run's deltas, where a bound is backpressure.
+   */
+  const frameCount = (text: string) => (text.match(/^data:/gm) ?? []).length
+
+  for (const [name, open] of [
+    ["REST message:stream", sseFrames],
+    ["JSON-RPC message/stream", jsonRpcFrames]
+  ] as const) {
+    it.live(`${name}: an unread stream neither stalls the task nor loses frames`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* serverFixture()
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* HttpServer.HttpServer
+            const url = HttpServer.formatAddress(server.address)
+
+            // The reference: a stream read as it arrives.
+            const prompt = yield* open(url, `${name}-prompt`, "reference")
+            const reference = yield* prompt.drainUntil("TASK_STATE_COMPLETED", Duration.seconds(5))
+            yield* prompt.close
+
+            // A stream nobody reads. The run behind it must still complete.
+            const slow = yield* open(url, `${name}-slow`, "unread")
+            const ran = yield* Effect.repeat(Ref.get(fixture.calls), {
+              until: (calls) => calls.length === 2,
+              schedule: Schedule.spaced(Duration.millis(10))
+            }).pipe(Effect.timeoutOption(Duration.seconds(3)))
+            assert.isTrue(Option.isSome(ran), "the task did not complete while its stream went unread")
+            yield* Effect.sleep(Duration.millis(200))
+
+            // Read late: the whole finite sequence, nothing dropped.
+            const late = yield* slow.drainUntil("TASK_STATE_COMPLETED", Duration.seconds(5))
+            assert.strictEqual(frameCount(late), frameCount(reference))
+            // And the first frame of all -- the one offered before the pump
+            // even starts -- is there for a reader that arrives last.
+            assert.include(late, "TASK_STATE_SUBMITTED")
+            assert.include(late, "TASK_STATE_COMPLETED")
+            assert.include(late, "unread")
+            yield* slow.close
+          }).pipe(Effect.provide(fixture.server))
+        )
+      })
+    )
+  }
 })
 
 describe("AgentA2A multimodal parts", () => {

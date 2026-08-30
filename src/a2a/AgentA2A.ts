@@ -1200,6 +1200,12 @@ export const serverLayer = <Principal>(
           // bound. Disconnecting the one observer therefore cannot backpressure
           // or cancel task execution, and there is no perpetual producer whose
           // output can accumulate for the life of the server.
+          //
+          // Pinned by `test/AgentA2A.test.ts` ("stream backpressure"): an
+          // unread stream's task still completes, and reading it late yields
+          // every frame a prompt reader got. AG-UI bounds its queue at 256
+          // because it streams a *live run's* deltas, where a bound is
+          // backpressure; this queue holds one finite protocol response.
           const output = yield* Queue.unbounded<Option.Option<string>>()
           const requestId = typeof body.id === "string" ||
               typeof body.id === "number" || body.id === null
@@ -1381,6 +1387,8 @@ export const serverLayer = <Principal>(
             onFailure: (failure) => restJson(failure.body, failure.status),
             onSuccess: ({ first, iterator }) =>
               Effect.gen(function* () {
+                // Unbounded for the same reason as the JSON-RPC pump above,
+                // and pinned by the same test on the REST path.
                 const output = yield* Queue.unbounded<Option.Option<string>>()
                 if (!first.done) {
                   yield* Queue.offer(

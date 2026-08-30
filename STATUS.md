@@ -3298,3 +3298,19 @@ restored-history fixture is built from `Prompt.Message` values rather than
 render assertions (title, structured `matches` body with the truncation
 flag, `code` body, path title); broken once by disabling the truncation
 flag in the view.
+
+## A2A stream pumps: the asymmetry is now a tested claim (2026-08-30)
+
+Item 13 of the remaining-work ranking. Both A2A SSE pumps are
+`Queue.unbounded` while AG-UI bounds at 256; the rationale was that an A2A
+stream is one finite protocol response drained by a layer-owned fibre, so a
+slow observer can neither backpressure the run nor accumulate output for
+the life of the server. That is now pinned on both the REST
+(`message:stream`) and JSON-RPC (`SendStreamingMessage`) paths: a stream
+nobody reads still sees its task complete, and reading it 200 ms later
+yields the same frames a prompt reader got, first status to completion.
+Broken once by dropping the REST pump's first frame. A sliding queue was
+tried first and did *not* bite: the response writer drains the queue into
+the socket buffer whether or not the client reads, so a few-KB protocol
+response never fills any queue -- which is exactly why the bound is moot
+for A2A and material for AG-UI, whose live deltas can outrun a reader.
