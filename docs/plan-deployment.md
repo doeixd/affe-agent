@@ -60,12 +60,18 @@ already loads on `workerd`.
    Worker needs a remote one — Cloudflare Containers, or E2B/Daytona. This is
    exactly [plan-integrations.md](./plan-integrations.md) §6.2's `fromExec`:
    one function, and the whole `Sandbox` surface derives.
-2. **`/durable` needs a `WorkflowEngine`.** `effect/unstable/cluster` ships
-   `SingleRunner`, `SqlMessageStorage` and `SqlRunnerStorage`, so SingleRunner
-   plus D1 inside a DO is plausible — but unproven, and possibly beside the
-   point. **A Durable Object already is durable execution.** Persisting to DO
-   storage may be simpler than running Effect Workflow inside one, and deciding
-   that is part of the work rather than a detail of it.
+2. **`/durable` needs a `WorkflowEngine`.** *Decided 2026-08-30, by
+   measurement rather than argument.* `SingleRunner` over
+   `@effect/sql-sqlite-do` builds and migrates inside a DO (after two real
+   findings: the DO driver needs the whole `DurableObjectStorage`, not just
+   `.sql`, and the engine's own sqlite migration nests a transaction the DO
+   driver refuses -- worked around with a re-entrant wrapper). But a bare
+   two-activity workflow then **times out on workerd** where the identical
+   program completes in ~140ms on Node -- the suspend/resume machinery does
+   not progress there. So: **a Durable Object is the durable execution**;
+   `apps/worker` persists history to DO SQLite per completed submission and
+   journals events to the ordinary `DeliveryLog`, and `/durable` stays on
+   hosts whose engine runs. Full detail in `docs/status-history.md`.
 3. **CPU metering.** A long run is mostly waiting on the model, which DOs bill
    as wall-clock rather than CPU. Compaction, large-transcript JSON and
    `/export` are genuinely CPU-bound and will meter. Measure before assuming.
@@ -325,10 +331,18 @@ deployment.
 
 ## 9. Success conditions
 
-- [ ] A Cloudflare Worker serves `/http` and runs a full submission against a
-      real model, with the session living in a Durable Object.
-- [ ] The same agent reconnects after DO hibernation and receives every event
-      above the last sequence it saw — asserted against the log, not observed.
+- [~] A Cloudflare Worker serves `/http` and runs a full submission with the
+      session living in a Durable Object (`apps/worker`,
+      `test/WorkerDurableObject.test.ts`, on real workerd via miniflare). The
+      model is the scripted test model -- CI has no key; the real-model half
+      belongs to the deployment stack (`examples/deploy-cloudflare/`).
+- [x] The same agent reconnects after the *runtime's death* -- a stronger
+      event than hibernation -- and receives every event above the last
+      sequence it saw, asserted against the log: a second miniflare over the
+      same persisted DO storage continues the conversation, and the resumed
+      stream begins exactly after the cursor with no gaps
+      (2026-08-30). Sequences continue across lives because the worker
+      shifts each life's events by the journal's last sequence.
 - [ ] A shell tool runs inside that Worker through a `fromExec` provider, and
       passes `SandboxConformance`.
 - [ ] Either the Worker entry needs no portability exception, **or** the
@@ -341,8 +355,9 @@ deployment.
 - [ ] One `AgentServer` serves a DO-backed mount **and** an HTTP-backed remote
       mount, and a client cannot tell them apart from the outside — the §6.2
       claim, exercised rather than asserted.
-- [ ] A decision is recorded on whether `/durable` runs inside a DO or is
-      redundant there.
+- [x] A decision is recorded on whether `/durable` runs inside a DO: it does
+      not, until the engine's resume machinery runs on workerd (measured;
+      see §3.2 item 2). The DO is the durability.
 - [ ] `npm run check` stays green; `lint:portability` unchanged, or changed with
       a written reason.
 

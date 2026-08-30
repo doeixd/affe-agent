@@ -86,9 +86,12 @@ divergence, activation); `/web` (+ Brave, HTTP fetch); `/openai`
 (OpenAI-compatible responses).
 
 **Applications.** `apps/tui` (full-screen local coding harness),
-`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (the
-compile-time portability fence), and `examples/` -- every one typechecked;
-`session-tree`, `ref-coding-agent` and `typed-agent` also run.
+`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (a real
+Durable Object host: one DO per session, history in DO SQLite, events
+journaled to the delivery log, resumption across the runtime's death --
+proven on workerd via miniflare), `examples/` -- every one typechecked;
+`session-tree`, `ref-coding-agent`, `typed-agent` and the worker test also
+run. `examples/deploy-cloudflare/` is the Alchemy stack.
 
 ## What holds it there
 
@@ -119,6 +122,12 @@ compile-time portability fence), and `examples/` -- every one typechecked;
   kernel decision -- the principal reaching the tool fibre.
 - **Threading and attachments** in channels wait on a decoder seam
   `/connectors` does not have.
+- **Effect Workflow inside a Durable Object** stalls at the first activity
+  on workerd (upstream; minimal repro in the history). The DO host uses the
+  platform's durability instead; `/durable` runs where its engine runs.
+- **The DO worker's model** is the scripted test model until a deployment
+  wires a real one; the Alchemy stack is written but has not been run
+  against a real account.
 
 The larger parked work -- a real workerd host, the reference gateway, code
 mode, compaction phases 11–15, filetypes phase 5, the relay and bridge

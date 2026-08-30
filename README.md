@@ -2080,6 +2080,9 @@ context transforms and canonical history are directly testable.
 - [`examples/state.ts`](./examples/state.ts) — a plan the agent fills in as
   typed state, shown to the model and persisted to SQLite, via
   `@doeixd/effect-agent/state`
+- [`examples/deploy-cloudflare/`](./examples/deploy-cloudflare/) — the
+  Alchemy stack that deploys `apps/worker` to Cloudflare: one Worker, one
+  SQLite-backed Durable Object namespace, one DO per session
 - [`examples/session-tree.ts`](./examples/session-tree.ts) — a conversation
   as a tree: two lanes from one node, the divergence point, and the transcript
   an activation hands back, rendered with `console.log`; runs as it is against

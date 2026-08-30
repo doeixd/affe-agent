@@ -3435,3 +3435,53 @@ over `serverLayer` through the official v2 client and pins the policy: a
 third session at `maxSessions: 2` is refused with the capacity reason, the
 two admitted ones are exactly what `agent://sessions` lists, the first is
 still its conversation, and closing one admits the next.
+
+## The Durable Object host, and what workerd would not run (2026-08-30)
+
+Item 19; `docs/plan-deployment.md` §3 and §7 item 1, with `effect` moved to
+rc.112 first (alchemy requires it; the whole suite passed unchanged).
+
+`apps/worker` stopped being a compile-time fence and became a host: the
+Worker routes `/sessions/{id}` to one Durable Object per session id, and the
+DO serves the same `/http` routes as every other deployment through
+`HttpRouter.toWebHandler`, over `AgentSessionHost` and a DO-backed client.
+Proven on real workerd (miniflare, `test/WorkerDurableObject.test.ts`): a
+full submission runs; a *second miniflare over the same persisted storage*
+-- the runtime dead, not merely hibernated -- re-adopts the session from
+its stored history, continues the conversation, and serves
+`events?after=N` from the delivery log beginning exactly after the cursor,
+with sequences continuous across lives because each life's events are
+shifted by the journal's last sequence. Broken once by zeroing that shift.
+
+**The finding that shaped it: Effect Workflow does not run on workerd.**
+The intended design was the full `/durable` client inside the DO --
+`SingleRunner` over `@effect/sql-sqlite-do`, which even ships in alchemy's
+dependency set. Three findings on the way:
+
+1. `@effect/sql-sqlite-do` needs the whole `DurableObjectStorage`, not just
+   `.sql`: transactions go through the DO's own transaction API.
+2. The cluster engine's sqlite migration pipes its index creation through
+   `sql.withTransaction` *inside* the migrator's transaction, and the DO
+   driver correctly refuses nested transactions. Worked around with a
+   re-entrant wrapper (an inner `withTransaction` joins the one it is
+   inside, tracked per fibre the way the driver tracks its own guard).
+3. With both fixed, a **bare two-activity workflow times out** under
+   `ClusterWorkflowEngine` + `SingleRunner` on workerd -- 20s and counting
+   with 200ms poll intervals -- while the byte-identical program completes
+   in ~140ms on Node (the twin probe). The journal shows the workflow
+   *starting* (SubmissionStarted, RunStarted journaled) and stalling at the
+   first activity boundary; SQL stays alive throughout (a watchdog query
+   answers mid-hang). The suspend/resume machinery is what does not
+   progress, and that is upstream.
+
+So the decision the plan asked for is recorded: **a DO is the durable
+execution.** History persists per completed submission; the delivery log
+carries resumption; a run that loses its process is lost, exactly as on a
+Node host without `/durable` -- and `/durable` keeps running where its
+engine runs. One more workerd fact worth keeping: modules mounted from
+outside the miniflare root fail with an opaque `internal error`; bundles
+must live under the project directory.
+
+`examples/deploy-cloudflare/alchemy.run.ts` is the Alchemy stack for it --
+typechecked in CI, not yet run against a real account, which is the open
+half of §9's first condition along with a real model.

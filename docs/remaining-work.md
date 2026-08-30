@@ -160,9 +160,17 @@ open, so the next pass does not have to re-derive it.
 
 ### Larger, correctly parked
 
-19. **Real workerd / Durable Object host** — `apps/worker` is a compile-time
-    fence; a DO-hosted `AgentHttp`, a DO-storage `KeyValueStore`, and the
-    `/durable`-on-DO decision are unstarted (`plan-deployment.md` §3, §7).
+19. **Real workerd / Durable Object host** — the core landed 2026-08-30:
+    `apps/worker` is a real host (one DO per session, `/http` over
+    `HttpRouter.toWebHandler`, history persisted to DO SQLite per completed
+    submission, events journaled to the `DeliveryLog`, `events?after=N`
+    gapless across the runtime's death), proven on real workerd by
+    `test/WorkerDurableObject.test.ts` through miniflare, and the
+    `/durable`-on-DO decision is recorded (no: the engine's resume machinery
+    stalls on workerd -- measured minimal repro in `status-history.md`).
+    `examples/deploy-cloudflare/` holds the Alchemy stack. Left: a real
+    model wired through the stack and deployed from a clean account; the
+    `fromExec` sandbox (blocked on `plan-integrations.md` §6.2); Rivet.
 20. **Reference gateway and declarative references, presets, LSP/code-mode
     batteries** (`plan-primitives.md` steps 3–6) — only the coding reference
     exists.
