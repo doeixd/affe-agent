@@ -1463,7 +1463,7 @@ details with their schemas when the use cases are concrete.
 | **11** ✅ | Add generic branch-seed decoration seam to `/tree` (`BranchSeedOptions.seed` on `branch` only -- activations are cached by node id, so a seeded activation could be answered by an unseeded live session; branch, then activate what it commits) |
 | **12** ✅ | Implement `BranchSummary` from `tree.divergence` (`/tree`'s `BranchSummary.branch`: summarises exactly the abandoned stretch past the common ancestor with the same `Summarise` vocabulary, seeds the new branch, carryover canonical via §19, provenance on the returned value via §20; `NothingToCarry` refuses an empty carryover) |
 | **13** | Add `/coding` cumulative file-operation details                        |
-| **14** | Durable conformance tests using Activity + persistent checkpoint store |
+| **14** ✅ | Durable conformance tests using Activity + persistent checkpoint store (`test/Durable.test.ts`: the summariser suspends after its Activity completes and before the checkpoint saves -- the worst case -- and the resumed replay's re-ask is answered by the journal, not by executing again; the Activity name is derived from what is summarised, because replay-stability is the whole contract and a random suffix makes the pin fail) |
 | **15** | Only after all that, investigate automatic provider-overflow recovery  |
 
 ---

@@ -3551,3 +3551,19 @@ protocol. `NothingToCarry` refuses when `from` is an ancestor of `to` or
 did nothing after the fork, rather than seeding a confidently empty
 carryover. Broken once both ways: slicing from zero and ignoring the seed
 each fail all four `test/BranchSummary.test.ts` cases.
+
+## Durable compaction, the decisive half (2026-08-30)
+
+Phase 14 of `plan-branching-and-compaction.md`. The suite already showed an
+Activity-wrapped summariser *runs* inside a durable submission; the new pin
+shows the journal doing its job in the worst case. The summariser completes
+its Activity and then the submission suspends on a durable gate -- before
+`completed()` persists the checkpoint, so the resumed replay finds no
+checkpoint, asks the summariser again, and must be answered by the journal:
+one execution total, and the checkpoint that finally persists (a real
+`KeyValueStore`) holds the first execution's text. The Activity's name is
+derived from what is being summarised (`summarise-<messages>`), because
+replay-stability is the entire contract -- broken once with a random
+suffix, the execution count reaches 2 and the pin fails. Phase 15
+(provider-overflow recovery) stays deliberately unstarted: the plan itself
+marks it a later, narrow seam to justify independently.

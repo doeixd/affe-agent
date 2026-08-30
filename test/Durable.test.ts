@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import { Activity, DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
@@ -32,6 +33,7 @@ const Gate3 = DurableDeferred.make("DurableTestGate3", { success: Schema.String 
 const Gate4 = DurableDeferred.make("DurableTestGate4", { success: Schema.String })
 const Gate5 = DurableDeferred.make("DurableTestGate5", { success: Schema.String })
 const StreamGate = DurableDeferred.make("StreamGate", { success: Schema.String })
+const Gate6 = DurableDeferred.make("DurableTestGate6", { success: Schema.String })
 
 const Refund = Tool.make("refund", {
   parameters: Schema.Struct({ amount: Schema.String }),
@@ -1054,6 +1056,111 @@ describe("compaction under durability", () => {
       assert.isTrue(
         last.content.some((message) => message.role === "system"),
         "the compacted projection never reached the model"
+      )
+    })
+  )
+
+  it.live("a replay returns the journalled summary instead of paying for it again", () =>
+    Effect.gen(function* () {
+      // Phase 14 of `plan-branching-and-compaction.md`, the decisive half.
+      // The test above shows an Activity-wrapped summariser *runs*; this one
+      // shows the journal doing its job. The summariser completes its
+      // Activity and then the submission suspends -- before the checkpoint is
+      // saved, which is the worst case: the resumed replay finds no
+      // checkpoint, asks the summariser again, and the answer must come from
+      // the journal rather than from executing the summary again. `executes`
+      // counts only real executions, inside the Activity body.
+      //
+      // The Activity's name is derived from what is being summarised
+      // (`summarise-<messages>`), because replay-stability is the entire
+      // contract: a name that varied per ask would journal nothing usefully,
+      // which the break-once for this test confirms (a random suffix makes
+      // `executes` reach 2).
+      const executes = yield* Ref.make(0)
+      const suspendOnce = yield* Ref.make(true)
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const kv = yield* KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+        Effect.provide(KeyValueStore.layerMemory)
+      )
+
+      const compaction = yield* Compaction.make({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        checkpointStore: kv,
+        summarise: ({ messages }) =>
+          Activity.make({
+            name: `summarise-${messages.content.length}`,
+            success: Schema.String,
+            execute: Ref.updateAndGet(executes, (n) => n + 1).pipe(
+              Effect.map((n) => `summary ${n}`)
+            )
+          }).pipe(
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                const shouldSuspend = yield* Ref.getAndSet(suspendOnce, false)
+                if (shouldSuspend) {
+                  const token = yield* DurableDeferred.token(Gate6)
+                  yield* Deferred.succeed(gateReady, token)
+                  yield* DurableDeferred.await(Gate6)
+                }
+              })
+            )
+          )
+      })
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: model } = yield* FakeModel.layer(
+        Array.from({ length: 8 }, (_, i) => ({ text: `t${i}` }))
+      )
+
+      const durable = DurableAgent.workflow(
+        "CompactedReplay",
+        Agent.make({
+          contextTransform: compaction,
+          loop: AgentLoop.make((state) =>
+            Effect.succeed(
+              state.turnIndex < 5 ? AgentLoop.Continue : AgentLoop.Stop
+            )
+          )
+        }),
+        { store }
+      )
+
+      yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, store, "compact-2", "go")
+        const token = yield* Deferred.await(gateReady)
+        yield* DurableDeferred.succeed(Gate6, { token, value: "resume" })
+        const exit = yield* DurableAgent.result(durable, id, {
+          interval: Duration.millis(20)
+        })
+        assert.isTrue(
+          Exit.isSuccess(exit),
+          `the resumed compacted submission failed: ${JSON.stringify(exit)}`
+        )
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      // The replay asked the summariser again -- there was no checkpoint to
+      // reuse, the suspension came first -- and the journal answered.
+      const stored = yield* KeyValueStore.toSchemaStore(
+        KeyValueStore.prefix(kv, "effect-agent:compaction:"),
+        Compaction.Checkpoint
+      ).get("compact-2")
+      assert.isTrue(Option.isSome(stored), "the checkpoint was never persisted")
+      assert.strictEqual(
+        Option.getOrThrow(stored).summary,
+        "summary 1",
+        "the persisted summary should be the journalled first execution"
+      )
+      assert.strictEqual(
+        yield* Ref.get(executes),
+        1,
+        "the summary was executed again on replay instead of replayed from the journal"
       )
     })
   )
