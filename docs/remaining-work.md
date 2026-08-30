@@ -185,10 +185,14 @@ open, so the next pass does not have to re-derive it.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.
 25. **Per-principal credentials** (`plan-tool-credentials.md` §6) — the
-    binding must be chosen per principal per call, and the session does not
-    carry the principal to the tool fibre. A kernel noun; design-review it
-    (design-assessment rec 1) before building the `Bindings` store, reauth
-    via elicitation and `securitySchemes` derivation that wait on it.
+    design review rec 1 requires is drafted and awaiting a decision:
+    `docs/plan-principal-on-tool-fibre.md` (2026-08-30). Recommended shape:
+    a `Context.Reference` the host sets per request — verified to reach
+    tool handlers because a submission forks from the caller's fibre and
+    the session env cannot clobber a key it never held; the durable path
+    carries the subject on the persisted `Payload`. Not implemented until
+    reviewed. The `Bindings` store, reauth via elicitation and
+    `securitySchemes` derivation queue behind it.
 26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
     — new packages and architecture (Claude Code / OpenCode bridges, relay
     transport, `SessionInbox` / `ProcessManager`). Preconditions are all met

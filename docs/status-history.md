@@ -3513,3 +3513,18 @@ the tier-0 POSIX-userland assumption, stated rather than discovered.
 Also this date: the two workerd findings are written up as filing-ready
 drafts in `docs/upstream/` (workflow activities never resume on workerd;
 the sqlite migration's nested transaction).
+
+## The principal-on-the-tool-fibre review, drafted (2026-08-30)
+
+`docs/plan-principal-on-tool-fibre.md`: the design review that gates
+per-principal credentials (remaining-work 25), written as a decision
+document rather than an open question. Two facts were verified in-code to
+ground it -- a submission forks from the caller's fibre, so a service the
+host provides around `prompt`/`submit` reaches every tool handler; and the
+run's `Effect.provide(self.env)` overrides only keys the captured env
+contains, so a `Context.Reference` survives it. The recommendation is that
+Reference (`CurrentPrincipal`, default `None`), set by the host per
+request, with the durable path carrying the subject on the persisted
+submission payload so replays see what the original saw. Options B (kernel
+plumbing) and C (session-id keyed bindings) are written up and argued
+against. Awaiting review; nothing implemented.
