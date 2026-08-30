@@ -251,15 +251,18 @@ describe("durable client behind two HTTP nodes", () => {
             payload: { requestId: requestId(`prompt-${tag}`), input: Prompt.make(tag) }
           })
         )
-      const racing = yield* Effect.forkChild(
-        Effect.all([attempt(f.a, "from-a"), attempt(f.b, "from-b")], { concurrency: "unbounded" })
-      )
+      // Node A's prompt is held inside the model; only once the session is
+      // observably running does node B contend, so B's request provably
+      // arrives while A's run is live (under load, firing both at once let
+      // B land after A had already finished -- a legitimate second accept).
+      const first = yield* Effect.forkChild(attempt(f.a, "from-a"))
       yield* Effect.repeat(
         Effect.map(f.a.sessions.status({ params: { id }, headers }), (s) => s.status),
         { until: (status) => status === "running" }
       )
+      const second = yield* attempt(f.b, "from-b")
       yield* Deferred.succeed(release, void 0)
-      const outcomes = yield* Fiber.join(racing)
+      const outcomes = [yield* Fiber.join(first), second]
       const won = outcomes.filter((o) => o._tag === "Success")
       const lost = outcomes.flatMap((o) => (o._tag === "Failure" ? [o.failure._tag] : []))
       assert.strictEqual(won.length, 1)
