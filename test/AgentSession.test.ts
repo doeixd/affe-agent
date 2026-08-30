@@ -595,12 +595,17 @@ describe("run lifecycle and events", () => {
       const startedSecond = yield* Deferred.make<void>()
       const releaseSecond = yield* Deferred.make<void>()
 
+      // The first submission takes a tool-call turn before it is cut, so it
+      // lands with counts a fresh run cannot have -- otherwise the live
+      // counter of the second run would coincide with the snapshot and the
+      // assertion below could not tell the two apart.
       yield* withSession(
         [
+          { toolCalls: [callEcho("t1", "hi")] },
           { started, during: Deferred.await(releaseModel), text: "first" },
           { started: startedSecond, during: Deferred.await(releaseSecond), text: "second" }
         ],
-        Agent.make({}),
+        Agent.make({ toolkit: echoToolkit }),
         ({ session }) =>
           Effect.gen(function* () {
             const first = yield* session.submit("go")
@@ -608,9 +613,10 @@ describe("run lifecycle and events", () => {
             yield* session.interrupt()
             const landed = yield* session.awaitSubmission(first.submissionId)
             assert.strictEqual(landed.status, "interrupted")
-            // The run had started when it was cut, so the counts are not zero
-            // -- which is what makes the next assertion mean something.
-            assert.isAtLeast(landed.runs, 1)
+            // One turn had completed when it was cut. The second run's live
+            // counter reads zero completed turns at its first turn, which is
+            // what makes the assertion below mean something.
+            assert.strictEqual(landed.turns, 1)
 
             // A newer submission zeroes the live progress counter...
             const second = yield* session.submit("again")
