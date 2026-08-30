@@ -3216,3 +3216,19 @@ source's `skipped` entries at debug.
 removing the dynamic floor (all five fail). Left for a design pass: headers
 as `Redacted`, and per-principal credential resolution
 (`docs/research-tool-sources.md` §7).
+
+## The cluster's D7 cell is typed (2026-08-30)
+
+Item 7 of the remaining-work ranking, the open half of E14. `AgentEntity`'s
+RPCs declared `AgentIdleError` and nothing else, so a `StorageError` from
+the channels store had nowhere to go but a defect -- the entity did that
+deliberately and `test/Cluster.test.ts` recorded it as the weaker D7 cell.
+The wire now declares `StorageError` on `submit`, `steer` and `followUp`
+(a `Schema.TaggedError`, so it crosses the cluster like `AgentIdleError`),
+the handlers stop dying on it, and `submit`'s `orDie` narrows to "anything
+that is not a store failure". `EntityClient.wrap` keeps its surface: a
+`StorageError` folds into `AgentTransportError`, which is exactly what
+`DurableAgentClient.storageAsTransport` does for its own stores.
+
+The test now asserts the raw entity client sees `StorageError` itself and
+the wrapped client sees `AgentTransportError` naming it.

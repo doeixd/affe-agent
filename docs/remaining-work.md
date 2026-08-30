@@ -74,10 +74,10 @@ open, so the next pass does not have to re-derive it.
    real design item -- per-principal credential resolution
    (research-tool-sources §7), of which only the per-invocation `headers`
    hook exists.
-7. **Cluster D7 wire contract** — `AgentEntity`'s RPC error schema is
-   `AgentIdleError` only; a `StorageError` becomes a defect on the wire
-   (`src/cluster/AgentEntity.ts`). Widen it so the cluster is not the weaker
-   D7 cell.
+7. ~~**Cluster D7 wire contract**~~ — landed 2026-08-30: `submit`, `steer`
+   and `followUp` declare `StorageError` beside `AgentIdleError`; the entity
+   no longer turns a store failure into a defect, and `EntityClient.wrap`
+   folds it into `AgentTransportError` as the durable client does.
 8. **Elicitation terminal state** — decoding `Response.value` against the
    request's schema exists; an explicit terminal state guarding against
    double-resolution does not (`ROADMAP.md`).

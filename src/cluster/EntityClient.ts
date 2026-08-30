@@ -170,7 +170,13 @@ const infrastructural = <A, E, R>(
   Effect.catch(retryTransient(effect), (error: E) =>
     Effect.fail(transportError(error)))
 
-/** The cluster's failure, in the vocabulary the rest of the library uses. */
+/**
+ * The cluster's failure, in the vocabulary the rest of the library uses.
+ *
+ * A `StorageError` the entity declared arrives here too and is folded the
+ * same way -- it is what `DurableAgentClient` does with its own stores'
+ * failures, and this surface promises the same `AgentTransportError`.
+ */
 const transportError = (error: unknown): AgentTransportError =>
   new AgentTransportError({
     sessionId: "",

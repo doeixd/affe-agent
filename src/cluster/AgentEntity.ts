@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc } from "effect/unstable/rpc"
-import { AgentIdleError } from "../Errors.js"
+import { AgentIdleError, StorageError, isStorageError } from "../Errors.js"
 import * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
@@ -26,21 +26,28 @@ export const AgentEntity = Entity.make("AgentSession", [
   // `Prompt` rather than `string`: steering a multimodal conversation with an
   // image is the same operation as steering it with a sentence. `PromptWire`
   // preserves the exact string / bytes / URL file-data variant across RPC.
+  // A store that fails before admission opens is a typed answer on the wire,
+  // as it is at every other door (D7): the caller can retry, route elsewhere
+  // or return a 503, none of which a defect allows. `StorageError` is a
+  // `Schema.TaggedError` and crosses the cluster like `AgentIdleError` does.
   Rpc.make("submit", {
     payload: { input: PromptWire.Prompt },
-    success: Schema.String
+    success: Schema.String,
+    error: StorageError
   }),
   // Admission is a real answer, not a crash. A client that steers a session
   // which has already finished should be able to tell that apart from a runner
   // falling over, and `AgentIdleError` is a `Schema.TaggedError`, so it
-  // serialises across the cluster without further ceremony.
+  // serialises across the cluster without further ceremony. A failed offer
+  // against the channels store is the third answer, and the one that must
+  // never be reported as acceptance.
   Rpc.make("steer", {
     payload: { input: PromptWire.Prompt },
-    error: AgentIdleError
+    error: Schema.Union([AgentIdleError, StorageError])
   }),
   Rpc.make("followUp", {
     payload: { input: PromptWire.Prompt },
-    error: AgentIdleError
+    error: Schema.Union([AgentIdleError, StorageError])
   }),
   // No payload. The execution id is a pure function of the session, and the
   // entity id *is* the session, so asking the caller for one only created a
@@ -216,35 +223,24 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
                 )
             )
             return executionId
-          }).pipe(Effect.orDie),
-        // Admission failures cross as `AgentIdleError`, declared by the RPCs
-        // above, so a remote caller gets the same answer a local one would.
-        // A store failure dies here rather than crossing the wire -- and only
-        // a store failure. `Effect.orDie` was wrong: it took `AgentIdleError`
-        // with it, which is the one error this Rpc *does* declare and the one
-        // a caller can act on. Caught by `test/Cluster.test.ts`, which asserts
-        // steering an idle session is a typed error and not a defect.
-        //
-        // These handlers implement an `Rpc` whose error schema declares
-        // `AgentIdleError` and nothing else. Reporting a `StorageError` to the
-        // caller would mean adding a variant to that schema -- a protocol
-        // change, and one every peer has to agree to -- which is a bigger
-        // decision than this triage should make on its own. The cluster
-        // transport already models infrastructure failure separately from an
-        // entity's declared errors, and `EntityClient` retries what it judges
-        // transient, so the caller is not left without a story.
-        //
-        // Recorded as the open half of E14: widening the entity's error schema
-        // is the better answer, and it belongs with whoever owns the wire.
+          }).pipe(
+            // A store failure before the caller has been told anything is
+            // the declared answer; anything else here is a bug and dies.
+            Effect.catch((error) => isStorageError(error) ? Effect.fail(error) : Effect.die(error))
+          ),
+        // Admission failures cross as `AgentIdleError` and store failures as
+        // `StorageError`, both declared by the RPCs above, so a remote caller
+        // gets the same answers a local one would. This used to `orDie`,
+        // which took `AgentIdleError` with it, and then die on `StorageError`
+        // alone, recorded as the open half of E14 -- the wire contract is now
+        // wide enough to carry it. `test/Cluster.test.ts` asserts both.
         steer: ({ payload }) =>
           carryForward.pipe(
-            Effect.andThen(DurableAgent.steer(store, sessionId, payload.input)),
-            Effect.catchTag("StorageError", (error) => Effect.die(error))
+            Effect.andThen(DurableAgent.steer(store, sessionId, payload.input))
           ),
         followUp: ({ payload }) =>
           carryForward.pipe(
-            Effect.andThen(DurableAgent.followUp(store, sessionId, payload.input)),
-            Effect.catchTag("StorageError", (error) => Effect.die(error))
+            Effect.andThen(DurableAgent.followUp(store, sessionId, payload.input))
           ),
         // Routed to the session's own execution, so a caller needs only the
         // session id it already used to submit.

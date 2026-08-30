@@ -189,7 +189,7 @@ the `✗` is the honest answer until H5 changes it.
 | D4 Interruption terminal, crash resumable | ✓ `AgentSession.test` | ✓ interruption, boundary recovery and owner loss | ✓ interruption and owner loss | ✓ `DurableHttpIntegration` on the parked path | ✓ explicit interruption and parked recovery; active client takeover is not separately claimed |
 | D5 Reconnect from a saved offset | n/a | ✓ `DeliveryLog` | ✓ `DeliveryLog` | ✓ `AgentHttp` (H5) | ✓ `DurableAgentClient` |
 | D6 A recorded event is replay-stable | n/a | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` | ✓ `DurableAudit` |
-| D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | ✓ `Cluster` (defect, see below) | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
+| D7 Storage failure degrades, not corrupts | n/a | ✓ `DurableStorageFaults` | ✓ `Cluster` (typed `StorageError` on the wire since 2026-08-30) | ✓ `DurableHttpIntegration` | ✓ `DurableAgentClient` |
 | D8 Every claim names its path | this table | this table | this table | this table | this table |
 
 **Historical note.** The one `✗` when H1 landed was W3: HTTP delivery was

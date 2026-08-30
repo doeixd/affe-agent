@@ -548,21 +548,14 @@ describe("approval across the cluster", () => {
    * that must not happen is the caller being told the input was accepted --
    * because it would then wait for an effect on a run that never received it.
    *
-   * **The entity converts a `StorageError` into a defect deliberately**, and
-   * this test records that rather than pretending otherwise. These handlers
-   * implement an `Rpc` whose error schema declares `AgentIdleError` and nothing
-   * else, so reporting a store failure as a typed error would mean widening
-   * the wire contract -- a decision noted as the open half of E14 and left to
-   * whoever owns the protocol. What the entity must not do meanwhile is *lose*
-   * the failure, and what it must not do is take `AgentIdleError` down with it,
-   * which an earlier `Effect.orDie` did.
-   *
-   * So the claim tested here is the narrow, true one: the caller is told, and
-   * the cluster's own transport-versus-declared-error distinction is what
-   * carries it. That is a weaker D7 than the durable client's typed failure,
-   * and the matrix says so.
+   * The entity used to convert a `StorageError` into a defect, because its
+   * RPCs declared `AgentIdleError` and nothing else (the open half of E14).
+   * The wire now declares `StorageError` on `submit`, `steer` and `followUp`,
+   * so the raw entity client sees the typed failure a local caller would --
+   * the same D7 cell the durable client has -- and `EntityClient.wrap` folds
+   * it into `AgentTransportError` as the durable client folds its own.
    */
-  it.live("a channels-store failure is reported to a steering caller, not swallowed", () =>
+  it.live("a channels-store failure is a typed StorageError on the wire, and AgentTransportError to the wrapped client", () =>
     Effect.gen(function* () {
       const { layer: modelLayer } = yield* FakeModel.layer([{ text: "unused" }])
       const healthy = yield* DurableChannels.memoryStore
@@ -579,14 +572,22 @@ describe("approval across the cluster", () => {
       yield* DurableAgent.open(healthy, "faulty-steer")
 
       const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)
-      const client = yield* makeClient("faulty-steer")
+      const raw = yield* makeClient("faulty-steer")
       const outcome = yield* Effect.exit(
-        client.steer({ input: Prompt.make("please stop") })
+        raw.steer({ input: Prompt.make("please stop") })
       )
 
-      // Told, one way or another. What must never happen is a success for
-      // input that was not accepted.
+      // A failure, and a *typed* one: the store's own error, not a defect.
       assert.isTrue(Exit.isFailure(outcome), "a failed offer was reported as accepted")
+      const error = Option.getOrUndefined(Exit.findErrorOption(outcome))
+      assert.strictEqual(error?._tag, "StorageError")
+
+      // The wrapped surface keeps its promise of `AgentTransportError`.
+      const wrapped = yield* Effect.flip(EntityClient.wrap(raw).steer("please stop"))
+      assert.strictEqual(wrapped._tag, "AgentTransportError")
+      if (wrapped._tag === "AgentTransportError") {
+        assert.include(wrapped.detail, "StorageError")
+      }
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
