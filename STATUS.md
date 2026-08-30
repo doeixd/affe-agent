@@ -3232,3 +3232,30 @@ that is not a store failure". `EntityClient.wrap` keeps its surface: a
 
 The test now asserts the raw entity client sees `StorageError` itself and
 the wrapped client sees `AgentTransportError` naming it.
+
+## SandboxConformance (2026-08-30)
+
+Item 9 of the remaining-work ranking; `docs/plan-integrations.md` §6.1 and
+the first two success conditions of §10. `@doeixd/effect-agent/testing`
+exports `SandboxConformance`: `cases(options)` is the list of named Effects
+over `SandboxProvider` -- files (bytes round-trip, replace and nested
+parents, `list` as sorted one-level workspace *paths* with types, `stat`
+type and size, `FileMissingError` on read/stat/list), identity (`canonical`
+stable, distinct, and available before the file exists), and exec (stdout
+and a non-zero exit as a result, arguments with spaces/quotes/`$` intact,
+stderr separate, `timeout` as `TimeoutError` under an outer guard so an
+ignoring provider cannot hang the suite, `maxOutputBytes` as
+`OutputLimitError`). `run(layer, options)` executes them and returns a
+report whose `capabilities` are *derived* from which exec probes held.
+
+Programs are the caller's: the suite asks for "print this to stderr" and the
+host says how (`node -e` here; a scripted executor for the memory provider).
+Without `programs` the exec cases are skipped and the report says `exec:
+false`. Not a vitest `suite(name, layer)`: `@effect/vitest` is a dev
+dependency and `/testing` cannot import it; the wiring is one line.
+
+Broken once, by construction: a wrapper over the local provider that merges
+stderr into stdout, stretches every `timeout` to an hour and returns bare
+names from `list` fails exactly those three cases, each with the diagnosis
+that names the fault, and its capability report contradicts what such a
+provider would claim.

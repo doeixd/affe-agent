@@ -86,10 +86,15 @@ open, so the next pass does not have to re-derive it.
 
 ### Proof and hygiene
 
-9. **`SandboxConformance.suite`** in `/testing` over the real `Sandbox`
-   contract (`read/write/list/stat/canonical/exec`), broken once against a
-   deliberately wrong provider. Unblocks `Sandbox.fromExec` /
-   `fromOperations` and every deployment step that needs a non-local sandbox.
+9. ~~**`SandboxConformance`**~~ — landed 2026-08-30 in `/testing`:
+   framework-agnostic `cases(options)` (named Effects over
+   `SandboxProvider`) and `run(layer, options)` returning a report with the
+   *derived* capabilities (`exec`, `separateStderr`, `timeout`,
+   `outputBound`). Passes against `memory` (scripted executor) and `local`
+   (real processes); a deliberately wrong provider fails exactly the three
+   promises it breaks. Not `suite(name, layer)`: `@effect/vitest` is a dev
+   dependency, so the runner wiring is one line in the caller's test file.
+   Next in that plan: `Sandbox.fromExec` / `fromOperations`.
 10. **Cross-adapter conformance matrix** — `AgentClientContract`,
     `DeliveryLogContract`, `NodeStoreContract` and `McpServerConformance` exist,
     but nothing holds HTTP, RPC, AG-UI, A2A and MCP to one answer on capacity,

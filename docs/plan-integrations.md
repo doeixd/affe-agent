@@ -352,13 +352,15 @@ command that provisions infrastructure.** That is a product, per
 
 ## 10. Success conditions
 
-- [ ] `SandboxConformance.suite` exists, runs against `memory` and `local` in
-      CI, and **fails against a deliberately broken provider** — one that drops
-      stderr, ignores `timeout`, mis-quotes arguments, or returns paths where
-      names are expected. Written and confirmed failing before anything depends
-      on it.
-- [ ] The suite emits a **derived capability report**, and a provider declaring
-      a capability the probe contradicts fails.
+- [x] `SandboxConformance` exists (2026-08-30; `cases` + `run` rather than a
+      vitest-bound `suite`, because `@effect/vitest` is a dev dependency), runs
+      against `memory` and `local` in CI, and **fails against a deliberately
+      broken provider** — `test/SandboxConformance.test.ts` breaks stderr
+      separation, `timeout` and path-vs-name at once and asserts exactly those
+      three cases fail, with the diagnosis each names.
+- [x] The suite emits a **derived capability report**
+      (`Report.capabilities`), taken from which exec probes held; the broken
+      provider's report reads `separateStderr: false, timeout: false`.
 - [ ] `Sandbox.fromExec` turns a single `exec` function into a provider that
       passes the suite, with its derived operations marked as derived.
 - [ ] `Sandbox.fromOperations` expresses a real remote provider (E2B or Daytona)
