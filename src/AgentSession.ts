@@ -310,6 +310,7 @@ export const make = <
       Option.Option<{
         readonly submissionId: SubmissionId
         readonly fiber: Fiber.Fiber<any, any>
+        readonly progress: SubmissionProgress<any>
       }>
     >(
       Option.none()
@@ -482,7 +483,10 @@ const release = (self: Session<any>): Effect.Effect<void> =>
     // The settled fibre stays joinable until the next submission replaces
     // it; see `settledFiber`.
     const active = yield* Ref.get(self.activeFiber)
-    if (Option.isSome(active)) yield* Ref.set(self.settledFiber, active)
+    if (Option.isSome(active)) {
+      const progress = yield* Ref.get(self.progress)
+      yield* Ref.set(self.settledFiber, Option.some({ ...active.value, progress }))
+    }
     yield* Ref.set(self.activeFiber, Option.none())
     // The withdrawal and the drain are one step, under the same permit
     // `followUp` and `steer` hold across their check-and-offer.
@@ -677,7 +681,11 @@ const settle = <Tools extends Record<string, Tool.Any>, E>(
   self: Session<Tools, E, never>,
   submissionId: Ids.SubmissionId,
   fiber: Fiber.Fiber<any, any>,
-  options: { readonly interruptWithCaller: boolean }
+  options: {
+    readonly interruptWithCaller: boolean
+    /** The progress to report an interruption from; the live counter otherwise. */
+    readonly progress?: SubmissionProgress<any> | undefined
+  }
 ): Effect.Effect<Result<Tools>, PromptError<Tools, E>> =>
   Effect.gen(function* () {
     const awaited = Fiber.await(fiber)
@@ -687,7 +695,7 @@ const settle = <Tools extends Record<string, Tool.Any>, E>(
 
     if (Exit.isFailure(exit)) {
       if (Cause.hasInterruptsOnly(exit.cause)) {
-        const landed = yield* Ref.get(self.progress)
+        const landed = options.progress ?? (yield* Ref.get(self.progress))
         return {
           submissionId,
           status: "interrupted",
@@ -718,7 +726,10 @@ export const awaitSubmission = Effect.fn("AgentSession.awaitSubmission")(functio
     }
     const last = yield* Ref.get(self.settledFiber)
     if (Option.isSome(last) && last.value.submissionId === submissionId) {
-      return yield* settle(self, submissionId, last.value.fiber, { interruptWithCaller: false })
+      return yield* settle(self, submissionId, last.value.fiber, {
+        interruptWithCaller: false,
+        progress: last.value.progress
+      })
     }
     return yield* new AgentSubmissionNotFoundError({ sessionId: self.id, submissionId })
   })

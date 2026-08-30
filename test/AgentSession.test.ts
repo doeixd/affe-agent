@@ -588,6 +588,51 @@ describe("unknown tools", () => {
 })
 
 describe("run lifecycle and events", () => {
+  it.effect("awaitSubmission answers for the last settled submission with its own progress, even after a newer one started", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const releaseModel = yield* Deferred.make<void>()
+      const startedSecond = yield* Deferred.make<void>()
+      const releaseSecond = yield* Deferred.make<void>()
+
+      yield* withSession(
+        [
+          { started, during: Deferred.await(releaseModel), text: "first" },
+          { started: startedSecond, during: Deferred.await(releaseSecond), text: "second" }
+        ],
+        Agent.make({}),
+        ({ session }) =>
+          Effect.gen(function* () {
+            const first = yield* session.submit("go")
+            yield* Deferred.await(started)
+            yield* session.interrupt()
+            const landed = yield* session.awaitSubmission(first.submissionId)
+            assert.strictEqual(landed.status, "interrupted")
+            // The run had started when it was cut, so the counts are not zero
+            // -- which is what makes the next assertion mean something.
+            assert.isAtLeast(landed.runs, 1)
+
+            // A newer submission zeroes the live progress counter...
+            const second = yield* session.submit("again")
+            yield* Deferred.await(startedSecond)
+            // ...and the settled one still reports what *it* landed with,
+            // from the snapshot taken as it settled, not the live counter.
+            const again = yield* session.awaitSubmission(first.submissionId)
+            assert.strictEqual(again.status, "interrupted")
+            assert.strictEqual(again.runs, landed.runs)
+            assert.strictEqual(again.turns, landed.turns)
+
+            // The running one is joinable at the same time.
+            yield* Deferred.succeed(releaseSecond, void 0)
+            assert.strictEqual((yield* session.awaitSubmission(second.submissionId)).text, "second")
+            // And once it settled, the first is gone: the kernel keeps one.
+            const gone = yield* Effect.flip(session.awaitSubmission(first.submissionId))
+            assert.strictEqual(gone._tag, "AgentSubmissionNotFoundError")
+          })
+      )
+    })
+  )
+
   it.effect("submit returns an admission receipt while execution continues", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()

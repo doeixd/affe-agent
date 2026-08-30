@@ -156,6 +156,13 @@ export interface Session<
     Option.Option<{
       readonly submissionId: SubmissionId
       readonly fiber: Fiber.Fiber<any, any>
+      /**
+       * Its progress as it landed. `progress` itself is zeroed when the next
+       * submission starts, and an interrupted outcome is built from it -- so
+       * a waiter joining this entry after that would otherwise read the new
+       * submission's counts.
+       */
+      readonly progress: SubmissionProgress<any>
     }>
   >
   readonly scope: Scope.Scope

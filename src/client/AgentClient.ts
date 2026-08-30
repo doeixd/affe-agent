@@ -429,7 +429,9 @@ export const fromSession = (
   const sessionId = session.id
 
   /** An agent failure, or an interruption, as the protocol reports it. */
-  const remote = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, RemoteError> =>
+  // The session is `AgentSession<any, any>`, so what it fails with is `any`
+  // here already; the mapping below is what makes the result honest.
+  const remote = <A>(effect: Effect.Effect<A, any>): Effect.Effect<A, RemoteError> =>
     effect.pipe(
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause) && !isRemoteCause(cause),
@@ -441,7 +443,7 @@ export const fromSession = (
             })
           )
       )
-    ) as Effect.Effect<A, RemoteError>
+    )
 
   const toRemoteResult = (result: AgentSession.Result<any>): RemoteResult => ({
     submissionId: result.submissionId,
