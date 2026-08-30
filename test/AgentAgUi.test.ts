@@ -7,6 +7,7 @@ import {
   Effect,
   Layer,
   Option,
+  PubSub,
   Queue,
   Ref,
   Schema,
@@ -536,7 +537,10 @@ const serverFixture = (fixtureOptions?: {
   readonly elicitation?: boolean
 }) =>
   Effect.gen(function* () {
-  const eventQueue = yield* Queue.unbounded<AgentEvent.AgentEventEnvelope>()
+  // A bus, not a queue: the host retains every hosted session's events with a
+  // subscriber of its own, and a queue would hand each event to only one of
+  // them. No replay either: a live bus has none.
+  const eventQueue = yield* PubSub.unbounded<AgentEvent.AgentEventEnvelope>()
   const sequence = yield* Ref.make(0)
   const approval = yield* Deferred.make<void>()
   const allowPrompt = yield* Deferred.make<void>()
@@ -546,7 +550,7 @@ const serverFixture = (fixtureOptions?: {
 
   const emit = (event: AgentEvent.AgentEvent) =>
     Ref.updateAndGet(sequence, (value) => value + 1).pipe(
-      Effect.flatMap((next) => Queue.offer(eventQueue, envelope(next, event))),
+      Effect.flatMap((next) => PubSub.publish(eventQueue, envelope(next, event))),
       Effect.asVoid
     )
 
@@ -641,7 +645,7 @@ const serverFixture = (fixtureOptions?: {
         pending: Effect.succeed([]),
         history: Effect.succeed(Prompt.make("")),
         status: Effect.succeed("idle" as const),
-        events: () => Stream.fromQueue(eventQueue)
+        events: () => Stream.fromPubSub(eventQueue)
       }),
     session: (id) =>
       Effect.fail(

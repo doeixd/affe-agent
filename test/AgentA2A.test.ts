@@ -13,7 +13,7 @@ import {
   Effect,
   Layer,
   Option,
-  Queue,
+  PubSub,
   Ref,
   Schema,
   Stream
@@ -247,7 +247,11 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
   const waiting = yield* Ref.make(new Map<string, Elicitation.Request>())
   const lastText = yield* Ref.make<string | undefined>(undefined)
   const lastInput = yield* Ref.make<Option.Option<Prompt.Prompt>>(Option.none())
-  const eventQueue = yield* Queue.unbounded<AgentProtocol.AgentEventEnvelope>()
+  // A bus, not a queue: the host retains every hosted session's events with a
+  // subscriber of its own, and a queue would hand each event to only one of
+  // them. No replay either -- a live bus has none, and the queue's habit of
+  // holding events for a late subscriber masked a real race in the adapter.
+  const eventQueue = yield* PubSub.unbounded<AgentProtocol.AgentEventEnvelope>()
   /** Every addressed tenant the principal resolver was shown, in order. */
   const resolvedTenants = yield* Ref.make<ReadonlyArray<string | undefined>>([])
 
@@ -321,7 +325,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   yield* Ref.update(waiting, (all) =>
                     new Map(all).set(request.id, request)
                   )
-                  yield* Queue.offer(
+                  yield* PubSub.publish(
                     eventQueue,
                     emit({
                       _tag: "ElicitationRequested",
@@ -333,7 +337,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                   yield* Deferred.succeed(asked, void 0)
                   const response = yield* Deferred.await(answer)
                   if (fixtureOptions?.failResumedRun === true) {
-                    yield* Queue.offer(
+                    yield* PubSub.publish(
                       eventQueue,
                       emit({
                         _tag: "SubmissionFailed",
@@ -362,7 +366,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                     yield* Ref.update(waiting, (all) =>
                       new Map(all).set(again.id, again)
                     )
-                    yield* Queue.offer(
+                    yield* PubSub.publish(
                       eventQueue,
                       emit({
                         _tag: "ElicitationRequested",
@@ -374,7 +378,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                     const second = yield* Deferred.await(secondAnswer)
                     finalText = `${finalText}:${String(second.value)}`
                   }
-                  yield* Queue.offer(
+                  yield* PubSub.publish(
                     eventQueue,
                     emit({ _tag: "SubmissionCompleted", runs: 1 })
                   )
@@ -446,7 +450,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                 }])
             ),
             status: Effect.succeed("idle" as const),
-            events: () => Stream.fromQueue(eventQueue)
+            events: () => Stream.fromPubSub(eventQueue)
           }
         }),
       session: (id) =>

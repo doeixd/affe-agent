@@ -3167,3 +3167,19 @@ served with a hole. `after` is never silently downgraded.
 Tests over the real in-process client and the official MCP v2 client; the
 refusal gate broken once. The legacy `AgentMcp.layer` path remains, still
 used by fixtures and an example; its removal is a separate migration.
+
+**What the second subscriber found.** The host now subscribes to every
+hosted session's events, and the first full-suite run failed six A2A and
+AG-UI tests: their fixtures served events from a single-consumer `Queue`,
+so the host's tail drained what the adapters' own listeners expected. The
+fakes now use a plain `PubSub`, which is what the real bus is -- and with
+no queue holding events for a late subscriber, a real race surfaced in the
+A2A adapter's continuation path: `continuePaused` held the event stream as a
+*value*, called `host.respond` (a forked, awaited mutation), and only then
+ran the stream, so the resumed run's terminal event could go out before the
+adapter subscribed. It now forks the consumer before answering and joins it
+after. The same function tested `host.respond`'s `{ matched }` response
+object as a boolean, so its "no run was waiting" branch was dead; fixed.
+The host's own subscription is forked and yielded to (`toPull` was tried
+and subscribes on the first pull, not on the call), with `oldest` reporting
+the truth whatever the scheduling.

@@ -273,25 +273,29 @@ export const make = <Principal>(
     ): Effect.Effect<HostedSession> =>
       Effect.gen(function* () {
         const tail: EventTail = { entries: [], dropped: 0 }
+        const retain = (envelope: AgentProtocol.AgentEventEnvelope) => {
+          tail.entries.push(envelope)
+          if (tail.entries.length > maxRetainedEvents) {
+            tail.entries.shift()
+            tail.dropped += 1
+          }
+        }
+        // Forked into the session's scope, then yielded to, so the child has
+        // subscribed before this returns: under the cooperative scheduler the
+        // subscription is registered at its first step, ahead of any request
+        // the host could serve next. `toPull` was tried and is no better --
+        // it subscribes on the first pull, not on the call. Whatever the
+        // scheduling, the read reports `oldest`, so nothing is silent.
         yield* Effect.forkIn(
-          Stream.runForEach(session.events(), (envelope) =>
-            Effect.sync(() => {
-              tail.entries.push(envelope)
-              if (tail.entries.length > maxRetainedEvents) {
-                tail.entries.shift()
-                tail.dropped += 1
-              }
-            })
-          ).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("stopped retaining a hosted session's events", {
-                sessionId: session.id,
-                cause
-              })
-            )
+          Stream.runForEach(session.events(), (envelope) => Effect.sync(() => retain(envelope))).pipe(
+            // The stream ending -- the session closed -- ends the tail; so
+            // does a stream failure, which for an in-process session cannot
+            // happen and for a remote one is that transport's to report.
+            Effect.catchCause(() => Effect.void)
           ),
           scope
         )
+        yield* Effect.yieldNow
         return { session, tail, scope }
       })
     const sessions = yield* Ref.make(

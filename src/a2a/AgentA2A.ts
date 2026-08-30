@@ -682,7 +682,34 @@ export const serverLayer = <Principal>(
         const eventsStream = yield* host.events(entry.principal, {
           sessionId: entry.sessionId
         })
-        const matched = yield* host.respond(entry.principal, {
+        // Consuming *before* answering, in a fibre of its own, so the event
+        // that settles the resumed run cannot slip past. Holding the stream
+        // as a value was not a subscription: `host.respond` is a forked,
+        // awaited mutation, and the run it wakes can publish its terminal
+        // event before this fibre gets back to running the stream. A live
+        // bus does not replay, so that event was simply gone.
+        let settledWith = ""
+        const askedAgain = yield* Ref.make<Option.Option<ElicitationRequestedEvent>>(Option.none())
+        const settled = yield* Effect.forkIn(
+          eventsStream.pipe(
+            Stream.filter((envelope) =>
+              terminalTags.has(envelope.event._tag) ||
+              envelope.event._tag === "ElicitationRequested"
+            ),
+            Stream.take(1),
+            Stream.runForEach((envelope) =>
+              envelope.event._tag === "ElicitationRequested"
+                ? Ref.set(askedAgain, Option.some(envelope.event))
+                : Effect.sync(() => {
+                    settledWith = envelope.event._tag
+                  })
+            )
+          ),
+          layerScope
+        )
+        // `host.respond` answers with `{ requestId, matched }`; this used to test
+        // the object, so the "no run was waiting" branch below was dead.
+        const { matched } = yield* host.respond(entry.principal, {
           // Keyed by the question as well as the task: a run that asks twice
           // is answered twice, and an idempotency key per task would reject
           // the second answer as a replay of the first.
@@ -693,6 +720,7 @@ export const serverLayer = <Principal>(
           response: { id: target.id, granted: true, value: answer }
         })
         if (!matched) {
+          yield* Fiber.interrupt(settled)
           const failedAt = yield* timestamp
           yield* Effect.sync(() =>
             eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
@@ -720,22 +748,7 @@ export const serverLayer = <Principal>(
         // continuation on the same bus that later publishes duplicate
         // terminal events. A second question is another INPUT_REQUIRED, with
         // the task left paused exactly as the first one left it.
-        let settledWith = ""
-        const askedAgain = yield* Ref.make<Option.Option<ElicitationRequestedEvent>>(Option.none())
-        yield* eventsStream.pipe(
-          Stream.filter((envelope) =>
-            terminalTags.has(envelope.event._tag) ||
-            envelope.event._tag === "ElicitationRequested"
-          ),
-          Stream.take(1),
-          Stream.runForEach((envelope) =>
-            envelope.event._tag === "ElicitationRequested"
-              ? Ref.set(askedAgain, Option.some(envelope.event))
-              : Effect.sync(() => {
-                  settledWith = envelope.event._tag
-                })
-          )
-        )
+        yield* Fiber.join(settled)
         const settledAt = yield* timestamp
         const again = yield* Ref.get(askedAgain)
         if (Option.isSome(again)) {
