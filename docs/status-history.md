@@ -3485,3 +3485,31 @@ must live under the project directory.
 `examples/deploy-cloudflare/alchemy.run.ts` is the Alchemy stack for it --
 typechecked in CI, not yet run against a real account, which is the open
 half of §9's first condition along with a real model.
+
+## A sandbox from one function (2026-08-30)
+
+`plan-integrations.md` §6.2/§6.3, validated the way §11 step 2 demanded:
+`Sandbox.fromExec(exec)` derives `read`, `write`, `list`, `stat` and
+`canonical` from POSIX commands (`sh`, `base64`, `find`, `stat -c`,
+`readlink -f`) over one `exec(command, { cwd, ...bounds })`, and the
+evidence is a provider rebuilt from the *local* sandbox's `exec` alone
+passing the whole of `SandboxConformance` -- every file case travelling as
+a command, the capability report full. `fromOperations` is tier 1: each
+named override stands in for its derivation (pinned: a `readFile` override
+is called exactly once and the shell never sees the read), everything
+omitted still derives, and `derived` names exactly what is shell-derived so
+nothing pretends to be native. Errors classify from the shell's own words
+-- "No such file" is `FileMissingError`, "Permission denied" is
+`PermissionDeniedError`, a custom classifier is consulted first -- broken
+once by disabling the missing-file match (two tests fail).
+
+Two facts from writing it: paths are relative to `directory(workspace)` and
+every command runs with that `cwd`, which is what makes the local-exec
+rebuild honest (the local sandbox pins its own directory, as a remote
+provider's exec does); and on Windows, Node resolves executables against
+the Windows PATH, so the test adapter names Git's `sh.exe` explicitly --
+the tier-0 POSIX-userland assumption, stated rather than discovered.
+
+Also this date: the two workerd findings are written up as filing-ready
+drafts in `docs/upstream/` (workflow activities never resume on workerd;
+the sqlite migration's nested transaction).

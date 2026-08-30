@@ -361,12 +361,18 @@ command that provisions infrastructure.** That is a product, per
 - [x] The suite emits a **derived capability report**
       (`Report.capabilities`), taken from which exec probes held; the broken
       provider's report reads `separateStderr: false, timeout: false`.
-- [ ] `Sandbox.fromExec` turns a single `exec` function into a provider that
-      passes the suite, with its derived operations marked as derived.
-- [ ] `Sandbox.fromOperations` expresses a real remote provider (E2B or Daytona)
-      in **under 30 lines**, with no casts at the call site, passing the suite.
-      If it cannot, invariant 4 has been violated and the lift needs work — that
-      finding is more valuable than the adapter.
+- [x] `Sandbox.fromExec` turns a single `exec` function into a provider that
+      passes the suite, with its derived operations marked as derived
+      (2026-08-30; `test/SandboxDerive.test.ts` validates it the way §11
+      step 2 demanded -- a provider rebuilt from the *local* sandbox's
+      `exec` alone passes the whole of `SandboxConformance`, and `derived`
+      names all five shell-derived operations).
+- [~] `Sandbox.fromOperations` exists (2026-08-30): overrides for
+      `readFile`/`writeFile`/`readdir`/`stat`/`canonical` stand in for their
+      derivations, everything omitted still derives, and the test's override
+      literal is under fifteen lines with no casts. The half still open is
+      the *real remote provider* (E2B or Daytona), which needs an account;
+      that is where invariant 4 gets measured against reality.
 - [ ] Flue's ~250-line Daytona adapter is reproduced in tier 1, and the
       line-count difference is recorded in `STATUS.md`.
 - [x] `ChannelConformance` exists (2026-08-30; `cases` + `run`, framework-

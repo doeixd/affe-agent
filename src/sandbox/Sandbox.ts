@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Option, Schema, Scope } from "effect"
+import { Context, Duration, Effect, Encoding, Layer, Option, Result, Schema, Scope } from "effect"
 
 /**
  * A scoped filesystem-and-process capability, acquired through a provider.
@@ -389,3 +389,287 @@ export const currentLayer = (
 /** Millis for an `ExecOptions.timeout`, applying the default. */
 export const timeoutMillis = (options: ExecOptions | undefined): number =>
   Duration.toMillis(options?.timeout ?? "10 seconds")
+
+// ---------------------------------------------------------------------------
+// Tier 0 and tier 1 providers: exec is enough
+
+/**
+ * What `fromOperations` needs, and what it will use natively when offered.
+ *
+ * `exec` is the one required primitive: run a command with a working
+ * directory. Everything else is derived from POSIX commands over it --
+ * `sh`, `base64`, `find`, `stat -c`, `readlink -f` -- which is tier 0 of
+ * `docs/plan-integrations.md` §6: any host that can run a command is a
+ * sandbox in one expression. The costs are stated there and are real:
+ * binary content rides base64 through argv, errors arrive as exit codes and
+ * stderr text, a Windows-only userland needs overrides, one process per
+ * file operation, and large files should not travel this way.
+ *
+ * Each optional operation, when present, replaces its derivation. Paths
+ * handed to overrides are `directory(workspace)` + the sandbox path -- the
+ * provider's own name for the file.
+ */
+export interface Operations {
+  readonly exec: (
+    command: Command,
+    options: ExecOptions & { readonly cwd: string }
+  ) => Effect.Effect<CommandResult, ExecError>
+  readonly readFile?:
+    | ((absolute: string) => Effect.Effect<Uint8Array, FileError>)
+    | undefined
+  readonly writeFile?:
+    | ((absolute: string, content: Uint8Array) => Effect.Effect<void, FileError>)
+    | undefined
+  readonly readdir?:
+    | ((absolute: string) => Effect.Effect<ReadonlyArray<{
+      readonly name: string
+      readonly type: "file" | "directory"
+      readonly size: Option.Option<number>
+    }>, FileError>)
+    | undefined
+  readonly stat?:
+    | ((absolute: string) => Effect.Effect<{
+      readonly type: "file" | "directory"
+      readonly size: Option.Option<number>
+    }, FileError>)
+    | undefined
+  readonly canonical?:
+    | ((absolute: string) => Effect.Effect<string, FileError>)
+    | undefined
+}
+
+/** What a failed derived command looked like, for classification. */
+export interface ClassifyContext {
+  readonly operation: "read" | "write" | "list" | "stat" | "canonical"
+  readonly path: string
+  readonly result: CommandResult
+}
+
+export interface DeriveOptions {
+  /**
+   * The working directory a workspace maps to; every derived command runs
+   * with this as `cwd` and file paths are relative to it. Defaults to
+   * `/tmp/effect-agent/<workspace>`, created at acquire. A provider whose
+   * `exec` cannot start in a directory that does not exist yet should
+   * pre-create it or supply one that does.
+   */
+  readonly directory?: ((workspace: Workspace) => string) | undefined
+  /**
+   * Turn a failed command into a typed file error. Consulted before the
+   * POSIX default ("No such file" and "not a directory" are
+   * `FileMissingError`, "Permission denied" is `PermissionDeniedError`);
+   * return `undefined` to fall through to it.
+   */
+  readonly classify?:
+    | ((context: ClassifyContext) => FileError | undefined)
+    | undefined
+}
+
+const DERIVABLE = ["canonical", "list", "read", "stat", "write"] as const
+export type DerivedOperation = (typeof DERIVABLE)[number]
+
+const utf8Encoder = new TextEncoder()
+
+const defaultClassify = (context: ClassifyContext): FileError => {
+  const text = context.result.stderr + "\n" + context.result.stdout
+  if (/no such file|not a directory/i.test(text)) {
+    return new FileMissingError({ path: context.path })
+  }
+  if (/permission denied|operation not permitted/i.test(text)) {
+    const operation = context.operation === "canonical" ? "stat" : context.operation
+    return new PermissionDeniedError({ path: context.path, operation })
+  }
+  return new ProviderError({
+    detail: `${context.operation} ${context.path}: exit ${context.result.exitCode}: ${context.result.stderr.slice(0, 300)}`
+  })
+}
+
+/**
+ * Tier 1: a provider from one `exec` plus whatever it does natively
+ * (`docs/plan-integrations.md` §6.3). Everything omitted derives from POSIX
+ * commands over `exec`; `derived` names exactly which operations are
+ * shell-derived, so nothing pretends to be native that is not. Validated by
+ * rebuilding the local provider from its own `exec` and passing
+ * `SandboxConformance` (`test/SandboxDerive.test.ts`).
+ */
+export const fromOperations = (
+  operations: Operations,
+  options?: DeriveOptions
+): {
+  readonly layer: Layer.Layer<SandboxProvider>
+  readonly derived: ReadonlyArray<DerivedOperation>
+} => {
+  const directoryOf = options?.directory ?? ((workspace: Workspace) => `/tmp/effect-agent/${workspace}`)
+  const derived = DERIVABLE.filter((operation) => {
+    switch (operation) {
+      case "read":
+        return operations.readFile === undefined
+      case "write":
+        return operations.writeFile === undefined
+      case "list":
+        return operations.readdir === undefined
+      case "stat":
+        return operations.stat === undefined
+      case "canonical":
+        return operations.canonical === undefined
+    }
+  })
+
+  const acquireSandbox = (workspace: Workspace): Effect.Effect<Sandbox, ProviderError> =>
+    Effect.gen(function* () {
+      const cwd = directoryOf(workspace)
+      const absolute = (value: string) => `${cwd}/${value}`
+
+      const shell = (
+        operation: ClassifyContext["operation"],
+        target: string,
+        script: string,
+        args: ReadonlyArray<string>
+      ): Effect.Effect<CommandResult, FileError> =>
+        operations.exec(command("sh", ["-c", script, "sh", ...args]), { cwd }).pipe(
+          Effect.mapError((error): FileError => new ProviderError({ detail: `${operation} ${target}: ${error.message}` })),
+          Effect.flatMap((result) =>
+            result.exitCode === 0
+              ? Effect.succeed(result)
+              : Effect.fail(
+                options?.classify?.({ operation, path: target, result })
+                  ?? defaultClassify({ operation, path: target, result })
+              )
+          )
+        )
+
+      // The workspace directory exists before anything else runs in it.
+      yield* operations.exec(command("sh", ["-c", 'mkdir -p "$1"', "sh", cwd]), { cwd }).pipe(
+        Effect.mapError((error) => new ProviderError({ detail: `could not prepare ${cwd}: ${error.message}` })),
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Effect.void
+            : Effect.fail(new ProviderError({ detail: `could not prepare ${cwd}: ${result.stderr.slice(0, 300)}` }))
+        )
+      )
+
+      const decodeOut = (target: string, base64Text: string): Effect.Effect<Uint8Array, FileError> =>
+        Effect.suspend(() => {
+          const decoded = Encoding.decodeBase64(base64Text.replace(/\s+/g, ""))
+          return Result.isSuccess(decoded)
+            ? Effect.succeed(decoded.success)
+            : Effect.fail(new ProviderError({ detail: `read ${target}: the shell's base64 output did not decode` }))
+        })
+
+      const read = (path: SandboxPath): Effect.Effect<Uint8Array, FileError> =>
+        operations.readFile !== undefined
+          ? operations.readFile(absolute(path))
+          : shell("read", path, 'base64 "$1"', [path]).pipe(
+            Effect.flatMap((result) => decodeOut(path, result.stdout))
+          )
+
+      const write = (path: SandboxPath, content: Uint8Array | string): Effect.Effect<void, FileError> => {
+        const bytes = typeof content === "string" ? utf8Encoder.encode(content) : content
+        if (operations.writeFile !== undefined) return operations.writeFile(absolute(path), bytes)
+        return shell(
+          "write",
+          path,
+          'mkdir -p "$(dirname "$2")" && printf %s "$1" | base64 -d > "$2"',
+          [Encoding.encodeBase64(bytes), path]
+        ).pipe(Effect.asVoid)
+      }
+
+      const entryOf = (kind: string, size: string, entryPath: string): Entry => {
+        const parsed = Number.parseInt(size, 10)
+        return {
+          path: entryPath as SandboxPath,
+          type: kind.includes("directory") ? "directory" : "file",
+          size: kind.includes("directory") || Number.isNaN(parsed) ? Option.none() : Option.some(parsed)
+        }
+      }
+
+      const byPath = (left: Entry, right: Entry): number =>
+        left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+
+      const list = (path?: SandboxPath): Effect.Effect<ReadonlyArray<Entry>, FileError> => {
+        const target = path ?? ("." as SandboxPath)
+        if (operations.readdir !== undefined) {
+          return operations.readdir(absolute(target)).pipe(
+            Effect.map((entries) =>
+              entries
+                .map((entry): Entry => ({
+                  path: (path === undefined ? entry.name : `${path}/${entry.name}`) as SandboxPath,
+                  type: entry.type,
+                  size: entry.size
+                }))
+                .sort(byPath)
+            )
+          )
+        }
+        return shell(
+          "list",
+          target,
+          '[ -d "$1" ] || { echo "No such file or directory: $1" >&2; exit 1; }; find "$1" -mindepth 1 -maxdepth 1 -exec stat -c "%F|%s|%n" {} +',
+          [target]
+        ).pipe(
+          Effect.map((result) =>
+            result.stdout
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line !== "")
+              .map((line) => {
+                const [kind = "", size = "", ...rest] = line.split("|")
+                const raw = rest.join("|")
+                return entryOf(kind, size, raw.startsWith("./") ? raw.slice(2) : raw)
+              })
+              .sort(byPath)
+          )
+        )
+      }
+
+      const stat = (path: SandboxPath): Effect.Effect<Entry, FileError> =>
+        operations.stat !== undefined
+          ? operations.stat(absolute(path)).pipe(Effect.map((info) => ({ path, ...info })))
+          : shell("stat", path, 'stat -c "%F|%s" "$1"', [path]).pipe(
+            Effect.map((result) => {
+              const [kind = "", size = ""] = result.stdout.trim().split("|")
+              return entryOf(kind, size, path)
+            })
+          )
+
+      const canonical = (path: SandboxPath): Effect.Effect<string, FileError> =>
+        operations.canonical !== undefined
+          ? operations.canonical(absolute(path))
+          : shell(
+            "canonical",
+            path,
+            'p="$1"; rest=""; while [ ! -e "$p" ] && [ "$p" != "/" ] && [ "$p" != "." ]; do rest="/$(basename "$p")$rest"; p=$(dirname "$p"); done; printf "%s%s" "$(readlink -f "$p")" "$rest"',
+            [path]
+          ).pipe(Effect.map((result) => result.stdout.trim()))
+
+      return {
+        workspace,
+        read,
+        write,
+        list,
+        stat,
+        canonical,
+        exec: (execCommand, execOptions) => operations.exec(execCommand, { ...execOptions, cwd })
+      } satisfies Sandbox
+    })
+
+  const layer = Layer.succeed(SandboxProvider, {
+    acquire: (workspace) => acquireSandbox(workspace)
+  })
+  return { layer, derived }
+}
+
+/**
+ * Tier 0: the whole provider from one function
+ * (`docs/plan-integrations.md` §6.2). Any host that can run a command -- an
+ * SSH box, a container exec, a CI runner -- becomes a sandbox in one
+ * expression, every file operation derived and reported as such.
+ */
+export const fromExec = (
+  exec: Operations["exec"],
+  options?: DeriveOptions
+): {
+  readonly layer: Layer.Layer<SandboxProvider>
+  readonly derived: ReadonlyArray<DerivedOperation>
+} => fromOperations({ exec }, options)
+

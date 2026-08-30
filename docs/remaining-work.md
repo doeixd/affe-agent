@@ -169,8 +169,11 @@ open, so the next pass does not have to re-derive it.
     `/durable`-on-DO decision is recorded (no: the engine's resume machinery
     stalls on workerd -- measured minimal repro in `status-history.md`).
     `examples/deploy-cloudflare/` holds the Alchemy stack. Left: a real
-    model wired through the stack and deployed from a clean account; the
-    `fromExec` sandbox (blocked on `plan-integrations.md` §6.2); Rivet.
+    model wired through the stack and deployed from a clean account; Rivet.
+    `Sandbox.fromExec` / `fromOperations` landed 2026-08-30 (a remote
+    sandbox for the Worker is now one exec function away); a real remote
+    provider (E2B/Daytona) still needs an account. The two upstream findings
+    are drafted for filing in `docs/upstream/`.
 20. **Reference gateway and declarative references, presets, LSP/code-mode
     batteries** (`plan-primitives.md` steps 3–6) — only the coding reference
     exists.
