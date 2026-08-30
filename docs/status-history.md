@@ -3528,3 +3528,26 @@ request, with the durable path carrying the subject on the persisted
 submission payload so replays see what the original saw. Options B (kernel
 plumbing) and C (session-id keyed bindings) are written up and argued
 against. Awaiting review; nothing implemented.
+
+## Branch carryover: `BranchSummary` and the tree's one missing seam (2026-08-30)
+
+Phases 11–12 of `plan-branching-and-compaction.md`. The seam first
+(§18): `tree.branch` now takes a pure `seed: (history) => history`
+decoration -- the tree keeps knowing how to build a session from a node
+without learning what a summary is. Deliberately not offered on `activate`:
+live branches are cached by node id in the `RcMap`, so a seeded activation
+could be answered by an unseeded session already running. On top of it,
+`BranchSummary.branch(tree, { from, to, summarise })` in `/tree`: one
+`divergence` walk names the abandoned stretch (`from`'s history sliced past
+the common ancestor's length -- history is append-only below a node, so the
+slice is exact), the same `Summarise` vocabulary `/compaction` uses turns
+it into text, and the new branch of `to` starts with the target's history
+verbatim plus one "Context carried from another branch" system message.
+Canonical by construction (§19): the message is in the seeded history, so
+the branch's first commit records it, parented on the target node, and
+descendants inherit it. Provenance (§20) rides the returned value --
+summary text, usage, from/to/common-ancestor ids -- never a fake message
+protocol. `NothingToCarry` refuses when `from` is an ancestor of `to` or
+did nothing after the fork, rather than seeding a confidently empty
+carryover. Broken once both ways: slicing from zero and ignoring the seed
+each fail all four `test/BranchSummary.test.ts` cases.

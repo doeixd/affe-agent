@@ -238,6 +238,33 @@ export interface BranchOptions {
   readonly lane?: string | undefined
 }
 
+/**
+ * `branch` alone also takes a seed.
+ *
+ * The one capability branch carryover needed from the tree
+ * (`docs/plan-branching-and-compaction.md` §18), kept deliberately generic:
+ * the tree knows how to build a session from a node, and this lets a caller
+ * decorate that starting history without the tree learning what a summary
+ * is. `BranchSummary` is the consumer; anything else that must enter a new
+ * branch's *canonical* history -- rather than a per-turn projection, which
+ * is `ContextTransform`'s job -- is equally at home here.
+ *
+ * Pure, because the expensive work (asking a model for a summary) belongs
+ * before the branch exists, not inside its construction. The decorated
+ * history is what the new session starts from, so its first commit records
+ * the decoration and every descendant inherits it. The node itself is
+ * untouched: a seed decorates the copy handed to the new session, never
+ * what the store holds.
+ *
+ * Not offered on `activate`: live branches are cached by node id, so a
+ * seeded activation could be answered by an unseeded session already
+ * running -- or worse, seed a session another holder sees. Branch, seed,
+ * then activate the node the branch commits.
+ */
+export interface BranchSeedOptions extends BranchOptions {
+  readonly seed?: ((history: Prompt.Prompt) => Prompt.Prompt) | undefined
+}
+
 export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = never> {
   /**
    * Capture the session's current conversation as a node.
@@ -363,7 +390,7 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
 
   readonly branch: (
     node: Node,
-    options?: BranchOptions
+    options?: BranchSeedOptions
   ) => Effect.Effect<
     AgentSession.AgentSession<Tools, E>,
     NodeMissing | SE,
@@ -719,11 +746,18 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
     const branch: SessionTree<Tools, E, SE>["branch"] = (node, branchOptions) =>
       Effect.gen(function*() {
         const { history } = yield* find(node.id)
+        // The seed decorates what the session starts from, not what the store
+        // holds: the node's history is read fresh above and the decorated copy
+        // exists only in the new session -- until its first commit, which is
+        // the point (see `BranchSeedOptions`).
+        const seeded = branchOptions?.seed === undefined
+          ? history
+          : branchOptions.seed(history)
         const n = yield* Ref.updateAndGet(branchCounter, (value) => value + 1)
         const sessionId = options?.sessionIds?.(node, n) ?? `${node.id}-branch-${n}`
         const session = yield* AgentSession.make(agent, {
           ...options?.session,
-          history,
+          history: seeded,
           sessionId
         }).pipe(Effect.provide(environment))
         /**

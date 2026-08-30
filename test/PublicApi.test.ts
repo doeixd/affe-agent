@@ -269,7 +269,18 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the tree vocabulary and nothing beyond it", async () => {
     const tree = await import("../src/tree/index.js")
-    assert.deepStrictEqual(Object.keys(tree).sort(), ["NodeStore", "SessionTree", "TreeExport"])
+    assert.deepStrictEqual(Object.keys(tree).sort(), [
+      "BranchSummary",
+      "NodeStore",
+      "SessionTree",
+      "TreeExport"
+    ])
+
+    // Branch carryover: one operation and the refusal it can answer with.
+    assert.deepStrictEqual(Object.keys(tree.BranchSummary).sort(), [
+      "NothingToCarry",
+      "branch"
+    ])
 
     // The store is a seam, so what it offers is part of the contract: two
     // implementations and the vocabulary to write a third.

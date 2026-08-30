@@ -1460,8 +1460,8 @@ details with their schemas when the use cases are concrete.
 | **8** ✅ | Add default continuation-oriented model summarizer (`Compaction.model`, `continuationSummary`, `Template`) |
 | **9** ✅ | Add controller/manual `compact()` API (`Compaction.controller`; `make` delegates to it) |
 | **10** ✅ | Add `CompactionEvent` stream and usage reporting (controller-scoped Schema, not `AgentEvent`) |
-| **11** | Add generic branch-seed decoration seam to `/tree`                     |
-| **12** | Implement `BranchSummary` from `tree.divergence`                       |
+| **11** ✅ | Add generic branch-seed decoration seam to `/tree` (`BranchSeedOptions.seed` on `branch` only -- activations are cached by node id, so a seeded activation could be answered by an unseeded live session; branch, then activate what it commits) |
+| **12** ✅ | Implement `BranchSummary` from `tree.divergence` (`/tree`'s `BranchSummary.branch`: summarises exactly the abandoned stretch past the common ancestor with the same `Summarise` vocabulary, seeds the new branch, carryover canonical via §19, provenance on the returned value via §20; `NothingToCarry` refuses an empty carryover) |
 | **13** | Add `/coding` cumulative file-operation details                        |
 | **14** | Durable conformance tests using Activity + persistent checkpoint store |
 | **15** | Only after all that, investigate automatic provider-overflow recovery  |

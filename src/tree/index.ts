@@ -10,6 +10,7 @@
  * lets a tree be added to an application without changing how it talks to an
  * agent.
  */
+export * as BranchSummary from "./BranchSummary.js"
 export * as NodeStore from "./NodeStore.js"
 export * as SessionTree from "./SessionTree.js"
 export * as TreeExport from "./TreeExport.js"
