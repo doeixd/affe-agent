@@ -47,13 +47,33 @@ import * as PromptWire from "../PromptWire.js"
  * session, which is the right default for a one-shot question; supplying one
  * reaches the same session again, and it lives as long as the server does.
  */
+/**
+ * The declared failure of every agent tool.
+ *
+ * Effect's `McpServer` renders a declared failure's text only when the value
+ * is an `Error` (`error instanceof Error ? error.message : <internal>`); a
+ * plain string failure -- which these tools declared for a long time -- is
+ * shown to the client as "Tool execution failed due to an internal server
+ * error", so a capacity or authorization refusal was indistinguishable from
+ * a crash. Found by `test/HostConformance.test.ts`. The wire is unchanged:
+ * `isError: true` with the reason as text.
+ */
+export class ToolFailure extends Schema.TaggedError<ToolFailure>()(
+  "AgentMcpToolFailure",
+  { detail: Schema.String }
+) {
+  override get message() {
+    return this.detail
+  }
+}
+
 export const AskAgent = Tool.make("ask_agent", {
   parameters: Schema.Struct({
     prompt: Schema.String,
     sessionId: Schema.optional(Schema.String)
   }),
   success: Schema.String,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 export const AgentToolkit = Toolkit.make(AskAgent)
@@ -70,7 +90,7 @@ export const StartAgent = Tool.make("agent_start", {
     sessionId: AgentProtocol.SessionId,
     requestId: AgentProtocol.RequestId
   }),
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Await the exact run previously returned by `agent_start`. */
@@ -81,7 +101,7 @@ export const AwaitAgent = Tool.make("agent_await", {
     requestId: AgentProtocol.RequestId
   }),
   success: AgentProtocol.RemoteResult,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Release a named or generated host session when the MCP client is done with it. */
@@ -92,7 +112,7 @@ export const CloseAgent = Tool.make("agent_close", {
     sessionId: AgentProtocol.SessionId
   }),
   success: Schema.Boolean,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Queue steering input for the run currently active in a host session. */
@@ -104,7 +124,7 @@ export const SteerAgent = Tool.make("agent_steer", {
     prompt: Schema.String
   }),
   success: Schema.Boolean,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Queue a sequential follow-up under the active submission. */
@@ -116,7 +136,7 @@ export const FollowUpAgent = Tool.make("agent_follow_up", {
     prompt: Schema.String
   }),
   success: Schema.Boolean,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Interrupt the run active in a host session. */
@@ -127,7 +147,7 @@ export const InterruptAgent = Tool.make("agent_interrupt", {
     sessionId: AgentProtocol.SessionId
   }),
   success: Schema.Boolean,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Read the current session state and any questions waiting for an answer. */
@@ -141,7 +161,7 @@ export const StatusAgent = Tool.make("agent_status", {
     status: AgentProtocol.SessionStatus,
     pending: Schema.Array(Elicitation.Request)
   }),
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 /** Answer one question reported by `agent_status` or native MCP elicitation. */
@@ -155,7 +175,7 @@ export const RespondAgent = Tool.make("agent_respond", {
     value: Schema.optional(Schema.Unknown)
   }),
   success: Schema.Boolean,
-  failure: Schema.String
+  failure: ToolFailure
 })
 
 // The shared-host variants run inside an MCP request and may issue reverse
@@ -863,8 +883,8 @@ const handlersFromHost = <Principal>(
 
     const remote = <A, E extends { readonly message: string }, R>(
       effect: Effect.Effect<A, E, R>
-    ): Effect.Effect<A, string, R> =>
-      Effect.mapError(effect, (error) => error.message)
+    ): Effect.Effect<A, ToolFailure, R> =>
+      Effect.mapError(effect, (error) => new ToolFailure({ detail: error.message }))
 
     const handlers = ServerToolkit.of({
       ask_agent: ({ prompt, sessionId }) =>
@@ -991,7 +1011,7 @@ const handlersFromHost = <Principal>(
       }, Requirements>,
       handle: (
         parameters: Parameters["Type"]
-      ) => Effect.Effect<Success["Type"], string, McpSchema.McpServerClient>
+      ) => Effect.Effect<Success["Type"], ToolFailure, McpSchema.McpServerClient>
     ) =>
       Effect.gen(function* () {
         const server = yield* McpServer.McpServer
@@ -1035,10 +1055,10 @@ const handlersFromHost = <Principal>(
               Effect.flatMap((parameters) =>
                 handle(parameters).pipe(
                   Effect.matchEffect({
-                    onFailure: (message) =>
+                    onFailure: (failure) =>
                       Effect.succeed(new McpSchema.CallToolResult({
                         isError: true,
-                        content: [{ type: "text", text: message }]
+                        content: [{ type: "text", text: failure.message }]
                       })),
                     onSuccess: (result) =>
                       encode(result).pipe(
@@ -1249,7 +1269,7 @@ export const handlers = (options?: {
           // has no place to put them. The tool's declared failure carries the
           // description instead, so the client sees a tool that failed for a
           // stated reason rather than a transport that broke.
-          Effect.mapError((error: Client.RemoteError) => error.message)
+          Effect.mapError((error: Client.RemoteError) => new ToolFailure({ detail: error.message }))
         )
     })
   })

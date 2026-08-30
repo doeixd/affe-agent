@@ -106,3 +106,8 @@ Superseded by whatever landed since; useful for the reasoning, not the verdicts.
   is a finding nobody will act on.
 - `.txt` files are earlier, less-edited briefs; `.md` files have been through a
   pass. The extension carries no other meaning.
+
+- [conformance-matrix.md](./conformance-matrix.md) — the cross-adapter
+  conformance matrix: HTTP, RPC, MCP, A2A and AG-UI held to the same rows
+  (creation, continuation, capacity, authorization, interruption,
+  idempotency, resumption), with each adapter's declared limitations.

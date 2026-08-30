@@ -95,10 +95,12 @@ open, so the next pass does not have to re-derive it.
    promises it breaks. Not `suite(name, layer)`: `@effect/vitest` is a dev
    dependency, so the runner wiring is one line in the caller's test file.
    Next in that plan: `Sandbox.fromExec` / `fromOperations`.
-10. **Cross-adapter conformance matrix** — `AgentClientContract`,
-    `DeliveryLogContract`, `NodeStoreContract` and `McpServerConformance` exist,
-    but nothing holds HTTP, RPC, AG-UI, A2A and MCP to one answer on capacity,
-    auth, idempotency and resumption (design-assessment rec 4).
+10. ~~**Cross-adapter conformance matrix**~~ — landed 2026-08-30:
+    `test/HostConformance.ts` (rows, runner, shared host and fixture) and
+    `test/HostConformance.test.ts` (five drivers); the rendered table with
+    every declared limitation is `docs/conformance-matrix.md`. It found and
+    fixed an MCP defect (host refusals rendered as "internal server error";
+    now `AgentMcp.ToolFailure`).
 11. **Public/SPI boundary** — `MakeOptions.eventSink` / `submissionIds` and
     `ToolExecution.execute` are public but engine-facing (design-assessment
     rec 2). Then a maturity label per subpath; README marks only three

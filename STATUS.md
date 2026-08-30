@@ -3259,3 +3259,28 @@ stderr into stdout, stretches every `timeout` to an hour and returns bare
 names from `list` fails exactly those three cases, each with the diagnosis
 that names the fault, and its capability report contradicts what such a
 provider would claim.
+
+## The cross-adapter conformance matrix (2026-08-30)
+
+Item 10 of the remaining-work ranking; design-assessment rec 4. One shared
+`AgentSessionHost` over one real client, seven rows, five drivers -- each
+driving the rows through its own wire (official MCP v2 client, raw A2A REST,
+raw AG-UI SSE, `HttpApiClient`, `RpcClient`) or declaring, with a reason,
+that its protocol has no vocabulary for a row. The table, with every
+declaration, is `docs/conformance-matrix.md`.
+
+It found a defect on its first run. `AgentMcp`'s nine tools declared
+`failure: Schema.String`; Effect's `McpServer` renders a declared failure's
+text only for an `Error` value, so every host refusal -- capacity, forbidden
+-- reached MCP clients as "Tool execution failed due to an internal server
+error". `AgentMcp.ToolFailure` is now the declared failure; the wire is the
+same (`isError: true` plus the reason). The other findings are protocol
+shapes rather than defects, and are recorded as such: A2A reports a refusal
+as a failed task with the reason in `status.message`, on a 200; the in-process
+client refuses an event cursor, so resumption is a property of the backing
+and that row runs on the durable client.
+
+Two matrix-authoring facts worth keeping: a server with a stream open at
+teardown fails the test with "All fibers interrupted" unless it drains
+(`disablePreemptiveShutdown`), and racing session creation must accept
+`AgentSessionAlreadyExistsError`.

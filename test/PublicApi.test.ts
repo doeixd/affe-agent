@@ -372,6 +372,7 @@ describe("durable and cluster surfaces", () => {
       "StartAgent",
       "StatusAgent",
       "SteerAgent",
+      "ToolFailure",
       "handlers",
       "layer",
       "serverLayer"
