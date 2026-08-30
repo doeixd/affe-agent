@@ -20,7 +20,10 @@ import {
 import { assert, describe, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Schema, Stream } from "effect"
 import { createServer, type Server } from "node:http"
+import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentA2A } from "../src/a2a/index.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 
 const textPart = (text: string): Message["parts"][number] => ({
   content: { $case: "text", value: text },
@@ -308,6 +311,54 @@ describe("AgentA2A client against an official SDK server", () => {
         request: { prompt: "hello" }
       })
       assert.strictEqual(result.reply, "echo:hello")
+    })
+  )
+
+  it.effect("a remote agent is a tool: the exchange with a name, schemas, and a declared failure", () =>
+    Effect.gen(function* () {
+      const peer = yield* servePeer({})
+      const ask = AgentA2A.tool("ask_peer", {
+        description: "Ask the echo peer",
+        request: Schema.Struct({ prompt: Schema.String }),
+        result: Schema.Struct({ reply: Schema.String }),
+        agent: { url: peer.url }
+      })
+      assert.strictEqual(ask.tool.name, "ask_peer")
+
+      // Straight through the handler, as the loop would call it.
+      const answered = yield* ask.handler({ prompt: "hello" }, { preliminary: () => Effect.void })
+      assert.deepStrictEqual(answered, { reply: "echo:hello" })
+
+      // And through a real run: the model calls the tool, the peer answers.
+      const { layer } = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCall("ask_peer", { prompt: "via the loop" }, { id: "call-1" }),
+        TestLanguageModel.text("relayed")
+      ])
+      const result = yield* Agent.run(
+        Agent.make({ tools: [ask], loop: AgentLoop.bounded(2) }),
+        "ask the peer"
+      ).pipe(Effect.provide(layer))
+      assert.strictEqual(result.text, "relayed")
+
+      // A peer that is not there is the tool's declared failure, not a defect.
+      const missing = AgentA2A.tool("ask_nobody", {
+        request: Schema.Struct({ prompt: Schema.String }),
+        result: Schema.Struct({ reply: Schema.String }),
+        agent: { url: "http://127.0.0.1:1" }
+      })
+      const failure = yield* Effect.flip(missing.handler({ prompt: "anyone?" }, { preliminary: () => Effect.void }))
+      assert.strictEqual(failure._tag, "AgentA2ATransportError")
+
+      // A peer answering off-contract is the peer's fault, named as such:
+      // the tool's declared failure, never a bare SchemaError.
+      const strict = AgentA2A.tool("ask_strictly", {
+        request: Schema.Struct({ prompt: Schema.String }),
+        result: Schema.Struct({ answer: Schema.Number }),
+        agent: { url: peer.url }
+      })
+      const offContract = yield* Effect.flip(strict.handler({ prompt: "numbers?" }, { preliminary: () => Effect.void }))
+      assert.strictEqual(offContract._tag, "AgentA2ARemoteError")
+      if (offContract._tag === "AgentA2ARemoteError") assert.strictEqual(offContract.code, "BAD_RESULT")
     })
   )
 

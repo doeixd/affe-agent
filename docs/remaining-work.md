@@ -17,7 +17,7 @@ Effect diagnostics, portability and the workerd bundle pass, and
 | `plan-execution-plan.md` | Complete (X1–X4, XS1–XS4). |
 | `plan-opencode-tools-port.md` | M1–M6 landed, post-review hardening included. |
 | `plan-pi-toolkit.md` | P0–P5 landed. |
-| `plan-session-tree.md` | T1–T5 landed; delta storage deliberately deferred; ST6 example never written. |
+| `plan-session-tree.md` | T1–T5 landed; delta storage deliberately deferred; ST6 example written 2026-08-30. |
 | `plan-snapshot-export.md` | E1–E5 landed. |
 | `plan-agent-server.md` | S1–S5 landed. |
 | `plan-durability-hardening.md` | H1–H9, SD1–SD6 landed; `scripts/falsify.mjs` is the re-runnable SD2. |
@@ -123,9 +123,16 @@ open, so the next pass does not have to re-derive it.
     whole few-KB response, which is the point). The A2A pump holds one
     finite protocol response; AG-UI's bound is backpressure on a live run's
     deltas. Both rationales now cite the test.
-14. **Small A2A additions** — `A2A.tool(...)` wrapping `RemoteAgent.send` +
-    `typed()`; there is no equivalent today.
-15. **`examples/session-tree.ts`** (ST6) — write it or strike ST6.
+14. ~~**Small A2A additions**~~ — 2026-08-30: `AgentA2A.tool(name, {
+    request, result, agent, contextId? })` is the typed exchange as a
+    `BoundTool` for `Agent.make({ tools })`, in `Subagent.tool`'s shape;
+    remote failures are the tool's declared failure, and an off-contract
+    reply is `AgentA2ARemoteError` `BAD_RESULT`. Tested against the official
+    SDK peer, through the handler and through a real run.
+15. ~~**`examples/session-tree.ts`**~~ — written 2026-08-30 (ST6): branches,
+    switches and renders to stdout, runnable against the scripted model
+    (`npx tsx examples/session-tree.ts`), typechecked with the rest of
+    `examples/`.
 16. **`ChannelConformance`** packaging — the Slack cases (signature, replay,
     idempotency) exist ad hoc; threading, attachments and hostile payloads do
     not.

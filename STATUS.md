@@ -3332,3 +3332,22 @@ there.
 
 The README gained a maturity map -- core, supported, experimental, reference
 -- with the criterion for each label and every subpath placed.
+
+## A remote agent as a tool; the session-tree example (2026-08-30)
+
+Items 14 and 15 of the remaining-work ranking. `AgentA2A.tool` wraps the
+typed exchange as a `BoundTool` -- the same shape `Subagent.tool` gives a
+local child agent -- so a remote A2A peer sits in `Agent.make({ tools })`
+beside everything else. The peer's failures reach the model as the tool's
+declared failure (transport, remote, unsupported content); a reply that
+does not decode is `AgentA2ARemoteError` with code `BAD_RESULT`, because a
+peer off its contract is the peer's fault and not a defect here. Tested
+against the official SDK's echo peer through the handler, through a real
+run with a scripted tool call, against a peer that is not there, and
+against a peer answering off-contract; broken once by dying on the decode
+failure instead of naming it.
+
+`examples/session-tree.ts` closes ST6: trunk, two lanes, the divergence
+point, an activation's transcript, and the lane advancing -- rendered with
+`console.log`, which is the point: the tree is the substrate, the UI is
+whatever prints it.

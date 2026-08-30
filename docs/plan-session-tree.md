@@ -597,7 +597,10 @@ is what keeping `history` off `Node` bought, and is the point at which the
 - **ST5:** Every invariant IT1–IT6 has a test that fails when it is broken.
 - **ST6:** An example (`examples/session-tree.ts`) branches, switches and
   renders to plain stdout, typechecked in CI, showing the substrate is enough
-  to build a UI on without being one.
+  to build a UI on without being one. *Met 2026-08-30: the example runs
+  against the scripted model (`npx tsx examples/session-tree.ts`) and prints
+  lanes, the divergence point, the transcript an activation hands back, and
+  the lane advancing after a further prompt.*
 
 ## Risks and open questions
 

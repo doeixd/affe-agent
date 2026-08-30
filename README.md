@@ -2101,6 +2101,10 @@ context transforms and canonical history are directly testable.
 - [`examples/state.ts`](./examples/state.ts) — a plan the agent fills in as
   typed state, shown to the model and persisted to SQLite, via
   `@doeixd/effect-agent/state`
+- [`examples/session-tree.ts`](./examples/session-tree.ts) — a conversation
+  as a tree: two lanes from one node, the divergence point, and the transcript
+  an activation hands back, rendered with `console.log`; runs as it is against
+  the scripted model, via `@doeixd/effect-agent/tree`
 - [`examples/skills.ts`](./examples/skills.ts) — a support agent that advertises
   skill metadata and loads a body on demand, via
   `@doeixd/effect-agent/skills`

@@ -591,6 +591,8 @@ describe("durable and cluster surfaces", () => {
       // and to test their `allowHosts` without standing a server up.
       "rejectPushUrl",
       "serverLayer",
+      // A remote A2A peer as a BoundTool for Agent.make({ tools }).
+      "tool",
       "typed"
     ])
   })

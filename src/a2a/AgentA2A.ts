@@ -42,6 +42,7 @@ import {
   toRestErrorBody
 } from "@a2a-js/sdk/errors"
 import { ClientFactory } from "@a2a-js/sdk/client"
+import * as Agent from "../Agent.js"
 import {
   AgentEvent,
   DefaultExecutionEventBusManager,
@@ -73,7 +74,7 @@ import {
   Schema,
   Stream
 } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import { Prompt, Tool } from "effect/unstable/ai"
 import {
   HttpIncomingMessage,
   HttpRouter,
@@ -2091,3 +2092,67 @@ export const typed = <Request, Result>(schemas: {
       return yield* Schema.decodeUnknownEffect(schemas.result)(parsed)
     })
 })
+
+// ---------------------------------------------------------------------------
+// A remote agent as a tool
+
+export interface ToolOptions<Req, Res> {
+  readonly description?: string | undefined
+  /** What the model hands the remote agent: the tool's parameters. */
+  readonly request: Schema.Codec<Req, unknown>
+  /** What the remote agent's result artifact decodes to: the tool's success. */
+  readonly result: Schema.Codec<Res, unknown>
+  /** An already-connected agent, or where to connect to on first use. */
+  readonly agent: RemoteAgent | ClientOptions
+  /**
+   * The A2A context the calls share. A constant keeps one conversation with
+   * the remote agent across calls; a function derives one per call. Empty
+   * by default, which asks the remote agent for a fresh context each time.
+   */
+  readonly contextId?: string | ((request: Req) => string) | undefined
+}
+
+export type ToolFailure =
+  | AgentA2ATransportError
+  | AgentA2ARemoteError
+  | AgentA2AUnsupportedContentError
+
+/**
+ * A remote A2A agent as one of this agent's tools.
+ *
+ * `typed` is the exchange; this is the exchange with a name and schemas the
+ * model can see, in the same shape `Subagent.tool` gives a *local* child
+ * agent: a `BoundTool` for `Agent.make({ tools: [...] })`. The remote
+ * agent's failures reach the model as the tool's declared failure, so under
+ * `ReturnToModel` it can try something else; a result that does not decode
+ * is `AgentA2ARemoteError` with code `BAD_RESULT`, since a peer answering
+ * off-contract is the peer's fault, not a bug here.
+ */
+export const tool = <Req, Res>(
+  name: string,
+  options: ToolOptions<Req, Res>
+) => {
+  const definition = Tool.make(name, {
+    ...(options.description === undefined ? {} : { description: options.description }),
+    parameters: options.request,
+    success: options.result,
+    failure: Schema.Union([AgentA2ATransportError, AgentA2ARemoteError, AgentA2AUnsupportedContentError])
+  })
+  const exchange = typed({ request: options.request, result: options.result })
+  const remote: Effect.Effect<RemoteAgent, AgentA2ATransportError> = "url" in options.agent
+    ? client(options.agent)
+    : Effect.succeed(options.agent)
+  const contextFor = (request: Req): string =>
+    typeof options.contextId === "function"
+      ? options.contextId(request)
+      : options.contextId ?? ""
+
+  const handler: Agent.Handler<typeof definition> = (request) =>
+    remote.pipe(
+      Effect.flatMap((agent) => exchange.exchange(agent, { contextId: contextFor(request), request })),
+      Effect.catchTag("SchemaError", (error) =>
+        Effect.fail(new AgentA2ARemoteError({ code: "BAD_RESULT", detail: error.message })))
+    )
+
+  return Agent.tool(definition, handler)
+}
