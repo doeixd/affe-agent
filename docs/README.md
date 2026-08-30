@@ -4,9 +4,10 @@ Written 2026-08-27. Thirty-odd documents accumulated here with no index; this is
 it. Grouped by what the document *is*, because that decides how much to trust it.
 
 **The four at the root are the authorities.** `PLAN.md` is the design
-authority, `STATUS.md` records what was built and why, `ROADMAP.md` tracks
-capability against the roadmap issues, and `AGENTS.md` holds the conventions —
-above all, that end-user code must never need a type cast.
+authority, `STATUS.md` is the short statement of what is true now (its
+chronology lives in [status-history.md](./status-history.md)), `ROADMAP.md`
+tracks capability against the roadmap issues, and `AGENTS.md` holds the
+conventions — above all, that end-user code must never need a type cast.
 
 **Inside `docs/`, nothing is a record of what ships.** A plan marked *specified,
 not implemented* has not been built; a research note describes somebody else's
@@ -107,6 +108,9 @@ Superseded by whatever landed since; useful for the reasoning, not the verdicts.
 - `.txt` files are earlier, less-edited briefs; `.md` files have been through a
   pass. The extension carries no other meaning.
 
+- [status-history.md](./status-history.md) — the chronology that used to be
+  `STATUS.md`: every dated finding and falsification, oldest first; new work
+  appends here and edits the line in `STATUS.md` it changes.
 - [conformance-matrix.md](./conformance-matrix.md) — the cross-adapter
   conformance matrix: HTTP, RPC, MCP, A2A and AG-UI held to the same rows
   (creation, continuation, capacity, authorization, interruption,

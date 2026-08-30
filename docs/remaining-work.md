@@ -3,10 +3,11 @@
 Rewritten 2026-08-29 from an audit of every plan in `/docs` against what ships
 at `b554458` (four read-only passes: kernel/durability plans, transport/server
 plans, tools/toolkit plans, and the progress files themselves). This is the
-live list; `STATUS.md` is the chronology and `ROADMAP.md` the capability view.
+live list; `STATUS.md` is what is true now, `docs/status-history.md` the
+chronology, and `ROADMAP.md` the capability view.
 
-State of play: issues #1–#3 and #5–#80 are closed; #4 (the roadmap tracker) is
-the only open issue. `npm run check` is green: 1466 tests in 131 files, zero
+State of play: every issue through #80 is closed, #4 (the roadmap tracker)
+last, on 2026-08-30. `npm run check` is green: 1466 tests in 131 files, zero
 Effect diagnostics, portability and the workerd bundle pass, and
 `npm run verify:durability` shows D1–D7 biting (D4b survives by construction).
 
@@ -144,11 +145,14 @@ open, so the next pass does not have to re-derive it.
     Threading and attachments are *not* in the suite: `/connectors` has no
     decoder seam to hold them to (a `Delivery` is text in a conversation), and
     asserting a shape that does not exist would be the wrong kind of test.
-17. **Compress `STATUS.md`** — 3k chronological lines; the 2026-08-29 section
-    corrected the flatly wrong sentences, but a short "current truth" document
-    with the chronology moved under `docs/` is still the right end state
-    (design-assessment rec 7).
-18. **Close #4** — mark the shipped items and close the tracker.
+17. ~~**Compress `STATUS.md`**~~ — 2026-08-30: the 3.4k-line chronology is
+    `docs/status-history.md` (moved with `git mv`, so its history follows
+    it), and `STATUS.md` is ~130 lines of current truth: the gates as
+    commands, the two properties, what ships per surface, what holds it
+    there, what is deliberately not done. New work appends to the history
+    and edits the line here it changes.
+18. ~~**Close #4**~~ — closed 2026-08-30 with a comment naming what shipped
+    since its last progress note; this list supersedes it as the tracker.
 
 ### Larger, correctly parked
 

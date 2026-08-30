@@ -1,7 +1,10 @@
 # Working in this repository
 
 Effect Harness is an Effect-native agent execution kernel. `PLAN.md` is the
-design authority; `STATUS.md` records what is built and why.
+design authority; `STATUS.md` is the short statement of what is true now, and
+`docs/status-history.md` the chronology of how it got there -- a change
+appends a dated section to the history and edits the line in `STATUS.md` it
+affects.
 
 ## The rule that matters most
 
