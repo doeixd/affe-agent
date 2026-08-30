@@ -5,6 +5,7 @@ import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as NodeStore from "../../../src/tree/NodeStore.js"
 import * as Checkout from "./checkout.ts"
 import { Prompt } from "effect/unstable/ai"
+import type * as AgentEvent from "../../../src/AgentEvent.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
 import { entriesOf } from "./restore.ts"
 import { VERSION } from "./version.ts"
@@ -614,8 +615,8 @@ stop()
  * is never settled, and `drainSettled` takes a *prefix* -- so one of them holds
  * itself and every later entry out of scrollback for the rest of the session.
  */
-const streamCases: Array<readonly [string, { readonly _tag: string }]> = [
-  ["failed", { _tag: "MessageFailed" }],
+const streamCases: Array<readonly [string, AgentEvent.AgentEventEnvelope["event"]]> = [
+  ["failed", { _tag: "MessageFailed", failure: { tag: "Boom", message: "boom", isDefect: false } }],
   ["interrupted", { _tag: "MessageInterrupted" }],
   // The case core does not report at all: a stream that simply stops because
   // the submission ended under it.
@@ -629,7 +630,7 @@ const streamOutcomes = streamCases.map(([name, terminal]) => {
   onEvent({ _tag: "MessageStarted" })
   onEvent({ _tag: "MessageDelta", kind: "text", delta: "half a th" })
   const blockedWhileStreaming = store.drainSettled().length
-  onEvent(terminal as never)
+  onEvent(terminal)
   store.sink.append({
     id: `after-${name}`,
     kind: "notice",
@@ -662,10 +663,10 @@ onReuse({ _tag: "MessageStarted" })
 onReuse({ _tag: "MessageDelta", kind: "text", delta: "thinking" })
 
 onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "shell", params: { command: "first" } })
-onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "shell", result: { exit_code: 0, stdout: "one", stderr: "" } } as never)
+onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "shell", result: { exit_code: 0, stdout: "one", stderr: "" }, encodedResult: { exit_code: 0, stdout: "one", stderr: "" } })
 // The same id again, while the first row is still in the live tree.
 onReuse({ _tag: "ToolCallStarted", id: "call_1", name: "shell", params: { command: "second" } })
-onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "shell", result: { exit_code: 0, stdout: "two", stderr: "" } } as never)
+onReuse({ _tag: "ToolCallSucceeded", id: "call_1", name: "shell", result: { exit_code: 0, stdout: "two", stderr: "" }, encodedResult: { exit_code: 0, stdout: "two", stderr: "" } })
 
 const reuseRows = reuseStore.entries.filter((entry) => entry.kind === "tool")
 const reuseStatuses = reuseRows.map((entry) => entry.status)
@@ -676,7 +677,7 @@ const reuseBodies = reuseRows.map((entry) =>
     : "")
 
 // Now let the message finish, and the whole prefix must drain.
-onReuse({ _tag: "MessageCompleted", text: "thinking" } as never)
+onReuse({ _tag: "MessageCompleted", text: "thinking" })
 const reuseDrained = reuseStore.drainSettled().length
 const reuseLeft = reuseStore.entries.length
 
@@ -695,7 +696,7 @@ onApproval({
   id: "e1",
   kind: "tool-approval",
   detail: { toolName: "shell", action: "shell", resource: "rm -rf /" }
-} as never)
+})
 const askedBeforeInterrupt = approvalStore.footer().type
 onApproval({ _tag: "SubmissionInterrupted" })
 const askedAfterInterrupt = approvalStore.footer().type
@@ -712,8 +713,8 @@ onResolved({
   id: "e2",
   kind: "tool-approval",
   detail: { toolName: "shell", action: "shell", resource: "ls" }
-} as never)
-onResolved({ _tag: "ElicitationResolved", id: "e2", granted: true } as never)
+})
+onResolved({ _tag: "ElicitationResolved", id: "e2", kind: "tool-approval", granted: true })
 const afterAnswering = resolvedStore.footer().type
 
 /**
@@ -792,10 +793,10 @@ const askedWithA = await askedEachTime("a")
  * these are exactly the shapes a scripted run will not produce.
  */
 const restored = (
-  parts: ReadonlyArray<ReadonlyArray<unknown>>
+  parts: ReadonlyArray<ReadonlyArray<Prompt.Message>>
 ): ReadonlyArray<{ kind: string; status?: string; title: string }> =>
   entriesOf(
-    Prompt.fromMessages(parts.map((content) => content[0] as never)),
+    Prompt.fromMessages(parts.flat()),
     defaultViews
   ).map((entry) => ({
     kind: entry.kind,
@@ -805,12 +806,12 @@ const restored = (
 
 const call = (id: string, name: string, params: unknown) =>
   Prompt.assistantMessage({
-    content: [Prompt.toolCallPart({ id, name, params, providerExecuted: false } as never)]
+    content: [Prompt.toolCallPart({ id, name, params, providerExecuted: false })]
   })
 
 const toolResult = (id: string, name: string, result: unknown, isFailure: boolean) =>
   Prompt.toolMessage({
-    content: [Prompt.toolResultPart({ id, name, result, isFailure } as never)]
+    content: [Prompt.toolResultPart({ id, name, result, isFailure, providerExecuted: false })]
   })
 
 // A failure recorded in history.
@@ -998,6 +999,26 @@ const checks: Array<readonly [string, boolean]> = [
   // W4: edit_file returns a record, so the change renders from fields.
   ["edit renders a change summary", /\+\d+ -\d+/.test(transcript)],
   ["change names the file", transcript.includes("src/index.ts")],
+
+  // SV2 (docs/plan-tui-port.md): the remaining three of the six tools
+  // render through the ported view, each named here.
+  ["search titles the pattern and its scope",
+    titleOf(defaultViews, "search", { pattern: "TODO", path: "src", include: "*.ts" }) === "search \"TODO\" in src *.ts"],
+  ["search renders matches as a structured body", (() => {
+    const body = bodyOf(defaultViews, "search", "src/a.ts:1: // TODO\n")
+    return body.type === "structured" && body.snapshot.kind === "matches"
+      && body.snapshot.text.includes("src/a.ts:1") && body.snapshot.truncated === false
+  })()],
+  ["search marks a truncated result", (() => {
+    const body = bodyOf(defaultViews, "search", "src/a.ts:1: x\nResults truncated\n")
+    return body.type === "structured" && body.snapshot.kind === "matches" && body.snapshot.truncated === true
+  })()],
+  ["read_file renders its text as code", (() => {
+    const body = bodyOf(defaultViews, "read_file", "const answer = 42\n")
+    return body.type === "code" && body.content === "const answer = 42\n"
+  })()],
+  ["write_file titles the path", titleOf(defaultViews, "write_file", { path: "src/new.ts" }) === "write src/new.ts"],
+  ["write_file without a path keeps its name", titleOf(defaultViews, "write_file", {}) === "write_file"],
   // Streaming: the reply was chunked, so the delta path built it up.
   ["streamed reply committed whole", transcript.includes("That is what the workspace holds.")],
   ["no empty assistant bubble", !/● \s*$/m.test(transcript)],

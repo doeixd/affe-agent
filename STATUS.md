@@ -3284,3 +3284,17 @@ Two matrix-authoring facts worth keeping: a server with a stream open at
 teardown fails the test with "All fibers interrupted" unless it drains
 (`disablePreemptiveShutdown`), and racing session creation must accept
 `AgentSessionAlreadyExistsError`.
+
+## TUI: no casts in the smoke, SV2 complete (2026-08-30)
+
+Item 12 of the remaining-work ranking. The nine `as never` casts in
+`apps/tui/src/smoke.tsx` were all the same shape: a hand-written event or
+message missing a field the union requires (`ToolCallSucceeded.encodedResult`,
+`ElicitationResolved.kind`, `MessageFailed.failure`,
+`ToolResultPart.providerExecuted`) and cast into place. They now carry the
+fields, the stream-outcome table is typed as the event union, and the
+restored-history fixture is built from `Prompt.Message` values rather than
+`unknown` arrays. `search`, `read_file` and `write_file` have their SV2
+render assertions (title, structured `matches` body with the truncation
+flag, `code` body, path title); broken once by disabling the truncation
+flag in the view.

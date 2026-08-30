@@ -105,10 +105,12 @@ open, so the next pass does not have to re-derive it.
     `ToolExecution.execute` are public but engine-facing (design-assessment
     rec 2). Then a maturity label per subpath; README marks only three
     packages experimental (rec 3).
-12. **TUI** — remove the nine `as never` casts in `apps/tui/src/smoke.tsx`
-    (CLAUDE.md rule; test code counts) and add the missing SV2 render
-    assertions for `search`, `read_file`, `write_file`. Live-region scrolling
-    and syntax highlighting stay blocked on OpenTUI parsers.
+12. ~~**TUI**~~ — 2026-08-30: the nine `as never` casts in
+    `apps/tui/src/smoke.tsx` are gone (the fakes now carry the fields the
+    event union requires; the restored history is built from typed
+    messages), and SV2 has its `search`, `read_file` and `write_file`
+    assertions, each named in the smoke. Live-region scrolling and syntax
+    highlighting stay blocked on OpenTUI parsers.
 13. **A2A slow-consumer test or bound** — both SSE pumps are
     `Queue.unbounded` with a rationale (#31); AG-UI is bounded at 256. Either
     add the slow-consumer test that justifies the asymmetry or bound it.
