@@ -3707,3 +3707,23 @@ functions, class instances, cycles and the depth bound are refused as
 caller's to route as diagnostic or defect. Broken once both ways:
 copying blocked keys fails the pollution pin; disabling the seen-set
 turns a cycle into a wrong "too-deep" and fails that pin.
+
+## Shape recovery for model programs (2026-08-31)
+
+Step 3 of `plan-code-mode-engine.md`, dependency-free. `recover(text)`
+unwraps what the model wrapped and reports what it did: every fenced
+block extracted and joined (the prose between two blocks was never code;
+the language tag is discarded even when it lies), a leading
+`export default` becomes `return`, and a whole-text bare arrow --
+conservatively matched at the start of the program only -- is invoked as
+`return (arrow)()`. A program that needs nothing comes back verbatim
+with `applied: []`, and one that merely *contains* an arrow is left
+alone: misfiring would rewrite a correct program, which is worse than
+not recovering one. One decision amended in the plan while writing it:
+TS type-syntax stripping moved from step 3 to step 4, because a regex
+stripper mangles object literals and ternaries into programs that are
+wrong yet still run -- the silent-corruption class step 2 exists to
+prevent -- so until the parser lands, TS syntax stays a diagnostic
+rather than a guess. Broken once both ways: dropping the fence join
+fails the two-blocks pin, and widening the arrow guard to any `=>`
+fails the containment pin.

@@ -195,8 +195,12 @@ open, so the next pass does not have to re-derive it.
     and its step 2: `internal/data.ts`, the plain-data boundary --
     prototype-reaching keys dropped, foreign prototypes rebuilt away,
     promises/functions/cycles/depth refused as `Result` values with the
-    fix named, Date/URL/Uint8Array serialised. Steps 3–6 remain; step 4
-    (the interpreter) is blocked on approving the acorn dependency.
+    fix named, Date/URL/Uint8Array serialised. Step 3 landed too:
+    `internal/recover.ts` unwraps fences (all blocks joined, tags
+    ignored), `export default` and conservative whole-text bare arrows,
+    reporting what it applied; TS stripping waits for step 4's parser on
+    purpose. Steps 4–6 remain; step 4 (the interpreter) is blocked on
+    approving the acorn dependency.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file

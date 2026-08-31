@@ -21,10 +21,12 @@ nothing below is needed to keep it.
    correlation id and a safe message, never the cause. This maps cleanly
    onto the existing distinction between a tool's declared failure type and
    an `AiError`.
-3. **Code recovery is v1** (§6.9.2): strip fences, `export default`, a bare
-   arrow, and TS type syntax before parsing. Rejecting a model's first
-   attempt because it wrapped the answer in a fence is a wasted turn, and
-   executor has the 180-second production failure to prove it.
+3. **Code recovery is v1** (§6.9.2): strip fences, `export default` and a
+   bare arrow before parsing; TS type syntax is stripped in step 4 by the
+   parser, never by regex (see the step-3 row for why). Rejecting a
+   model's first attempt because it wrapped the answer in a fence is a
+   wasted turn, and executor has the 180-second production failure to
+   prove it.
 4. **Diagnostics name the fix** (invariant 6). The whole value of owning
    the language over embedding an engine is `UnsupportedSyntax: use
    for...of` instead of an iteration that silently runs zero times.
@@ -49,7 +51,7 @@ nothing below is needed to keep it.
 | Step | What | Depends on |
 | --- | --- | --- |
 | 2 | `internal/data.ts` — the plain-data boundary: depth bound, cycle refusal, blocked prototype members dropped, Date/URL serialised, promises and functions refused with the fix named | nothing |
-| 3 | `internal/recover.ts` — fence/`export default`/arrow/TS-syntax recovery, pure string-to-string | nothing |
+| 3 | `internal/recover.ts` — fence/`export default`/bare-arrow recovery, pure string-to-string. TS-syntax stripping deliberately moved to step 4: without a parser, a regex stripper produces wrong programs that still run — the silent-corruption class step 2 exists to prevent — so until the parser lands, TS syntax is an `UnsupportedSyntax` diagnostic, not a guess | nothing |
 | 4 | `internal/parse.ts` + `internal/interpret.ts` — acorn + the §5.4 minimal subset; every absence an `UnsupportedSyntax` naming the feature | acorn approval |
 | 5 | `CodeMode.ts` (`make`/`execute` behind `CodeExecutor`) + `CodeTool.ts` (the model-facing tool over a toolkit map, per-call permission, events) | 2–4 |
 | 6 | Elicitation inside programs (decline throws) | 5 |
