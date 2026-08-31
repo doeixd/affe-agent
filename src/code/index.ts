@@ -10,3 +10,4 @@
  */
 export * as Catalog from "./Catalog.js"
 export * as CodeMode from "./CodeMode.js"
+export * as CodeTool from "./CodeTool.js"

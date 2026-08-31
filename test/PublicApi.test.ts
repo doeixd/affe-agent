@@ -279,7 +279,16 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the code vocabulary and nothing beyond it", async () => {
     const code = await import("../src/code/index.js")
-    assert.deepStrictEqual(Object.keys(code).sort(), ["Catalog", "CodeMode"])
+    assert.deepStrictEqual(Object.keys(code).sort(), [
+      "Catalog",
+      "CodeMode",
+      "CodeTool"
+    ])
+    assert.deepStrictEqual(Object.keys(code.CodeTool).sort(), [
+      "Result",
+      "catalogOf",
+      "tool"
+    ])
     assert.deepStrictEqual(Object.keys(code.CodeMode).sort(), [
       "interpreted",
       "make"

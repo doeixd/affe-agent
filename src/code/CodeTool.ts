@@ -1,0 +1,205 @@
+import { Context, Effect, Schema } from "effect"
+import { Tool } from "effect/unstable/ai"
+import * as Agent from "../Agent.js"
+import type * as Permission from "../Permission.js"
+import * as Catalog from "./Catalog.js"
+import * as CodeMode from "./CodeMode.js"
+
+/**
+ * The model-facing half of code mode
+ * (`docs/plan-code-mode-engine.md` step 5).
+ *
+ * One tool the model calls with a program. Its *description* carries the
+ * budgeted catalog, which is the entire point of code mode: a large tool
+ * surface reaches the model as a few thousand tokens of signatures plus
+ * a statement of what was elided, instead of hundreds of tool
+ * definitions -- and the program can then loop, branch and combine
+ * results without a round trip per call.
+ *
+ * The result is deliberately a flat record with a discriminant, for the
+ * reason `/coding`'s `shell` returns `{exit_code, stdout, stderr}`: the
+ * model should not have to parse prose to learn what happened. Nested
+ * calls are reported as they settle, through the preliminary-result
+ * channel the kernel already projects as `ToolCallProgress` events, so
+ * `apps/tui`, `/observability`, `/export` and the MCP frontend see a
+ * running program without this module knowing any of them exist.
+ */
+
+const Call = Schema.Struct({
+  /** `data.lookup`, as the program addressed it. */
+  path: Schema.String,
+  outcome: Schema.Literals(["succeeded", "failed", "refused"])
+})
+
+/**
+ * What the model gets back.
+ *
+ * `running` is a preliminary result -- progress while the program is
+ * still going -- and never the final one.
+ */
+export const Result = Schema.Struct({
+  outcome: Schema.Literals(["running", "returned", "nothing", "threw", "refused"]),
+  /** The value the program returned, when it returned one. */
+  value: Schema.optional(Schema.Unknown),
+  /** What the program threw, when it threw. */
+  error: Schema.optional(Schema.Unknown),
+  /** What to do instead, when the engine refused. Always names a fix. */
+  fix: Schema.optional(Schema.String),
+  /** 1-based line the refusal concerns, when one applies. */
+  line: Schema.optional(Schema.Number),
+  /** Everything the program logged, one entry per `console.log`. */
+  logs: Schema.Array(Schema.String),
+  /** Every nested tool call, in order. */
+  calls: Schema.Array(Call)
+})
+export type Result = typeof Result.Type
+
+const Parameters = Schema.Struct({
+  /**
+   * Named `program` rather than `code`, because what the model writes is
+   * a whole program with a `return`, not an expression.
+   */
+  program: Schema.String
+})
+
+const INSTRUCTIONS = [
+  "Run a JavaScript program against the tools below. Prefer this over many separate tool calls:",
+  "a program can loop, branch, and combine results without a round trip each time.",
+  "",
+  "Write **plain JavaScript** (no TypeScript types), as the body of an async function:",
+  "`return` your answer, and `await` every tool call.",
+  "",
+  "Each tool call returns `{ ok: true, value }` or `{ ok: false, error }` -- check `ok`",
+  "rather than assuming success. A call the policy refuses throws instead, so wrap",
+  "risky calls in try/catch if you want to continue past a refusal.",
+  "",
+  "Supported: const/let, arrow functions, template strings, destructuring, if,",
+  "for...of, while, try/catch/finally, throw, await, Promise.all, console.log, JSON,",
+  "Math, Object.keys/values/entries/fromEntries, and array methods including",
+  "map/filter/find/some/every/forEach/reduce.",
+  "Not supported (each refusal names the fix): classes, function declarations, var,",
+  "classic for loops, for...in, regular expressions, optional chaining, and `==`.",
+  ""
+].join("\n")
+
+export interface Options<Groups extends CodeMode.ToolGroups, R> {
+  readonly tools: Groups
+  /** The tool's name. `execute` by default, as in every code-mode host. */
+  readonly name?: string | undefined
+  /** Per nested call, over each tool's own projection. */
+  readonly permission?: Permission.Policy<R> | undefined
+  readonly limits?: CodeMode.Limits | undefined
+  readonly executor?: CodeMode.CodeExecutor | undefined
+  /** Signature budget for the catalog in the description. Defaults to 2000. */
+  readonly catalogBudgetTokens?: number | undefined
+}
+
+const render = (value: unknown): string =>
+  typeof value === "string" ? value : JSON.stringify(value) ?? String(value)
+
+/**
+ * Build the `execute` tool over the supplied toolkits.
+ *
+ * ```ts
+ * const agent = Agent.make({
+ *   tools: [yield* CodeTool.tool({ tools: { github, linear } })]
+ * })
+ * ```
+ *
+ * An `Effect`, for the same reason `Agent.toolkit` is one: a bound
+ * tool's handler must carry no requirement of its own, so whatever the
+ * permission policy and the grouped handlers need is discharged *here*,
+ * from the context where the tool is built. Nothing is passed at call
+ * time and nothing is cast.
+ *
+ * Whether this *replaces* the underlying tools or sits beside them is
+ * the application's decision, deliberately not this module's: opencode
+ * defers MCP tools into code mode and keeps native ones direct, which
+ * looks right and is still policy.
+ */
+export const tool = <Groups extends CodeMode.ToolGroups, R = never>(
+  options: Options<Groups, R>
+) =>
+  Effect.map(
+    Effect.context<R | CodeMode.ServicesOf<Groups>>(),
+    (environment) => build(options, environment)
+  )
+
+const build = <Groups extends CodeMode.ToolGroups, R>(
+  options: Options<Groups, R>,
+  environment: Context.Context<R | CodeMode.ServicesOf<Groups>>
+) => {
+  const catalog = Catalog.catalog(options.tools, {
+    ...(options.catalogBudgetTokens === undefined
+      ? {}
+      : { budgetTokens: options.catalogBudgetTokens })
+  })
+
+  const definition = Tool.make(options.name ?? "execute", {
+    description: `${INSTRUCTIONS}${catalog.text}`,
+    parameters: Parameters,
+    success: Result
+  })
+
+  const runtime = CodeMode.make<Groups, R>({
+    tools: options.tools,
+    ...(options.permission === undefined ? {} : { permission: options.permission }),
+    ...(options.limits === undefined ? {} : { limits: options.limits }),
+    ...(options.executor === undefined ? {} : { executor: options.executor })
+  })
+
+  const handler: Agent.Handler<typeof definition> = ({ program }, context) =>
+    Effect.gen(function*() {
+      // Captured at build time (see `tool`): the handler itself requires
+      // nothing, which is what lets it be an ordinary bound tool.
+      const seen: Array<typeof Call.Type> = []
+      const result = yield* runtime.execute(program, {
+        onCall: (call) => {
+          seen.push({ path: call.path.join("."), outcome: call.outcome })
+          // A preliminary result: the kernel emits it as
+          // `ToolCallProgress` and keeps waiting for the final one.
+          return context.preliminary({
+            outcome: "running",
+            logs: [],
+            calls: [...seen]
+          })
+        }
+      })
+
+      const logs = result.logs.map((entry) => entry.map(render).join(" "))
+      const calls = result.calls.map((call) => ({
+        path: call.path.join("."),
+        outcome: call.outcome
+      }))
+
+      switch (result.outcome._tag) {
+        case "Returned":
+          return { outcome: "returned" as const, value: result.outcome.value, logs, calls }
+        case "RanOffTheEnd":
+          return {
+            outcome: "nothing" as const,
+            fix: "the program returned nothing; end it with `return <your answer>`",
+            logs,
+            calls
+          }
+        case "Threw":
+          return { outcome: "threw" as const, error: result.outcome.error, logs, calls }
+        case "Refused":
+          return {
+            outcome: "refused" as const,
+            fix: result.outcome.fix,
+            ...(result.outcome.line === undefined ? {} : { line: result.outcome.line }),
+            logs,
+            calls
+          }
+      }
+    }).pipe(Effect.provide(environment))
+
+  return Agent.tool(definition, handler)
+}
+
+/** The catalog this tool would advertise, for a host that wants to show it. */
+export const catalogOf = <Groups extends CodeMode.ToolGroups>(
+  tools: Groups,
+  options?: { readonly budgetTokens?: number | undefined }
+): Catalog.Catalog => Catalog.catalog(tools, options)

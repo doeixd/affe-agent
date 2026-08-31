@@ -128,9 +128,21 @@ export const interpreted: CodeExecutor = {
     })
 }
 
+/** Per-run hooks. Progress is the caller's to project. */
+export interface ExecuteOptions {
+  /**
+   * Called as each nested call settles, so a caller can report progress
+   * while the program is still running -- `CodeTool` turns these into
+   * preliminary results, which the kernel already projects as
+   * `ToolCallProgress` events.
+   */
+  readonly onCall?: ((call: ObservedCall) => Effect.Effect<void>) | undefined
+}
+
 export interface CodeMode<R> {
   readonly execute: (
-    program: string
+    program: string,
+    options?: ExecuteOptions
   ) => Effect.Effect<ExecuteResult, never, R>
 }
 
@@ -159,7 +171,8 @@ export const make = <Groups extends ToolGroups, R = never>(
   const executor = options.executor ?? interpreted
 
   const execute = (
-    program: string
+    program: string,
+    runOptions?: ExecuteOptions
   ): Effect.Effect<ExecuteResult, never, R | ServicesOf<Groups>> =>
     Effect.gen(function*() {
       const calls: Array<ObservedCall> = []
@@ -169,7 +182,17 @@ export const make = <Groups extends ToolGroups, R = never>(
         path: ReadonlyArray<string>,
         input: unknown,
         outcome: ObservedCall["outcome"]
-      ) => Effect.sync(() => void calls.push({ path, input, outcome }))
+      ) =>
+        Effect.suspend(() => {
+          const call: ObservedCall = { path, input, outcome }
+          calls.push(call)
+          // Reported as it settles, not at the end: a program that runs
+          // for a minute is otherwise invisible for exactly as long as
+          // it is interesting.
+          return runOptions?.onCall === undefined
+            ? Effect.void
+            : runOptions.onCall(call)
+        })
 
       const invoke: Invoke<R | ServicesOf<Groups>> = (path, input) =>
         Effect.gen(function*() {

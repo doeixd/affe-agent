@@ -3776,3 +3776,33 @@ invariant (the groups constraint erases tools to `any`) and
 `execute`'s inferred types are not `any`. Broken once both ways:
 skipping the Deny branch fails the policy test; rethrowing declared
 failures fails the failure-as-value test.
+
+## Code mode reaches the model: CodeTool (2026-08-31)
+
+Step 5 finished (`plan-code-mode-engine.md`). `CodeTool.tool` is the
+model-facing half: one `execute` tool whose *description* carries the
+budgeted catalog -- which is the whole point of code mode, a large tool
+surface arriving as a few thousand tokens of signatures plus a statement
+of what was elided -- and whose result is a flat record with a
+discriminant (returned / nothing / threw / refused), following `shell`'s
+precedent that a model should not have to parse prose to learn what
+happened. A refusal reaches the model as a `fix`, so the interpreter's
+"use for...of" is advice the model can act on rather than an error it can
+only retry.
+
+Two decisions worth recording. Nested calls become **preliminary
+results**, which `ToolExecution` already projects as `ToolCallProgress`
+events -- so `apps/tui`, `/observability`, `/export` and the MCP frontend
+see a running program without `/code` knowing any of them exist, and
+without the kernel event bus (which is internal and not reachable from a
+handler) growing a new seam for this. And `tool` is an **Effect** rather
+than a plain function, for the same reason `Agent.toolkit` is one: a
+bound tool's handler must carry no requirement of its own, so the
+permission policy's and the grouped handlers' services are discharged at
+build time from the context where the tool is made -- no `provide`
+parameter, no cast, and a caller with requirements gets a compile error
+pointing at the build site rather than a runtime missing-service defect.
+Broken once both ways: dropping the preliminary call fails the progress
+pin; replacing the diagnostic's `fix` with generic prose fails the
+refusal pin.
+

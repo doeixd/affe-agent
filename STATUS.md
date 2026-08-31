@@ -78,6 +78,12 @@ the fibre that acts -- a `Context.Reference` the host sets per request
 (`AgentSessionHost.Options.subject`), `None` outside any host, carried on
 the durable claim/payload so replays see what the claimer saw.
 
+**Code mode.** `/code`: `Catalog` (signatures, budgeted round-robin
+catalog, deterministic search), the owned acorn-based interpreter, and
+`CodeMode`/`CodeTool` -- a model-written JavaScript program runs against
+real toolkits, every nested call passing the same `Permission` decision a
+direct call gets. In-program elicitation is not built.
+
 **Batteries.** `/blob` (+ `/blob/fs`): content-addressed blob storage with
 size/MIME policy and `BlobWire` externalize/resolve over the encoded
 prompt form; `/sandbox` (+ `/sandbox/local`) with a conformance suite and

@@ -214,9 +214,13 @@ open, so the next pass does not have to re-derive it.
     are opaque `internal` diagnostics), limits refuse naming the fix,
     outcomes are data, and `CurrentPrincipal` reaches nested handlers on
     the calling fibre. Two inventoried casts restate wrapper-erased
-    requirements (AGENTS.md). Remaining: `CodeTool` (the model-facing
-    tool, observed calls as agent events), then step 6 (in-program
-    elicitation).
+    requirements (AGENTS.md). `CodeTool` landed with it: the
+    model-facing `execute` tool whose description carries the budgeted
+    catalog, whose nested calls surface as `ToolCallProgress` through the
+    existing preliminary-result seam (no kernel change), and whose
+    refusals reach the model as a `fix` rather than an error. Remaining:
+    step 6 (in-program elicitation), and the plan's own deferrals --
+    durable suspension of a paused program stays out of scope.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file
