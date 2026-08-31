@@ -54,6 +54,11 @@ context transform, or a layer, and end-user code needs no type casts.
   and bind tools from an MCP server by declare-and-verify.
 - `@doeixd/effect-agent/openai` — OpenAI-compatible chat completions over any
   `AgentClient`.
+- `@doeixd/effect-agent/a2a` also bridges an external runtime *in*:
+  `ClaudeCodeA2A.remote` presents Anthropic's Claude Code CLI as a
+  `RemoteAgent`, spawned through `Sandbox.execStream` inside a workspace, with
+  the A2A context mapped to the CLI's own session. `AgentA2A.tool` then makes it
+  an ordinary tool, so no new concept is needed to delegate to it.
 - `@doeixd/effect-agent/durable-streams` — official Durable Streams as typed
   streams, and the durable client's delivery log.
 - `@doeixd/effect-agent/sandbox` (+ `/sandbox/local`) — a scoped

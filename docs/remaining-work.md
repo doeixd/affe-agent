@@ -282,11 +282,31 @@ open, so the next pass does not have to re-derive it.
     goes over `opencode serve`'s HTTP API, needs none of it, which is the sign
     the seam is in the right place.
 
-26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
-    — new packages and architecture (Claude Code / OpenCode bridges, relay
-    transport, `SessionInbox` / `ProcessManager`). Preconditions are all met
-    and tested; nothing started. `plan-deployment.md` §6.3 narrows when the
-    relay is the right tool.
+26c. **Claude Code A2A bridge** — SHIPPED 2026-08-31,
+    `src/a2a/claudeCode.ts` (`ClaudeCodeA2A`), the plan's step 1. The CLI is
+    spawned through `Sandbox.execStream` inside a workspace and presented as a
+    `RemoteAgent`, so `AgentA2A.tool` makes it a tool with no new concept —
+    the payoff the plan names. `stream-json` is parsed permissively (unknown
+    event types ignored, non-JSON lines ignored: the CLI writes warnings to the
+    same stream); the A2A context maps to the CLI session id and a second
+    message `--resume`s it; a run ending without a `result` is *cancelled*,
+    never completed; `cancel(id)` stops a run for a caller who holds a task id
+    and no fiber, and waits for it to actually settle. `Bridge.delegate`
+    narrows `send`'s `Message | Task` to `Task`, since this peer never replies
+    with a bare message. Tested against a scripted provider — no `claude`
+    binary in CI, which is the same property that lets it run against a remote
+    sandbox unchanged.
+
+    Still open from the plan: **step 2**, the `--permission-prompt-tool` bridge
+    into `Permission` / `Elicitation` (until then the sandbox is the only
+    boundary), **step 3**, the OpenCode bridge over `opencode serve`'s HTTP API
+    (independent of this: it needs no subprocess seam), and steps 5-7 (relay
+    transport, then the `LanguageModel` adapter experiment).
+
+26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
+    `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
+    `ProcessManager`, and the bridge steps listed under 26c.
+    `plan-deployment.md` §6.3 narrows when the relay is the right tool.
 
 ### Known, deliberately left
 

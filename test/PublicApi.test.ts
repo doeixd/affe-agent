@@ -665,7 +665,11 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the A2A v1 server and client vocabulary and nothing beyond it", async () => {
     const a2a = await import("../src/a2a/index.js")
-    assert.deepStrictEqual(Object.keys(a2a).sort(), ["AgentA2A"])
+    assert.deepStrictEqual(Object.keys(a2a).sort(), ["AgentA2A", "ClaudeCodeA2A"])
+    // The bridge's surface is two values: a constructor, and the line parser
+    // it is built on -- exported because a caller reading `stream-json` from
+    // somewhere else (a log, a recorded run) should not re-derive it.
+    assert.deepStrictEqual(Object.keys(a2a.ClaudeCodeA2A).sort(), ["parseLine", "remote"])
     assert.deepStrictEqual(Object.keys(a2a.AgentA2A).sort(), [
       "AgentA2AInvalidInputError",
       "AgentA2ARemoteError",

@@ -1625,6 +1625,55 @@ cannot dispatch it to a toolkit that no longer declares one: drain or
 version those before deploying. The TUI keeps a display-only view for
 historical `bash` rows; nothing executes under that name.
 
+### Claude Code as an A2A agent
+
+`@doeixd/effect-agent/a2a` also bridges an *external* agent runtime in.
+`ClaudeCodeA2A.remote(sandbox)` runs Anthropic's Claude Code CLI inside a
+sandbox workspace and presents it as an ordinary `RemoteAgent`:
+
+```ts
+import { AgentA2A, ClaudeCodeA2A } from "@doeixd/effect-agent/a2a"
+
+const claude = yield* ClaudeCodeA2A.remote(sandbox, { allowedTools: ["Read", "Edit"] })
+
+const Manager = Agent.make({
+  instructions: "Delegate implementation work, then review it.",
+  tools: [AgentA2A.tool("claude_coder", {
+    description: "Delegate a coding task to Claude Code.",
+    request: Schema.String,
+    result: Schema.String,
+    agent: claude,
+    contextId: "coding"
+  })]
+})
+```
+
+**A coding CLI is an agent, not a model.** Putting one behind `LanguageModel`
+would nest an agent loop inside another and call the inner one a model; A2A
+says what it is — an autonomous peer with its own loop, tools, workspace and
+session state — and costs nothing extra, because `AgentA2A.tool` already turns
+any `RemoteAgent` into one of this agent's tools. The contrast is
+[`examples/openrouter.ts`](./examples/openrouter.ts): a model gateway *is* a
+model API, and nests under `LanguageModel` with nothing left over.
+
+Everything goes through `Sandbox`: the CLI is spawned inside the workspace,
+under its timeout and output bounds, and the module imports no `node:*` — so
+the same bridge runs against a remote sandbox unchanged, and a scripted
+provider is the CLI as far as the bridge can tell (which is how it is tested,
+with no `claude` binary in CI). An A2A context maps to the CLI's session id, so
+a second message to the same context resumes the same conversation. `delegate`
+is `send` with the answer narrowed to `Task`, since this peer never replies
+with a bare message. A run that ends without a `result` is reported as
+*cancelled*, never completed: a caller must not read "it worked" from "it
+stopped".
+
+It does **not** re-implement Claude Code's permission model — the CLI decides
+what it may do, from its own flags. Routing its `--permission-prompt-tool`
+prompts into [`Permission`](#permissions) and `Elicitation` is the next step and
+is not here yet, so until then the sandbox is the only boundary this bridge
+provides: choose the workspace accordingly, and prefer explicit `allowedTools`
+over a broad permission mode.
+
 ## Subagents
 
 A subagent is a tool that opens a child session — no first-class concept, just
