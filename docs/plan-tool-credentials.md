@@ -128,12 +128,23 @@ definition, and this document says so rather than pretending otherwise.
 
 ## 7. Next slices, in order
 
-1. Query placements applied by the OpenAPI/GraphQL sources (render already
-   produces them).
-2. Methods derived from OpenAPI `securitySchemes` (§7.1: schemes in one
-   security object are required together).
-3. The principal-on-the-tool-fibre decision (§6), then per-principal
-   bindings.
+1. ~~Query placements applied by the OpenAPI/GraphQL sources~~ -- landed
+   2026-08-31: both sources take `credentials` (the `Rendered` shape)
+   beside `headers`; query pairs land on the URL after the parameter loop,
+   so a model-chosen argument cannot shadow a credential's query name, and
+   the GraphQL document itself is untouched.
+2. ~~Methods derived from OpenAPI `securitySchemes`~~ -- landed 2026-08-31:
+   `methodFromOpenApi(spec)` uses the first root `security` requirement
+   (its schemes required *together*, one placement each, variables named by
+   scheme); apiKey header/query and http bearer are expressible; basic,
+   oauth2/openIdConnect and cookie are `skipped` with reasons, never
+   silently.
+3. ~~The principal-on-the-tool-fibre decision (§6), then per-principal
+   bindings~~ -- landed 2026-08-31: `Bindings` store keyed by
+   `(integration, subject)` with user-over-org selection, and
+   `resolveFor(integration)` reading `CurrentPrincipal`; a subject served
+   by nothing gets `reauthRequired: true`, a bare configuration gap does
+   not.
 4. Reauth via elicitation (§5).
 5. OAuth as a per-source escape hatch, never a placement (§7.4 of the
    research).

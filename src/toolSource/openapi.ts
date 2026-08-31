@@ -44,6 +44,15 @@ interface OpenApiOptions {
    * calls. Never part of a tool's parameter schema.
    */
   readonly headers?: Effect.Effect<Headers.Headers, unknown> | undefined
+  /**
+   * Resolved per invocation, like `headers`, and applied to *both* carriers:
+   * the headers merge over `headers`'s, and the query pairs land on the
+   * request URL. The shape is `Credentials.resolve`'s `Rendered`, so a
+   * binding whose method places a key in the query string reaches the wire
+   * without a second mechanism. Never part of a tool's parameter schema,
+   * and never overridden by a model-chosen parameter -- credentials win.
+   */
+  readonly credentials?: Effect.Effect<CredentialParts, unknown> | undefined
   /** Per request, including the body read. Defaults to 30 seconds. */
   readonly timeout?: Duration.Duration | undefined
   /** Cap on the serialised request body. Defaults to 1 MiB. */
@@ -57,9 +66,17 @@ interface OpenApiOptions {
   readonly httpClient?: HttpClient.HttpClient | undefined
 }
 
+/** The shape the `credentials` option resolves to; `Credentials.Rendered`. */
+interface CredentialParts {
+  readonly headers: Readonly<Record<string, string>>
+  readonly query: Readonly<Record<string, string>>
+}
+
+const emptyCredentialParts: Effect.Effect<CredentialParts, unknown> = Effect.succeed({ headers: {}, query: {} })
+
 const isOpenApiOptions = (value: unknown): value is OpenApiOptions => {
   if (typeof value !== "object" || value === null) return false
-  return "endpoint" in value || "fetchImpl" in value || "headers" in value || "timeout" in value || "httpClient" in value || "maxRequestBytes" in value || "maxResponseBytes" in value
+  return "endpoint" in value || "fetchImpl" in value || "headers" in value || "credentials" in value || "timeout" in value || "httpClient" in value || "maxRequestBytes" in value || "maxResponseBytes" in value
 }
 
 /**
@@ -597,6 +614,7 @@ export const makeOpenApiSource = (
   const resolvedEndpoint = isOpenApiOptions(endpoint) ? endpoint.endpoint : typeof endpoint === "string" ? endpoint : undefined
   const resolvedFetchImpl = isOpenApiOptions(endpoint) ? (endpoint.fetchImpl ?? (globalThis.fetch.bind(globalThis) as typeof fetch)) : fetchImpl
   const resolvedHeaders = isOpenApiOptions(endpoint) ? endpoint.headers : headers
+  const resolvedCredentials = isOpenApiOptions(endpoint) ? endpoint.credentials : undefined
   const resolvedTimeout = isOpenApiOptions(endpoint) ? (endpoint.timeout ?? FETCH_TIMEOUT) : FETCH_TIMEOUT
   const resolvedMaxRequestBytes = isOpenApiOptions(endpoint) ? (endpoint.maxRequestBytes ?? MAX_REQUEST_BYTES) : MAX_REQUEST_BYTES
   const resolvedMaxResponseBytes = isOpenApiOptions(endpoint) ? (endpoint.maxResponseBytes ?? MAX_RESPONSE_BYTES) : MAX_RESPONSE_BYTES
@@ -720,6 +738,16 @@ export const makeOpenApiSource = (
           Effect.mapError((cause) => new InvocationError({ sourceId: id, toolName: name, detail: `headers resolver failed: ${String(cause)}` }))
         )
 
+        const credentialParts = yield* (resolvedCredentials ?? emptyCredentialParts).pipe(
+          Effect.mapError((cause) => new InvocationError({ sourceId: id, toolName: name, detail: `credentials resolver failed: ${String(cause)}` }))
+        )
+        // Credentials win over anything the model chose: `set`, after the
+        // parameter loop, so a tool argument cannot shadow an api key's
+        // query name with its own value.
+        for (const [key, value] of Object.entries(credentialParts.query)) {
+          query.set(key, value)
+        }
+
         // All path params must be supplied — leftover `{param}` means missing required path param
         if (urlPath.includes("{") || urlPath.includes("}")) {
           return yield* new InvocationError({ sourceId: id, toolName: name, detail: `missing required path parameter for ${urlPath}` })
@@ -745,7 +773,10 @@ export const makeOpenApiSource = (
           ...(hasBody ? { "content-type": "application/json" } : {}),
           ...paramHeaders
         }
-        const allHeaders = Headers.merge(Headers.fromInput(baseHeaders), extraHeaders)
+        const allHeaders = Headers.merge(
+          Headers.merge(Headers.fromInput(baseHeaders), extraHeaders),
+          Headers.fromInput(credentialParts.headers)
+        )
         const headersForFetch: Record<string, string> = { ...allHeaders }
         const method = meta.method.toUpperCase()
 

@@ -3639,3 +3639,26 @@ deliberately rather than by silence: compaction phase 15 stays parked (no
 observed provider-overflow to justify a recovery seam), tree delta
 storage stays parked (no measured snapshot pain), and D4b's
 defence-in-depth stays.
+
+## The credentials contract, three slices closed (2026-08-31)
+
+`plan-tool-credentials.md` §7 slices 1–3, the first consumers of
+`CurrentPrincipal`. The sources gained a `credentials` hook beside
+`headers` -- the `Rendered` shape, both carriers: headers merge last so
+credentials win, and query pairs are `set` after the parameter loop so a
+model-chosen argument cannot shadow an api key's query name (pinned: the
+schema already refuses unknown parameters, and the sabotage of the apply
+loop fails the wire test). On GraphQL the credential lands on the endpoint
+URL; the document is untouched. `methodFromOpenApi` derives the method
+from `securitySchemes` + the first root `security` requirement -- its
+schemes required together, one placement per scheme, variables named by
+scheme name -- and refuses basic/oauth2/openIdConnect/cookie with reasons
+in `skipped`. And the multi-user half: `Credentials.bindings` (an
+in-memory `Bindings` store keyed by integration and subject; user-owned
+entries must name a subject, org-owned must not) with
+`resolveFor(integration)` reading `CurrentPrincipal` on the calling fibre
+-- the subject's own binding wins, everyone else falls back to org, and
+the two refusals differ on purpose: a subject served by nothing is
+"connect your GitHub" (`reauthRequired: true`), a bare configuration gap
+is not. Broken once: forcing org-always fails the preference test.
+Still open in that plan: reauth via elicitation, OAuth as an escape hatch.

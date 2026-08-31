@@ -1,4 +1,5 @@
 import { Config, Context, Effect, Layer, Option, Redacted, Schema } from "effect"
+import { CurrentPrincipal } from "../Principal.js"
 import { Headers } from "effect/unstable/http"
 
 /**
@@ -250,3 +251,194 @@ export const resolve = (binding: Binding): Effect.Effect<Rendered, CredentialErr
 /** The headers half of `resolve`, in the shape the sources' `headers` hook takes. */
 export const headers = (binding: Binding): Effect.Effect<Headers.Headers, CredentialError, Provider> =>
   Effect.map(resolve(binding), (rendered) => Headers.fromInput(rendered.headers))
+
+// ---------------------------------------------------------------------------
+// Per-principal bindings: the multi-user half, unblocked by CurrentPrincipal
+
+/**
+ * Which bindings exist, per integration and per subject.
+ *
+ * The store the contract promised once the principal could reach the tool
+ * fibre (plan-tool-credentials.md, section 6). Selection is by
+ * `(integration, subject)`: a user-owned binding matches only its subject,
+ * an org-owned binding matches everyone, and the user binding wins when
+ * both exist -- identity lives in the partition, never in a model-facing
+ * name.
+ */
+export interface BindingEntry {
+  readonly binding: Binding
+  /**
+   * The subject a user-owned binding belongs to. Required exactly when
+   * `binding.owner` is `"user"`; meaningless -- and refused at
+   * construction -- on an org binding, which belongs to everyone.
+   */
+  readonly subject?: string | undefined
+}
+
+export interface BindingsService {
+  readonly find: (
+    integration: string,
+    subject: Option.Option<string>
+  ) => Effect.Effect<Option.Option<Binding>, CredentialError>
+}
+
+export class Bindings extends Context.Service<Bindings, BindingsService>()(
+  "@doeixd/effect-agent/tool-source/Credentials/Bindings"
+) {}
+
+/**
+ * An in-memory bindings store from entries.
+ *
+ * The user binding for the asking subject wins over the org binding; a
+ * subject with no user binding falls back to org, which is what "the org
+ * connected GitHub, Alice connected her own" should mean.
+ */
+export const bindings = (
+  entries: ReadonlyArray<BindingEntry>
+): Layer.Layer<Bindings> =>
+  Layer.sync(Bindings, () => {
+    const org = new Map<string, Binding>()
+    const user = new Map<string, Binding>()
+    for (const entry of entries) {
+      if (entry.binding.owner === "user") {
+        if (entry.subject === undefined) {
+          throw new RangeError(
+            `Credentials.bindings: a user-owned binding for ${entry.binding.integration} names no subject`
+          )
+        }
+        user.set(`${entry.binding.integration} ${entry.subject}`, entry.binding)
+      } else {
+        if (entry.subject !== undefined) {
+          throw new RangeError(
+            `Credentials.bindings: an org-owned binding for ${entry.binding.integration} must not name a subject`
+          )
+        }
+        org.set(entry.binding.integration, entry.binding)
+      }
+    }
+    return {
+      find: (integration, subject) =>
+        Effect.sync(() => {
+          if (Option.isSome(subject)) {
+            const own = user.get(`${integration} ${subject.value}`)
+            if (own !== undefined) return Option.some(own)
+          }
+          return Option.fromNullishOr(org.get(integration))
+        })
+    }
+  })
+
+/**
+ * Resolve the binding for the *caller* -- `CurrentPrincipal` on this fibre
+ * -- then the credentials. The per-principal `resolve`: same rendering,
+ * same provider, the binding chosen per subject per call. No binding at
+ * all is a configuration gap (`reauthRequired: false`); a subject present
+ * and served by nothing is what "connect your GitHub" looks like, so that
+ * refusal says `reauthRequired: true`.
+ */
+export const resolveFor = (
+  integration: string
+): Effect.Effect<Rendered, CredentialError, Bindings | Provider> =>
+  Effect.gen(function* () {
+    const store = yield* Bindings
+    const subject = yield* CurrentPrincipal
+    const found = yield* store.find(integration, subject)
+    if (Option.isNone(found)) {
+      return yield* new CredentialError({
+        handle: integration,
+        reason: "missing",
+        detail: Option.isSome(subject)
+          ? `no binding for ${integration} for subject ${JSON.stringify(subject.value)} and no org fallback`
+          : `no binding for ${integration}`,
+        reauthRequired: Option.isSome(subject)
+      })
+    }
+    return yield* resolve(found.value)
+  })
+
+/** The headers half of `resolveFor`, for the sources' `headers` hook. */
+export const headersFor = (
+  integration: string
+): Effect.Effect<Headers.Headers, CredentialError, Bindings | Provider> =>
+  Effect.map(resolveFor(integration), (rendered) => Headers.fromInput(rendered.headers))
+
+// ---------------------------------------------------------------------------
+// Methods derived from OpenAPI securitySchemes (invariant 5: one derivation
+// for every entry path)
+
+export interface DerivedMethod {
+  readonly method: Method
+  /** Schemes the derivation cannot express, with the reason, never silently. */
+  readonly skipped: ReadonlyArray<{ readonly name: string; readonly reason: string }>
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/**
+ * Derive the method from a parsed OpenAPI document's security machinery.
+ *
+ * The first requirement object in root `security` is used, and every scheme
+ * it names is required *together* (the spec's AND semantics -- Datadog's
+ * two keys), each becoming a placement whose variable is the scheme name.
+ * With no root `security`, every declared scheme is offered as one method
+ * for the caller to trim.
+ *
+ * Expressible: `apiKey` in header or query; `http bearer`. Refused with a
+ * reason: `http basic` (needs an encoding, not a placement), `oauth2` and
+ * `openIdConnect` (a flow, not a placement -- the contract's escape
+ * hatch), `apiKey` in cookie. A spec with no schemes derives `none`.
+ */
+export const methodFromOpenApi = (spec: unknown): DerivedMethod => {
+  const skipped: Array<{ name: string; reason: string }> = []
+  const root = isRecord(spec) ? spec : undefined
+  const components = root !== undefined && isRecord(root["components"]) ? root["components"] : undefined
+  const schemes = components !== undefined && isRecord(components["securitySchemes"])
+    ? components["securitySchemes"]
+    : undefined
+  if (schemes === undefined) return { method: none, skipped }
+
+  const security = root !== undefined && Array.isArray(root["security"]) ? root["security"] : undefined
+  const firstRequirement = security?.find(isRecord)
+  const wanted = firstRequirement !== undefined
+    ? Object.keys(firstRequirement)
+    : Object.keys(schemes)
+
+  const placements: Array<Placement> = []
+  for (const name of wanted) {
+    const scheme = isRecord(schemes[name]) ? schemes[name] : undefined
+    if (scheme === undefined) {
+      skipped.push({ name, reason: "security names a scheme the components do not declare" })
+      continue
+    }
+    const type = scheme["type"]
+    if (type === "apiKey") {
+      const where = scheme["in"]
+      const carrierName = typeof scheme["name"] === "string" ? scheme["name"] : undefined
+      if (carrierName === undefined) {
+        skipped.push({ name, reason: "apiKey scheme declares no name" })
+      } else if (where === "header") {
+        placements.push({ carrier: "header", name: carrierName, variable: name })
+      } else if (where === "query") {
+        placements.push({ carrier: "query", name: carrierName, variable: name })
+      } else {
+        skipped.push({ name, reason: `apiKey in ${JSON.stringify(where)} is not expressible as a placement` })
+      }
+    } else if (type === "http") {
+      const httpScheme = typeof scheme["scheme"] === "string" ? scheme["scheme"].toLowerCase() : undefined
+      if (httpScheme === "bearer") {
+        placements.push({ carrier: "header", name: "Authorization", prefix: "Bearer ", variable: name })
+      } else {
+        skipped.push({ name, reason: `http ${JSON.stringify(httpScheme)} needs an encoding or a flow, not a placement` })
+      }
+    } else if (type === "oauth2" || type === "openIdConnect") {
+      skipped.push({ name, reason: `${String(type)} is a flow, not a placement -- handle it as a per-source escape hatch` })
+    } else {
+      skipped.push({ name, reason: `unknown security scheme type ${JSON.stringify(type)}` })
+    }
+  }
+  return {
+    method: placements.length === 0 ? none : { kind: "apikey", placements },
+    skipped
+  }
+}

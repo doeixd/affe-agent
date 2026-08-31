@@ -71,7 +71,10 @@ open, so the next pass does not have to re-derive it.
    `needsApproval` -- the thing `intrinsicApproval` actually reads; before,
    `requiresApproval` was only a permission *projection*, and no approval was
    ever asked. Declared tools are floored, never loosened. Dropped names and
-   `skipped` entries are logged. The credential design item now has its contract
+   `skipped` entries are logged. 2026-08-31: query placements applied by both sources (the `credentials`
+    hook), `methodFromOpenApi` deriving methods from `securitySchemes`, and
+    per-subject `Bindings`/`resolveFor` over `CurrentPrincipal` all landed
+    -- §7 slices 1–3 struck in the contract. The credential design item has its contract
    (`docs/plan-tool-credentials.md`, 2026-08-30) and its single-user slice:
    `Credentials` in `/tool-source` -- method (placements), binding
    (opaque handles, `owner` a role), provider service (`fromValues`,
