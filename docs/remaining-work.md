@@ -199,8 +199,16 @@ open, so the next pass does not have to re-derive it.
     `internal/recover.ts` unwraps fences (all blocks joined, tags
     ignored), `export default` and conservative whole-text bare arrows,
     reporting what it applied; TS stripping waits for step 4's parser on
-    purpose. Steps 4–6 remain; step 4 (the interpreter) is blocked on
-    approving the acorn dependency.
+    purpose. Step 4 landed 2026-08-31 (acorn@8.18.0
+    approved and pinned; v1 is plain JavaScript with a dedicated TS
+    diagnostic): `internal/parse.ts` and the Effect-based tree-walking
+    interpreter — the §5.4 subset with array HOFs run in-interpreter,
+    tool calls as effects on the calling fibre, Promise.all as
+    Effect.all, two failure channels (a program catches its own throws
+    and a tool's failure, never a host diagnostic), the prototype escape
+    closed on every member route, recursion bounded as a call-depth
+    diagnostic. Steps 5–6 (CodeMode / the execute tool, then in-program
+    elicitation) remain.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file

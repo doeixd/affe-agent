@@ -3727,3 +3727,29 @@ prevent -- so until the parser lands, TS syntax stays a diagnostic
 rather than a guess. Broken once both ways: dropping the fence join
 fails the two-blocks pin, and widening the arrow guard to any `=>`
 fails the containment pin.
+
+## The owned interpreter (2026-08-31)
+
+Step 4 of `plan-code-mode-engine.md`. Acorn approved and pinned exact
+(8.18.0; meriyah rejected as speed nobody needs, oxc/swc as native
+binaries the portability gate forbids), and with it the corollary: v1
+programs are plain JavaScript -- `parse.ts` turns TS-looking input into a
+parse diagnostic that says "write plain JavaScript" instead of stripping
+types by regex into wrong-but-running programs. `interpret.ts` is the
+§5.4 subset as an Effect-based tree walk, which buys three things at
+once: host interruption propagates for free, a nested tool call runs on
+the calling fibre (so `CurrentPrincipal` reaches it), and `Promise.all`
+is `Effect.all` rather than a second scheduler. Array HOFs
+(map/filter/find/some/every/forEach/reduce) run inside the interpreter
+because a program arrow's body is an Effect no native method can await;
+handing an arrow to any other host function is refused. Two failure
+channels stay apart -- a program catches its own throws and a failing
+tool, never a `CodeDiagnostic` -- and every refusal names the fix
+("classic for" says use for...of; == says use ===; a RegExp literal
+points at string methods; recursion past the bound says use iteration).
+The prototype escape ("".constructor.constructor) is closed at every
+member route: static, computed, spread, property keys and assignment
+targets. Broken once both ways: emptying the blocklist fails the escape
+pin on six routes, and letting try/catch see diagnostics fails the
+channel-separation pin.
+

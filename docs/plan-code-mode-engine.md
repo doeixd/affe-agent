@@ -41,10 +41,14 @@ nothing below is needed to keep it.
    scope** for v1 and recorded as a design target only (§5.3): an
    interpreter whose state survives a process boundary is a far stronger
    claim than one that runs to completion.
-8. **Blocked: the acorn dependency.** The interpreter (step 4) needs a
-   parser; `acorn` (~120 KB, no transitive deps, MIT) behind the `/code`
-   entry is the recommendation. This is the one decision held for review —
-   everything before step 4 is dependency-free.
+8. **Resolved 2026-08-31: acorn approved and pinned** (`acorn@8.18.0`,
+   exact). The "faster" alternatives were considered and rejected: meriyah
+   trades size for parse speed that is irrelevant on KB-sized model
+   programs; oxc/swc are native binaries the portability gate forbids.
+   Corollary decided with it: **v1 programs are plain JavaScript** — acorn
+   does not parse TS, so TS syntax is a dedicated parse diagnostic
+   ("write plain JavaScript…", heuristically detected) rather than a
+   second dependency, answering §5.6's open question by prompting.
 
 ## Sequence
 
