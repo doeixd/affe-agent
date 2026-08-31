@@ -35,12 +35,10 @@ export class ProgramThrow extends Schema.TaggedError<ProgramThrow>()(
   { value: Schema.Unknown }
 ) {
   override get message() {
-    const value = this.value
-    if (
-      typeof value === "object" && value !== null &&
-      typeof (value as { readonly message?: unknown }).message === "string"
-    ) {
-      return String((value as { readonly message: string }).message)
+    const value: unknown = this.value
+    if (typeof value === "object" && value !== null && "message" in value) {
+      const message: unknown = value.message
+      if (typeof message === "string") return message
     }
     return typeof value === "string" ? value : JSON.stringify(value)
   }
@@ -328,7 +326,7 @@ export const interpret = (
           })
         }
         if (typeof object === "string" || Array.isArray(object)) {
-          const member: unknown = (object as Record<string, unknown> & object)[key as never]
+          const member: unknown = Reflect.get(Object(object), key)
           return typeof member === "function" ? member.bind(object) : member
         }
         if (typeof object === "object") {
@@ -340,8 +338,8 @@ export const interpret = (
           return (object as Record<string, unknown>)[key]
         }
         if (typeof object === "number" || typeof object === "boolean") {
-          const member: unknown = (object as unknown as Record<string, unknown>)[key]
-          return typeof member === "function" ? (member as (...args: never) => unknown).bind(object) : member
+          const member: unknown = Reflect.get(Object(object), key)
+          return typeof member === "function" ? member.bind(object) : member
         }
         return undefined
       })
@@ -419,6 +417,9 @@ export const interpret = (
       env: Env
     ): Effect.Effect<unknown, ProgramFailure> =>
       Effect.gen(function*() {
+        // Captured before the switch: in the default branch `node` has
+        // narrowed to `never`, and the name is for the diagnostic only.
+        const nodeType: string = node.type
         switch (node.type) {
           case "Literal": {
             if (node.regex !== undefined) {
@@ -727,7 +728,7 @@ export const interpret = (
           default:
             return yield* unsupported(
               node,
-              `${(node as acorn.Node).type}`,
+              nodeType,
               "use the documented subset: literals, arrows, calls, member access, arithmetic, template strings, destructuring, if/for...of/while, try/catch, await and Promise.all"
             )
         }
