@@ -180,53 +180,26 @@ open, so the next pass does not have to re-derive it.
 20. **Reference gateway and declarative references, presets, LSP/code-mode
     batteries** (`plan-primitives.md` steps 3–6) — only the coding reference
     exists.
-21. **Code mode** (`research-code-mode.md`) — the interpreter-free half
-    landed 2026-08-31 as `/code` (`Catalog`): JSDoc-annotated TypeScript
-    signatures from any toolkit (schema descriptions and defaults ride as
-    JSDoc; Effect's Number-codec sentinels collapse to `number`), the
-    token-budgeted round-robin catalog (every namespace always listed with
-    its count, completeness stated, cheapest-next placement so every
-    namespace is represented before any is complete), and deterministic
-    field-weighted search with pagination whose results carry the same
-    signatures. The engine now has its plan
-    (`docs/plan-code-mode-engine.md`, 2026-08-31: CodeExecutor seam from
-    day one, executor's tool-failure split decided, code recovery in v1,
-    limits without defaults, durable suspension explicitly out of scope)
-    and its step 2: `internal/data.ts`, the plain-data boundary --
-    prototype-reaching keys dropped, foreign prototypes rebuilt away,
-    promises/functions/cycles/depth refused as `Result` values with the
-    fix named, Date/URL/Uint8Array serialised. Step 3 landed too:
-    `internal/recover.ts` unwraps fences (all blocks joined, tags
-    ignored), `export default` and conservative whole-text bare arrows,
-    reporting what it applied; TS stripping waits for step 4's parser on
-    purpose. Step 4 landed 2026-08-31 (acorn@8.18.0
-    approved and pinned; v1 is plain JavaScript with a dedicated TS
-    diagnostic): `internal/parse.ts` and the Effect-based tree-walking
-    interpreter — the §5.4 subset with array HOFs run in-interpreter,
-    tool calls as effects on the calling fibre, Promise.all as
-    Effect.all, two failure channels (a program catches its own throws
-    and a tool's failure, never a host diagnostic), the prototype escape
-    closed on every member route, recursion bounded as a call-depth
-    diagnostic. Step 5's host half landed the same day: `CodeMode.make` /
-    `execute` behind the `CodeExecutor` seam — every nested call passes
-    `ToolExecution.decide` over the tool's own Permission projection (a
-    Deny throws into the program, a declared failure is a value, defects
-    are opaque `internal` diagnostics), limits refuse naming the fix,
-    outcomes are data, and `CurrentPrincipal` reaches nested handlers on
-    the calling fibre. Two inventoried casts restate wrapper-erased
-    requirements (AGENTS.md). `CodeTool` landed with it: the
-    model-facing `execute` tool whose description carries the budgeted
-    catalog, whose nested calls surface as `ToolCallProgress` through the
-    existing preliminary-result seam (no kernel change), and whose
-    refusals reach the model as a `fix` rather than an error. Step 6 landed the same day: an
-    `Ask` inside a program pauses on a `tool-approval` elicitation built
-    from the tool's own projection, a grant proceeds, a refusal throws
-    into the program, and no elicitor means it throws saying so. The
-    question reaches renderers through the progress channel (a handler
-    cannot reach the event bus) and sits in `session.pending` because the
-    elicitor is the session's own. **The plan is now complete**; its one
-    stated deferral is durable suspension of a paused program, documented
-    at the option rather than promised.
+21. ~~**Code mode**~~ (`research-code-mode.md`,
+    `plan-code-mode-engine.md`) — complete 2026-08-31, plan and all six
+    steps. `/code` ships `Catalog` (JSDoc TypeScript signatures from any
+    toolkit, the token-budgeted round-robin catalog stating its own
+    completeness, deterministic field-weighted search), the plain-data
+    boundary, shape recovery, an owned tree-walking interpreter over
+    `acorn@8.18.0` (v1 is plain JavaScript; TS gets a dedicated
+    diagnostic), and `CodeMode`/`CodeTool` — a model-written program runs
+    against real toolkits with every nested call passing the same
+    `ToolExecution.decide` a direct call gets, an `Ask` pausing on the
+    host's elicitor and a refusal throwing into the program. Two audit
+    passes followed: hardening (a throwing builtin no longer fails the
+    run, byte-accurate output limits, bounded call concurrency, search
+    16x faster by memoising derived facts) and edges/type-UX
+    (no-argument calls, no internal class names in diagnostics, and
+    type-level pins — broken from the library side — that a tool's
+    `dependencies` and a policy's `R` reach `execute`).
+    `examples/code-mode.ts` runs, needs no services, and has no cast.
+    Deliberately not built: durable suspension of a *paused* program,
+    documented at the `elicitor` option rather than promised.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file
