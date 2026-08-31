@@ -86,8 +86,9 @@ Composition and defaults only -- each returns the parts it assembled, so
 dropping to the primitives is taking a field. Both references are built
 on them.
 
-**Reference implementations.** `examples/ref-coding-agent.ts` and
-`examples/ref-gateway.ts` (`plan-primitives.md` §4) are built only from the
+**Reference implementations.** `examples/ref-coding-agent.ts`,
+`examples/ref-gateway.ts` and `examples/ref-declarative.ts`
+(`plan-primitives.md` §4) are built only from the
 public surface, carry compile-time assertions that inference stayed
 precise, and run in CI. What `ref-gateway` found, which is the point of
 the exercise:
@@ -103,6 +104,25 @@ the exercise:
   agent with no elicitor fails closed. A gateway whose policy is
   misconfigured still does not silently write. Both are asserted, and
   disabling the floor fails the smoke.
+What `ref-declarative` found:
+
+- **Nothing was missing**, and the cohesion claim holds: state, its
+  rendering into the prompt, capability rules and event reactions are
+  each one declaration, and the harness does the assembling.
+- **"Dynamic capability resolution" has a boundary worth stating.** The
+  *toolkit* is fixed when the agent is constructed -- a model needs a
+  stable list of what exists -- so what follows live state is the
+  `Permission` policy, per call. That is enough for a mode change to take
+  effect on the next call with no rebuild of the agent or session
+  (asserted), but it is not a tool list that changes under the model.
+- **A tool that touches state declares it**, in both directions:
+  `dependencies: [tag]` for the service and a `failure` for the store's
+  error. That is the type system doing its job, and it is worth knowing
+  before writing the first stateful tool.
+- **`docs/flue.md` is referenced by this plan but absent** from the
+  repository, so the mapping this reference argues against is not
+  checkable here.
+
 - **Gap: no in-memory MCP transport.** An MCP surface can be *typechecked*
   in an example but not *built*, because every transport binds either the
   process's stdio or an `HttpRouter`. `examples/mcp.ts` has the same

@@ -228,7 +228,15 @@ Rules that make them worth the maintenance:
    which is the acceptance test. A chat preset is deliberately absent:
    the plan names one, but nothing calls it yet, and that is the guess
    this rule exists to prevent.
-5. **`ref-declarative`**, and the ergonomics claim it is there to substantiate.
+5. ~~**`ref-declarative`**~~ — written 2026-08-31. State, how state
+   reaches the model, which capabilities apply, and what reacts to what
+   are each declared as data; the harness assembles them. Runs in CI
+   (`npm run smoke:ref-declarative`) and enforces its claims. Findings in
+   `STATUS.md`: nothing was missing, and the ergonomics claim holds with
+   one caveat worth stating -- a *toolkit* is fixed at construction, so
+   "dynamic capability resolution" here means the policy resolving
+   against live state per call, not the tool list changing under the
+   model.
 6. **Batteries** — LSP, truncation as a service, rendered prompts, code mode —
    in whatever order step 1's findings rank them.
 

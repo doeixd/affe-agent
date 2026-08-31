@@ -187,10 +187,14 @@ open, so the next pass does not have to re-derive it.
     2026-08-31: `@doeixd/effect-agent/presets` (`Presets.coding`,
     `Presets.gateway`), derived from what the two references had written
     by hand, and both references rewritten on top of them as the
-    acceptance test. A chat preset waits for a caller. What remains:
-    **`ref-declarative`** (step 5) and the ergonomics claim it
-    substantiates, and the remaining batteries (LSP, truncation as a
-    service, rendered prompts).
+    acceptance test. A chat preset waits for a caller. Step 5 landed the same day:
+    `examples/ref-declarative.ts` substantiates the ergonomics claim --
+    state, its rendering, capability rules and reactions each declared as
+    data -- and records the boundary it found (a toolkit is fixed at
+    construction; what follows live state is the policy, per call). What
+    remains: **step 6's batteries** (LSP, truncation as a service,
+    rendered prompts), ranked by what step 1 found. **`plan-primitives.md`
+    steps 1–5 are complete.**
 21. ~~**Code mode**~~ (`research-code-mode.md`,
     `plan-code-mode-engine.md`) — complete 2026-08-31, plan and all six
     steps. `/code` ships `Catalog` (JSDoc TypeScript signatures from any

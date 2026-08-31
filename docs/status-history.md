@@ -4009,3 +4009,34 @@ arguments through to `Agent.make` explicitly, wrote that in a comment,
 and then found by breaking it that they were redundant -- the comment
 now records the real cause.
 
+## The declarative reference (2026-08-31)
+
+`plan-primitives.md` §7 step 5, the third and last of the reference
+implementations. It is the one that argues rather than demonstrates: the
+plan's conclusion about framework ergonomics is that nothing is missing
+-- "the difference is cohesion, not power" -- and that a user's real
+problem is assembling fifteen pieces to get what a declarative framework
+hands them in one declaration. `examples/ref-declarative.ts` makes that
+checkable. State, how state reaches the model, which capabilities apply
+in which mode, and what reacts to what are each declared as data, and
+the harness assembles them.
+
+The claim holds, with one boundary worth stating rather than glossing: a
+*toolkit* is fixed when the agent is constructed, because a model needs
+a stable list of what exists. So "dynamic capability resolution" here
+means the `Permission` policy resolving against live state per call --
+which is enough for a mode change to take effect on the very next call
+with no rebuild of the agent or the session, and the reference asserts
+exactly that (planning refuses `run_step`; a state write flips the mode;
+the same session then runs it). Breaking the resolution to ignore state
+fails the smoke.
+
+Two smaller findings. A tool that touches state has to declare it in
+both directions -- `dependencies: [tag]` for the service, and a
+`failure` for the store's error -- which is the type system doing its
+job and is worth knowing before writing the first stateful tool; the
+first draft of this file did neither and did not compile. And
+`docs/flue.md`, which this plan cites as the mapping the ergonomics
+claim rests on, is not in the repository, so that mapping cannot be
+checked here.
+
