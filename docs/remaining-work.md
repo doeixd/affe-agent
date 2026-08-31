@@ -247,15 +247,21 @@ open, so the next pass does not have to re-derive it.
     behind it: the per-subject `Bindings` store and
     `Credentials.resolveFor`, reauth via elicitation, `securitySchemes`
     derivation.
-26b. **OpenRouter example** — small, unblocked, and *not* a package.
-    Checked 2026-08-31: OpenRouter speaks the OpenAI API and
-    `@effect/ai-openai@4.0.0-rc.112` takes an `apiUrl`, so a provider layer
-    is ten lines of caller configuration and `src/` should stay out of it
-    (`plan-primitives.md`, model gateways). What is missing is an example
-    carrying the snippet and the two things a caller cannot guess: that
-    routing and fallback belong to `ExecutionPlan`, and that per-model usage
-    still reaches `/budget` through the ordinary usage events. Typecheck-only,
-    as `examples/anthropic.ts` is -- it needs a real key to run.
+26b. **OpenRouter example** — SHIPPED 2026-08-31, `examples/openrouter.ts`.
+    OpenRouter speaks the OpenAI API and `@effect/ai-openai@4.0.0-rc.112` takes
+    an `apiUrl`, so the provider layer is ten lines of caller configuration and
+    `src/` stays out of it (`plan-primitives.md`, model gateways). The example
+    carries that snippet plus the two things a caller cannot guess: that routing
+    *across* calls belongs to `ExecutionPlan` while OpenRouter's own routing is
+    *within* one call, and that usage still reaches `/budget` through the
+    ordinary usage events — in tokens, not dollars, which is the trap when a
+    plan spans vendors at different prices. Typecheck-only, as
+    `examples/anthropic.ts` is; the `_NeedsNothing` assertion was broken once to
+    confirm it is enforced. One thing the plan had wrong: rc.112 speaks the
+    **Responses** API (`POST /responses`), not chat completions, so "OpenAI-
+    compatible" was not on its own sufficient — OpenRouter's `/api/v1/responses`
+    was checked against its OpenAPI document. `@effect/ai-openai` is now a
+    devDependency, for the example only.
 
 26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
     — new packages and architecture (Claude Code / OpenCode bridges, relay

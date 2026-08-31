@@ -2064,6 +2064,9 @@ context transforms and canonical history are directly testable.
   object authoring styles, bound tools, a bundle and `Agent.run`
 - [`examples/tracing.ts`](./examples/tracing.ts) — OTLP export
 - [`examples/anthropic.ts`](./examples/anthropic.ts) — a real provider
+- [`examples/openrouter.ts`](./examples/openrouter.ts) — a model gateway as
+  ordinary provider configuration: where routing lives, and what a gateway
+  does to budgets
 - [`examples/durable.ts`](./examples/durable.ts) — durable execution and the
   cluster client; the snippets above are lifted from it, so they are
   type-checked rather than prose

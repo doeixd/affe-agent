@@ -132,7 +132,11 @@ the same rule failing from the other direction. What is worth having is an
 **example** carrying that snippet and the two facts a caller cannot guess:
 routing/fallback belongs to `ExecutionPlan` rather than to OpenRouter's own
 routing when both could serve, and per-model usage still lands in `/budget`
-through the ordinary usage events.
+through the ordinary usage events. **Shipped 2026-08-31 as
+`examples/openrouter.ts`**, typecheck-only. It also records a third fact the
+snippet above hides: the rc speaks the *Responses* API (`POST /responses`), so
+"OpenAI-compatible" is not on its own enough — OpenRouter's `/api/v1/responses`
+was checked against its OpenAPI document before the example claimed it.
 
 The distinction this row draws is *provider* versus *product*, and it is worth
 holding against a second case: a coding CLI such as Claude Code is neither.

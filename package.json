@@ -270,6 +270,7 @@
     "@cloudflare/workers-types": "^5.20260830.1",
     "@durable-streams/server": "^0.3.8",
     "@effect/ai-anthropic": "^4.0.0-rc.112",
+    "@effect/ai-openai": "^4.0.0-rc.112",
     "@effect/language-service": "^0.87.2",
     "@effect/platform-node": "^4.0.0-rc.112",
     "@effect/sql-sqlite-node": "^4.0.0-rc.112",

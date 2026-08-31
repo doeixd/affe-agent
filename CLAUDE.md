@@ -7,3 +7,7 @@ signature, not the call site. Test code counts as user code.
 
 Compiling is not proof that inference is precise — `any` compiles too. Assert
 it, and break the assertion once to confirm it is enforced.
+
+**Always review your code after committing.** A double check, on the commit you
+just made: correctness, edge cases addressed, TypeScript DX, performance,
+hardening. Fix what it finds in a follow-up commit rather than leaving it.
