@@ -102,14 +102,29 @@ Single-user: one tenant, `subject` absent, every binding `owner: "org"`, the
 provider reading configuration. That is the degenerate case of the seam, and
 it costs nothing to have parameterised it.
 
-## 5. Reauth through elicitation (specified, not built)
+## 5. Reauth through elicitation (built 2026-08-31)
 
-An expired token during a run should raise an elicitation carrying the
-authorization URL; the user completes it; the run resumes -- and under
-`/durable` that survives the process, which is the one thing executor cannot
-do. `CredentialError.reauthRequired` is the hook: a source that sees it can
-ask instead of failing. Wiring it needs the source's `invoke` to reach the
-session's elicitor, which is §6's question again from the other side.
+An expired token raises an elicitation carrying the authorization URL, the
+user completes it, and the run resumes -- and under `/durable` the elicitor
+is a `DurableDeferred`, so that wait survives the process, which is the one
+thing executor cannot do.
+
+`Credentials.withReauth(resolve, { elicitor })` wraps any resolution and is
+what a source's per-invocation `headers`/`credentials` hook takes. The
+elicitor is the *host's* to supply -- the same answer §6 reached, and the
+same shape code mode's in-program approvals use -- so an application passes
+the elicitor its session was built with and the question lands in
+`session.pending` beside every other, as `kind: "credential-reauth"`
+carrying `{ handle, reason, authorizationUrl? }`.
+
+Two rules the tests pin, both about not training people to click through
+questions:
+
+- **Only `reauthRequired` failures ask.** A missing handle is a
+  misconfiguration a human cannot fix by following a link.
+- **Exactly one retry.** A loop would re-ask forever against a connection
+  that is not coming back; the second failure is the honest answer, and a
+  refusal fails with the original error without retrying at all.
 
 ## 6. The blocked half: the principal at invoke time
 
@@ -146,5 +161,17 @@ definition, and this document says so rather than pretending otherwise.
    by nothing gets `reauthRequired: true`, a bare configuration gap does
    not.
 4. Reauth via elicitation (§5).
-5. OAuth as a per-source escape hatch, never a placement (§7.4 of the
-   research).
+5. ~~OAuth as a per-source escape hatch, never a placement~~ -- built
+   2026-08-31 as `Credentials.fromRefreshing`. The shape is the argument:
+   static credentials are declarative, OAuth is stateful and
+   protocol-specific, and pretending otherwise produces an abstraction
+   that fits neither. So there is no `oauth` placement and there will not
+   be one -- a refreshing connection resolves the conventional token input
+   like any other credential, and everything specific to it (discovery,
+   registration, scopes, callbacks, refresh, garbage collection) stays in
+   the application behind one function. `token` returning `None` means
+   *reconnection is required*, which is what a dead refresh token is, and
+   becomes the `CredentialError` §5 turns into a question. Read-only by
+   construction: the application owns the connection.
+
+**The plan is complete.**

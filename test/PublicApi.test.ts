@@ -696,5 +696,36 @@ describe("durable and cluster surfaces", () => {
     ])
     assert.deepStrictEqual(Object.keys(toolSource.OpenApi).sort(), ["extractOpenApi", "makeOpenApiSource"])
     assert.deepStrictEqual(Object.keys(toolSource.GraphQL).sort(), ["extractGraphQL", "makeGraphQLSource"])
+
+    // Credentials: the three layers, the per-principal store, and the
+    // stateful-token escape hatch with the question it can raise.
+    // `Binding` is type-only, so it is deliberately absent here: the
+    // runtime vocabulary is the constructors and the services.
+    assert.deepStrictEqual(Object.keys(toolSource.Credentials).sort(), [
+      "Bindings",
+      "CredentialError",
+      "Method",
+      "Placement",
+      "Provider",
+      "ReauthDetail",
+      "bearer",
+      "binding",
+      "bindings",
+      "fromConfig",
+      "fromRefreshing",
+      "fromValues",
+      "header",
+      "headers",
+      "headersFor",
+      "methodFromOpenApi",
+      "none",
+      "query",
+      "readOnly",
+      "render",
+      "requiredVariables",
+      "resolve",
+      "resolveFor",
+      "withReauth"
+    ])
   })
 })

@@ -3907,3 +3907,41 @@ another -- because a type assertion that cannot fail is worse than none.
 `examples/code-mode.ts` makes the same claim where a user would feel it:
 it runs, needs no services, and contains no cast.
 
+## Credentials: reconnecting an expired token (2026-08-31)
+
+The last two slices of `plan-tool-credentials.md`, which turned out to be
+one feature: a stateful token that can expire and ask to be reconnected.
+
+`Credentials.fromRefreshing` is the OAuth escape hatch the research
+argued for, and its shape is the argument -- static credentials are
+declarative, OAuth is stateful and protocol-specific, and modelling the
+second as the first fits neither. There is no `oauth` placement and there
+will not be one: a refreshing connection resolves the conventional token
+input like any other credential, and discovery, registration, scopes,
+callbacks and refresh stay in the application behind one function. Its
+`token` returning `None` means *reconnection is required* -- the state a
+dead refresh token is in -- and becomes a `CredentialError` carrying
+`reauthRequired` and, when known, the URL a human goes to (a new optional
+field, since the elicitation needs somewhere to send them). Read-only by
+construction: refreshing is not writing, and nothing here should be able
+to overwrite a connection the application owns.
+
+`Credentials.withReauth` raises that as a `credential-reauth` elicitation
+and retries once. The elicitor is the host's to supply -- the same answer
+the principal decision reached, and the same shape code mode's in-program
+approvals use -- so the question lands in `session.pending` beside every
+other, and under `/durable` the wait survives the process. Two rules are
+pinned because both are about not training people to click through
+questions: only `reauthRequired` failures ask (a missing handle is a
+misconfiguration no link can fix), and there is exactly one retry (a loop
+would re-ask forever against a connection that is not coming back; a
+refusal fails with the original error without retrying at all). Broken
+once each way -- asking on every credential error fails the
+misconfiguration pin, and retrying regardless of the answer fails the
+refusal pin.
+
+With this the credentials contract is complete end to end: method,
+binding and provider; the per-subject store over `CurrentPrincipal`;
+query placements and `securitySchemes` derivation; and now reauth and the
+stateful-token hatch.
+

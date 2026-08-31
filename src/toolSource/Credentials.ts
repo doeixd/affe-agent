@@ -1,4 +1,5 @@
 import { Config, Context, Effect, Layer, Option, Redacted, Schema } from "effect"
+import * as Elicitation from "../Elicitation.js"
 import { CurrentPrincipal } from "../Principal.js"
 import { Headers } from "effect/unstable/http"
 
@@ -144,7 +145,15 @@ export class CredentialError extends Schema.TaggedError<CredentialError>()(
     reason: Schema.Literals(["missing", "unreadable", "readOnly", "expired"]),
     detail: Schema.String,
     /** The model can say "reconnect GitHub" instead of "internal error". */
-    reauthRequired: Schema.Boolean
+    reauthRequired: Schema.Boolean,
+    /**
+     * Where a human reconnects, when the provider knows.
+     *
+     * Only meaningful with `reauthRequired`, and optional even then: a
+     * config-backed credential has no URL to offer, and inventing one
+     * would be worse than saying nothing.
+     */
+    authorizationUrl: Schema.optional(Schema.String)
   }
 ) {
   override get message() {
@@ -442,3 +451,124 @@ export const methodFromOpenApi = (spec: unknown): DerivedMethod => {
     skipped
   }
 }
+
+// ---------------------------------------------------------------------------
+// Stateful tokens: the per-source escape hatch, and asking a human to reconnect
+
+/**
+ * A provider whose tokens expire and can be refreshed -- OAuth, or
+ * anything else stateful.
+ *
+ * This is the escape hatch `research-tool-sources.md` §7.4 argues for, and
+ * the shape of it is the argument: **static credentials are declarative,
+ * OAuth is stateful and protocol-specific, and pretending otherwise
+ * produces an abstraction that fits neither.** So OAuth never enters the
+ * *method* vocabulary -- there is no `oauth` placement, and there will not
+ * be one. It resolves the conventional token input like any other
+ * credential, and everything specific to it (discovery, registration,
+ * scopes, callbacks, refresh, garbage collection) lives behind this one
+ * function, where it belongs to the application.
+ *
+ * `token` returning `None` means *reconnection is required*, not "no
+ * value": that is the state a dead refresh token is in, and it becomes a
+ * `CredentialError` carrying `reauthRequired` and, when the caller knows
+ * one, the URL a human goes to. `withReauth` is what turns that into a
+ * question.
+ */
+export const fromRefreshing = (options: {
+  /** Names the provider in errors: `oauth`, `1password`. */
+  readonly key: string
+  /** The current token, refreshed if the caller needs to. */
+  readonly token: (handle: string) => Effect.Effect<Option.Option<Redacted.Redacted<string>>, CredentialError>
+  /** Where a human reconnects this handle, when that is known. */
+  readonly authorizationUrl?: ((handle: string) => string | undefined) | undefined
+}): Layer.Layer<Provider> =>
+  Layer.succeed(Provider, {
+    key: options.key,
+    // Refreshing is not writing: the application owns the connection, and
+    // nothing here should be able to overwrite it.
+    writable: false,
+    get: (handle) =>
+      Effect.flatMap(options.token(handle), (found) =>
+        Option.isSome(found)
+          ? Effect.succeed(found)
+          : Effect.fail(
+            new CredentialError({
+              handle,
+              reason: "expired",
+              detail: `${options.key} needs ${JSON.stringify(handle)} reconnected`,
+              reauthRequired: true,
+              ...(() => {
+                const url = options.authorizationUrl?.(handle)
+                return url === undefined ? {} : { authorizationUrl: url }
+              })()
+            })
+          ))
+  })
+
+/** What a reauthorization question carries. */
+export const ReauthDetail = Schema.Struct({
+  handle: Schema.String,
+  reason: Schema.String,
+  /** Where the human goes, when the provider knew. */
+  authorizationUrl: Schema.optional(Schema.String)
+})
+export type ReauthDetail = typeof ReauthDetail.Type
+
+const encodeReauth = Schema.encodeSync(Schema.toCodecJson(ReauthDetail))
+
+/**
+ * Ask a human to reconnect, then try once more.
+ *
+ * The §5 promise, and the shape is the same one code mode's in-program
+ * approvals use, for the same reason: the elicitor is the *host's* to
+ * supply, so an application passes the very one its session was built
+ * with and the question lands in `session.pending` beside every other.
+ *
+ * Only `reauthRequired` failures ask -- a missing handle is a
+ * misconfiguration a human cannot fix by clicking a link, and asking
+ * about it would train people to click through questions that never
+ * help. Exactly one retry: a loop would re-ask forever against a
+ * connection that is not coming back, and the second failure is the
+ * honest answer.
+ *
+ * Under `/durable` the elicitor is a `DurableDeferred`, so the wait
+ * survives the process -- which is the thing this design is *for*, and
+ * the one thing a live-context sandbox cannot do.
+ */
+export const withReauth = <A, E, R>(
+  resolve: Effect.Effect<A, E | CredentialError, R>,
+  options: {
+    readonly elicitor: Elicitation.Elicitor
+    /** Namespaces the question's id. Defaults to the handle. */
+    readonly id?: ((error: CredentialError) => string) | undefined
+    /** Run when the question is asked, before the wait. */
+    readonly onAsk?: ((detail: ReauthDetail) => Effect.Effect<void>) | undefined
+  }
+): Effect.Effect<A, E | CredentialError, R> =>
+  Effect.catchIf(
+    resolve,
+    (error): error is CredentialError =>
+      error instanceof CredentialError && error.reauthRequired,
+    (error) =>
+      Effect.gen(function* () {
+        const detail: ReauthDetail = {
+          handle: error.handle,
+          reason: error.detail,
+          ...(error.authorizationUrl === undefined
+            ? {}
+            : { authorizationUrl: error.authorizationUrl })
+        }
+        const answer = yield* options.elicitor.elicit(
+          {
+            id: options.id?.(error) ?? `reauth:${error.handle}`,
+            kind: "credential-reauth",
+            detail: encodeReauth(detail)
+          },
+          options.onAsk === undefined ? Effect.void : options.onAsk(detail)
+        )
+        // Refused, or reconnected and still broken: the original failure
+        // is what the caller gets, unchanged.
+        return yield* answer.granted ? resolve : Effect.fail(error)
+      })
+  )
