@@ -1,5 +1,6 @@
-import { Context, Duration, Effect, Option, Result, Stream } from "effect"
+import { Context, Duration, Effect, Option, Result, Schema, Stream } from "effect"
 import type { Tool, Toolkit } from "effect/unstable/ai"
+import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
 import * as ToolExecution from "../ToolExecution.js"
 import { CodeDiagnostic } from "./internal/diagnostics.js"
@@ -71,6 +72,21 @@ export interface MakeOptions<Groups extends ToolGroups, R> {
   readonly limits?: Limits | undefined
   /** The engine. The owned interpreter unless a host supplies another. */
   readonly executor?: CodeExecutor | undefined
+  /**
+   * Where an `Ask` decision is asked (plan step 6).
+   *
+   * The host supplies it -- usually the very elicitor its session was
+   * built with, so an in-program approval is answered through the same
+   * channel and appears in `session.pending` beside any other. Absent,
+   * an `Ask` throws into the program saying so: no elicitor means no way
+   * to ask, and failing closed is the only honest answer.
+   *
+   * **Not durable.** With a durable elicitor the workflow suspends and
+   * the program is re-executed from the top on resume; only journalled
+   * tool calls are replay-safe. Durable suspension of a *paused program*
+   * is explicitly out of scope (`plan-code-mode-engine.md` decision 7).
+   */
+  readonly elicitor?: Elicitation.Elicitor | undefined
 }
 
 /** One nested call, observed. What step 5's events project from. */
@@ -128,8 +144,31 @@ export const interpreted: CodeExecutor = {
     })
 }
 
+/** An approval this program is waiting on. */
+export interface PendingApproval {
+  readonly id: string
+  readonly path: ReadonlyArray<string>
+  readonly detail: Permission.ApprovalDetail
+}
+
 /** Per-run hooks. Progress is the caller's to project. */
 export interface ExecuteOptions {
+  /**
+   * Namespace for the elicitation ids this run allocates. A caller with
+   * a tool call id should pass it, so an answer can never be matched to
+   * a different program's question. Defaults to a random prefix.
+   */
+  readonly approvalPrefix?: string | undefined
+  /**
+   * Called when the program pauses for approval, before the wait begins.
+   *
+   * The kernel's event bus is not reachable from a tool handler, so this
+   * is how an in-program approval becomes visible: `CodeTool` reports it
+   * as a preliminary result, which is projected as `ToolCallProgress`.
+   * The request is also in `session.pending`, because the elicitor is
+   * the session's own.
+   */
+  readonly onApproval?: ((pending: PendingApproval) => Effect.Effect<void>) | undefined
   /**
    * Called as each nested call settles, so a caller can report progress
    * while the program is still running -- `CodeTool` turns these into
@@ -144,6 +183,21 @@ export interface CodeMode<R> {
     program: string,
     options?: ExecuteOptions
   ) => Effect.Effect<ExecuteResult, never, R>
+}
+
+const encodeApproval = Schema.encodeSync(Schema.toCodecJson(Permission.ApprovalDetail))
+
+/**
+ * Namespace for one run's elicitation ids when the caller names none.
+ *
+ * Random rather than a counter: a counter resets with the process, and
+ * two runtimes in one session would mint the same id for different
+ * questions -- an answer would then be matched to the wrong program.
+ */
+const randomPrefix = (): string => {
+  const bytes = new Uint8Array(6)
+  globalThis.crypto.getRandomValues(bytes)
+  return `code-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`
 }
 
 const refusedOf = (diagnostic: CodeDiagnostic): Outcome => ({
@@ -177,6 +231,8 @@ export const make = <Groups extends ToolGroups, R = never>(
     Effect.gen(function*() {
       const calls: Array<ObservedCall> = []
       let callCount = 0
+      let approvalCount = 0
+      const prefix = runOptions?.approvalPrefix ?? randomPrefix()
 
       const observed = (
         path: ReadonlyArray<string>,
@@ -274,13 +330,45 @@ export const make = <Groups extends ToolGroups, R = never>(
               )
             }
             if (decision._tag === "Ask") {
-              return yield* rethrow(
-                new ProgramThrow({
-                  value: {
-                    message: `${tool.name} requires approval, which code mode cannot ask for yet; call the tool directly`
-                  }
-                })
+              if (options.elicitor === undefined) {
+                return yield* rethrow(
+                  new ProgramThrow({
+                    value: {
+                      message: `${tool.name} requires approval and this runtime has no elicitor; call the tool directly`
+                    }
+                  })
+                )
+              }
+              approvalCount += 1
+              const id = `${prefix}-approval-${approvalCount}`
+              const detail: Permission.ApprovalDetail = {
+                toolName: tool.name,
+                toolCallId: `code-${callCount}`,
+                action: decided.request.action,
+                resource: decided.request.resource,
+                ...(decided.request.subject === undefined
+                  ? {}
+                  : { subject: decided.request.subject }),
+                ...(decision.reason === undefined ? {} : { reason: decision.reason })
+              }
+              // Announced *after* the request registers and before the
+              // wait -- the ordering `Elicitor.elicit` documents, and the
+              // reason the announcement is passed rather than emitted here.
+              const answer = yield* options.elicitor.elicit(
+                { id, kind: "tool-approval", detail: encodeApproval(detail) },
+                runOptions?.onApproval === undefined
+                  ? Effect.void
+                  : runOptions.onApproval({ id, path, detail })
               )
+              if (!answer.granted) {
+                // The executor split, again: a refused approval throws.
+                // A program must not be able to ignore it on the happy path.
+                return yield* rethrow(
+                  new ProgramThrow({
+                    value: { message: `approval refused for ${tool.name}` }
+                  })
+                )
+              }
             }
           }
 

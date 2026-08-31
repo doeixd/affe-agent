@@ -4,6 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as Permission from "../src/Permission.js"
 import { CodeTool } from "../src/code/index.js"
 import { withSession } from "./helpers.js"
 
@@ -140,6 +141,50 @@ describe("CodeTool", () => {
       }
       assert.strictEqual(result.outcome, "refused")
       assert.include(result.fix, "for...of")
+    })
+  )
+
+  it.effect("an in-program approval reaches a renderer as progress, carrying the id to answer with", () =>
+    Effect.gen(function*() {
+      const bound = yield* CodeTool.tool({
+        tools: yield* groups,
+        permission: Permission.make(() => Effect.succeed(Permission.ask("confirm"))),
+        // Answers yes; the point under test is that the question became
+        // visible, since a handler cannot reach the event bus.
+        elicitor: {
+          elicit: (request, announce) =>
+            Effect.as(announce, { id: request.id, granted: true }),
+          respond: () => Effect.succeed(false),
+          pending: Effect.succeed([])
+        }
+      })
+      const { events } = yield* withSession(
+        turns("const n = await tools.data.count({})\nreturn n.value"),
+        Agent.make({ tools: [bound] }),
+        ({ session }) => AgentSession.prompt(session, "do it")
+      )
+
+      const waiting = events
+        .filter(AgentEvent.is("ToolCallProgress"))
+        .map((entry) => entry.event.result as {
+          readonly outcome: string
+          readonly awaiting?: { readonly id: string; readonly path: string; readonly action: string }
+        })
+        .filter((result) => result.outcome === "awaiting-approval")
+      assert.strictEqual(waiting.length, 1)
+      assert.strictEqual(waiting[0]!.awaiting!.path, "data.count")
+      // The default projection's action for a tool with no annotation.
+      assert.strictEqual(waiting[0]!.awaiting!.action, "tool")
+      // Namespaced by the tool call, so an answer cannot be matched to
+      // another program's question.
+      assert.include(waiting[0]!.awaiting!.id, "-approval-1")
+
+      // Approved, so the program completed.
+      const succeeded = events.filter(AgentEvent.is("ToolCallSucceeded"))
+      assert.strictEqual(
+        (succeeded[0]!.event.result as { readonly outcome: string }).outcome,
+        "returned"
+      )
     })
   )
 })

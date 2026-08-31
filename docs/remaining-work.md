@@ -218,9 +218,15 @@ open, so the next pass does not have to re-derive it.
     model-facing `execute` tool whose description carries the budgeted
     catalog, whose nested calls surface as `ToolCallProgress` through the
     existing preliminary-result seam (no kernel change), and whose
-    refusals reach the model as a `fix` rather than an error. Remaining:
-    step 6 (in-program elicitation), and the plan's own deferrals --
-    durable suspension of a paused program stays out of scope.
+    refusals reach the model as a `fix` rather than an error. Step 6 landed the same day: an
+    `Ask` inside a program pauses on a `tool-approval` elicitation built
+    from the tool's own projection, a grant proceeds, a refusal throws
+    into the program, and no elicitor means it throws saying so. The
+    question reaches renderers through the progress channel (a handler
+    cannot reach the event bus) and sits in `session.pending` because the
+    elicitor is the session's own. **The plan is now complete**; its one
+    stated deferral is durable suspension of a paused program, documented
+    at the option rather than promised.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file

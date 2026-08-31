@@ -1,6 +1,7 @@
 import { Context, Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
+import type * as Elicitation from "../Elicitation.js"
 import type * as Permission from "../Permission.js"
 import * as Catalog from "./Catalog.js"
 import * as CodeMode from "./CodeMode.js"
@@ -38,7 +39,14 @@ const Call = Schema.Struct({
  * still going -- and never the final one.
  */
 export const Result = Schema.Struct({
-  outcome: Schema.Literals(["running", "returned", "nothing", "threw", "refused"]),
+  outcome: Schema.Literals([
+    "running",
+    "awaiting-approval",
+    "returned",
+    "nothing",
+    "threw",
+    "refused"
+  ]),
   /** The value the program returned, when it returned one. */
   value: Schema.optional(Schema.Unknown),
   /** What the program threw, when it threw. */
@@ -50,7 +58,17 @@ export const Result = Schema.Struct({
   /** Everything the program logged, one entry per `console.log`. */
   logs: Schema.Array(Schema.String),
   /** Every nested tool call, in order. */
-  calls: Schema.Array(Call)
+  calls: Schema.Array(Call),
+  /**
+   * Set on an `awaiting-approval` progress result: the question the
+   * program is paused on, and the `id` an answer is delivered under.
+   */
+  awaiting: Schema.optional(Schema.Struct({
+    id: Schema.String,
+    path: Schema.String,
+    action: Schema.String,
+    resource: Schema.String
+  }))
 })
 export type Result = typeof Result.Type
 
@@ -90,6 +108,13 @@ export interface Options<Groups extends CodeMode.ToolGroups, R> {
   readonly permission?: Permission.Policy<R> | undefined
   readonly limits?: CodeMode.Limits | undefined
   readonly executor?: CodeMode.CodeExecutor | undefined
+  /**
+   * Where an in-program approval is asked. Pass the session's own
+   * elicitor, so the question appears in `session.pending` and is
+   * answered through the same channel as any other. Absent, an `Ask`
+   * throws into the program rather than running unapproved.
+   */
+  readonly elicitor?: Elicitation.Elicitor | undefined
   /** Signature budget for the catalog in the description. Defaults to 2000. */
   readonly catalogBudgetTokens?: number | undefined
 }
@@ -145,7 +170,8 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
     tools: options.tools,
     ...(options.permission === undefined ? {} : { permission: options.permission }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
-    ...(options.executor === undefined ? {} : { executor: options.executor })
+    ...(options.executor === undefined ? {} : { executor: options.executor }),
+    ...(options.elicitor === undefined ? {} : { elicitor: options.elicitor })
   })
 
   const handler: Agent.Handler<typeof definition> = ({ program }, context) =>
@@ -154,6 +180,11 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
       // nothing, which is what lets it be an ordinary bound tool.
       const seen: Array<typeof Call.Type> = []
       const result = yield* runtime.execute(program, {
+        // Namespaced by this tool call, so an answer can never be matched
+        // to a different program's question.
+        ...(context.toolCallId === undefined
+          ? {}
+          : { approvalPrefix: context.toolCallId }),
         onCall: (call) => {
           seen.push({ path: call.path.join("."), outcome: call.outcome })
           // A preliminary result: the kernel emits it as
@@ -163,7 +194,23 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
             logs: [],
             calls: [...seen]
           })
-        }
+        },
+        // The only way an in-program approval becomes visible to a
+        // renderer: the event bus is not reachable from a handler, so the
+        // question rides the progress channel, carrying the id an answer
+        // is delivered under.
+        onApproval: (pending) =>
+          context.preliminary({
+            outcome: "awaiting-approval",
+            logs: [],
+            calls: [...seen],
+            awaiting: {
+              id: pending.id,
+              path: pending.path.join("."),
+              action: pending.detail.action,
+              resource: pending.detail.resource
+            }
+          })
       })
 
       const logs = result.logs.map((entry) => entry.map(render).join(" "))

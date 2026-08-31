@@ -40,7 +40,10 @@ nothing below is needed to keep it.
 7. **Elicitation inside programs is step 6; durable suspension is out of
    scope** for v1 and recorded as a design target only (§5.3): an
    interpreter whose state survives a process boundary is a far stronger
-   claim than one that runs to completion.
+   claim than one that runs to completion. Step 6 landed 2026-08-31 with
+   that boundary stated at the `elicitor` option: with a durable elicitor
+   the workflow suspends and the program re-executes from the top on
+   resume, so only journalled tool calls are replay-safe.
 8. **Resolved 2026-08-31: acorn approved and pinned** (`acorn@8.18.0`,
    exact). The "faster" alternatives were considered and rejected: meriyah
    trades size for parse speed that is irrelevant on KB-sized model
@@ -58,7 +61,7 @@ nothing below is needed to keep it.
 | 3 | `internal/recover.ts` — fence/`export default`/bare-arrow recovery, pure string-to-string. TS-syntax stripping deliberately moved to step 4: without a parser, a regex stripper produces wrong programs that still run — the silent-corruption class step 2 exists to prevent — so until the parser lands, TS syntax is an `UnsupportedSyntax` diagnostic, not a guess | nothing |
 | 4 | `internal/parse.ts` + `internal/interpret.ts` — acorn + the §5.4 minimal subset; every absence an `UnsupportedSyntax` naming the feature | acorn approval |
 | 5 | ✅ 2026-08-31. `CodeMode.ts` (`make`/`execute` behind `CodeExecutor`; per-nested-call `ToolExecution.decide`, the executor failure split, limits, `CurrentPrincipal` on the calling fibre, an `onCall` hook) and `CodeTool.ts` (the model-facing `execute` tool: the budgeted catalog rides its description, nested calls surface as preliminary results the kernel already projects as `ToolCallProgress`, refusals reach the model as a `fix`). `tool` is an `Effect` for the same reason `Agent.toolkit` is: the handler must carry no requirement, so the policy's and handlers' services are discharged at build time | 2–4 |
-| 6 | Elicitation inside programs (decline throws) | 5 |
+| 6 | ✅ 2026-08-31. Elicitation inside programs: the host supplies the elicitor (usually its session's own, so the question lands in `session.pending`), an `Ask` pauses the program on a `tool-approval` request built from the tool's own projection, a grant proceeds and a **refusal throws** into the program. No elicitor means an `Ask` throws saying so -- fail-closed. The question reaches a renderer through the progress channel, since a handler cannot reach the event bus. Durable suspension of a paused program stays out of scope (decision 7) and is documented at the option | 5 |
 
 ## The data boundary's contract (step 2, implemented with this plan)
 

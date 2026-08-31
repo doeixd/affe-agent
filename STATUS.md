@@ -82,7 +82,9 @@ the durable claim/payload so replays see what the claimer saw.
 catalog, deterministic search), the owned acorn-based interpreter, and
 `CodeMode`/`CodeTool` -- a model-written JavaScript program runs against
 real toolkits, every nested call passing the same `Permission` decision a
-direct call gets. In-program elicitation is not built.
+direct call gets -- including an `Ask`, which pauses the program on the
+host's elicitor and throws into it when refused. Durable suspension of a
+paused program is deliberately not offered.
 
 **Batteries.** `/blob` (+ `/blob/fs`): content-addressed blob storage with
 size/MIME policy and `BlobWire` externalize/resolve over the encoded

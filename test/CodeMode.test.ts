@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import type * as Elicitation from "../src/Elicitation.js"
 import * as Permission from "../src/Permission.js"
 import { CodeMode } from "../src/code/index.js"
 import { CurrentPrincipal } from "../src/Principal.js"
@@ -66,6 +67,32 @@ export type _ResultIsNotAny = Assert<IsAny<ExecuteResult> extends true ? false :
 export type _RequirementsAreNotAny = Assert<
   IsAny<Effect.Services<ReturnType<Runtime["execute"]>>> extends true ? false : true
 >
+
+
+/**
+ * An elicitor that answers immediately, recording what it was asked.
+ * A fake rather than the memory elicitor because the point under test is
+ * what code mode *asks* and what it does with the answer, not how a real
+ * elicitor parks a fibre.
+ */
+const answering = (
+  granted: boolean,
+  seen: Array<Elicitation.Request>
+): Elicitation.Elicitor => ({
+  elicit: (request, announce) =>
+    Effect.as(
+      Effect.andThen(announce, Effect.sync(() => void seen.push(request))),
+      { id: request.id, granted }
+    ),
+  respond: () => Effect.succeed(false),
+  pending: Effect.succeed([])
+})
+
+/** A policy that asks about deletes and allows everything else. */
+const asksAboutDeletes = Permission.make((request) =>
+  Effect.succeed(
+    request.action === "delete" ? Permission.ask("say yes?") : Permission.allow
+  ))
 
 describe("CodeMode", () => {
   it.effect("a program calls tools, branches on the failure value, and returns data", () =>
@@ -186,6 +213,88 @@ describe("CodeMode", () => {
       const fenced = yield* runtime.execute("```js\nreturn 7\n```")
       assert.deepStrictEqual(fenced.outcome, { _tag: "Returned", value: 7 })
       assert.deepStrictEqual(fenced.recovered, ["fence"])
+    })
+  )
+
+  it.effect("an Ask pauses for approval; granted, the call runs and the detail describes it", () =>
+    Effect.gen(function*() {
+      const { admin } = yield* fixture
+      const asked: Array<Elicitation.Request> = []
+      const announced: Array<string> = []
+      const runtime = CodeMode.make({
+        tools: { admin },
+        permission: asksAboutDeletes,
+        elicitor: answering(true, asked)
+      })
+      const out = yield* runtime.execute(
+        "const done = await tools.admin.wipe({ target: \"staging\" })\nreturn done.value",
+        { approvalPrefix: "call-7", onApproval: (pending) =>
+          Effect.sync(() => void announced.push(`${pending.id}:${pending.path.join(".")}`)) }
+      )
+      assert.deepStrictEqual(out.outcome, { _tag: "Returned", value: "wiped staging" })
+
+      // Asked once, as a tool-approval, with the projection's own action
+      // and resource -- the same question a direct call would raise.
+      assert.strictEqual(asked.length, 1)
+      assert.strictEqual(asked[0]!.kind, "tool-approval")
+      assert.strictEqual(asked[0]!.id, "call-7-approval-1")
+      const detail = asked[0]!.detail as {
+        readonly toolName: string
+        readonly action: string
+        readonly resource: string
+        readonly reason?: string
+      }
+      assert.strictEqual(detail.toolName, "wipe")
+      assert.strictEqual(detail.action, "delete")
+      assert.strictEqual(detail.resource, "staging")
+      assert.strictEqual(detail.reason, "say yes?")
+      // Announced, so a renderer can show the question before the wait.
+      assert.deepStrictEqual(announced, ["call-7-approval-1:admin.wipe"])
+    })
+  )
+
+  it.effect("a refused approval throws into the program, and is catchable", () =>
+    Effect.gen(function*() {
+      const { admin, data } = yield* fixture
+      const asked: Array<Elicitation.Request> = []
+      const runtime = CodeMode.make({
+        tools: { admin, data },
+        permission: asksAboutDeletes,
+        elicitor: answering(false, asked)
+      })
+      const out = yield* runtime.execute([
+        "try {",
+        "  await tools.admin.wipe({ target: \"prod\" })",
+        "  return \"unreachable\"",
+        "} catch (error) {",
+        "  const ok = await tools.data.lookup({ key: \"after\" })",
+        "  return { refused: error.message, then: ok.value.found }",
+        "}"
+      ].join("\n"))
+      assert.deepStrictEqual(out.outcome, {
+        _tag: "Returned",
+        value: { refused: "approval refused for wipe", then: "value-of-after" }
+      })
+      assert.strictEqual(asked.length, 1)
+      // The refused call is observed as refused, not as a failure.
+      assert.strictEqual(out.calls[0]!.outcome, "refused")
+    })
+  )
+
+  it.effect("with no elicitor an Ask fails closed, saying why", () =>
+    Effect.gen(function*() {
+      const { admin } = yield* fixture
+      const runtime = CodeMode.make({
+        tools: { admin },
+        permission: asksAboutDeletes
+      })
+      const out = yield* runtime.execute(
+        "try {\n  await tools.admin.wipe({ target: \"prod\" })\n} catch (error) {\n  return error.message\n}"
+      )
+      assert.deepStrictEqual(out.outcome, {
+        _tag: "Returned",
+        value: "wipe requires approval and this runtime has no elicitor; call the tool directly"
+      })
     })
   )
 })

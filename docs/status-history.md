@@ -3806,3 +3806,34 @@ Broken once both ways: dropping the preliminary call fails the progress
 pin; replacing the diagnostic's `fix` with generic prose fails the
 refusal pin.
 
+## Approvals inside a running program (2026-08-31)
+
+Step 6, which completes `plan-code-mode-engine.md`. An `Ask` decision on
+a nested call no longer refuses: the program pauses on a `tool-approval`
+elicitation whose detail is built from the tool's *own* projection --
+same action, resource, subject and reason a direct call would raise, so
+a UI that already renders approvals renders this one unchanged. A grant
+proceeds; a refusal **throws** into the program, which is the executor
+split holding at its most load-bearing point: a policy refusal must not
+be something a happy path can ignore. With no elicitor supplied, an Ask
+still throws, saying exactly that -- no way to ask means fail closed.
+
+Two constraints shaped the design. The elicitor is the *host's* to
+supply (invariant 1: authority is chosen by the host), so code mode
+takes it as an option and an application passes the same one its session
+was built with -- which is what puts an in-program question into
+`session.pending` beside every other. And a tool handler cannot reach
+the kernel's event bus, so there is no `ElicitationRequested` event for
+it; instead the question rides the progress channel already used for
+nested calls, as an `awaiting-approval` preliminary result carrying the
+id an answer is delivered under. Ids are namespaced by the enclosing
+tool call (a random prefix when none is given), so an answer can never
+be matched to a different program's question.
+
+Durable suspension is still out of scope and now says so at the option:
+with a durable elicitor the workflow suspends and the program
+re-executes from the top on resume, so only journalled tool calls are
+replay-safe. Broken once both ways: letting a refused approval proceed
+fails the refusal pin; dropping the announcement fails both the
+ordering pin and the renderer-visibility pin.
+
