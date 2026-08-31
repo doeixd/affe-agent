@@ -73,6 +73,11 @@ survives the process; `/cluster` makes a session an entity (typed
 `StorageError` on the wire) and adds scheduled agents; `/durable-streams`
 delivers events across nodes.
 
+**Principal.** `Principal.CurrentPrincipal` (root): the caller's subject on
+the fibre that acts -- a `Context.Reference` the host sets per request
+(`AgentSessionHost.Options.subject`), `None` outside any host, carried on
+the durable claim/payload so replays see what the claimer saw.
+
 **Batteries.** `/blob` (+ `/blob/fs`): content-addressed blob storage with
 size/MIME policy and `BlobWire` externalize/resolve over the encoded
 prompt form; `/sandbox` (+ `/sandbox/local`) with a conformance suite and

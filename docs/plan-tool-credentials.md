@@ -116,11 +116,11 @@ session's elicitor, which is §6's question again from the other side.
 Multi-user needs the binding chosen *per principal per call*. The host knows
 the principal for every request, but the session does not carry it, and a
 tool handler -- where `invoke` runs -- sees `TurnContext`, not the request.
-Threading a principal onto the tool fibre needs the design review
-design-assessment rec 1 asks for; that review is drafted at
-`plan-principal-on-tool-fibre.md` (2026-08-30) with a recommended shape --
-a `Context.Reference` set by the host per request, which is a context key
-rather than a new kernel noun -- and awaits a decision. The seam is ready for it: `Provider.get`
+The principal now reaches the tool fibre: `plan-principal-on-tool-fibre.md`
+was decided 2026-08-31 as recommended and shipped the same day --
+`Principal.CurrentPrincipal`, set by the host per request
+(`AgentSessionHost.Options.subject`) and carried on the durable
+claim/payload. The seam is ready for it: `Provider.get`
 takes only a handle, and a per-principal `Bindings` store keyed by
 `(tenant, owner, subject)` is a Layer over `resolve`. Until then, a binding
 is chosen where the source is constructed, which is single-user by

@@ -4,6 +4,7 @@ import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { WorkflowEngine } from "effect/unstable/workflow"
 import type { AgentDefinition } from "../Agent.js"
+import { CurrentPrincipal } from "../Principal.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
@@ -280,7 +281,11 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
         submissionId: claim.submissionId,
         prompt,
         initialHistory,
-        stream: claim.stream
+        stream: claim.stream,
+        // The subject the claim recorded, forward onto the journalled
+        // payload so the run -- and any replay -- sees what the claimer saw.
+        // Not part of the execution id, which keys on session+submission.
+        ...(claim.principal === undefined ? {} : { principal: claim.principal })
       }
       const executionId = yield* submission.definition.executionId(payload)
       yield* DurableAgent.open(options.store, sessionId)
@@ -403,9 +408,13 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
         // dying in that window is the case the recorded claim exists for.
         const dispatched = yield* Effect.uninterruptible(
           Effect.gen(function* () {
+            // Read on the claiming fibre: this is the one moment the
+            // caller's context is present (docs/plan-principal-on-tool-fibre.md).
+            const principal = yield* CurrentPrincipal
             const outcome = yield* options.sessionStore.claim(sessionId, {
               prompt: Prompt.make(input),
               stream: promptOptions?.stream === true,
+              ...(Option.isNone(principal) ? {} : { principal: principal.value }),
               // The caller's key, forwarded verbatim. Without it a retry
               // after a lost acknowledgement — the store took the claim, the
               // reply never arrived — is a *second* request, refused as

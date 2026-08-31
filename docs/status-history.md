@@ -3610,3 +3610,32 @@ data are never externalised; a document decoded without resolving is
 refused loudly by the codec (pinned) instead of yielding an empty file.
 Externalisation at each transport/durable boundary (the plan's step 6)
 and the relay (step 7) are deliberately left with remaining-work item 26.
+
+## The principal reaches the tool fibre (2026-08-31)
+
+`plan-principal-on-tool-fibre.md` decided as recommended (Option A, the
+three open questions resolved: subject string, `respond` sets it, home
+`src/Principal.ts`) and implemented. `CurrentPrincipal` is a
+`Context.Reference<Option<string>>` -- not a kernel noun: no signature
+changes anywhere, and a bare session reads `None`. The host sets it
+around the *mutation* of prompt/submit/steer/followUp/respond
+(`Options.subject`), which is precise on purpose: only the owner of a
+request-id reservation executes the mutation, so a retry that joins never
+re-principals a run, and the owner fork inherits the reserving caller's
+context. The durable path cannot inherit a fibre, so the subject is read
+on the claiming fibre, persisted as `claim.principal`, forwarded onto the
+journalled `Payload` (optional and additive; not part of the execution
+id, which keys on session+submission), and provided around the
+in-workflow prompt -- replay sees what the claimer saw by construction.
+Pinned in `test/Principal.test.ts`; both provide-sites broken once (each
+failure is the durable or the host test alone). Found while wiring: the
+dispatch step is the one place the claim's fields become the payload's,
+and forgetting the copy there is invisible to types -- the test caught
+it. Unblocked next: the per-subject `Bindings` store over
+`Credentials.resolve`.
+
+Also this date, the standing parked decisions were re-affirmed
+deliberately rather than by silence: compaction phase 15 stays parked (no
+observed provider-overflow to justify a recovery seam), tree delta
+storage stays parked (no measured snapshot pain), and D4b's
+defence-in-depth stays.

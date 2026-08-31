@@ -198,14 +198,19 @@ open, so the next pass does not have to re-derive it.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.
 25. **Per-principal credentials** (`plan-tool-credentials.md` §6) — the
-    design review rec 1 requires is drafted and awaiting a decision:
-    `docs/plan-principal-on-tool-fibre.md` (2026-08-30). Recommended shape:
-    a `Context.Reference` the host sets per request — verified to reach
-    tool handlers because a submission forks from the caller's fibre and
-    the session env cannot clobber a key it never held; the durable path
-    carries the subject on the persisted `Payload`. Not implemented until
-    reviewed. The `Bindings` store, reauth via elicitation and
-    `securitySchemes` derivation queue behind it.
+    principal decision is made and its mechanism SHIPPED 2026-08-31
+    (`docs/plan-principal-on-tool-fibre.md`, decided as recommended):
+    `Principal.CurrentPrincipal` on the root, set by
+    `AgentSessionHost.Options.subject` around the five mutations
+    (owner-of-the-reservation semantics), and carried on the durable path
+    as `claim.principal` → `Payload.principal` → provided around the
+    in-workflow run, optional/additive so existing journals decode.
+    Pinned by `test/Principal.test.ts` (bare session reads `None`; two
+    principals interleave on one hosted session; the durable tool reads
+    what the claimer set), both mechanisms broken once. Still queued
+    behind it: the per-subject `Bindings` store and
+    `Credentials.resolveFor`, reauth via elicitation, `securitySchemes`
+    derivation.
 26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
     — new packages and architecture (Claude Code / OpenCode bridges, relay
     transport, `SessionInbox` / `ProcessManager`). Preconditions are all met

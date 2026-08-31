@@ -1,4 +1,16 @@
-# Decision draft: the principal on the tool fibre
+# Decision: the principal on the tool fibre
+
+**Decided 2026-08-31: Option A, as recommended.** The three open questions
+resolve as recommended -- an opaque subject string (a tenant becomes a
+second Reference the day multi-tenancy is real), `respond` sets it too,
+and the home is `src/Principal.ts` exported from the root. Implemented the
+same day: `Principal.CurrentPrincipal`; `AgentSessionHost.Options.subject`
+providing it around the five mutations (owner-of-the-reservation
+semantics, so a joining retry never re-principals a run); the durable path
+carries it `claim.principal` → `Payload.principal` → provided around the
+in-workflow prompt, optional and additive so existing journals decode.
+`DurableAgent.submit` (the low-level, claimless path) deliberately does
+not carry it -- the claim is where the caller's fibre meets persistence.
 
 Drafted 2026-08-30 for review — this is the design review that
 [design-assessment](./design-assessment-2026-08-28.md) rec 1 requires before

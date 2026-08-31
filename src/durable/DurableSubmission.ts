@@ -1,5 +1,6 @@
 import { Cause, Deferred, Duration, Effect, Exit, Option, Ref, Schedule, Schema } from "effect"
 import * as PromptWire from "../PromptWire.js"
+import { CurrentPrincipal } from "../Principal.js"
 import * as History from "../internal/history.js"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -64,7 +65,14 @@ export const Payload = Schema.Struct({
    * Part of the payload rather than a definition-level option, so replay
    * makes the choice the original run did.
    */
-  stream: Schema.Boolean
+  stream: Schema.Boolean,
+  /**
+   * The submitter's subject, provided as `CurrentPrincipal` around the
+   * in-workflow run. On the payload because the engine's fibres inherit
+   * nothing from the caller, and a replay must see what the original saw.
+   * Optional and additive: payloads journalled before this field decode.
+   */
+  principal: Schema.optional(Schema.String)
 })
 export type Payload = typeof Payload.Type
 
@@ -740,7 +748,17 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
           const exit = yield* Effect.exit(
             AgentSession.prompt(session, payload.prompt, {
               stream: payload.stream
-            })
+            }).pipe(
+              // The submitter's subject, onto the fibre the run forks from
+              // -- the durable twin of the host's provideService, replay-
+              // stable because it rides the journalled payload.
+              payload.principal === undefined
+                ? (self) => self
+                : Effect.provideService(
+                    CurrentPrincipal,
+                    Option.some(payload.principal)
+                  )
+            )
           )
           yield* Ref.set(historyAtEnd, yield* session.history)
 

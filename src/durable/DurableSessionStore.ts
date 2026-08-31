@@ -66,7 +66,16 @@ export const Claim = Schema.Struct({
    * second one. See `claim` for why that matters and why the key has to come
    * from the caller rather than be derived here.
    */
-  key: Schema.optional(Schema.String)
+  key: Schema.optional(Schema.String),
+  /**
+   * The submitter's subject, when one was on the claiming fibre.
+   *
+   * Recorded here because the engine's fibres inherit nothing from the
+   * caller: whatever the run must see has to ride the persisted intent
+   * (`docs/plan-principal-on-tool-fibre.md`). Optional and additive, so
+   * claims written before this field decode unchanged.
+   */
+  principal: Schema.optional(Schema.String)
 })
 export type Claim = typeof Claim.Type
 
@@ -148,6 +157,8 @@ export interface DurableSessionStore {
     submission: {
       readonly prompt: Prompt.Prompt
       readonly stream: boolean
+      /** The submitter's subject, persisted on the claim. */
+      readonly principal?: string | undefined
       /**
        * A caller's own name for this request, making a retry safe.
        *
@@ -412,7 +423,8 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
               submissionId: `${sessionId}:submission-${found.submissionCount + 1}`,
               prompt: encoded,
               stream: submission.stream,
-              ...(submission.key === undefined ? {} : { key: submission.key })
+              ...(submission.key === undefined ? {} : { key: submission.key }),
+              ...(submission.principal === undefined ? {} : { principal: submission.principal })
             }
             const updated: SessionRecord = {
               ...found,
@@ -794,7 +806,8 @@ export const sqlStore = (
                   submissionId: `${sessionId}:submission-${record.submissionCount + 1}`,
                   prompt: encoded,
                   stream: submission.stream,
-                  ...(submission.key === undefined ? {} : { key: submission.key })
+                  ...(submission.key === undefined ? {} : { key: submission.key }),
+                  ...(submission.principal === undefined ? {} : { principal: submission.principal })
                 }
                 const claimJson = yield* encodeClaim(claim)
                 // The predicate restates the invariant in the statement, and

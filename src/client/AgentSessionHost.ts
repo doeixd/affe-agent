@@ -67,6 +67,15 @@ export interface PrincipalResolver<Principal> {
 export interface Options<Principal> {
   readonly principal: PrincipalResolver<Principal>
   readonly authorization: AgentProtocol.Authorization<Principal>
+  /**
+   * Project the principal to the opaque subject string set as
+   * `CurrentPrincipal` on the fibre that runs a submission
+   * (`docs/plan-principal-on-tool-fibre.md`): tool handlers, the model
+   * call and permission evaluation all read it, and a session outside any
+   * host reads `None`. The submitter's subject governs the whole run;
+   * `respond` sets it too. Absent, the host sets nothing.
+   */
+  readonly subject?: ((principal: Principal) => string) | undefined
   /** Refuse new sessions at this bound; the host never evicts live work. */
   readonly maxSessions: number
   /** Completed request records are evicted FIFO when this bound is reached. */

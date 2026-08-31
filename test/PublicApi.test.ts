@@ -23,6 +23,10 @@ describe("public API", () => {
       "Elicitation",
       "InputChannel",
       "Permission",
+      // The caller's subject on the fibre that acts: a Context.Reference the
+      // host sets per request, None outside any host. Decided in
+      // docs/plan-principal-on-tool-fibre.md; deliberately not a kernel noun.
+      "Principal",
       // The same prompt codec is used by every JSON and durable boundary. It
       // is public so custom JobStore and transport implementations do not
       // invent a subtly incompatible file-data representation.
@@ -35,6 +39,12 @@ describe("public API", () => {
       "ToolExecution",
       "ToolPermissionDeniedError",
       "isStorageError"
+    ])
+  })
+
+  it("exports the principal reference and nothing beyond it", () => {
+    assert.deepStrictEqual(Object.keys(Harness.Principal).sort(), [
+      "CurrentPrincipal"
     ])
   })
 

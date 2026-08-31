@@ -10,6 +10,7 @@ import {
   Stream
 } from "effect"
 import { positiveInteger } from "../../internal/positive.js"
+import { CurrentPrincipal } from "../../Principal.js"
 import * as AgentClient from "../AgentClient.js"
 import * as AgentProtocol from "../AgentProtocol.js"
 
@@ -26,6 +27,17 @@ export const allowAll = <Principal>(): Authorization<Principal> => ({
 
 export interface Options<Principal> {
   readonly authorization: Authorization<Principal>
+  /**
+   * Project the principal to the opaque subject string set as
+   * `CurrentPrincipal` on the fibre that runs a submission
+   * (`docs/plan-principal-on-tool-fibre.md`). The submitter's subject
+   * governs the whole run: it is provided around the mutation that starts
+   * it, the fork inherits it, and the session's captured environment
+   * cannot clobber a key it never held. `respond` sets it too -- an
+   * approval's authority is the approver's. Absent, the host sets nothing
+   * and every run reads the default `None`.
+   */
+  readonly subject?: ((principal: Principal) => string) | undefined
   /** Refuse new sessions at this bound; the host never evicts live work. */
   readonly maxSessions: number
   /** Completed request records are evicted FIFO when this bound is reached. */
@@ -486,6 +498,26 @@ export const make = <Principal>(
       )
     })
 
+    /**
+     * The submitter's subject, onto the fibre the mutation runs on.
+     *
+     * Around the *mutation*, not the whole host operation: only the owner
+     * of a request-id reservation executes the mutation, so the run's
+     * authority is whoever's request actually started it -- a retry that
+     * joins the reservation inherits the answer, never re-principals the
+     * run. The owner is forked from the reserving caller's fibre inside
+     * `mutate`, which is what carries this into the fork.
+     */
+    const asPrincipal = (principal: Principal) =>
+      <A2, E2, R2>(self: Effect.Effect<A2, E2, R2>): Effect.Effect<A2, E2, R2> =>
+        options.subject === undefined
+          ? self
+          : Effect.provideService(
+              self,
+              CurrentPrincipal,
+              Option.some(options.subject(principal))
+            )
+
     const mutate = Effect.fn("AgentSessionHost.mutate")(function* <A, I>(
       operation: MutationOperation,
       sessionId: Option.Option<AgentProtocol.SessionId>,
@@ -743,7 +775,7 @@ export const make = <Principal>(
           }),
           (result) => ({ requestId: request.requestId, result })
         )
-      )
+      ).pipe(asPrincipal(principal))
       return yield* mutate(
         "prompt",
         sessionId,
@@ -779,7 +811,7 @@ export const make = <Principal>(
           }),
           (receipt) => ({ requestId: request.requestId, submissionId: receipt.submissionId })
         )
-      )
+      ).pipe(asPrincipal(principal))
       return yield* mutate(
         "submit",
         sessionId,
@@ -816,7 +848,7 @@ export const make = <Principal>(
           requestId: request.requestId,
           accepted: true
         })
-      )
+      ).pipe(asPrincipal(principal))
       return yield* mutate(
         "steer",
         sessionId,
@@ -843,7 +875,7 @@ export const make = <Principal>(
           requestId: request.requestId,
           accepted: true
         })
-      )
+      ).pipe(asPrincipal(principal))
       return yield* mutate(
         "followUp",
         sessionId,
@@ -897,7 +929,7 @@ export const make = <Principal>(
           requestId: request.requestId,
           matched
         }))
-      )
+      ).pipe(asPrincipal(principal))
       return yield* mutate(
         "respond",
         sessionId,
