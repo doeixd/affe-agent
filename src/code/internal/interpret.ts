@@ -46,6 +46,23 @@ export class ProgramThrow extends Schema.TaggedError<ProgramThrow>()(
 
 export type ProgramFailure = ProgramThrow | CodeDiagnostic
 
+/**
+ * How a value that only exists inside the interpreter should be described
+ * to the model, or `undefined` for ordinary data.
+ *
+ * The runtime holds a few values a program can name but that cannot leave
+ * it -- a closure, a tool path, an unawaited call. Without this the data
+ * boundary describes them by their class, and "a ProgramFunction instance
+ * cannot cross" tells the model about our implementation instead of about
+ * its own program.
+ */
+export const internalKind = (value: unknown): string | undefined => {
+  if (value instanceof ProgramFunction) return "a function"
+  if (value instanceof ToolPath) return "a tool reference"
+  if (value instanceof ProgramPromiseMarker) return "a value it never awaited"
+  return undefined
+}
+
 /** How the host answers a nested tool call. */
 export type Invoke<R = never> = (
   path: ReadonlyArray<string>,
@@ -68,6 +85,9 @@ export interface Interpretation {
 // ---------------------------------------------------------------------------
 // Runtime values the program can hold that are not plain data
 // ---------------------------------------------------------------------------
+
+/** The identity of an unawaited value, stable outside `interpret`. */
+class ProgramPromiseMarker {}
 
 /** A closure the program defined. */
 class ProgramFunction {
@@ -158,10 +178,13 @@ export const interpret = <R = never>(
   Effect.gen(function*() {
     /**
      * A not-yet-awaited value: what a tool call or an async arrow returns.
-     * Declared here so its effect can carry the hook requirement `R`.
+     * Declared here so its effect can carry the hook requirement `R`, over
+     * a module-scope base so `internalKind` can recognise one from outside.
      */
-    class ProgramPromise {
-      constructor(readonly effect: Effect.Effect<unknown, ProgramFailure, R>) {}
+    class ProgramPromise extends ProgramPromiseMarker {
+      constructor(readonly effect: Effect.Effect<unknown, ProgramFailure, R>) {
+        super()
+      }
     }
     const logs: Array<ReadonlyArray<unknown>> = []
     const maxCallDepth = options.maxCallDepth ?? 256
@@ -611,8 +634,15 @@ export const interpret = <R = never>(
 
             const callee = yield* settle(yield* evaluate(node.callee, env))
             if (callee instanceof ToolPath) {
+              // Held in a variable and then called. The interpreter cannot
+              // tell a namespace from a tool -- it has never seen the
+              // toolkit -- so the message says the one thing that is true
+              // either way, and names the form that works.
+              const rendered = `tools${callee.segments.map((segment) => `.${segment}`).join("")}`
               return yield* new ProgramThrow({
-                value: { message: `tools${callee.segments.map((segment) => `.${segment}`).join("")} is a namespace, not a tool` }
+                value: {
+                  message: `${rendered} cannot be called through a variable; call it directly as ${rendered}(...)`
+                }
               })
             }
             if (callee instanceof ProgramFunction) {

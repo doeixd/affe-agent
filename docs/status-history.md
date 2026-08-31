@@ -3874,3 +3874,36 @@ own test, since caching by tool identity alone would have served one
 namespace's path for another -- a program written from the catalog would
 then call a tool that is not there.
 
+## Code mode: edges a model writes, and the type UX (2026-08-31)
+
+A second audit pass, this one written from the outside in -- the cases
+came from asking what a model would plausibly type, not from reading the
+interpreter, which is why they found things the first pass did not.
+
+The worst was the most ordinary: `tools.x.count()` on a tool whose
+schema has no properties -- the obvious thing to write -- decoded
+`undefined` against a struct and came back as a failure. Absent input is
+an empty object now; a tool that genuinely needs arguments still refuses
+with its own schema's message. Two diagnostics were also lying about
+whose fault things were: returning a closure reported "a ProgramFunction
+instance cannot cross", naming our class rather than the model's
+mistake, and a tool held in a variable was told it was "a namespace, not
+a tool" -- a guess the interpreter cannot make, since it has never seen
+the toolkit. The first is fixed by a `describe` hook on the data
+boundary, so a caller names foreign values in its own vocabulary and the
+boundary keeps knowing nothing about interpreters; the second now names
+the form that works.
+
+The type-UX half matters more than it looks, because code mode's groups
+are constrained as `WithHandler<any>` -- Effect's toolkit type is
+invariant in its tools -- and that is precisely the `any` that swallows
+a service requirement and turns a compile error into a runtime
+missing-service defect. It does not: a tool's declared `dependencies`
+reach `execute`'s requirement, a policy's `R` reaches it too, a toolkit
+needing nothing requires nothing, and none of it is `any`. All four are
+pinned at the type level and were broken once *from the library side* --
+making `ServicesOf` return `never` fails one pin, making it `any` fails
+another -- because a type assertion that cannot fail is worse than none.
+`examples/code-mode.ts` makes the same claim where a user would feel it:
+it runs, needs no services, and contains no cast.
+

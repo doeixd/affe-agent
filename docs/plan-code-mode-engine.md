@@ -128,3 +128,39 @@ the namespace matters: **0.7ms per query, a 16x improvement**, with the
 catalog's own behaviour pinned unchanged and the namespace key pinned by
 its own test (a tool under two namespaces must render two paths).
 
+## Edge-case and type-UX pass (2026-08-31)
+
+Written by asking "what would a model plausibly type?" rather than by
+reading the interpreter, which is how all four of these were found
+(`test/CodeEdges.test.ts`).
+
+1. **A parameterless tool could not be called with no arguments.**
+   `tools.x.count()` -- the obvious thing for a tool whose schema has no
+   properties -- decoded `undefined` against a struct and came back as a
+   failure. Absent input is now an empty object. A tool that *does* need
+   arguments still refuses, with its own schema's message.
+2. **Internal class names leaked into model-visible diagnostics.**
+   Returning a closure said "a ProgramFunction instance cannot cross",
+   which describes our implementation rather than the model's mistake.
+   `toData` gained a `describe` hook -- the caller names foreign values in
+   its own vocabulary -- so the same case now reads "the program returned
+   a function; return plain data instead", nested cases included.
+3. **A tool held in a variable got a wrong message.** `const f =
+   tools.x.y; await f()` said "is a namespace, not a tool", which is a
+   guess the interpreter cannot make (it has never seen the toolkit). It
+   now names the form that works.
+4. **A returned promise is awaited** and a bare `return` is
+   distinguishable from running off the end -- both were already correct
+   and are now pinned.
+
+**Type UX** (`test/CodeTypes.test.ts`), because the groups constraint is
+`WithHandler<any>` and that is exactly the kind of `any` that silently
+swallows a requirement. Pinned at the type level and broken once from
+the library side to prove the pins are not vacuous: a tool's declared
+`dependencies` reach `execute`'s requirement (making `ServicesOf` return
+`never` fails the pin), the requirement is not `any` (making it `any`
+fails a second pin), a toolkit needing nothing requires nothing, and a
+permission policy's own `R` propagates. `examples/code-mode.ts` is the
+same claim at usage level: it runs, and asserts that its requirements
+are `never` and its inference is not `any` -- with no cast anywhere.
+

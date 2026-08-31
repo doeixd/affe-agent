@@ -54,6 +54,18 @@ export class DataViolation extends Schema.TaggedError<DataViolation>()(
 export interface ToDataOptions {
   /** How deep a value may nest. A bound, not a budget; default 64. */
   readonly maxDepth?: number | undefined
+  /**
+   * Name a foreign value in the caller's own vocabulary, returning the
+   * `fix` to report for it.
+   *
+   * This module refuses anything that is not plain data, and by default
+   * describes it by its constructor -- which is right for a caller's
+   * `Map`, and wrong for a value that only exists inside the caller's
+   * runtime: "a ProgramFunction instance cannot cross" describes our
+   * implementation rather than the user's mistake. The hook lets the
+   * caller supply the sentence without this module learning its types.
+   */
+  readonly describe?: ((value: object) => string | undefined) | undefined
 }
 
 const BLOCKED = new Set(["__proto__", "constructor", "prototype"])
@@ -110,6 +122,13 @@ export const toData = (
     }
     if (typeof current !== "object") {
       return refuse("unsupported", path, `a ${typeof current} cannot cross; use plain data`)
+    }
+
+    // The caller's own vocabulary first: a value belonging to its runtime
+    // should be described as the caller would, not by its class.
+    const described = options?.describe?.(current)
+    if (described !== undefined) {
+      return refuse("unsupported", path, described)
     }
 
     // Specific shapes before the generic object cases.

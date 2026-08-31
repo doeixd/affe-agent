@@ -5,7 +5,7 @@ import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
 import * as ToolExecution from "../ToolExecution.js"
 import { CodeDiagnostic } from "./internal/diagnostics.js"
-import { interpret, ProgramThrow, type Invoke, type ProgramFailure } from "./internal/interpret.js"
+import { internalKind, interpret, ProgramThrow, type Invoke, type ProgramFailure } from "./internal/interpret.js"
 import { parse } from "./internal/parse.js"
 import { recover } from "./internal/recover.js"
 import { toData } from "./internal/data.js"
@@ -197,6 +197,17 @@ export interface CodeMode<R> {
   ) => Effect.Effect<ExecuteResult, never, R>
 }
 
+/**
+ * How the data boundary should describe a value that belongs to the
+ * interpreter rather than to the program's data -- a closure, a tool
+ * path, a call the program never awaited. Passed to `toData` so those
+ * are never reported by their class name.
+ */
+const describeInternal = (value: object): string | undefined => {
+  const kind = internalKind(value)
+  return kind === undefined ? undefined : `this is ${kind}; return plain data instead`
+}
+
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength
 
 const encodeApproval = Schema.encodeSync(Schema.toCodecJson(Permission.ApprovalDetail))
@@ -303,9 +314,25 @@ export const make = <Groups extends ToolGroups, R = never>(
 
           // The boundary, inbound: program arguments become plain data
           // before anything reads them.
-          const inputData = toData(input)
+          //
+          // No arguments means an empty object, not `undefined`: a model
+          // writing `tools.x.count()` for a tool whose schema has no
+          // properties is writing the obvious thing, and decoding
+          // `undefined` against a struct would refuse it for no reason. A
+          // tool that *does* need arguments still refuses, with its own
+          // schema's message about the missing key.
+          const inputData = toData(input === undefined ? {} : input, { describe: describeInternal })
           if (Result.isFailure(inputData)) {
-            return yield* rethrow(new ProgramThrow({ value: { message: inputData.failure.message } }))
+            const kind = internalKind(input)
+            return yield* rethrow(
+              new ProgramThrow({
+                value: {
+                  message: kind === undefined
+                    ? inputData.failure.message
+                    : `${tool.name} was passed ${kind}; pass plain data instead`
+                }
+              })
+            )
           }
 
           // Invariant 2: the same permission decision a direct call gets.
@@ -513,11 +540,20 @@ export const make = <Groups extends ToolGroups, R = never>(
 
       // The boundary, outbound: the program's answer is plain data or a
       // refusal that says why.
-      const outData = toData(returned.value)
+      const internal = internalKind(returned.value)
+      if (internal !== undefined) {
+        return finish(refusedOf(
+          new CodeDiagnostic({
+            reason: "host-value",
+            fix: `the program returned ${internal}; return plain data instead`
+          })
+        ))
+      }
+      const outData = toData(returned.value, { describe: describeInternal })
       if (Result.isFailure(outData)) {
         return finish(refusedOf(
           new CodeDiagnostic({
-            reason: outData.failure.reason === "promise" ? "host-value" : "host-value",
+            reason: "host-value",
             fix: `the returned value cannot leave the program: ${outData.failure.message}`
           })
         ))
