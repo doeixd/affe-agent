@@ -37,7 +37,7 @@ const sourceRoot = process.argv[2] === undefined
  * the Web Crypto API. Removing an entry is the only proof that a module became
  * portable, which is why the list is checked rather than merely documented.
  */
-const HOST_MODULES = new Set(["sandbox/local.ts"])
+const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts"])
 
 const builtins = new Set(builtinModules)
 const hostPackages =
