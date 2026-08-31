@@ -47,13 +47,13 @@ export class ProgramThrow extends Schema.TaggedError<ProgramThrow>()(
 export type ProgramFailure = ProgramThrow | CodeDiagnostic
 
 /** How the host answers a nested tool call. */
-export type Invoke = (
+export type Invoke<R = never> = (
   path: ReadonlyArray<string>,
   input: unknown
-) => Effect.Effect<unknown, ProgramFailure>
+) => Effect.Effect<unknown, ProgramFailure, R>
 
-export interface InterpretOptions {
-  readonly invoke: Invoke
+export interface InterpretOptions<R = never> {
+  readonly invoke: Invoke<R>
   /** Nested program-function call depth. Default 256: a bound, not a budget. */
   readonly maxCallDepth?: number | undefined
 }
@@ -68,11 +68,6 @@ export interface Interpretation {
 // ---------------------------------------------------------------------------
 // Runtime values the program can hold that are not plain data
 // ---------------------------------------------------------------------------
-
-/** A not-yet-awaited value: what a tool call or an async arrow returns. */
-class ProgramPromise {
-  constructor(readonly effect: Effect.Effect<unknown, ProgramFailure>) {}
-}
 
 /** A closure the program defined. */
 class ProgramFunction {
@@ -140,11 +135,18 @@ const truthy = (value: unknown): boolean => Boolean(value)
  * `return` produces the result, top-level `await` is allowed, and running
  * off the end returns `None`.
  */
-export const interpret = (
+export const interpret = <R = never>(
   program: acorn.Program,
-  options: InterpretOptions
-): Effect.Effect<Interpretation, ProgramFailure> =>
+  options: InterpretOptions<R>
+): Effect.Effect<Interpretation, ProgramFailure, R> =>
   Effect.gen(function*() {
+    /**
+     * A not-yet-awaited value: what a tool call or an async arrow returns.
+     * Declared here so its effect can carry the hook requirement `R`.
+     */
+    class ProgramPromise {
+      constructor(readonly effect: Effect.Effect<unknown, ProgramFailure, R>) {}
+    }
     const logs: Array<ReadonlyArray<unknown>> = []
     const maxCallDepth = options.maxCallDepth ?? 256
     let callDepth = 0
@@ -178,7 +180,7 @@ export const interpret = (
     // promises only from tool calls and async arrows.
     root.declare("Promise", "__promise_namespace__", false)
 
-    const settle = (value: unknown): Effect.Effect<unknown, ProgramFailure> =>
+    const settle = (value: unknown): Effect.Effect<unknown, ProgramFailure, R> =>
       value instanceof ProgramPromise ? value.effect : Effect.succeed(value)
 
     /** Call a program-defined closure. */
@@ -186,7 +188,7 @@ export const interpret = (
       fn: ProgramFunction,
       args: ReadonlyArray<unknown>,
       site: acorn.Node
-    ): Effect.Effect<unknown, ProgramFailure> =>
+    ): Effect.Effect<unknown, ProgramFailure, R> =>
       Effect.gen(function*() {
         if (callDepth >= maxCallDepth) {
           return yield* new CodeDiagnostic({
@@ -215,7 +217,7 @@ export const interpret = (
     const asCallable = (
       value: unknown,
       site: acorn.Node
-    ): ((...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, ProgramFailure>) => {
+    ): ((...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, ProgramFailure, R>) => {
       if (value instanceof ProgramFunction) {
         return (...args) => callProgramFunction(value, args, site)
       }
@@ -242,7 +244,7 @@ export const interpret = (
       method: string,
       args: ReadonlyArray<unknown>,
       site: acorn.Node
-    ): Effect.Effect<unknown, ProgramFailure> | undefined => {
+    ): Effect.Effect<unknown, ProgramFailure, R> | undefined => {
       const callback = args[0]
       if (!(callback instanceof ProgramFunction)) return undefined
       const call = asCallable(callback, site)
@@ -308,7 +310,7 @@ export const interpret = (
       object: unknown,
       key: string,
       node: acorn.Node
-    ): Effect.Effect<unknown, ProgramFailure> =>
+    ): Effect.Effect<unknown, ProgramFailure, R> =>
       Effect.gen(function*() {
         if (BLOCKED_MEMBERS.has(key)) {
           return yield* new CodeDiagnostic({
@@ -349,7 +351,7 @@ export const interpret = (
       value: unknown,
       env: Env,
       mutable: boolean
-    ): Effect.Effect<void, ProgramFailure> =>
+    ): Effect.Effect<void, ProgramFailure, R> =>
       Effect.gen(function*() {
         switch (pattern.type) {
           case "Identifier": {
@@ -415,7 +417,7 @@ export const interpret = (
     const evaluate = (
       node: acorn.Expression | acorn.Super | acorn.PrivateIdentifier,
       env: Env
-    ): Effect.Effect<unknown, ProgramFailure> =>
+    ): Effect.Effect<unknown, ProgramFailure, R> =>
       Effect.gen(function*() {
         // Captured before the switch: in the default branch `node` has
         // narrowed to `never`, and the name is for the diagnostic only.
@@ -737,7 +739,7 @@ export const interpret = (
     const runBlock = (
       block: acorn.BlockStatement | acorn.Program,
       env: Env
-    ): Effect.Effect<Completion, ProgramFailure> =>
+    ): Effect.Effect<Completion, ProgramFailure, R> =>
       Effect.gen(function*() {
         for (const statement of block.body) {
           const completion = yield* runStatement(statement, env)
@@ -749,7 +751,7 @@ export const interpret = (
     const runStatement = (
       statement: acorn.Statement | acorn.ModuleDeclaration,
       env: Env
-    ): Effect.Effect<Completion, ProgramFailure> =>
+    ): Effect.Effect<Completion, ProgramFailure, R> =>
       Effect.gen(function*() {
         switch (statement.type) {
           case "ExpressionStatement": {

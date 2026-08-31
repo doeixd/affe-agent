@@ -24,7 +24,7 @@ A plain `x as T` is still checked for overlap — it can narrow, it cannot claim
 string is a number. `src/` has around a hundred of those and they are ordinary.
 What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
 which routes around it. A third form erases too, from the other end: `x as never`, since `never` is
-assignable to everything. **Nineteen erasing casts exist, in four files**, and they
+assignable to everything. **Twenty-three erasing casts exist, in seven files**, and they
 are the list below. `test/Casts.test.ts` enforces it: adding one fails the build
 until it is written down here, with its reason.
 
@@ -64,6 +64,14 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   in the one place licensed to hold it rather than in the test that wanted it
   (two of them -- one per entry point, because a streamed run must see the same
   provider as a batch one);
+* **restating a wrapper-erased requirement** (`code/CodeMode.ts`, two):
+  `Toolkit.WithHandler` is invariant in its tools, so code mode's groups are
+  constrained as `WithHandler<any>` and `handle`'s services surface as
+  `unknown` — the truth, restated by the cast, is `ServicesOf<Groups>`,
+  which `execute` declares and the caller provides; and
+  `ToolExecution.decide` is an `Effect.fn` whose generic requirement
+  collapses to `unknown` under code mode's instantiation — the truth is the
+  policy's own `R`, its only requirement-carrying input;
 * **satisfying an unreduced conditional return type** (`Agent.ts`'s
   `withExecutionPlan`, the one `as never` in `src/`). The signature states the
   plan/error compatibility check as a conditional on the *return* type, so with

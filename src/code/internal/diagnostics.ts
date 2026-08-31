@@ -25,7 +25,10 @@ export class CodeDiagnostic extends Schema.TaggedError<CodeDiagnostic>()(
       "not-iterable",
       "call-depth",
       "tool-limit",
-      "host-value"
+      "host-value",
+      "timeout",
+      "output-limit",
+      "internal"
     ]),
     /** 1-based line, when the AST or the parser could say. */
     line: Schema.optional(Schema.Number),

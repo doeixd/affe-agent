@@ -3753,3 +3753,26 @@ targets. Broken once both ways: emptying the blocklist fails the escape
 pin on six routes, and letting try/catch see diagnostics fails the
 channel-separation pin.
 
+## CodeMode: programs run against real toolkits (2026-08-31)
+
+Step 5's host half (`plan-code-mode-engine.md`). `CodeMode.make({ tools,
+permission?, limits?, executor? })` builds a runtime whose `execute`
+returns *data* -- Returned / RanOffTheEnd / Threw / Refused-with-fix --
+and fails only the host's own way. Every nested call is a tool call in
+the full sense: `ToolExecution.decide` over the tool's own Permission
+projection (the same function a session uses), with the executor split
+decided in the plan -- a Deny throws into the program, an Ask is refused
+with a message saying step 6 will wire elicitation, a tool's *declared*
+failure returns as `{ ok, error }` the program branches on, and a
+handler defect is an opaque `internal` diagnostic whose cause never
+crosses. Limits (maxToolCalls, timeout, maxOutputBytes -- no defaults)
+refuse naming the fix. The interpreter's hook now carries `R`, so
+handlers' services flow through `execute`'s type and `CurrentPrincipal`
+reaches nested handlers on the calling fibre (pinned). Two erasing casts
+were added and inventoried rather than hidden: `WithHandler` is
+invariant (the groups constraint erases tools to `any`) and
+`ToolExecution.decide`'s `Effect.fn` collapses its generic requirement
+-- each cast restates the truth the wrapper lost, and the test pins that
+`execute`'s inferred types are not `any`. Broken once both ways:
+skipping the Deny branch fails the policy test; rethrowing declared
+failures fails the failure-as-value test.

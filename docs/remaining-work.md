@@ -207,8 +207,16 @@ open, so the next pass does not have to re-derive it.
     Effect.all, two failure channels (a program catches its own throws
     and a tool's failure, never a host diagnostic), the prototype escape
     closed on every member route, recursion bounded as a call-depth
-    diagnostic. Steps 5–6 (CodeMode / the execute tool, then in-program
-    elicitation) remain.
+    diagnostic. Step 5's host half landed the same day: `CodeMode.make` /
+    `execute` behind the `CodeExecutor` seam — every nested call passes
+    `ToolExecution.decide` over the tool's own Permission projection (a
+    Deny throws into the program, a declared failure is a value, defects
+    are opaque `internal` diagnostics), limits refuse naming the fix,
+    outcomes are data, and `CurrentPrincipal` reaches nested handlers on
+    the calling fibre. Two inventoried casts restate wrapper-erased
+    requirements (AGENTS.md). Remaining: `CodeTool` (the model-facing
+    tool, observed calls as agent events), then step 6 (in-program
+    elicitation).
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file

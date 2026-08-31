@@ -57,7 +57,7 @@ nothing below is needed to keep it.
 | 2 | `internal/data.ts` — the plain-data boundary: depth bound, cycle refusal, blocked prototype members dropped, Date/URL serialised, promises and functions refused with the fix named | nothing |
 | 3 | `internal/recover.ts` — fence/`export default`/bare-arrow recovery, pure string-to-string. TS-syntax stripping deliberately moved to step 4: without a parser, a regex stripper produces wrong programs that still run — the silent-corruption class step 2 exists to prevent — so until the parser lands, TS syntax is an `UnsupportedSyntax` diagnostic, not a guess | nothing |
 | 4 | `internal/parse.ts` + `internal/interpret.ts` — acorn + the §5.4 minimal subset; every absence an `UnsupportedSyntax` naming the feature | acorn approval |
-| 5 | `CodeMode.ts` (`make`/`execute` behind `CodeExecutor`) + `CodeTool.ts` (the model-facing tool over a toolkit map, per-call permission, events) | 2–4 |
+| 5 | `CodeMode.ts` landed 2026-08-31 (`make`/`execute` behind `CodeExecutor`; per-nested-call `ToolExecution.decide`, the executor failure split, limits, `CurrentPrincipal` on the calling fibre, observed calls). Still open in this step: `CodeTool.ts`, the model-facing tool, with the observed calls projected as agent events | 2–4 |
 | 6 | Elicitation inside programs (decline throws) | 5 |
 
 ## The data boundary's contract (step 2, implemented with this plan)

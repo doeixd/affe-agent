@@ -147,6 +147,17 @@ const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
     "the same tuple-preserving map, through `withSourceFloor`"
   ],
   [
+    "src/code/CodeMode.ts",
+    2,
+    "restating requirements two wrappers erased: `Toolkit.WithHandler` is " +
+      "invariant, so the groups constraint types tools as `any` and " +
+      "`handle`'s services surface as `unknown` (the truth is " +
+      "`ServicesOf<Groups>`, which `execute` declares); and " +
+      "`ToolExecution.decide` is an `Effect.fn` whose generic requirement " +
+      "collapses to `unknown` under this instantiation (the truth is the " +
+      "policy's `R`)"
+  ],
+  [
     "src/testing/TestLanguageModel.ts",
     6,
     "the same service-wrapping shape: four for the scripted model, two for " +

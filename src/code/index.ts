@@ -9,3 +9,4 @@
  * own dependency cost behind this same entry.
  */
 export * as Catalog from "./Catalog.js"
+export * as CodeMode from "./CodeMode.js"
