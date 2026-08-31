@@ -216,9 +216,12 @@ Rules that make them worth the maintenance:
    gap list, replacing the guesses in §2.
 2. **The integration axis** — `ToolSource`, then OpenAPI and GraphQL sources,
    then the three auth layers (research-tool-sources.md §6–§7).
-3. **`ref-gateway`**, which is the acceptance test for step 2 and should be
-   written against the design *before* it is built, so the design answers to a
-   caller.
+3. ~~**`ref-gateway`**~~ — written 2026-08-31, against the finished
+   integration axis. `examples/ref-gateway.ts` runs in CI
+   (`npm run smoke:ref-gateway`) and enforces its claims rather than
+   printing them. Findings in `STATUS.md`; the headline is that nothing
+   was missing -- it composes from the public surface with no cast -- and
+   the surprise is that a write is refused *twice*, independently.
 4. **Presets**, informed by what steps 1 and 3 actually had to wire by hand. Not
    before: a preset designed ahead of its first two callers is a guess.
 5. **`ref-declarative`**, and the ergonomics claim it is there to substantiate.

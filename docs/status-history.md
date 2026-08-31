@@ -3945,3 +3945,34 @@ binding and provider; the per-subject store over `CurrentPrincipal`;
 query placements and `securitySchemes` derivation; and now reauth and the
 stateful-token hatch.
 
+## The reference gateway (2026-08-31)
+
+`plan-primitives.md` §7 step 3, written the day step 2 finished --
+`examples/ref-gateway.ts`, the acceptance test for the integration axis.
+An OpenAPI document becomes typed tools through `ToolSource.bind`; the
+credential is resolved per invocation and chosen per subject, so two
+callers of one gateway reach the upstream with different bearer tokens;
+the host projects each caller to that subject; a policy refuses writes;
+and the same host is what an MCP surface would be built on. It runs in
+CI (`smoke:ref-gateway`) and *enforces* its claims -- an example that
+only prints is a demo.
+
+The exercise's real output is the findings, and there are three. The
+headline: **nothing was missing.** Every piece composed from
+`@doeixd/effect-agent/*` with no cast and no private import, which is
+what this reference existed to test. The surprise: **a write is refused
+twice, independently** -- the operator's policy denies it, and the
+source's own non-GET annotation is floored by `bind` into
+`needsApproval`, which asks, and an agent with no elicitor fails closed.
+I found this by sabotaging the policy and watching the write still not
+happen. That second guard is the one nobody would notice losing, so it
+is now asserted, and disabling the floor fails the smoke. The gap:
+**there is no in-memory MCP transport**, so an MCP surface can be
+typechecked in an example but not built -- every transport binds stdio
+or an `HttpRouter`. `examples/mcp.ts` has the same limitation; the
+server layer itself is exercised in `test/AgentMcp.test.ts`.
+
+Presets are next in that plan and were deliberately not started earlier:
+a preset designed ahead of its first two callers is a guess, and those
+two callers only both existed as of today.
+

@@ -78,6 +78,30 @@ the fibre that acts -- a `Context.Reference` the host sets per request
 (`AgentSessionHost.Options.subject`), `None` outside any host, carried on
 the durable claim/payload so replays see what the claimer saw.
 
+**Reference implementations.** `examples/ref-coding-agent.ts` and
+`examples/ref-gateway.ts` (`plan-primitives.md` §4) are built only from the
+public surface, carry compile-time assertions that inference stayed
+precise, and run in CI. What `ref-gateway` found, which is the point of
+the exercise:
+
+- **Nothing was missing.** Sources, the three credential layers,
+  per-principal bindings, per-tool policy and the host all composed from
+  `@doeixd/effect-agent/*` with no cast and no private import. That is the
+  integration axis' acceptance test passing.
+- **A write is refused twice, independently** -- and the second guard is
+  the one nobody would notice losing. The operator's `Permission` policy
+  denies it, *and* the OpenAPI source's own non-GET annotation is floored
+  by `ToolSource.bind` into the tool's `needsApproval`, which asks; an
+  agent with no elicitor fails closed. A gateway whose policy is
+  misconfigured still does not silently write. Both are asserted, and
+  disabling the floor fails the smoke.
+- **Gap: no in-memory MCP transport.** An MCP surface can be *typechecked*
+  in an example but not *built*, because every transport binds either the
+  process's stdio or an `HttpRouter`. `examples/mcp.ts` has the same
+  limitation and says so. Not blocking -- the server layer is exercised in
+  `test/AgentMcp.test.ts` -- but it is why both examples stop at the
+  transport.
+
 **Code mode.** `/code`: `Catalog` (signatures, budgeted round-robin
 catalog, deterministic search), the owned acorn-based interpreter, and
 `CodeMode`/`CodeTool` -- a model-written JavaScript program runs against
