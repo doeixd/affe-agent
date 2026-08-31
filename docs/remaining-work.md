@@ -186,7 +186,15 @@ open, so the next pass does not have to re-derive it.
     (provider-overflow recovery) stays parked as the plan's own "later,
     narrow phase" — it needs a model-invocation recovery seam justified
     independently, not a compaction special case.
-23. **Filetypes phase 5** — blob store, size/MIME policy.
+23. ~~**Filetypes phase 5**~~ — landed 2026-08-30: `/blob` (`BlobStore`
+    content-addressed by SHA-256 with memory and `/blob/fs` backings,
+    `withPolicy` size/MIME acceptance, typed `BlobRejectedError` /
+    `BlobMissingError`) and `BlobWire.externalize`/`resolve`/`references`
+    over the `PromptWire`-encoded form — oversized inline bytes become
+    refs, a receiver resolves deliberately, an unresolved doc is refused
+    loudly by the codec. The plan's step 6 (adapters/durable stores
+    calling externalize automatically) and step 7 (relay) remain with the
+    relay work, item 26.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.
 25. **Per-principal credentials** (`plan-tool-credentials.md` §6) — the

@@ -267,6 +267,33 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  it("exports the blob vocabulary and nothing beyond it", async () => {
+    const blob = await import("../src/blob/index.js")
+    assert.deepStrictEqual(Object.keys(blob).sort(), ["BlobStore", "BlobWire"])
+
+    assert.deepStrictEqual(Object.keys(blob.BlobStore).sort(), [
+      "BlobId",
+      "BlobMissingError",
+      "BlobRef",
+      "BlobRejectedError",
+      "BlobStore",
+      "BlobStoreError",
+      "describe",
+      "getBytes",
+      "layerMemory",
+      "memory",
+      "putBytes",
+      "sha256",
+      "withPolicy"
+    ])
+
+    assert.deepStrictEqual(Object.keys(blob.BlobWire).sort(), [
+      "externalize",
+      "references",
+      "resolve"
+    ])
+  })
+
   it("exports the tree vocabulary and nothing beyond it", async () => {
     const tree = await import("../src/tree/index.js")
     assert.deepStrictEqual(Object.keys(tree).sort(), [

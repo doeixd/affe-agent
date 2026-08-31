@@ -73,7 +73,9 @@ survives the process; `/cluster` makes a session an entity (typed
 `StorageError` on the wire) and adds scheduled agents; `/durable-streams`
 delivers events across nodes.
 
-**Batteries.** `/sandbox` (+ `/sandbox/local`) with a conformance suite and
+**Batteries.** `/blob` (+ `/blob/fs`): content-addressed blob storage with
+size/MIME policy and `BlobWire` externalize/resolve over the encoded
+prompt form; `/sandbox` (+ `/sandbox/local`) with a conformance suite and
 tier-0/1 derivation (`Sandbox.fromExec` / `fromOperations`: any host that
 can run a command is a sandbox, shell-derived operations reported as such);
 `/coding` and `/pi` tool batteries over it; `/shell` with construction-time

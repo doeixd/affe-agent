@@ -977,7 +977,7 @@ Tests: `test/MessageContent.test.ts`, the `PromptWire.Part` suite in
 re-attachment (every content assertion fails, across transports) and the
 streamed announcement.
 
-Phase 4 landed the same day (below); phase 5 (blob store) remains.
+Phase 4 landed the same day (below); phase 5 landed 2026-08-30 (below).
 
 ## Progress: phase 4 (2026-08-29)
 
@@ -1020,3 +1020,33 @@ Tests: `AgentA2A multimodal parts`, `OpenAiAgent multimodal input`,
 `content` (it used to return text with an empty `content`, which a real host
 never does). Broken once per adapter: files dropped from the A2A artifact,
 `image_url` never decoded, AG-UI inline data ignored.
+
+## Progress: phase 5 (2026-08-30)
+
+`/blob` is the boring storage capability this plan asked for, agents
+nowhere in it. `BlobStore` is a `Context.Service` -- put (a
+`Stream<Uint8Array>`), get, stat, remove -- content-addressed: the id *is*
+the lowercase-hex SHA-256 (Web Crypto, so the entry stays platform-clean),
+which buys dedupe, immutability under history, and verification in one
+decision. `BlobRef` carries id, mediaType, byteLength, sha256, optional
+fileName. Backings: `memory` and `/blob/fs` (Node, own subpath exactly as
+`/sandbox/local`; bytes under `<id>`, ref sidecar `<id>.json`, bytes
+before ref so nothing dangles; fileName never touches the filesystem).
+`withPolicy` is the security section's acceptance rules -- maxBytes, MIME
+allow (exact and `type/*` family) with deny winning -- refusing at put
+with typed `BlobRejectedError`, reads untouched so a tightened policy
+cannot make history unreadable.
+
+The wire half operates on the `PromptWire`-ENCODED form, deliberately: a
+`BlobRef` cannot be a runtime `FilePart` datum (string | bytes | URL is
+correct), so the reference exists only between encode and decode.
+`BlobWire.externalize(encoded, {store, maxInlineBytes})` moves oversized
+`Bytes` (never `String`/`Url` -- a data URI is the sender's choice, a URL
+is already a reference) into the store and writes `{_tag:"Blob", ref}`;
+`resolve` fetches them back; `references` lists what a document carries.
+A receiver that decodes without resolving is refused loudly by the
+PromptWire codec -- pinned -- rather than handed a silently empty file.
+
+Not in this phase, recorded as such: step 6 (transports and durable
+stores calling externalize automatically at their own boundaries) and
+step 7 (relay) ride with the relay/bridge work in remaining-work item 26.

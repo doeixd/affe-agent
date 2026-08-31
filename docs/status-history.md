@@ -3591,3 +3591,22 @@ the modifies set fails two of the four tests.
 With 11–14 landed and 15 (provider-overflow recovery) deliberately parked
 as the plan's own "later, narrow phase", the branching-and-compaction plan
 is complete.
+
+## Large files leave the wire: `/blob` (2026-08-30)
+
+Filetypes phase 5 (`plan-filetypes.txt`). `BlobStore`: put/get/stat/remove
+over content the id of which *is* its SHA-256 -- dedupe, immutable
+history references and verification from one decision; memory and
+`/blob/fs` backings (the Node one on its own subpath so `/blob` never
+imports `node:*`, the `/sandbox/local` split repeated). `withPolicy`
+carries the plan's security rules -- maxBytes and a MIME allow/deny where
+deny wins and `image/*` admits a family -- refusing at put with a typed
+`BlobRejectedError` split by reason, and never refusing a read.
+`BlobWire.externalize`/`resolve`/`references` operate on the
+`PromptWire`-encoded JSON, because that is the only place a reference can
+exist: runtime file data is string | bytes | URL and stays that way.
+Oversized inline `Bytes` become `{_tag:"Blob", ref}`; `String` and `Url`
+data are never externalised; a document decoded without resolving is
+refused loudly by the codec (pinned) instead of yielding an empty file.
+Externalisation at each transport/durable boundary (the plan's step 6)
+and the relay (step 7) are deliberately left with remaining-work item 26.

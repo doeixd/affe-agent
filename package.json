@@ -171,6 +171,14 @@
       "types": "./dist/shell/index.d.ts",
       "default": "./dist/shell/index.js"
     },
+    "./blob": {
+      "types": "./dist/blob/index.d.ts",
+      "default": "./dist/blob/index.js"
+    },
+    "./blob/fs": {
+      "types": "./dist/blob/fs.d.ts",
+      "default": "./dist/blob/fs.js"
+    },
     "./sandbox": {
       "types": "./dist/sandbox/index.d.ts",
       "default": "./dist/sandbox/index.js"
