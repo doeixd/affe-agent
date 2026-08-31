@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
@@ -177,6 +177,44 @@ describe("in-memory sandbox", () => {
       assert.deepStrictEqual(seen, [
         { executable: "tool", args: ["--flag", "value"] }
       ])
+    })
+  )
+
+  it.effect("execStream is derived from the scripted exec: same result, one event per stream", () =>
+    Effect.gen(function* () {
+      const layer = MemorySandbox.layer({
+        exec: () => Effect.succeed({ exitCode: 2, stdout: "out", stderr: "err" })
+      })
+      const sandbox = yield* Effect.provide(
+        Sandbox.acquire(Sandbox.workspace("derived-stream")),
+        layer
+      )
+      const events = yield* Stream.runCollect(sandbox.execStream(Sandbox.command("anything")))
+      assert.deepStrictEqual(
+        events.map((event) => event._tag === "Output" ? `${event.stream}:${new TextDecoder().decode(event.bytes)}` : `exit:${event.exitCode}`),
+        ["stdout:out", "stderr:err", "exit:2"]
+      )
+      // Derived or native, collecting has to agree with `exec`.
+      const collected = yield* Sandbox.collect(sandbox.execStream(Sandbox.command("anything")))
+      assert.deepStrictEqual(collected, yield* sandbox.exec(Sandbox.command("anything")))
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("collect refuses a stream that never said how the command ended", () =>
+    Effect.gen(function* () {
+      // A truncated stream is not a finished command, and inventing exit 0
+      // would be the worst possible guess: a caller checking `exitCode === 0`
+      // would read "it worked" from "we stopped watching".
+      const truncated = Stream.make(Sandbox.outputEvent("stdout", bytes("partial")))
+      const exit = yield* Effect.exit(Sandbox.collect(truncated))
+      if (!Exit.isFailure(exit)) {
+        assert.fail("collect accepted a stream with no exit event")
+      }
+      const error = Cause.findErrorOption(exit.cause)
+      assert.isTrue(
+        error._tag === "Some" && error.value instanceof Sandbox.ProviderError,
+        "expected a ProviderError"
+      )
     })
   )
 
@@ -567,6 +605,69 @@ describe("local sandbox", () => {
         assert.isBelow(Date.now() - began, 3000, "waited on the grandchild")
       }).pipe(Effect.provide(fixture.layer), Effect.scoped)
     })
+  )
+
+  /**
+   * The reason the streaming seam exists: a caller that reads output while the
+   * command is still running, decides something, and stops.
+   *
+   * `docs/plan-a2a-layers-bridges.txt` needs exactly this to bridge an
+   * external coding agent -- `stream-json` has to be consumed as it arrives so
+   * a permission prompt can be answered mid-run. A buffered `exec` cannot
+   * express it at all.
+   */
+  it.live("a consumer can act on output while the command is still running, and stopping ends it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        // Prints at once, then writes a file two and a half seconds later. The
+        // file is the whole assertion: it exists only if the process outlived
+        // the consumer that stopped reading.
+        const command = node(
+          "const fs = require('fs'); console.log('ready'); setTimeout(() => fs.writeFileSync('survived.txt', 'x'), 2500)"
+        )
+        const began = Date.now()
+        const first = yield* Stream.runCollect(
+          Stream.take(Sandbox.lines(sandbox.execStream(command, { timeout: "10 seconds" })), 1)
+        )
+        const elapsed = Date.now() - began
+        assert.deepStrictEqual(first, ["ready"])
+        // Delivered while it ran: the command had 10 seconds and 2.5 of work.
+        assert.isBelow(elapsed, 2000, "the first line waited for the process to end")
+
+        // And the process is gone rather than orphaned. Past the moment it
+        // would have written, the file is not there.
+        yield* Effect.sleep("3 seconds")
+        const survived = yield* Effect.exit(sandbox.stat(p("survived.txt")))
+        assert.isTrue(
+          Exit.isFailure(survived),
+          "the command outlived the consumer that stopped reading it"
+        )
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    }),
+    30_000
+  )
+
+  it.live("lines decodes across chunk boundaries, which is why events carry bytes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        // One byte per write, 15ms apart: every multi-byte character is split
+        // across chunks, so decoding a chunk on its own would corrupt it.
+        const collected = yield* Stream.runCollect(
+          Sandbox.lines(sandbox.execStream(
+            node(
+              "const b = Buffer.from('\u65e5\u672c\u8a9e\\n\u3053\u3093\u306b\u3061\u306f\\n'); let i = 0; const t = setInterval(() => { process.stdout.write(b.subarray(i, i + 1)); if (++i === b.length) clearInterval(t) }, 15)"
+            ),
+            { timeout: "20 seconds" }
+          ))
+        )
+        assert.deepStrictEqual(collected, ["\u65e5\u672c\u8a9e", "\u3053\u3093\u306b\u3061\u306f"])
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    }),
+    40_000
   )
 
   it.effect("reports a process ended by a signal as such", () =>

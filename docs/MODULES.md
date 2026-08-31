@@ -64,7 +64,7 @@ The root entry, `@doeixd/effect-agent`. This is the part that executes.
 
 | module | path | what | relates to |
 | --- | --- | --- | --- |
-| **`Sandbox`** | `/sandbox` | The portable execution capability: typed file ops and argv `exec`, branded `SandboxPath`, `Scope`-bound acquisition, `canonical` for lock identity, output bounds. | The seam `/coding`, `/pi` and `/shell` all sit on. `MemorySandbox` ships here; the Node provider is `/sandbox/local`. |
+| **`Sandbox`** | `/sandbox` | The portable execution capability: typed file ops, argv `exec` and `execStream` (output as it arrives; `lines` decodes across chunk boundaries, `collect` folds back to a `CommandResult`), branded `SandboxPath`, `Scope`-bound acquisition, `canonical` for lock identity, output bounds. | The seam `/coding`, `/pi` and `/shell` all sit on. `MemorySandbox` ships here; the Node provider is `/sandbox/local`. |
 | **`MemorySandbox`** | `/sandbox` | In-memory provider. | The default for tests and for agents that need no real filesystem. |
 | **local provider** | `/sandbox/local` | Node-backed provider. | **The one host module in `src/`** — its own entry so importing `/sandbox` never pulls `node:*`. Enforced by `scripts/verify-portability.mjs`. |
 | **`Shell`** | `/shell` | Turns a one-line script into a `Sandbox.Command`. Bash, sh, zsh, fish, PowerShell, pwsh, Nushell, or a custom four-liner. | Isolation stays on `Sandbox`; this only constructs argv, so a toolkit never names a binary. |

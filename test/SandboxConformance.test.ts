@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -22,7 +22,15 @@ const nodePrograms: SandboxConformance.Programs = {
   exit: (code) => Sandbox.command(process.execPath, ["-e", `process.exit(${code})`]),
   argv: (args) => Sandbox.command(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...args]),
   sleep: (millis) => Sandbox.command(process.execPath, ["-e", `setTimeout(() => {}, ${millis})`]),
-  emit: (bytes) => Sandbox.command(process.execPath, ["-e", `process.stdout.write('x'.repeat(${bytes}))`])
+  emit: (bytes) => Sandbox.command(process.execPath, ["-e", `process.stdout.write('x'.repeat(${bytes}))`]),
+  // Supplied because the local provider does stream natively; the suite holds
+  // it to that. `unref` on nothing -- the interval is cleared at the end -- so
+  // the process exits on its own after the last line.
+  drip: (count, millis) =>
+    Sandbox.command(process.execPath, [
+      "-e",
+      `let n = 0; const t = setInterval(() => { process.stdout.write('line ' + n + '\\n'); if (++n === ${count}) clearInterval(t) }, ${millis})`
+    ])
 }
 
 /**
@@ -35,7 +43,8 @@ const memoryPrograms: SandboxConformance.Programs = {
   exit: (code) => Sandbox.command("mem", ["exit", String(code)]),
   argv: (args) => Sandbox.command("mem", ["argv", ...args]),
   sleep: (millis) => Sandbox.command("mem", ["sleep", String(millis)]),
-  emit: (bytes) => Sandbox.command("mem", ["emit", String(bytes)])
+  emit: (bytes) => Sandbox.command("mem", ["emit", String(bytes)]),
+  drip: (count, millis) => Sandbox.command("mem", ["drip", String(count), String(millis)])
 }
 
 const memoryExecutor: Sandbox.Sandbox["exec"] = (command, options): Effect.Effect<Sandbox.CommandResult, Sandbox.ExecError> => {
@@ -109,13 +118,62 @@ const broken = (
     }))
   ).pipe(Layer.provide(inner))
 
+/**
+ * A scripted `execStream` for the in-memory provider: everything but `drip`
+ * falls back to the derivation over the scripted `exec`, and `drip` emits its
+ * lines on a real clock. This is what a test that cares *when* output arrives
+ * looks like without a process.
+ */
+const memoryDripStream: Sandbox.Sandbox["execStream"] = (command, options) => {
+  const [op, count, millis] = command.args
+  if (op !== "drip") {
+    return Stream.unwrap(Effect.map(
+      memoryExecutor(command, options),
+      (result) => Stream.fromArray(Sandbox.eventsOf(result))
+    ))
+  }
+  const encoder = new TextEncoder()
+  return Stream.fromIterable(Array.from({ length: Number(count) }, (_, index) => index)).pipe(
+    Stream.mapEffect((index) =>
+      Effect.as(
+        Effect.sleep(`${Number(millis)} millis`),
+        Sandbox.outputEvent("stdout", encoder.encode(`line ${index}\n`))
+      )
+    ),
+    Stream.concat(Stream.succeed(Sandbox.exitEvent(0)))
+  )
+}
+
 describe("SandboxConformance", () => {
+  it.live("a scripted execStream satisfies the streaming claim without a process", () =>
+    Effect.gen(function* () {
+      const report = yield* SandboxConformance.run(
+        MemorySandbox.layer({ exec: memoryExecutor, execStream: memoryDripStream }),
+        { programs: memoryPrograms }
+      )
+      assert.deepStrictEqual(report.failed, [])
+      // The point of the case: the same suite that reports `false` for the
+      // derivation reports `true` here, so it is measuring the timeline and
+      // not the provider's name.
+      assert.isTrue(report.capabilities.streamsIncrementally)
+    }),
+    30_000
+  )
+
   it.live("the in-memory provider passes every case, with exec probed through its scripted executor", () =>
     Effect.gen(function* () {
-      const report = yield* SandboxConformance.run(MemorySandbox.layer({ exec: memoryExecutor }), { programs: memoryPrograms })
+      // No `drip`: a scripted executor buffers, and does not claim otherwise.
+      const { drip: _drip, ...buffered } = memoryPrograms
+      const report = yield* SandboxConformance.run(MemorySandbox.layer({ exec: memoryExecutor }), { programs: buffered })
       assert.deepStrictEqual(report.failed, [])
-      assert.deepStrictEqual(report.capabilities, { exec: true, separateStderr: true, timeout: true, outputBound: true })
-      assert.strictEqual(report.passed.length, SandboxConformance.cases({ programs: memoryPrograms }).length)
+      assert.deepStrictEqual(report.capabilities, {
+        exec: true,
+        separateStderr: true,
+        timeout: true,
+        outputBound: true,
+        streamsIncrementally: false
+      })
+      assert.strictEqual(report.passed.length, SandboxConformance.cases({ programs: buffered }).length)
     })
   )
 
@@ -123,7 +181,13 @@ describe("SandboxConformance", () => {
     Effect.gen(function* () {
       const report = yield* SandboxConformance.run(MemorySandbox.layer())
       assert.deepStrictEqual(report.failed, [])
-      assert.deepStrictEqual(report.capabilities, { exec: false, separateStderr: false, timeout: false, outputBound: false })
+      assert.deepStrictEqual(report.capabilities, {
+        exec: false,
+        separateStderr: false,
+        timeout: false,
+        outputBound: false,
+        streamsIncrementally: false
+      })
       assert.isTrue(report.passed.every((name) => !name.startsWith("exec:")))
     })
   )
@@ -133,7 +197,14 @@ describe("SandboxConformance", () => {
       const root = yield* withTempRoot()
       const report = yield* SandboxConformance.run(LocalSandbox.layer({ root }), { programs: nodePrograms })
       assert.deepStrictEqual(report.failed, [])
-      assert.deepStrictEqual(report.capabilities, { exec: true, separateStderr: true, timeout: true, outputBound: true })
+      // The local provider spawns, so it is held to the streaming claim too.
+      assert.deepStrictEqual(report.capabilities, {
+        exec: true,
+        separateStderr: true,
+        timeout: true,
+        outputBound: true,
+        streamsIncrementally: true
+      })
     }).pipe(Effect.scoped),
     60_000
   )
@@ -158,7 +229,13 @@ describe("SandboxConformance", () => {
       assert.include(byName["exec: timeout is TimeoutError, not a hang"], "ignored `timeout`")
       assert.include(byName["files: list returns workspace paths, one level, sorted, typed"], "names instead of paths")
       // The derived capability report contradicts what such a provider would claim.
-      assert.deepStrictEqual(report.capabilities, { exec: true, separateStderr: false, timeout: false, outputBound: true })
+      assert.deepStrictEqual(report.capabilities, {
+        exec: true,
+        separateStderr: false,
+        timeout: false,
+        outputBound: true,
+        streamsIncrementally: true
+      })
     }).pipe(Effect.scoped),
     60_000
   )

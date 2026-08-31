@@ -58,7 +58,11 @@ context transform, or a layer, and end-user code needs no type casts.
   streams, and the durable client's delivery log.
 - `@doeixd/effect-agent/sandbox` (+ `/sandbox/local`) — a scoped
   filesystem-and-process capability that tools demand through the requirement
-  channel; deterministic in memory, or a real directory on disk.
+  channel; deterministic in memory, or a real directory on disk. Commands can
+  be run to a result (`exec`) or watched while they run (`execStream`), with
+  `lines` decoding across chunk boundaries and `collect` folding events back to
+  a result; a provider that cannot stream gets the derivation and is reported
+  as derived.
 - `@doeixd/effect-agent/coding` — a coding-agent tool battery (read/write/edit
   files, list, in-process search, bash) over the sandbox seam, each tool
   permission-projected.

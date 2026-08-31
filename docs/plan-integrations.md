@@ -247,6 +247,15 @@ binding, `timeout` → `TimeoutError`, output bounding → `OutputLimitError`,
 interruption wired to the provider's `AbortSignal` when it has one, path
 branding, and error classification. **The residue is the object literal above.**
 
+`execStream` (added 2026-08-31) is the one override where the derivation is
+*correct but not equivalent*: without it, output is buffered and delivered at
+exit, which is the right result and a false timeline. So it is the one thing
+`derived` reports that a caller may actually need to act on -- an SDK that
+returns a process handle with an output callback should supply it, and one that
+only returns a finished result honestly cannot. The conformance suite measures
+it rather than believing it: `programs.drip` prints on a timer, and
+`capabilities.streamsIncrementally` says what was observed.
+
 That is the whole argument against codegen: twenty lines a person writes in five
 minutes, or an LLM writes in one message without any blueprint infrastructure,
 because a mistake in twenty lines is caught by a suite that already exists.

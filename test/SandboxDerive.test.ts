@@ -101,11 +101,21 @@ describe("Sandbox.fromExec", () => {
     Effect.gen(function* () {
       const { exec, commands } = yield* execOverLocal()
       const { layer, derived } = Sandbox.fromExec(exec)
-      // Everything but exec itself is shell-derived, and the report says so.
-      assert.deepStrictEqual(derived, ["canonical", "list", "read", "stat", "write"])
+      // Everything but exec itself is derived, and the report says so --
+      // including `execStream`, which a provider given only a buffered `exec`
+      // cannot honestly stream: it delivers the whole run at exit.
+      assert.deepStrictEqual(derived, ["canonical", "execStream", "list", "read", "stat", "write"])
       const report = yield* SandboxConformance.run(layer, { programs: nodePrograms })
       assert.deepStrictEqual(report.failed, [])
-      assert.deepStrictEqual(report.capabilities, { exec: true, separateStderr: true, timeout: true, outputBound: true })
+      // No `drip` above: a provider derived from a buffered `exec` does not
+      // claim to stream, and the report agrees rather than flattering it.
+      assert.deepStrictEqual(report.capabilities, {
+        exec: true,
+        separateStderr: true,
+        timeout: true,
+        outputBound: true,
+        streamsIncrementally: false
+      })
       // The file cases really did travel as commands.
       assert.isTrue(commands.some((script) => script.includes("base64")), "reads/writes did not go through the shell")
       assert.isTrue(commands.some((script) => script.includes("find ")), "list did not go through the shell")
@@ -133,7 +143,7 @@ describe("Sandbox.fromExec", () => {
           ),
         writeFile: (absolute, content) => Effect.sync(() => void files.set(absolute, content))
       })
-      assert.deepStrictEqual(derived, ["canonical", "list", "stat"])
+      assert.deepStrictEqual(derived, ["canonical", "execStream", "list", "stat"])
       const sandbox = yield* Effect.provide(Sandbox.acquire(Sandbox.workspace("override")), layer)
       const file = yield* Effect.orDie(Sandbox.path("held/inside.txt"))
       yield* sandbox.write(file, "kept natively")

@@ -3,8 +3,16 @@ import { realpathSync } from "node:fs"
 import * as fs from "node:fs/promises"
 import { tmpdir } from "node:os"
 import * as nodePath from "node:path"
-import { Effect, Layer, Option, Scope } from "effect"
+import { Cause, Effect, Layer, Option, Queue, Scope, Stream } from "effect"
 import * as Sandbox from "./Sandbox.js"
+
+/** What the scope holds while a command runs, and how it ends it. */
+interface Running {
+  readonly kill: (signal: "SIGTERM" | "SIGKILL") => void
+  readonly exited: () => boolean
+  readonly child?: ReturnType<typeof spawn> | undefined
+  readonly clear?: (() => void) | undefined
+}
 
 /**
  * A real directory on this machine.
@@ -100,188 +108,222 @@ export const layer = (options?: {
         return new Sandbox.ProviderError({ detail: String(cause) })
       }
 
-      const runProcess = (
+      /**
+       * One process implementation, streaming.
+       *
+       * `exec` used to spawn and buffer; now it is `collect` over this, so the
+       * kill-the-whole-tree, timeout and output-limit machinery below has one
+       * home instead of two that drift. Everything the buffered version
+       * guaranteed still holds -- the differences are that output is delivered
+       * as it arrives, and that the caller now decides whether to keep it.
+       */
+      const runProcessStream = (
         root: string
-      ): Sandbox.Sandbox["exec"] =>
+      ): Sandbox.Sandbox["execStream"] =>
         (input, execOptions) =>
-          Effect.callback((resume) => {
-            const timeoutMs = Sandbox.timeoutMillis(execOptions)
-            const maxOutputBytes =
-              execOptions?.maxOutputBytes ?? 1024 * 1024
+          Stream.callback<Sandbox.ExecEvent, Sandbox.ExecError>((queue) =>
+            Effect.acquireRelease(
+              Effect.sync((): Running => {
+                const timeoutMs = Sandbox.timeoutMillis(execOptions)
+                const maxOutputBytes = execOptions?.maxOutputBytes ?? 1024 * 1024
 
-            let child: ReturnType<typeof spawn>
-            try {
-              child = spawn(input.executable, [...input.args], {
-                cwd: root,
-                shell: false,
-                windowsHide: true,
-                stdio: ["ignore", "pipe", "pipe"],
-                // Its own process group on POSIX, so that ending the command
-                // ends everything it started. Killing only the direct child
-                // leaves a grandchild holding the stdio pipes -- `npm`, a
-                // shell with a background job -- and the command never
-                // closes. Windows has no groups; `taskkill /T` walks the tree.
-                detached: process.platform !== "win32"
-              })
-            } catch (cause) {
-              resume(Effect.fail(new Sandbox.CommandLaunchError({
-                executable: input.executable,
-                detail: String(cause)
-              })))
-              return
-            }
-
-            let settled = false
-            let total = 0
-            const stdout: Array<Buffer> = []
-            const stderr: Array<Buffer> = []
-            let terminal: Effect.Effect<never, Sandbox.ExecError> | undefined
-            const timers: Array<ReturnType<typeof setTimeout>> = []
-            const later = (ms: number, run: () => void) => {
-              timers.push(setTimeout(run, ms))
-            }
-
-            const finish = (result: Effect.Effect<
-              Sandbox.CommandResult,
-              Sandbox.ExecError
-            >) => {
-              if (settled) return
-              settled = true
-              for (const timer of timers) clearTimeout(timer)
-              child.stdout?.destroy()
-              child.stderr?.destroy()
-              resume(result)
-            }
-
-            const killTree = (signal: "SIGTERM" | "SIGKILL") => {
-              if (child.pid === undefined) return
-              if (process.platform === "win32") {
-                // No graceful signal exists on Windows; both phases end the
-                // whole tree. `taskkill` failing (already gone) is fine.
-                try {
-                  spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-                    stdio: "ignore",
-                    windowsHide: true
-                  }).on("error", () => {})
-                } catch {
-                  child.kill()
+                const fail = (error: Sandbox.ExecError) => {
+                  Queue.failCauseUnsafe(queue, Cause.fail(error))
                 }
-                return
-              }
-              try {
-                process.kill(-child.pid, signal)
-              } catch {
-                child.kill(signal)
-              }
-            }
 
-            // A bound that is enforced, not merely reported: the failure is
-            // delivered once the process is gone -- or, failing that, once a
-            // hard deadline has passed. Settling on the signal alone would
-            // hand control back while the process still ran; waiting on
-            // `close` alone could wait forever on a descendant that kept the
-            // pipes open after the child died. So: SIGTERM, SIGKILL to the
-            // tree after a grace period, and a deadline after which the
-            // result is delivered regardless, with the streams torn down.
-            const terminate = (failure: Sandbox.ExecError) => {
-              if (terminal !== undefined || settled) return
-              terminal = Effect.fail(failure)
-              // Nothing more is kept: a process ignoring its signal while
-              // flooding stdout must not turn the output bound into a memory
-              // bound that is not one.
-              child.stdout?.destroy()
-              child.stderr?.destroy()
-              killTree("SIGTERM")
-              later(1000, () => killTree("SIGKILL"))
-              later(2500, () => finish(terminal!))
-            }
+                let child: ReturnType<typeof spawn>
+                try {
+                  child = spawn(input.executable, [...input.args], {
+                    cwd: root,
+                    shell: false,
+                    windowsHide: true,
+                    stdio: ["ignore", "pipe", "pipe"],
+                    // Its own process group on POSIX, so that ending the command
+                    // ends everything it started. Killing only the direct child
+                    // leaves a grandchild holding the stdio pipes -- `npm`, a
+                    // shell with a background job -- and the command never
+                    // closes. Windows has no groups; `taskkill /T` walks the tree.
+                    detached: process.platform !== "win32"
+                  })
+                } catch (cause) {
+                  fail(new Sandbox.CommandLaunchError({
+                    executable: input.executable,
+                    detail: String(cause)
+                  }))
+                  return { kill: () => {}, exited: () => true }
+                }
 
-            later(timeoutMs, () => {
-              terminate(new Sandbox.TimeoutError({
-                executable: input.executable,
-                timeoutMillis: timeoutMs
-              }))
-            })
+                const started = child
+                let settled = false
+                let total = 0
+                let terminal: Sandbox.ExecError | undefined
+                const timers: Array<ReturnType<typeof setTimeout>> = []
+                const later = (ms: number, run: () => void) => {
+                  timers.push(setTimeout(run, ms))
+                }
 
-            const append = (chunk: Buffer, isStdout: boolean) => {
-              if (terminal !== undefined || settled) return
-              ;(isStdout ? stdout : stderr).push(chunk)
-              total += chunk.byteLength
-              if (total > maxOutputBytes) {
-                terminate(new Sandbox.OutputLimitError({
-                  executable: input.executable,
-                  maxOutputBytes
-                }))
-              }
-            }
-            child.stdout?.on("data", (chunk: Buffer) => append(chunk, true))
-            child.stderr?.on("data", (chunk: Buffer) => append(chunk, false))
+                const killTree = (signal: "SIGTERM" | "SIGKILL") => {
+                  if (started.pid === undefined) return
+                  if (process.platform === "win32") {
+                    // No graceful signal exists on Windows; both phases end the
+                    // whole tree. `taskkill` failing (already gone) is fine.
+                    try {
+                      spawn("taskkill", ["/pid", String(started.pid), "/T", "/F"], {
+                        stdio: "ignore",
+                        windowsHide: true
+                      }).on("error", () => {})
+                    } catch {
+                      started.kill()
+                    }
+                    return
+                  }
+                  try {
+                    process.kill(-started.pid, signal)
+                  } catch {
+                    started.kill(signal)
+                  }
+                }
 
-            child.on("error", (cause) =>
-              finish(Effect.fail(new Sandbox.CommandLaunchError({
-                executable: input.executable,
-                detail: String(cause)
-              }))))
+                const teardown = () => {
+                  settled = true
+                  for (const timer of timers) clearTimeout(timer)
+                  started.stdout?.destroy()
+                  started.stderr?.destroy()
+                }
 
-            const result = (
-              code: number | null,
-              signal: NodeJS.Signals | null
-            ): Effect.Effect<Sandbox.CommandResult, Sandbox.ExecError> =>
-              terminal ??
-                Effect.succeed({
-                  exitCode: code ?? -1,
-                  stdout: Buffer.concat(stdout).toString("utf8"),
-                  stderr: Buffer.concat(stderr).toString("utf8"),
-                  // A process ended by a signal the sandbox did not send -- the
-                  // OOM killer, a kill from elsewhere -- is reported as such,
-                  // not as an exit code a tool might have chosen.
-                  ...(signal === null ? {} : { signal })
+                const finish = (end: () => void) => {
+                  if (settled) return
+                  teardown()
+                  end()
+                }
+
+                // A bound that is enforced, not merely reported: the failure is
+                // delivered once the process is gone -- or, failing that, once a
+                // hard deadline has passed. Ending the stream on the signal alone
+                // would hand control back while the process still ran; waiting on
+                // `close` alone could wait forever on a descendant that kept the
+                // pipes open after the child died. So: SIGTERM, SIGKILL to the
+                // tree after a grace period, and a deadline after which the
+                // failure is delivered regardless, with the streams torn down.
+                const terminate = (failure: Sandbox.ExecError) => {
+                  if (terminal !== undefined || settled) return
+                  terminal = failure
+                  // Nothing more is emitted: a process ignoring its signal while
+                  // flooding stdout must not turn the output bound into a memory
+                  // bound that is not one.
+                  started.stdout?.destroy()
+                  started.stderr?.destroy()
+                  killTree("SIGTERM")
+                  later(1000, () => killTree("SIGKILL"))
+                  later(2500, () => finish(() => fail(failure)))
+                }
+
+                later(timeoutMs, () => {
+                  terminate(new Sandbox.TimeoutError({
+                    executable: input.executable,
+                    timeoutMillis: timeoutMs
+                  }))
                 })
-            // `exit` is the process being gone. `close` -- the streams ending
-            // too -- normally follows within a tick; a descendant keeping the
-            // pipes open is given a short grace, then the result is delivered
-            // with whatever was read.
-            child.on("exit", (code, signal) => {
-              later(250, () => {
-                // Something the command started is still holding its pipes
-                // after the command itself is gone. It belongs to nobody now
-                // and would outlive the sandbox -- and keep this process's
-                // own stdio alive with it. The command is over; so is its
-                // tree.
-                killTree("SIGKILL")
-                finish(result(code, signal))
-              })
-            })
-            child.on("close", (code, signal) => finish(result(code, signal)))
 
-            // Interruption of the calling fibre -- a caller's timeout, the run
-            // being interrupted mid-tool, the scope closing -- must not strand
-            // the child. The tree is ended and the interrupt completes once
-            // the process is gone or the deadline has passed, the same
-            // guarantee the timeout path gives.
-            return Effect.callback<void>((done) => {
-              if (settled) {
-                done(Effect.void)
-                return
-              }
-              settled = true
-              for (const timer of timers) clearTimeout(timer)
-              child.stdout?.destroy()
-              child.stderr?.destroy()
-              let finished = false
-              const complete = () => {
-                if (finished) return
-                finished = true
-                clearTimeout(force)
-                clearTimeout(deadline)
-                done(Effect.void)
-              }
-              child.once("exit", complete)
-              killTree("SIGTERM")
-              const force = setTimeout(() => killTree("SIGKILL"), 1000)
-              const deadline = setTimeout(complete, 2500)
-            })
-          })
+                const append = (chunk: Buffer, isStdout: boolean) => {
+                  if (terminal !== undefined || settled) return
+                  Queue.offerUnsafe(
+                    queue,
+                    Sandbox.outputEvent(
+                      isStdout ? "stdout" : "stderr",
+                      new Uint8Array(chunk)
+                    )
+                  )
+                  total += chunk.byteLength
+                  if (total > maxOutputBytes) {
+                    terminate(new Sandbox.OutputLimitError({
+                      executable: input.executable,
+                      maxOutputBytes
+                    }))
+                  }
+                }
+                started.stdout?.on("data", (chunk: Buffer) => append(chunk, true))
+                started.stderr?.on("data", (chunk: Buffer) => append(chunk, false))
+
+                started.on("error", (cause) =>
+                  finish(() =>
+                    fail(new Sandbox.CommandLaunchError({
+                      executable: input.executable,
+                      detail: String(cause)
+                    }))
+                  ))
+
+                const done = (
+                  code: number | null,
+                  signal: NodeJS.Signals | null
+                ) =>
+                  () => {
+                    if (terminal !== undefined) {
+                      fail(terminal)
+                      return
+                    }
+                    // A process ended by a signal the sandbox did not send -- the
+                    // OOM killer, a kill from elsewhere -- is reported as such,
+                    // not as an exit code a tool might have chosen.
+                    Queue.offerUnsafe(
+                      queue,
+                      Sandbox.exitEvent(code ?? -1, signal ?? undefined)
+                    )
+                    Queue.endUnsafe(queue)
+                  }
+
+                // `exit` is the process being gone. `close` -- the streams ending
+                // too -- normally follows within a tick; a descendant keeping the
+                // pipes open is given a short grace, then the stream is ended
+                // with whatever was read.
+                started.on("exit", (code, signal) => {
+                  later(250, () => {
+                    // Something the command started is still holding its pipes
+                    // after the command itself is gone. It belongs to nobody now
+                    // and would outlive the sandbox -- and keep this process's
+                    // own stdio alive with it. The command is over; so is its
+                    // tree.
+                    killTree("SIGKILL")
+                    finish(done(code, signal))
+                  })
+                })
+                started.on("close", (code, signal) => finish(done(code, signal)))
+
+                return {
+                  kill: killTree,
+                  exited: () => settled,
+                  child: started,
+                  clear: teardown
+                }
+              }),
+              // Scope closing -- the consumer stopped reading, its fibre was
+              // interrupted, the run was interrupted mid-tool -- must not strand
+              // the child. The tree is ended and release completes once the
+              // process is gone or the deadline has passed, the same guarantee
+              // the timeout path gives.
+              (running) =>
+                Effect.callback<void>((resume) => {
+                  const child = running.child
+                  if (running.exited() || child === undefined) {
+                    resume(Effect.void)
+                    return
+                  }
+                  running.clear?.()
+                  let finished = false
+                  const complete = () => {
+                    if (finished) return
+                    finished = true
+                    clearTimeout(force)
+                    clearTimeout(deadline)
+                    resume(Effect.void)
+                  }
+                  child.once("exit", complete)
+                  running.kill("SIGTERM")
+                  const force = setTimeout(() => running.kill("SIGKILL"), 1000)
+                  const deadline = setTimeout(complete, 2500)
+                })
+            )
+          )
 
       const makeSandbox = (
         workspace: Sandbox.Workspace,
@@ -459,7 +501,9 @@ export const layer = (options?: {
           // `resolveWithin` already is the canonical name: the real path of
           // the deepest existing ancestor plus whatever does not exist yet.
           canonical: (target) => resolveWithin(target, "stat"),
-          exec: runProcess(root)
+          exec: (input, execOptions) =>
+            Sandbox.collect(runProcessStream(root)(input, execOptions)),
+          execStream: runProcessStream(root)
         }
       }
 

@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
 import * as Sandbox from "../sandbox/Sandbox.js"
 
 /**
@@ -58,6 +58,21 @@ export interface Programs {
   readonly sleep: (millis: number) => Sandbox.Command
   /** Write `bytes` bytes to stdout. */
   readonly emit: (bytes: number) => Sandbox.Command
+  /**
+   * Print `count` lines to stdout, `millis` apart, then exit 0.
+   *
+   * Optional, and supplying it is the claim: it exists for one question no
+   * other program can ask -- does this provider deliver output *while* the
+   * command runs, or only once it has ended? A provider whose `execStream` is
+   * derived from a buffered `exec` cannot, legitimately (tier 0 of
+   * `docs/plan-integrations.md` §6), so it simply does not supply `drip`: the
+   * case is skipped and the report says `streamsIncrementally: false`. Supply
+   * it when the provider streams natively, and the suite will hold it to that.
+   *
+   * This is the same opt-in `programs` itself is -- a question the caller
+   * chooses to be asked, not a promise the suite assumes.
+   */
+  readonly drip?: ((count: number, millis: number) => Sandbox.Command) | undefined
 }
 
 export interface Options {
@@ -81,6 +96,14 @@ export interface Capabilities {
   readonly separateStderr: boolean
   readonly timeout: boolean
   readonly outputBound: boolean
+  /**
+   * `execStream` delivered output before the process ended.
+   *
+   * False for a provider whose streaming is derived from a buffered `exec`
+   * -- the result is right and the timeline is not -- and false when
+   * `programs.drip` was not supplied to ask.
+   */
+  readonly streamsIncrementally: boolean
 }
 
 export interface Report {
@@ -271,6 +294,8 @@ const EXEC_PLAIN = "exec: stdout arrives, a non-zero exit is a result"
 const EXEC_STDERR = "exec: stderr is separate from stdout"
 const EXEC_TIMEOUT = "exec: timeout is TimeoutError, not a hang"
 const EXEC_OUTPUT = "exec: maxOutputBytes is OutputLimitError"
+const EXEC_STREAM = "exec: execStream collects to what exec returns"
+const EXEC_INCREMENTAL = "exec: execStream delivers output before the process exits"
 
 const execCases = (workspace: string, programs: Programs): ReadonlyArray<Case> => [
   named(EXEC_PLAIN, "exec", workspace, (sandbox, expect) =>
@@ -306,6 +331,70 @@ const execCases = (workspace: string, programs: Programs): ReadonlyArray<Case> =
       yield* expect(!out.stderr.includes("to stdout only"), "stdout text appeared on stderr: the streams are merged")
     }).pipe(asFailure(EXEC_STDERR))
   ),
+  named(EXEC_STREAM, "exec", workspace, (sandbox, expect) =>
+    Effect.gen(function* () {
+      // The two surfaces are one process implementation or they are a bug:
+      // whatever `exec` reports, collecting the events must report as well.
+      const buffered = yield* sandbox.exec(programs.echo("streamed conformance"))
+      const collected = yield* Sandbox.collect(sandbox.execStream(programs.echo("streamed conformance")))
+      yield* expect(
+        collected.exitCode === buffered.exitCode,
+        `execStream collected exit ${collected.exitCode}, exec returned ${buffered.exitCode}`
+      )
+      yield* expect(
+        collected.stdout.trim() === buffered.stdout.trim(),
+        `execStream collected ${JSON.stringify(collected.stdout)}, exec returned ${JSON.stringify(buffered.stdout)}`
+      )
+
+      // Exactly one Exit event, and it is last: a caller folding these must
+      // not have to guess which of two codes is real.
+      const events = yield* Stream.runCollect(sandbox.execStream(programs.exit(3)))
+      const exits = events.filter((event) => event._tag === "Exit")
+      yield* expect(exits.length === 1, `${exits.length} Exit events; expected exactly one`)
+      yield* expect(
+        events[events.length - 1]?._tag === "Exit",
+        "the last event was not the Exit"
+      )
+      yield* expect(
+        exits[0]?._tag === "Exit" && exits[0].exitCode === 3,
+        `the Exit event carried ${JSON.stringify(exits[0])}; expected exit code 3`
+      )
+
+      // Stderr stays labelled, and `lines` reassembles text across chunks.
+      const err = yield* Stream.runCollect(Sandbox.lines(sandbox.execStream(programs.stderr("split me")), "stderr"))
+      yield* expect(
+        err.some((line) => line.includes("split me")),
+        `stderr lines were ${JSON.stringify(err)}`
+      )
+      const out = yield* Stream.runCollect(Sandbox.lines(sandbox.execStream(programs.stderr("split me"))))
+      yield* expect(
+        !out.some((line) => line.includes("split me")),
+        "stderr text appeared in the stdout lines: the streams are merged"
+      )
+    }).pipe(asFailure(EXEC_STREAM))
+  ),
+  ...(programs.drip === undefined ? [] : [
+    named(EXEC_INCREMENTAL, "exec", workspace, (sandbox, expect) =>
+      Effect.gen(function* () {
+        const drip = programs.drip!(3, 200)
+        const seen: Array<{ readonly tag: string; readonly at: number }> = []
+        yield* Stream.runForEach(sandbox.execStream(drip), (event) =>
+          Effect.map(Clock.currentTimeMillis, (at) => {
+            seen.push({ tag: event._tag, at })
+          }))
+        const first = seen.find((entry) => entry.tag === "Output")
+        const exit = seen.find((entry) => entry.tag === "Exit")
+        yield* expect(first !== undefined && exit !== undefined, `saw ${JSON.stringify(seen.map((e) => e.tag))}`)
+        // Loose on purpose: the claim is "before the end", not a latency
+        // budget. A provider that buffers delivers everything within a tick
+        // of the exit and lands far under this.
+        yield* expect(
+          first !== undefined && exit !== undefined && exit.at - first.at >= 150,
+          `the first output arrived ${first !== undefined && exit !== undefined ? exit.at - first.at : "?"}ms before the exit; a command printing 3 lines 200ms apart should be further ahead`
+        )
+      }).pipe(asFailure(EXEC_INCREMENTAL))
+    )
+  ]),
   named(EXEC_TIMEOUT, "exec", workspace, (sandbox, expect) =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
@@ -378,7 +467,8 @@ export const run = <E>(
         exec: held(EXEC_PLAIN),
         separateStderr: held(EXEC_STDERR),
         timeout: held(EXEC_TIMEOUT),
-        outputBound: held(EXEC_OUTPUT)
+        outputBound: held(EXEC_OUTPUT),
+        streamsIncrementally: held(EXEC_INCREMENTAL)
       }
     }
   }).pipe(Effect.provide(provider))

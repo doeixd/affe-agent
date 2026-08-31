@@ -263,6 +263,25 @@ open, so the next pass does not have to re-derive it.
     was checked against its OpenAPI document. `@effect/ai-openai` is now a
     devDependency, for the example only.
 
+26a. **`Sandbox.execStream`** — SHIPPED 2026-08-31, the prerequisite
+    `plan-a2a-layers-bridges.txt` does not name. Its step 1 is "spawn through a
+    child process; parse `stream-json`", and parsing `stream-json` means
+    consuming output *incrementally* — that is how a bridge shows the agent
+    working, maps interruption, and answers a permission prompt mid-run. There
+    was no streaming exec anywhere in `src/`: `Sandbox.exec` buffers to a
+    `CommandResult`. So the seam came first, where the plan's own physical
+    boundary already puts the spawned CLI (§"Physical boundary").
+    `ExecEvent` (bytes per stream, then exactly one `Exit`), `Sandbox.lines`
+    (decoding across chunk boundaries), `Sandbox.collect` (events back to a
+    `CommandResult`). Required on the handle, optional on `Operations` with a
+    buffered derivation that is reported in `derived`. The local provider now
+    has *one* process implementation — `exec` is `collect(execStream(...))` —
+    and the conformance suite measures incrementality with a command that
+    prints on a timer instead of believing a provider that claims it. The
+    bridges are ordinary portable modules on top; the OpenCode bridge, which
+    goes over `opencode serve`'s HTTP API, needs none of it, which is the sign
+    the seam is in the right place.
+
 26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
     — new packages and architecture (Claude Code / OpenCode bridges, relay
     transport, `SessionInbox` / `ProcessManager`). Preconditions are all met

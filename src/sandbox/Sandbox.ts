@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Encoding, Layer, Option, Result, Schema, Scope } from "effect"
+import { Cause, Context, Duration, Effect, Encoding, Layer, Option, Result, Schema, Scope, Stream } from "effect"
 
 /**
  * A scoped filesystem-and-process capability, acquired through a provider.
@@ -256,6 +256,128 @@ export interface CommandResult {
   readonly signal?: string | undefined
 }
 
+/**
+ * One thing that happened while a command ran.
+ *
+ * `exec` hands back a `CommandResult` when the process is already over, which
+ * is the right shape for `git status` and the wrong one for anything you want
+ * to *watch*: a build's progress, a long test run, or an external agent
+ * emitting `stream-json` whose permission prompts have to be answered while it
+ * is still running. Those need the output as it arrives.
+ *
+ * The exit is an event rather than a separate channel because it keeps the
+ * ordering honest -- output that arrived before the process ended is delivered
+ * before it, and there is exactly one way to learn the code. A stream that
+ * ends without an `Exit` is a provider bug, and `collect` says so rather than
+ * inventing a zero.
+ */
+export type ExecEvent =
+  | {
+    readonly _tag: "Output"
+    readonly stream: "stdout" | "stderr"
+    /**
+     * Bytes exactly as the process wrote them, not text.
+     *
+     * A chunk boundary can fall inside a multi-byte character, so decoding
+     * each chunk on its own corrupts it. `lines` does the decoding across
+     * boundaries, in one place; anything else that needs text should go
+     * through `Stream.decodeText` rather than per-chunk `TextDecoder`.
+     */
+    readonly bytes: Uint8Array
+  }
+  | {
+    readonly _tag: "Exit"
+    /** The process exit code, or -1 when it was ended by a signal. */
+    readonly exitCode: number
+    readonly signal?: string | undefined
+  }
+
+export const outputEvent = (
+  stream: "stdout" | "stderr",
+  bytes: Uint8Array
+): ExecEvent => ({ _tag: "Output", stream, bytes })
+
+export const exitEvent = (
+  exitCode: number,
+  signal?: string | undefined
+): ExecEvent => ({
+  _tag: "Exit",
+  exitCode,
+  ...(signal === undefined ? {} : { signal })
+})
+
+/**
+ * One stream's output as complete lines, decoded across chunk boundaries.
+ *
+ * This is the shape line-delimited protocols want -- `stream-json`, NDJSON, a
+ * progress log -- and it is the reason `ExecEvent` carries bytes: the split
+ * and the decode both have to happen after reassembly, and doing them here
+ * means every caller gets it right once.
+ */
+export const lines = <E, R>(
+  events: Stream.Stream<ExecEvent, E, R>,
+  stream: "stdout" | "stderr" = "stdout"
+): Stream.Stream<string, E, R> =>
+  events.pipe(
+    Stream.filter((event): event is Extract<ExecEvent, { _tag: "Output" }> =>
+      event._tag === "Output" && event.stream === stream
+    ),
+    Stream.map((event) => event.bytes),
+    Stream.decodeText(),
+    Stream.splitLines
+  )
+
+/**
+ * Run a stream of events to the `CommandResult` `exec` would have returned.
+ *
+ * Two things make this worth exporting rather than inlining. It is how a
+ * provider that streams natively also satisfies `exec` -- one process
+ * implementation, not two that drift -- and it is what lets the conformance
+ * suite assert the two surfaces agree on the same command.
+ */
+export const collect = <R>(
+  events: Stream.Stream<ExecEvent, ExecError, R>
+): Effect.Effect<CommandResult, ExecError, R> =>
+  Stream.runFold(
+    events,
+    () => ({
+      stdout: [] as Array<Uint8Array>,
+      stderr: [] as Array<Uint8Array>,
+      exit: undefined as { readonly exitCode: number; readonly signal?: string | undefined } | undefined
+    }),
+    (state, event) => {
+      if (event._tag === "Exit") return { ...state, exit: event }
+      ;(event.stream === "stdout" ? state.stdout : state.stderr).push(event.bytes)
+      return state
+    }
+  ).pipe(
+    Effect.flatMap((state) =>
+      // No `Exit` event means nobody can say how the command ended, and a
+      // fabricated zero would be the worst possible guess. This is also what
+      // makes `collect` refuse a truncated stream rather than report a
+      // partial run as a finished one.
+      state.exit === undefined
+        ? Effect.fail(
+          new ProviderError({
+            detail: "the command's event stream ended without an exit event"
+          })
+        )
+        : Effect.succeed<CommandResult>({
+          exitCode: state.exit.exitCode,
+          stdout: decodeAll(state.stdout),
+          stderr: decodeAll(state.stderr),
+          ...(state.exit.signal === undefined ? {} : { signal: state.exit.signal })
+        })
+    )
+  )
+
+const decodeAll = (chunks: ReadonlyArray<Uint8Array>): string => {
+  const decoder = new TextDecoder()
+  let text = ""
+  for (const chunk of chunks) text += decoder.decode(chunk, { stream: true })
+  return text + decoder.decode()
+}
+
 export interface ExecOptions {
   /** Kill the process if it runs longer. Default 10 seconds. */
   readonly timeout?: Duration.Input | undefined
@@ -303,6 +425,18 @@ export interface Sandbox {
     command: Command,
     options?: ExecOptions | undefined
   ) => Effect.Effect<CommandResult, ExecError>
+  /**
+   * The same command, watched while it runs.
+   *
+   * Required on the handle, and optional on `Operations`: a consumer must be
+   * able to rely on it existing, while a provider that cannot stream gets a
+   * derivation (buffer, then emit once at exit) and is reported as derived.
+   * `collect(execStream(...))` is `exec` -- the conformance suite asserts it.
+   */
+  readonly execStream: (
+    command: Command,
+    options?: ExecOptions | undefined
+  ) => Stream.Stream<ExecEvent, ExecError>
 }
 
 /** Text conveniences over the byte-level surface. */
@@ -414,6 +548,21 @@ export interface Operations {
     command: Command,
     options: ExecOptions & { readonly cwd: string }
   ) => Effect.Effect<CommandResult, ExecError>
+  /**
+   * Incremental output, when the host can give it.
+   *
+   * Omit it and `execStream` is derived from `exec`: the whole run is buffered
+   * and delivered as one output event per stream followed by the exit. That is
+   * a faithful *result* and a false *timeline*, so it is listed in `derived`
+   * -- a caller watching for progress can ask whether it will actually get
+   * any, instead of discovering it does not.
+   */
+  readonly execStream?:
+    | ((
+      command: Command,
+      options: ExecOptions & { readonly cwd: string }
+    ) => Stream.Stream<ExecEvent, ExecError>)
+    | undefined
   readonly readFile?:
     | ((absolute: string) => Effect.Effect<Uint8Array, FileError>)
     | undefined
@@ -465,10 +614,20 @@ export interface DeriveOptions {
     | undefined
 }
 
-const DERIVABLE = ["canonical", "list", "read", "stat", "write"] as const
+const DERIVABLE = ["canonical", "execStream", "list", "read", "stat", "write"] as const
 export type DerivedOperation = (typeof DERIVABLE)[number]
 
 const utf8Encoder = new TextEncoder()
+
+/**
+ * A finished result as the events it would have produced, in order, with
+ * empty streams omitted -- the derivation behind a non-streaming provider.
+ */
+export const eventsOf = (result: CommandResult): ReadonlyArray<ExecEvent> => [
+  ...(result.stdout.length > 0 ? [outputEvent("stdout", utf8Encoder.encode(result.stdout))] : []),
+  ...(result.stderr.length > 0 ? [outputEvent("stderr", utf8Encoder.encode(result.stderr))] : []),
+  exitEvent(result.exitCode, result.signal)
+]
 
 const defaultClassify = (context: ClassifyContext): FileError => {
   const text = context.result.stderr + "\n" + context.result.stdout
@@ -512,6 +671,8 @@ export const fromOperations = (
         return operations.stat === undefined
       case "canonical":
         return operations.canonical === undefined
+      case "execStream":
+        return operations.execStream === undefined
     }
   })
 
@@ -649,7 +810,14 @@ export const fromOperations = (
         list,
         stat,
         canonical,
-        exec: (execCommand, execOptions) => operations.exec(execCommand, { ...execOptions, cwd })
+        exec: (execCommand, execOptions) => operations.exec(execCommand, { ...execOptions, cwd }),
+        execStream: (execCommand, execOptions) =>
+          operations.execStream !== undefined
+            ? operations.execStream(execCommand, { ...execOptions, cwd })
+            : Stream.unwrap(Effect.map(
+              operations.exec(execCommand, { ...execOptions, cwd }),
+              (result) => Stream.fromArray(eventsOf(result))
+            ))
       } satisfies Sandbox
     })
 

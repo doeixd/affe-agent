@@ -1519,6 +1519,35 @@ with exact executable/argument separation, time limits and bounded output.
 Its documentation states plainly what it is not: **a security boundary**. It
 runs with your program's full privileges.
 
+#### Watching a command run
+
+`exec` answers *what did it print*, which is the wrong question for a build,
+a long test run, or an external agent whose prompts have to be answered while
+it is still working. `execStream` answers *what is it printing*:
+
+```ts
+// Act on the first line, then stop -- and the process ends with the scope.
+yield* Stream.runForEach(
+  Sandbox.lines(sandbox.execStream(Sandbox.command("npm", ["test"]))),
+  (line) => Effect.log(line)
+)
+```
+
+Events carry **bytes**, not text, because a chunk boundary can fall inside a
+multi-byte character; `Sandbox.lines` decodes and splits across boundaries, in
+one place, and is what line-delimited protocols (NDJSON, `stream-json`) should
+go through. The exit arrives as the last event rather than on a side channel,
+so ordering is unambiguous, and `Sandbox.collect` folds a stream back into the
+`CommandResult` `exec` returns -- which is literally how the local provider
+implements `exec`, so the two cannot drift.
+
+`execStream` is **required on the handle and optional on a provider**: one
+built from a buffered `exec` alone (`Sandbox.fromExec`) still has it, derived
+by delivering everything at exit, and says so in its `derived` report. The
+conformance suite probes the difference rather than trusting it —
+`capabilities.streamsIncrementally` is measured by a command that prints on a
+timer.
+
 ### Coding toolkit
 
 `@doeixd/effect-agent/coding` is a ready-made battery of the tools a coding

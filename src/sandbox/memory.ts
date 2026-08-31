@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Option, Ref, Stream } from "effect"
 import * as Sandbox from "./Sandbox.js"
 
 /**
@@ -18,6 +18,16 @@ export const layer = (options?: {
    * its result verbatim is what lets tests assert executable and arguments.
    */
   readonly exec?: Sandbox.Sandbox["exec"] | undefined
+  /**
+   * Scripted incremental output, for tests that care *when* output arrives --
+   * a consumer that acts on a line before the process has ended, which is the
+   * whole reason the streaming seam exists.
+   *
+   * Omitted, `execStream` is derived from `exec` exactly as a non-streaming
+   * provider's is: one event per stream, then the exit. A test that only
+   * checks what a command produced needs nothing here.
+   */
+  readonly execStream?: Sandbox.Sandbox["execStream"] | undefined
 }): Layer.Layer<Sandbox.SandboxProvider> =>
   Layer.effect(
     Sandbox.SandboxProvider,
@@ -72,6 +82,12 @@ export const layer = (options?: {
         }
         return undefined
       }
+
+      const exec: Sandbox.Sandbox["exec"] = options?.exec ?? ((input) =>
+        Effect.fail(new Sandbox.ProviderError({
+          detail:
+            `the in-memory sandbox does not run processes; supply an exec script to run "${input.executable}"`
+        })))
 
       const sandboxFor = (workspace: Sandbox.Workspace): Sandbox.Sandbox => ({
         workspace,
@@ -169,11 +185,12 @@ export const layer = (options?: {
         // The world is a map keyed on the normalised path with no links and
         // no case folding, so the path is its own identity.
         canonical: (path) => Effect.succeed(`${workspace}\u0000${path}`),
-        exec: options?.exec ?? ((input) =>
-          Effect.fail(new Sandbox.ProviderError({
-            detail:
-              `the in-memory sandbox does not run processes; supply an exec script to run "${input.executable}"`
-          })))
+        exec,
+        execStream: options?.execStream ?? ((input, execOptions) =>
+          Stream.unwrap(Effect.map(
+            exec(input, execOptions),
+            (result) => Stream.fromArray(Sandbox.eventsOf(result))
+          )))
       })
 
       return {
