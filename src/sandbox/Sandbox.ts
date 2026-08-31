@@ -379,9 +379,21 @@ const decodeAll = (chunks: ReadonlyArray<Uint8Array>): string => {
 }
 
 export interface ExecOptions {
-  /** Kill the process if it runs longer. Default 10 seconds. */
+  /**
+   * Kill the process if it runs longer. Default 10 seconds.
+   *
+   * The default suits a command you wait on. A command you *watch* through
+   * `execStream` -- a build, a test run, an external agent -- normally needs a
+   * much larger one, and gets a `TimeoutError` mid-stream without it.
+   */
   readonly timeout?: Duration.Input | undefined
-  /** Kill the process if it emits more combined output. Default 1 MiB. */
+  /**
+   * Kill the process if it emits more combined output. Default 1 MiB.
+   *
+   * Counted as the bytes the process produced, whether or not a streaming
+   * consumer keeps them -- so it bounds a runaway process rather than this
+   * program's memory, and a long watch should raise it.
+   */
   readonly maxOutputBytes?: number | undefined
 }
 
@@ -432,6 +444,14 @@ export interface Sandbox {
    * able to rely on it existing, while a provider that cannot stream gets a
    * derivation (buffer, then emit once at exit) and is reported as derived.
    * `collect(execStream(...))` is `exec` -- the conformance suite asserts it.
+   *
+   * **The `ExecOptions` defaults are `exec`'s, and a watcher usually wants
+   * neither.** They are 10 seconds and 1 MiB, chosen for a command you wait
+   * on; the things worth watching -- a build, a test run, an external agent --
+   * outlive and outprint both, and would be killed mid-stream with a
+   * `TimeoutError` or an `OutputLimitError`. Set them deliberately. They are
+   * still enforced, and still worth having: an unbounded watch on a process
+   * that never ends is a leak with a nicer name.
    */
   readonly execStream: (
     command: Command,

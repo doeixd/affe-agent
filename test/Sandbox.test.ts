@@ -649,6 +649,33 @@ describe("local sandbox", () => {
     30_000
   )
 
+  it.live("a watched command is still bounded: the stream fails where exec would have", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture()
+      yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox.acquire(Sandbox.workspace("local"))
+        // The bounds are `exec`'s, and they are not suspended because someone
+        // is watching: a process that prints forever is killed and the stream
+        // fails, rather than running until the consumer gives up.
+        const exit = yield* Effect.exit(
+          Stream.runCollect(sandbox.execStream(
+            node("const t = setInterval(() => process.stdout.write('x'.repeat(4096)), 5)"),
+            { maxOutputBytes: 32 * 1024, timeout: "20 seconds" }
+          ))
+        )
+        if (!Exit.isFailure(exit)) {
+          assert.fail("an unbounded watch was allowed")
+        }
+        const error = Cause.findErrorOption(exit.cause)
+        assert.isTrue(
+          error._tag === "Some" && error.value instanceof Sandbox.OutputLimitError,
+          "expected OutputLimitError"
+        )
+      }).pipe(Effect.provide(fixture.layer), Effect.scoped)
+    }),
+    30_000
+  )
+
   it.live("lines decodes across chunk boundaries, which is why events carry bytes", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture()
