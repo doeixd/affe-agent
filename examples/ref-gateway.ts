@@ -254,7 +254,6 @@ const program = Effect.gen(function*() {
   // gateway whose operator misconfigures the policy still does not
   // silently write. Both are asserted, because the second is the one
   // nobody would notice losing.
-  const calls = wire
   // A violated claim is a *defect*, not a typed failure: it means this
   // reference's statement about the library is false, which is not a
   // condition any caller could handle.
@@ -263,14 +262,16 @@ const program = Effect.gen(function*() {
 
   yield* expect(
     "each caller's own connection is used, chosen per call",
-    calls[0]?.authorization === "Bearer alice-secret" &&
-      calls[1]?.authorization === "Bearer org-secret"
+    wire[0]?.authorization === "Bearer alice-secret" &&
+      wire[1]?.authorization === "Bearer org-secret"
   )
-  // The one that matters most: policy runs *before* the call, so a refused
-  // tool never reaches the upstream at all -- not even to be rejected there.
+  // The outcome both guards exist for: a refused tool is refused *before*
+  // the call, so nothing reaches the upstream -- not even to be rejected
+  // there. Deliberately not attributed to either guard, because either
+  // alone produces it; the two assertions below are what separate them.
   yield* expect(
-    "a denied call never reaches the upstream",
-    calls.length === 2
+    "a refused call never reaches the upstream",
+    wire.length === 2
   )
   yield* expect(
     "the source's own annotation floors a write to needsApproval, whatever the policy says",
@@ -289,8 +290,8 @@ const program = Effect.gen(function*() {
   // transport to this process's stdio -- the same split
   // `examples/mcp.ts` makes, and the reason that file says so plainly.
 
-  yield* Console.log(`\nUpstream calls: ${calls.length} (the denied one never left the gateway)`)
-  return calls
+  yield* Console.log(`\nUpstream calls: ${wire.length} (the refused one never left the gateway)`)
+  return wire
 })
 
 /**
