@@ -55,7 +55,7 @@ try {
     scratch
   )
 
-  const hostEntries = new Set(["./sandbox/local", "./connectors/slack"])
+  const hostEntries = new Set(["./sandbox/local", "./connectors/slack", "./blob/fs"])
   const hook = pathToFileURL(
     path.join(root, "scripts", "no-node-builtins.mjs")
   ).href
