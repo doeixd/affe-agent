@@ -188,9 +188,15 @@ open, so the next pass does not have to re-derive it.
     its count, completeness stated, cheapest-next placement so every
     namespace is represented before any is complete), and deterministic
     field-weighted search with pagination whose results carry the same
-    signatures. The engine — the owned interpreter, `execute`, the data
-    boundary (§5.4 steps 2–6) — remains, with the acorn dependency cost,
-    and needs its own plan.
+    signatures. The engine now has its plan
+    (`docs/plan-code-mode-engine.md`, 2026-08-31: CodeExecutor seam from
+    day one, executor's tool-failure split decided, code recovery in v1,
+    limits without defaults, durable suspension explicitly out of scope)
+    and its step 2: `internal/data.ts`, the plain-data boundary --
+    prototype-reaching keys dropped, foreign prototypes rebuilt away,
+    promises/functions/cycles/depth refused as `Result` values with the
+    fix named, Date/URL/Uint8Array serialised. Steps 3–6 remain; step 4
+    (the interpreter) is blocked on approving the acorn dependency.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file

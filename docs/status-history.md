@@ -3687,3 +3687,23 @@ fairness pin, and flattening the segment weight fails the ordering pin.
 The engine (§5.4 steps 2-6: data boundary, interpreter, execute tool,
 limits, elicitation) stays future work with its own plan; `/code` is the
 entry it will share.
+
+## The code-mode engine plan, and its data boundary (2026-08-31)
+
+`docs/plan-code-mode-engine.md` condenses research-code-mode §5–6 into
+eight decisions so implementation never re-litigates them: the
+`CodeExecutor` seam from day one, executor's tool-failure split (declared
+failures are values, declined approvals throw, defects opaque), code
+recovery in v1, diagnostics that name the fix, nested calls as real tool
+calls, limits without defaults, elicitation as step 6 with durable
+suspension explicitly out of scope, and acorn as the one decision held
+for review. Step 2 landed with the plan: `src/code/internal/data.ts`, the
+plain-data boundary everything crossing host/program passes. Objects are
+rebuilt (foreign prototypes never cross), `__proto__`/`constructor`/
+`prototype` keys are dropped on both directions, Date/URL serialise and
+Uint8Array copies, undefined follows JSON semantics, and promises,
+functions, class instances, cycles and the depth bound are refused as
+`Result` values whose `fix` says what to do instead -- refusals are the
+caller's to route as diagnostic or defect. Broken once both ways:
+copying blocked keys fails the pollution pin; disabling the seen-set
+turns a cycle into a wrong "too-deep" and fails that pin.
