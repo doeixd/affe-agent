@@ -171,6 +171,10 @@
       "types": "./dist/shell/index.d.ts",
       "default": "./dist/shell/index.js"
     },
+    "./code": {
+      "types": "./dist/code/index.d.ts",
+      "default": "./dist/code/index.js"
+    },
     "./blob": {
       "types": "./dist/blob/index.d.ts",
       "default": "./dist/blob/index.js"

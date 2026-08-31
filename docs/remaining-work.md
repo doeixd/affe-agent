@@ -180,8 +180,17 @@ open, so the next pass does not have to re-derive it.
 20. **Reference gateway and declarative references, presets, LSP/code-mode
     batteries** (`plan-primitives.md` steps 3–6) — only the coding reference
     exists.
-21. **Code mode** (`research-code-mode.md`) — signature generation and the
-    budgeted catalog are useful without an interpreter; nothing in `src/`.
+21. **Code mode** (`research-code-mode.md`) — the interpreter-free half
+    landed 2026-08-31 as `/code` (`Catalog`): JSDoc-annotated TypeScript
+    signatures from any toolkit (schema descriptions and defaults ride as
+    JSDoc; Effect's Number-codec sentinels collapse to `number`), the
+    token-budgeted round-robin catalog (every namespace always listed with
+    its count, completeness stated, cheapest-next placement so every
+    namespace is represented before any is complete), and deterministic
+    field-weighted search with pagination whose results carry the same
+    signatures. The engine — the owned interpreter, `execute`, the data
+    boundary (§5.4 steps 2–6) — remains, with the acorn dependency cost,
+    and needs its own plan.
 22. ~~**Compaction phases 11–15**~~ — 11–14 landed 2026-08-30: the
     branch-seed seam on `tree.branch`, `BranchSummary` over `divergence`
     with canonical carryover, `CodingSummary.wrap`'s cumulative file

@@ -3662,3 +3662,28 @@ the two refusals differ on purpose: a subject served by nothing is
 "connect your GitHub" (`reauthRequired: true`), a bare configuration gap
 is not. Broken once: forcing org-always fails the preference test.
 Still open in that plan: reauth via elicitation, OAuth as an escape hatch.
+
+## Code mode without a program: /code Catalog (2026-08-31)
+
+`research-code-mode.md` §5.4 step 1, deliberately alone -- the research's
+own sequencing note says a v1 that starts at the interpreter is six weeks
+before anything is usable, and the catalog is the fix for prompt bloat
+whether or not a program ever runs. `Catalog.signatureOf` renders a
+JSDoc-annotated TypeScript signature from any tool via
+`Tool.getJsonSchema` -- field descriptions and `@default` tags from the
+schema's own annotations, non-identifier segments as index expressions,
+Effect's Number-codec wire sentinels ("Infinity"/"NaN") collapsed into
+`number` because a signature is about the decoded type. `catalog` is the
+budgeted round-robin: every namespace always listed with its tool count,
+signatures placed cheapest-next per namespace so every namespace gets
+representation before any gets everything, and the text states its own
+completeness (COMPLETE vs PARTIAL - N of M; per namespace "(2 tools, 1
+shown)" and a "not shown:" line naming the elided). `search` is additive
+field-weighted scoring -- path segment 20, path substring 8, description
+4, input-property text 2, camelCase tokenised, naive singulars -- with
+offset pagination and results carrying the same signatures, so no second
+lookup. Broken once both ways: a greedy per-namespace fill fails the
+fairness pin, and flattening the segment weight fails the ordering pin.
+The engine (§5.4 steps 2-6: data boundary, interpreter, execute tool,
+limits, elicitation) stays future work with its own plan; `/code` is the
+entry it will share.
