@@ -1,5 +1,5 @@
 import { Config, Effect, ExecutionPlan, Layer, Schedule } from "effect"
-import { FetchHttpClient } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -42,7 +42,19 @@ import { Budget } from "../src/budget/index.js"
  */
 const openrouter = OpenAiClient.layerConfig({
   apiKey: Config.redacted("OPENROUTER_API_KEY"),
-  apiUrl: Config.succeed("https://openrouter.ai/api/v1")
+  apiUrl: Config.succeed("https://openrouter.ai/api/v1"),
+  /**
+   * The one gateway-specific thing, and it is optional: OpenRouter attributes
+   * traffic on its leaderboards by these two headers. There is no field for
+   * them because they are not part of the OpenAI API -- `transformClient` is
+   * the seam for anything a gateway adds on top of the protocol it borrows.
+   */
+  transformClient: HttpClient.mapRequest(
+    HttpClientRequest.setHeaders({
+      "HTTP-Referer": "https://github.com/doeixd/effect-agent",
+      "X-Title": "effect-agent"
+    })
+  )
 }).pipe(Layer.provide(FetchHttpClient.layer))
 
 const sonnet = OpenAiLanguageModel.layer({
@@ -89,6 +101,10 @@ const plan = ExecutionPlan.make(
  * `Budget.within` counts the usage the model reports on each turn, whatever
  * produced it, so a run through OpenRouter is capped exactly as a direct one
  * is -- the ceiling is enforced by the loop seam, not by the provider.
+ *
+ * Where `Budget.layer` is provided decides the scope, and it is provided at the
+ * edge below: one 50k pool for the whole program, shared by every session it
+ * makes. Move it inside `Effect.scoped` for a fresh ceiling per conversation.
  *
  * The caveat is that the unit is **tokens**, and a plan that spans vendors
  * spans prices: 50k tokens of `anthropic/claude-sonnet-4.5` and 50k of
