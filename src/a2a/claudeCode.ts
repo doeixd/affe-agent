@@ -96,6 +96,16 @@ export interface Options {
   readonly timeout?: Duration.Input | undefined
   /** Output bound for one run. Default 32 MiB, for the same reason. */
   readonly maxOutputBytes?: number | undefined
+  /**
+   * How many finished tasks stay fetchable by `task(id)`. Default 256.
+   *
+   * A bridge is meant to be long-lived -- one manager delegating all day -- and
+   * a task carries the CLI's whole answer, so remembering every one of them
+   * without a bound is a leak that only shows up in the deployments that matter
+   * most. The oldest are dropped first; a caller who needs them kept has them
+   * already, in the value `delegate` returned.
+   */
+  readonly historyLimit?: number | undefined
   /** Name and version reported on the generated Agent Card. */
   readonly card?:
     | { readonly name?: string | undefined; readonly version?: string | undefined }
@@ -104,6 +114,7 @@ export interface Options {
 
 const DEFAULT_TIMEOUT = "10 minutes"
 const DEFAULT_MAX_OUTPUT = 32 * 1024 * 1024
+const DEFAULT_HISTORY = 256
 
 // ---------------------------------------------------------------------------
 // The CLI's stream-json, read for exactly what a bridge needs
@@ -432,9 +443,23 @@ export const remote = (
         return next
       })
 
+    const historyLimit = Math.max(1, config.historyLimit ?? DEFAULT_HISTORY)
+
     const record = (task: Task) =>
       Effect.gen(function* () {
-        yield* Ref.update(tasks, (all) => new Map(all).set(task.id, task))
+        yield* Ref.update(tasks, (all) => {
+          const next = new Map(all)
+          // Re-inserting moves it to the end, so the eviction order is "least
+          // recently finished" rather than "first ever seen".
+          next.delete(task.id)
+          next.set(task.id, task)
+          while (next.size > historyLimit) {
+            const oldest = next.keys().next()
+            if (oldest.done === true) break
+            next.delete(oldest.value)
+          }
+          return next
+        })
         const sessionId = (task.metadata as { claudeSessionId?: string } | undefined)?.claudeSessionId
         if (sessionId !== undefined && task.contextId.length > 0) {
           yield* Ref.update(sessions, (all) => new Map(all).set(task.contextId, sessionId))
@@ -454,6 +479,17 @@ export const remote = (
             new AgentA2ARemoteError({
               code: "INVALID_INPUT",
               detail: "the message carried no text; the CLI has nothing to be asked"
+            })
+          )
+        }
+        // Two runs under one task id would leave `cancel(id)` pointing at
+        // whichever registered last, and the other one unstoppable. The id is
+        // the caller's to choose, so this is their mistake to hear about.
+        if ((yield* Ref.get(running)).has(taskId)) {
+          return Stream.fail(
+            new AgentA2ARemoteError({
+              code: "TASK_ALREADY_RUNNING",
+              detail: `${taskId} is already running; give the second message its own task id`
             })
           )
         }

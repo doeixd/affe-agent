@@ -32,7 +32,8 @@ const scripted = (
 }
 
 const bridge = (
-  execStream: Sandbox.Sandbox["execStream"]
+  execStream: Sandbox.Sandbox["execStream"],
+  options?: ClaudeCodeA2A.Options
 ): Effect.Effect<
   ClaudeCodeA2A.Bridge,
   Sandbox.ProviderError,
@@ -43,7 +44,7 @@ const bridge = (
       Sandbox.acquire(Sandbox.workspace("claude")),
       MemorySandbox.layer({ execStream })
     ),
-    (sandbox) => ClaudeCodeA2A.remote(sandbox)
+    (sandbox) => ClaudeCodeA2A.remote(sandbox, options)
   )
 
 const ask = (text: string, options?: {
@@ -258,6 +259,44 @@ describe("ClaudeCodeA2A", () => {
       if (Exit.isSuccess(result)) {
         assert.strictEqual(result.value.status?.state, TaskState.TASK_STATE_CANCELED)
       }
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("two runs cannot share one task id, because cancel could only reach one", () =>
+    Effect.gen(function* () {
+      const claude = yield* bridge(() =>
+        Stream.concat(
+          Stream.fromArray([Sandbox.outputEvent("stdout", encoder.encode(`${INIT}\n`))]),
+          Stream.fromEffect(Effect.as(Effect.never, Sandbox.exitEvent(0)))
+        ))
+      const first = yield* Effect.forkChild(Effect.exit(claude.delegate(ask("go"))))
+      // Let the first run register before the second asks for the same id;
+      // without the guard the second would silently take it over.
+      yield* Effect.yieldNow
+      const second = yield* Effect.exit(claude.delegate(ask("also go")))
+      assert.isTrue(Exit.isFailure(second))
+      const error = Cause.findErrorOption(
+        Exit.isFailure(second) ? second.cause : Cause.fail(new Error("unreachable"))
+      )
+      assert.strictEqual(
+        error._tag === "Some" && "code" in error.value ? error.value.code : undefined,
+        "TASK_ALREADY_RUNNING"
+      )
+      yield* Fiber.interrupt(first)
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("the task history is bounded, because a bridge is meant to be long-lived", () =>
+    Effect.gen(function* () {
+      const claude = yield* bridge(scripted([INIT, RESULT("done")], []), { historyLimit: 2 })
+      for (const id of ["a", "b", "c"]) {
+        yield* claude.delegate(ask("go", { taskId: id, messageId: id }))
+      }
+      // The two most recent are still there; the oldest was dropped rather
+      // than held forever with the whole of the CLI's answer attached.
+      assert.strictEqual((yield* claude.task("c")).id, "c")
+      assert.strictEqual((yield* claude.task("b")).id, "b")
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(claude.task("a"))))
     }).pipe(Effect.scoped)
   )
 
