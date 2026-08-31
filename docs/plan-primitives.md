@@ -110,6 +110,36 @@ per-tenant rate limiting, provider contract management) are operations, not
 primitives, and pursuing them would bend the kernel toward a shape nothing else
 needs.
 
+**Checked 2026-08-31: the adapter is not even a small piece of work — it is
+configuration.** OpenRouter speaks the OpenAI API, and
+`@effect/ai-openai@4.0.0-rc.112` (the rc this repository pins) takes an
+`apiUrl` on both `OpenAiClient.layer` and `layerConfig`. So OpenRouter is:
+
+```ts
+OpenAiLanguageModel.layer({ model: "anthropic/claude-sonnet-4.5" }).pipe(
+  Layer.provide(OpenAiClient.layerConfig({
+    apiKey: Config.redacted("OPENROUTER_API_KEY"),
+    apiUrl: Config.succeed("https://openrouter.ai/api/v1")
+  })),
+  Layer.provide(FetchHttpClient.layer)
+)
+```
+
+Nothing in `src/` should wrap that. A provider layer is the caller's to
+assemble, exactly as the Anthropic one in `examples/anthropic.ts` is, and a
+`/openrouter` package would add a name without adding a capability — which is
+the same rule failing from the other direction. What is worth having is an
+**example** carrying that snippet and the two facts a caller cannot guess:
+routing/fallback belongs to `ExecutionPlan` rather than to OpenRouter's own
+routing when both could serve, and per-model usage still lands in `/budget`
+through the ordinary usage events.
+
+The distinction this row draws is *provider* versus *product*, and it is worth
+holding against a second case: a coding CLI such as Claude Code is neither.
+See [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) — an
+OpenRouter-style model API nests cleanly under `LanguageModel`, and an agent
+runtime does not.
+
 **Stating this as a non-goal is the point of the row.** Left unstated it becomes
 a goal by default.
 

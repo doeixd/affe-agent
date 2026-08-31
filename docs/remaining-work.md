@@ -247,6 +247,16 @@ open, so the next pass does not have to re-derive it.
     behind it: the per-subject `Bindings` store and
     `Credentials.resolveFor`, reauth via elicitation, `securitySchemes`
     derivation.
+26b. **OpenRouter example** — small, unblocked, and *not* a package.
+    Checked 2026-08-31: OpenRouter speaks the OpenAI API and
+    `@effect/ai-openai@4.0.0-rc.112` takes an `apiUrl`, so a provider layer
+    is ten lines of caller configuration and `src/` should stay out of it
+    (`plan-primitives.md`, model gateways). What is missing is an example
+    carrying the snippet and the two things a caller cannot guess: that
+    routing and fallback belong to `ExecutionPlan`, and that per-model usage
+    still reaches `/budget` through the ordinary usage events. Typecheck-only,
+    as `examples/anthropic.ts` is -- it needs a real key to run.
+
 26. **`plan-a2a-layers-bridges.txt`, `plan-relay.txt`, `effect-plan-2.txt`**
     — new packages and architecture (Claude Code / OpenCode bridges, relay
     transport, `SessionInbox` / `ProcessManager`). Preconditions are all met

@@ -76,6 +76,21 @@ Stream<Response.Part>
 
 That would be a legitimate provider.
 
+### The contrast that makes the problem visible: OpenRouter
+
+Added 2026-08-31, because "run X as a provider" gets asked about CLIs and
+gateways in the same breath and they are not the same question.
+
+OpenRouter *is* a model API. It has no loop, no tools, no workspace and no
+session state of its own, so it nests under `LanguageModel` with nothing left
+over -- and it needs no adapter in this repository at all: it speaks the OpenAI
+API, and `@effect/ai-openai`'s client takes an `apiUrl`, so it is
+`OpenAiClient.layerConfig({ apiKey, apiUrl })` pointed at
+`https://openrouter.ai/api/v1`. See `plan-primitives.md`'s model-gateway row,
+which also records why *being* a gateway stays a non-goal.
+
+A coding CLI is the opposite case, and the next section is why.
+
 ### But there's a semantic problem
 
 Claude Code is not really a model.
