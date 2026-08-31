@@ -33,6 +33,7 @@
       "@doeixd/effect-agent/http": ["./src/http/index.ts"],
       "@doeixd/effect-agent/ag-ui": ["./src/ag-ui/index.ts"],
       "@doeixd/effect-agent/coding": ["./src/coding/index.ts"],
+      "@doeixd/effect-agent/presets": ["./src/presets/index.ts"],
       "@doeixd/effect-agent/tree": ["./src/tree/index.ts"],
       "@doeixd/effect-agent/export": ["./src/export/index.ts"],
       "@doeixd/effect-agent/redaction": ["./src/redaction/index.ts"],

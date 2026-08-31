@@ -3976,3 +3976,36 @@ Presets are next in that plan and were deliberately not started earlier:
 a preset designed ahead of its first two callers is a guess, and those
 two callers only both existed as of today.
 
+## Presets, derived rather than designed (2026-08-31)
+
+`plan-primitives.md` §7 step 4, taken the day its precondition became
+true: the plan says a preset built ahead of its first two callers is a
+guess, and `ref-coding-agent` and `ref-gateway` only both existed as of
+today. So `Presets.coding` and `Presets.gateway` are what those two
+files had written by hand, lifted -- and both were then rewritten on top
+of the presets, which is the acceptance test rather than a
+demonstration. A chat preset is deliberately absent; the plan names one,
+but nothing calls it, and that is exactly the guess the rule prevents.
+
+The defaults *are* the recipe, and each is the quiet failure it
+prevents. A coding agent asks before it changes anything, so a caller
+who says nothing about permission gets the safe policy rather than an
+open one. A gateway returns refusals to the model rather than failing
+the run -- its job is to keep serving the caller it just refused -- and
+its `subject` projection is **required**, because a gateway that omits
+it silently gives every caller the org's credential and nothing about it
+looks wrong.
+
+Two typing failures, both found rather than reasoned about, and both now
+pinned. Restating the agent's fields in the preset's own options fixed
+the error and requirement parameters to `never`, rejecting exactly the
+agents worth building -- a toolkit whose handlers need a sandbox, a
+transform that can fail; both references stopped compiling. Widening the
+other way to a bare `object` compiled fine and *silently erased the tool
+names* from the agent handed back, which is a preset taking away more
+than it gives. The answer is to accept `Agent.Config<...>` with every
+type parameter free. I also briefly believed the fix was passing type
+arguments through to `Agent.make` explicitly, wrote that in a comment,
+and then found by breaking it that they were redundant -- the comment
+now records the real cause.
+

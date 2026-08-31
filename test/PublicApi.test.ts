@@ -277,6 +277,18 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  it("exports the presets vocabulary and nothing beyond it", async () => {
+    const presets = await import("../src/presets/index.js")
+    assert.deepStrictEqual(Object.keys(presets).sort(), ["Presets"])
+    // Two presets, each with a caller in `examples/`. A chat preset is
+    // deliberately absent until one has callers: see the module docs.
+    assert.deepStrictEqual(Object.keys(presets.Presets).sort(), [
+      "coding",
+      "codingPolicy",
+      "gateway"
+    ])
+  })
+
   it("exports the code vocabulary and nothing beyond it", async () => {
     const code = await import("../src/code/index.js")
     assert.deepStrictEqual(Object.keys(code).sort(), [

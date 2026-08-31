@@ -171,6 +171,10 @@
       "types": "./dist/shell/index.d.ts",
       "default": "./dist/shell/index.js"
     },
+    "./presets": {
+      "types": "./dist/presets/index.d.ts",
+      "default": "./dist/presets/index.js"
+    },
     "./code": {
       "types": "./dist/code/index.d.ts",
       "default": "./dist/code/index.js"

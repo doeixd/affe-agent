@@ -222,8 +222,12 @@ Rules that make them worth the maintenance:
    printing them. Findings in `STATUS.md`; the headline is that nothing
    was missing -- it composes from the public surface with no cast -- and
    the surprise is that a write is refused *twice*, independently.
-4. **Presets**, informed by what steps 1 and 3 actually had to wire by hand. Not
-   before: a preset designed ahead of its first two callers is a guess.
+4. ~~**Presets**~~ — landed 2026-08-31 as `@doeixd/effect-agent/presets`,
+   derived from what steps 1 and 3 had written by hand. `Presets.coding`
+   and `Presets.gateway`; both references were rewritten on top of them,
+   which is the acceptance test. A chat preset is deliberately absent:
+   the plan names one, but nothing calls it yet, and that is the guess
+   this rule exists to prevent.
 5. **`ref-declarative`**, and the ergonomics claim it is there to substantiate.
 6. **Batteries** — LSP, truncation as a service, rendered prompts, code mode —
    in whatever order step 1's findings rank them.

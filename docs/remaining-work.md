@@ -183,13 +183,14 @@ open, so the next pass does not have to re-derive it.
     4–6). Step 3 landed 2026-08-31: `examples/ref-gateway.ts` is the
     integration axis' acceptance test, runs in CI, and found nothing
     missing (findings in `STATUS.md`). Step 2 completed the same day with
-    the credentials plan, and step 6's code-mode battery is `/code`. What
-    remains: **presets** — deliberately not before now, since the plan
-    says a preset designed ahead of its first two callers is a guess, and
-    `ref-coding-agent` and `ref-gateway` are those two callers;
-    **`ref-declarative`** and the ergonomics claim it substantiates; and
-    the remaining batteries (LSP, truncation as a service, rendered
-    prompts).
+    the credentials plan, and step 6's code-mode battery is `/code`. Step 4 landed
+    2026-08-31: `@doeixd/effect-agent/presets` (`Presets.coding`,
+    `Presets.gateway`), derived from what the two references had written
+    by hand, and both references rewritten on top of them as the
+    acceptance test. A chat preset waits for a caller. What remains:
+    **`ref-declarative`** (step 5) and the ergonomics claim it
+    substantiates, and the remaining batteries (LSP, truncation as a
+    service, rendered prompts).
 21. ~~**Code mode**~~ (`research-code-mode.md`,
     `plan-code-mode-engine.md`) — complete 2026-08-31, plan and all six
     steps. `/code` ships `Catalog` (JSDoc TypeScript signatures from any

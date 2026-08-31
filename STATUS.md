@@ -78,6 +78,14 @@ the fibre that acts -- a `Context.Reference` the host sets per request
 (`AgentSessionHost.Options.subject`), `None` outside any host, carried on
 the durable claim/payload so replays see what the claimer saw.
 
+**Presets.** `@doeixd/effect-agent/presets`: `Presets.coding` (toolkit, a
+policy that asks before anything changes, an acquired workspace) and
+`Presets.gateway` (source-bound tools behind one host, refusals returned
+to the model, the caller's `subject` required rather than optional).
+Composition and defaults only -- each returns the parts it assembled, so
+dropping to the primitives is taking a field. Both references are built
+on them.
+
 **Reference implementations.** `examples/ref-coding-agent.ts` and
 `examples/ref-gateway.ts` (`plan-primitives.md` §4) are built only from the
 public surface, carry compile-time assertions that inference stayed

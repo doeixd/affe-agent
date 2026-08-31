@@ -21,7 +21,8 @@ import { Tool } from "effect/unstable/ai"
 import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "@doeixd/effect-agent"
 import { CodingToolkit } from "@doeixd/effect-agent/coding"
 import { Compaction } from "@doeixd/effect-agent/compaction"
-import { MemorySandbox, Sandbox } from "@doeixd/effect-agent/sandbox"
+import { Presets } from "@doeixd/effect-agent/presets"
+import { MemorySandbox } from "@doeixd/effect-agent/sandbox"
 import { TestLanguageModel } from "@doeixd/effect-agent/testing"
 
 // ---------------------------------------------------------------------------
@@ -56,14 +57,26 @@ const program = Effect.gen(function* () {
       )
   })
 
-  const Coder = Agent.make({
-    instructions:
-      "You edit code inside a workspace. Read before you write, prefer edit_file over write_file, and run tests with bash.",
+  // The preset is what this file used to assemble by hand: the toolkit,
+  // a policy that asks before anything changes, and an acquired
+  // workspace. The policy below is passed explicitly because this
+  // reference states its own; omitting it gets `Presets.codingPolicy`,
+  // which is the same shape and is the point -- a coding agent should
+  // have to opt *out* of asking, never into it.
+  const coder = Presets.coding({
     toolkit: CodingToolkit.toolkit(),
+    sandbox: MemorySandbox.layer({
+      seed: {
+        "src/app.ts": "// TODO: fix\nconst x = 1\n",
+        "README.md": "# workspace\n"
+      }
+    }),
+    workspace: "ref-coding-agent",
     permission: policy,
     contextTransform: compaction,
     loop: AgentLoop.bounded(10)
   })
+  const Coder = coder.agent
 
   // Scripted model: search → read → edit → bash → done.
   const { layer: modelLayer } = yield* TestLanguageModel.script([
@@ -82,18 +95,7 @@ const program = Effect.gen(function* () {
     TestLanguageModel.text("Done. Fixed TODO, edit applied, tests pass.")
   ])
 
-  const sandboxProvider = MemorySandbox.layer({
-    seed: {
-      "src/app.ts": "// TODO: fix\nconst x = 1\n",
-      "README.md": "# workspace\n"
-    }
-  })
-
-  const workspaceLayer = Sandbox.currentLayer(Sandbox.workspace("ref-coding-agent")).pipe(
-    Layer.provide(sandboxProvider)
-  )
-
-  const env = Layer.mergeAll(modelLayer, workspaceLayer)
+  const env = Layer.mergeAll(modelLayer, coder.workspace)
 
   const result = yield* Effect.scoped(
     Effect.gen(function* () {

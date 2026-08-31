@@ -30,7 +30,8 @@ import { McpProtocol, McpServer } from "effect/unstable/ai"
 // needs a private import, that is a missing primitive and belongs in
 // STATUS.md (plan-primitives.md §4 rule 4).
 import { Agent, AgentLoop, Permission, Principal, ToolExecution } from "@doeixd/effect-agent"
-import { AgentClient, AgentProtocol, AgentSessionHost } from "@doeixd/effect-agent/client"
+import { AgentProtocol, AgentSessionHost } from "@doeixd/effect-agent/client"
+import { Presets } from "@doeixd/effect-agent/presets"
 import { AgentMcp } from "@doeixd/effect-agent/mcp"
 import { TestLanguageModel } from "@doeixd/effect-agent/testing"
 import { Credentials, OpenApi, ToolSource } from "@doeixd/effect-agent/tool-source"
@@ -182,26 +183,27 @@ const program = Effect.gen(function*() {
     { text: "I am not allowed to open issues here." }
   ])
 
-  const gateway = Agent.make({
+  // The preset is the recipe this file used to spell out: the agent, the
+  // client behind it, and the host in front. Its two defaults are the
+  // ones a gateway gets wrong by omission -- a refusal is returned to
+  // the model rather than failing the run, and `subject` is required, so
+  // there is no way to build a gateway where every caller quietly shares
+  // the org's credential.
+  const Host = AgentSessionHost.Tag<string>("example/ref-gateway/host")
+  const preset = Presets.gateway({
     toolkit,
     permission: policy,
-    // A refusal is told to the model rather than failing the run: a
-    // gateway's job is to keep serving the caller it just refused.
-    toolDenialPolicy: ToolExecution.ReturnToModel,
-    loop: AgentLoop.bounded(3)
-  })
-
-  // One host for every surface. It authenticates the request, and its
-  // `subject` projection is what puts the caller on the fibre the tools
-  // run on — which is how the binding above knows whose credential to use.
-  const Host = AgentSessionHost.Tag<string>("example/ref-gateway/host")
-  const host = AgentSessionHost.layer(Host, {
     principal: { resolve: ({ headers }) => Effect.succeed(headers["x-user"] ?? "anonymous") },
     subject: (user) => user,
     authorization: AgentSessionHost.allowAll(),
+    loop: AgentLoop.bounded(3),
     maxSessions: 8,
     maxRequestsPerSession: 32
-  }).pipe(Layer.provide(AgentClient.layer(gateway)), Layer.provideMerge(model))
+  })
+  // Nothing is hidden: `preset.agent` is an ordinary definition, and the
+  // host is an ordinary layer. Dropping to the primitives is taking a
+  // field, not starting over.
+  const host = preset.host(Host).pipe(Layer.provideMerge(model))
 
   const requestId = Schema.decodeSync(AgentProtocol.RequestId)
   const sessionId = Schema.decodeSync(AgentProtocol.SessionId)
