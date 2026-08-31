@@ -86,6 +86,18 @@ Composition and defaults only -- each returns the parts it assembled, so
 dropping to the primitives is taking a field. Both references are built
 on them.
 
+**Durability, demonstrated.** `examples/durable-resume.ts`
+(`npm run smoke:durable-resume`, ~20s) actually runs the claim rather
+than typechecking it: four processes over one SQLite file, sharing no
+memory. A conversation outlives the process that started it; a
+submission whose process dies mid-tool is finished by the next one; and
+the model call the dead process already made is replayed from the
+journal, not re-issued. Each claim is asserted, and breaking one fails
+the run. Deliberately *not* in `check`: the guarantees themselves are
+covered by `DurableSql`, `DurableAgentClientSql`, `ClusterMultiNode` and
+`verify:durability`, so this is a walkthrough rather than the proof, and
+`check` should not pay 20 seconds for it.
+
 **Reference implementations.** `examples/ref-coding-agent.ts`,
 `examples/ref-gateway.ts` and `examples/ref-declarative.ts`
 (`plan-primitives.md` §4) are built only from the

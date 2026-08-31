@@ -4040,3 +4040,29 @@ first draft of this file did neither and did not compile. And
 claim rests on, is not in the repository, so that mapping cannot be
 checked here.
 
+## A runnable durable-resume walkthrough (2026-08-31)
+
+Asked whether a durable server agent's state can be saved and resumed
+elsewhere, the answer was yes with tests -- `DurableSql`,
+`DurableAgentClientSql`, `ClusterMultiNode`, `WorkerDurableObject`, plus
+the falsification harness -- but the two durable *examples* in the
+repository both said "this file exists to be type-checked". Nothing
+runnable showed the claim, so `examples/durable-resume.ts` now does.
+
+Four processes over one SQLite file, each with its own client, workflow
+engine and model, sharing nothing else; closing a scope is a process
+dying. Process A starts a conversation and dies. B, addressed only by
+session id, reads what A left and continues it. C accepts a submission
+and dies with a tool still running. D finishes it -- and is scripted
+with *only* the turn that has not happened yet, so if the journal were
+ignored and the run started over, D would be asked for a turn it cannot
+answer. All three claims are asserted rather than printed, and each was
+broken once to confirm it bites.
+
+Two notes for whoever reads it next. The cluster logs "No healthy
+runners available" while D waits for C's shard lock to expire -- that is
+the takeover working, and the example quiets the log rather than hiding
+the fact. And it is deliberately not in `check`: at ~20 seconds it is a
+walkthrough, not the proof, and the guarantees already have dedicated
+tests.
+

@@ -246,6 +246,7 @@
     "smoke:ref-coding": "tsx examples/ref-coding-agent.ts",
     "smoke:ref-gateway": "tsx examples/ref-gateway.ts",
     "smoke:ref-declarative": "tsx examples/ref-declarative.ts",
+    "smoke:durable-resume": "tsx examples/durable-resume.ts",
     "smoke:tui": "node scripts/tui-smoke.mjs"
   },
   "peerDependencies": {
