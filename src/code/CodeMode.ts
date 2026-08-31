@@ -1,4 +1,5 @@
-import { Context, Duration, Effect, Option, Result, Schema, Stream } from "effect"
+import { Context, Duration, Effect, Option, Result, Schema, Semaphore, Stream } from "effect"
+import { positiveInteger } from "../internal/positive.js"
 import type { Tool, Toolkit } from "effect/unstable/ai"
 import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
@@ -56,8 +57,19 @@ export interface Limits {
   readonly maxToolCalls?: number | undefined
   /** Wall-clock bound for the whole program. */
   readonly timeout?: Duration.Input | undefined
-  /** Cap on the JSON size of the returned value. */
+  /** Cap on the UTF-8 size of the returned value, in bytes. */
   readonly maxOutputBytes?: number | undefined
+  /**
+   * How many nested calls may be in flight at once.
+   *
+   * `Promise.all` in a program is `Effect.all` unbounded, which is what
+   * JavaScript itself does -- and what lets one program open a hundred
+   * connections to an upstream that expected a handful. Bounded here, at
+   * the host's boundary, rather than in the interpreter, so every
+   * executor obeys it. Unbounded when unset, no default: budgets are
+   * host policy.
+   */
+  readonly maxConcurrentCalls?: number | undefined
 }
 
 export interface MakeOptions<Groups extends ToolGroups, R> {
@@ -185,6 +197,8 @@ export interface CodeMode<R> {
   ) => Effect.Effect<ExecuteResult, never, R>
 }
 
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength
+
 const encodeApproval = Schema.encodeSync(Schema.toCodecJson(Permission.ApprovalDetail))
 
 /**
@@ -233,6 +247,10 @@ export const make = <Groups extends ToolGroups, R = never>(
       let callCount = 0
       let approvalCount = 0
       const prefix = runOptions?.approvalPrefix ?? randomPrefix()
+      const concurrency = options.limits?.maxConcurrentCalls
+      const permits = concurrency === undefined
+        ? undefined
+        : yield* Semaphore.make(positiveInteger("CodeMode maxConcurrentCalls", concurrency))
 
       const observed = (
         path: ReadonlyArray<string>,
@@ -422,6 +440,10 @@ export const make = <Groups extends ToolGroups, R = never>(
           yield* observed(path, input, "succeeded")
           return { ok: true, value: outData.success }
         }).pipe(
+          // The host's bound on in-flight nested calls, applied around the
+          // whole call including its approval wait: a program that is
+          // parked on a question is not holding an upstream connection.
+          (self) => permits === undefined ? self : permits.withPermits(1)(self),
           // A handler defect is the host's problem, and its cause never
           // reaches the program (invariant 4).
           Effect.catchDefect(() =>
@@ -451,7 +473,27 @@ export const make = <Groups extends ToolGroups, R = never>(
             )
       )
 
-      const attempted = yield* Effect.result(bounded)
+      // A defect in the engine is the host's, and no model-written
+      // program may fail the agent run with one: it becomes a refusal
+      // naming no internals (invariants 3 and 4).
+      //
+      // **Defence in depth, with no reachable case today.** Every route
+      // tried lands somewhere else first: pathological nesting is
+      // refused by acorn as a parse error, runaway recursion by
+      // `maxCallDepth`, a throwing builtin is converted to a program
+      // throw, and a handler defect is caught per call below. It is kept
+      // because the alternative to an unreachable guard here is an
+      // interpreter bug taking down a run, and it is recorded as
+      // unreachable so nobody mistakes it for tested behaviour.
+      const attempted = yield* Effect.result(
+        Effect.catchDefect(bounded, () =>
+          Effect.fail(
+            new CodeDiagnostic({
+              reason: "internal",
+              fix: "the engine could not run this program; simplify it and try again"
+            })
+          ))
+      )
       const finish = (outcome: Outcome): ExecuteResult => ({
         outcome,
         logs: Result.isSuccess(attempted) ? attempted.success.logs : [],
@@ -482,7 +524,9 @@ export const make = <Groups extends ToolGroups, R = never>(
       }
       const maxOut = options.limits?.maxOutputBytes
       if (maxOut !== undefined) {
-        const size = JSON.stringify(outData.success)?.length ?? 0
+        // Bytes, as the name says: `.length` counts UTF-16 units, so a
+        // budget could be overrun threefold by non-ASCII text alone.
+        const size = utf8Bytes(JSON.stringify(outData.success) ?? "")
         if (size > maxOut) {
           return finish(refusedOf(
             new CodeDiagnostic({

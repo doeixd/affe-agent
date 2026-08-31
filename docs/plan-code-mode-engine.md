@@ -81,3 +81,50 @@ arguments and the final result out — passes `toData`:
   host-overridable) are refused naming the path.
 - Refusals are values (`Result`), not exceptions: the caller decides
   whether a violation is a diagnostic to the model or a defect.
+
+## Hardening pass (2026-08-31, after step 6)
+
+An audit of the finished engine against its own invariants, with each
+finding proved by a failing test before it was fixed
+(`test/CodeHardening.test.ts`).
+
+Three real defects, all in the same class -- a model-written program
+being able to do something to the *host* that it should only be able to
+do to itself:
+
+1. **A throwing host builtin was a defect, not a catchable error.**
+   `JSON.parse("{oops")` inside a program failed the whole agent run,
+   and the program could not even `try`/`catch` it. Native calls are now
+   guarded and become `ProgramThrow`, carrying `{ name, message }` --
+   plain data, never the thrown object with its stack. The message
+   survives on purpose: it describes the program's own mistake, which is
+   exactly what the model needs to fix it. A *handler* defect is a
+   different thing and stays opaque.
+2. **`maxOutputBytes` counted UTF-16 units.** A budget could be overrun
+   threefold by non-ASCII text alone. It counts UTF-8 bytes now, as the
+   name always claimed.
+3. **`Promise.all` had unbounded tool-call concurrency.** One program
+   could open as many upstream connections as it had array elements.
+   `maxConcurrentCalls` bounds in-flight nested calls at the *host*
+   boundary (a semaphore around the whole call, approval wait included),
+   so every executor obeys it rather than only the owned interpreter. No
+   default: budgets are host policy.
+
+One guard is kept as **defence in depth with no reachable case**: a
+defect escaping the executor becomes an `internal` refusal rather than
+failing the run. Every route tried lands elsewhere first -- pathological
+nesting is refused by acorn as a parse error (measured: "Not enough
+stack space to parse input"), runaway recursion by `maxCallDepth`, a
+throwing builtin by the fix above, a handler defect per call. It is
+recorded as unreachable at the site so nobody mistakes it for tested
+behaviour.
+
+**Performance**, measured rather than assumed. At 200 tools across 10
+namespaces, `Catalog.search` cost ~11ms per query -- it re-derived every
+tool's JSON Schema twice per query, and search runs per model request.
+Derived facts (schema, search text, rendered entry) are now memoised on
+the tool object by identity in a `WeakMap`, keyed per namespace where
+the namespace matters: **0.7ms per query, a 16x improvement**, with the
+catalog's own behaviour pinned unchanged and the namespace key pinned by
+its own test (a tool under two namespaces must render two paths).
+

@@ -3837,3 +3837,40 @@ replay-safe. Broken once both ways: letting a refused approval proceed
 fails the refusal pin; dropping the announcement fails both the
 ordering pin and the renderer-visibility pin.
 
+## Hardening code mode (2026-08-31)
+
+An audit of the finished engine, each finding proved by a failing test
+before the fix. Three were real, and all of the same kind: a
+model-written program able to affect the *host* rather than only itself.
+`JSON.parse` on malformed text -- the obvious thing a model does --
+crashed the agent run as a defect the program could not catch; native
+calls are now guarded into `ProgramThrow` carrying `{ name, message }`,
+data rather than the thrown object, with the message kept because it
+describes the program's own mistake. `maxOutputBytes` counted UTF-16
+units, so a non-ASCII answer could overrun its budget threefold; it
+counts UTF-8 bytes now. And `Promise.all` dispatched nested calls with
+unbounded concurrency -- one program could open an upstream connection
+per array element -- so `maxConcurrentCalls` now bounds in-flight calls
+at the host boundary, around the whole call including any approval wait,
+which means every executor obeys it and not just the owned interpreter.
+
+A fourth guard was added and then honestly demoted: a defect escaping
+the executor becomes an `internal` refusal, but no reachable case
+exists. Disabling it changed no test, and each route tried lands
+somewhere else first -- acorn refuses pathological nesting as a parse
+error ("Not enough stack space to parse input", measured), `maxCallDepth`
+catches runaway recursion, the fix above catches throwing builtins, and
+handler defects are caught per call. Kept, because the alternative to an
+unreachable guard is an interpreter bug taking down a run, and labelled
+unreachable at the site so it is never mistaken for tested behaviour.
+
+Perf was measured, not guessed. `Catalog.search` at 200 tools cost ~11ms
+per query and runs per model request, because it re-derived every tool's
+JSON Schema twice each time. Schema, search text and rendered entry are
+now memoised on the tool by identity (`WeakMap`, so a discarded toolkit
+is still collectable), keyed by namespace where that matters: 0.7ms per
+query, 16x faster, behaviour pinned unchanged. The namespace key has its
+own test, since caching by tool identity alone would have served one
+namespace's path for another -- a program written from the catalog would
+then call a tool that is not there.
+

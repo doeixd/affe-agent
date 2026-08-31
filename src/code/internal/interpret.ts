@@ -126,6 +126,22 @@ const unsupported = (node: acorn.Node, what: string, fix: string) =>
     fix: `${what} is not supported; ${fix}`
   })
 
+/**
+ * What a thrown host value looks like to the program.
+ *
+ * Plain data with a `message`, never the thrown object itself: an `Error`
+ * carries a stack and whatever a host attached to it, and the program is
+ * untrusted. The message survives because it is the program's own mistake
+ * being described -- `JSON.parse` on malformed text is the case that
+ * matters, and "Unexpected token" is exactly what the model needs to fix
+ * it. A *handler* defect is different and stays opaque; `CodeMode` makes
+ * that one an internal diagnostic before it can reach here.
+ */
+const thrownValue = (cause: unknown): unknown =>
+  cause instanceof Error
+    ? { name: cause.name, message: cause.message }
+    : { message: String(cause) }
+
 const truthy = (value: unknown): boolean => Boolean(value)
 
 /**
@@ -222,7 +238,11 @@ export const interpret = <R = never>(
         return (...args) => callProgramFunction(value, args, site)
       }
       if (typeof value === "function") {
-        return (...args) => Effect.sync(() => (value as (...inner: ReadonlyArray<unknown>) => unknown)(...args))
+        return (...args) =>
+          Effect.try({
+            try: () => (value as (...inner: ReadonlyArray<unknown>) => unknown)(...args),
+            catch: (cause) => new ProgramThrow({ value: thrownValue(cause) })
+          })
       }
       return () =>
         Effect.fail(
@@ -580,7 +600,13 @@ export const interpret = <R = never>(
                   fix: `${method} cannot take an arrow function here; use map/filter/find/some/every/forEach/reduce, or a loop`
                 })
               }
-              return (member as (...inner: ReadonlyArray<unknown>) => unknown)(...args)
+              // Guarded, not called bare: a builtin that throws --
+              // `JSON.parse` on bad text, `repeat(-1)` -- must be the
+              // program's catchable error, not a defect that fails the run.
+              return yield* Effect.try({
+                try: () => (member as (...inner: ReadonlyArray<unknown>) => unknown)(...args),
+                catch: (cause) => new ProgramThrow({ value: thrownValue(cause) })
+              })
             }
 
             const callee = yield* settle(yield* evaluate(node.callee, env))
@@ -601,7 +627,10 @@ export const interpret = <R = never>(
                   fix: "this host function cannot take an arrow function; compute the value first"
                 })
               }
-              return (callee as (...inner: ReadonlyArray<unknown>) => unknown)(...args)
+              return yield* Effect.try({
+                try: () => (callee as (...inner: ReadonlyArray<unknown>) => unknown)(...args),
+                catch: (cause) => new ProgramThrow({ value: thrownValue(cause) })
+              })
             }
             return yield* new CodeDiagnostic({
               reason: "not-callable",

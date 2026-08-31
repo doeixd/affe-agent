@@ -44,6 +44,55 @@ export interface Entry {
   readonly tokens: number
 }
 
+/**
+ * Derived facts about a tool, remembered by identity.
+ *
+ * `Tool.getJsonSchema` converts a Schema on every call, and both the
+ * signature and the search index need it -- so a `search` over a large
+ * catalog was converting every tool's schema twice, per query. A `Tool`
+ * is an immutable value, so caching on the object itself is sound, and a
+ * `WeakMap` keeps a discarded toolkit collectable.
+ *
+ * Measured before adding: 200 tools cost ~11ms per search and ~30ms to
+ * build the catalog. Search is a per-request operation, which is what
+ * made this worth a cache rather than a comment.
+ */
+interface Derived {
+  readonly schema: unknown
+  /** Property names and their descriptions, lowercased, for scoring. */
+  readonly searchable: string
+  /**
+   * The rendered entry, per namespace -- the same tool under two
+   * namespaces renders two paths, so the namespace is part of the key.
+   * Populated lazily by `entryOf`.
+   */
+  readonly entries: Map<string, Entry>
+}
+
+const derivedByTool = new WeakMap<Tool.Any, Derived>()
+
+const derivedOf = (tool: Tool.Any): Derived => {
+  const held = derivedByTool.get(tool)
+  if (held !== undefined) return held
+  const schema = Tool.getJsonSchema(tool)
+  const parts: Array<string> = []
+  if (isObject(schema) && isObject(schema["properties"])) {
+    for (const [name, member] of Object.entries(schema["properties"])) {
+      parts.push(name)
+      if (isObject(member) && typeof member["description"] === "string") {
+        parts.push(member["description"])
+      }
+    }
+  }
+  const derived: Derived = {
+    schema,
+    searchable: parts.join(" ").toLowerCase(),
+    entries: new Map()
+  }
+  derivedByTool.set(tool, derived)
+  return derived
+}
+
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
 /** `tools.orders.lookup`, or `tools.context7["resolve-library-id"]`. */
@@ -142,7 +191,7 @@ const renderJsdoc = (lines: ReadonlyArray<string>, indent: string): string =>
  * the tools, not by inventing text here.
  */
 export const signatureOf = (namespace: string, tool: Tool.Any): string => {
-  const schema = Tool.getJsonSchema(tool)
+  const schema = derivedOf(tool).schema
   const head = tool.description === undefined || tool.description === ""
     ? ""
     : renderJsdoc(tool.description.split("\n"), "")
@@ -168,8 +217,11 @@ export const signatureOf = (namespace: string, tool: Tool.Any): string => {
 export const estimateTokens = (text: string): number => Math.ceil(text.length / 4)
 
 const entryOf = (namespace: string, tool: Tool.Any): Entry => {
+  const derived = derivedOf(tool)
+  const held = derived.entries.get(namespace)
+  if (held !== undefined) return held
   const signature = signatureOf(namespace, tool)
-  return {
+  const entry: Entry = {
     namespace,
     name: tool.name,
     path: pathOf(namespace, tool.name),
@@ -177,6 +229,8 @@ const entryOf = (namespace: string, tool: Tool.Any): Entry => {
     signature,
     tokens: estimateTokens(signature)
   }
+  derived.entries.set(namespace, entry)
+  return entry
 }
 
 /** Every tool of every namespace, rendered once. Namespaces and names sorted. */
@@ -292,20 +346,6 @@ const tokenize = (value: string): ReadonlyArray<string> =>
 const variants = (token: string): ReadonlyArray<string> =>
   token.endsWith("s") && token.length > 3 ? [token, token.slice(0, -1)] : [token]
 
-/** Property names and their descriptions, once per entry. */
-const searchableText = (tool: Tool.Any): string => {
-  const schema = Tool.getJsonSchema(tool)
-  if (!isObject(schema) || !isObject(schema["properties"])) return ""
-  const parts: Array<string> = []
-  for (const [name, member] of Object.entries(schema["properties"])) {
-    parts.push(name)
-    if (isObject(member) && typeof member["description"] === "string") {
-      parts.push(member["description"])
-    }
-  }
-  return parts.join(" ").toLowerCase()
-}
-
 export interface SearchResult {
   readonly results: ReadonlyArray<Entry & { readonly score: number }>
   /** Spread back into the next request to continue: `{ offset }`. */
@@ -340,7 +380,7 @@ export const search = (
       const path = `${entry.namespace}.${entry.name}`.toLowerCase()
       const segments = new Set(tokenize(path))
       const description = (entry.description ?? "").toLowerCase()
-      const searchable = searchableText(toolsByPath.get(entry.path)!)
+      const searchable = derivedOf(toolsByPath.get(entry.path)!).searchable
       let score = 0
       for (const raw of queryTokens) {
         for (const token of variants(raw)) {

@@ -84,6 +84,27 @@ describe("Catalog.signatureOf", () => {
   })
 })
 
+describe("Catalog memoisation", () => {
+  it("one tool under two namespaces renders both paths", () => {
+    // Derived facts are cached on the tool object by identity, so the
+    // namespace has to be part of the key -- otherwise the second
+    // namespace would serve the first one's path, and a program written
+    // from the catalog would call a tool that is not there.
+    const out = Catalog.catalog({ alpha: groupOf(Ping), beta: groupOf(Ping) })
+    assert.include(out.text, "tools.alpha.ping")
+    assert.include(out.text, "tools.beta.ping")
+    assert.deepStrictEqual(
+      out.all.map((entry) => entry.path),
+      ["tools.alpha.ping", "tools.beta.ping"]
+    )
+    // And repeated calls stay identical, cache warm or cold.
+    assert.strictEqual(
+      Catalog.catalog({ alpha: groupOf(Ping), beta: groupOf(Ping) }).text,
+      out.text
+    )
+  })
+})
+
 describe("Catalog.catalog", () => {
   it("a complete catalog says so, and lists every namespace with its count", () => {
     const out = Catalog.catalog({
