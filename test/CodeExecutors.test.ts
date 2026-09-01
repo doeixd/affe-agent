@@ -74,21 +74,28 @@ describe("code-mode executors", () => {
       // `Suspended` from `CodeMode.interpreted` and this fails.
       const { data } = yield* groups
       const runtime = CodeMode.make({ tools: { data } })
-      const programs = [
-        "return 1",
-        "const one = await tools.data.echo({ text: \"x\" })\nreturn one.value",
-        "for (const n of [1, 2]) { await tools.data.echo({ text: String(n) }) }\nreturn \"done\"",
-        "throw new Error(\"boom\")",
-        "class Nope {}",
-        "await tools.data.echo({ text: \"x\" })"
+      // Each case states the tag it *should* reach, not merely that it is
+      // not `Suspended`: "anything but Suspended" would pass for a
+      // program that refused for an unrelated reason, which is how a
+      // negative assertion quietly stops testing anything.
+      const programs: ReadonlyArray<readonly [string, CodeMode.Outcome["_tag"]]> = [
+        ["return 1", "Returned"],
+        ["const one = await tools.data.echo({ text: \"x\" })\nreturn one.value", "Returned"],
+        [
+          "for (const n of [1, 2]) { await tools.data.echo({ text: String(n) }) }\nreturn \"done\"",
+          "Returned"
+        ],
+        // `JSON.parse` on malformed text, not `throw new Error(...)`:
+        // `new` is outside the subset, so that would have been a refusal.
+        // The first draft of this test asserted `Threw` for it and was
+        // wrong, which is what naming the expected tag is for.
+        ["return JSON.parse(\"{oops\")", "Threw"],
+        ["class Nope {}", "Refused"],
+        ["await tools.data.echo({ text: \"x\" })", "RanOffTheEnd"]
       ]
-      for (const program of programs) {
+      for (const [program, expected] of programs) {
         const out = yield* runtime.execute(program)
-        assert.notStrictEqual(
-          out.outcome._tag,
-          "Suspended",
-          `interpreted executor suspended on: ${program}`
-        )
+        assert.strictEqual(out.outcome._tag, expected, `on: ${program}`)
       }
     })
   )
@@ -205,6 +212,15 @@ describe("code-mode executors", () => {
 
       // The host has it, which is why the model does not need it.
       assert.deepStrictEqual(yield* Ref.get(held), SECRET_STATE)
+
+      // And the model is told what to do, not merely what happened. The
+      // executor's reason is a status; on its own, a model holding a list
+      // of the calls the program already made runs it again, which starts
+      // a fresh run and repeats them. Break once by passing
+      // `result.outcome.reason` straight through as the fix.
+      const fix = (result as { readonly fix: string }).fix
+      assert.include(fix, "approval gate")
+      assert.include(fix, "Do not run this program again")
     })
   )
 })

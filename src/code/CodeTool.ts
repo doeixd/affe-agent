@@ -276,9 +276,20 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
           // the model can see would invite the model to reason about an
           // opaque engine value, and `test/CodeExecutors.test.ts`
           // asserts structurally that no field carries it.
+          //
+          // The `fix` is composed rather than passed through, and that is
+          // the load-bearing part. Every other `fix` in this switch is an
+          // instruction; the executor's `reason` is a *status*. A model
+          // told only "waiting on the approval gate", holding a list of
+          // the calls the program already made, does the obvious thing
+          // and runs the program again -- which starts a fresh run with
+          // no `resumeFrom` and repeats every one of those calls. That is
+          // the retry-for-a-resume hazard `interpreted` refuses, one
+          // layer up and worse, because here nothing asked a human.
           return {
             outcome: "suspended" as const,
-            fix: result.outcome.reason,
+            fix:
+              `${result.outcome.reason}. This run is paused, not failed: the host holds its state and will resume it. Do not run this program again -- a new run would repeat the calls this one already made.`,
             logs,
             calls
           }

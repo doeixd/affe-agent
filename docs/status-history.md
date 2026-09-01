@@ -4144,3 +4144,23 @@ surface:
   call the first attempt made, made again. Writes twice, no symptom. It is
   now a `not-resumable` diagnostic naming the fix, broken once and seen to
   return "ran" with a duplicate call when the guard is removed.
+
+**Second review pass, same day** -- reading the mapping as the *model*
+receives it rather than as the host writes it, which is where the real one
+was:
+
+- **`CodeTool` passed the executor's `reason` through as the `fix`.** Every
+  other `fix` in that switch is an instruction; a `reason` is a status. A
+  model told only "waiting on the approval gate", holding the list of calls
+  the program already made, does the obvious thing and runs the program
+  again -- a fresh run, no `resumeFrom`, every one of those calls repeated.
+  The same retry-for-a-resume hazard `interpreted` now refuses, one layer up
+  and worse, because at that layer nothing asks a human first. The `fix` is
+  composed now: the reason, then that the run is paused rather than failed,
+  then not to re-run it. Broken once by restoring the pass-through.
+- **The "never suspends" test asserted only "not `Suspended`"**, which would
+  have passed for a program refused for an unrelated reason -- how a
+  negative assertion quietly stops testing anything. It now names the tag
+  each program should reach, and doing that immediately caught a wrong
+  assumption in the test itself: `throw new Error(...)` is a *refusal*,
+  because `new` is outside the subset, not the `Threw` it claimed.
