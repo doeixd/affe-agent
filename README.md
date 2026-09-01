@@ -1597,9 +1597,12 @@ and cannot escalate a `Deny` into a call. It *can* consume CPU up to the
 limits and exercise the interpreter, which is why the limits exist and why
 the interpreter is the part of `src/` most worth a second reader. An
 isolate-per-program executor with no outbound network is a stronger physical
-boundary; the `CodeExecutor` seam admits one, and it is planned for the
-Cloudflare host ([docs/plan-effect-agent-comparison.md](./docs/plan-effect-agent-comparison.md)
-§3.5). On Node there is no honest equivalent -- `vm` is not a security
+boundary, and on Cloudflare there is one: `IsolateExecutor` in
+[`/cloudflare`](#platforms) runs each program in a Dynamic Worker whose only
+outbound is the object's own broker route, with `fetch` removed from the
+program's globals and CPU and subrequest limits set -- the same `Permission`
+decision per call, because every call still goes through the host's
+`invoke`. On Node there is no honest equivalent -- `vm` is not a security
 boundary and its documentation says so -- and this library does not pretend
 one.
 

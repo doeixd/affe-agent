@@ -4,9 +4,9 @@
 5 (§3.5, the documentation half), 6 (§3.4, phase 1: in-process), 7 (§3.6)
 and 10 (§3.7) landed 2026-09-01, and item 8's entry (§3.3c) the same day:
 `@doeixd/effect-agent/cloudflare`, on `effect-cf` by the owner's decision
-(recorded in `plan-effect-cf-and-webtransport.md` §3a). What remains is
-8's real deployment (§3.3d, needs an account), item 9 (the isolate
-executor, §3.5), and phase 2 of typed input. Written 2026-09-01 from a
+(recorded in `plan-effect-cf-and-webtransport.md` §3a). Item 9 (§3.5, the
+isolate executor) landed the same day. What remains is 8's real deployment
+(§3.3d, needs an account) and phase 2 of typed input. Written 2026-09-01 from a
 read of [effect-agent.com](https://effect-agent.com/) — the documentation
 site for `danieljvdm/effect-agent`, the same author as `effect-cf`, which
 [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)

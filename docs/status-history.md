@@ -4784,3 +4784,45 @@ Not done: the real deployment (item 19, plan §3.3d). This container has no
 Cloudflare account, and the owner's wrangler login is on their machine;
 the Alchemy stack is updated for the entry and waits for one.
 
+## 2026-09-01 — code mode in an isolate (comparison plan, item 9)
+
+`docs/plan-effect-agent-comparison.md` §3.5, the later half.
+`IsolateExecutor` in `/cloudflare`: a `CodeExecutor` that loads each
+program as its own Dynamic Worker through the Worker Loader binding and
+discards it when the program ends. Real JavaScript, compiled by the
+runtime (Workers forbid `eval`), with CPU and subrequest limits.
+
+**How the isolate reaches its tools, and nothing else.** The object's own
+stub is the isolate's `globalOutbound`, so a fetch to any URL lands on the
+object; the main module captures the real `fetch` for its broker call and
+then removes `fetch` and `WebSocket` from the program's globals. A
+program therefore has no network at all, and the main module has one
+road: `POST /code/invoke` under a per-run token, which `CodeBroker` (in
+the host) answers by the run's own `invoke` hook, provided with the
+context the run started with -- so the same `Permission` decision, the
+same events and the same `CurrentPrincipal` as a call the interpreter
+makes. The reply shape is the interpreter's (`{ ok, value }` for a
+result, a throw the program can catch for a refusal or a declared
+failure), and a `CodeDiagnostic` the host raised is recorded by the broker
+and wins the run whatever the program returned.
+
+Found while building it: workerd refuses to serialise a namespace
+binding into a dynamic worker's `env` ("does not support
+serialization"), which is why the callback rides on `globalOutbound`
+rather than on a binding -- and why blanking the program's `fetch` is
+load-bearing, not tidiness: with the object as the only outbound, a
+program *with* fetch could reach the object's other routes.
+
+Proven on miniflare (`workerLoaders: { LOADER: {} }`): a program calls
+`tools.data.echo` and returns its answer through the broker; a program
+that reaches for `fetch` returns the refusal; and the broker route is
+unreachable from the public Worker (every public path carries the session
+segment, so `/code/invoke` is a 404 there before any token is read), while
+inside the object a bad token is a 403. `apps/worker` builds the
+executor once per object and hands it to `CodeTool.tool` from a
+per-turn toolkit, and its scripted model is chosen by the object's name
+-- the thing a per-instance layer can do that a module-level one cannot.
+
+Not done: suspension (an isolate's state is its heap) and a Node
+equivalent (there is no honest one).
+

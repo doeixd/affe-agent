@@ -18,6 +18,7 @@ own entry point, so importing `/sandbox` never pulls in `/sandbox/local`.
 | **Events** | the `DeliveryLog` (SQL or `/durable-streams`); a client resumes with `read({ after })` | the same `DeliveryLog`, in DO SQLite; `events?after=N` is served from the journal then live, gaplessly |
 | **Scheduling** | `/scheduling` over Effect's `Schedule`; `/cluster`'s `ScheduledAgent` across nodes | `/scheduling`'s `AgentDispatcher` as a logical alarm per job (`effect-cf`'s `DurableObjectAlarm`: at-least-once, retried, the platform alarm reconciled in the same transaction), so a job outlives the runtime that dispatched it |
 | **Sandbox** | `/sandbox/local`, real processes | `MemorySandbox`, or `Sandbox.fromExec` over a remote provider |
+| **Code mode** | the owned interpreter, in-process | the same, or `IsolateExecutor`: each program in a Dynamic Worker (Worker Loader binding `LOADER`), no network but the object's broker route, CPU and subrequest limits |
 | **Model** | any `@effect/ai-*` layer | the scripted test model until a deployment wires one; `examples/deploy-cloudflare/` is the Alchemy stack, written and not yet run against an account |
 | **Proof** | `npm run verify:durability`, `examples/durable-resume.ts` (four processes, one SQLite file) | `test/WorkerDurableObject.test.ts` on miniflare |
 

@@ -21,6 +21,10 @@ import * as DeliveryLog from "../durable/DeliveryLog.js"
 import * as AgentHttp from "../http/AgentHttp.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Scheduling from "../scheduling/Scheduling.js"
+import * as Isolate from "./isolate.js"
+
+/** Code mode in a Dynamic Worker: the executor and the broker it calls back through. */
+export * as IsolateExecutor from "./isolate.js"
 
 /**
  * The agent on Cloudflare: one Durable Object per session, a Worker routing
@@ -73,7 +77,7 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
   readonly layer: Layer.Layer<
     LanguageModel.LanguageModel | R,
     unknown,
-    WorkerEnvironment | DurableObjectState.DurableObjectState | SqlClient.SqlClient
+    WorkerEnvironment | DurableObjectState.DurableObjectState | SqlClient.SqlClient | Isolate.CodeBroker
   >
   /** The Durable Object namespace binding the Worker routes to. Default `SESSIONS`. */
   readonly namespace?: string | undefined
@@ -344,6 +348,9 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
 
   const objectLayer = Layer.mergeAll(clientLayer, surfaceLayer.pipe(Layer.provide(clientLayer)), dispatcherLayer).pipe(
     Layer.provideMerge(options.layer),
+    // The broker before the caller's layer: an isolate executor built there
+    // registers its runs with it.
+    Layer.provideMerge(Isolate.brokerLayer),
     Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),
     Layer.provideMerge(DurableObjectSqlite.layer())
   )
@@ -381,6 +388,12 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
           status: 202,
           headers: { "content-type": "application/json" }
         })
+      }
+      if (request.method === "POST" && new URL(request.url).pathname === "/code/invoke") {
+        // A program in an isolate calling one of its tools; the broker
+        // knows the run by its token and answers by the run's own hook.
+        const broker = yield* Isolate.CodeBroker
+        return yield* broker.handle(request)
       }
       const surface = yield* Surface
       return yield* Effect.promise(() => surface.handle(request))

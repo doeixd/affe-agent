@@ -647,7 +647,9 @@ sizes; the items are repeated here so this list stays the one tracker.
     decision of `plan-effect-cf-and-webtransport.md` §3 applied to our own
     code and should be recorded there. Item 19's real-model deployment
     re-ranks behind it.
-44. **An isolate executor behind `CodeExecutor`** (plan §3.5, later) — a
+44. ~~**An isolate executor behind `CodeExecutor`**~~ — landed 2026-09-01
+    as `IsolateExecutor` in `/cloudflare`; see `status-history.md`. As
+    planned (§3.5, later) — a
     Dynamic Worker with `globalOutbound: null` per program, tool calls back
     over RPC; lives in item 43's entry and cannot precede it. No Node
     equivalent is pretended.

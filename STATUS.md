@@ -108,6 +108,10 @@ peer, by the owner's decision (`docs/plan-effect-cf-and-webtransport.md`
 §3a) -- the one place it enters `src/`, compiled as its own program
 (`tsconfig.cloudflare.json`) and exempted by name in the portability lint.
 Durability is the platform's: `/durable`'s engine still stalls on workerd.
+`IsolateExecutor` (same entry) is code mode in a Dynamic Worker: no
+network but the object's broker route, every call still through the
+host's `invoke`; proven on miniflare with a program that reaches for
+`fetch` and gets nothing.
 
 **Presets.** `@doeixd/effect-agent/presets`: `Presets.coding` (toolkit, a
 policy that asks before anything changes, an acquired workspace) and

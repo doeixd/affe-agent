@@ -43,7 +43,7 @@ const sourceRoot = positionalRoot === undefined
  */
 // `cloudflare/` is the Cloudflare host entry, on `effect-cf` and the DO
 // SQLite driver by design (`docs/plan-effect-cf-and-webtransport.md` §3).
-const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts", "cloudflare/index.ts"])
+const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts", "cloudflare/index.ts", "cloudflare/isolate.ts"])
 
 const builtins = new Set(builtinModules)
 
