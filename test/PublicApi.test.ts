@@ -668,7 +668,17 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(a2a).sort(), [
       "AgentA2A",
       "ClaudeCodeA2A",
-      "ClaudeCodePermissions"
+      "ClaudeCodePermissions",
+      "OpenCodeA2A"
+    ])
+    // Both bridges expose the same three things: a constructor, the projection
+    // that puts the runtime's tools in this application's vocabulary, and the
+    // parser where somebody else's evolving format would break first.
+    assert.deepStrictEqual(Object.keys(a2a.OpenCodeA2A).sort(), [
+      "PermissionAsked",
+      "defaultProjection",
+      "readEvent",
+      "remote"
     ])
     assert.deepStrictEqual(Object.keys(a2a.ClaudeCodePermissions).sort(), [
       // The CLI flags that point a run at the decision endpoint.

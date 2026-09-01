@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
 import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
+import * as DelegatedPermission from "./internal/delegatedPermission.js"
 
 /**
  * The bridged CLI's permission prompts, answered by *this* application's
@@ -86,11 +87,7 @@ export type PromptResult = typeof PromptResult.Type
 // Projection: the CLI's tools in this application's vocabulary
 
 /** What a tool call *is*, for policy purposes. */
-export interface Projected {
-  readonly action: string
-  readonly resource: string
-  readonly subject?: string | undefined
-}
+export type Projected = DelegatedPermission.Projected
 
 const field = (input: unknown, name: string): Option.Option<string> => {
   if (typeof input !== "object" || input === null) return Option.none()
@@ -275,6 +272,21 @@ export const args = (options: {
  * test: hand it a tool name and an input, get back exactly what the CLI will
  * be told. The MCP tool below is this function with a schema on each side.
  */
+/**
+ * One prompt, decided.
+ *
+ * Exported because it is the whole of the behaviour and needs no server to
+ * test: hand it a tool name and an input, get back exactly what the CLI will
+ * be told. The MCP tool below is this function with a schema on each side.
+ *
+ * The decision itself is shared with the other bridges
+ * (`internal/delegatedPermission.ts`); what is here is the CLI's spelling of
+ * the answer. `remember` has no spelling in this protocol -- the prompt tool
+ * can echo `updatedPermissions` back, which would write rules into the
+ * *workspace's* settings, and a bridge silently editing the delegated repo is
+ * not something to do on a policy's behalf. So "allow always" reaches our
+ * policy and not the CLI, and the CLI asks again.
+ */
 export const decide = <R = never>(
   options: Options<R>
 ) =>
@@ -293,77 +305,19 @@ export const decide = <R = never>(
     const toolName = request.toolName.value
     const project = options.projection ?? defaultProjection
     const projected = project(toolName, request.input)
-    const toolCallId = Option.getOrElse(
-      request.toolUseId,
-      () => `${toolName}:${projected.resource}:${nextPrompt++}`
-    )
-    const permissionRequest: Permission.Request = {
-      sessionId: options.sessionId ?? toolReference(options),
-      toolCallId,
-      tool: { name: toolName, params: request.input },
-      action: projected.action,
-      resource: projected.resource,
-      // The CLI asks only for calls its own rules did not already approve, so
-      // by the time one arrives here it *is* approval-requiring. Saying so lets
-      // a policy tighten on it, and never loosens anything: the harness treats
-      // this as a floor.
-      intrinsicApproval: true,
-      ...(projected.subject === undefined ? {} : { subject: projected.subject }),
-      // The delegated agent's conversation is its own; this side has never seen
-      // it. An empty history is the truthful answer, and a policy that needs
-      // the transcript to decide cannot be used here -- which is better than
-      // one that silently decides on a transcript that is not the real one.
-      messages: []
-    }
-
-    const decision = yield* options.policy.evaluate(permissionRequest)
-    if (decision._tag === "Deny") {
-      return {
-        behavior: "deny" as const,
-        message: decision.reason ?? "denied by policy"
-      }
-    }
-    if (decision._tag === "Allow") {
-      return { behavior: "allow" as const, updatedInput: request.input ?? {} }
-    }
-
-    const elicitor = options.elicitor
-    if (elicitor === undefined) {
-      return {
-        behavior: "deny" as const,
-        message: decision.reason ??
-          "approval is required and no elicitor is wired, so the request was refused"
-      }
-    }
-
-    const detail: Permission.ApprovalDetail = {
+    const verdict = yield* DelegatedPermission.decide(options)({
+      callId: Option.getOrElse(
+        request.toolUseId,
+        () => `${toolName}:${projected.resource}:${nextPrompt++}`
+      ),
       toolName,
-      toolCallId,
-      action: projected.action,
-      resource: projected.resource,
-      ...(projected.subject === undefined ? {} : { subject: projected.subject }),
-      ...(decision.reason === undefined ? {} : { reason: decision.reason })
-    }
-    // The same `kind` the harness uses for its own approvals, so an application
-    // that already renders one renders this: from the answering side, a
-    // delegated agent asking to write a file is the same question as a local
-    // tool asking to.
-    const answer = yield* elicitor.elicit(
-      { id: `claude-code:${toolCallId}`, kind: "tool-approval", detail },
-      Effect.void
-    )
-    if (!answer.granted) {
-      return { behavior: "deny" as const, message: "the request was refused" }
-    }
-    // "Allow always" is two things: this answer, and a grant the policy keeps.
-    const remember = Schema.decodeUnknownOption(Permission.ApprovalValue)(answer.value)
-    if (
-      Option.isSome(remember) && remember.value.remember &&
-      options.policy.remember !== undefined
-    ) {
-      yield* options.policy.remember(permissionRequest)
-    }
-    return { behavior: "allow" as const, updatedInput: request.input ?? {} }
+      params: request.input,
+      projected,
+      origin: toolReference(options)
+    })
+    return verdict.allow
+      ? { behavior: "allow" as const, updatedInput: request.input ?? {} }
+      : { behavior: "deny" as const, message: verdict.reason ?? "denied" }
   })
 
 // ---------------------------------------------------------------------------

@@ -61,7 +61,9 @@ context transform, or a layer, and end-user code needs no type casts.
   an ordinary tool, so no new concept is needed to delegate to it.
   `ClaudeCodePermissions` puts this application's `Permission` policy and
   `Elicitation` in front of the CLI's own tool calls, in `/coding`'s action
-  vocabulary — one rule set for both runtimes.
+  vocabulary — one rule set for both runtimes. `OpenCodeA2A` bridges an
+  `opencode serve` over its HTTP API with the same surface, answering its
+  native permission requests from the same policy.
 - `@doeixd/effect-agent/durable-streams` — official Durable Streams as typed
   streams, and the durable client's delivery log.
 - `@doeixd/effect-agent/sandbox` (+ `/sandbox/local`) — a scoped

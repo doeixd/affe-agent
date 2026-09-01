@@ -1704,6 +1704,37 @@ does not depend on what the host machine happens to have configured. **The
 endpoint is an authority** — anything that can reach it can be asked to approve
 a tool call — so bind it to loopback and keep it off an exposed router.
 
+### OpenCode, over its server
+
+`OpenCodeA2A.remote({ baseUrl })` bridges an `opencode serve` the same way, and
+presents the **same** `RemoteAgent` — so a manager delegating to both writes the
+code once:
+
+```ts
+const opencode = yield* OpenCodeA2A.remote({
+  baseUrl: "http://127.0.0.1:4096",
+  permissions: { policy, elicitor }
+})
+```
+
+It speaks OpenCode's HTTP API rather than its terminal: sessions, the event bus,
+and first-class permission requests all come for free, and an A2A context maps
+to a server session exactly as it maps to a CLI session for Claude Code. Note
+what it did *not* need — `Sandbox.execStream`. The seam the Claude Code bridge
+required does not appear here at all, which is the sign it was put in the right
+place rather than everywhere.
+
+Permissions are **tighter** on this side. Claude Code has to be given a prompt
+tool before it will ask anything; OpenCode asks on its own bus, and its answer
+has a third value: `always`. So "allow always" reaches the delegated runtime as
+well as our policy, and it stops asking. Both bridges project into the same
+`read` / `write` / `shell` vocabulary, so one rule set governs a local
+`CodingToolkit` run, a delegated Claude Code run, and a delegated OpenCode run.
+
+Cancellation differs for a real reason and the interface says so: there is no
+process to kill, the run lives in the server, so `cancel` is a request
+(`/session/{id}/abort`) rather than fiber interruption.
+
 ## Subagents
 
 A subagent is a tool that opens a child session — no first-class concept, just

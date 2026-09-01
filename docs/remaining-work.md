@@ -321,10 +321,34 @@ open, so the next pass does not have to re-derive it.
     anything that can reach it can be asked to approve a call, so it belongs on
     loopback. A per-run bearer token would be the next hardening step.
 
-    Still open from the plan: **step 3**, the OpenCode bridge over
-    `opencode serve`'s HTTP API (independent of both: it needs no subprocess
-    seam and has native permission endpoints), and steps 5-7 (relay transport,
-    then the `LanguageModel` adapter experiment).
+26e. **OpenCode A2A bridge** — SHIPPED 2026-09-01, `src/a2a/openCode.ts`, the
+    plan's step 3, and done the way the plan insists: over `opencode serve`'s
+    HTTP API, not by parsing `opencode run`'s terminal. Sessions, the event bus
+    and native permission requests all come with it. An A2A context maps to a
+    server session; `permission.asked` frames are answered by the *same*
+    `Permission.Policy` the Claude Code bridge uses -- the decision now lives
+    once in `internal/delegatedPermission.ts` and each bridge encodes it, which
+    is the part you do not want two diverging copies of. OpenCode's reply has a
+    third value, `always`, so "allow always" reaches the delegated runtime as
+    well as our policy; Claude Code's prompt tool cannot express that half.
+
+    It needed **none** of `Sandbox.execStream` (26a) -- the seam the other
+    bridge required does not appear here at all, which is the evidence that
+    seam was put in the right place rather than everywhere. Tested against a
+    stubbed `HttpClient`, including a permission answered while the prompt is
+    still in flight, which is the ordering a real run has.
+
+    Open questions, recorded rather than guessed: the permission-name table
+    (`bash`/`edit`/`read`/`webfetch`) and the metadata field names were read
+    from OpenCode's published OpenAPI document, not from a live server, so the
+    projection is best-effort and overridable. `cancel` goes through
+    `/session/{id}/abort` because there is no process to kill -- the run lives
+    in the server, and interrupting the fibre here would leave it running.
+
+    Still open from the plan: steps 5-7 -- relay transport (both bridges over
+    `plan-relay.txt`, at which point local vs remote is transport selection),
+    then the `LanguageModel` adapter experiment, which the plan itself ranks
+    last and least natural.
 
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
