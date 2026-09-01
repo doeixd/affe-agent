@@ -171,7 +171,11 @@ can run a command is a sandbox, shell-derived operations reported as such);
 dialects; `/tool-source` (OpenAPI, GraphQL, MCP; approval hints become
 `needsApproval`; `Credentials` -- method, binding, provider -- `Redacted`
 until the header is written); `/subagent`; `/state`; `/skills`; `/memory`; `/evals`;
-`/observability`; `/export` (JSON envelope + JSONL commit log); `/compaction`
+`/observability`; `/model` (what upstream's `Model` omits: context window, max
+output, vision/tools/reasoning, per-million cost with `cacheRead` and
+`cacheWrite` priced apart -- with a built-in Anthropic table guarded by an
+exhaustiveness test, and `budget`, a compaction budget the model sizes
+itself); `/export` (JSON envelope + JSONL commit log); `/compaction`
 (+ branch carryover: `BranchSummary` over the tree's seed seam, and
 `CodingSummary`'s cumulative file details);
 (token policy, checkpoints, controller, events); `/redaction`; `/budget`;

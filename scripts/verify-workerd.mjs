@@ -9,7 +9,9 @@
  * What it proves:
  * - `apps/worker/src` typechecks with `lib: ["DOM","WebWorker"]` and `types: []`
  *   (no `node:*` globals, no `Buffer`, `process`, `__dirname`).
- * - `scripts/verify-portability.mjs` passes on `apps/worker/src`.
+ * - `scripts/verify-portability.mjs` passes on `apps/worker/src` with
+ *   `--host=cloudflare`: Cloudflare packages are allowed there and nowhere
+ *   else, while Node, Bun and Deno coupling still fails.
  * - If `esbuild` is available, the same entry bundles for `browser`/`neutral`
  *   without the `node` export condition — the way workerd/Bun/Deno see the package.
  *
@@ -42,7 +44,15 @@ step("workerd: tsc --noEmit --project apps/worker/tsconfig.json", () =>
 )
 
 step("workerd: verify-portability apps/worker/src", () =>
-  run("node", ["scripts/verify-portability.mjs", "apps/worker/src"], { cwd: root })
+  // `--host=cloudflare`: this bundle *is* the Cloudflare host, so `effect-cf`,
+  // `@cloudflare/*` and the D1/DO drivers are what it is meant to reach for.
+  // Every other host group -- Node, Bun, Deno -- is still rejected here, which
+  // is the coupling this step exists to catch.
+  run(
+    "node",
+    ["scripts/verify-portability.mjs", "apps/worker/src", "--host=cloudflare"],
+    { cwd: root }
+  )
 )
 
 // Optional bundle probe — best-effort. If esbuild is not installed, skip rather than fail.

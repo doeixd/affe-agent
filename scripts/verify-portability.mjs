@@ -26,9 +26,13 @@ import { builtinModules } from "node:module"
 
 const root = process.cwd()
 // An explicit source root lets the check itself be tested against fixtures.
-const sourceRoot = process.argv[2] === undefined
+// Flags are filtered out first, so `--host` may appear on either side of it.
+const positionalRoot = process.argv
+  .slice(2)
+  .find((argument) => !argument.startsWith("--"))
+const sourceRoot = positionalRoot === undefined
   ? path.join(root, "src")
-  : path.resolve(process.argv[2])
+  : path.resolve(positionalRoot)
 
 /**
  * Host implementations, by path relative to `src/`. Keep this list short.
@@ -40,31 +44,54 @@ const sourceRoot = process.argv[2] === undefined
 const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts"])
 
 const builtins = new Set(builtinModules)
+
 /**
- * Packages that bind a module to one host, by name.
+ * Packages that bind a module to one host, grouped by *which* host.
  *
  * An allowlist of known-bad rather than a rule, which is a real weakness: the
- * check only stops what somebody thought to name. It missed `effect-cf`,
- * `@cloudflare/*` and `@effect/sql-sqlite-do` -- the last a platform package
+ * check only stops what somebody thought to name. It missed the Cloudflare
+ * group entirely -- including `@effect/sql-sqlite-do`, a platform package
  * `apps/worker` already uses -- so anything in that set imported into `src/`
  * passed the check built to stop it.
  *
- * Extended while none of them are in `src/`, so it changes no current result.
- * That is the argument for doing it now rather than when it is a debate about
- * a module somebody has already written.
+ * Grouped rather than merged into one pattern, because "host coupling" is
+ * relative to a target. The portable core must import none of these. The
+ * workerd bundle *is* the Cloudflare host, so the Cloudflare group is exactly
+ * what it is allowed to reach for, and rejecting it there would be the check
+ * refusing the thing it exists to prove works. Hence `--host`.
  */
-const hostPackages = new RegExp(
-  [
-    // Effect's own host bindings: a runtime, or a driver that speaks to one.
-    "^@effect/(platform-node|platform-bun|platform-deno",
-    "|sql-sqlite-node|sql-sqlite-bun|sql-sqlite-do|sql-pg|sql-mysql2|sql-d1|sql-libsql)",
-    // Cloudflare: the Workers runtime, and the community Effect bindings for
-    // it. `apps/worker` is the right place for these; `src/` is not.
-    "|^effect-cf(/|$)|^@cloudflare/",
-    // Bun and Deno expose themselves as specifiers as well as globals.
-    "|^bun:|^(bun|deno)(/|$)"
-  ].join("")
-)
+const HOST_GROUPS = {
+  node: /^@effect\/(platform-node|sql-sqlite-node|sql-pg|sql-mysql2)/,
+  bun: /^@effect\/(platform-bun|sql-sqlite-bun)|^bun:|^bun(\/|$)/,
+  deno: /^@effect\/platform-deno|^deno(\/|$)/,
+  cloudflare: /^@effect\/(sql-d1|sql-sqlite-do)|^effect-cf(\/|$)|^@cloudflare\//,
+  // Not a runtime of its own; a driver that pins you to one service.
+  other: /^@effect\/sql-libsql/
+}
+
+/**
+ * The host this target is allowed to be. `--host=cloudflare` for the workerd
+ * bundle; absent means fully portable, which is the default and the stricter
+ * reading.
+ */
+const targetHost = process.argv
+  .slice(2)
+  .find((argument) => argument.startsWith("--host="))
+  ?.slice("--host=".length)
+
+if (targetHost !== undefined && !Object.hasOwn(HOST_GROUPS, targetHost)) {
+  console.error(
+    `unknown --host=${targetHost}; expected one of ${Object.keys(HOST_GROUPS).join(", ")}`
+  )
+  process.exit(1)
+}
+
+const rejected = Object.entries(HOST_GROUPS)
+  .filter(([host]) => host !== targetHost)
+  .map(([, pattern]) => pattern)
+
+const isHostPackage = (specifier) =>
+  rejected.some((pattern) => pattern.test(specifier))
 
 const walk = (dir) =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -92,7 +119,7 @@ for (const file of walk(sourceRoot)) {
     if (specifier === undefined) continue
     if (specifier.startsWith("node:") || builtins.has(specifier)) {
       violations.push(`${relative}: imports Node built-in "${specifier}"`)
-    } else if (hostPackages.test(specifier)) {
+    } else if (isHostPackage(specifier)) {
       violations.push(`${relative}: imports host package "${specifier}"`)
     }
   }

@@ -1,16 +1,14 @@
 # Plan: model capabilities — the metadata `Model` omits
 
-**Status: partly implemented, and the implementation is not committed.**
+**Status: partly implemented; everything below is committed.**
 Updated 2026-09-01. Against §8: **M0 done** (both open facts verified, §11),
-**M3 done** (`ContextTransform.cacheBreakpoint`, `test/PromptCache.test.ts`),
-**M1 written but not reachable** — `src/model/ModelCapabilities.ts` and
-`test/ModelCapabilities.test.ts` exist and pass, including the exhaustiveness
-test that fails the build when the pinned rc names a model with no capability
-row, but **`src/model/` has no `./model` entry in `package.json`'s `exports`**,
-so nothing outside the repository can import it and `verify:package` does not
-cover it. That is the next edit this plan needs, and it is one entry.
-**M2, M4, M5 and M6 are not started.** All of the above sits in the working
-tree unstaged; it is not in any commit, so `STATUS.md` does not claim it.
+**M1 done** — `src/model/ModelCapabilities.ts` and `test/ModelCapabilities.test.ts`,
+reachable as the `./model` entry point, which `verify:package` imports from the
+packed tarball; the exhaustiveness test fails the build when the pinned rc names
+a model with no capability row. **M2 done** (`ModelCapabilities.budget`, §8),
+**M3 done** (`ContextTransform.cacheBreakpoint`, `test/PromptCache.test.ts`).
+**M4, M5 and M6 are not started.** Everything above is committed, so `STATUS.md`
+may claim it.
 
 Drafted 2026-09-01, from a question that arrived as a sketch:
 `InferenceProvider<Models, Contract>` — a model carrying its own options
@@ -292,8 +290,15 @@ out of scope until someone does.
   Neither invalidates a milestone below, and M4 in particular is unblocked.
 - **M1 — `Capabilities`, the service, `fromTable`, `builtin`, and the
   exhaustiveness test.** Data and a lookup; no consumer yet.
-- **M2 — `ModelCapabilities.budget`, wired into `Compaction.tokens` through the
-  existing `ResolveBudget` seam.** The proof that no signature moves.
+- **M2 — `ModelCapabilities.budget`. ✅ Done 2026-09-01.** A resolver reading
+  `contextWindow` from the model in scope; `reserve` and `keepRecent` stay the
+  caller's, because they are judgements about the agent rather than facts about
+  the model, and `reserve` defaults to the model's own `maxOutputTokens`.
+  `src/compaction` did not change, which was the milestone's actual claim --
+  pinned by a test that hands the resolver to `Compaction.tokens` and would
+  stop compiling if either shape drifted (confirmed by breaking it). Typed
+  structurally rather than as `Compaction.ResolveBudget`, so `/model` does not
+  depend on `/compaction` to state its own return type.
 - **M3 — Prompt caching (§7.1). ✅ Done 2026-09-01.**
   `ContextTransform.cacheBreakpoint` marks the last message of the leading
   system run; `Presets.coding` sets it as a default the caller overrides by
