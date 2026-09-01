@@ -387,16 +387,66 @@ open, so the next pass does not have to re-derive it.
       handled, the first by ignoring unknown types and the second by the `||`
       in the failure check rather than by luck.
 
-    **Still unverified: the permission paths.** Claude Code's
-    `--permission-prompt-tool` was never exercised end to end (it needs the MCP
-    server standing), and OpenCode never emitted a `permission.asked` frame at
-    all -- a write went straight through, and a session created with
-    `permission: [{permission:"edit", pattern:"*", action:"ask"}]` did not
-    change that. So the reply endpoint, the request shape and the payload
-    casing remain read-from-documentation rather than observed. Both parsers
-    hedge (either casing decodes; an unknown permission keeps its own name),
-    but this is the part to prove next, and proving it needs an OpenCode
-    configured to ask.
+26h. **OpenCode's permission loop, proven live** — 2026-09-01. The gap 26g
+    left open is closed on the OpenCode side. A server started with a config
+    that gates writes (`permission: { edit: "ask", bash: "ask" }` in the
+    workspace's `opencode.json` -- the session-create `permission` ruleset did
+    *not* have this effect, which is worth knowing) emits `permission.asked`,
+    and the whole loop runs:
+
+    - **Denied**: the policy saw `action=shell resource="pwd"`, answered
+      `Deny`, the bridge replied `reject`, and the file the agent had been
+      asked to create was never written.
+    - **Allowed**: the policy saw `action=write resource="...\denied.txt"`,
+      answered `Allow`, the bridge replied `once`, and the file was created
+      with the expected contents.
+
+    So the projection, the reply endpoint and the reply values are observed,
+    not assumed. The captured frame is now a fixture in
+    `test/OpenCodeA2A.test.ts` -- it caught one thing the schema had wrong:
+    the metadata key is `filepath`, lowercase, where the guess was `filePath`
+    (both are accepted now). `patterns[0]` on Windows arrives with the drive
+    letter stripped; it is still the right resource, because it is what an
+    `always` reply remembers.
+
+    One observation, not yet a claim: prompting a second time into a context
+    whose previous run had a *denied* permission came back with an empty
+    answer. A fresh context behaved correctly. That may be OpenCode session
+    state rather than anything here, and it is not reproduced in a test.
+
+    **Still unverified: Claude Code's prompt tool.** `--permission-prompt-tool`
+    has not been exercised end to end -- it needs the MCP server standing next
+    to a real run, which is a live test with more moving parts than the two
+    above. The request payload's casing remains the hedged part (both
+    spellings decode).
+
+26i. **OpenCode v2 (`/api/...`) is a second client, not a rename.** Asked
+    2026-09-01. `OpenCodeA2A` speaks the v1 API (`/session`,
+    `/session/{id}/message`, `/event`, `/session/{id}/permissions/{id}`), and
+    the installed server (1.18.23) serves **both** surfaces -- verified by
+    probing, which is why every live run above worked. A v2-only server would
+    not answer any of them.
+
+    The delta is not paths. `POST /api/session/{id}/prompt` takes
+    `{ prompt: { text }, delivery?, resume? }` and returns
+    `SessionInputAdmitted` -- an *admission*, not an answer -- so the run's
+    result has to be assembled from the event stream instead of returned by
+    the call. That is a different run loop, and it is the whole of the work:
+
+    | | v1 (shipped) | v2 |
+    | --- | --- | --- |
+    | prompt | `POST /session/{id}/message` → the finished assistant message | `POST /api/session/{id}/prompt` → `SessionInputAdmitted`, then follow events |
+    | permission event | `permission.asked` `{ permission, patterns }` | `permission.v2.asked` `{ action, resources }` |
+    | reply | `POST /session/{id}/permissions/{id}` `{ response }` | `POST /api/session/{id}/permission/{id}/reply` `{ reply, message? }` |
+    | reply values | `once` / `always` / `reject` | identical |
+    | cancel | `POST /session/{id}/abort` | `POST /api/session/{id}/interrupt` |
+
+    Two things make v2 *easier* when it is done: its `action` is already this
+    repository's vocabulary (`edit`, `shell`), so `defaultProjection` mostly
+    goes away, and its permission reply carries a `message` -- so a policy's
+    reason can reach the delegated agent, which v1 has no field for. The work
+    is the async run loop, and it is testable live against the installed
+    server, since that serves `/api` today.
 
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /

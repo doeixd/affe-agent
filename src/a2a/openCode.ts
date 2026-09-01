@@ -197,8 +197,15 @@ export const defaultProjection = (
           stringField(request.metadata, "command"),
           () =>
             Option.orElse(
-              stringField(request.metadata, "filePath"),
-              () => stringField(request.metadata, "url")
+              // `filepath`, lowercase, is what a real server sends -- observed
+              // 2026-09-01, having guessed `filePath` from the schema. Both are
+              // accepted, because guessing once is enough.
+              stringField(request.metadata, "filepath"),
+              () =>
+                Option.orElse(
+                  stringField(request.metadata, "filePath"),
+                  () => stringField(request.metadata, "url")
+                )
             )
         )
     ),

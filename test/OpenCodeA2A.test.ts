@@ -127,6 +127,60 @@ describe("OpenCodeA2A.defaultProjection", () => {
   })
 })
 
+describe("OpenCodeA2A: what a real server actually sent", () => {
+  /**
+   * Captured from `opencode serve` 1.18.23 on 2026-09-01, asking about a write
+   * it had been configured to gate. Kept verbatim: the schema said what these
+   * fields are *called*, and one of them was called something else.
+   */
+  const REAL_ASKED = {
+    id: "evt_05ce5595f001Rtc4Tu5SiV13xg",
+    type: "permission.asked",
+    properties: {
+      id: "per_05ce5595f001Rtc4Tu5SiV13xg",
+      sessionID: "ses_fa31ac732ffec9h0VMX2pkR9Md",
+      permission: "edit",
+      // Windows, drive letter stripped -- this is OpenCode's canonical scope
+      // for the ask, and what an `always` reply would remember.
+      patterns: ["Users\\Patrick\\scratch\\denied.txt"],
+      metadata: {
+        // Lowercase `filepath`. `filePath` was the guess; this is the fact.
+        filepath: "C:\\Users\\Patrick\\scratch\\denied.txt"
+      },
+      always: ["*"],
+      tool: { messageID: "msg_05ce5560a001A3ClIhY4kFqC1r", callID: "call_01a05ce5583f75c2" }
+    }
+  }
+
+  it("decodes the frame and projects it into this application's vocabulary", () => {
+    const read = OpenCodeA2A.readEvent(JSON.stringify(REAL_ASKED), REAL_ASKED.properties.sessionID)
+    assert.isTrue(Option.isSome(read))
+    if (!Option.isSome(read) || read.value._tag !== "Permission") return
+    const asked = read.value.asked
+    assert.strictEqual(asked.permission, "edit")
+    // A live run took this exact path end to end: the policy denied and the
+    // file was never written; allowed, it was written with the expected bytes.
+    assert.deepStrictEqual(
+      OpenCodeA2A.defaultProjection(asked.permission, asked),
+      { action: "write", resource: "Users\\Patrick\\scratch\\denied.txt" }
+    )
+  })
+
+  it("falls back to the metadata key the server really uses", () => {
+    const { patterns: _dropped, ...withoutPatterns } = REAL_ASKED.properties
+    const read = OpenCodeA2A.readEvent(
+      JSON.stringify({ ...REAL_ASKED, properties: withoutPatterns }),
+      REAL_ASKED.properties.sessionID
+    )
+    assert.isTrue(Option.isSome(read))
+    if (!Option.isSome(read) || read.value._tag !== "Permission") return
+    assert.deepStrictEqual(
+      OpenCodeA2A.defaultProjection("edit", read.value.asked),
+      { action: "write", resource: "C:\\Users\\Patrick\\scratch\\denied.txt" }
+    )
+  })
+})
+
 describe("OpenCodeA2A.readEvent", () => {
   it("reads the two frames that matter and ignores the rest", () => {
     const permission = OpenCodeA2A.readEvent(JSON.stringify(asked()), "ses_1")

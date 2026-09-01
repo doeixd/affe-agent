@@ -1740,6 +1740,12 @@ Cancellation differs for a real reason and the interface says so: there is no
 process to kill, the run lives in the server, so `cancel` is a request
 (`/session/{id}/abort`) rather than fiber interruption.
 
+This bridge speaks OpenCode's **v1** HTTP API. A current server (1.18.23)
+serves both v1 and the newer `/api/...` surface, so it works today; a v2-only
+server would need a v2 client, and that is more than a path change — v2's
+prompt endpoint returns an *admission* and the answer is assembled from the
+event stream. See `docs/remaining-work.md` 26i for the table.
+
 ## Subagents
 
 A subagent is a tool that opens a child session — no first-class concept, just
