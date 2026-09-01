@@ -370,7 +370,7 @@ export const makeEngine = <
 
     const session: Session<Tools, E, R> = {
       id,
-      agent: agent as AgentDefinition<any, any>,
+      agent: agent as AgentDefinition<any, any, any, any, any>,
       state,
       history,
       progress,

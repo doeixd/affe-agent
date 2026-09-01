@@ -6,10 +6,24 @@ plans, tools/toolkit plans, and the progress files themselves). This is the
 live list; `STATUS.md` is what is true now, `docs/status-history.md` the
 chronology, and `ROADMAP.md` the capability view.
 
-State of play: every issue through #80 is closed, #4 (the roadmap tracker)
-last, on 2026-08-30. `npm run check` is green: 1466 tests in 131 files, zero
-Effect diagnostics, portability and the workerd bundle pass, and
+State of play, re-measured 2026-09-01: every issue through #80 is closed, #4
+(the roadmap tracker) last, on 2026-08-30. `npm test` is green at **1820 tests
+in 168 files** (up from 1466 in 131 when this was written), zero Effect
+diagnostics, portability and the workerd bundle pass, and
 `npm run verify:durability` shows D1–D7 biting (D4b survives by construction).
+
+Two things that number hides, both worth knowing before trusting a red run:
+
+- **The suite is flaky under process pressure on Windows.** Three consecutive
+  full runs on 2026-09-01 gave 0, 2 and 20 failures. Every failure was in a
+  test that spawns a real process — `Sandbox.test.ts`, `SandboxDerive.test.ts`,
+  the MCP stdio pair, `WorkerDurableObject.test.ts` — and the cascade shape was
+  vitest workers dying (`0xC0000142`, Windows' DLL-init failure under
+  exhaustion), which fails whole *files* including pure ones like
+  `Casts.test.ts` and `PublicApi.test.ts`. Those pure files pass in isolation.
+  So a red run here is a resource question first and a regression question
+  second; re-run the named files alone before believing it.
+- **The count includes work that is not committed.** See item 27.
 
 ## Already done — do not restart
 
@@ -178,7 +192,12 @@ open, so the next pass does not have to re-derive it.
     `Sandbox.fromExec` / `fromOperations` landed 2026-08-30 (a remote
     sandbox for the Worker is now one exec function away); a real remote
     provider (E2B/Daytona) still needs an account. The two upstream findings
-    are drafted for filing in `docs/upstream/`.
+    are filed in `docs/upstream/` (`effect-workflow-on-workerd.md`,
+    `effect-sqlite-do-nested-migration-tx.md`). `plan-deployment.md`'s status
+    line, §7, §9 and §10 were corrected 2026-09-01 — they still described the
+    worker as unbuilt, which was the reverse of the truth. **D1 and the
+    DO-storage `NodeStore` (that plan's §7 item 2) were never built and are
+    not blocking anything**; DO SQLite covered history and the delivery log.
 20. **Presets, `ref-declarative`, batteries** (`plan-primitives.md` steps
     4–6). Step 3 landed 2026-08-31: `examples/ref-gateway.ts` is the
     integration axis' acceptance test, runs in CI, and found nothing
@@ -497,6 +516,126 @@ open, so the next pass does not have to re-derive it.
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
     `ProcessManager`, and the bridge steps listed under 26c.
     `plan-deployment.md` §6.3 narrows when the relay is the right tool.
+
+### Newly ranked — from the effect-cf research (2026-09-01)
+
+Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).
+Split out because one of these is a defect and the rest are options.
+
+31. **Extend the portability guardrail's host-package pattern** (that plan's
+    C1) — **do this one regardless of every other decision here.**
+    `verify-portability.mjs` rejects host packages by a hardcoded allowlist of
+    known-bad (`platform-node|…|sql-d1|sql-libsql`), so it does **not** catch
+    `effect-cf`, `@cloudflare/*`, or `@effect/sql-sqlite-do` — the last being a
+    concrete platform package `apps/worker` already uses. Anything in that set
+    imported into `src/` today passes the check built to stop it. Verified
+    2026-09-01 that none of them are in `src/`, so extending the pattern is
+    safe and changes no current result — which is the argument for doing it
+    while it is still a cheap edit rather than a debate. Break it once.
+
+32. **Hibernatable WebSockets: read, then answer the question** (C2–C3). Our
+    worker serves HTTP+SSE, and `plan-deployment.md` §11 already says a dropped
+    connection on a hibernating DO is "the normal case, several times an hour".
+    We answer with resumption over the `DeliveryLog`, which is correct and
+    tested across the runtime's death — but Cloudflare's Hibernatable
+    WebSockets API is a way to need that recovery path *less often*, and
+    verified 2026-09-01 we use none of it (no hibernation handling anywhere in
+    `src/` or `apps/`). `effect-cf` has `DurableObject.WebSocket` /
+    `RpcWebSocket` as prior art. The question worth answering first is ours,
+    not theirs: **does a hibernatable socket carrying `AgentRpc` preserve the
+    resumption contract across eviction, or merely relocate the gap?** A
+    miniflare test importing nothing new can settle it, and "it relocates the
+    gap, the cursor is still the only honest thing" is a good result to record
+    rather than a failed milestone.
+
+33. **`AgentRpc` over WebTransport, as evidence** (W1–W2) — optional, ranked
+    last on purpose. `effect-webtransport`'s `WebTransportSocket` returns
+    Effect's own `Socket.Socket`, and our WebSocket RPC path is already
+    `Socket` → `RpcClient.makeProtocolSocket()` (`test/AgentRpc.test.ts:681`),
+    so the swap is one line and `src/` does not move. The value is *not*
+    WebTransport — resumption is transport-independent by design, so a new
+    socket type solves nothing we have. The value is that `transport.md` §3's
+    "transport-agnostic by Effect's design" has only ever been demonstrated
+    against transports we wired ourselves; a third-party `Socket` is the first
+    independent test of it. **Cloudflare cannot serve WebTransport**
+    ([workerd#6451](https://github.com/cloudflare/workerd/issues/6451): no
+    QUIC/HTTP-3 stack, not on the roadmap), so this never touches the CF path,
+    and the real cost is standing up a Node-side WebTransport server. Drop it
+    if that exceeds a day.
+
+34. **`effect-cf` as a source for `plan-deployment.md` §7 item 2** — it has
+    `D1`, `Kv`, `Storage` and `Sqlite` modules, which is the shopping list for
+    the store layers that plan asks for and item 19 records as never built.
+    This does **not** change the ranking: those layers still block nothing.
+    Recorded only so the next person to want them does not start from the
+    Cloudflare docs.
+
+### In flight (2026-09-01)
+
+Items 28 and 29 **landed while this section was being written** — `230745d`
+(`feat(output)`) and `efc3306` (`feat(code): CallScript behind the executor
+seam`). They are kept below, struck, rather than deleted, because the entry
+records what shipped and the next audit should not have to re-derive it.
+
+Item 27 is still in the working tree unstaged. `STATUS.md` does not claim it
+and should not until it is committed. Item 30 is untouched.
+
+27. **Model capabilities and prompt caching**
+    (`docs/plan-model-capabilities.md`, milestones M0–M6). The plan's own
+    status line now records this; the short version:
+    - **M3 landed**: `ContextTransform.cacheBreakpoint` marks the end of the
+      leading system run so Anthropic and OpenAI can bill the stable prefix at
+      the cached rate, with `Presets.coding` setting it by default.
+      `test/PromptCache.test.ts` pins placement, wire survival, and that
+      canonical history is untouched.
+    - **M1 written but unreachable**: `src/model/ModelCapabilities.ts` (the
+      `Capabilities` value, the service, `fromTable`, `builtin`, and the
+      exhaustiveness test that fails the build when the pinned rc names a model
+      with no row). **`package.json` has no `./model` export**, so it is not
+      importable and `verify:package` does not see it. One entry fixes that,
+      and it is the immediate next step.
+    - **M2, M4, M5, M6 not started** — `Compaction.tokens` wiring, `Budget.cost`
+      (which must price `cacheWrite` as well as `cacheRead`), the opt-in
+      pre-flight transform, and the selection example.
+
+28. ~~**`AgentOutput`**~~ — SHIPPED 2026-09-01, `230745d`. A typed value a submission ends with, implemented as
+    *a tool the model calls to report its answer* rather than a second model
+    call, so it costs no extra call and lands in canonical history as an
+    ordinary call/result that replays and audits like any other. Exported from
+    `src/index.ts`, wired through `Agent`, `AgentTurn`, `AgentRun`,
+    `AgentSubmission` and `Presets`; `test/AgentOutput.test.ts` passes.
+    Documented by `docs/plan-structured-output.md` ("Status: landed"), which is
+    in the index.
+
+29. ~~**Code-mode executors**~~ — SHIPPED 2026-09-01, `efc3306`, which also
+    updated `verify-package.mjs` for the new entry point.
+    (`docs/plan-code-mode-executors.md`) — steps 1–3
+    landed 2026-09-01 (`CodeExecutor`'s `Completed | Suspended` outcome,
+    `CodeTool.searchTool`, the collect-all pre-flight). **Step 4 is now
+    implemented too**: `src/code/callscript.ts` puts CallScript behind
+    `CodeExecutor`, with a `./code/callscript` export and `callscript` as an
+    optional peer dependency, and `test/CodeCallScript.test.ts` passes (6
+    tests). The plan's step table and `docs/README.md`'s index were both
+    corrected in the same pass. Step 4 was the acceptance test for 1 and 3
+    ("a second executor is the only real evidence"), so landing it is the
+    claim that seam is a seam.
+
+30. **Two junk files at the repository root**, untracked: `nul.d.ts` (170KB of
+    generated declarations — the result of a `> nul` redirect on Windows, where
+    `nul` is a device name, so `tsc` wrote a file instead of discarding output)
+    and a zero-byte file literally named `{})`. Neither is referenced by
+    anything. Delete both, and add `nul.d.ts` to `.gitignore` if the redirect
+    that made it is in a script somebody still runs.
+
+31. **A typed output across the remote and durable boundaries.**
+    `AgentOutput` landed (`plan-structured-output.md`), and `Result.value` is
+    local to an in-process session: `AgentClient`'s `RemoteResult` and
+    `DurableSubmission`'s `Outcome` are fixed schemas shared by every agent, so
+    neither carries it. A remote or durable caller reads the answer out of
+    history instead. The open decision is not the field, it is how a client
+    names the schema to decode the value with — pass the `AgentOutput` on the
+    client side and decode the encoded form, or publish it with the agent's
+    card. Worth doing when a second caller wants it; not before.
 
 ### Known, deliberately left
 

@@ -103,11 +103,17 @@ const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
 /**
  * The output tool, handled, for one session.
  *
- * The handler is the whole mechanism: it records the decoded value and returns
- * a confirmation. Recording is `Ref.update`, so a model that calls the tool
- * twice leaves the last value -- the same rule the rest of `progress` follows
- * for `text` and `response`, and the only one that does not need a policy
- * decision about which of two answers the model "meant".
+ * The handler is the whole mechanism: it stages the decoded value and returns
+ * a confirmation.
+ *
+ * A model that calls the tool twice in one turn leaves whichever handler
+ * *finished* last, which under the default `ToolExecution.Parallel` is a race
+ * rather than the later call in the response. Left as it is, deliberately:
+ * rejecting the second call would make the output tool the one tool with its
+ * own arity rule, and picking "the last one in the response" would decide on
+ * the model's behalf which of two answers it meant. Neither is better than
+ * saying plainly that a model asked for one answer and gave two, and that the
+ * harness kept one of them.
  *
  * The parameters arrive decoded: `Toolkit.handle` decodes against the tool's
  * parameter schema before calling this, so a value that does not fit the shape
@@ -330,14 +336,14 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     const correlation: Correlation = { submissionId, runId, turn }
     yield* Telemetry.annotateTurn(session.id, runId, turn)
 
-    // Ordering per PLAN §14: steering has already been drained and committed by
-    // the run, so the snapshot includes it. The prompt is derived before
-    // `TurnStarted` is emitted, so a transform that fails cannot leave an
-    // orphaned `TurnStarted` with no matching `TurnCompleted`.
     // Cleared per turn: the ref stages *this* turn's value, and a leftover
     // from a turn that was rolled back must not be promoted by the next one.
     yield* Ref.set(session.pendingOutput, Option.none())
 
+    // Ordering per PLAN §14: steering has already been drained and committed by
+    // the run, so the snapshot includes it. The prompt is derived before
+    // `TurnStarted` is emitted, so a transform that fails cannot leave an
+    // orphaned `TurnStarted` with no matching `TurnCompleted`.
     const canonicalPrompt = yield* History.snapshot(session.history)
     // Ephemeral: the transform's output feeds this model call and nothing else.
     const context = yield* session.agent.contextTransform.transform({

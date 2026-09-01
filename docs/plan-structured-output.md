@@ -46,8 +46,9 @@ Everything else follows from it being a tool:
 * the value is what the model **produced**, validated against the schema at the
   provider boundary and decoded by the toolkit;
 * it costs **no extra model call**;
-* it lands in canonical history as an ordinary call and result, so it is
-  auditable, replayable and durable exactly as every other call is;
+* it lands in canonical history as an ordinary call and result, so the answer
+  is auditable, replayable and durable exactly as every other call is (the
+  *call*, that is — see the boundary below);
 * permission, failure policy, streaming and `ExecutionPlan` needed no changes.
 
 ## The alternative, and why not
@@ -87,6 +88,28 @@ than inventing a second one.
 
 `test/AgentOutput.test.ts` pins it: *a value from a turn that never commits is
 not reported*.
+
+## Known boundary: the value is local to the session
+
+`Result.value` does not cross the remote or the durable boundary.
+`AgentClient`'s `RemoteResult` and `DurableSubmission`'s `Outcome` are fixed
+schemas shared by every agent, and carrying a value through one means deciding
+how the caller names the schema to decode it with -- a typed-remote-output
+feature, not a field. Until then, a remote or durable caller reads the answer
+out of history, where the tool call and its result are recorded in full.
+
+The claim that survives unchanged is the one about the *call*: it is committed,
+journaled and replayed exactly as every other tool call is.
+
+## Deliberately open: a stale value across runs
+
+A follow-up starts a second run under the same submission. If that run answers
+in prose without calling the output tool, the submission still reports run one's
+value. That is consistent with `text`, which behaves the same way and for the
+same reason -- the result reports what landed, not what the last run happened to
+produce -- but a caller cannot distinguish "this answers the follow-up" from
+"this answered the original prompt". Making the value per-run would need a
+per-run result, which the surface does not have.
 
 ## What is deliberately not tested
 

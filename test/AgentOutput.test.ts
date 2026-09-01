@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Option, Ref, Schema } from "effect"
-import { Tool, Toolkit } from "effect/unstable/ai"
+import { Cause, Deferred, Effect, Exit, Option, Ref, Schema } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentOutput from "../src/AgentOutput.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as Permission from "../src/Permission.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import * as FakeModel from "./FakeModel.js"
 
@@ -14,6 +15,10 @@ const Quality = Schema.Struct({
 })
 
 const Output = AgentOutput.make(Quality)
+
+/** Everything an exit's cause says, defect included, as one string. */
+const causeText = <A, E>(exit: Exit.Exit<A, E>): string =>
+  Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "(the effect succeeded)"
 
 /** The params the model sends for a well-formed report. */
 const report = { hasCallToAction: true, clarity: 8 }
@@ -28,7 +33,7 @@ const report = { hasCallToAction: true, clarity: 8 }
  */
 const run = <Tools extends Record<string, Tool.Any>, Value>(
   turns: ReadonlyArray<FakeModel.Turn>,
-  agent: Agent.AgentDefinition<Tools, never, never, never, Value>
+  agent: Agent.AgentDefinition<Tools, never, never, LanguageModel.LanguageModel, Value>
 ) =>
   Effect.gen(function*() {
     const { layer, recorder } = yield* FakeModel.layer(turns)
@@ -265,7 +270,10 @@ describe("AgentOutput", () => {
         )
       )
 
-      assert.isTrue(Exit.isFailure(exit))
+      // Named, not merely "some failure": `Exit.isFailure` alone passes on a
+      // failure from any cause at all, including the ones this test exists to
+      // distinguish itself from.
+      assert.match(causeText(exit), /duplicate tool name "submit_output"/)
     }))
 
   it.effect("the report is committed to history like any other tool call", () =>
@@ -275,12 +283,118 @@ describe("AgentOutput", () => {
         Agent.make({ output: Output })
       )
       const history = yield* AgentSession.history(session)
-      const roles = FakeModel.roles(history)
 
-      // Assistant message and tool result both present: the answer is part of
-      // the transcript, which is what makes it auditable and replayable.
-      assert.include(roles, "assistant")
-      assert.include(roles, "tool")
+      // The *output* call specifically, not merely some tool call: a test that
+      // only checked for a `tool` role would pass for any agent with any tool.
+      const parts = history.content.flatMap((message) =>
+        Array.isArray(message.content) ? message.content : []
+      )
+      const names = parts.flatMap((part: { readonly type: string; readonly name?: string }) =>
+        part.name === undefined ? [] : [part.name]
+      )
+      assert.include(names, Output.toolName)
+      assert.include(FakeModel.roles(history), "assistant")
+    }))
+
+  it.effect("a streamed run reports the value the same way", () =>
+    Effect.gen(function*() {
+      // The streaming path is a different function (`streamResponse`), and it
+      // reassembles the response itself. The claim that streaming "needs to
+      // know nothing about" outputs is only worth making if it is checked.
+      const { layer } = yield* FakeModel.layer([
+        FakeModel.toolCall(Output.toolName, report)
+      ])
+      const result = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* AgentSession.make(Agent.make({ output: Output }))
+          return yield* AgentSession.prompt(session, "go", { stream: true })
+        }).pipe(Effect.provide(layer))
+      )
+
+      assert.deepStrictEqual(
+        result.value,
+        Option.some({ hasCallToAction: true, clarity: 8 })
+      )
+    }))
+
+  it.effect("a denied report ends the run, like any other denied call", () =>
+    Effect.gen(function*() {
+      // Worth pinning because it is surprising: the output tool goes through
+      // permission like everything else, and the default `toolDenialPolicy`
+      // is `FailRun` -- so a policy that denies it destroys the answer rather
+      // than returning it to the model. That is the agent's policy doing
+      // exactly what it says, and a caller should not discover it in
+      // production.
+      const exit = yield* Effect.exit(
+        run(
+          [FakeModel.toolCall(Output.toolName, report)],
+          Agent.make({
+            output: Output,
+            permission: Permission.rules([
+              { tool: Output.toolName, decision: Permission.deny("not allowed") }
+            ], { otherwise: Permission.allow })
+          })
+        )
+      )
+
+      assert.match(causeText(exit), /ToolPermissionDenied|not allowed/)
+    }))
+
+  it.effect("a tool added after construction cannot shadow the output", () =>
+    Effect.gen(function*() {
+      // The `toolkit` config path is covered above; this is the other
+      // authoring path, which merges through a different code route.
+      const Clash = Tool.make("submit_output", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String
+      })
+
+      const exit = yield* Effect.exit(
+        run(
+          [FakeModel.text("hi")],
+          Agent.make({ output: Output }).pipe(
+            Agent.withTool(Clash, () => Effect.succeed("x"))
+          )
+        )
+      )
+
+      assert.match(causeText(exit), /duplicate tool name "submit_output"/)
+    }))
+
+  it.effect("a value from an earlier run outlives a later run that gives none", () =>
+    Effect.gen(function*() {
+      // Documented behaviour rather than an accident, and the same rule
+      // `text` follows: the result reports what landed. A caller cannot tell
+      // "this answers the follow-up" from "this answered the prompt" -- see
+      // docs/plan-structured-output.md.
+      const queued = yield* Deferred.make<void>()
+
+      const result = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const { layer } = yield* FakeModel.layer([
+            {
+              ...FakeModel.toolCall(Output.toolName, report),
+              during: Deferred.await(queued)
+            },
+            FakeModel.text("nothing further to report")
+          ])
+
+          return yield* Effect.gen(function*() {
+            const session = yield* AgentSession.make(Agent.make({ output: Output }))
+            const receipt = yield* AgentSession.submit(session, "go")
+            yield* AgentSession.followUp(session, "and again")
+            yield* Deferred.succeed(queued, undefined)
+            return yield* AgentSession.awaitSubmission(session, receipt.submissionId)
+          }).pipe(Effect.provide(layer))
+        })
+      )
+
+      assert.strictEqual(result.runs, 2)
+      assert.strictEqual(result.text, "nothing further to report")
+      assert.deepStrictEqual(
+        result.value,
+        Option.some({ hasCallToAction: true, clarity: 8 })
+      )
     }))
 
   it.effect("tools and an output coexist", () =>

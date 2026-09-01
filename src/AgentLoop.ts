@@ -39,6 +39,12 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
    * Provider-executed calls are excluded: the provider already ran them, so
    * `untilIdle` must not treat their presence as outstanding work. The full
    * set, including provider-side calls, is on `response.content`.
+   *
+   * One call here may not be in `Tools`: an agent that declares an
+   * `AgentOutput` has the harness's own reporting tool injected per turn, and
+   * that tool never enters the agent's tool record. A policy matching on
+   * `call.name` should expect it; a policy matching on the record's keys will
+   * simply not recognise it, which is the safe direction.
    */
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
 }

@@ -85,7 +85,14 @@ export interface Session<
   R = any
 > {
   readonly id: SessionId
-  readonly agent: AgentDefinition<Tools, E, R>
+  /**
+   * `Value` is `any` here on purpose: the engine reads `agent.output` to
+   * decide whether to inject the output tool, and never needs the value's
+   * type. Naming it would push a fifth parameter through every internal
+   * signature to say nothing the engine uses -- `AgentSession` is where the
+   * type is restored, at the boundary that hands it to a caller.
+   */
+  readonly agent: AgentDefinition<Tools, E, R, any, any>
   readonly state: SubscriptionRef.SubscriptionRef<SessionState>
   /**
    * Canonical history, held apart from the observable runtime state.

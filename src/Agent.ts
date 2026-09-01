@@ -47,15 +47,23 @@ export interface AgentDefinition<
    * `AgentDefinition<Tools, E, R>` or `<Tools, E, R, Model>` still means what
    * it did.
    *
-   * Carried in the type reference only, exactly as `Model` is, and not in the
-   * `output` field below. Referencing it there gives inference a second site
-   * for the same variable, and piping an agent through a combinator then
-   * leaves it unresolved -- `Agent.run(Researcher, ...)` stopped compiling on
-   * an agent that declares no output at all. The field is erased to `any` for
-   * the same reason `definition` erases every other channel: this parameter
-   * is what states the fact, and `AgentSession` reads it from there.
+   * Carried in the type reference only, and not in the `output` field below.
+   * Referencing it there gives inference a second site for the same variable,
+   * and piping an agent through a combinator then leaves it unresolved --
+   * `Agent.run(Researcher, ...)` stopped compiling on an agent that declares
+   * no output at all.
+   *
+   * Invariant (`in out`) rather than left to inference, which is the
+   * difference between this and `Model`. A parameter that appears in no field
+   * is bivariant, so two definitions differing only here would be mutually
+   * assignable -- and a caller could pass an agent whose output is `A` where
+   * one producing `B` was expected, then read `result.value` as `Option<B>`
+   * holding an `A`. `Model` erasure does not have that failure mode: it is a
+   * *requirement* slot, and a mismatch there is caught at `Effect.provide`.
+   * This is a *data* slot the caller reads, with nothing downstream to catch
+   * it, so the variance is declared.
    */
-  Value = never
+  in out Value = never
 > extends Pipeable {
   readonly instructions: Option.Option<string>
   /**

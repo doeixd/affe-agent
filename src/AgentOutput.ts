@@ -20,8 +20,14 @@ import { Tool } from "effect/unstable/ai"
  *   schema by the provider and decoded by the toolkit — not a re-reading of
  *   the transcript by a second call that can drift from it;
  * - it costs no extra model call, and no extra billing;
- * - it lands in canonical history as an ordinary tool call and result, so it
- *   is auditable, replayable, and durable exactly as every other call is;
+ * - it lands in canonical history as an ordinary tool call and result, so the
+ *   answer is auditable, replayable and durable exactly as every other call
+ *   is. Note the scope of that claim: it is the *call* that crosses those
+ *   boundaries. `Result.value` is a local-session convenience, and neither
+ *   `AgentClient`'s `RemoteResult` nor `DurableSubmission`'s `Outcome` carries
+ *   it -- a remote or durable caller reads the answer out of history. Carrying
+ *   it would mean deciding how a client names the schema to decode it with,
+ *   which is a second feature rather than a field;
  * - permission, failure policy, streaming and `ExecutionPlan` need to know
  *   nothing about it.
  *
@@ -46,9 +52,6 @@ export interface AgentOutput<A, I> {
    */
   readonly tool: Tool.Any
 }
-
-/** The value type an output describes, for reading a result's `value`. */
-export type Value<O> = O extends AgentOutput<infer A, infer _I> ? A : never
 
 /**
  * Describe the shape a submission must end in.
