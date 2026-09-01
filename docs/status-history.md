@@ -4601,3 +4601,60 @@ Not done here: a published `/cloudflare` entry (item 43, the category
 decision) and a real deployment (item 19). The host is still a reference
 to read and copy, with the scripted model.
 
+## 2026-09-01 — typed input, phase 1 (comparison plan, item 6)
+
+`docs/plan-effect-agent-comparison.md` §3.4, the in-process half.
+`AgentInput.make(schema, render)` declared on the agent (`Config.input`,
+`Agent.withInput`) makes `prompt`, `submit` and `Agent.run` take the
+schema's type instead of `Prompt.RawInput`; the encoded value is provided
+on the submission's fibre as `AgentInput.Current` (a `Context.Reference`,
+as `CurrentPrincipal` is) and carried on `SubmissionStarted.input`; the
+rendering -- `render(value)`, plain or an `Effect` whose `E`/`R` join the
+agent's -- is what enters canonical history. `AgentInput.current(input)`
+decodes the fibre's value against the schema it is asked with, so a tool
+wired into the wrong agent gets the schema's error rather than a mistyped
+value.
+
+The type parameter: `AgentDefinition` and `AgentSession` gained
+`Input = never`, invariant like `Value` and for the same reason -- a data
+slot the caller passes, with nothing downstream to catch a mismatch. Every
+combinator threads it; `withInput` is the one that replaces it. `Config`
+gained `Input`, `IE`, `IR`. `PromptInput<Input>` is `Prompt.RawInput` for
+`never`, the type otherwise, and the input parameter is `NoInfer` so
+`Input` is inferred from the agent alone -- the first draft let the argument
+drive inference and every `prompt(session, "text")` in the repository
+stopped typechecking.
+
+Two things building it found:
+
+- **Rendering after the claim would have leaked the claim.** A renderer
+  that fails must not leave the session `running`; rendering now happens
+  before `claim`, and `submit`'s error gains the agent's `E`, which it must:
+  the renderer runs at admission. Pinned: a failing render leaves the
+  session `idle` and the next prompt runs.
+- **The definition field's channels decide the public error type.** With
+  `input: Option<AgentInput<Input, any, any, any>>` on the definition, the
+  renderer's `Effect<_, any, any>` made `prompt`'s error channel `any`
+  end to end, and five examples' `_ErrorNotUnknown` assertions caught it.
+  The field is `AgentInput<Input, any, E, R>`: the renderer's channels are
+  the agent's, by `Config`'s construction, and now by the type.
+
+What the boundary is, and where it is stated: the remote surfaces
+(`AgentClient` and every transport) and the durable interpreter still take
+`Prompt.RawInput`, and the invariant `Input` makes them *refuse* a
+typed-input agent at compile time rather than mis-render it at runtime.
+Carrying the value across a wire means deciding how a client names the
+schema to encode it with; that is phase 2, tracked as the open half of
+item 41.
+
+Pinned in `test/AgentInput.test.ts`: the model and history see the
+rendering and not the id; a tool reads the typed value; `None` outside a
+submission and under an agent without an input; a permission policy
+refuses on the value where the rendering would allow (broken once by not
+providing `Current` around the submission -- the tool and permission cases
+both failed); a renderer's service joins `R`; a transform sees the value;
+and type-level, the input is the schema's type, not `any`, and a string is
+refused for a typed agent as a ticket is for an untyped one.
+`examples/typed-agent.ts` gained the `Support` agent with the same
+assertions; the README gained "Typed input and output".
+

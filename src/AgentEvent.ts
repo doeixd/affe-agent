@@ -137,7 +137,14 @@ export const SessionClosed = Schema.TaggedStruct("SessionClosed", {})
  * A submission is the externally observed unit of work: the initial prompt plus
  * every follow-up queued before the session reaches quiescence.
  */
-export const SubmissionStarted = Schema.TaggedStruct("SubmissionStarted", {})
+export const SubmissionStarted = Schema.TaggedStruct("SubmissionStarted", {
+  /**
+   * The submission's typed input in its encoded form, for an agent that
+   * declares an `AgentInput`. Absent otherwise, and optional so a journal or
+   * consumer written before it existed still decodes.
+   */
+  input: Schema.optional(Schema.Unknown)
+})
 export const SubmissionCompleted = Schema.TaggedStruct("SubmissionCompleted", {
   runs: Schema.Number
 })

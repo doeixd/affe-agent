@@ -621,7 +621,11 @@ sizes; the items are repeated here so this list stays the one tracker.
     authority boundary; neither is an isolate, and the doc says so, each
     confinement citing its test. The readonly recipe is a `Permission` rule
     set, shown rather than built.
-41. **Typed input** (plan §3.4) — `AgentInput.make(schema, render)` as the
+41. ~~**Typed input**~~ — phase 1 landed 2026-09-01 (in-process:
+    `AgentSession`, `Agent.run`, tools, permissions, transforms, the event);
+    see `status-history.md`. **Phase 2 stays open**: the remote surfaces and
+    the durable interpreter still take `Prompt.RawInput` and refuse a
+    typed-input agent at compile time. As planned: `AgentInput.make(schema, render)` as the
     mirror of `AgentOutput`: the full value reaches tools as
     `AgentInput.Current`, the model sees the rendering, the host decodes JSON
     at the boundary, `/durable` journals the encoded value. One more type

@@ -13,6 +13,9 @@ describe("public API", () => {
       "AgentClosedError",
       "AgentEvent",
       "AgentIdleError",
+      // The shape a submission is asked in: the mirror of `AgentOutput`,
+      // and a noun for the same reason -- it changes `prompt`'s parameter.
+      "AgentInput",
       "AgentLoop",
       // The shape a submission is asked to end in. A first-class noun because
       // it changes an agent's *type* -- `Result.value` is `Option<never>`
@@ -74,6 +77,9 @@ describe("public API", () => {
       // changes the signature -- a planned agent no longer needs a
       // `LanguageModel` from its environment.
       "withExecutionPlan",
+      // The typed-input mirror of `output`: the one combinator that replaces
+      // the agent's `Input` slot rather than threading it.
+      "withInput",
       "withInstructions",
       "withLoop",
       "withPermission",

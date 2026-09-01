@@ -1,6 +1,7 @@
 import { Effect, Fiber, Option, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import * as AgentInput from "../src/AgentInput.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
@@ -127,3 +128,46 @@ export type _ToolFailureIsNotAdmissionFailure = Assert<
 
 // The handler above destructures `query` with no annotation; if it were `any`
 // the `_ToolCallNameIsLiteral` assertion would also have degraded.
+
+// --- Typed input -----------------------------------------------------------
+// The mirror of `AgentOutput`: the value a submission is asked with, and the
+// rendering the model sees, kept apart. `customerId` never reaches the model;
+// a tool reads it from the fibre.
+
+const Ticket = AgentInput.make(
+  Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+  ({ body }) => `A customer writes:\n\n${body}`
+)
+
+const Lookup = Tool.make("lookup", {
+  parameters: Schema.Struct({}),
+  success: Schema.String
+})
+
+export const Support = Agent.make({
+  instructions: "Answer the customer.",
+  input: Ticket,
+  tools: [
+    Agent.tool(Lookup, () =>
+      Effect.map(AgentInput.current(Ticket), (ticket) =>
+        Option.match(ticket, {
+          onNone: () => "no ticket",
+          onSome: ({ customerId }) => `customer ${customerId}`
+        })
+      ).pipe(Effect.orDie))
+  ],
+  loop: AgentLoop.bounded(4)
+})
+
+// `prompt` takes the schema's type -- inferred, not annotated.
+export const support = Agent.run(Support, { customerId: "c-42", body: "my order is late" })
+
+type SupportInput = typeof Support extends Agent.AgentDefinition<any, any, any, any, any, infer I> ? I : never
+export type _SupportInputIsTheTicket = Assert<
+  SupportInput extends { readonly customerId: string; readonly body: string } ? true : false
+>
+export type _SupportInputNotAny = Assert<IsAny<SupportInput> extends false ? true : false>
+// An agent without an input is still asked with `Prompt.RawInput`.
+type ResearcherInput = typeof Researcher extends Agent.AgentDefinition<any, any, any, any, any, infer I> ? I : never
+export type _ResearcherTakesRawInput = Assert<[ResearcherInput] extends [never] ? true : false>
+

@@ -2028,6 +2028,69 @@ Slack's `v0=` HMAC-SHA256 over `v0:{timestamp}:{body}`, rejects stale timestamps
 (the replay window), and compares in constant time — drop it into a `decode`
 instead of re-implementing it. See [`examples/connectors.ts`](./examples/connectors.ts).
 
+## Typed input and output
+
+An agent can be *asked* in a shape and *answer* in one, and both are
+declared on the agent, because an agent held to a shape is defined by it.
+
+```ts
+import { Agent, AgentInput, AgentOutput } from "@doeixd/effect-agent"
+
+const Ticket = AgentInput.make(
+  Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+  // What the model is shown. The id never enters the transcript.
+  ({ body }) => `A customer writes:\n\n${body}`
+)
+const Triage = AgentOutput.make(
+  Schema.Struct({ severity: Schema.Literals(["low", "high"]), reply: Schema.String }),
+  { name: "record_triage" }
+)
+
+const Support = Agent.make({ instructions: "...", input: Ticket, output: Triage, tools: [lookup] })
+
+// `prompt` takes the ticket, not a string; `value` is the triage, not `unknown`.
+const result = yield* Agent.run(Support, { customerId: "c-42", body: "my order is late" })
+result.value // Option<{ severity: "low" | "high"; reply: string }>
+```
+
+**Output** is a tool the model calls to report its answer -- no second model
+call, validated by the provider and decoded by the toolkit, committed to
+history like any other call, and `Option` on the result because a model can
+stop without answering. The run ends when it is reported.
+
+**Input** splits what a prompt string conflates. The *value* is the full
+input as the caller means it: validated by the schema, carried in its encoded
+form on the submission's fibre and on `SubmissionStarted`, and read by any
+tool, permission policy or transform through `AgentInput.current(Ticket)`.
+The *rendering* is what the model sees, and it alone enters canonical
+history. So a permission rule can refuse a call for a customer the model
+was never told the id of, a tool can read a document the model saw only a
+summary of, and a secret in the input has no route into the transcript:
+
+```ts
+const onlyOwner = Permission.make(() =>
+  AgentInput.current(Ticket).pipe(
+    Effect.map((ticket) => Option.isSome(ticket) && ticket.value.customerId === "vip"
+      ? Permission.allow
+      : Permission.deny("not this customer's")),
+    Effect.orDie
+  )
+)
+```
+
+`render` may be an `Effect`; its failure joins the agent's `E` and its
+requirements the agent's `R`, and it runs before the session is claimed, so
+a failed rendering never leaves a session busy.
+
+**Scope, stated.** Typed input is the in-process seam: `AgentSession`,
+`Agent.run`, tools, permissions, transforms and the event. The remote
+surfaces (`AgentClient` and every transport over it) and the durable
+interpreter still take `Prompt.RawInput`, and an agent with an input is
+refused by them at compile time rather than mis-rendered at runtime.
+Carrying the value across a wire means deciding how a client names the
+schema to encode it with -- the next phase, tracked in
+[remaining-work.md](./docs/remaining-work.md).
+
 ## Structured data
 
 An agent often has typed output beyond its reply — an order it created, a row

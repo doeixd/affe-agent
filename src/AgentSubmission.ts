@@ -71,12 +71,15 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
   session: Session<Tools, E, R>,
   submissionId: SubmissionId,
   input: Prompt.Prompt,
-  options: AgentTurn.Options = {}
+  options: AgentTurn.Options = {},
+  /** The typed input's encoded form, for `SubmissionStarted`; `None` without an `AgentInput`. */
+  typedInput: Option.Option<unknown> = Option.none()
 ) {
     const correlation: Correlation = { submissionId }
     yield* Telemetry.annotateSubmission(session.id, submissionId)
     yield* EventBus.emit(session.bus, correlation, {
-      _tag: "SubmissionStarted"
+      _tag: "SubmissionStarted",
+      ...(Option.isSome(typedInput) ? { input: typedInput.value } : {})
     })
 
     let next: Prompt.Prompt | undefined = input

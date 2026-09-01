@@ -15,7 +15,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1862 passing in 171 files, `McpServerConformance` included (it no longer runs separately) |
+| tests | `npm test` | 1873 passing in 173 files, `McpServerConformance` included (it no longer runs separately) |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
@@ -52,7 +52,11 @@ The kernel vocabulary (`Agent`, `AgentSession`, submission / run / turn,
 `AgentLoop.Decision` gained `Final` (one tool-less turn, then stop) and an
 optional `reason`, and `State` gained `toolCallsTotal` and `elapsed` -- all
 additive, and the engine's only new knowledge is that a `Final` has one
-turn's notice. Everything else is built *from* the vocabulary: a Service, a
+turn's notice -- and the same day `AgentInput` joined `AgentOutput` as a
+root noun: the value a submission is asked with, split from the rendering
+the model sees, carried on the fibre as a `Context.Reference` and on
+`SubmissionStarted`. `Agent.make` and `AgentSession` gained an `Input` type
+parameter, defaulting to `never` (`Prompt.RawInput`). Everything else is built *from* the vocabulary: a Service, a
 Layer, a toolkit, a transform, an adapter.
 
 ## What ships
@@ -67,6 +71,9 @@ keys; typed tool execution with strategies and failure policies; permission
 policy with projections, rules and remembered grants; elicitation with a
 terminal state; snapshots and restore; execution plans; the event ADT with
 the correlation envelope; `PromptWire` so files cross every boundary intact;
+typed input (`AgentInput`: value on the fibre, rendering in history,
+in-process only -- the remote and durable surfaces refuse it at compile
+time until phase 2);
 run policy on the loop seam -- `maxTurns`, `maxToolCalls`, `maxDuration`,
 `limits`, `withFinalTurn` -- with the stop's reason on `RunCompleted`, the
 result and every client.
