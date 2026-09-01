@@ -31,6 +31,18 @@ import { toData } from "./internal/data.js"
  * succeeds with what happened -- returned, ran off the end, threw, or was
  * refused with a diagnostic naming the fix -- and fails only the host's
  * own way (interruption stays interruption).
+ *
+ * **What the boundary is.** The program is confined by construction of the
+ * language -- an owned tree-walking interpreter over a JavaScript subset in
+ * which nothing closes over host authority but the `invoke` hook, and the
+ * prototype routes to `Function` are refused on every access -- and its
+ * *authority* is decided per call by `Permission`. It is not an OS or
+ * isolate boundary: the program runs on the host's fibre, in the host's
+ * process, and an interpreter bug is a host bug. The README's "Code mode"
+ * section lists each confinement with the test that pins it; an
+ * isolate-per-program executor is admitted by the `CodeExecutor` seam and
+ * is not this module. A read-only code mode is a `Permission` policy over
+ * annotated tools, shown there, not an option here.
  */
 
 /**

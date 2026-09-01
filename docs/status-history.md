@@ -4529,3 +4529,27 @@ Not shipped: `McpServerConformance` and the cross-adapter host matrix.
 Both are about this repository's adapters against this repository's host,
 not a contract a third party implements.
 
+## 2026-09-01 — code mode says what its boundary is (comparison plan, item 5)
+
+`docs/plan-effect-agent-comparison.md` §3.5, the documentation half. The
+README had no section on `/code` at all -- the module was documented in its
+own header and in `examples/code-mode.ts` -- and a reader arriving from a
+code mode that runs each program in a fresh isolate would have assumed the
+same here.
+
+Now stated, in the README's new "Code mode" section and the `CodeMode`
+header: the program is confined by construction of the language (an owned
+tree-walking interpreter over a subset, no host authority reachable but the
+`invoke` hook, the prototype routes to `Function` refused on every access)
+and its authority is decided per call by `Permission`; it is not an OS or
+isolate boundary, and an interpreter bug is a host bug. Twelve confinements
+are listed, each cited from the test that pins it, and
+`test/CodeModeThreatModel.test.ts` reads the list and looks every name up in
+the file it cites -- broken once by editing a citation, it failed. The
+read-only recipe is `Permission.rules` over annotated tools, shown rather
+than built, with the tool left in the catalog so the model learns from the
+refusal. `docs/MODULES.md` gains the `/code` row it was missing.
+
+The isolate executor (the plan's item 9) stays where the plan put it: after
+a published Cloudflare host entry, and not the reason for one.
+

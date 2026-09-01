@@ -614,7 +614,9 @@ sizes; the items are repeated here so this list stays the one tracker.
     (plan §3.3 a–b) — a lost runtime costs the turn in flight, not the run;
     `/scheduling`'s seam gets its Durable Object alarm implementation. Both
     in `apps/worker`, both proved on miniflare, neither needing an account.
-40. **Code mode threat model, stated** (plan §3.5, now) — the interpreter
+40. ~~**Code mode threat model, stated**~~ — landed 2026-09-01: README
+    "Code mode" section, `test/CodeModeThreatModel.test.ts` pins the
+    citations. As planned: the interpreter
     confines by construction of the language and `Permission` is the
     authority boundary; neither is an isolate, and the doc says so, each
     confinement citing its test. The readonly recipe is a `Permission` rule

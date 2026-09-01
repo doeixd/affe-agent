@@ -82,6 +82,7 @@ The root entry, `@doeixd/effect-agent`. This is the part that executes.
 | **`McpToolkit`** | `/mcp` | Remote MCP tools as an ordinary `Toolkit`. | Two doors: `bind` (declare locally, verify at connect, fully typed) and `bindDiscovered` (`Tool.dynamic` over the server's JSON Schema). That pair is the model [research-tool-sources.md](./research-tool-sources.md) generalises. |
 | **`ToolSource`** | `/tool-source` | One eager extraction + invocation seam over external tool catalogs. | The same declared/discovered doors over MCP, OpenAPI and GraphQL. Extraction reports skipped operations instead of silently creating broken tools; discovered toolkits preserve a `never` service requirement rather than leaking `any`. Credential resolution remains application/auth work. |
 | **`Subagent`** | `/subagent` | A tool that delegates a prompt to a child agent. | Typed convenience over child sessions; adds nothing to the engine. Composes with `/tree` when the children should be navigable. |
+| **`CodeMode` / `CodeTool` / `Catalog`** | `/code` | One `execute` tool over a budgeted catalog; the model answers with a program that runs against the real toolkits, every nested call through `Permission`. | Confined by construction of the language (an owned interpreter) with authority decided per call -- not an isolate; the README's "Code mode" section states the boundary and cites its tests. `CodeExecutor` admits other engines (`/code/callscript`). |
 
 ## 4. Context, state and memory
 
