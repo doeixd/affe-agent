@@ -49,12 +49,13 @@ import {
  * })
  * ```
  *
- * **What this is not.** It does not re-implement Claude Code's permission
- * model: the CLI decides what it may do, from its own flags and settings. The
- * `--permission-prompt-tool` bridge that routes its prompts into `Permission`
- * and `Elicitation` is the plan's step 2 and is not here yet, so until then the
- * sandbox is the only boundary this module provides -- choose the workspace
- * accordingly, and prefer explicit `allowedTools` over a broad permission mode.
+ * **Permissions are opt-in, and separate.** On its own this module does not
+ * re-implement Claude Code's permission model: the CLI decides what it may do,
+ * from its own flags and settings, and the sandbox is the only boundary. To put
+ * this application's policy in front of the CLI's own tool calls, add
+ * `ClaudeCodePermissions` -- its `args` are `extraArgs` here, and its `layer`
+ * serves the decision. Without it, choose the workspace accordingly and prefer
+ * explicit `allowedTools` over a broad permission mode.
  */
 
 // ---------------------------------------------------------------------------

@@ -665,7 +665,23 @@ describe("durable and cluster surfaces", () => {
 
   it("exports the A2A v1 server and client vocabulary and nothing beyond it", async () => {
     const a2a = await import("../src/a2a/index.js")
-    assert.deepStrictEqual(Object.keys(a2a).sort(), ["AgentA2A", "ClaudeCodeA2A"])
+    assert.deepStrictEqual(Object.keys(a2a).sort(), [
+      "AgentA2A",
+      "ClaudeCodeA2A",
+      "ClaudeCodePermissions"
+    ])
+    assert.deepStrictEqual(Object.keys(a2a.ClaudeCodePermissions).sort(), [
+      // The CLI flags that point a run at the decision endpoint.
+      "args",
+      // The decision itself, exported because it is the whole behaviour and
+      // needs no server to test.
+      "decide",
+      "defaultProjection",
+      "layer",
+      // The published tool, so a caller can serve it on their own server.
+      "tool",
+      "toolReference"
+    ])
     // The bridge's surface is two values: a constructor, and the line parser
     // it is built on -- exported because a caller reading `stream-json` from
     // somewhere else (a log, a recorded run) should not re-derive it.

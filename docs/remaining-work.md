@@ -297,11 +297,34 @@ open, so the next pass does not have to re-derive it.
     binary in CI, which is the same property that lets it run against a remote
     sandbox unchanged.
 
-    Still open from the plan: **step 2**, the `--permission-prompt-tool` bridge
-    into `Permission` / `Elicitation` (until then the sandbox is the only
-    boundary), **step 3**, the OpenCode bridge over `opencode serve`'s HTTP API
-    (independent of this: it needs no subprocess seam), and steps 5-7 (relay
-    transport, then the `LanguageModel` adapter experiment).
+26d. **Claude Code permission bridge** — SHIPPED 2026-09-01,
+    `src/a2a/claudeCodePermissions.ts`, the plan's step 2 and the boundary 26c
+    left open. `--permission-prompt-tool` routes the CLI's prompts to a one-tool
+    MCP server whose answer is `Permission.Policy` plus `Elicitation`. The
+    default projection maps the CLI's tools onto `/coding`'s own `read` /
+    `write` / `shell` actions, so one rule set governs both runtimes — that is
+    the whole claim, and `test/ClaudeCodePermissions.test.ts` pins the action
+    strings because the claim is false if they drift. An `Ask` raises a
+    `tool-approval` elicitation of the same `kind` the harness raises, and
+    "allow always" reaches `policy.remember`. Fails closed: no elicitor means an
+    `Ask` is a denial, a request naming no tool is denied before the policy is
+    consulted, and `--strict-mcp-config` is on by default so the delegated run's
+    tool surface does not depend on the host. `decide` is exported because it is
+    the whole behaviour and needs no server to test; `tool` is exported so the
+    wire contract (snake_case *and* camelCase in, a JSON *object* out) is
+    pinned directly.
+
+    Known and deliberate: the policy sees `messages: []`, because the delegated
+    agent's transcript is its own — a policy that needs the conversation to
+    decide cannot be used here, which is better than one deciding on a
+    transcript that is not the real one. And the endpoint is an authority:
+    anything that can reach it can be asked to approve a call, so it belongs on
+    loopback. A per-run bearer token would be the next hardening step.
+
+    Still open from the plan: **step 3**, the OpenCode bridge over
+    `opencode serve`'s HTTP API (independent of both: it needs no subprocess
+    seam and has native permission endpoints), and steps 5-7 (relay transport,
+    then the `LanguageModel` adapter experiment).
 
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /

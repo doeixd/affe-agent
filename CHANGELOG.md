@@ -59,6 +59,9 @@ context transform, or a layer, and end-user code needs no type casts.
   `RemoteAgent`, spawned through `Sandbox.execStream` inside a workspace, with
   the A2A context mapped to the CLI's own session. `AgentA2A.tool` then makes it
   an ordinary tool, so no new concept is needed to delegate to it.
+  `ClaudeCodePermissions` puts this application's `Permission` policy and
+  `Elicitation` in front of the CLI's own tool calls, in `/coding`'s action
+  vocabulary — one rule set for both runtimes.
 - `@doeixd/effect-agent/durable-streams` — official Durable Streams as typed
   streams, and the durable client's delivery log.
 - `@doeixd/effect-agent/sandbox` (+ `/sandbox/local`) — a scoped

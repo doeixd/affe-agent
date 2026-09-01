@@ -1667,12 +1667,42 @@ with a bare message. A run that ends without a `result` is reported as
 *cancelled*, never completed: a caller must not read "it worked" from "it
 stopped".
 
-It does **not** re-implement Claude Code's permission model — the CLI decides
-what it may do, from its own flags. Routing its `--permission-prompt-tool`
-prompts into [`Permission`](#permissions) and `Elicitation` is the next step and
-is not here yet, so until then the sandbox is the only boundary this bridge
-provides: choose the workspace accordingly, and prefer explicit `allowedTools`
-over a broad permission mode.
+#### One policy, two runtimes
+
+On its own the bridge does not touch Claude Code's permission model — the CLI
+decides what it may do, from its own flags, and the sandbox is the only
+boundary. `ClaudeCodePermissions` changes that: `--permission-prompt-tool`
+routes every prompt the CLI would have shown a human to an MCP tool, and that
+tool is this application's [`Permission`](#permissions) policy plus its
+`Elicitation`.
+
+```ts
+import { ClaudeCodePermissions } from "@doeixd/effect-agent/a2a"
+
+// 1. Serve the decision — one tool, on your own (loopback) router.
+const Permissions = ClaudeCodePermissions.layer({ policy, elicitor })
+
+// 2. Point the CLI at it.
+const claude = yield* ClaudeCodeA2A.remote(sandbox, {
+  extraArgs: ClaudeCodePermissions.args({ url: "http://127.0.0.1:4599/permission" })
+})
+```
+
+The default projection maps the CLI's tools onto the **same `action`
+vocabulary** `/coding` annotates its own with — `shell` on the command, `read`
+and `write` on the path — so a rule written as "ask before `write`, never
+`git push`" governs a delegated Claude Code run and a local `CodingToolkit` run
+identically, without knowing that either exists. An `ask` becomes a
+`tool-approval` elicitation of the same `kind` the harness raises for its own
+tools, so whatever already renders that question renders this one; "allow
+always" reaches the policy's `remember`.
+
+It fails closed. With no elicitor an `ask` is a denial (the harness's own
+default), a request naming no tool is denied before the policy is consulted, and
+`--strict-mcp-config` is passed by default so a delegated run's tool surface
+does not depend on what the host machine happens to have configured. **The
+endpoint is an authority** — anything that can reach it can be asked to approve
+a tool call — so bind it to loopback and keep it off an exposed router.
 
 ## Subagents
 
