@@ -4859,3 +4859,48 @@ regardless of what the manager was built with; `acquire` interrupts rather than
 fails once the manager is closed; and `LayerMap` is created without a
 `capacity`, so a workspace label derived from model input could hold unbounded
 live workspaces.
+
+---
+
+# 2026-09-01 — Break-once becomes a command
+
+`AGENTS.md` has always said a mechanism is not done until its test has been
+broken once and seen to fail. Applied by hand, it fails. Over three days ten
+tests were found asserting an outcome their mechanism did not produce — every
+one caught by review, none by the suite — and the pattern never varied: the
+test checks a settled end state, and the end state is reachable with the
+mechanism removed.
+
+`scripts/mutate.mjs` runs it mechanically. Sixteen mutations across
+`SessionProjection`, host-wide events and workspace lifetime, each naming the
+tests that must fail; `npm run verify:mutations`, in `check`, ~65s.
+
+**The precision is the point, and it is what `falsify.mjs` lacks.** That script
+asks "did anything fail?", so a mutation that breaks something *unrelated*
+scores as `bites`. This names the expected tests, which makes three distinct
+failures possible where there was one:
+
+- `SURVIVES` — the mutation changed nothing observable. Either the mechanism is
+  untested or the mutation is not one.
+- `WRONG TESTS` — something failed, but not what claimed to cover this. The
+  test does not test what its name says. This is the verdict that would have
+  caught most of the ten.
+- `SITE MOVED` — the pattern no longer matches, which must never be scored as a
+  pass: a break that silently fails to apply looks exactly like a guarantee
+  nothing enforces.
+
+Deliberately a sibling rather than a rewrite of `falsify.mjs`. That one is
+load-bearing for D1–D7 and runs a fixed eleven-file suite per break, which is
+minutes and is why it sits outside `check`. Merging them is possible later;
+destabilising the durability gate to do it now is not worth it.
+
+**The harness was itself broken once**, which for a tool of this kind is the
+only evidence worth having. Three probes: a mutation that only edits a comment
+reported `SURVIVES`; a real mutation attributed to a test it does not break
+reported `WRONG TESTS`; a pattern absent from the file reported `SITE MOVED`.
+All three exit non-zero — checked directly rather than through a pipe, because
+the first attempt read `tail`'s status and looked like a pass.
+
+The sixteen mutations are the ones verified by hand this week, so the table
+starts as a record of work already done rather than as an aspiration. Every one
+bites at `2026-09-01`; the run is recorded in `mutations.json`.

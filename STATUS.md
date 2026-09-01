@@ -21,6 +21,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
 | portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. Widened 2026-09-01 to reject `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do` and the `bun:` / `deno` specifiers as well as Effect's own host bindings, each proved to fire; the check now covers what the claim says. |
 | package | `npm run verify:package` | every published entry point imports from the packed tarball |
+| break-once | `npm run verify:mutations` | 16 mutations across `/sessions`, host events and workspace lifetime; each names the tests that must fail, so a mutation failing the *wrong* test is an error too. In `check` (~65s) |
 | durability | `npm run verify:durability` | D1–D7 bite when broken; D4b survives by construction |
 | smoke | `smoke:ref-coding`, `smoke:cli`, `smoke:tui` | the reference coding agent, the CLI and the TUI run end to end |
 

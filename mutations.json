@@ -1,0 +1,175 @@
+[
+  {
+    "id": "SP-gap",
+    "mechanism": "a discontinuity in the sequence is recorded",
+    "verdict": "bites",
+    "failed": 7,
+    "missing": [],
+    "names": [
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > records a gap and still applies the event",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > keeps only the earliest gap, because repair from it subsumes the rest",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > `since` does call that a gap, which is the whole difference",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > repairing means re-folding the whole log, and reproduces it exactly",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > resuming at the gap cursor is NOT repair, and loses the other side",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > refuses a sequence it cannot order, instead of disabling both guards"
+    ]
+  },
+  {
+    "id": "SP-duplicate",
+    "mechanism": "a replayed sequence is ignored rather than folded twice",
+    "verdict": "bites",
+    "failed": 2,
+    "missing": [],
+    "names": [
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > ignores a replayed sequence rather than double-counting it",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > ignores an older sequence arriving after a newer one"
+    ]
+  },
+  {
+    "id": "SP-foreign",
+    "mechanism": "another session's envelope is counted, not folded in",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/SessionProjection.test.ts > SessionProjection > tolerance > counts an envelope for another session instead of folding it in"
+    ]
+  },
+  {
+    "id": "SP-malformed",
+    "mechanism": "an unorderable sequence cannot disable the ordering guards",
+    "verdict": "bites",
+    "failed": 2,
+    "missing": [],
+    "names": [
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > refuses a sequence it cannot order, instead of disabling both guards",
+      "test/SessionProjection.test.ts > SessionProjection > sequence discipline > refuses Infinity and fractional sequences too"
+    ]
+  },
+  {
+    "id": "SP-settle",
+    "mechanism": "a settled submission holds nothing open",
+    "verdict": "bites",
+    "failed": 2,
+    "missing": [],
+    "names": [
+      "test/SessionProjection.test.ts > SessionProjection > folding a conversation > a closed session is never active, and holds nothing open",
+      "test/SessionProjection.test.ts > SessionProjection > what is still open > an interrupted submission does not leak its unanswered question"
+    ]
+  },
+  {
+    "id": "SP-recovered",
+    "mechanism": "a tool failure handed back to the model is not why a run stopped",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/SessionProjection.test.ts > SessionProjection > what is still open > a failure handed back to the model is not why the session stopped"
+    ]
+  },
+  {
+    "id": "HE-order",
+    "mechanism": "no event for a session precedes its SessionHosted",
+    "verdict": "bites",
+    "failed": 3,
+    "missing": [],
+    "names": [
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > announces a session before any of its events",
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > delivers the inventory first, then goes live",
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > folded into per-session projections > routes every event to its own session, and none to another"
+    ]
+  },
+  {
+    "id": "HE-inventory",
+    "mechanism": "a late subscriber is told what is already hosted",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > delivers the inventory first, then goes live"
+    ]
+  },
+  {
+    "id": "HE-unhosted",
+    "mechanism": "a session's tail cannot trail its own SessionUnhosted",
+    "verdict": "bites",
+    "failed": 2,
+    "missing": [],
+    "names": [
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > reports a closed session as unhosted, last and once",
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > a host shutting down says so, rather than claiming a close"
+    ]
+  },
+  {
+    "id": "HE-released",
+    "mechanism": "a host shutting down is not a session closing",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > a host shutting down says so, rather than claiming a close"
+    ]
+  },
+  {
+    "id": "HE-unbounded",
+    "mechanism": "publication never blocks on a subscriber that stopped reading",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > a parked subscriber blocks neither a run nor another subscriber"
+    ]
+  },
+  {
+    "id": "HE-pumps",
+    "mechanism": "the live-pump count can see a leak",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/AgentSessionHostEvents.test.ts > AgentSessionHost host-wide events > no pump outlives its session"
+    ]
+  },
+  {
+    "id": "WM-hold",
+    "mechanism": "a live holder keeps the workspace regardless of the idle window",
+    "verdict": "bites",
+    "failed": 2,
+    "missing": [],
+    "names": [
+      "test/WorkspaceManager.test.ts > WorkspaceManager > a live holder keeps it past the idle window",
+      "test/WorkspaceManager.test.ts > WorkspaceManager > `invalidate` rebuilds without revoking from a live holder"
+    ]
+  },
+  {
+    "id": "WM-ttl-option",
+    "mechanism": "the configured idle window is the one used",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/WorkspaceManager.test.ts > WorkspaceManager > and is released once the window passes"
+    ]
+  },
+  {
+    "id": "WM-ttl-default",
+    "mechanism": "the documented default idle window",
+    "verdict": "bites",
+    "failed": 2,
+    "missing": [],
+    "names": [
+      "test/WorkspaceManager.test.ts > WorkspaceManager > the default idle window is the documented one",
+      "test/WorkspaceManager.test.ts > WorkspaceManager > `invalidate` rebuilds without revoking from a live holder"
+    ]
+  },
+  {
+    "id": "WM-invalidate",
+    "mechanism": "invalidate forces a rebuild",
+    "verdict": "bites",
+    "failed": 1,
+    "missing": [],
+    "names": [
+      "test/WorkspaceManager.test.ts > WorkspaceManager > `invalidate` rebuilds without revoking from a live holder"
+    ]
+  }
+]
