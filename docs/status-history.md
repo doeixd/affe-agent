@@ -4685,3 +4685,49 @@ also no `HostConformance` row, because that matrix is per-transport and there is
 no transport. And no `ServerEvent` merge helper in `src/`, because §30 is
 explicit that merging host events with a process manager's is the application's
 job; it lives in the example.
+
+## Post-commit review of `90b7230` — four tests that did not bite
+
+The review `CLAUDE.md` asks for found that four of the claimed guarantees had
+no working test, and one docstring overclaimed. All verified by mutation before
+being believed.
+
+**The most important test in the file was a no-op.** "A parked subscriber
+blocks neither a run nor another subscriber" is the entire justification for an
+unbounded `PubSub`, and `PubSub.bounded(1)` passed it. `hostEvents` returns
+`Stream.unwrap`, and Effect defers the wrapped effect to the *first pull* -- so
+obtaining the stream and holding it subscribes to nothing at all. The test now
+forks a reader that takes one element and blocks on a `Deferred`, which is what
+actually fills a buffer, and `bounded(1)` fails it.
+
+**The leak detector had no test that it detects anything.** `pumps` was
+asserted once, as `=== 0` after three closes, which `pumps: Effect.succeed(0)`
+satisfies. It is now asserted `=== 3` while three sessions are live, before the
+closes.
+
+**A real ordering hole, in the direction the gate does not cover.** `closeRaw`
+unregisters a session under the registry gate but closes its scope outside it,
+deliberately. A `hostEvents` subscriber arriving in that window snapshots a
+registry that no longer contains the session, and then receives its
+`SessionEvent`s and its `SessionUnhosted` -- events for a session it was never
+told about, which is exactly what publishing `SessionHosted` before the fork
+exists to prevent. The docstring claimed "exactly once" was *exact*; it was
+exact for hosting and silent about unhosting. A `closing` set now keeps such a
+session in the inventory until its pump has announced.
+
+**That fix is untested, and says so in the code.** It defends an interleaving
+that cannot be produced deterministically here -- removing the set leaves the
+suite green, as does removing the registry gate from `hostEvents`. Both are
+recorded as untested rather than left looking proven.
+
+**Also corrected:** a dead `Cause` import; a comment paragraph left behind by
+its own rewrite; and a claim that `FiberMap` "mirrors rather than owns" the
+pumps, which is false -- its release interrupts every fibre it holds. What
+makes that harmless is registration order, so the comment now says that
+instead, and says not to reorder the two registrations.
+
+**And two claims that were not gated:** `smoke:host-events` existed as a script
+but was not in `check`, so an example whose comment says "breaking any of them
+fails the run" was only ever typechecked. It is in `check` now. `vitest.config.ts`
+was outside `tsconfig.json#include`, so a misspelled option would have failed at
+vitest load rather than at typecheck; it is included now.

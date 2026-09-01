@@ -118,19 +118,26 @@ const program = Effect.gen(function* () {
 
       // The claims, asserted rather than described -- breaking any of them
       // fails the run.
-      if (projections.size !== 2) {
-        throw new Error(`expected two projections, got ${projections.size}`)
-      }
+      const require_ = (ok: boolean, why: string) =>
+        ok ? Effect.void : Effect.die(new Error(why))
+
+      yield* require_(
+        projections.size === 2,
+        `expected two projections, got ${projections.size}`
+      )
       for (const [id, projection] of projections) {
-        if (projection.foreign !== 0) {
-          throw new Error(`${id} folded another session's events`)
-        }
-        if (!SessionProjection.isComplete(projection)) {
-          throw new Error(`${id} reported a gap it never had`)
-        }
-        if (projection.submissions.completed !== 1) {
-          throw new Error(`${id} did not complete its submission`)
-        }
+        yield* require_(
+          projection.foreign === 0,
+          `${id} folded another session's events`
+        )
+        yield* require_(
+          SessionProjection.isComplete(projection),
+          `${id} reported a gap it never had`
+        )
+        yield* require_(
+          projection.submissions.completed === 1,
+          `${id} did not complete its submission`
+        )
       }
     })
   ).pipe(Effect.provide(AgentClient.layer(agent).pipe(Layer.provide(model))))

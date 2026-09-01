@@ -245,7 +245,7 @@
     "lint:cli": "node scripts/effect-diagnostics.mjs apps/cli/tsconfig.json",
     "lint:tui": "node scripts/effect-diagnostics.mjs apps/tui/tsconfig.json",
     "lint:portability": "node scripts/verify-portability.mjs",
-    "check": "npm run typecheck && npm run typecheck:cli && npm run typecheck:tui && npm run typecheck:worker && npm run build && npm run lint && npm run lint:cli && npm run lint:tui && npm run lint:portability && npm run verify:workerd && npm run test && npm run verify:package && npm run smoke:ref-coding && npm run smoke:ref-gateway && npm run smoke:ref-declarative && npm run smoke:ref-delegation && npm run smoke:cli && npm run smoke:tui",
+    "check": "npm run typecheck && npm run typecheck:cli && npm run typecheck:tui && npm run typecheck:worker && npm run build && npm run lint && npm run lint:cli && npm run lint:tui && npm run lint:portability && npm run verify:workerd && npm run test && npm run verify:package && npm run smoke:ref-coding && npm run smoke:ref-gateway && npm run smoke:ref-declarative && npm run smoke:ref-delegation && npm run smoke:host-events && npm run smoke:cli && npm run smoke:tui",
     "cli": "npm --prefix apps/cli run dev --",
     "prepublishOnly": "npm run check",
     "verify:package": "node scripts/verify-package.mjs",

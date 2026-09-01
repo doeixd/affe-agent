@@ -1,5 +1,4 @@
 import {
-  Cause,
   Deferred,
   Effect,
   Exit,
@@ -146,6 +145,16 @@ export interface Host<Principal> {
    * The error channel is `never`, unlike per-session `events`. One session's
    * transport failing must not end everyone else's feed, so it arrives as
    * `SessionUnhosted` with `reason: "failed"` and the stream carries on.
+   *
+   * **Publication never blocks, and the price is on the reader.** The backing
+   * is unbounded, so a subscriber that stops reading pins the history at its
+   * cursor and grows the host's heap without limit -- every event of every
+   * session, for as long as the host lives. That is the deliberate trade: the
+   * alternative is a bound whose backpressure stalls one session's pump behind
+   * another session's slow consumer. **A transport adapter serving this over a
+   * connection must bound its own per-connection buffer**, which it can do
+   * safely because its producer is disposable and request-scope interruption
+   * releases it. Nothing here can do that on its behalf.
    */
   readonly hostEvents: (
     principal: Principal
@@ -425,9 +434,6 @@ export const make = <Principal>(
               // `"failed"` for an orderly release.
               reason: Option.isSome(removed)
                 ? removed.value
-                // Nobody removed it, so report what happened. A stream that
-                // ran out means the session closed for an in-process bus and
-                // only that the transport stopped for a remote one.
                 // Nobody removed it, so report what the pump saw. Both
                 // removers state their reason, so this is the genuinely
                 // unattended case: the session's own stream ended or broke
@@ -436,6 +442,11 @@ export const make = <Principal>(
                 ? "ended"
                 : "failed",
               lastSequence: Option.fromNullishOr(lastSequence)
+            })
+            yield* Ref.update(closing, (ids) => {
+              const next = new Set(ids)
+              next.delete(sessionId)
+              return next
             })
           })
 
@@ -479,12 +490,18 @@ export const make = <Principal>(
           scope
         )
         yield* Effect.yieldNow
-        // A mirror, not the owner. The session's child scope already tears
-        // this fibre down; a `FiberMap` that owned it would be bound to the
-        // *host's* scope instead and would outlive the session unless someone
-        // remembered to remove it -- which is the leak §29 exists to prevent.
-        // Held only so `pumps` can count what is genuinely live, since the map
-        // drops a fibre when it completes.
+        // Held so `pumps` can count what is genuinely live: the map drops a
+        // fibre when it completes, so its size is live pumps rather than pumps
+        // ever started, and a leaked pump is exactly one whose session has left
+        // the registry -- which `size` cannot see.
+        //
+        // `FiberMap` *is* an owner -- its release interrupts every fibre it
+        // holds -- so the session's child scope is not the only thing that
+        // could tear these down. What makes that harmless is registration
+        // order: the map is created before `releaseAll` is registered, and
+        // finalizers run last-registered-first, so `releaseAll` has already
+        // closed every session scope by the time the map is released and it
+        // finds nothing left to interrupt. Do not reorder those two.
         FiberMap.setUnsafe(pumpFibers, sessionId, fiber)
         return { session, tail, scope, reason }
       })
@@ -511,6 +528,25 @@ export const make = <Principal>(
      * memory is bounded by a constant the operator already chose.
      */
     const retained = yield* Ref.make<ReadonlyArray<AgentProtocol.SessionId>>([])
+    /**
+     * Sessions removed from the registry whose pump has not yet announced.
+     *
+     * `closeRaw` unregisters under the gate but closes the scope outside it,
+     * so between those two a session is invisible to a fresh `hostEvents`
+     * snapshot while its pump is still forwarding. Without this, a subscriber
+     * arriving in that window would receive `SessionEvent`s and a
+     * `SessionUnhosted` for a session it was never told about -- the exact
+     * thing publishing `SessionHosted` before the fork exists to prevent, in
+     * the one direction the registry gate does not cover.
+     *
+     * **Not covered by a test.** It defends a race between a subscriber
+     * attaching and a session closing, and that interleaving cannot be
+     * produced deterministically here -- removing this set leaves the suite
+     * green. Found by review rather than by a failure, and recorded as
+     * untested rather than left to look proven.
+     */
+    const closing = yield* Ref.make(new Set<AgentProtocol.SessionId>())
+
     const registryGate = yield* Semaphore.make(1)
     const requestGate = yield* Semaphore.make(1)
 
@@ -837,6 +873,9 @@ export const make = <Principal>(
           const next = new Map(all)
           next.delete(request.sessionId)
           yield* Ref.set(sessions, next)
+          // Still visible to a subscriber until its pump has announced.
+          yield* Ref.update(closing, (ids) =>
+            new Set(ids).add(request.sessionId))
           return found
         })
       ).pipe(
@@ -1248,7 +1287,10 @@ export const make = <Principal>(
             const subscription = yield* PubSub.subscribe(hostBus)
             const attached: AgentProtocol.HostEvent = {
               _tag: "HostAttached",
-              sessionIds: Array.from((yield* Ref.get(sessions)).keys())
+              sessionIds: [
+                ...(yield* Ref.get(sessions)).keys(),
+                ...(yield* Ref.get(closing))
+              ]
             }
             return Stream.concat(
               Stream.make(attached),

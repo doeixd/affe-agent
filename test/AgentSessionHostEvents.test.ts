@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, Layer, Option, Result, Scope, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Result, Scope, Stream } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -247,13 +247,18 @@ describe("AgentSessionHost host-wide events", () => {
   it.effect("a parked subscriber blocks neither a run nor another subscriber", () =>
     withHost([TestLanguageModel.text("one")], (host) =>
       Effect.gen(function* () {
-        // Subscribed and never read. With a bounded PubSub this fills and then
-        // stalls every session's pump behind it -- which is why the bus is
-        // unbounded and why publication can never block a turn.
+        // The subscriber has to be *running and stuck*, not merely obtained.
+        // `hostEvents` returns `Stream.unwrap`, which defers the subscribe to
+        // the first pull -- so an earlier version of this test held a stream
+        // value that had subscribed to nothing, and `PubSub.bounded(1)` passed
+        // it. Reading one element and then blocking for ever is what actually
+        // fills a bounded buffer and stalls every pump behind it.
         const parked = yield* host.hostEvents(undefined)
-        // Deliberately never read. Naming it is the point: a bounded PubSub
-        // would fill behind this and stall every session's pump.
-        void parked
+        const wedge = yield* Deferred.make<void>()
+        const stuck = yield* Effect.forkChild(
+          Stream.runForEach(parked, () => Deferred.await(wedge))
+        )
+        yield* Effect.yieldNow
 
         const { collected } = yield* collecting(
           host,
@@ -270,7 +275,11 @@ describe("AgentSessionHost host-wide events", () => {
           })
         )
 
+        // The run finished and a second subscriber saw everything, while the
+        // first is still wedged on its very first element.
         assert.isTrue(tagsFor(collected, "a").includes("SessionEvent"))
+        yield* Deferred.succeed(wedge, undefined)
+        yield* Fiber.interrupt(stuck)
       })))
 
   it.effect("the host stream and the event log agree on what happened", () =>
@@ -323,6 +332,14 @@ describe("AgentSessionHost host-wide events", () => {
               requestId: requestId(`c-${name}`),
               sessionId: sessionId(name)
             })
+          }
+          // Seen non-zero first. Asserting only that it returns to zero is
+          // passed by a `pumps` that is hardcoded to zero, which is no
+          // detector at all.
+          assert.strictEqual(yield* host.pumps, 3)
+          assert.strictEqual(yield* host.size, 3)
+
+          for (const name of ["a", "b", "c"]) {
             yield* host.closeSession(undefined, {
               requestId: requestId(`x-${name}`),
               sessionId: sessionId(name)

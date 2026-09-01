@@ -37,12 +37,9 @@ import { defineConfig } from "vitest/config"
  * fix `DurableStreams`' "linear, not quadratic", which asserts an asymptotic
  * bound by measuring elapsed time and spawns no processes at all.
  *
- * The cost is real and is paid on every solo run: about 29%, 51s to 66s.
- * That is the trade -- a suite whose red runs mean something, against a suite
- * that is faster when nothing else is happening. It was made deliberately,
- * because break-once discipline, `scripts/falsify.mjs` and `check` all rest on
- * a failure being informative, and an ambiguous one costs more than the
- * fifteen seconds.
+ * The cost is real and paid on every solo run: about 29%, 51s to 66s. It buys
+ * a failure that means something, which break-once discipline,
+ * `scripts/falsify.mjs` and `check` all depend on.
  *
  * Raise it with `npx vitest run --maxWorkers=16` when you know you are alone
  * on the machine.
