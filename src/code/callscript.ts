@@ -1,6 +1,7 @@
 import {
   executeScript,
   parseJsScript,
+  earlyReturn,
   ScriptValidationError,
   validateScript,
   type ExecuteResult,
@@ -96,6 +97,16 @@ export interface Options {
    */
   readonly suspendOn?: ((step: { readonly stepId: string; readonly tool: string }) => boolean) | undefined
 }
+
+/**
+ * What the handler returns when the host refused, to end the run.
+ *
+ * A sentinel object rather than a string or `undefined`: it becomes the
+ * plan's `output` for exactly as long as it takes to be recognised here,
+ * and it must not be confusable with a value a program could have
+ * produced.
+ */
+const REFUSED = { "@doeixd/effect-agent/code/callscript": "refused" }
 
 /** `namespace.name` back to the path `invoke` takes. */
 const pathOf = (tool: string): ReadonlyArray<string> => tool.split(".")
@@ -232,8 +243,13 @@ export const executor = (options?: Options): CodeMode.CodeExecutor => ({
        * interpreter, and letting a plan step skip past one would make
        * code mode's budget advisory.
        *
-       * So it is captured here and re-raised after the engine returns,
-       * whatever the plan decided to do about it.
+       * So the handler throws the engine's own `earlyReturn` instead of
+       * rejecting: the run ends *at* that step, and the diagnostic is
+       * re-raised here. Rejecting and re-raising afterwards also worked,
+       * but it let the plan keep going -- every later call refused by
+       * `invoke` in turn, so no handler ran twice, yet a budget that only
+       * fails a run after it has walked the whole plan is a budget in
+       * name. Stopping is what a limit means.
        */
       let refusal: CodeDiagnostic | undefined
 
@@ -254,6 +270,13 @@ export const executor = (options?: Options): CodeMode.CodeExecutor => ({
                           refusal = failure
                         }
                       })
+                    ),
+                    // `catchIf` rather than a rejection: the promise must
+                    // *end the run*, and `earlyReturn` is how this engine
+                    // is told to do that from inside a handler.
+                    Effect.catchIf(
+                      (failure): failure is CodeDiagnostic => failure instanceof CodeDiagnostic,
+                      () => Effect.sync((): unknown => { throw earlyReturn(REFUSED) })
                     )
                   )
                 )

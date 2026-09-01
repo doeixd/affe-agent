@@ -4396,16 +4396,34 @@ step-1 review's own finding, reintroduced one layer down:
   test flipped and never reset -- how the *next* test using the gate
   silently stops suspending. Local to the test now.
 
-Two things checked and deliberately left, recorded so they are not
-mistaken for oversights:
+Two things were recorded here as "checked and left". Both were then
+looked at properly, and **one of them was a real defect** -- worth noting
+that the difference only showed up on being asked to justify the decision
+rather than state it.
 
-- **The plan engine cannot be interrupted mid-run.** `executeScript`
-  returns a plain promise with no cancellation channel. Interruption still
-  reaches the *calls*: they are forked into a scoped `FiberSet`, so
-  closing the scope interrupts them and the engine sees their failures.
-  The engine's own loop runs to its next await either way.
-- **A host refusal stops the run only once the engine returns**, not at
-  the call that raised it. No further handler runs -- `invoke` refuses
-  every subsequent call itself, which the budget test asserts by checking
-  what the handlers actually saw -- so the cost is wasted plan-engine
-  work, not duplicated effects.
+- **Interruption: measured, and it holds.** `executeScript` is a plain
+  promise with no cancellation channel, so an interrupted run leaves its
+  loop to finish; that part cannot be fixed from here. What matters is
+  whether a *call* survives, and a probe says no: interrupting mid-call
+  showed the in-flight call interrupted and released, and the two after it
+  never started, 400ms later. The reason is the scoped `FiberSet` -- a
+  closed set refuses the work. That was previously true by accident and
+  undocumented; it is now `test/CodeCallScript.test.ts`'s interruption
+  pin, because a leaked tool call is exactly the thing that would
+  otherwise be found in production.
+- **A host refusal really did let the plan carry on -- reachably.** The
+  claim that this cost only "wasted plan-engine work" rested on the
+  engine halting at the first failing step, which it does *by default*.
+  But `try`/`catch` in the JS surface compiles to `onError: "skip"`
+  (verified against the compiler), so a model writing ordinary defensive
+  JavaScript reaches the swallow path, and a `maxToolCalls` refusal was
+  caught per step while the run finished normally. A budget that lets the
+  engine walk the whole plan before failing it is a budget in name. The
+  handler now throws the engine's own `earlyReturn` on a `CodeDiagnostic`,
+  which ends the run at that step; the diagnostic is re-raised here.
+
+The second is also a lesson about the test that missed it. The original
+budget test used plain sequential calls, which halt at the first error
+anyway -- so it passed identically with and without the guard. Removing
+the guard and watching *nothing* fail is what exposed it; the test now
+uses `try`/`catch` and discriminates.

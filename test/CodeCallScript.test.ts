@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Ref, Schema } from "effect"
+import { Duration, Effect, Fiber, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as Permission from "../src/Permission.js"
@@ -22,6 +22,12 @@ const Lookup = Tool.make("lookup", {
   description: "Look a key up",
   parameters: Schema.Struct({ key: Schema.String }),
   success: Schema.Struct({ found: Schema.String })
+})
+
+const Slow = Tool.make("slow", {
+  description: "Take a while",
+  parameters: Schema.Struct({ key: Schema.String }),
+  success: Schema.String
 })
 
 const Write = Tool.make("write", {
@@ -114,10 +120,16 @@ describe("CallScript as a CodeExecutor", () => {
         limits: { maxToolCalls: 1 }
       })
 
+      // `try`/`catch` in this surface compiles to `onError: "skip"` --
+      // which is how a *model* reaches the swallow path, not a contrived
+      // plan. Without the guard the run walks all four calls, catching
+      // each refusal, and finishes as though the budget were advice.
       const out = yield* runtime.execute([
-        "const a = await data.lookup({ key: \"a\" })",
-        "const b = await data.lookup({ key: \"b\" })",
-        "return [a.value.found, b.value.found]"
+        "try { const a = await data.lookup({ key: \"a\" }) } catch (e) {}",
+        "try { const b = await data.lookup({ key: \"b\" }) } catch (e) {}",
+        "try { const c = await data.lookup({ key: \"c\" }) } catch (e) {}",
+        "try { const d = await data.lookup({ key: \"d\" }) } catch (e) {}",
+        "return \"finished anyway\""
       ].join("\n"))
 
       assert.strictEqual(out.outcome._tag, "Refused")
@@ -126,6 +138,15 @@ describe("CallScript as a CodeExecutor", () => {
       }
       // The budget bit: one call happened, the second was refused.
       assert.deepStrictEqual(seen, ["lookup:a"])
+      // And the run *stopped* there rather than walking the rest of the
+      // plan collecting refusals. A limit that lets the engine finish the
+      // whole plan before failing it is a limit in name only. Break once
+      // by rejecting instead of throwing `earlyReturn` and this sees four
+      // calls, not two.
+      assert.deepStrictEqual(out.calls.map((call) => call.outcome), [
+        "succeeded",
+        "refused"
+      ])
     })
   )
 
@@ -262,6 +283,51 @@ describe("CallScript as a CodeExecutor", () => {
         assert.strictEqual(out.outcome.reason, "not-resumable")
       }
       assert.deepStrictEqual(seen, [])
+    })
+  )
+
+  it.live("interruption stops the calls, even though the engine cannot be cancelled", () =>
+    Effect.gen(function*() {
+      // `executeScript` is a plain promise with no cancellation channel,
+      // so an interrupted run leaves its loop to finish. What matters is
+      // that no *call* survives the interruption, and that holds for a
+      // reason worth pinning rather than trusting: the calls are forked
+      // into a scoped `FiberSet`, so closing the scope interrupts the one
+      // in flight and refuses every one after it. Measured, not assumed --
+      // and if `FiberSet` or the scoping here ever changes, a leaked tool
+      // call is the kind of thing that would otherwise be found in
+      // production.
+      const started: Array<string> = []
+      const released: Array<string> = []
+      const data = yield* Agent.toolkit([Slow], {
+        slow: ({ key }) =>
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              started.push(key)
+              return key
+            }),
+            () => Effect.as(Effect.sleep(Duration.millis(120)), key),
+            () => Effect.sync(() => { released.push(key) })
+          )
+      })
+      const runtime = CodeMode.make({ tools: { data }, executor: CallScript.executor() })
+
+      const running = yield* Effect.forkChild(runtime.execute([
+        "const a = await data.slow({ key: \"a\" })",
+        "const b = await data.slow({ key: \"b\" })",
+        "const c = await data.slow({ key: \"c\" })",
+        "return c.value"
+      ].join("\n")))
+
+      yield* Effect.sleep(Duration.millis(60))
+      yield* Fiber.interrupt(running)
+      // Long enough that a detached engine loop would have made both
+      // remaining calls twice over.
+      yield* Effect.sleep(Duration.millis(400))
+
+      assert.deepStrictEqual(started, ["a"])
+      // The one in flight was interrupted, not abandoned mid-acquire.
+      assert.deepStrictEqual(released, ["a"])
     })
   )
 })
