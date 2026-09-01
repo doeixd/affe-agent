@@ -4658,3 +4658,33 @@ refused for a typed agent as a ticket is for an untyped one.
 `examples/typed-agent.ts` gained the `Support` agent with the same
 assertions; the README gained "Typed input and output".
 
+## 2026-09-01 — a pull-request reviewer from existing parts (comparison plan, item 10)
+
+`docs/plan-effect-agent-comparison.md` §3.7. `examples/pr-review.ts`:
+`Presets.coding` for the workspace and the read-only tools, an
+`AgentOutput` so the review is a typed value (verdict, summary, findings
+with path, line and severity), `Budget.within` for the ceiling, and
+`Evals` to assert what happened and report what it cost. Runs against the
+scripted model; typechecked with the rest; `npx tsx examples/pr-review.ts`.
+
+Two library gaps the example found, both fixed in the library as
+`AGENTS.md` says to:
+
+- **`Presets.coding` could not take an `output`** (or an `input`): its
+  `Config` generics stopped at `PR`, so `Value` was `never` and an
+  `AgentOutput` was refused. The preset now threads `Value`, `Input`, `IE`
+  and `IR` -- a coding agent that must answer in a shape is still a coding
+  agent.
+- **`Evals` could not take an agent with a typed output or input.**
+  `Eval.agent` was `AgentDefinition<Tools, E, R>`, so an invariant `Value`
+  made a reviewer unassignable and `t.send`'s `result.value` was `never`.
+  `EvalContext`, `Eval`, `defineEval`, `run` and `runAll` thread `Value`
+  and `Input`; `send` takes `PromptInput<Input>`.
+
+And one thing worth knowing before writing the first output-bearing agent
+under a strict policy: **the output tool is a tool, and a default-deny
+`Permission` policy denies it.** The first run of the example refused its
+own review (`ToolPermissionDeniedError` on `record_review`). The example
+allows it by name, and the README's "Typed input and output" section and
+`AgentOutput`'s header now say so.
+

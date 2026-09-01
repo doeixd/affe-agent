@@ -2056,7 +2056,10 @@ result.value // Option<{ severity: "low" | "high"; reply: string }>
 **Output** is a tool the model calls to report its answer -- no second model
 call, validated by the provider and decoded by the toolkit, committed to
 history like any other call, and `Option` on the result because a model can
-stop without answering. The run ends when it is reported.
+stop without answering. The run ends when it is reported. Being a tool, it
+goes through `Permission` like one: a policy that denies by default must
+allow it by name (`{ tool: Triage.toolName, decision: Permission.allow }`),
+or the agent is refused its own answer.
 
 **Input** splits what a prompt string conflates. The *value* is the full
 input as the caller means it: validated by the schema, carried in its encoded

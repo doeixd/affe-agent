@@ -1,8 +1,8 @@
 # Plan: what to take from `effect-agent.com`, and what to leave
 
 **Status: in progress.** Items 1 (§3.0), 2 (§3.1), 3 (§3.2), 4 (§3.3 a–b),
-5 (§3.5, the documentation half) and 6 (§3.4, phase 1: in-process) landed
-2026-09-01; the rest is as proposed. Written 2026-09-01 from a
+5 (§3.5, the documentation half), 6 (§3.4, phase 1: in-process) and 10
+(§3.7) landed 2026-09-01; the rest is as proposed. Written 2026-09-01 from a
 read of [effect-agent.com](https://effect-agent.com/) — the documentation
 site for `danieljvdm/effect-agent`, the same author as `effect-cf`, which
 [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)

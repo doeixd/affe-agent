@@ -646,7 +646,8 @@ sizes; the items are repeated here so this list stays the one tracker.
     Dynamic Worker with `globalOutbound: null` per program, tool calls back
     over RPC; lives in item 43's entry and cannot precede it. No Node
     equivalent is pretended.
-45. **`examples/pr-review.ts`** (plan §3.7) — `Presets.coding` + an
+45. ~~**`examples/pr-review.ts`**~~ — landed 2026-09-01; see
+    `status-history.md`. As planned: `Presets.coding` + an
     `AgentOutput` review schema + `Budget.within` + `Evals.tokens`, against
     the scripted model. A reference, not a package.
 
