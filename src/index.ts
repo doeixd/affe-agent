@@ -1,6 +1,7 @@
 export * as Agent from "./Agent.js"
 export * as AgentEvent from "./AgentEvent.js"
 export * as AgentLoop from "./AgentLoop.js"
+export * as AgentOutput from "./AgentOutput.js"
 export * as AgentRun from "./AgentRun.js"
 export * as AgentSession from "./AgentSessionPublic.js"
 export * as AgentSubmission from "./AgentSubmission.js"

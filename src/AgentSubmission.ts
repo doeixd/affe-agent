@@ -27,7 +27,7 @@ export interface Receipt {
  * finish reason and content parts that a caller would otherwise have to
  * reconstruct from the event stream.
  */
-export interface Result<Tools extends Record<string, Tool.Any>> {
+export interface Result<Tools extends Record<string, Tool.Any>, Value = never> {
   readonly submissionId: SubmissionId
   readonly status: "completed" | "interrupted"
   readonly runs: number
@@ -35,6 +35,17 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly text: string
   /** The final model response, so usage and finish reason are not discarded. */
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+  /**
+   * The typed value the model reported, for an agent that declares an output.
+   *
+   * `Option`, not the value itself, and it stays an `Option` even for a
+   * completed submission. A model can stop without calling the tool, a run can
+   * be interrupted, and a loop bound can end the run first -- so a signature
+   * promising a value would be a promise the harness cannot keep. An agent
+   * that declares no output has `Value = never`, making this `Option<never>`:
+   * always `none`, and the compiler says so rather than the docs.
+   */
+  readonly value: Option.Option<Value>
 }
 
 /**
@@ -200,5 +211,10 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       runs
     })
 
-    return { submissionId, runs, turns, text, response }
+    // Read at the end rather than tracked in a local: the value is written by
+    // a tool handler deep inside a turn, and `progress` is the one place this
+    // submission's landed work is already collected for exactly that reason.
+    const { value } = yield* Ref.get(session.progress)
+
+    return { submissionId, runs, turns, text, response, value }
   })

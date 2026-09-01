@@ -14,6 +14,10 @@ describe("public API", () => {
       "AgentEvent",
       "AgentIdleError",
       "AgentLoop",
+      // The shape a submission is asked to end in. A first-class noun because
+      // it changes an agent's *type* -- `Result.value` is `Option<never>`
+      // without one -- which no helper on another module could express.
+      "AgentOutput",
       "AgentRun",
       "AgentSession",
       "AgentSubmission",

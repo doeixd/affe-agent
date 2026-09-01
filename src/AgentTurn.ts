@@ -1,8 +1,9 @@
-import { Cause, Effect, Option, Stream } from "effect"
-import { LanguageModel, Prompt, Response } from "effect/unstable/ai"
+import { Cause, Effect, Option, Ref, Stream } from "effect"
+import { LanguageModel, Prompt, Response, Toolkit } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
-import type { Tool, Toolkit } from "effect/unstable/ai"
+import type { Tool } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
+import type * as AgentOutput from "./AgentOutput.js"
 import type { Correlation } from "./AgentEvent.js"
 import * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
@@ -23,6 +24,13 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly response: LanguageModel.GenerateTextResponse<Tools, true>
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
   readonly text: string
+  /**
+   * The value the output tool recorded during this turn, if it was called.
+   *
+   * Returned rather than written to `progress` here, so that a value is
+   * visible to the submission only once its turn has committed.
+   */
+  readonly value: Option.Option<unknown>
 }
 
 /**
@@ -55,17 +63,81 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
   )
 
 /**
- * Resolve the agent's toolkit for this turn.
+ * Resolve the agent's toolkit for this turn, plus the output tool if the agent
+ * declares one.
  *
  * Done per turn, so an Effect-valued toolkit can vary with runtime state. Its
  * requirements are met by the environment the session captured.
+ *
+ * The output tool is merged in here rather than folded into the agent's
+ * toolkit at definition time, because its handler has to close over *this*
+ * session's progress -- an `Agent` is a value that many sessions share, and a
+ * handler bound at definition time would write one session's answer into
+ * another's. Merging is `mergeHandled`, the same delegation `Agent.withTools`
+ * uses, so the output tool is dispatched, decoded, executed, committed and
+ * announced exactly as any other tool is. A duplicate name is a defect at
+ * resolution, which is what `mergeHandled` already reports.
  */
 const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools>
 ): Effect.Effect<Toolkit.WithHandler<Tools>> =>
-  // The session env satisfies the toolkit's requirements, so the shared
-  // resolver's `E`/`R` are discharged to `never` here.
-  InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<Toolkit.WithHandler<Tools>>
+  Effect.flatMap(
+    // The session env satisfies the toolkit's requirements, so the shared
+    // resolver's `E`/`R` are discharged to `never` here.
+    InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<
+      Toolkit.WithHandler<Tools>
+    >,
+    (resolved) =>
+      Option.match(session.agent.output, {
+        onNone: () => Effect.succeed(resolved),
+        onSome: (output) =>
+          Effect.map(
+            outputToolkit(session, output),
+            (extra) =>
+              InternalToolkit.mergeHandled(resolved, extra) as unknown as
+                Toolkit.WithHandler<Tools>
+          )
+      })
+  )
+
+/**
+ * The output tool, handled, for one session.
+ *
+ * The handler is the whole mechanism: it records the decoded value and returns
+ * a confirmation. Recording is `Ref.update`, so a model that calls the tool
+ * twice leaves the last value -- the same rule the rest of `progress` follows
+ * for `text` and `response`, and the only one that does not need a policy
+ * decision about which of two answers the model "meant".
+ *
+ * The parameters arrive decoded: `Toolkit.handle` decodes against the tool's
+ * parameter schema before calling this, so a value that does not fit the shape
+ * fails the call rather than reaching here. Under the default
+ * `ToolExecution.ReturnToModel`, that failure is committed as a failed tool
+ * result and the model gets to try again -- which is the right outcome for a
+ * malformed answer, and one the injection gets for free by being a tool.
+ */
+const outputToolkit = <Tools extends Record<string, Tool.Any>>(
+  session: Session<Tools>,
+  output: AgentOutput.AgentOutput<any, any>
+): Effect.Effect<Toolkit.WithHandler<Record<string, Tool.Any>>> => {
+  const built = Toolkit.make(output.tool)
+  const handlers = {
+    [output.tool.name]: (value: unknown) =>
+      Effect.as(
+        Ref.set(session.pendingOutput, Option.some(value)),
+        "Recorded."
+      )
+  }
+  // An Effect rather than a `runSync`: binding handlers builds a layer, and
+  // running a layer synchronously is a promise about its acquisition that
+  // this module is in no position to make. The caller is already resolving a
+  // toolkit effectfully, so there is nothing to gain by forcing it here.
+  return built.pipe(
+    Effect.provide(
+      built.toLayer(handlers as Toolkit.HandlersFrom<Toolkit.ToolsByName<[Tool.Any]>>)
+    )
+  )
+}
 
 /**
  * Execute one turn: derive context, call the model, run its tool calls, and
@@ -262,6 +334,10 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     // the run, so the snapshot includes it. The prompt is derived before
     // `TurnStarted` is emitted, so a transform that fails cannot leave an
     // orphaned `TurnStarted` with no matching `TurnCompleted`.
+    // Cleared per turn: the ref stages *this* turn's value, and a leftover
+    // from a turn that was rolled back must not be promoted by the next one.
+    yield* Ref.set(session.pendingOutput, Option.none())
+
     const canonicalPrompt = yield* History.snapshot(session.history)
     // Ephemeral: the transform's output feeds this model call and nothing else.
     const context = yield* session.agent.contextTransform.transform({
@@ -398,9 +474,13 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
      */
     const text = response.text
     const content = History.assistantContent(response.content)
+    // Read inside the same uninterruptible region as the commit, so a value
+    // is promoted exactly when the turn that produced it becomes canonical.
+    let value: Option.Option<unknown> = Option.none()
     yield* Effect.uninterruptible(
       Effect.gen(function*() {
         yield* History.commit(session.history, committed)
+        value = yield* Ref.get(session.pendingOutput)
 
         // A message is worth announcing when it says something or carries a
         // file. Reasoning alone is not one: it is the model's working, and a
@@ -418,5 +498,5 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       })
     )
 
-    return { response, toolCalls, text }
+    return { response, toolCalls, text, value }
   })

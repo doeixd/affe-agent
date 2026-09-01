@@ -9,5 +9,10 @@ Compiling is not proof that inference is precise — `any` compiles too. Assert
 it, and break the assertion once to confirm it is enforced.
 
 **Always review your code after committing.** A double check, on the commit you
-just made: correctness, edge cases addressed, TypeScript DX, performance,
-hardening. Fix what it finds in a follow-up commit rather than leaving it.
+just made: correctness, edge cases addressed, TypeScript DX, performance, anti
+AI slop patterns, hardening, and that the tests are robust, well designed,
+correct, and will actually find bugs. Fix what it finds in a follow-up commit
+rather than leaving it.
+
+If you ever have an issue or suggestion with the design of the project, please
+let me know.

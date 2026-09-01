@@ -58,6 +58,21 @@ export interface SubmissionProgress<
   readonly turns: number
   readonly text: string
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+  /**
+   * The value the model reported through the agent's output tool, if it has
+   * one and has called it. See `AgentOutput`.
+   *
+   * Here rather than in a ref of its own for the same reason the rest of this
+   * lives here: an interrupted submission must still be able to report it. A
+   * value is committed the moment its tool call succeeds, so an interrupt
+   * landing during a later turn does not lose an answer that was already
+   * given.
+   *
+   * `unknown` because the session's value type is a type-level fact
+   * (`AgentDefinition`'s `Value`), and this internal record is shared by every
+   * agent regardless. `AgentSession` restores the type at the boundary.
+   */
+  readonly value: Option.Option<unknown>
 }
 
 /**
@@ -89,6 +104,20 @@ export interface Session<
    * `AgentSubmission` when a new submission begins.
    */
   readonly progress: Ref.Ref<SubmissionProgress<Tools>>
+  /**
+   * Where the output tool's handler puts the value it decoded, until the turn
+   * that produced it commits.
+   *
+   * Staged rather than written straight to `progress`, because a tool handler
+   * runs *before* the turn's atomic commit. A run interrupted between a
+   * successful call and that commit rolls the turn back -- the assistant
+   * message and the tool result never enter history -- and a value promoted
+   * eagerly would then be reported as this submission's answer while nothing
+   * in the transcript says the model ever gave one. `text` and `response`
+   * have always been recorded at the commit for the same reason; this follows
+   * them rather than inventing a second rule.
+   */
+  readonly pendingOutput: Ref.Ref<Option.Option<unknown>>
   readonly bus: EventBus
   /** Out-of-band input; substitutable so a durable runtime can record it. */
   readonly steering: InputChannel

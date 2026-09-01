@@ -43,9 +43,15 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   relating a field typed for one agent to the next agent's parameters even
   when the value is exactly right -- every combinator states its precise result
   type, and the erasure is confined to that one place;
-* merging two handled toolkits by delegation (`mergeHandled`), because Effect
-  AI composes toolkits before handlers are bound and a `WithHandler` is a
-  closed value;
+* merging two handled toolkits by delegation (`internal/toolkit.ts`'s
+  `mergeHandled`, two), because Effect AI composes toolkits before handlers are
+  bound and a `WithHandler` is a closed value;
+* **merging the output tool into the agent's toolkit** (`AgentTurn.ts`, one).
+  An agent that declares an `AgentOutput` has one extra tool injected per turn,
+  whose handler closes over that session's staged value. `Toolkit.WithHandler`
+  is invariant in its tools, so the merged union is not `WithHandler<Tools>` --
+  which is honest, and also not something a caller ever sees: the injected tool
+  is the harness's own and never enters the agent's tool record;
 * **mapping a declared tool tuple element-wise** through a function that
   returns each element's own type -- `McpToolkit.bind` (1) and
   `ToolSource.bind` (1) raise a declared tool's approval floor from the
@@ -260,3 +266,14 @@ npm test
 
 All four must pass (`npm run check` runs them). `examples/anthropic.ts` is typechecked but never executed — it
 would make live billed requests.
+
+## Reviewing
+
+**Always review your code after committing.** A double check, on the commit you
+just made: correctness, edge cases addressed, TypeScript DX, performance, anti
+AI slop patterns, hardening, and that the tests are robust, well designed,
+correct, and will actually find bugs. Fix what it finds in a follow-up commit
+rather than leaving it.
+
+If you ever have an issue or suggestion with the design of the project, please
+let me know.

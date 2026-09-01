@@ -27,8 +27,10 @@ that says what is actually next.
 ## Current design threads (2026-08-27)
 
 Written together over one pass; heavily cross-referenced. Since then
-`/tool-source`, the host-based MCP frontend, the workerd probe and the first
-reference agent have landed; each file carries its own status line, and
+`/tool-source`, the host-based MCP frontend, all four reference agents,
+`/presets`, `/code` and the two delegation bridges have landed — and the
+workerd *probe* became a real Durable Object host (`apps/worker`, proven on
+workerd through miniflare). Each file carries its own status line, and
 [remaining-work.md](./remaining-work.md) ranks what is left.
 
 | document | what it is |
@@ -45,9 +47,10 @@ reference agent have landed; each file carries its own status line, and
 
 | document | what it is |
 | --- | --- |
-| [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. Phase 1 (the `PromptWire` codec) landed; blob storage and protocol projections (phases 2–5) remain. |
-| [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. Phases 1–7 landed; 8–15 (default summariser, manual `compact()`, branch summaries, durable activities) remain. |
-| [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. |
+| [plan-model-capabilities.md](./plan-model-capabilities.md) | The metadata upstream's `Model` omits — vision, window, cost — and what it unblocks in compaction and `/budget`; why cross-provider option normalization is a non-goal, and where prompt caching sits. M0 and M3 (prompt caching) done, M1 written but not exported, M2/M4/M5/M6 open — **and none of it is committed yet**. |
+| [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. **Phases 1–5 landed** (the `PromptWire` codec, `content` on results and events, media through A2A/OpenAI/AG-UI, and `/blob`); steps 6 (adapters externalizing automatically) and 7 (relay) remain. |
+| [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. **Phases 1–14 landed**; only phase 15 (provider-overflow recovery) remains, deliberately parked. |
+| [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. **Steps 1–4 landed** — both bridges ship, share one permission decision, and are proven against the real Claude Code and OpenCode runtimes; `examples/ref-delegation.ts` is the reference. Steps 5–7 (relay, then the `LanguageModel` adapter) remain. |
 | [plan-relay.txt](./plan-relay.txt) | A secure addressable transport for services behind NAT, as an `RpcClient.Protocol`. Sixteen phases. |
 | [opencode-completion-plan.md](./opencode-completion-plan.md) · [effect-plan-2.txt](./effect-plan-2.txt) | A design brief for `SessionInbox` / `ProcessManager`; the second is the tree-annotated revision with the implementation order. |
 
@@ -65,6 +68,10 @@ Kept because they record *why*, not because there is work left in them. See
 | [plan-snapshot-export.md](./plan-snapshot-export.md) | `/export` — the versioned envelope and JSONL commit log. |
 | [plan-agent-server.md](./plan-agent-server.md) | `AgentServer` — several agents on one HTTP surface. Complete, S5 included. |
 | [plan-execution-plan.md](./plan-execution-plan.md) | Provider fallback as a combinator, from the ecosystem audit. |
+| [plan-code-mode-engine.md](./plan-code-mode-engine.md) · [plan-code-mode-executors.md](./plan-code-mode-executors.md) | `/code` — the owned acorn interpreter, then the executor seam proved by a second executor: suspension, the pre-flight validator, a search tool, and CallScript behind `CodeExecutor`. |
+| [plan-structured-output.md](./plan-structured-output.md) | `AgentOutput` — a session that ends in a typed value, as a tool the model calls rather than a second model call. |
+| [plan-submit-await.md](./plan-submit-await.md) | `submit` / `awaitSubmission` on every client, and the bounded-retention contract that makes a lost acknowledgement safe to retry. |
+| [plan-principal-on-tool-fibre.md](./plan-principal-on-tool-fibre.md) | Getting the caller's subject onto the fibre that acts — the one kernel decision the multi-user half of `plan-tool-credentials.md` was blocked on. Decided and shipped as `Principal.CurrentPrincipal`. |
 | [plan-durability-hardening.md](./plan-durability-hardening.md) | The durability guarantees. Complete; `npm run verify:durability` re-runs SD2. |
 | [plan-tui-port.md](./plan-tui-port.md) · [plan-tui-tool-views.md](./plan-tui-tool-views.md) | `apps/tui`, and per-tool rendering. |
 

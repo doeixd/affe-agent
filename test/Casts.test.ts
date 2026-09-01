@@ -118,11 +118,26 @@ const castsInSource = (
 const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
   [
     "src/Agent.ts",
-    5,
-    "the phantom `Tools` field, the `Toolkit.empty` default, the `definition` " +
-      "assembly, `mergeHandled`'s two delegating calls, and " +
+    3,
+    "the phantom `Tools` field, the `Toolkit.empty` default, and " +
       "`withExecutionPlan`'s `as never` -- its return type is a conditional " +
       "on an unresolved parameter, which nothing but `never` satisfies"
+  ],
+  [
+    "src/internal/toolkit.ts",
+    2,
+    "`mergeHandled`'s two delegating calls: Effect AI composes toolkits " +
+      "before handlers are bound, so a `WithHandler` is a closed value and " +
+      "adding a tool to one merges at the `handle` level, where each side's " +
+      "method is typed for its own record"
+  ],
+  [
+    "src/AgentTurn.ts",
+    1,
+    "merging the output tool back into the agent's toolkit: " +
+      "`Toolkit.WithHandler` is invariant in its tools, so the union the " +
+      "merge produces is not `WithHandler<Tools>` even though the injected " +
+      "tool is the harness's own and never appears in the agent's record"
   ],
   [
     "src/durable/DurableModel.ts",

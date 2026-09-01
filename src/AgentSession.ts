@@ -37,8 +37,8 @@ export type Id = Ids.SessionId
 
 export type { Status }
 export type { SessionState as State }
-export type Result<Tools extends Record<string, Tool.Any> = {}> =
-  AgentSubmission.Result<Tools>
+export type Result<Tools extends Record<string, Tool.Any> = {}, Value = never> =
+  AgentSubmission.Result<Tools, Value>
 export type SubmissionReceipt = AgentSubmission.Receipt
 
 
@@ -76,7 +76,13 @@ const SessionTypeId: unique symbol = Symbol.for("@doeixd/effect-agent/AgentSessi
  */
 export interface AgentSession<
   Tools extends Record<string, Tool.Any> = {},
-  E = never
+  E = never,
+  /**
+   * The typed value this session's submissions end with, or `never` when the
+   * agent declares no output. Comes straight from the `AgentDefinition`, so a
+   * caller never states it.
+   */
+  Value = never
 > {
   readonly [SessionTypeId]: Session<any, any, any>
 
@@ -90,7 +96,7 @@ export interface AgentSession<
   readonly prompt: (
     input: Prompt.RawInput,
     options?: PromptOptions
-  ) => Effect.Effect<Result<Tools>, PromptError<Tools, E>>
+  ) => Effect.Effect<Result<Tools, Value>, PromptError<Tools, E>>
 
   /**
    * Admit a submission and return without waiting for execution to finish.
@@ -124,7 +130,10 @@ export interface AgentSession<
    */
   readonly awaitSubmission: (
     submissionId: Ids.SubmissionId
-  ) => Effect.Effect<Result<Tools>, PromptError<Tools, E> | AgentSubmissionNotFoundError>
+  ) => Effect.Effect<
+    Result<Tools, Value>,
+    PromptError<Tools, E> | AgentSubmissionNotFoundError
+  >
 
   /** Insert guidance into the active run, applied at the next turn boundary. */
   readonly steer: (
@@ -156,7 +165,7 @@ export interface AgentSession<
 }
 
 const unwrap = <Tools extends Record<string, Tool.Any>, E>(
-  session: AgentSession<Tools, E>
+  session: AgentSession<Tools, E, any>
 ): Session<Tools, E, never> =>
   session[SessionTypeId] as Session<Tools, E, never>
 
@@ -251,11 +260,13 @@ export const make = <
   Tools extends Record<string, Tool.Any>,
   E,
   R,
-  Model = LanguageModel.LanguageModel
+  Model = LanguageModel.LanguageModel,
+  Value = never
 >(
-  agent: AgentDefinition<Tools, E, R, Model>,
+  agent: AgentDefinition<Tools, E, R, Model, Value>,
   options?: MakeOptions
-): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> => makeEngine(agent, options)
+): Effect.Effect<AgentSession<Tools, E, Value>, never, Scope.Scope | Model | R> =>
+  makeEngine(agent, options)
 
 /**
  * `make` for an engine: the same session, with `EngineOptions` accepted.
@@ -268,11 +279,12 @@ export const makeEngine = <
   Tools extends Record<string, Tool.Any>,
   E,
   R,
-  Model = LanguageModel.LanguageModel
+  Model = LanguageModel.LanguageModel,
+  Value = never
 >(
-  agent: AgentDefinition<Tools, E, R, Model>,
+  agent: AgentDefinition<Tools, E, R, Model, Value>,
   options?: MakeOptions & EngineOptions
-): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> =>
+): Effect.Effect<AgentSession<Tools, E, Value>, never, Scope.Scope | Model | R> =>
   Effect.gen(function* () {
     // Captured once, so the session handle carries no residual requirements
     // and a child session can run under an entirely different model layer.
@@ -348,8 +360,10 @@ export const makeEngine = <
       runs: 0,
       turns: 0,
       text: "",
-      response: Option.none()
+      response: Option.none(),
+      value: Option.none()
     })
+    const pendingOutput = yield* Ref.make<Option.Option<unknown>>(Option.none())
     const ids = yield* Ids.makeIdSource
     const submissionName = options?.submissionIds ?? ((count: number) => `submission-${count}`)
     const beforeClose = options?.beforeClose ?? Effect.void
@@ -360,6 +374,7 @@ export const makeEngine = <
       state,
       history,
       progress,
+      pendingOutput,
       bus,
       steering,
       followUps,
@@ -408,7 +423,7 @@ export const makeEngine = <
     // The action methods delegate to this module's own functions, so there is
     // one implementation and one set of spans. They are safe to reference
     // before `handle` is initialised because they are only *called* later.
-    const handle: AgentSession<Tools, E> = {
+    const handle: AgentSession<Tools, E, Value> = {
       [SessionTypeId]: session,
       id,
       prompt: (input, options) => prompt(handle, input, options),
@@ -586,7 +601,11 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
           runs: 0,
           turns: 0,
           text: "",
-          response: Option.none()
+          response: Option.none(),
+          // Cleared with the rest: an output is one submission's answer, and
+          // a new submission that is interrupted before its own tool call
+          // must not report the previous one's value as its result.
+          value: Option.none()
         })
 
         const registered = yield* Deferred.make<void>()
@@ -646,7 +665,7 @@ export const submit = Effect.fn("AgentSession.submit")(function* <
   Tools extends Record<string, Tool.Any>,
   E
 >(
-  session: AgentSession<Tools, E>,
+  session: AgentSession<Tools, E, any>,
   input: Prompt.RawInput,
   options: PromptOptions = {}
 ) {
@@ -671,9 +690,10 @@ export const submit = Effect.fn("AgentSession.submit")(function* <
  */
 export const prompt = Effect.fn("AgentSession.prompt")(function* <
   Tools extends Record<string, Tool.Any>,
-  E
+  E,
+  Value = never
 >(
-  session: AgentSession<Tools, E>,
+  session: AgentSession<Tools, E, Value>,
   input: Prompt.RawInput,
   options: PromptOptions = {}
 ) {
@@ -704,7 +724,7 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
  * run was detached by `submit`, and a waiter leaving is not the work being
  * cancelled.
  */
-const settle = <Tools extends Record<string, Tool.Any>, E>(
+const settle = <Tools extends Record<string, Tool.Any>, E, Value = never>(
   self: Session<Tools, E, never>,
   submissionId: Ids.SubmissionId,
   fiber: Fiber.Fiber<any, any>,
@@ -713,7 +733,7 @@ const settle = <Tools extends Record<string, Tool.Any>, E>(
     /** The progress to report an interruption from; the live counter otherwise. */
     readonly progress?: SubmissionProgress<any> | undefined
   }
-): Effect.Effect<Result<Tools>, PromptError<Tools, E>> =>
+): Effect.Effect<Result<Tools, Value>, PromptError<Tools, E>> =>
   Effect.gen(function* () {
     const awaited = Fiber.await(fiber)
     const exit = yield* (options.interruptWithCaller
@@ -729,20 +749,25 @@ const settle = <Tools extends Record<string, Tool.Any>, E>(
           runs: landed.runs,
           turns: landed.turns,
           text: landed.text,
-          response: landed.response
-        } satisfies Result<Tools>
+          response: landed.response,
+          // An interrupted submission still reports a value it already got.
+          // The tool call that produced it committed atomically with its turn,
+          // so this is work that landed, not work in flight.
+          value: landed.value as Option.Option<Value>
+        } satisfies Result<Tools, Value>
       }
       return yield* Effect.failCause(exit.cause)
     }
 
-    return { ...exit.value, status: "completed" } satisfies Result<Tools>
+    return { ...exit.value, status: "completed" } satisfies Result<Tools, Value>
   })
 
 export const awaitSubmission = Effect.fn("AgentSession.awaitSubmission")(function* <
   Tools extends Record<string, Tool.Any>,
-  E
+  E,
+  Value = never
 >(
-  session: AgentSession<Tools, E>,
+  session: AgentSession<Tools, E, Value>,
   submissionId: Ids.SubmissionId
 ) {
     const self = unwrap(session)
@@ -817,7 +842,7 @@ const stillActive = (
  * way. For immediate intervention, `interrupt` then `prompt`.
  */
 export const steer = Effect.fn("AgentSession.steer")(function* (
-  session: AgentSession<any, any>,
+  session: AgentSession<any, any, any>,
   input: Prompt.RawInput
 ) {
     const self = unwrap(session)
@@ -852,7 +877,7 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
 
 /** Queue work to run after the active run reaches its stopping condition. */
 export const followUp = Effect.fn("AgentSession.followUp")(function* (
-  session: AgentSession<any, any>,
+  session: AgentSession<any, any, any>,
   input: Prompt.RawInput
 ) {
     const self = unwrap(session)
@@ -900,7 +925,7 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
 
 /** Interrupt the active submission. */
 export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
-  session: AgentSession<any, any>
+  session: AgentSession<any, any, any>
 ) {
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
@@ -961,7 +986,7 @@ const stateOf = (self: Session<any, any, any>): StateView => ({
  * outside, "approved" and "approved too late" look identical otherwise.
  */
 export const respond = Effect.fn("AgentSession.respond")(function* (
-  session: AgentSession<any, any>,
+  session: AgentSession<any, any, any>,
   response: Elicitation.Response
 ) {
     const self = unwrap(session)
@@ -972,16 +997,16 @@ export const respond = Effect.fn("AgentSession.respond")(function* (
 
 /** What the run is currently waiting to be told. */
 export const pending = (
-  session: AgentSession<any, any>
+  session: AgentSession<any, any, any>
 ): Effect.Effect<ReadonlyArray<Elicitation.Request>> =>
   unwrap(session).elicitation.pending
 
 /** Canonical conversation history. */
 export const history = (
-  session: AgentSession<any, any>
+  session: AgentSession<any, any, any>
 ): Effect.Effect<Prompt.Prompt> => historyOf(unwrap(session))
 
-export const status = (session: AgentSession<any, any>): Effect.Effect<Status> =>
+export const status = (session: AgentSession<any, any, any>): Effect.Effect<Status> =>
   statusOf(unwrap(session))
 
 /**
@@ -1012,7 +1037,7 @@ export type Snapshot = typeof Snapshot.Type
  * out they have not.
  */
 export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
-  session: AgentSession<any, any>
+  session: AgentSession<any, any, any>
 ) {
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
@@ -1069,12 +1094,13 @@ export const restore = <
   Tools extends Record<string, Tool.Any>,
   E,
   R,
-  Model = LanguageModel.LanguageModel
+  Model = LanguageModel.LanguageModel,
+  Value = never
 >(
-  agent: AgentDefinition<Tools, E, R, Model>,
+  agent: AgentDefinition<Tools, E, R, Model, Value>,
   snapshot: Snapshot,
   options?: Omit<MakeOptions, "sessionId" | "history">
-): Effect.Effect<AgentSession<Tools, E>, never, Scope.Scope | Model | R> =>
+): Effect.Effect<AgentSession<Tools, E, Value>, never, Scope.Scope | Model | R> =>
   make(agent, {
     ...options,
     sessionId: snapshot.sessionId,
@@ -1094,7 +1120,7 @@ export interface StateView {
   readonly changes: Stream.Stream<SessionState>
 }
 
-export const state = (session: AgentSession<any, any>): StateView =>
+export const state = (session: AgentSession<any, any, any>): StateView =>
   stateOf(unwrap(session))
 
 /**
@@ -1104,7 +1130,7 @@ export const state = (session: AgentSession<any, any>): StateView =>
  * cannot tolerate loss belongs to a future store observing commits.
  */
 export const events = (
-  session: AgentSession<any, any>
+  session: AgentSession<any, any, any>
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
 
 /**
@@ -1146,7 +1172,7 @@ export const events = (
  * deliberately a different seam with the opposite coupling.
  */
 export const observe = (
-  session: AgentSession<any, any>,
+  session: AgentSession<any, any, any>,
   observer: (envelope: AgentEventEnvelope) => Effect.Effect<void>
 ): Effect.Effect<void, never, Scope.Scope> =>
   EventBus.observe(unwrap(session).bus, observer)
@@ -1166,6 +1192,6 @@ export const observe = (
  * session already in flight.
  */
 export const subscribe = (
-  session: AgentSession<any, any>
+  session: AgentSession<any, any, any>
 ): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>
   PubSub.subscribe(unwrap(session).bus.pubsub)

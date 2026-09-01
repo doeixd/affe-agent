@@ -81,7 +81,11 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         runs: p.runs,
         turns: p.turns + 1,
         text: result.text.length > 0 ? result.text : p.text,
-        response: Option.some(result.response)
+        response: Option.some(result.response),
+        // A turn that reported a value replaces the previous one; a turn
+        // that did not leaves it alone. Same rule as `text` above, and for
+        // the same reason: this is the record of what has landed.
+        value: Option.isSome(result.value) ? result.value : p.value
       }))
 
       // Follow-up state is deliberately not passed: whether more work is

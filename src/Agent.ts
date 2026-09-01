@@ -6,6 +6,7 @@ import { Toolkit } from "effect/unstable/ai"
 import type { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
+import * as AgentOutput from "./AgentOutput.js"
 import * as AgentSession from "./AgentSession.js"
 import * as ContextTransform from "./ContextTransform.js"
 import * as InternalToolkit from "./internal/toolkit.js"
@@ -37,7 +38,24 @@ export interface AgentDefinition<
    * should not tell. Defaulted, so no existing reference to
    * `AgentDefinition<Tools, E, R>` moves.
    */
-  Model = LanguageModel.LanguageModel
+  Model = LanguageModel.LanguageModel,
+  /**
+   * The typed value a submission ends with, or `never` when the agent
+   * declares no output. See `output` below and `AgentOutput`.
+   *
+   * Defaulted and last, so every existing reference to
+   * `AgentDefinition<Tools, E, R>` or `<Tools, E, R, Model>` still means what
+   * it did.
+   *
+   * Carried in the type reference only, exactly as `Model` is, and not in the
+   * `output` field below. Referencing it there gives inference a second site
+   * for the same variable, and piping an agent through a combinator then
+   * leaves it unresolved -- `Agent.run(Researcher, ...)` stopped compiling on
+   * an agent that declares no output at all. The field is erased to `any` for
+   * the same reason `definition` erases every other channel: this parameter
+   * is what states the fact, and `AgentSession` reads it from there.
+   */
+  Value = never
 > extends Pipeable {
   readonly instructions: Option.Option<string>
   /**
@@ -66,6 +84,15 @@ export interface AgentDefinition<
    * nothing to fall back to.
    */
   readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
+  /**
+   * The shape this agent's submissions end in, if it declares one.
+   *
+   * Absent by default: an agent that answers in prose is the common case, and
+   * an output contract no caller reads is a tool the model can waste a turn
+   * on. See `AgentOutput` for why this is a tool rather than a second kind of
+   * model call.
+   */
+  readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
 }
 
 /**
@@ -96,7 +123,8 @@ export interface Config<
   KE = never,
   KR = never,
   Bound extends ReadonlyArray<BoundTool<Tool.Any>> = [],
-  PR = never
+  PR = never,
+  Value = never
 > {
   readonly instructions?: string | undefined
   readonly toolkit?: ToolkitInput<Tools, KE, KR> | undefined
@@ -164,6 +192,17 @@ export interface Config<
    * as a failed tool result instead, so the model can take another route.
    */
   readonly toolDenialPolicy?: ToolExecution.FailurePolicy | undefined
+  /**
+   * The shape every submission must end in. See `AgentOutput.make`.
+   *
+   * Declaring it does three things: the model is given a tool to report the
+   * value through, the run stops as soon as it calls that tool, and
+   * `Result.value` becomes `Option<Value>` instead of `Option<never>`.
+   *
+   * The stop is a policy composed onto whatever loop the agent has, not a
+   * special case in the engine -- see `outputStop`.
+   */
+  readonly output?: AgentOutput.AgentOutput<Value, any> | undefined
 }
 
 /**
@@ -222,7 +261,7 @@ export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
  * parameters even when the value is exactly right. A spread of a definition
  * keeps `pipe` as an own property, so derived values pipe too.
  */
-const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel>(fields: {
+const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel, Value = never>(fields: {
   readonly instructions: Option.Option<string>
   readonly toolkit: ToolkitInput<any, any, any>
   readonly loop: AgentLoop.AgentLoop<any, any, any>
@@ -232,7 +271,8 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = Langua
   readonly permission: Permission.Policy<any>
   readonly toolDenialPolicy: ToolExecution.FailurePolicy
   readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
-}): AgentDefinition<Tools, E, R, Model> =>
+  readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
+}): AgentDefinition<Tools, E, R, Model, Value> =>
   ({
     instructions: fields.instructions,
     toolkit: fields.toolkit,
@@ -243,10 +283,43 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = Langua
     permission: fields.permission,
     toolDenialPolicy: fields.toolDenialPolicy,
     executionPlan: fields.executionPlan,
+    output: fields.output,
     pipe() {
       return pipeArguments(this, arguments)
     }
-  }) as AgentDefinition<Tools, E, R, Model>
+  }) as AgentDefinition<Tools, E, R, Model, Value>
+
+/**
+ * Stop the run once the model has reported its output.
+ *
+ * Composed onto the agent's own loop rather than special-cased in the engine:
+ * "the run is over when the answer has been given" is a continuation decision,
+ * and continuation decisions live in `AgentLoop`. Nothing in `AgentRun` or
+ * `AgentTurn` learns that outputs exist.
+ *
+ * The inner policy is consulted first and its `Stop` short-circuits, which is
+ * exactly `AgentLoop.and(loop, ...)` — written out here only because `and`
+ * cannot relate one agent's invariant `Tools` slot to another's (see
+ * `Config.loop`). A policy that counts turns or records telemetry therefore
+ * still sees the turn that produced the value.
+ *
+ * Without this, `untilIdle` would see a turn that made a tool call, continue,
+ * and spend one more model call on a closing remark nobody reads.
+ */
+const withOutputStop = <E, R>(
+  loop: AgentLoop.AgentLoop<E, R, any>,
+  output: AgentOutput.AgentOutput<any, any> | undefined
+): AgentLoop.AgentLoop<E, R, any> =>
+  output === undefined
+    ? loop
+    : AgentLoop.make((state) =>
+        Effect.map(loop.decide(state), (decision) =>
+          decision._tag === "Stop" ||
+          state.toolCalls.some((call) => call.name === output.toolName)
+            ? AgentLoop.Stop
+            : AgentLoop.Continue
+        )
+      )
 
 export const make = <
   Tools extends Record<string, Tool.Any> = {},
@@ -257,9 +330,10 @@ export const make = <
   KE = never,
   KR = never,
   const Bound extends ReadonlyArray<BoundTool<Tool.Any>> = [],
-  PR = never
+  PR = never,
+  Value = never
 >(
-  config?: Config<Tools, LE, LR, TE, TR, KE, KR, Bound, PR>
+  config?: Config<Tools, LE, LR, TE, TR, KE, KR, Bound, PR, Value>
   // The toolkit's resolution failure joins the agent's error type, alongside
   // the loop's and the transform's. Acquiring a capability can fail; saying so
   // is what lets a caller handle it. Bound tools contribute their record and
@@ -267,7 +341,9 @@ export const make = <
 ): AgentDefinition<
   Tools & ToolsOf<Bound>,
   LE | TE | KE,
-  LR | TR | KR | ServicesOf<Bound> | PR
+  LR | TR | KR | ServicesOf<Bound> | PR,
+  LanguageModel.LanguageModel,
+  Value
 > => {
   if (config?.toolkit !== undefined && config?.tools !== undefined) {
     throw new Error("Agent.make: supply either `toolkit` or `tools`, not both")
@@ -288,12 +364,14 @@ export const make = <
         (config?.tools === undefined
           ? (Toolkit.empty as unknown as ToolkitInput<Tools>)
           : boundToolkit(config.tools)),
-    loop:
+    loop: withOutputStop(
       config?.loop === undefined
         ? AgentLoop.untilIdle()
         : typeof config.loop === "function"
           ? AgentLoop.make(config.loop)
           : config.loop,
+      config?.output
+    ),
     contextTransform:
       config?.contextTransform === undefined
         ? ContextTransform.identity
@@ -304,6 +382,7 @@ export const make = <
     toolFailurePolicy: config?.toolFailurePolicy ?? ToolExecution.ReturnToModel,
     permission: config?.permission ?? Permission.allowAll,
     toolDenialPolicy: config?.toolDenialPolicy ?? ToolExecution.FailRun,
+    output: Option.fromUndefinedOr(config?.output),
     // Not in `Config`, deliberately. A plan is a combinator
     // (`withExecutionPlan`) because it changes the *signature* -- it
     // discharges `LanguageModel` -- and `Config` cannot express that.
@@ -388,41 +467,6 @@ const boundToolkit = <const Bound extends ReadonlyArray<BoundTool<Tool.Any>>>(
   >
 }
 
-/**
- * Combine two handled toolkits into one, by delegation.
- *
- * Effect AI composes toolkits before their handlers are bound; once bound, a
- * `WithHandler` is a closed value. Adding a tool to an agent that already has
- * some therefore merges at the `handle` level: the name decides which
- * toolkit answers. Solved once here, so every authoring path shares it.
- */
-const mergeHandled = <
-  A extends Record<string, Tool.Any>,
-  B extends Record<string, Tool.Any>
->(
-  left: Toolkit.WithHandler<A>,
-  right: Toolkit.WithHandler<B>
-): Toolkit.WithHandler<A & B> => {
-  for (const name of Object.keys(right.tools)) {
-    if (Object.hasOwn(left.tools, name)) {
-      throw new Error(`Agent: duplicate tool name "${name}"`)
-    }
-  }
-  const tools = { ...left.tools, ...right.tools } as A & B
-  // Dispatch by own name only (`Object.hasOwn`): `"toString" in right.tools`
-  // would be true of any object and route a tool of that name wrongly. The
-  // `any` on the two `handle` calls is this module's documented structural
-  // cast: each side's `handle` is typed for its own record, and the merged
-  // signature is exactly their union by name.
-  const handle = ((name: string, params: unknown, toolCallId?: string) =>
-    Object.hasOwn(right.tools, name)
-      ? (right.handle as any)(name, params, toolCallId)
-      : (left.handle as any)(name, params, toolCallId)) as Toolkit.WithHandler<
-    A & B
-  >["handle"]
-  return { tools, handle }
-}
-
 const resolveToolkit = <Tools extends Record<string, Tool.Any>, E, R>(
   input: ToolkitInput<Tools, E, R>
 ): Effect.Effect<Toolkit.WithHandler<Tools>, E, R> =>
@@ -438,9 +482,9 @@ const resolveToolkit = <Tools extends Record<string, Tool.Any>, E, R>(
 /** Replace the instructions. */
 export const withInstructions =
   (instructions: string) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<Tools, E, R, Model> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E, R, Model, Value> =>
     definition({ ...agent, instructions: Option.some(instructions) })
 
 /**
@@ -453,10 +497,10 @@ export const withToolkit =
   <Tools extends Record<string, Tool.Any>, KE = never, KR = never>(
     toolkit: ToolkitInput<Tools, KE, KR>
   ) =>
-  <_Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<_Tools, E, R>
-  ): AgentDefinition<Tools, E | KE, R | KR> =>
-    definition<Tools, E | KE, R | KR>({ ...agent, toolkit })
+  <_Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<_Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E | KE, R | KR, Model, Value> =>
+    definition<Tools, E | KE, R | KR, Model, Value>({ ...agent, toolkit })
 
 /**
  * Add bound tools to an agent, accumulating the tool record precisely.
@@ -468,18 +512,18 @@ export const withToolkit =
  */
 export const withTools =
   <const Bound extends ReadonlyArray<BoundTool<Tool.Any>>>(...bound: Bound) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>, Model> => {
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>, Model, Value> => {
     const added = boundToolkit(bound)
     const merged: Effect.Effect<
       Toolkit.WithHandler<Tools & ToolsOf<Bound>>,
       E,
       R | ServicesOf<Bound>
     > = Effect.flatMap(resolveToolkit(agent.toolkit), (existing) =>
-      Effect.map(added, (extra) => mergeHandled(existing, extra))
+      Effect.map(added, (extra) => InternalToolkit.mergeHandled(existing, extra))
     )
-    return definition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>>({
+    return definition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>, Model, Value>({
       ...agent,
       toolkit: merged
     })
@@ -493,15 +537,15 @@ export const withTools =
 export const withTool: {
   <T extends Tool.Any>(
     bound: BoundTool<T>
-  ): <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>, Model>
+  ): <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>, Model, Value>
   <T extends Tool.Any>(
     tool: T,
     handler: Handler<T>
-  ): <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>, Model>
+  ): <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ) => AgentDefinition<Tools & ToolsOf<[BoundTool<T>]>, E, R | Tool.HandlerServices<T>, Model, Value>
 } = <T extends Tool.Any>(first: BoundTool<T> | T, handler?: Handler<T>) => {
   if (isBound(first)) return withTools(first)
   if (handler === undefined) {
@@ -525,10 +569,10 @@ export const withContextTransform =
           context: ContextTransform.Context
         ) => Effect.Effect<Prompt.Prompt, TE, TR>)
   ) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<Tools, E | TE, R | TR, Model> =>
-    definition<Tools, E | TE, R | TR, Model>({
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E | TE, R | TR, Model, Value> =>
+    definition<Tools, E | TE, R | TR, Model, Value>({
       ...agent,
       contextTransform:
         typeof transform === "function"
@@ -542,13 +586,15 @@ export const withContextTransform =
  * `withContextTransform` replaces; this composes, and says so.
  */
 export const updateContextTransform =
-  <Tools extends Record<string, Tool.Any>, E, R, Model, TE = never, TR = never>(
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value, TE = never, TR = never>(
     update: (
       current: ContextTransform.ContextTransform<E, R>
     ) => ContextTransform.ContextTransform<TE, TR>
   ) =>
-  (agent: AgentDefinition<Tools, E, R, Model>): AgentDefinition<Tools, E | TE, R | TR, Model> =>
-    definition<Tools, E | TE, R | TR, Model>({
+  (
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E | TE, R | TR, Model, Value> =>
+    definition<Tools, E | TE, R | TR, Model, Value>({
       ...agent,
       contextTransform: update(agent.contextTransform)
     })
@@ -567,12 +613,20 @@ export const withLoop =
       | AgentLoop.AgentLoop<LE, LR, LTools>
       | ((state: AgentLoop.State<LTools>) => Effect.Effect<AgentLoop.Decision, LE, LR>)
   ) =>
-  <Tools extends LTools, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E | LE, R | LR> =>
-    definition<Tools, E | LE, R | LR>({
+  <Tools extends LTools, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E | LE, R | LR, Model, Value> =>
+    definition<Tools, E | LE, R | LR, Model, Value>({
       ...agent,
-      loop: typeof loop === "function" ? AgentLoop.make(loop) : loop
+      // Re-applied, not inherited: the stop rule belongs to the agent's
+      // output contract, not to whichever loop happened to carry it. Without
+      // this, replacing the loop of an agent that declares an output would
+      // silently drop the rule and leave the run spending a turn after the
+      // answer had already been given.
+      loop: withOutputStop(
+        typeof loop === "function" ? AgentLoop.make(loop) : loop,
+        Option.getOrUndefined(agent.output)
+      )
     })
 
 /**
@@ -581,28 +635,36 @@ export const withLoop =
  * `withLoop` replaces; this combines, and says so.
  */
 export const updateLoop =
-  <Tools extends Record<string, Tool.Any>, E, R, Model, LE = never, LR = never>(
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value, LE = never, LR = never>(
     update: (
       current: AgentLoop.AgentLoop<E, R, Tools>
     ) => AgentLoop.AgentLoop<LE, LR, Tools>
   ) =>
-  (agent: AgentDefinition<Tools, E, R, Model>): AgentDefinition<Tools, E | LE, R | LR, Model> =>
-    definition<Tools, E | LE, R | LR, Model>({ ...agent, loop: update(agent.loop) })
+  (
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E | LE, R | LR, Model, Value> =>
+    definition<Tools, E | LE, R | LR, Model, Value>({
+      ...agent,
+      // As `withLoop`: the update receives the loop the agent is running --
+      // stop rule included -- and its result is re-wrapped, so a policy that
+      // composes with `AgentLoop.and` cannot lose the contract.
+      loop: withOutputStop(update(agent.loop), Option.getOrUndefined(agent.output))
+    })
 
 /** Replace the tool execution strategy. */
 export const withToolExecution =
   (strategy: ToolExecution.Strategy) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<Tools, E, R, Model> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E, R, Model, Value> =>
     definition({ ...agent, toolExecution: strategy })
 
 /** Replace the tool failure policy. */
 export const withToolFailurePolicy =
   (policy: ToolExecution.FailurePolicy) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<Tools, E, R, Model> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E, R, Model, Value> =>
     definition({ ...agent, toolFailurePolicy: policy })
 
 /**
@@ -614,9 +676,9 @@ export const withToolFailurePolicy =
  */
 export const withPermission =
   <PR>(policy: Permission.Policy<PR>) =>
-  <Tools extends Record<string, Tool.Any>, E, R>(
-    agent: AgentDefinition<Tools, E, R>
-  ): AgentDefinition<Tools, E, R | PR> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E, R | PR, Model, Value> =>
     definition({ ...agent, permission: policy })
 
 /**
@@ -664,8 +726,8 @@ export const withExecutionPlan =
     // combinator would compile while being impossible to call.
     plan: ExecutionPlan.ExecutionPlan<Types>
   ) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
   ): AiError.AiError extends Types["input"] ? AgentDefinition<
     Tools,
     /**
@@ -704,7 +766,8 @@ export const withExecutionPlan =
      * before any plan is always the same thing -- an ambient `LanguageModel` --
      * so the answer can be recomputed from that constant every time.
      */
-    Exclude<LanguageModel.LanguageModel, Types["provides"]>
+    Exclude<LanguageModel.LanguageModel, Types["provides"]>,
+    Value
   >
     /**
      * R28 -- the plan's predicates are handed the *model call's* failures.
@@ -742,9 +805,9 @@ export const withExecutionPlan =
 /** Replace what a denied or refused call does to the run. */
 export const withToolDenialPolicy =
   (policy: ToolExecution.FailurePolicy) =>
-  <Tools extends Record<string, Tool.Any>, E, R, Model>(
-    agent: AgentDefinition<Tools, E, R, Model>
-  ): AgentDefinition<Tools, E, R, Model> =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value>(
+    agent: AgentDefinition<Tools, E, R, Model, Value>
+  ): AgentDefinition<Tools, E, R, Model, Value> =>
     definition({ ...agent, toolDenialPolicy: policy })
 
 // ---------------------------------------------------------------------------
@@ -759,12 +822,12 @@ export const withToolDenialPolicy =
  * quiescence. Reach for `AgentSession` when the conversation continues:
  * steering, follow-ups, interruption, answers, observation, identity.
  */
-export const run = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>,
+export const run = <Tools extends Record<string, Tool.Any>, E, R, Value = never>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value>,
   input: Prompt.RawInput,
   options?: AgentSession.PromptOptions
 ): Effect.Effect<
-  AgentSession.Result<Tools>,
+  AgentSession.Result<Tools, Value>,
   AgentSession.PromptError<Tools, E>,
   LanguageModel.LanguageModel | R
 > =>
