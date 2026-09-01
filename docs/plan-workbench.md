@@ -47,26 +47,44 @@ What is missing is mostly the **product shell**:
 - connection/tool configuration;
 - settings, usage and administration.
 
-The recommended vertical slice is deliberately small:
+The recommended vertical slice is deliberately **Effect-native and UI-framework
+agnostic**:
 
 ```text
-React
-  |
-assistant-ui
-  |
-AG-UI
-  |
-@doeixd/effect-agent/ag-ui
-  |
-AgentSessionHost
-  |
-@doeixd/effect-agent
-  |
-Effect / Effect AI
+React / Solid / TUI / assistant-ui / anything
+                    |
+          thin UI-framework adapter
+                    |
+          ConversationPresenter
+      (typed Effect state projection)
+                    |
+       +------------+-------------+
+       |                          |
+Workbench product services     AgentClient
+(conversations, agents,        RemoteSession
+ workspaces, artifacts)           |
+       |                          |
+       +------------+-------------+
+                    |
+        typed Effect transports
+          HTTP / RPC / in-proc
+                    |
+        AgentSessionHost / kernel
+                    |
+        @doeixd/effect-agent
+                    |
+            Effect / Effect AI
 ```
 
-AG-UI is a projection of the kernel's event model, not the canonical internal
-protocol.
+**assistant-ui and AG-UI are optional adapters at the edge.** They are useful
+for shipping a polished React client quickly and for interoperability, but no
+workbench domain type, store, controller, or persistence record should mention
+either one.
+
+The stable execution seam is `AgentClient` / `RemoteSession`; the stable
+observation seam is `AgentEvent`; product data is exposed through separate
+Effect services. AG-UI remains a projection of the kernel's event model, not the
+canonical internal protocol.
 
 ---
 
@@ -132,10 +150,11 @@ branding or redistribution terms would constrain downstream forks.
 |  settings            approvals                     state           |
 |                      composer                                      |
 |                           |                                       |
-|                     assistant-ui                                  |
+|              React adapter / ui-core                              |
 +---------------------------|---------------------------------------+
                             |
-                          AG-UI
+                 typed Effect client seams
+             (AG-UI adapter optional at edge)
                             |
 +---------------------------v---------------------------------------+
 |                      Product server                               |
@@ -161,6 +180,661 @@ Those boundaries should stay visible in the types.
 
 ---
 
+## Exact Effect module seams
+
+This section is the architectural contract for the workbench. The names below
+are intentionally more precise than "chat backend" or "frontend state". Each
+module owns one authority and composes through `Effect`, `Layer`, `Schema`,
+`Stream`, `Scope`, and ordinary service requirements.
+
+There are three classes of seams:
+
+1. **existing `effect-agent` seams** — consume them unchanged;
+2. **workbench domain services** — new application-level Effect services;
+3. **UI projections/adapters** — pure or scoped modules that may be replaced
+   without changing either execution or persistence.
+
+### Existing seams to use directly
+
+| need | exact module | role in the workbench |
+| --- | --- | --- |
+| Execute / reconnect to an agent session | `@doeixd/effect-agent/client` → `AgentClient`, `RemoteSession` | **Primary execution seam.** UI-independent prompt, submit/await, steer, follow-up, interrupt, respond, pending, history, status and event stream. Do not wrap these into a second agent API. |
+| Wire-safe session vocabulary | `@doeixd/effect-agent/client` → `AgentProtocol` | `Schema`-owned session ids, request ids, requests, responses and remote errors. Product transports reuse these types rather than defining "WorkbenchPromptRequest". |
+| Server-side session registry / auth | `@doeixd/effect-agent/client` → `AgentSessionHost` | Shared registry, capacity, principal resolution, authorization and idempotent request authority. |
+| Canonical observation | root → `AgentEvent` | The source event vocabulary. UI timelines, telemetry and protocol projections derive from this stream. |
+| Wire-safe prompt/history | root → `PromptWire` | Stable prompt/message encoding including files. Product persistence and custom transports use this, never UI-library message JSON. |
+| Human input / approvals | root → `Elicitation` | The typed request/response contract for paused execution. |
+| Agent tree / branches | `/tree` → `SessionTree` | Branch/rewind semantics. The UI never implements branches by cloning message arrays. |
+| Workspace execution | `/sandbox` → `SandboxProvider`, `Sandbox.Current`, `Sandbox.acquire` | Portable filesystem/process authority. Workbench workspace ids resolve *to* this seam; they do not replace it. |
+| Binary content | `/blob` → `BlobStore`, `BlobWire` | Bytes and stable content-addressed references for uploads/artifacts. |
+| Structured UI data | `/data` → `AgentData` | Schema-first data channels from tools to clients. This is the preferred route for typed agent-native panels. |
+| Typed session state | `/state` → `AgentState` | Agent/application state used by tools and context transforms. UI reads projections; it does not become the state authority. |
+| Model metadata | `/model` → `ModelCapabilities` | Capability checks for image input, windows, limits and UI affordances when known. |
+| Tool credentials | `/tool-source` → `Credentials.Provider`, `Credentials.Bindings` | Secret resolution and per-principal binding. Workbench connection records hold handles/bindings, never plaintext secrets. |
+| Durable event resumption | `/durable-streams` / durable `AgentClient` | Reconnect from an event sequence without silent gaps. |
+| Export/import | `/export` | Versioned execution/session export. Product metadata can wrap it but must not invent another transcript format. |
+
+The workbench should depend on these public subpaths as a third-party consumer
+would. If a required capability is only reachable through `src/internal`, fix
+the framework seam first.
+
+### Proposed workbench package boundaries
+
+Use a small package graph rather than one `web/` package that knows everything:
+
+```text
+packages/
+  domain/       # Schemas and pure values only
+  store/        # server-side persistence services
+  runtime/      # composition: product record <-> AgentClient/Sandbox
+  protocol/     # Schema-owned product wire API
+  client/       # transport-neutral Effect client services
+  ui-core/      # pure/scoped projections; no React
+  react/        # optional React bindings
+  assistant-ui/ # optional adapter
+  server/       # HTTP/RPC composition and auth wiring
+```
+
+The first six packages should compile without React. `domain`, `protocol`
+and ideally `client` should be browser-safe and contain no Node imports.
+
+### 1. `WorkbenchIds` — pure branded identity schemas
+
+**Package:** `domain`
+
+Define every product identity once with `Schema.brand`:
+
+```ts
+export const UserId = Schema.String.pipe(Schema.brand("workbench/UserId"))
+export const ConversationId =
+  Schema.String.pipe(Schema.brand("workbench/ConversationId"))
+export const AgentProfileId =
+  Schema.String.pipe(Schema.brand("workbench/AgentProfileId"))
+export const WorkspaceId =
+  Schema.String.pipe(Schema.brand("workbench/WorkspaceId"))
+export const AttachmentId =
+  Schema.String.pipe(Schema.brand("workbench/AttachmentId"))
+export const ArtifactId =
+  Schema.String.pipe(Schema.brand("workbench/ArtifactId"))
+export const ConnectionId =
+  Schema.String.pipe(Schema.brand("workbench/ConnectionId"))
+export const ModelProfileId =
+  Schema.String.pipe(Schema.brand("workbench/ModelProfileId"))
+```
+
+Do not use interchangeable naked strings in persistence or protocol schemas.
+Kernel ids stay kernel ids: `AgentProtocol.SessionId`,
+`AgentProtocol.SubmissionId`, `BlobStore.BlobId`,
+`Sandbox.Workspace`, etc.
+
+### 2. `ConversationStore` — product metadata persistence only
+
+**Package:** `store`  
+**Kind:** `Context.Service`
+
+```ts
+export interface ConversationStoreService {
+  readonly create: (
+    record: Conversation.New
+  ) => Effect.Effect<Conversation.Record, ConversationStoreError>
+
+  readonly get: (
+    id: ConversationId
+  ) => Effect.Effect<Option.Option<Conversation.Record>, ConversationStoreError>
+
+  readonly list: (
+    query: Conversation.Query
+  ) => Effect.Effect<ReadonlyArray<Conversation.Summary>, ConversationStoreError>
+
+  readonly update: (
+    id: ConversationId,
+    patch: Conversation.Patch
+  ) => Effect.Effect<Conversation.Record, ConversationStoreError>
+
+  readonly remove: (
+    id: ConversationId
+  ) => Effect.Effect<void, ConversationStoreError>
+}
+
+export class ConversationStore
+  extends Context.Service<ConversationStore, ConversationStoreService>()(
+    "workbench/ConversationStore"
+  ) {}
+```
+
+Authority: title, owner, archive state, `agentProfileId`, stable
+`AgentProtocol.SessionId`, optional `WorkspaceId`, timestamps.
+
+It **does not** store canonical message history and it **does not** execute
+session operations.
+
+Provide layers such as:
+
+- `ConversationStore.memory`;
+- `ConversationStore.sqlite`;
+- `ConversationStore.postgres`.
+
+The rest of the application sees the service, not the database.
+
+### 3. `AgentCatalog` — stored agent configuration
+
+**Package:** `store`  
+**Kind:** `Context.Service`
+
+```ts
+export interface AgentCatalogService {
+  readonly get: (
+    id: AgentProfileId
+  ) => Effect.Effect<Option.Option<AgentProfile>, AgentCatalogError>
+
+  readonly list: (
+    owner: UserId
+  ) => Effect.Effect<ReadonlyArray<AgentProfile.Summary>, AgentCatalogError>
+
+  readonly put: (
+    profile: AgentProfile
+  ) => Effect.Effect<void, AgentCatalogError>
+
+  readonly remove: (
+    id: AgentProfileId
+  ) => Effect.Effect<void, AgentCatalogError>
+}
+
+export class AgentCatalog
+  extends Context.Service<AgentCatalog, AgentCatalogService>()(
+    "workbench/AgentCatalog"
+  ) {}
+```
+
+`AgentProfile` is declarative data: instructions, model profile, selected tool
+sources, skill ids, memory policy, permission policy, budget preset and
+workspace policy. It is **not** an `AgentDefinition<any,...>` serialized into
+JSON.
+
+### 4. `AgentDirectory` — dynamic agent id → existing `AgentClient`
+
+**Package:** `runtime`  
+**Kind:** `Context.Service`
+
+This is the critical dynamic composition seam for an Open-WebUI-style product.
+A user can create agent profiles at runtime, while every consumer still talks
+to the existing `AgentClient` contract.
+
+```ts
+export interface AgentDirectoryService {
+  readonly client: (
+    id: AgentProfileId
+  ) => Effect.Effect<
+    AgentClient.Service,
+    AgentResolutionError,
+    Scope.Scope
+  >
+}
+
+export class AgentDirectory
+  extends Context.Service<AgentDirectory, AgentDirectoryService>()(
+    "workbench/AgentDirectory"
+  ) {}
+```
+
+Server implementation:
+
+1. load `AgentProfile` from `AgentCatalog`;
+2. resolve model/tool/skill/memory/permission layers;
+3. construct the typed `AgentDefinition`;
+4. erase only at the already-defined remote boundary by exposing an
+   `AgentClient.Service`;
+5. cache scoped per-agent wiring with Effect resource combinators
+   (`LayerMap` is the first candidate) rather than a process-global
+   `Map<id, any>`.
+
+Browser implementation:
+
+- resolve the profile id to a server endpoint;
+- construct/cache an HTTP or RPC implementation of **the same**
+  `AgentClient.Service`.
+
+This is what lets React, a TUI, a remote desktop client and an automated test
+share exactly one execution API.
+
+### 5. `ConversationSessions` — join product identity to execution identity
+
+**Package:** `runtime`  
+**Kind:** `Context.Service`
+
+This service coordinates creation/opening but deliberately returns the existing
+`RemoteSession` instead of wrapping all its methods.
+
+```ts
+export interface OpenConversation {
+  readonly conversation: Conversation.Record
+  readonly session: AgentClient.RemoteSession
+}
+
+export interface ConversationSessionsService {
+  readonly create: (input: {
+    readonly ownerId: UserId
+    readonly agentProfileId: AgentProfileId
+    readonly workspaceId?: WorkspaceId
+  }) => Effect.Effect<
+    OpenConversation,
+    ConversationSessionError,
+    Scope.Scope
+  >
+
+  readonly open: (
+    id: ConversationId
+  ) => Effect.Effect<
+    OpenConversation,
+    ConversationSessionError,
+    Scope.Scope
+  >
+}
+
+export class ConversationSessions
+  extends Context.Service<ConversationSessions, ConversationSessionsService>()(
+    "workbench/ConversationSessions"
+  ) {}
+```
+
+`create` is the one place allowed to coordinate:
+
+```text
+AgentDirectory.client(agentProfileId)
+        |
+AgentClient.createSession({ sessionId })
+        |
+ConversationStore.create({ same sessionId, ... })
+```
+
+`open` performs:
+
+```text
+ConversationStore.get(id)
+        |
+AgentDirectory.client(record.agentProfileId)
+        |
+AgentClient.session(record.sessionId)
+```
+
+After that, callers receive `RemoteSession` and use its typed methods
+directly. This prevents a parallel "workbench run API" from appearing.
+
+The implementation must define compensation if session creation succeeds and
+metadata persistence fails. For durable backends, stable ids make the operation
+retryable; do not solve it with an untyped distributed transaction abstraction.
+
+### 6. `WorkspaceStore` — workspace metadata
+
+**Package:** `store`  
+**Kind:** `Context.Service`
+
+A workbench workspace record maps product ownership/lifecycle to the existing
+sandbox identity:
+
+```ts
+export const WorkspaceRecord = Schema.Struct({
+  id: WorkspaceId,
+  ownerId: UserId,
+  sandboxWorkspace: Sandbox.Workspace,
+  label: Schema.String,
+  createdAt: Schema.DateTimeUtc
+})
+```
+
+CRUD lives in `WorkspaceStore`. It does not expose read/write/exec.
+
+### 7. `WorkspaceRuntime` — product workspace id → `Sandbox`
+
+**Package:** `runtime`  
+**Kind:** `Context.Service`
+
+```ts
+export interface WorkspaceRuntimeService {
+  readonly acquire: (
+    id: WorkspaceId
+  ) => Effect.Effect<
+    Sandbox.Sandbox,
+    WorkspaceRuntimeError,
+    Scope.Scope
+  >
+}
+
+export class WorkspaceRuntime
+  extends Context.Service<WorkspaceRuntime, WorkspaceRuntimeService>()(
+    "workbench/WorkspaceRuntime"
+  ) {}
+```
+
+Implementation loads `WorkspaceRecord.sandboxWorkspace` and delegates to
+`Sandbox.acquire`. It adds product lookup/authorization and **no filesystem
+semantics**.
+
+The actual agent wiring still uses `Sandbox.currentLayer(workspace)` /
+`Sandbox.Current` so tool code is identical whether invoked from the
+workbench, CLI or TUI.
+
+### 8. `AttachmentCatalog` + existing `BlobStore`
+
+**Package:** `store` / `runtime`
+
+Do not create another byte store. Use:
+
+```text
+AttachmentCatalog
+  AttachmentId -> ConversationId + BlobStore.BlobRef + display metadata
+
+BlobStore
+  BlobRef -> bytes
+```
+
+Suggested service:
+
+```ts
+export interface AttachmentCatalogService {
+  readonly add: (
+    attachment: Attachment.Record
+  ) => Effect.Effect<void, AttachmentStoreError>
+
+  readonly list: (
+    conversationId: ConversationId
+  ) => Effect.Effect<ReadonlyArray<Attachment.Record>, AttachmentStoreError>
+
+  readonly remove: (
+    id: AttachmentId
+  ) => Effect.Effect<Option.Option<Attachment.Record>, AttachmentStoreError>
+}
+```
+
+A higher-level `Attachments` module may compose `AttachmentCatalog |
+BlobStore.BlobStore` for upload/delete/GC, but `BlobStore` remains byte
+authority and `BlobWire` remains the wire reference format.
+
+### 9. `ArtifactCatalog` — references, not renderer components
+
+**Package:** `domain` + `store`
+
+Define a UI-neutral source union:
+
+```ts
+export const ArtifactSource = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("Blob"),
+    ref: BlobStore.BlobRef
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("WorkspaceFile"),
+    workspaceId: WorkspaceId,
+    path: Sandbox.SandboxPath
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("Inline"),
+    mediaType: Schema.String,
+    value: Schema.Unknown
+  })
+])
+```
+
+`Artifact.Record` adds id, conversation id, title, media type and source.
+`ArtifactCatalog` stores/query these descriptors.
+
+React renderers are a separate registry:
+
+```ts
+type ArtifactRenderer<A> = (artifact: A) => ReactNode
+```
+
+and therefore do not leak into `domain` or `store`.
+
+Where the artifact is genuinely typed application output, prefer
+`AgentData`; the catalog can retain a stable descriptor/reference to it.
+
+### 10. `ConnectionStore` over existing credential seams
+
+**Package:** `store`
+
+Store:
+
+- integration/provider name;
+- owner/user association;
+- non-secret configuration;
+- `Credentials.Binding`;
+- provider key / credential handles;
+- connection health metadata.
+
+Never store the resolved value. Runtime resolution is exactly:
+
+```text
+ConnectionStore
+   -> Credentials.Binding / handle
+   -> Credentials.Bindings
+   -> Credentials.Provider
+   -> Redacted value at invocation
+```
+
+If the web UI lets a user paste a secret, the write endpoint calls the selected
+`Credentials.Provider.set` when it is writable and stores only the resulting
+handle/binding.
+
+### 11. `WorkbenchProtocol` — product schemas only
+
+**Package:** `protocol`  
+**Kind:** pure `Schema` module
+
+This protocol covers only concepts `AgentProtocol` does not own:
+
+- conversations;
+- agent profiles;
+- workspaces;
+- attachments;
+- artifacts;
+- connections/settings.
+
+It should **reuse kernel schemas by reference**:
+
+```ts
+export const Conversation = Schema.Struct({
+  id: WorkbenchIds.ConversationId,
+  sessionId: AgentProtocol.SessionId,
+  agentProfileId: WorkbenchIds.AgentProfileId,
+  workspaceId: Schema.optional(WorkbenchIds.WorkspaceId),
+  ...
+})
+```
+
+It must not define alternate schemas for prompt, steer, follow-up, interrupt,
+pending, history, status or agent events. Those remain `AgentProtocol`.
+
+### 12. Product client services — transport-neutral Effect APIs
+
+**Package:** `client`
+
+Prefer small services rather than one god-object. At minimum:
+
+```text
+ConversationClient
+AgentCatalogClient
+WorkspaceClient
+AttachmentClient
+ArtifactClient
+ConnectionClient
+```
+
+Each returns `Effect` / `Stream` with `Schema.TaggedError` failures and
+has in-process plus HTTP/RPC layers.
+
+An optional convenience `WorkbenchClient` may aggregate them, but individual
+Context tags remain available so a test can replace only `ArtifactClient`
+without replacing conversations and workspaces too.
+
+**Agent execution is intentionally absent from this list.** Frontends require
+`AgentDirectory` / `AgentClient` separately.
+
+### 13. `ConversationProjection` — pure `AgentEvent` → UI state
+
+**Package:** `ui-core`  
+**Kind:** pure module, not a service
+
+This is the key to avoiding an assistant-ui-shaped domain model.
+
+Define Schema-owned UI-neutral state:
+
+```ts
+export interface ConversationView {
+  readonly messages: ReadonlyArray<MessageView>
+  readonly activity: ReadonlyArray<ActivityView>
+  readonly pending: ReadonlyArray<Elicitation.Request>
+  readonly status: AgentProtocol.SessionStatus
+  readonly lastSequence: Option.Option<number>
+}
+
+export const initial = (
+  history: PromptWire.Prompt,
+  pending: ReadonlyArray<Elicitation.Request>,
+  status: AgentProtocol.SessionStatus
+): ConversationView => ...
+
+export const transition = (
+  state: ConversationView,
+  envelope: AgentEvent.AgentEventEnvelope
+): readonly [ConversationView, ReadonlyArray<ViewPatch>] => ...
+```
+
+Properties:
+
+- pure and deterministic;
+- exhaustive matching over known `AgentEvent` tags where appropriate;
+- unknown/future events can be retained as generic activity rather than
+  crashing;
+- no React nodes;
+- no assistant-ui message objects;
+- no AG-UI events;
+- no persistence authority.
+
+The same transition function can drive React, Solid, a TUI, tests, screenshots,
+or an assistant-ui adapter.
+
+### 14. `ConversationPresenter` — scoped Effect state for a frontend
+
+**Package:** `ui-core`  
+**Kind:** scoped constructor, optionally exposing a `Context.Service`
+
+```ts
+export interface ConversationPresenter {
+  readonly conversation: Conversation.Record
+  readonly session: AgentClient.RemoteSession
+  readonly state: SubscriptionRef.SubscriptionRef<ConversationView>
+}
+
+export const make = (
+  id: ConversationId
+): Effect.Effect<
+  ConversationPresenter,
+  ConversationPresenterError,
+  ConversationSessions | Scope.Scope
+>
+```
+
+Construction:
+
+1. `ConversationSessions.open(id)`;
+2. read `session.history`, `session.pending`, `session.status`;
+3. build `ConversationProjection.initial`;
+4. subscribe to `session.events({ after })` when resumption is available;
+5. reduce events into the `SubscriptionRef` in a scoped fiber.
+
+Commands are **not copied onto the presenter**. The UI calls
+`presenter.session.prompt/submit/steer/followUp/interrupt/respond` directly.
+The presenter owns presentation state, not execution semantics.
+
+A React hook is then tiny:
+
+```text
+useConversation(id)
+   -> scoped ConversationPresenter
+   -> subscribe to presenter.state
+```
+
+and a TUI can consume the same `SubscriptionRef.changes` stream.
+
+### 15. UI framework adapters
+
+**Package:** `react`, `assistant-ui`, future `solid`
+
+These adapters may depend on UI libraries. Nothing below them may.
+
+Examples:
+
+```text
+@workbench/react
+  ConversationPresenter -> hooks/context/components
+
+@workbench/assistant-ui
+  ConversationView + RemoteSession -> assistant-ui runtime/messages
+
+@workbench/ag-ui
+  optional interoperability path using existing effect-agent/ag-ui
+```
+
+Deleting `@workbench/assistant-ui` must leave the domain, server, persistence,
+transport, session lifecycle and tests intact.
+
+### 16. HTTP/RPC adapters
+
+**Package:** `server`
+
+Use Effect HTTP/RPC the same way the framework already does:
+
+- product routes are generated from `WorkbenchProtocol`;
+- agent routes reuse `AgentProtocol`;
+- `AgentDirectory` selects which `AgentClient` serves a dynamic
+  `AgentProfileId`;
+- principal/auth context is resolved once and supplied to both product policy
+  and `AgentSessionHost`.
+
+For dynamic user-created agents, do not require one statically registered
+`HttpApi` group per profile. Build an application-level routing adapter keyed
+by `AgentProfileId` that delegates to the resolved `AgentClient` while
+reusing `AgentProtocol` schemas. That is routing, not a new protocol.
+
+### Dependency rule
+
+The dependency graph should point inward:
+
+```text
+React / assistant-ui
+        |
+        v
+     ui-core
+        |
+        +-----------> client ----------> protocol ----> domain
+        |                                  |
+        +-----------> AgentClient <--------+
+                          |
+                          v
+                    effect-agent
+
+server -> runtime -> store -> domain
+   |        |          |
+   |        +------> effect-agent Sandbox / Blob / Credentials
+   +---------------> AgentSessionHost / AgentClient
+```
+
+Forbidden edges:
+
+- `domain -> React`;
+- `domain -> assistant-ui`;
+- `store -> AG-UI`;
+- `runtime -> React`;
+- `effect-agent core -> workbench`;
+- `ConversationStore -> canonical message history`;
+- `ConversationPresenter -> model/tool execution logic`.
+
+This is the composition boundary that gives the project freedom to replace the
+entire UI stack without touching its agent or product semantics.
+
+---
+
 ## Repository shape
 
 Keep the framework repository a framework repository. The preferred shape is a
@@ -168,72 +842,102 @@ separate application repository, for example `doeixd/effect-agent-workbench`.
 That forces the workbench to consume the same public package a third party
 would.
 
-If development velocity initially requires a monorepo app, keep the boundary
-identical and move it out once the first vertical slice is stable.
-
-Recommended application structure:
+If development velocity initially requires a monorepo app, keep the package
+edges below identical and move it out once the first vertical slice is stable.
 
 ```text
 effect-agent-workbench/
   apps/
     web/
-  packages/
-    ui/
     server/
-    db/
-    auth/
-    workspace/
-    config/
+  packages/
+    domain/
+    store/
+    runtime/
+    protocol/
+    client/
+    ui-core/
+    react/
+    assistant-ui/   # optional
+    server/
 ```
 
-The web package must never import `effect-agent` engine internals directly.
+Only `react/` and `assistant-ui/` may depend on those UI libraries.
+`domain/`, `protocol/`, `client/`, and `ui-core/` must remain usable by
+another frontend.
+
+The workbench must never import `effect-agent` engine internals directly.
 
 ---
 
-## Frontend choice
+## Frontend architecture
 
-### Use assistant-ui as the chat behavior layer
+### The stable frontend API is Effect, not a component library
 
-Use `assistant-ui` for thread/composer/message behavior: streaming,
-auto-scroll, message actions, retry/edit/regenerate, tool rendering,
-attachments, reasoning, approvals, and accessible interaction primitives.
+The frontend core should consume:
 
-Do not make it the source of truth for persisted execution.
+- product `*Client` services for workbench metadata;
+- `AgentDirectory` / `AgentClient` for execution;
+- `ConversationPresenter` for scoped projected state;
+- `BlobWire`, `Elicitation`, and shared `Schema` values where needed.
 
-### Use AG-UI as the web-facing projection
+A component library is downstream of that contract.
 
-The existing `@doeixd/effect-agent/ag-ui` adapter is the natural boundary.
-The browser should consume it with the standard AG-UI client and
-`assistant-ui`'s AG-UI runtime.
+### First-party React binding
 
-Conceptually:
+Build a thin `react/` package around `ConversationPresenter` and the product
+clients. It should mostly contain:
 
-```tsx
-const agent = new HttpAgent({ url: "/api/agent" })
-const runtime = useAgUiRuntime({ agent })
+- scoped runtime/provider wiring;
+- hooks over `SubscriptionRef` / streams;
+- render components for `ConversationView`;
+- browser-only input concerns such as drag/drop and clipboard.
 
-return (
-  <AssistantRuntimeProvider runtime={runtime}>
-    <App />
-  </AssistantRuntimeProvider>
-)
+It should not contain session lifecycle or persistence logic.
+
+### assistant-ui is an optional adapter
+
+Use assistant-ui if it saves meaningful work on composer behavior, accessible
+message interactions, branching controls, attachments, or polished tool views.
+
+But implement it in `packages/assistant-ui` as:
+
+```text
+ConversationPresenter
+   + ConversationView
+   + RemoteSession
+           |
+           v
+assistant-ui runtime adapter
 ```
 
-The exact integration should be pinned by a small contract test before UI work
-grows around it.
+No server module should know whether this package is installed.
 
-### AI Elements is optional source material, not another runtime
+### AG-UI is an interoperability adapter
+
+Keep `@doeixd/effect-agent/ag-ui` supported and contract-tested. It is useful
+for external AG-UI clients and may be the fastest way to bootstrap an
+assistant-ui adapter.
+
+It is **not required** for the first-party frontend if a browser-safe
+`AgentClient` HTTP/RPC implementation can be used directly. W0 must test this.
+If the existing generated HTTP client is not browser-appropriate, add a
+browser-safe `AgentClient` transport implementation against
+`AgentProtocol`; do not move AG-UI types into `ui-core`.
+
+### AI Elements is optional visual source material
 
 Vercel AI Elements may be copied selectively for visual components such as
 source cards, reasoning views, code blocks, attachments or artifact chrome.
 Do not introduce Vercel AI SDK as an execution dependency merely to use those
 components.
 
-### Do not add CopilotKit initially
+### CopilotKit is not part of the core design
 
-The application already has an AG-UI-speaking runtime. Adding CopilotKit would
-create another orchestration layer unless a concrete product feature later
-requires its specific app-state conventions.
+The workbench already has typed state, an execution seam and AG-UI
+interoperability. Add CopilotKit only if a concrete later feature justifies an
+adapter. It must sit at the same edge as assistant-ui, not between the workbench
+and `effect-agent`.
 
 ---
 
@@ -775,32 +1479,54 @@ fully supported first-class case.
 **W10 — Work works without coding lock-in.** A workspace is useful for files,
 artifacts and state even when the agent is not a coding agent.
 
+**W11 — The UI framework is disposable.** Removing assistant-ui, AG-UI, React,
+or any other presentation adapter does not change domain schemas, stores,
+runtime composition, session identity, or execution semantics.
+
+**W12 — Product protocols do not duplicate AgentProtocol.** Workbench wire
+schemas cover product concepts only; agent commands and event envelopes remain
+the framework's schemas.
+
 ---
 
 ## Milestones
 
-### W0 — Integration spike
+### W0 — Effect-native frontend seam spike
 
-Goal: prove the vertical slice before product work.
+Goal: prove the UI-independent vertical slice before choosing presentation
+libraries.
 
-Build a tiny React page using:
+Build:
 
-- `@assistant-ui/react`;
-- `@assistant-ui/react-ag-ui`;
-- `@ag-ui/client`;
-- `@doeixd/effect-agent/ag-ui`.
+- `WorkbenchIds`;
+- in-memory `ConversationStore` and `AgentCatalog`;
+- a minimal `AgentDirectory` over one existing agent;
+- `ConversationSessions`;
+- `ConversationProjection`;
+- `ConversationPresenter`;
+- the browser transport needed to obtain the same `AgentClient.Service`;
+- a deliberately plain React page over `ConversationPresenter`.
 
 Acceptance:
 
-1. send a prompt;
-2. stream assistant text;
-3. stream/render reasoning if emitted;
-4. render a tool call and progress;
-5. stop/interruption works;
-6. an elicitation can be answered;
-7. no custom execution state machine exists in the frontend.
+1. create/open a conversation through the proposed services;
+2. send a prompt through `RemoteSession`;
+3. stream assistant text into `ConversationProjection`;
+4. render reasoning, a tool call and tool progress from `AgentEvent`;
+5. stop/interruption works through `RemoteSession.interrupt`;
+6. an elicitation can be answered through `RemoteSession.respond`;
+7. refresh/reconnect reconstructs from history plus resumable events where the
+   backend supports them;
+8. no React or assistant-ui type appears in `domain/store/runtime/protocol/client/ui-core`;
+9. no custom execution state machine exists in the frontend.
 
-If this exposes an AG-UI conformance gap, fix the adapter first.
+Then, as a **separate adapter proof**, wire the same presenter/session into
+assistant-ui. The assistant-ui demo passes if deleting that package leaves the
+plain React client and all core tests green.
+
+If W0 exposes a transport or event-projection gap, fix the corresponding
+`AgentClient`, `AgentProtocol`, or adapter seam rather than coding around it
+inside React.
 
 ### W1 — Conversation product shell
 
@@ -931,8 +1657,10 @@ W0 integration
 Do not start with an admin panel, marketplace, elaborate RAG interface or a
 full Open WebUI settings clone.
 
-The first serious architectural test is whether the existing AG-UI/host/client
-seams can support a polished persistent chat without private imports.
+The first serious architectural test is whether `AgentClient`,
+`AgentProtocol`, `AgentEvent` and the proposed product services can support
+a polished persistent chat without private imports or UI-library types. AG-UI
+and assistant-ui are then adapter conformance tests over that foundation.
 
 ---
 
@@ -940,16 +1668,19 @@ seams can support a polished persistent chat without private imports.
 
 ### assistant-ui
 
-Borrow/use directly:
+Borrow/use at the adapter edge:
 
 - thread and composer behavior;
-- streaming UI;
+- streaming presentation;
 - message actions;
 - tool/reasoning rendering primitives;
-- AG-UI runtime;
-- accessibility behavior.
+- accessibility behavior;
+- its AG-UI runtime when that adapter path is useful.
 
-Do not adopt it as the canonical backend state model.
+Do not let assistant-ui own conversation identity, canonical messages,
+execution commands, persistence, or the workbench's projected state model.
+There must also be a non-assistant-ui frontend test over the same
+`ConversationPresenter`.
 
 ### bb
 
@@ -1013,20 +1744,32 @@ This prevents the reference app from turning the kernel into a web framework.
 
 ## First concrete task list
 
-1. Create a separate workbench repository or a temporary isolated app package.
-2. Pin assistant-ui, AG-UI client and `effect-agent` versions.
-3. Implement the W0 page against the existing AG-UI adapter.
-4. Add an integration test covering text, tool progress, interrupt and
-   elicitation.
-5. Record every adapter mismatch; fix those in `/ag-ui` with conformance tests.
-6. Add the product database with `Conversation`, `AgentDefinition` and
-   `ModelConfiguration` only.
-7. Make browser reload/reconnect work before adding more UI.
-8. Add attachments through `/blob` + `PromptWire`.
-9. Add the workspace record and bind it to `Sandbox`.
-10. Only after W1/W2 are solid, add file/artifact panes.
-
----
+1. Create a separate workbench repository or temporary isolated workspace with
+   the package boundaries in this plan.
+2. Implement `domain/WorkbenchIds` and Schema-owned product records.
+3. Implement in-memory `ConversationStore`, `AgentCatalog` and
+   `WorkspaceStore` layers.
+4. Implement `AgentDirectory` for one statically configured agent, returning
+   the existing `AgentClient.Service`.
+5. Implement `ConversationSessions.create/open` and pin stable
+   conversation↔session identity with tests.
+6. Implement pure `ConversationProjection.initial/transition` with exhaustive
+   event fixtures.
+7. Implement scoped `ConversationPresenter` using `SubscriptionRef` and a
+   scoped event-consumer fiber.
+8. Prove a browser-safe `AgentClient` transport. Prefer the existing HTTP/RPC
+   client; add a browser adapter only if the existing one genuinely cannot run
+   there.
+9. Build a minimal plain React client over `ConversationPresenter` and
+   `RemoteSession`.
+10. Add integration coverage for text, reasoning, tool progress, interrupt,
+    elicitation and reconnect.
+11. Build assistant-ui as a **separate optional adapter** and verify the same
+    tests/fixtures map cleanly.
+12. Add attachments through `BlobStore` / `BlobWire` plus
+    `AttachmentCatalog`.
+13. Add `WorkspaceRuntime` as the product-id lookup over `Sandbox.acquire`.
+14. Only after W1/W2 are solid, add artifact/file panes and richer settings.
 
 ## Success conditions
 
@@ -1040,7 +1783,11 @@ The plan is successful when:
 - an optional workspace survives across turns and can be inspected from the UI;
 - the same frontend works against local and remote/durable agent backends;
 - the application itself becomes the strongest public example of how to build
-  on `@doeixd/effect-agent`.
+  on `@doeixd/effect-agent`;
+- replacing assistant-ui with plain React, Solid, or another presentation
+  adapter requires changes only at the UI edge;
+- workbench product protocols never redefine `AgentProtocol` operations or
+  `AgentEvent` envelopes.
 
 The intended result is not merely "chat for effect-agent." It is a permissively
 licensed, general-purpose **agent workbench** whose architecture demonstrates
