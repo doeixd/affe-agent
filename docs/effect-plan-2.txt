@@ -1971,7 +1971,13 @@ Three things this section left open, decided in the implementation:
   bound and buy nothing.
 * **`empty` vs `since`.** Attaching to a live tail mid-conversation is not a
   gap; continuing from a known cursor makes the same envelope a gap. `since`
-  is the repair constructor this section's `DeliveryLog.read({ after })` needs.
+  is for attaching where the cursor is already trusted.
+* **Repair is a re-fold of the whole log, not a resume at `gap.after`.** This
+  follows from applying gapped events: the polluted state cannot be corrected
+  in place, and a fresh state begun at the cursor has never seen what preceded
+  it. `gap.after` is therefore diagnostic -- where loss began -- and a
+  `DeliveryLog` read is bounded per session, so re-folding it is cheap enough
+  that the sharper-looking incremental repair is not worth being wrong about.
 
 An `UnknownEvent` **advances the cursor**. It occupies a sequence number, so
 skipping it without advancing reports a discontinuity every time a newer peer

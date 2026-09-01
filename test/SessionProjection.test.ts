@@ -34,11 +34,21 @@ const envelope = (
   event
 })
 
-const usage = (inputTokens: number, outputTokens: number) => ({
-  inputTokens,
-  outputTokens,
-  totalTokens: inputTokens + outputTokens
-})
+/**
+ * `totalTokens` is passed, not derived.
+ *
+ * Deriving it as `inputTokens + outputTokens` made the fixture satisfy an
+ * invariant the real thing does not have -- providers report cached and
+ * reasoning tokens that put `total` above the two -- so an accumulator that
+ * recomputed the total from the other two fields agreed with every assertion.
+ * The whole reason this field is carried separately is that it is not a sum of
+ * the other two, and a fixture that makes it one cannot pin that.
+ */
+const usage = (
+  inputTokens: number,
+  outputTokens: number,
+  totalTokens: number
+) => ({ inputTokens, outputTokens, totalTokens })
 
 const failure = (message: string): AgentEvent.Failure => ({
   tag: "X",
@@ -53,7 +63,7 @@ const conversation: ReadonlyArray<AgentEvent.AgentEvent> = [
   { _tag: "SessionStarted" },
   { _tag: "SubmissionStarted" },
   { _tag: "RunStarted" },
-  { _tag: "ModelCallCompleted", usage: usage(10, 5), finishReason: "tool-calls" },
+  { _tag: "ModelCallCompleted", usage: usage(10, 5, 18), finishReason: "tool-calls" },
   { _tag: "ToolCallStarted", id: "c1", name: "read", params: {} },
   {
     _tag: "ToolCallSucceeded",
@@ -63,7 +73,7 @@ const conversation: ReadonlyArray<AgentEvent.AgentEvent> = [
     encodedResult: "ok"
   },
   turnCompleted,
-  { _tag: "ModelCallCompleted", usage: usage(20, 7), finishReason: "stop" },
+  { _tag: "ModelCallCompleted", usage: usage(20, 7, 30), finishReason: "stop" },
   { _tag: "MessageCompleted", text: "done" },
   turnCompleted,
   { _tag: "RunCompleted", turns: 2 },
@@ -105,7 +115,7 @@ describe("SessionProjection", () => {
       assert.strictEqual(state.modelCalls, 2)
       // The reason usage is worth folding at all: it is additive across calls,
       // so a per-event consumer cannot answer "what did this session cost".
-      assert.deepStrictEqual(state.usage, usage(30, 12))
+      assert.deepStrictEqual(state.usage, usage(30, 12, 48))
       assert.strictEqual(state.messages, 1)
 
       assert.strictEqual(state.tools.started, 1)
@@ -133,15 +143,72 @@ describe("SessionProjection", () => {
       assert.deepStrictEqual(settled.activeSubmission, Option.none())
     })
 
-    it("a closed session is never active", () => {
-      // The abrupt-drop shape: a submission opened and the stream ended with a
-      // close rather than a terminal submission event.
+    it("a closed session is never active, and holds nothing open", () => {
+      // The abrupt-drop shape: work in flight and the stream ends with a close
+      // rather than terminal events for any of it.
+      //
+      // Both halves are asserted because each alone is passed by breaking the
+      // other: drop `settle` from the close and `isActive` is still false via
+      // its `closed` guard; drop the `closed` guard and `activeSubmission` is
+      // already `None` because `settle` ran. The open lists are what
+      // discriminate.
       const state = SessionProjection.reduceAll(
         SessionProjection.empty(sessionId),
-        numbered([{ _tag: "SubmissionStarted" }, { _tag: "SessionClosed" }])
+        numbered([
+          { _tag: "SubmissionStarted" },
+          { _tag: "ToolCallStarted", id: "a", name: "read", params: {} },
+          {
+            _tag: "ElicitationRequested",
+            id: "e1",
+            kind: "tool-approval",
+            detail: {}
+          },
+          { _tag: "SessionClosed" }
+        ])
       )
+
       assert.isTrue(state.closed)
       assert.isFalse(SessionProjection.isActive(state))
+      assert.deepStrictEqual(state.activeToolCalls, [])
+      assert.deepStrictEqual(state.pendingElicitations, [])
+      assert.isFalse(SessionProjection.isBlocked(state))
+    })
+
+    it("counts the interrupted outcomes, which are their own events", () => {
+      const state = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        numbered([
+          { _tag: "RunStarted" },
+          { _tag: "ToolCallStarted", id: "a", name: "read", params: {} },
+          { _tag: "ToolCallInterrupted", id: "a", name: "read" },
+          { _tag: "RunInterrupted" }
+        ])
+      )
+
+      assert.strictEqual(state.runs.interrupted, 1)
+      assert.strictEqual(state.tools.interrupted, 1)
+      // Interruption settles the call as much as success does: a consumer must
+      // not be left rendering it as still running.
+      assert.deepStrictEqual(state.activeToolCalls, [])
+      // And it is not a failure -- nothing went wrong, the run went away.
+      assert.deepStrictEqual(state.lastFailure, Option.none())
+    })
+
+    it("a failed message is a failure, an interrupted one is not", () => {
+      const failed = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        numbered([{ _tag: "MessageFailed", failure: failure("generation") }])
+      )
+      assert.deepStrictEqual(failed.lastFailure, Option.some(failure("generation")))
+
+      const interrupted = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        numbered([{ _tag: "MessageInterrupted" }])
+      )
+      assert.deepStrictEqual(interrupted.lastFailure, Option.none())
+      // Neither commits a message: only `MessageCompleted` does.
+      assert.strictEqual(failed.messages, 0)
+      assert.strictEqual(interrupted.messages, 0)
     })
   })
 
@@ -216,7 +283,7 @@ describe("SessionProjection", () => {
       )
       assert.isFalse(SessionProjection.isComplete(state))
       assert.deepStrictEqual(
-        SessionProjection.gap(state),
+        state.gap,
         Option.some({ after: 0, resumedAt: 97 })
       )
     })
@@ -229,10 +296,7 @@ describe("SessionProjection", () => {
       assert.isTrue(SessionProjection.isComplete(state))
     })
 
-    it("repairing from the gap cursor reproduces the ungapped fold", () => {
-      // The claim §27 makes: `DeliveryLog.read({ after: gap.after })` folded
-      // into `since(id, gap.after)` is a whole projection again. Same reducer,
-      // no separate repair path -- which is why `reduce` is pure.
+    it("repairing means re-folding the whole log, and reproduces it exactly", () => {
       const all = numbered(conversation)
       // Sequences 2 and 3 dropped: the stream lost the middle of the opening.
       const lossy = SessionProjection.reduceAll(
@@ -240,9 +304,42 @@ describe("SessionProjection", () => {
         all.filter((each) => each.sequence === 1 || each.sequence >= 4)
       )
       assert.isFalse(SessionProjection.isComplete(lossy))
+      // The cursor is diagnostic -- where loss began -- not a resume point.
+      assert.deepStrictEqual(lossy.gap, Option.some({ after: 1, resumedAt: 4 }))
 
-      const cursor = Option.getOrThrow(SessionProjection.gap(lossy)).after
       const repaired = SessionProjection.reduceAll(
+        SessionProjection.since(sessionId, 0),
+        all
+      )
+      const pristine = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        all
+      )
+
+      assert.isTrue(SessionProjection.isComplete(repaired))
+      // The whole projection, field for field. An earlier version of this
+      // compared a hand-picked subset and passed while the repair was wrong:
+      // resuming at `gap.after` instead of re-folding silently dropped
+      // everything before the cursor, and `started` was false where the whole
+      // fold had it true. Naming the fields is what let that through, so the
+      // assertion names none of them.
+      assert.deepStrictEqual(repaired, pristine)
+    })
+
+    it("resuming at the gap cursor is NOT repair, and loses the other side", () => {
+      // Pinned because it is the tempting mistake and it looks like it works:
+      // every counter after the gap is right, so a spot-check agrees. The
+      // reason it cannot work is that gapped events were already applied, so
+      // the polluted state cannot be corrected in place -- and a fresh state
+      // begun at the cursor has never seen `SessionStarted`.
+      const all = numbered(conversation)
+      const lossy = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        all.filter((each) => each.sequence === 1 || each.sequence >= 4)
+      )
+      const cursor = Option.getOrThrow(lossy.gap).after
+
+      const resumed = SessionProjection.reduceAll(
         SessionProjection.since(sessionId, cursor),
         all.filter((each) => each.sequence > cursor)
       )
@@ -251,17 +348,68 @@ describe("SessionProjection", () => {
         all
       )
 
-      assert.isTrue(SessionProjection.isComplete(repaired))
-      // Everything the fold accumulates, not a sampled field or two: a repair
-      // that restored the counters but lost the usage would pass a narrower
-      // assertion.
-      assert.deepStrictEqual(repaired.submissions, pristine.submissions)
-      assert.deepStrictEqual(repaired.runs, pristine.runs)
-      assert.deepStrictEqual(repaired.usage, pristine.usage)
-      assert.strictEqual(repaired.turns, pristine.turns)
-      assert.strictEqual(repaired.modelCalls, pristine.modelCalls)
-      assert.strictEqual(repaired.messages, pristine.messages)
-      assert.deepStrictEqual(repaired.tools, pristine.tools)
+      assert.isTrue(SessionProjection.isComplete(resumed))
+      assert.isFalse(resumed.started)
+      assert.isTrue(pristine.started)
+      assert.notDeepEqual(resumed, pristine)
+    })
+
+    it("refuses a sequence it cannot order, instead of disabling both guards", () => {
+      // `sequence` is `Schema.Number`, so NaN survives a non-JSON decode. Both
+      // comparisons are false against it, so before this guard a NaN between
+      // sequence 1 and sequence 500 reported `isComplete: true, gaps: 0` while
+      // 498 events were missing -- the projection claiming exactness it did
+      // not have, which is the one failure it cannot be allowed.
+      const state = SessionProjection.reduceAll(
+        SessionProjection.since(sessionId, 0),
+        [
+          envelope(1, turnCompleted),
+          envelope(Number.NaN, turnCompleted),
+          envelope(500, turnCompleted)
+        ]
+      )
+
+      assert.strictEqual(state.malformed, 1)
+      assert.strictEqual(state.turns, 2)
+      // The cursor never took the unorderable value, so the 1 -> 500 jump is
+      // still seen for what it is.
+      assert.strictEqual(state.gaps, 1)
+      assert.deepStrictEqual(state.gap, Option.some({ after: 1, resumedAt: 500 }))
+      assert.isFalse(SessionProjection.isComplete(state))
+    })
+
+    it("refuses Infinity and fractional sequences too", () => {
+      const infinite = SessionProjection.reduce(
+        SessionProjection.since(sessionId, 0),
+        envelope(Number.POSITIVE_INFINITY, turnCompleted)
+      )
+      // Infinity as a cursor would make every later event a duplicate for
+      // ever, freezing the fold while still reporting it complete.
+      assert.strictEqual(infinite.malformed, 1)
+      assert.deepStrictEqual(infinite.lastSequence, Option.some(0))
+
+      const fractional = SessionProjection.reduce(
+        SessionProjection.since(sessionId, 0),
+        envelope(1.5, turnCompleted)
+      )
+      assert.strictEqual(fractional.malformed, 1)
+      assert.strictEqual(fractional.turns, 0)
+    })
+
+    it("`since` given an unusable cursor degrades to no expectation, and says so", () => {
+      // `Number(searchParams.get("after"))` on an absent parameter is the
+      // ordinary way to get here, and it must not poison every comparison.
+      const state = SessionProjection.reduceAll(
+        SessionProjection.since(sessionId, Number.NaN),
+        [envelope(1, turnCompleted), envelope(900, turnCompleted)]
+      )
+
+      assert.strictEqual(state.malformed, 1)
+      // Not silent: the caller asked for a guarantee this cannot give.
+      assert.isFalse(SessionProjection.isComplete(state))
+      // But it still detects the discontinuity it *can* see, from the first
+      // event it actually got.
+      assert.deepStrictEqual(state.gap, Option.some({ after: 1, resumedAt: 900 }))
     })
   })
 
@@ -352,22 +500,27 @@ describe("SessionProjection", () => {
       assert.strictEqual(state.tools.succeeded, 1)
     })
 
-    it("separates a tool failure returned to the model from one that is not", () => {
+    it("a failed tool call settles, and only a fatal one is the last failure", () => {
+      // Each failure has its `ToolCallStarted`, so the removal from
+      // `activeToolCalls` is actually exercised. Without them the filter runs
+      // on an empty array and a broken one looks identical.
       const state = SessionProjection.reduceAll(
         SessionProjection.empty(sessionId),
         numbered([
+          { _tag: "ToolCallStarted", id: "a", name: "read", params: {} },
+          { _tag: "ToolCallStarted", id: "b", name: "write", params: {} },
           {
             _tag: "ToolCallFailed",
             id: "a",
             name: "read",
-            failure: failure("boom"),
+            failure: failure("handed back"),
             returnedToModel: true
           },
           {
             _tag: "ToolCallFailed",
             id: "b",
             name: "write",
-            failure: failure("boom"),
+            failure: failure("fatal"),
             returnedToModel: false
           }
         ])
@@ -375,6 +528,113 @@ describe("SessionProjection", () => {
 
       assert.strictEqual(state.tools.failed, 2)
       assert.strictEqual(state.tools.returnedToModel, 1)
+      assert.deepStrictEqual(state.activeToolCalls, [])
+      assert.deepStrictEqual(state.lastFailure, Option.some(failure("fatal")))
+    })
+
+    it("a failure handed back to the model is not why the session stopped", () => {
+      // It is the case where the run *recovered*: the error went to the model
+      // as a tool result and the submission completed. Recording it as
+      // `lastFailure` would answer "why did this stop" with something that
+      // stopped nothing.
+      const state = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        numbered([
+          { _tag: "ToolCallStarted", id: "a", name: "read", params: {} },
+          {
+            _tag: "ToolCallFailed",
+            id: "a",
+            name: "read",
+            failure: failure("recovered"),
+            returnedToModel: true
+          },
+          { _tag: "SubmissionCompleted", runs: 1 }
+        ])
+      )
+
+      assert.strictEqual(state.tools.failed, 1)
+      assert.strictEqual(state.submissions.completed, 1)
+      assert.deepStrictEqual(state.lastFailure, Option.none())
+    })
+
+    it("does not open the same tool call or question twice", () => {
+      // A replayed id at a *different* sequence passes the sequence duplicate
+      // guard, so the dedup inside the case is the only thing between a
+      // redelivered frame and a view reporting two tools running when one is.
+      //
+      // Asserted here, while both are still open. Asserting only the settled
+      // end state does not pin it: the settling filter removes *every* entry
+      // with the id, so a doubled list empties just the same and a broken
+      // dedup is invisible.
+      const open = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        numbered([
+          { _tag: "ToolCallStarted", id: "a", name: "read", params: {} },
+          { _tag: "ToolCallStarted", id: "a", name: "read", params: {} },
+          {
+            _tag: "ElicitationRequested",
+            id: "e1",
+            kind: "tool-approval",
+            detail: {}
+          },
+          {
+            _tag: "ElicitationRequested",
+            id: "e1",
+            kind: "tool-approval",
+            detail: {}
+          }
+        ])
+      )
+
+      assert.deepStrictEqual(open.activeToolCalls, [{ id: "a", name: "read" }])
+      assert.deepStrictEqual(open.pendingElicitations, [
+        { id: "e1", kind: "tool-approval" }
+      ])
+      // The counters still record both arrivals: they are what happened.
+      assert.strictEqual(open.tools.started, 2)
+
+      const settled = SessionProjection.reduceAll(open, [
+        envelope(5, {
+          _tag: "ToolCallSucceeded",
+          id: "a",
+          name: "read",
+          result: 1,
+          encodedResult: 1
+        }),
+        envelope(6, {
+          _tag: "ElicitationResolved",
+          id: "e1",
+          kind: "tool-approval",
+          granted: true
+        })
+      ])
+
+      assert.deepStrictEqual(settled.activeToolCalls, [])
+      assert.deepStrictEqual(settled.pendingElicitations, [])
+    })
+
+    it("a stray event after a close does not reopen the session", () => {
+      // What `isActive`/`isBlocked`'s `closed` guard is actually for. `settle`
+      // empties everything at the close, so the guard is unreachable on a
+      // well-formed stream -- this is the malformed one a relay or a buggy
+      // producer can deliver, and the guard is the only thing holding it.
+      const state = SessionProjection.reduceAll(
+        SessionProjection.empty(sessionId),
+        numbered([
+          { _tag: "SessionClosed" },
+          { _tag: "SubmissionStarted" },
+          {
+            _tag: "ElicitationRequested",
+            id: "e1",
+            kind: "tool-approval",
+            detail: {}
+          }
+        ])
+      )
+
+      assert.isTrue(state.closed)
+      assert.isFalse(SessionProjection.isActive(state))
+      assert.isFalse(SessionProjection.isBlocked(state))
     })
 
     it("tracks pending elicitations, and reports the session as blocked", () => {

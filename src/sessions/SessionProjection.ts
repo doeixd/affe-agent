@@ -44,11 +44,32 @@ import type {
  * rendering a dashboard carries on.
  *
  * Only the *earliest* gap is retained, with a count of how many there were.
- * That is not a bounded-memory compromise, it is sufficient: repair reads
- * `DeliveryLog.read(sessionId, { after: gap.after })`, and everything after
- * the earliest discontinuity -- including every later one -- is in that read.
+ * That is not a bounded-memory compromise, it is sufficient: it is where loss
+ * began, so it bounds what was missed, and every later gap is after it.
  * Keeping every range would let an unlucky stream grow the state without
  * bound and buy nothing.
+ *
+ * ## Repair is a re-fold, not a resume
+ *
+ * **Repairing a gapped projection means folding the log again from the start,
+ * into a fresh state.** Not continuing the gapped one, and not starting a new
+ * one at `gap.after`.
+ *
+ * This follows from applying gapped events rather than freezing. Once
+ * post-gap events are in the accumulators there is no way to take them back
+ * out, so the gapped state cannot be corrected in place; and a fresh state
+ * begun at `gap.after` has never seen the events *before* the gap, so it is
+ * missing the other end of the conversation. Measured on the first
+ * implementation of this module, whose test compared a cursor-resumed
+ * projection against a whole one on a selected subset of fields and passed:
+ * `started` was `false` where the whole fold had `true`, because
+ * `SessionStarted` was on the other side of the cursor.
+ *
+ * So `gap.after` is diagnostic -- it says where loss began, which is what a
+ * log line or a metric wants -- and {@link since} is for *attaching* with a
+ * cursor you already trust, not for repair. A `DeliveryLog` read is bounded
+ * per session, so re-folding it is cheap enough that the sharper-looking
+ * incremental repair is not worth being wrong about.
  *
  * ## What this is not
  *
@@ -140,6 +161,23 @@ export interface Projection {
    * case across a relay, not an error.
    */
   readonly unknown: number
+  /**
+   * Envelopes ignored because their `sequence` was not a safe integer.
+   *
+   * `AgentEventEnvelope.sequence` is `Schema.Number`, which admits `NaN`,
+   * `Infinity` and fractions -- so a decode that is not JSON, or a `since`
+   * built from `Number(searchParams.get("after"))` on an absent parameter,
+   * produces one without anything upstream complaining.
+   *
+   * Such an envelope cannot be *ordered*, so it is not applied: folding it
+   * would put a non-comparable value in the cursor, and every subsequent
+   * comparison against `NaN` is false -- which silently disables both the
+   * duplicate guard and gap detection. Measured before this guard existed: a
+   * `NaN` between sequence 1 and sequence 500 reported `isComplete: true` and
+   * `gaps: 0` while 498 events were missing. A projection that says it is
+   * exact when it is not is the one failure this module cannot have.
+   */
+  readonly malformed: number
   /** The earliest discontinuity, if any. */
   readonly gap: Option.Option<Gap>
   /** How many discontinuities were seen. */
@@ -191,7 +229,8 @@ const noUsage: ModelUsage = {
 
 const base = (
   sessionId: SessionId,
-  lastSequence: Option.Option<number>
+  lastSequence: Option.Option<number>,
+  malformed = 0
 ): Projection => ({
   sessionId,
   lastSequence,
@@ -199,6 +238,7 @@ const base = (
   duplicates: 0,
   foreign: 0,
   unknown: 0,
+  malformed,
   gap: Option.none(),
   gaps: 0,
   started: false,
@@ -227,19 +267,29 @@ export const empty = (sessionId: SessionId): Projection =>
   base(sessionId, Option.none())
 
 /**
- * A projection continuing from a known cursor.
+ * A projection that expects the next event to be `sequence + 1`.
  *
- * This is the repair constructor, and the reason `reduce` is pure: after
- * `DeliveryLog.read(sessionId, { after: n })` you fold the result into
- * `since(sessionId, n)` and get a projection with no gap, using the same code
- * path that produced the gapped one.
+ * For attaching where you already know the cursor and want continuity
+ * checked from there -- a subscriber resuming an SSE tail from
+ * `Last-Event-ID`, or a fold over `DeliveryLog.read({ after: n })` that should
+ * complain if the log skips.
  *
  * Sequences are 1-based, so `since(id, 0)` means "from the very beginning"
  * and makes a first envelope at sequence 3 a genuine gap -- which `empty`,
- * by design, would not.
+ * by design, would not. That is also the constructor to re-fold a whole log
+ * through when repairing (see the module docs: repair is a re-fold, and this
+ * is *not* a way to resume a gapped projection at its cursor).
  */
 export const since = (sessionId: SessionId, sequence: number): Projection =>
-  base(sessionId, Option.some(sequence))
+  Number.isSafeInteger(sequence)
+    ? base(sessionId, Option.some(sequence))
+    // "I have seen up to NaN" is not a claim, so it degrades to `empty`'s
+    // no-expectation cursor rather than poisoning every later comparison.
+    // Counted as malformed rather than done silently: the caller asked for a
+    // guarantee this cannot give, and `isComplete` should say so instead of
+    // reporting exactness it did not check. `Number(param)` on an absent
+    // query parameter is the ordinary way to get here.
+    : base(sessionId, Option.none(), 1)
 
 const addLifecycle = (
   self: Lifecycle,
@@ -269,30 +319,38 @@ export const reduce = (
   }
 
   const sequence = envelope.sequence
-  let state = self
+  // Before the ordering comparisons, never after: an unorderable sequence
+  // makes both of them false, which silently disables the duplicate guard and
+  // gap detection together. See `Projection.malformed`.
+  if (!Number.isSafeInteger(sequence)) {
+    return { ...self, malformed: self.malformed + 1 }
+  }
+
+  let gaps = self.gaps
+  let gap = self.gap
 
   if (Option.isSome(self.lastSequence)) {
     const last = self.lastSequence.value
     if (sequence <= last) return { ...self, duplicates: self.duplicates + 1 }
     if (sequence > last + 1) {
-      state = {
-        ...state,
-        gaps: state.gaps + 1,
-        // Earliest only: repairing from here subsumes every later gap.
-        gap: Option.isSome(state.gap)
-          ? state.gap
-          : Option.some({ after: last, resumedAt: sequence })
-      }
+      gaps = gaps + 1
+      // Earliest only: repairing from here subsumes every later gap.
+      gap = Option.isSome(gap)
+        ? gap
+        : Option.some({ after: last, resumedAt: sequence })
     }
   }
 
-  state = {
-    ...state,
-    lastSequence: Option.some(sequence),
-    applied: state.applied + 1
-  }
-
-  return apply(state, envelope)
+  return apply(
+    {
+      ...self,
+      lastSequence: Option.some(sequence),
+      applied: self.applied + 1,
+      gaps,
+      gap
+    },
+    envelope
+  )
 }
 
 /**
@@ -423,7 +481,14 @@ const apply = (
         activeToolCalls: self.activeToolCalls.filter(
           (call) => call.id !== event.id
         ),
-        lastFailure: Option.some(event.failure)
+        // Only when it actually stopped something. A failure handed back to
+        // the model is one the run *recovered* from -- the turn continued and
+        // the submission may well have completed -- so recording it as
+        // `lastFailure` would answer "why did this stop" with an error that
+        // stopped nothing.
+        lastFailure: event.returnedToModel
+          ? self.lastFailure
+          : Option.some(event.failure)
       }
     }
     case "ToolCallInterrupted":
@@ -439,9 +504,27 @@ const apply = (
       // Counted, cursor already advanced. See `Projection.unknown`.
       return { ...self, unknown: self.unknown + 1 }
 
-    default:
-      // Observational events with nothing to accumulate: deltas, part
-      // announcements, queue notices. `applied` already counted them.
+    // Observational, with nothing to accumulate: generation progress, queue
+    // notices, and the openings whose terminal events are counted above.
+    // `applied` has already counted them.
+    //
+    // Listed rather than left to a `default`, so that adding an event to the
+    // ADT is a compile error here instead of a silent no-op. `AgentEvent`'s
+    // own `match` makes that argument for consumers; a projection is the
+    // consumer it was written about, and this module would otherwise be
+    // exactly the hand-written switch that stops covering the union as it
+    // grows.
+    case "TurnStarted":
+    case "MessageStarted":
+    case "MessageDelta":
+    case "MessagePartCompleted":
+    case "MessageStreamCompleted":
+    case "MessageInterrupted":
+    case "ToolCallProgress":
+    case "SteeringQueued":
+    case "SteeringApplied":
+    case "FollowUpQueued":
+    case "FollowUpApplied":
       return self
   }
 }
@@ -457,16 +540,18 @@ export const reduceAll = (
 }
 
 /**
- * The earliest discontinuity, if the projection has one.
+ * Whether every event between the start cursor and now was seen.
  *
- * `Some` means the counters are lower bounds. The value's `after` is the
- * cursor to repair from: `DeliveryLog.read(sessionId, { after })`, folded into
+ * False means the counters are lower bounds. `gap.after` is then the cursor to
+ * repair from: `DeliveryLog.read(sessionId, { after })`, folded into
  * `since(sessionId, after)`.
+ *
+ * A malformed sequence counts against completeness too. Its envelope was not
+ * applied -- it could not be ordered -- so the fold is genuinely missing an
+ * event, and reporting exactness would be the same lie a missed gap tells.
  */
-export const gap = (self: Projection): Option.Option<Gap> => self.gap
-
-/** Whether every event between the start cursor and now was seen. */
-export const isComplete = (self: Projection): boolean => Option.isNone(self.gap)
+export const isComplete = (self: Projection): boolean =>
+  Option.isNone(self.gap) && self.malformed === 0
 
 /**
  * Whether the session is running work right now.

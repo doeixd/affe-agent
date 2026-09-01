@@ -536,9 +536,9 @@ open, so the next pass does not have to re-derive it.
     and unanswered elicitations, last failure. Pure `(state, envelope) =>
     state`, so it runs over a live `Stream`, over `DeliveryLog.read({ after })`
     or over an array and cannot tell the difference — which is what makes
-    repair a re-fold through `since(id, cursor)` rather than a second code
-    path, the claim §27 makes and `test/SessionProjection.test.ts` asserts by
-    reproducing an ungapped fold from a lossy one.
+    repair a re-fold rather than a second code path, the claim §27 makes and
+    `test/SessionProjection.test.ts` asserts by reproducing a whole projection
+    from a lossy one, field for field.
 
     Three decisions the plan left open, decided here and written down because
     each could reasonably have gone the other way:
@@ -550,8 +550,15 @@ open, so the next pass does not have to re-derive it.
       compromise — repair reads after it, so every later gap is inside that
       read. Keeping ranges would grow unbounded and buy nothing.
     - **`empty` vs `since`.** Joining a live tail mid-conversation is not a
-      gap; continuing from a known cursor makes the same envelope a gap. The
-      distinction is the repair constructor.
+      gap; continuing from a known cursor makes the same envelope a gap.
+    - **Repair is a re-fold of the whole log, not a resume at `gap.after`** —
+      forced by the first decision. Once gapped events are in the
+      accumulators the state cannot be corrected in place, and a fresh state
+      begun at the cursor has never seen what came before it. So `gap.after`
+      is diagnostic. The post-commit review caught this: the original test
+      compared a cursor-resumed projection against a whole one on a
+      *hand-picked subset* of fields and passed, while `started` was false
+      where the whole fold had it true.
 
     Seven deliberate breaks were run against the suite. One of them —
     clearing the cursor on an unknown event instead of advancing it — **passed

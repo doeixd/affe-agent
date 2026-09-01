@@ -4442,9 +4442,9 @@ A session's events folded into what is true *now*: lifecycle, submission / run
 unanswered elicitations, last failure. `reduce` is pure and total, which is
 the load-bearing property rather than a stylistic one — a live `Stream`, a
 `DeliveryLog.read({ after })` and a plain array all fold identically, so
-repairing a gap is a re-fold through `since(id, cursor)` and not a second code
-path. That is the claim §27 makes, and the test asserts it by reproducing an
-ungapped fold from a lossy one across every accumulated field.
+repairing a gap is a re-fold and not a second code path. That is the claim
+§27 makes. (The first version of this paragraph said the re-fold went
+`through since(id, cursor)`. It does not -- see the correction below.)
 
 ## What the ledger was hiding
 
@@ -4476,8 +4476,7 @@ merely coded:
   compromise — repair reads after it, so every later gap is inside that read.
   Ranges would grow unbounded and buy nothing.
 - **`empty` vs `since`.** Attaching to a live tail mid-conversation is not a
-  gap; continuing from a known cursor makes the same envelope a gap. `since`
-  is the repair constructor.
+  gap; continuing from a known cursor makes the same envelope a gap.
 
 An `UnknownEvent` advances the cursor. It occupies a sequence number, so
 skipping it without advancing would report a discontinuity every time a newer
@@ -4520,3 +4519,73 @@ work, which accounts for roughly twenty of those tests. Writing 1859 into
 `STATUS.md` would claim uncommitted work had shipped, and separating the two
 without disturbing their tree is not worth the manoeuvre. Whoever lands M5/M6
 should regenerate the row from `npm test`.
+
+## Same day, post-commit review — the repair story was wrong
+
+The review `CLAUDE.md` asks for after every commit found six things in
+`e4d5bd2`. Two were serious enough to change the design rather than the code.
+
+**Repair is a re-fold of the whole log, not a resume at `gap.after`.** The
+commit claimed the opposite, in its message, in `remaining-work.md`, in
+`MODULES.md` and in the plan's own status line. It is false, and it follows
+from this module's own first decision: because a gapped event is *applied*
+rather than dropped, the accumulators are polluted and cannot be corrected in
+place; and a fresh projection begun at the cursor has never seen the events
+*before* the gap. Measured — a cursor-resumed fold reports `started: false`
+where the whole fold reports `true`, because `SessionStarted` was on the far
+side of the cursor.
+
+What let it ship is the more useful lesson. The test named
+"repairing from the gap cursor reproduces the ungapped fold" compared seven
+hand-picked fields — submissions, runs, usage, turns, modelCalls, messages,
+tools — and every one of them matched, because they all accumulate from events
+*after* the gap. The fields that would have disagreed (`started`, `closed`,
+`activeSubmission`, the open lists, `lastFailure`) were the ones not named. The
+test even carried a comment claiming it compared "everything the fold
+accumulates, not a sampled field or two". It is now
+`assert.deepStrictEqual(repaired, pristine)` on the whole projection, which
+names nothing and therefore cannot be gamed, plus a second case pinning that
+resuming at the cursor is *not* repair and loses the other side.
+
+**A sequence that cannot be ordered disabled both guards at once.** `sequence`
+is `Schema.Number`, which admits `NaN`, `Infinity` and fractions. Both
+comparisons in `reduce` are false against `NaN`, so such an envelope was
+applied and became the cursor, after which every later comparison was also
+false. Measured: a `NaN` between sequence 1 and sequence 500 reported
+`isComplete: true, gaps: 0` while 498 events were missing — the projection
+asserting exactness it did not have, which is the single failure it cannot be
+allowed. Reachable without a hostile peer: `since(id, Number(param))` on an
+absent query parameter is `NaN`, and that is the ordinary way to build a
+resume call. Now guarded before the comparisons, counted as `malformed`, and
+counted against `isComplete`; `since` degrades an unusable cursor to
+no-expectation rather than poisoning the fold, and says so.
+
+Also fixed: `lastFailure` was set by a `ToolCallFailed` with
+`returnedToModel: true` — the case where the run *recovered* — so a submission
+that completed successfully answered "why did this stop" with an error that
+stopped nothing. The `default:` arm of the event switch became an explicit list
+of ignorable tags, so adding an event to the ADT is a compile error here rather
+than a silent no-op; `AgentEvent.match`'s own doc makes that argument, and a
+projection is the consumer it was written about. The redundant `gap` accessor
+was deleted (it returned a field of the same name).
+
+The review also named six mechanisms it believed the suite would not catch.
+All six were real: `ToolCallInterrupted`, `RunInterrupted` and `MessageFailed`
+had no test at all; the `ToolCallFailed` case folded failures with no preceding
+`ToolCallStarted`, so its removal from `activeToolCalls` ran on an empty array
+and a broken filter was invisible; and `totalTokens` was *derived* in the test
+fixture as `inputTokens + outputTokens`, so an accumulator that recomputed it
+from the other two agreed with every assertion — which is exactly the invariant
+the real thing does not have, since providers report cached and reasoning
+tokens.
+
+Sixteen mutations were run against the final suite and all sixteen fail it.
+Three needed the test strengthened before they would: the two dedup guards
+(asserting the settled end state does not pin them, because the settling filter
+removes *every* entry with the id, so a doubled list empties just the same —
+they are now asserted while both are still open), and the `closed` guards on
+`isActive`/`isBlocked`, which are unreachable on a well-formed stream because
+`settle` empties everything at the close, and are now pinned by the malformed
+stream they actually defend against: an event arriving after the close.
+
+28 tests, from 19.
