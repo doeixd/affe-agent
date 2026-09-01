@@ -45,6 +45,16 @@ export const Result = Schema.Struct({
     "returned",
     "nothing",
     "threw",
+    /**
+     * The engine paused and the host holds the state to resume it.
+     *
+     * **No field of this result carries that state**, and that is a rule
+     * rather than an oversight: it is an opaque executor value, and a
+     * model handed one will try to reason about it or echo it back. The
+     * host receives it through `CodeTool.Options.onSuspend`; the model
+     * receives `fix`, which tells it what it is waiting for.
+     */
+    "suspended",
     "refused"
   ]),
   /** The value the program returned, when it returned one. */
@@ -117,6 +127,21 @@ export interface Options<Groups extends CodeMode.ToolGroups, R> {
   readonly elicitor?: Elicitation.Elicitor | undefined
   /** Signature budget for the catalog in the description. Defaults to 2000. */
   readonly catalogBudgetTokens?: number | undefined
+  /**
+   * Where a suspended run's state goes, for an executor that can suspend.
+   *
+   * The owned interpreter never suspends, so a host that has not chosen
+   * another executor never needs this. With one that does, a host that
+   * omits it gets the model's `suspended` result and no way to resume --
+   * the run is not lost (nothing was rolled back), but its settled work
+   * is unreachable. Stated here because the alternative is discovering it
+   * from a program that pauses in production.
+   */
+  readonly onSuspend?:
+    | ((suspension: { readonly state: unknown; readonly reason: string }) => Effect.Effect<void>)
+    | undefined
+  /** A prior suspension's state, to continue that run instead of starting one. */
+  readonly resumeFrom?: unknown | undefined
 }
 
 const render = (value: unknown): string =>
@@ -185,6 +210,8 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
         ...(context.toolCallId === undefined
           ? {}
           : { approvalPrefix: context.toolCallId }),
+        ...(options.resumeFrom === undefined ? {} : { resumeFrom: options.resumeFrom }),
+        ...(options.onSuspend === undefined ? {} : { onSuspend: options.onSuspend }),
         onCall: (call) => {
           seen.push({ path: call.path.join("."), outcome: call.outcome })
           // A preliminary result: the kernel emits it as
@@ -231,6 +258,18 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
           }
         case "Threw":
           return { outcome: "threw" as const, error: result.outcome.error, logs, calls }
+        case "Suspended":
+          // `result.outcome.state` is deliberately not read here. It
+          // reached the host through `onSuspend`; putting it in a field
+          // the model can see would invite the model to reason about an
+          // opaque engine value, and `test/CodeExecutors.test.ts`
+          // asserts structurally that no field carries it.
+          return {
+            outcome: "suspended" as const,
+            fix: result.outcome.reason,
+            logs,
+            calls
+          }
         case "Refused":
           return {
             outcome: "refused" as const,

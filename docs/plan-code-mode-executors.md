@@ -94,7 +94,7 @@ in our own surface, and lands a second executor as the proof the seam is one.
 
 | Step | What | Depends on |
 | --- | --- | --- |
-| 1 | `CodeExecutor` outcome widened to `Completed \| Suspended`; `CodeMode.Outcome` and `CodeTool.Result` gain the variant; resume threaded through `execute` | nothing |
+| 1 | ✅ 2026-09-01. `CodeExecutor` outcome widened to `Completed \| Suspended`; `CodeMode.Outcome` and `CodeTool.Result` gain the variant; resume threaded through `execute`; `onSuspend` carries the state to the host and never to the model (`test/CodeExecutors.test.ts`, three break-once) | nothing |
 | 2 | `Catalog.searchTool` — `Catalog.search` as a model-facing tool, opt-in from `CodeTool` | nothing |
 | 3 | `internal/validate.ts` — collect-all pre-flight; `CodeDiagnostic` gains a plural carrier | 1 (for the reason set) |
 | 4 | `code/callscript.ts` — CallScript behind `CodeExecutor`, as the acceptance test for 1 and 3 | 1, 3 |

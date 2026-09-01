@@ -4066,3 +4066,63 @@ the fact. And it is deliberately not in `check`: at ~20 seconds it is a
 walkthrough, not the proof, and the guarantees already have dedicated
 tests.
 
+
+---
+
+## 2026-09-01 — the code-mode executor seam widens (executors plan, step 1)
+
+Read Vercel Labs' CallScript (`callscript.dev`) against the finished `/code`
+engine. Same premise as code mode -- one model round-trip authors many tool
+calls -- reached from the other end: the model writes JavaScript-shaped
+source that compiles to an inert JSON plan of three verbs, and nothing
+executes it. Giving up Turing-completeness buys whole-program validation
+before any call runs, a static upper bound on total calls, and suspension
+across a process boundary, because the plan plus its settled outputs *is*
+the state.
+
+Neither design subsumes the other, which is the case `CodeExecutor` was
+introduced for. The comparison is written up as
+[plan-code-mode-executors.md](./plan-code-mode-executors.md): four steps,
+three of which stand on their own merits.
+
+**What it found in our own surface, which is the part worth recording.**
+`CodeExecutor.run` returned `{ result, logs }` or failed. That is true of the
+owned interpreter and was being asserted as the interface of *every* engine:
+an engine that pauses had to choose between losing its settled work and
+blocking the fibre, which is the process boundary it exists to cross. The
+engine plan chose the tool-failure shape early on the stated grounds that it
+is near-impossible to change later; the outcome set has the same property and
+had not been given the same treatment.
+
+Widened now, before a second executor exists: `ExecutorOutcome` is
+`Completed | Suspended`, `hooks.resumeFrom` carries a prior state back in,
+and `CodeMode.Outcome` / `CodeTool.Result` gain the variant. One variant
+today against a breaking change to a published entry point later.
+
+- **Engine-plan decision 7 is not reopened.** The owned interpreter still
+  never suspends -- its state is a JS call stack -- and that is now
+  *asserted* across six program shapes rather than left as something nobody
+  happened to do. Broken once by making `interpreted` return `Suspended`.
+- **Suspension state is opaque and typed `unknown`.** Not the `unknown`
+  AGENTS.md forbids: that rule is about error channels, where an unknown
+  erases what a caller must branch on. Nothing branches on this. It is a
+  storage payload whose schema belongs to a component the kernel does not
+  know, and an executor that returns `Suspended` warrants by doing so that
+  it is JSON-serialisable.
+- **The model never receives that state.** `CodeTool` hands it to the host
+  through `onSuspend` and gives the model `{ outcome: "suspended", fix:
+  <reason> }` -- a model handed an opaque engine value will try to reason
+  about it or echo it back. Asserted structurally, by encoding the result and
+  searching it for the state, rather than by reading the mapping. Broken once
+  by adding the state to the returned object.
+- **Resumption is resumption, not a retry.** Pinned by an executor that calls
+  a tool before suspending: a run that re-executed from the top would call it
+  twice. Broken once by dropping `resumeFrom` on the way through
+  `CodeMode.execute`.
+- **The limits do not resume with the state**, and that is stated at the
+  option rather than defaulted into: `maxToolCalls` and the observed `calls`
+  are per call to `execute`, so a host needing a budget across resumptions
+  carries its own count. Engine-plan decision 6 -- budgets are host policy.
+
+`test/CodeExecutors.test.ts`, four tests, three break-once. `npm run lint`
+0/0/0 over 399 files; typecheck clean; 1760 tests in 162 files.

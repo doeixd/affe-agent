@@ -111,6 +111,20 @@ export interface ObservedCall {
 export type Outcome =
   | { readonly _tag: "Returned"; readonly value: unknown }
   | { readonly _tag: "RanOffTheEnd" }
+  | {
+    /**
+     * The engine paused and can continue later
+     * (`docs/plan-code-mode-executors.md` step 1).
+     *
+     * Only an executor whose state survives a process boundary ever
+     * produces this. The owned interpreter never does -- its state is a
+     * JS call stack -- and `test/CodeExecutors.test.ts` asserts that
+     * rather than leaving it to be assumed.
+     */
+    readonly _tag: "Suspended"
+    readonly state: unknown
+    readonly reason: string
+  }
   | { readonly _tag: "Threw"; readonly error: unknown }
   | {
     readonly _tag: "Refused"
@@ -128,31 +142,81 @@ export interface ExecuteResult {
 }
 
 /**
- * The engine seam (plan decision 1): one engine today, and the shape that
- * lets a `node:vm` or QuickJS engine arrive behind its own package entry
- * without touching anything above it.
+ * What an engine has to say when it stops running
+ * (`docs/plan-code-mode-executors.md` step 1).
+ *
+ * Two variants, not one, because "a program either finishes or fails" is
+ * true of the owned interpreter and was being asserted as the interface
+ * of *every* engine. A plan-based engine -- CallScript is the worked
+ * example -- pauses on an approval gate and continues in another process,
+ * and with only `Completed` it would have to choose between losing the
+ * settled work and blocking the fibre, which is the process boundary it
+ * exists to cross.
+ */
+export type ExecutorOutcome =
+  | {
+    readonly _tag: "Completed"
+    /** What the program returned; `None` when it ran off the end. */
+    readonly result: Option.Option<unknown>
+    readonly logs: ReadonlyArray<ReadonlyArray<unknown>>
+  }
+  | {
+    readonly _tag: "Suspended"
+    /**
+     * Everything the executor needs to continue, and nothing the host
+     * interprets: persist it, hand it back to `run` as `resumeFrom`,
+     * unchanged.
+     *
+     * `unknown` on purpose, and not the `unknown` AGENTS.md forbids --
+     * that rule is about *error channels*, where an unknown erases the
+     * information a caller must branch on. Nothing branches on this. It
+     * is a storage payload whose schema belongs to a component the kernel
+     * does not know, and an executor that returns `Suspended` warrants by
+     * doing so that the value is JSON-serialisable.
+     */
+    readonly state: unknown
+    /** Why it paused, in the model's vocabulary. Names what would resume it. */
+    readonly reason: string
+    /** A suspended run has already done work worth showing. */
+    readonly logs: ReadonlyArray<ReadonlyArray<unknown>>
+  }
+
+/**
+ * The engine seam (engine-plan decision 1): one engine today, and the
+ * shape that lets a `node:vm`, QuickJS or plan-compiling engine arrive
+ * behind its own package entry without touching anything above it.
  */
 export interface CodeExecutor {
   readonly run: <R>(
     code: string,
-    hooks: { readonly invoke: Invoke<R> }
-  ) => Effect.Effect<
-    {
-      readonly result: Option.Option<unknown>
-      readonly logs: ReadonlyArray<ReadonlyArray<unknown>>
-    },
-    ProgramFailure,
-    R
-  >
+    hooks: {
+      readonly invoke: Invoke<R>
+      /**
+       * A `Suspended.state` this run continues from. What settled before
+       * the pause is the executor's to reuse; an executor that cannot
+       * suspend never sees one.
+       */
+      readonly resumeFrom?: unknown | undefined
+    }
+  ) => Effect.Effect<ExecutorOutcome, ProgramFailure, R>
 }
 
-/** The owned tree-walking interpreter as a `CodeExecutor`. */
+/**
+ * The owned tree-walking interpreter as a `CodeExecutor`.
+ *
+ * Never suspends (engine-plan decision 7, not reopened): its state is a
+ * JS call stack, so a paused program cannot cross a process boundary and
+ * this module does not pretend otherwise. `resumeFrom` is ignored, which
+ * is the honest reading of "this engine has no resumable state" -- there
+ * is no state of ours it could be.
+ */
 export const interpreted: CodeExecutor = {
   run: (code, hooks) =>
     Effect.gen(function*() {
       const parsed = parse(code)
       if (Result.isFailure(parsed)) return yield* parsed.failure
-      return yield* interpret(parsed.success, { invoke: hooks.invoke })
+      const done = yield* interpret(parsed.success, { invoke: hooks.invoke })
+      return { _tag: "Completed" as const, result: done.result, logs: done.logs }
     })
 }
 
@@ -188,6 +252,27 @@ export interface ExecuteOptions {
    * `ToolCallProgress` events.
    */
   readonly onCall?: ((call: ObservedCall) => Effect.Effect<void>) | undefined
+  /**
+   * A prior run's `Outcome.Suspended.state`, to continue from.
+   *
+   * **The limits do not resume with it.** `maxToolCalls` and the observed
+   * `calls` are per *call to `execute`*, so a resumed run starts both
+   * afresh, and a program that suspends repeatedly could exceed the
+   * budget a host thought it had set. That is stated rather than
+   * defaulted (engine-plan decision 6: budgets are host policy) -- a host
+   * that needs a budget across resumptions carries its own count and
+   * lowers `maxToolCalls` on the way back in.
+   */
+  readonly resumeFrom?: unknown | undefined
+  /**
+   * Called when the program suspends, with the state to persist.
+   *
+   * Redundant for a caller that reads `Outcome.Suspended` off the return
+   * value, and not redundant for `CodeTool`: its handler returns the
+   * *model's* result, and the model must never be handed executor state
+   * to reason about. This is how the state reaches the host instead.
+   */
+  readonly onSuspend?: ((suspension: { readonly state: unknown; readonly reason: string }) => Effect.Effect<void>) | undefined
 }
 
 export interface CodeMode<R> {
@@ -485,7 +570,10 @@ export const make = <Groups extends ToolGroups, R = never>(
 
       const recovered = recover(program)
       const budget = options.limits?.timeout
-      const bounded = executor.run(recovered.code, { invoke }).pipe(
+      const bounded = executor.run(recovered.code, {
+        invoke,
+        ...(runOptions?.resumeFrom === undefined ? {} : { resumeFrom: runOptions.resumeFrom })
+      }).pipe(
         budget === undefined
           ? (self) => self
           : (self) =>
@@ -535,7 +623,19 @@ export const make = <Groups extends ToolGroups, R = never>(
           : finish({ _tag: "Threw", error: failure.value })
       }
 
-      const returned = attempted.success.result
+      const settled = attempted.success
+      if (settled._tag === "Suspended") {
+        // The state goes to the host, never through the outbound data
+        // boundary: it is the executor's own value, not the program's
+        // answer, and `toData` would rewrite or refuse it for being
+        // exactly what it is meant to be.
+        if (runOptions?.onSuspend !== undefined) {
+          yield* runOptions.onSuspend({ state: settled.state, reason: settled.reason })
+        }
+        return finish({ _tag: "Suspended", state: settled.state, reason: settled.reason })
+      }
+
+      const returned = settled.result
       if (Option.isNone(returned)) return finish({ _tag: "RanOffTheEnd" })
 
       // The boundary, outbound: the program's answer is plain data or a
