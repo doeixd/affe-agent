@@ -1621,7 +1621,7 @@ which is already an encodable value, so the activity boundary lands exactly
 where persistence needs it. Tools work the same way — a durable package wraps
 the toolkit's handlers when constructing it.
 
-That is the answer to the `AgentExecution` question WORKFLOW.md raises: **the
+That is the answer to the `AgentExecution` question `docs/research-effect-workflow.md` raises: **the
 interception points a durable interpreter needs are already Layers**, and Layers
 are already the substitution mechanism. Do not add `AgentExecution` until a
 durable implementation demonstrates interception that the Layer boundary cannot
@@ -1646,7 +1646,7 @@ express.
 A follow-up check established that `ClusterWorkflowEngine.layer` composes with
 `TestRunner.layer`, which has no dependencies of its own. The durable path can
 therefore be developed and tested in ordinary unit tests, with no database.
-`WORKFLOW_CLUSTER_PLAN.md` builds every phase on that.
+`docs/plan-workflow-cluster.md` builds every phase on that.
 
 ### What remains unproven
 

@@ -89,6 +89,8 @@ Kept because they record *why*, not because there is work left in them. See
 | [plan-structured-output.md](./plan-structured-output.md) | `AgentOutput` — a session that ends in a typed value, as a tool the model calls rather than a second model call. |
 | [plan-submit-await.md](./plan-submit-await.md) | `submit` / `awaitSubmission` on every client, and the bounded-retention contract that makes a lost acknowledgement safe to retry. |
 | [plan-principal-on-tool-fibre.md](./plan-principal-on-tool-fibre.md) | Getting the caller's subject onto the fibre that acts — the one kernel decision the multi-user half of `plan-tool-credentials.md` was blocked on. Decided and shipped as `Principal.CurrentPrincipal`. |
+| [plan-workflow-cluster.md](./plan-workflow-cluster.md) | `/durable` and `/cluster` — the original implementation plan for durable and distributed execution; `PLAN.md` builds on it. |
+| [plan-agent-plugins.md](./plan-agent-plugins.md) | `/plugins` — Agent Plugins 1.0.0 support over `/skills` + `/mcp`. |
 | [plan-durability-hardening.md](./plan-durability-hardening.md) | The durability guarantees. Complete; `npm run verify:durability` re-runs SD2. |
 | [plan-tui-port.md](./plan-tui-port.md) · [plan-tui-tool-views.md](./plan-tui-tool-views.md) | `apps/tui`, and per-tool rendering. |
 
@@ -98,6 +100,8 @@ Treat as dated. Each names the commit or the date it was read.
 
 | document | subject |
 | --- | --- |
+| [research-effect-workflow.md](./research-effect-workflow.md) | Why Effect Workflow integration is a reason for the project to exist, and the one boundary to preserve. Moved from the root 2026-09-01. |
+| [review-2026-08-20.md](./review-2026-08-20.md) | The first implementation review; its findings are folded into [status-history.md](./status-history.md). |
 | [research-opencode-tools.md](./research-opencode-tools.md) | opencode v2's built-in tools — the edit replacer chain, truncation, prompts, permissions. |
 | [research-session-tree.md](./research-session-tree.md) | Whether Pi's branch-and-rewind tree fits our primitives. |
 | [research-code-mode.md](./research-code-mode.md) | See *Current design threads*. |

@@ -136,7 +136,7 @@ than by anticipation (PLAN §42.2):
 `examples/typed-agent.ts` asserts at compile time that the sugar costs no
 inference: a handler parameter is still exactly its schema type.
 
-## Review findings (REVIEW.md)
+## Review findings (review-2026-08-20.md)
 
 All eleven core items are addressed. Five were already done; the rest:
 
@@ -289,7 +289,7 @@ is the session, which is what makes retrying safe).
 Implemented as subpath exports: `@doeixd/effect-agent/durable` and `/cluster`.
 Core does not depend on either.
 
-The central claim of `WORKFLOW_CLUSTER_PLAN.md` is verified: **the same agent
+The central claim of `plan-workflow-cluster.md` is verified: **the same agent
 definition runs durably, and a resumed submission replays completed work instead
 of repeating it.** `Agent.make({...})` is passed unchanged to
 `DurableAgent.workflow`; the model becomes an `Activity` by replacing a Layer,
@@ -1437,7 +1437,7 @@ than implying coverage that is not there.
 ## Breaking changes for the durable/distributed path
 
 Two seams the earlier design lacked, both driven by concrete blockers found
-while planning `WORKFLOW_CLUSTER_PLAN.md` rather than by speculation.
+while planning `plan-workflow-cluster.md` rather than by speculation.
 
 **`InputChannel` replaces the session's raw queues** (PLAN §16.2). Steering and
 follow-ups are the only inputs a run consumes that come from neither the model,
@@ -1479,7 +1479,7 @@ already Layers, so `AgentExecution` stays unbuilt.
 
 `ClusterWorkflowEngine.layer` also composes with `TestRunner.layer` (no
 dependencies), so the durable path is unit-testable without SQL —
-`WORKFLOW_CLUSTER_PLAN.md` is the implementation plan built on that.
+`plan-workflow-cluster.md` is the implementation plan built on that.
 
 Both were subsequently implemented and tested; see the durable section above for
 what is proven and what is not.
