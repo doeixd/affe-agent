@@ -604,7 +604,8 @@ sizes; the items are repeated here so this list stays the one tracker.
     `RunCompleted` and the result. Additive throughout. The first growth of
     the kernel vocabulary since `0.0.1`, and `STATUS.md` should say so when
     it lands.
-38. **Ship the contracts** (plan §3.2) — `AgentClientContract`,
+38. ~~**Ship the contracts**~~ — landed 2026-09-01; see `status-history.md`.
+    As planned: `AgentClientContract`,
     `DeliveryLogContract` and `NodeStoreContract` move from `test/` to
     `/testing` in `SandboxConformance`'s shape, plus a `DurableSessionStore`
     contract that does not yet exist as one; each with a deliberately wrong

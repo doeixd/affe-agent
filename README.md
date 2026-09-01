@@ -77,7 +77,7 @@ Core is the default import; everything else is an explicit subpath.
 : `/coding` — file/shell tools over a sandbox · `/pi` — the same seam with Pi's tool contracts (batch edits, rendered listings, PowerShell) · `/tool-source` — MCP/OpenAPI/GraphQL catalogs as typed or discovered toolkits, with `Credentials` (method / binding / provider, `Redacted` values resolved per call into the sources' `headers` hook) · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
 
 **Host & testing**
-: `/sandbox` (portable) + `/sandbox/local` (host) · `/shell` · `/elicitation` · `/testing` (the scripted `TestLanguageModel` and probes) · `/compaction`.
+: `/sandbox` (portable) + `/sandbox/local` (host) · `/shell` · `/elicitation` · `/testing` (the scripted `TestLanguageModel`, probes, and the conformance suites every client, store, sandbox and channel is held to) · `/compaction`.
 
 **Applications in this repository**
 : `apps/tui` — the full-screen local coding harness · `apps/cli` — a

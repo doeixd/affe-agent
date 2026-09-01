@@ -4483,3 +4483,49 @@ decision, not a loop's), and a replay-stable `elapsed` under `/durable` --
 `State.elapsed`'s JSDoc says why a duration bound can decide differently on
 replay, and `maxDuration` inherits the caveat.
 
+## 2026-09-01 — the contract suites ship (comparison plan, item 3)
+
+`docs/plan-effect-agent-comparison.md` §3.2. `AgentClientContract`,
+`DeliveryLogContract` and `NodeStoreContract` lived in `test/`, so a client
+or store written outside this repository could not be certified against
+them; `SandboxConformance` and `ChannelConformance` had already shown the
+shape that fixes it. Now in `/testing`:
+
+- `AgentClientConformance`, `DeliveryLogConformance`, `NodeStoreConformance`
+  and -- new as a suite, having only been an in-file `describe` --
+  `DurableSessionStoreConformance`. Each is `cases(options)` as named
+  Effects failing with the suite's own tagged `Failure`, and
+  `run(options)` returning a `Report`. No `@effect/vitest` import: the
+  runner wiring is one `it.live` or `it.effect` per case in the caller's
+  file, which is exactly what the four `test/*Contract.ts` wrappers are now.
+- `src/testing/internal/conformance.ts` holds what the suites share:
+  `report`, a structural `deepEqual` (arrays, byte arrays, dates, plain
+  objects -- which covers `Option` and tagged structs), `show`, and the
+  `checks` vocabulary (`that`, `equal`, `failureOf`). `failureOf` exists
+  because `Effect.flip` puts an unexpected *success* on the error channel,
+  where a case's declared error type has no room for it; a case that
+  expected a failure and got a value is the case failing, and the report
+  says so.
+- The protocol-error half of the old client contract (`failingHost`,
+  `protocolErrors`, `runProtocolErrors`) stays in `test/`: it is a fixture
+  about transports, not a contract a client implements.
+
+Falsified: `test/ShippedConformance.test.ts` runs each suite against an
+in-tree implementation from the published entry and then against the same
+implementation with one method replaced -- a log that reports a conflict as
+a duplicate, a store whose roots are every node, a session store that
+accepts a replayed `finish`, a client that cannot reach a session by id --
+and asserts the report names exactly that case. A fifth case checks that a
+failure through the client's own error surfaces as the suite's comparison
+rather than a defect dump.
+
+Found while porting: the `attachExecution` case compared the claim's
+`executionId` as an `Option` where the schema has it `optional`, and the
+first count of client cases was one short (the streaming case is
+conditional, and was counted as absent). Both caught by the falsification
+file before anything depended on them.
+
+Not shipped: `McpServerConformance` and the cross-adapter host matrix.
+Both are about this repository's adapters against this repository's host,
+not a contract a third party implements.
+

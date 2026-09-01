@@ -15,7 +15,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1853 passing in 170 files, `McpServerConformance` included (it no longer runs separately) |
+| tests | `npm test` | 1862 passing in 171 files, `McpServerConformance` included (it no longer runs separately) |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
@@ -201,10 +201,14 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
 
 ## What holds it there
 
-- Contract suites: `AgentClientContract` (every client), `DeliveryLogContract`
-  and `NodeStoreContract` (every store), `McpServerConformance`,
-  `SandboxConformance`, `ChannelConformance`, and the cross-adapter host
-  matrix.
+- Contract suites, **shipped from `/testing`** since 2026-09-01 so a client
+  or store outside this repository is held to the same rows:
+  `AgentClientConformance` (every client), `DeliveryLogConformance`,
+  `NodeStoreConformance` and `DurableSessionStoreConformance` (every store),
+  beside `SandboxConformance` and `ChannelConformance`; `McpServerConformance`
+  and the cross-adapter host matrix stay in `test/`. Each shipped suite has a
+  deliberately wrong implementation that fails exactly the promise it breaks
+  (`test/ShippedConformance.test.ts`).
 - Break-once discipline: a mechanism is not done until its test has been
   broken once and seen to fail. The history records each.
 - Falsification: `scripts/falsify.mjs` re-runs the durability harness; the

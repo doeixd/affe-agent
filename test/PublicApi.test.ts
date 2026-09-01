@@ -257,8 +257,12 @@ describe("durable and cluster surfaces", () => {
   it("exports the testing vocabulary and nothing beyond it", async () => {
     const testing = await import("../src/testing/index.js")
     assert.deepStrictEqual(Object.keys(testing).sort(), [
+      "AgentClientConformance",
       "AgentProbe",
       "ChannelConformance",
+      "DeliveryLogConformance",
+      "DurableSessionStoreConformance",
+      "NodeStoreConformance",
       "SandboxConformance",
       "TestLanguageModel",
       "TestWebFetch",

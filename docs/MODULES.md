@@ -141,6 +141,7 @@ These all speak `AgentClient`, not `AgentSession`.
 | **`AgentProbe`** | `/testing` | Attaches once and buffers the whole event record. | A live stream means a late subscriber has already missed events. Records from `SubmissionStarted` onward; `SessionStarted` is emitted before any handle exists, and the probe says so rather than faking it. |
 | **`TestLanguageModel`** | `/testing` | Scripted provider, including `failingAfter`. | In `src/` rather than `test/` on purpose: **test code counts as user code**, so the cast it needs lives in the one place licensed to hold it. |
 | **`TestWebSearch` / `TestWebFetch`** | `/testing` | Doubles for the `/web` capabilities. | |
+| **`AgentClientConformance`, `DeliveryLogConformance`, `NodeStoreConformance`, `DurableSessionStoreConformance`** | `/testing` | The contract suites, framework-agnostic: `cases(...)` as named Effects, `run(...)` as a report. | What the in-tree clients and stores pass, published so yours can be held to the same rows -- the shape `SandboxConformance` and `ChannelConformance` already had. |
 
 ## 9. Plugins and extension
 
