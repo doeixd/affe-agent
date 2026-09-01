@@ -206,13 +206,26 @@ export interface CodeExecutor {
  *
  * Never suspends (engine-plan decision 7, not reopened): its state is a
  * JS call stack, so a paused program cannot cross a process boundary and
- * this module does not pretend otherwise. `resumeFrom` is ignored, which
- * is the honest reading of "this engine has no resumable state" -- there
- * is no state of ours it could be.
+ * this module does not pretend otherwise.
+ *
+ * It therefore **refuses** a `resumeFrom` rather than ignoring one. This
+ * matters more than the tidiness of it: ignoring the state would run the
+ * program again from the top, so a host that swapped executors and kept
+ * its resume path would silently get a *retry* -- every tool call the
+ * first attempt already made, made a second time. Writes twice, for a
+ * mistake with no symptom. A diagnostic naming the fix is the only safe
+ * reading of "this engine cannot do that".
  */
 export const interpreted: CodeExecutor = {
   run: (code, hooks) =>
     Effect.gen(function*() {
+      if (hooks.resumeFrom !== undefined) {
+        return yield* new CodeDiagnostic({
+          reason: "not-resumable",
+          fix:
+            "the owned interpreter cannot resume a suspended run; it never suspends, so this state is not its own -- run the program again deliberately, or use an executor that suspends"
+        })
+      }
       const parsed = parse(code)
       if (Result.isFailure(parsed)) return yield* parsed.failure
       const done = yield* interpret(parsed.success, { invoke: hooks.invoke })

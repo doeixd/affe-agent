@@ -93,6 +93,28 @@ describe("code-mode executors", () => {
     })
   )
 
+  it.effect("the owned interpreter refuses a resume rather than silently retrying", () =>
+    Effect.gen(function*() {
+      // The dangerous version of this is not an error, it is a success:
+      // ignoring `resumeFrom` runs the program again from the top, so a
+      // host that swapped executors and kept its resume path repeats
+      // every tool call the first attempt already made. Writes twice,
+      // no symptom. Break once by ignoring `resumeFrom` in `interpreted`
+      // and this returns "ran" with a second call recorded.
+      const { data } = yield* groups
+      const runtime = CodeMode.make({ tools: { data } })
+      const out = yield* runtime.execute(
+        "await tools.data.echo({ text: \"again\" })\nreturn \"ran\"",
+        { resumeFrom: { some: "state" } }
+      )
+      assert.strictEqual(out.outcome._tag, "Refused")
+      if (out.outcome._tag === "Refused") {
+        assert.strictEqual(out.outcome.reason, "not-resumable")
+      }
+      assert.deepStrictEqual(out.calls, [])
+    })
+  )
+
   it.effect("an executor that suspends reports it, and the host gets the state", () =>
     Effect.gen(function*() {
       const { data } = yield* groups

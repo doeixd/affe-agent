@@ -140,9 +140,22 @@ export interface Options<Groups extends CodeMode.ToolGroups, R> {
   readonly onSuspend?:
     | ((suspension: { readonly state: unknown; readonly reason: string }) => Effect.Effect<void>)
     | undefined
-  /** A prior suspension's state, to continue that run instead of starting one. */
-  readonly resumeFrom?: unknown | undefined
 }
+
+/**
+ * There is deliberately no `resumeFrom` here.
+ *
+ * A bound tool is built once and mounted on an agent; a resumption is one
+ * run continuing. A build-time `resumeFrom` would apply to *every* program
+ * the model subsequently wrote, which is not a resumption of anything, and
+ * it would read as though the model could resume -- it cannot, because it
+ * never holds the state.
+ *
+ * Resuming is a host operation at the level that has one: build a
+ * `CodeMode.make` runtime over the same tools and call
+ * `execute(program, { resumeFrom })`. Dropping to the primitives is taking
+ * a field, not going around the API.
+ */
 
 const render = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value) ?? String(value)
@@ -210,7 +223,6 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
         ...(context.toolCallId === undefined
           ? {}
           : { approvalPrefix: context.toolCallId }),
-        ...(options.resumeFrom === undefined ? {} : { resumeFrom: options.resumeFrom }),
         ...(options.onSuspend === undefined ? {} : { onSuspend: options.onSuspend }),
         onCall: (call) => {
           seen.push({ path: call.path.join("."), outcome: call.outcome })

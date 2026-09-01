@@ -4126,3 +4126,21 @@ today against a breaking change to a published entry point later.
 
 `test/CodeExecutors.test.ts`, four tests, three break-once. `npm run lint`
 0/0/0 over 399 files; typecheck clean; 1760 tests in 162 files.
+
+**Post-commit review pass, same day.** Two findings, both in the new
+surface:
+
+- **`CodeTool` had a build-time `resumeFrom`.** A bound tool is built once
+  and mounted; that field would have applied to *every* program the model
+  subsequently wrote, which resumes nothing, and it read as though the
+  model could resume -- it cannot, it never holds the state. Removed.
+  Resuming is a host operation at the level that has one:
+  `CodeMode.make(...).execute(program, { resumeFrom })`. `onSuspend` stays,
+  because that is how the state escapes a model-facing tool at all.
+- **The owned interpreter ignored a `resumeFrom` instead of refusing it**,
+  and the dangerous version of that is not an error but a success: ignoring
+  the state runs the program again from the top, so a host that swapped
+  executors and kept its resume path silently gets a *retry* -- every tool
+  call the first attempt made, made again. Writes twice, no symptom. It is
+  now a `not-resumable` diagnostic naming the fix, broken once and seen to
+  return "ran" with a duplicate call when the guard is removed.

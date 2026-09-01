@@ -26,6 +26,8 @@ export class CodeDiagnostic extends Schema.TaggedError<CodeDiagnostic>()(
       "call-depth",
       "tool-limit",
       "host-value",
+      /** A host asked an executor that cannot resume to continue a run. */
+      "not-resumable",
       "timeout",
       "output-limit",
       "internal"
