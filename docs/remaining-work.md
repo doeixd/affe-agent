@@ -603,9 +603,13 @@ and should not until it is committed. Item 30 is untouched.
       exhaustiveness test that fails the build when the pinned rc names a model
       with no row), committed as `be75b83` and reachable: `./model` is entry
       point 48 and `verify:package` imports it from the packed tarball.
-    - **M2, M4, M5, M6 not started** — `Compaction.tokens` wiring, `Budget.cost`
-      (which must price `cacheWrite` as well as `cacheRead`), the opt-in
-      pre-flight transform, and the selection example.
+    - **M2 landed 2026-09-01**: `ModelCapabilities.budget` is a resolver
+      `Compaction.tokens` accepts unchanged, so the `ResolveBudget` seam
+      carried the whole wiring and `src/compaction` did not move. A test hands
+      it to `Compaction.tokens` and fails to compile if either shape drifts.
+    - **M4, M5, M6 not started** — `Budget.cost` (which must price
+      `cacheWrite` as well as `cacheRead`), the opt-in pre-flight transform,
+      and the selection example.
 
 28. ~~**`AgentOutput`**~~ — SHIPPED 2026-09-01, `230745d`. A typed value a submission ends with, implemented as
     *a tool the model calls to report its answer* rather than a second model

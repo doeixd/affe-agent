@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Generated } from "@effect/ai-anthropic"
 import { Effect, Layer, Option } from "effect"
 import { Model } from "effect/unstable/ai"
+import * as Compaction from "../src/compaction/Compaction.js"
 import * as ModelCapabilities from "../src/model/ModelCapabilities.js"
 
 /**
@@ -137,4 +138,73 @@ describe("ModelCapabilities: resolution", () => {
       assert.isFalse(caps.vision === false)
       assert.deepStrictEqual(Option.fromNullishOr(caps.vision), Option.none())
     }).pipe(Effect.provide(ModelCapabilities.builtin)))
+})
+
+describe("ModelCapabilities: budget (M2)", () => {
+  /**
+   * `ResolveBudget` is handed a `ContextTransform.Context`, and this resolver
+   * ignores it entirely -- the budget comes from the model in scope, not from
+   * the turn. Passing `undefined` says that outright, and would stop
+   * compiling if the resolver ever started reading it.
+   */
+  const context = undefined
+
+  const anthropic = (model: string) =>
+    Layer.merge(
+      ModelCapabilities.builtin,
+      Model.make("anthropic", model, Layer.empty)
+    )
+
+  it.effect("sizes the window from the model, and keeps the caller's figures", () =>
+    Effect.gen(function*() {
+      const resolve = ModelCapabilities.budget({ reserve: 4096, keepRecent: 8192 })
+      const resolved = yield* resolve(context)
+
+      // Only `contextWindow` is derived: it is the number a caller cannot
+      // know. The other two are judgements about the agent.
+      assert.strictEqual(resolved.contextWindow, 200_000)
+      assert.strictEqual(resolved.reserveTokens, 4096)
+      assert.strictEqual(resolved.keepRecentTokens, 8192)
+    }).pipe(Effect.provide(anthropic("claude-haiku-4-5"))))
+
+  it.effect("reserves the model's own max output when the caller does not say", () =>
+    Effect.gen(function*() {
+      const resolved = yield* ModelCapabilities.budget({ keepRecent: 8192 })(context)
+
+      // The response has to fit somewhere, and the model states how large it
+      // can be -- so the default is a fact rather than a guess.
+      assert.strictEqual(resolved.reserveTokens, 64_000)
+    }).pipe(Effect.provide(anthropic("claude-haiku-4-5"))))
+
+  it.effect("fails naming the model rather than compacting to a guess", () =>
+    Effect.gen(function*() {
+      const result = yield* Effect.result(
+        ModelCapabilities.budget({ keepRecent: 8192 })(context)
+      )
+
+      assert.isTrue(result._tag === "Failure")
+      if (result._tag !== "Failure") return
+      // The failure travels on `ResolveBudget`'s own error channel, which is
+      // the reason that seam is typed at all.
+      // Narrowed, not asserted: the channel carries two error types and only
+      // one of them names a model.
+      assert.strictEqual(result.failure._tag, "UnknownModelError")
+      if (result.failure._tag !== "UnknownModelError") return
+      assert.strictEqual(result.failure.model, "claude-imaginary-9")
+    }).pipe(Effect.provide(anthropic("claude-imaginary-9"))))
+
+  it.effect("is a ResolveBudget: Compaction.tokens takes it unchanged", () =>
+    Effect.gen(function*() {
+      // The milestone's actual claim -- "no change to `src/compaction`" -- is
+      // this assignment, not any behaviour above. It is a runtime test only
+      // incidentally; the point is that it compiles, and it would stop
+      // compiling if either side's shape moved.
+      const policy = Compaction.tokens({
+        budget: ModelCapabilities.budget({ reserve: 4096, keepRecent: 8192 }),
+        estimate: Compaction.estimate.approximate
+      })
+
+      assert.strictEqual(policy._tag, "Tokens")
+      assert.strictEqual(typeof policy.budget, "function")
+    }))
 })

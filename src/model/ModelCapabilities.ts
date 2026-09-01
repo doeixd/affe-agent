@@ -276,3 +276,72 @@ export const builtin: Layer.Layer<ModelCapabilities> = fromTable({
 
 /** The built-in rows, for a caller extending rather than replacing them. */
 export const builtinTable: Table = { anthropic: ANTHROPIC }
+
+/**
+ * A `Compaction.ResolveBudget` that sizes the window from the model in scope.
+ *
+ * The point of the whole module, in one function: `Compaction.tokens` already
+ * takes `budget: ContextBudget | ResolveBudget`, so a capability-derived budget
+ * needs no change to `src/compaction` at all -- it is a second way to supply
+ * the number, not a replacement for the literal.
+ *
+ * ```ts
+ * Compaction.tokens({
+ *   budget: ModelCapabilities.budget({ reserve: 4096, keepRecent: 8192 }),
+ *   estimate: Compaction.estimate.approximate
+ * })
+ * ```
+ *
+ * The two figures stay the caller's. `reserve` is how much of the window to
+ * keep free for the response, and `keepRecent` how much recent conversation to
+ * show verbatim -- both judgements about *this agent*, not facts about the
+ * model, which is why neither is derived. Only `contextWindow` is, because
+ * that is the number a caller cannot know and was previously obliged to
+ * hand-write.
+ *
+ * `reserve` defaults to the model's own `maxOutputTokens`: the response has to
+ * fit somewhere, and the model already states how large it can be. A caller
+ * that knows its replies are short can say so and get the space back.
+ *
+ * The result's requirement is `ModelCapabilities` and its failures are the
+ * lookup's, which is exactly what the `ResolveBudget<E, R>` seam exists to
+ * carry -- so an agent whose model has no capability row fails where the
+ * budget is resolved, naming the model, rather than silently compacting to a
+ * window somebody guessed.
+ *
+ * Typed structurally rather than as `Compaction.ResolveBudget`, so that
+ * `/model` does not depend on `/compaction` to state its own return type. The
+ * shape is what makes it assignable, and `test/ModelCapabilities.test.ts`
+ * pins the assignability so the two cannot drift apart unnoticed.
+ */
+/** The `ContextBudget` shape `Compaction.tokens` consumes, stated structurally. */
+export interface ResolvedBudget {
+  readonly contextWindow: number
+  readonly reserveTokens: number
+  readonly keepRecentTokens: number
+}
+
+export const budget = (options: {
+  /**
+   * Tokens held back for the response. Defaults to the model's
+   * `maxOutputTokens`.
+   */
+  readonly reserve?: number | undefined
+  /** Tokens of recent conversation always shown verbatim. */
+  readonly keepRecent: number
+}): (
+  context: unknown
+) => Effect.Effect<
+  ResolvedBudget,
+  UnknownModelError | UnknownCurrentModelError,
+  ModelCapabilities
+> =>
+() =>
+  Effect.map(
+    Effect.flatMap(ModelCapabilities, (capabilities) => capabilities.current),
+    (capabilities): ResolvedBudget => ({
+      contextWindow: capabilities.contextWindow,
+      reserveTokens: options.reserve ?? capabilities.maxOutputTokens,
+      keepRecentTokens: options.keepRecent
+    })
+  )
