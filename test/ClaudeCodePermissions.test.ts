@@ -1,5 +1,10 @@
+import { NodeHttpServer } from "@effect/platform-node"
+import { Client as V2Client, StreamableHTTPClientTransport as V2HttpTransport } from "@modelcontextprotocol/client"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Option, Ref, Schema } from "effect"
+import { Effect, Fiber, Layer, Option, Ref, Schema } from "effect"
+import { McpProtocol, McpServer } from "effect/unstable/ai"
+import { HttpRouter, HttpServer } from "effect/unstable/http"
+import { createServer } from "node:http"
 import * as Elicitation from "../src/Elicitation.js"
 import * as Permission from "../src/Permission.js"
 import { ClaudeCodePermissions } from "../src/a2a/index.js"
@@ -252,6 +257,136 @@ describe("ClaudeCodePermissions.tool", () => {
       updatedInput: { command: "ls" }
     })
   })
+})
+
+describe("ClaudeCodePermissions.layer: the wire, as the CLI reads it", () => {
+  /**
+   * Served and called the way Claude Code calls it.
+   *
+   * This test exists because the result *shape* was wrong in a way nothing
+   * cheaper could see. Registering the tool through `McpServer.registerToolkit`
+   * attaches `structuredContent` and declares an `outputSchema`, and the CLI
+   * refuses that outright:
+   *
+   *   Permission prompt tool returned an invalid result. Expected a single text
+   *   block param with type="text" and a string text value.
+   *
+   * The run was then *blocked by that error*, which is the worst way for it to
+   * be wrong -- from the outside it looks exactly like the gate working. So the
+   * assertions below are about the envelope, not only the decision.
+   */
+  const serverFor = (policy: Permission.Policy) =>
+    HttpRouter.serve(
+      ClaudeCodePermissions.layer({ policy }).pipe(
+        Layer.provide(McpServer.layerHttp({
+          name: "effect-agent-permissions",
+          version: "1.0.0",
+          path: "/permission",
+          protocols: [McpProtocol.v2025_11_25]
+        }))
+      ),
+      { disableLogger: true, disableListenLog: true }
+    ).pipe(
+      Layer.provideMerge(NodeHttpServer.layer(createServer, {
+        port: 0,
+        gracefulShutdownTimeout: 100
+      }))
+    )
+
+  const connect = Effect.gen(function*() {
+    const address = HttpServer.formatAddress((yield* HttpServer.HttpServer).address)
+    return yield* Effect.acquireRelease(
+      Effect.promise(async () => {
+        const client = new V2Client(
+          { name: "permission-wire-test", version: "1.0.0" },
+          { versionNegotiation: { mode: "auto" } }
+        )
+        await client.connect(new V2HttpTransport(new URL("/permission", address)))
+        return client
+      }),
+      (client) => Effect.promise(() => client.close()).pipe(Effect.ignore)
+    )
+  })
+
+  /** The decision the CLI would parse: the one text block, decoded. */
+  const decisionOf = (result: {
+    readonly content: ReadonlyArray<{ readonly type: string }>
+  }): unknown => {
+    assert.strictEqual(result.content.length, 1, "expected a single content block")
+    const block = result.content[0]
+    assert.strictEqual(block?.type, "text")
+    if (block === undefined || block.type !== "text") return undefined
+    return JSON.parse((block as { readonly text: string }).text)
+  }
+
+  it.live("answers with exactly one text block, and nothing else", () =>
+    Effect.gen(function*() {
+      const client = yield* connect
+
+      // No output schema: declaring one is what makes the runtime attach
+      // `structuredContent`, which is what the CLI refuses.
+      const listed = yield* Effect.promise(() => client.listTools())
+      assert.deepStrictEqual(listed.tools.map((entry) => entry.name), ["approve"])
+      assert.isUndefined(listed.tools[0]?.outputSchema)
+
+      const refused = yield* Effect.promise(() =>
+        client.callTool({
+          name: "approve",
+          arguments: {
+            tool_name: "Write",
+            input: { file_path: "src/x.ts", content: "" },
+            tool_use_id: "toolu_1"
+          }
+        })
+      )
+      assert.isFalse(
+        "structuredContent" in refused && refused.structuredContent !== undefined,
+        "structuredContent is present, and the CLI refuses a result carrying it"
+      )
+      assert.deepStrictEqual(decisionOf(refused), {
+        behavior: "deny",
+        message: "read-only here"
+      })
+
+      const allowed = yield* Effect.promise(() =>
+        client.callTool({
+          name: "approve",
+          arguments: { tool_name: "Read", input: { file_path: "README.md" } }
+        })
+      )
+      assert.deepStrictEqual(decisionOf(allowed), {
+        behavior: "allow",
+        // Echoed on every allow: older CLIs rejected an allow that omitted it.
+        updatedInput: { file_path: "README.md" }
+      })
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(serverFor(
+        Permission.rules([{ action: "write", decision: Permission.deny("read-only here") }], {
+          otherwise: Permission.allow
+        })
+      ))
+    ),
+    30_000
+  )
+
+  it.live("a request it cannot even read is denied, not failed", () =>
+    Effect.gen(function*() {
+      // Failing the tool call would leave the CLI reporting a broken permission
+      // layer -- true, but indistinguishable from a refusal to anyone watching.
+      const client = yield* connect
+      const answer = yield* Effect.promise(() =>
+        client.callTool({ name: "approve", arguments: { tool_name: 42 } })
+      )
+      assert.notStrictEqual(answer.isError, true, "the tool call failed instead of deciding")
+      const decision = decisionOf(answer)
+      assert.isTrue(
+        typeof decision === "object" && decision !== null &&
+          (decision as { behavior?: unknown }).behavior === "deny"
+      )
+    }).pipe(Effect.scoped, Effect.provide(serverFor(Permission.allowAll))),
+    30_000
+  )
 })
 
 describe("ClaudeCodePermissions.args", () => {

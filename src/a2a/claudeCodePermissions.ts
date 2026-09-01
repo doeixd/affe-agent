@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
+import { McpSchema, McpServer, Tool } from "effect/unstable/ai"
 import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
 import * as DelegatedPermission from "./internal/delegatedPermission.js"
@@ -357,25 +357,72 @@ const handlerFor = <R>(options: Options<R>, services: Context.Context<R>) =>
   }).pipe(Effect.provideContext(services))
 
 /**
- * The tool, and where its handler's services come from.
+ * Registered by hand, not through `McpServer.registerToolkit`.
  *
- * A policy's own services are captured when the layer is built, where they are
- * in scope, rather than demanded per call: an MCP tool handler is invoked by
- * the server with the server's context, and a policy that quietly lost its
- * dependencies at that boundary would fail at the worst possible moment.
+ * The toolkit registration sets `structuredContent` on the result whenever the
+ * success value is an object, and declares an `outputSchema` to match. Claude
+ * Code refuses such a result outright:
+ *
+ * > Permission prompt tool returned an invalid result. Expected a single text
+ * > block param with type="text" and a string text value.
+ *
+ * It wants exactly one text block and nothing else -- the extra fields are not
+ * ignored, they are the failure. Observed against the real CLI (2.1.252) on
+ * 2026-09-01, and the run was *blocked* by that error rather than by the
+ * policy's decision, which is the worst way for this to be wrong: it looks like
+ * the gate working.
+ *
+ * So the result is built here, where its shape is the point. This mirrors
+ * `AgentMcp.registerInteractive`, which exists for a neighbouring reason.
  */
-const ApproveToolkit = Toolkit.make(tool)
+const register = <R>(options: Options<R>, services: Context.Context<R>) =>
+  Effect.gen(function*() {
+    const server = yield* McpServer.McpServer
+    const inputSchema = yield* Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema)(
+      Tool.getJsonSchema(tool)
+    ).pipe(Effect.orDie)
+    const decode = Schema.decodeUnknownEffect(PromptInput)
+    const answer = handlerFor(options, services)
 
-const handlers = <R>(options: Options<R>): Layer.Layer<
-  Tool.HandlersFor<{ readonly approve: typeof tool }>,
-  never,
-  R
-> =>
-  ApproveToolkit.toLayer(
-    Effect.map(Effect.context<R>(), (services) => ({
-      approve: handlerFor(options, services)
-    }))
-  )
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: tool.name,
+        description: Tool.getDescription(tool),
+        inputSchema
+        // No `outputSchema`, deliberately: declaring one is what makes the
+        // runtime attach `structuredContent`, which is what the CLI refuses.
+      }),
+      annotations: Context.empty(),
+      handle: (payload) =>
+        decode(payload ?? {}).pipe(
+          // A request this cannot even decode is still a decision to make, and
+          // the only safe one. Failing the tool call would leave the CLI
+          // reporting a broken permission layer -- true, but it would look
+          // exactly like a refusal, and nobody could tell them apart.
+          Effect.matchEffect({
+            onFailure: (error) =>
+              Effect.succeed(
+                deniedResult(`the permission request could not be read: ${error.message}`)
+              ),
+            onSuccess: (input) =>
+              Effect.map(answer(input), (result) =>
+                new McpSchema.CallToolResult({
+                  isError: false,
+                  content: [{ type: "text", text: JSON.stringify(result) }]
+                }))
+          })
+        )
+    })
+  })
+
+const deniedResult = (message: string) =>
+  new McpSchema.CallToolResult({
+    isError: false,
+    content: [{
+      type: "text",
+      text: JSON.stringify({ behavior: "deny", message } satisfies PromptResult)
+    }]
+  })
 
 /**
  * Register the permission tool on the ambient `McpServer`.
@@ -388,6 +435,6 @@ const handlers = <R>(options: Options<R>): Layer.Layer<
 export const layer = <R = never>(
   options: Options<R>
 ): Layer.Layer<never, never, McpServer.McpServer | R> =>
-  Layer.effectDiscard(McpServer.registerToolkit(ApproveToolkit)).pipe(
-    Layer.provide(handlers(options))
+  Layer.effectDiscard(
+    Effect.flatMap(Effect.context<R>(), (services) => register(options, services))
   )
