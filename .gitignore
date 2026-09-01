@@ -8,3 +8,8 @@ doeixd-effect-agent-*.tgz
 # Remove these lines to include them in the repo.
 ADDITIONAL.md
 flue.md
+
+# Live coordination between agents sharing this working tree: claims on files,
+# not history. Local by design -- a claim from another machine's session is
+# noise at best and a stale lock at worst.
+COLLABORATION.md
