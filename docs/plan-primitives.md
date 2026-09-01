@@ -190,6 +190,7 @@ assertions that inference stayed precise:
 | `examples/ref-coding-agent.ts` | opencode / Pi | sessions, tools, permissions, sandbox, compaction, a front end |
 | `examples/ref-gateway.ts` | executor | sources, auth, principals, per-tool policy, an MCP surface |
 | `examples/ref-declarative.ts` | Flue | dynamic capability resolution, state, hooks — the ergonomics claim |
+| `examples/ref-delegation.ts` | openclaw / a mesh of runtimes | two bridged agent runtimes as ordinary tools, one policy governing both — `plan-a2a-layers-bridges.txt`'s claim |
 
 Rules that make them worth the maintenance:
 

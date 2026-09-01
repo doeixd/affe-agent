@@ -345,10 +345,30 @@ open, so the next pass does not have to re-derive it.
     `/session/{id}/abort` because there is no process to kill -- the run lives
     in the server, and interrupting the fibre here would leave it running.
 
+26f. **`examples/ref-delegation.ts`** — SHIPPED 2026-09-01, the fourth
+    reference example and the first place the bridges are used the way a *user*
+    would: published entry points only, no casts, `npm run smoke:ref-delegation`
+    in `check`. It asserts the two claims rather than describing them -- a
+    bridged CLI and a bridged HTTP server are both ordinary tools of one
+    manager, and one rule set written in `/coding`'s vocabulary governs both
+    (an `edit` asked on OpenCode's bus becomes an elicitation and comes back as
+    `always`; `git push` is refused in Claude Code's dialect). Compile-time
+    assertions pin that both bridges narrow `send`'s union to `Task` and that
+    either is accepted where a peer is wanted.
+
     Still open from the plan: steps 5-7 -- relay transport (both bridges over
     `plan-relay.txt`, at which point local vs remote is transport selection),
     then the `LanguageModel` adapter experiment, which the plan itself ranks
     last and least natural.
+
+    **Neither bridge has been run against the real thing.** Every test and this
+    example substitute the seam -- a scripted `Sandbox`, a stubbed `HttpClient`
+    -- which is legitimate for CI and is exactly how the CLI/server contracts
+    could still be wrong in a way nothing here would catch. Same standing
+    caveat as the Anthropic example. The two places to expect it: the
+    permission payload's field casing (both spellings are accepted, so this is
+    hedged) and OpenCode's permission-name table (read from its OpenAPI
+    document, and overridable).
 
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
