@@ -101,6 +101,14 @@ the fibre that acts -- a `Context.Reference` the host sets per request
 (`AgentSessionHost.Options.subject`), `None` outside any host, carried on
 the durable claim/payload so replays see what the claimer saw.
 
+**Cloudflare host.** `@doeixd/effect-agent/cloudflare` (since 2026-09-01):
+`CloudflareHost.make({ agent, layer })` returns the Durable Object class and
+the Worker class a deployment exports. Built on `effect-cf`, an optional
+peer, by the owner's decision (`docs/plan-effect-cf-and-webtransport.md`
+§3a) -- the one place it enters `src/`, compiled as its own program
+(`tsconfig.cloudflare.json`) and exempted by name in the portability lint.
+Durability is the platform's: `/durable`'s engine still stalls on workerd.
+
 **Presets.** `@doeixd/effect-agent/presets`: `Presets.coding` (toolkit, a
 policy that asks before anything changes, an acquired workspace) and
 `Presets.gateway` (source-bound tools behind one host, refusals returned
@@ -202,11 +210,11 @@ target guard); `/openai`
 (OpenAI-compatible responses).
 
 **Applications.** `apps/tui` (full-screen local coding harness),
-`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (a real Durable Object host: one DO per session, history in
-DO SQLite written at every committed turn, events journaled to the delivery
-log, resumption across the runtime's death, and `/scheduling`'s
-`AgentDispatcher` over DO SQLite and the object's alarm -- each proven on
-workerd via miniflare, the alarm across a runtime restart), `examples/` -- every one typechecked;
+`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (the published `/cloudflare` entry with the scripted model:
+one DO per session, history in DO SQLite written at every committed turn,
+events journaled to the delivery log, resumption across the runtime's
+death, and `/scheduling`'s `AgentDispatcher` as logical alarms -- each
+proven on workerd via miniflare, the alarm across a runtime restart), `examples/` -- every one typechecked;
 `session-tree`, `ref-coding-agent`, `typed-agent` and the worker test also
 run. `examples/deploy-cloudflare/` is the Alchemy stack.
 
@@ -247,8 +255,10 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
   on workerd (upstream; minimal repro in the history). The DO host uses the
   platform's durability instead; `/durable` runs where its engine runs.
 - **The DO worker's model** is the scripted test model until a deployment
-  wires a real one; the Alchemy stack is written but has not been run
-  against a real account.
+  wires a real one; the Alchemy stack is written for the `/cloudflare` entry
+  (`nodejs_compat`, compatibility date 2026-08-25) but has not been run
+  against a real account -- this container has none, and the owner's
+  wrangler login is on their machine.
 
 The larger parked work -- the reference gateway, code mode, filetypes
 phase 5, the relay and bridge packages, compaction's overflow-recovery

@@ -40,8 +40,12 @@ const bundleWorker = Effect.fn("WorkerDurableObject.bundle")(function* () {
       conditions: ["workerd", "browser"],
       outfile,
       logLevel: "silent",
+      // workerd provides its own runtime module, and the Node built-ins
+      // effect-cf reaches for (`node:async_hooks`) under `nodejs_compat`.
+      external: ["cloudflare:*", "node:*"],
       alias: {
         "@doeixd/effect-agent": path.join(process.cwd(), "src", "index.ts"),
+        "@doeixd/effect-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts"),
         "@doeixd/effect-agent/AgentSession": path.join(process.cwd(), "src", "AgentSession.ts"),
         "@doeixd/effect-agent/client": path.join(process.cwd(), "src", "client", "index.ts"),
         "@doeixd/effect-agent/durable": path.join(process.cwd(), "src", "durable", "index.ts"),
@@ -61,7 +65,8 @@ const workerAt = (outfile: string, persist: string) =>
       // travels through the converter it ships for exactly this.
       new Miniflare(convertV4MiniflareOptions({
         modules: [{ type: "ESModule", path: outfile }],
-        compatibilityDate: "2025-08-01",
+        compatibilityDate: "2026-08-25",
+        compatibilityFlags: ["nodejs_compat"],
         durableObjects: {
           SESSIONS: { className: "AgentSessionObject", useSQLite: true }
         },

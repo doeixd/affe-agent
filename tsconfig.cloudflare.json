@@ -1,0 +1,22 @@
+{
+  // The Cloudflare host entry (`src/cloudflare`), compiled apart from the
+  // rest of `src`: it is built on `effect-cf`, whose types reach the Workers
+  // globals (`DurableObjectState`, `AlarmInvocationInfo`, `Cloudflare.Env`),
+  // and those globals collide with the DOM lib the main build uses. Same
+  // `outDir`, same `rootDir`: the entry lands in `dist/cloudflare` beside
+  // everything else, and the portable modules it imports are re-emitted
+  // identically.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "lib": ["ES2022", "WebWorker"],
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/cloudflare"],
+  "exclude": []
+}

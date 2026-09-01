@@ -637,8 +637,11 @@ sizes; the items are repeated here so this list stays the one tracker.
     Rendering's REST API as the first (portable) provider, doubles in
     `/testing`, every bound in the README table. The interactive browser is
     parked behind item 43.
-43. **A published Cloudflare host entry, then a real deployment** (plan §3.3
-    c–d) — after 39: `@doeixd/effect-agent/cloudflare` as a host module in
+43. ~~**A published Cloudflare host entry**~~ — landed 2026-09-01 as
+    `@doeixd/effect-agent/cloudflare` on `effect-cf` (decision:
+    `plan-effect-cf-and-webtransport.md` §3a; see `status-history.md`).
+    **The real deployment (§3.3d) still needs an account** and is item 19's
+    remaining half. As planned (plan §3.3 c–d) — after 39: `@doeixd/effect-agent/cloudflare` as a host module in
     `/sandbox/local`'s shape, with its own exemption in
     `verify-portability.mjs` and still no `effect-cf`. This is the category
     decision of `plan-effect-cf-and-webtransport.md` §3 applied to our own

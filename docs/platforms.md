@@ -10,13 +10,13 @@ own entry point, so importing `/sandbox` never pulls in `/sandbox/local`.
 
 | | Node.js | Cloudflare Workers |
 | --- | --- | --- |
-| **Requirement** | 22.5+, for the host entries only | workerd; `apps/worker` is proven on it through miniflare in CI |
-| **Entry** | `/sandbox/local`, `/durable` with `@effect/sql-sqlite-node`, `/cluster` | [`apps/worker`](../apps/worker/src/index.ts) — a reference host to read and copy, not yet a published entry |
+| **Requirement** | 22.5+, for the host entries only | workerd with `nodejs_compat`, compatibility date 2026-08-25 or later; proven through miniflare in CI |
+| **Entry** | `/sandbox/local`, `/durable` with `@effect/sql-sqlite-node`, `/cluster` | `/cloudflare` (`CloudflareHost.make({ agent, layer })` → the Durable Object class and the Worker), on `effect-cf`, an optional peer; [`apps/worker`](../apps/worker/src/index.ts) is it with the scripted model |
 | **Execution model** | a process you operate; `/cluster` for more than one | one Durable Object per session, the Worker routing by session id |
 | **History** | in memory; `/durable` rebuilds it from the journal, `/tree` persists it to a `NodeStore` | DO SQLite, written as each turn commits and restored when the object wakes |
 | **Work that survives the process** | `/durable`: model and tool calls are Workflow activities, so a resumed submission replays them instead of repeating them; `/cluster` reassigns a shard when its owner dies mid-activity | every committed turn and the conversation survive hibernation and death; the turn in flight and its submission do not — the DO equivalent of Node without `/durable` (see the file's header for why the workflow engine is not used there) |
 | **Events** | the `DeliveryLog` (SQL or `/durable-streams`); a client resumes with `read({ after })` | the same `DeliveryLog`, in DO SQLite; `events?after=N` is served from the journal then live, gaplessly |
-| **Scheduling** | `/scheduling` over Effect's `Schedule`; `/cluster`'s `ScheduledAgent` across nodes | `/scheduling`'s `AgentDispatcher` over a job table in DO SQLite and the object's alarm; a wake re-arms from the table, so a job outlives the runtime that dispatched it |
+| **Scheduling** | `/scheduling` over Effect's `Schedule`; `/cluster`'s `ScheduledAgent` across nodes | `/scheduling`'s `AgentDispatcher` as a logical alarm per job (`effect-cf`'s `DurableObjectAlarm`: at-least-once, retried, the platform alarm reconciled in the same transaction), so a job outlives the runtime that dispatched it |
 | **Sandbox** | `/sandbox/local`, real processes | `MemorySandbox`, or `Sandbox.fromExec` over a remote provider |
 | **Model** | any `@effect/ai-*` layer | the scripted test model until a deployment wires one; `examples/deploy-cloudflare/` is the Alchemy stack, written and not yet run against an account |
 | **Proof** | `npm run verify:durability`, `examples/durable-resume.ts` (four processes, one SQLite file) | `test/WorkerDurableObject.test.ts` on miniflare |

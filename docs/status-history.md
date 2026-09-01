@@ -4736,3 +4736,51 @@ Parked, as planned: the interactive browser -- navigate, click, fill, with
 a session lifetime and an uncertain outcome after a crash -- behind the
 published Cloudflare host entry (item 43).
 
+## 2026-09-01 — the Cloudflare host is a published entry, on effect-cf (comparison plan, item 8c)
+
+The owner decided: utilise `effect-cf` where appropriate. Under
+`plan-effect-cf-and-webtransport.md` §3's own reasoning that has one
+answer, and §3a records it: the Cloudflare host entry, and nowhere else.
+
+`@doeixd/effect-agent/cloudflare` (`src/cloudflare/index.ts`):
+`CloudflareHost.make({ agent, layer, ... })` returns the Durable Object
+class and the Worker class a deployment exports. Inside it is what
+`apps/worker` used to hand-roll, on `effect-cf`'s services instead:
+
+- `DurableObject.make` for the class, the per-instance runtime and
+  `DurableObjectState`; `DurableObjectSqlite.layer()` for the object's
+  SQLite as `SqlClient`; `Worker.make` and `DurableObjectNamespace` for the
+  router and the stub as an Effect client.
+- `DurableObjectAlarm` replaced the hand-rolled jobs table, `setAlarm` and
+  re-arm-on-wake: `/scheduling`'s `AgentDispatcher` is now one logical
+  alarm per job (`scheduleAlarm` persists it and reconciles the platform
+  alarm in one transaction), and the alarm handler is `processDue` --
+  at-least-once, a failed run retried after `retryFailedAfter`. The
+  object's session id is the name it was created under (`state.id.name`),
+  so the meta table went too.
+- History at every committed turn, the delivery-log journal and gapless
+  `events?after=N` are unchanged from the worker, now the entry's.
+
+What made it a separate compile: `effect-cf`'s types reach the Workers
+globals, which collide with the DOM lib the main build uses, so the entry
+is its own program (`tsconfig.cloudflare.json`, `typecheck:cloudflare`,
+`lint:cloudflare`, a second `tsc` in `build` into the same `dist`). And
+what made `verify-package` special-case it: the entry imports
+`cloudflare:workers`, which only workerd provides, so on Node the check
+resolves it through `exports` and stops; `test/WorkerDurableObject.test.ts`
+imports it on workerd, with `cloudflare:*` and `node:*` external to the
+bundle and `nodejs_compat` on (effect-cf reaches for
+`node:async_hooks`). `effect-cf` is an optional peer, `>=0.39.0 <1.0.0`.
+
+`apps/worker` is now twenty lines: the agent, the scripted model, and the
+two exports. Its three miniflare tests pass unchanged over the entry -- a
+session surviving the runtime's death with its log, the turn-boundary
+persistence, and the dispatched job firing after a restart, now through
+`effect-cf`'s alarm rather than the table it replaced. `verify:workerd`
+and `verify:package` pass; the portability lint exempts the entry by name
+and still rejects `effect-cf` everywhere else.
+
+Not done: the real deployment (item 19, plan §3.3d). This container has no
+Cloudflare account, and the owner's wrangler login is on their machine;
+the Alchemy stack is updated for the entry and waits for one.
+

@@ -41,7 +41,9 @@ const sourceRoot = positionalRoot === undefined
  * the Web Crypto API. Removing an entry is the only proof that a module became
  * portable, which is why the list is checked rather than merely documented.
  */
-const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts"])
+// `cloudflare/` is the Cloudflare host entry, on `effect-cf` and the DO
+// SQLite driver by design (`docs/plan-effect-cf-and-webtransport.md` §3).
+const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts", "cloudflare/index.ts"])
 
 const builtins = new Set(builtinModules)
 

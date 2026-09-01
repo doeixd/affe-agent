@@ -64,9 +64,13 @@
       "@doeixd/effect-agent/sandbox/local": ["./src/sandbox/local.ts"],
       "@doeixd/effect-agent/mcp/v1": ["./src/mcp/v1/index.ts"],
       "@doeixd/effect-agent/mcp/v2": ["./src/mcp/v2/index.ts"],
-      "@doeixd/effect-agent/pi": ["./src/pi/index.ts"]
+      "@doeixd/effect-agent/pi": ["./src/pi/index.ts"],
+      "@doeixd/effect-agent/cloudflare": ["./src/cloudflare/index.ts"]
     },
     "plugins": [{ "name": "@effect/language-service" }]
   },
-  "include": ["src", "test", "examples"]
+  "include": ["src", "test", "examples"],
+  // The Cloudflare host entry compiles under tsconfig.cloudflare.json: its
+  // types reach the Workers globals, which collide with the DOM lib here.
+  "exclude": ["src/cloudflare"]
 }

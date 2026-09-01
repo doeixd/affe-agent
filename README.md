@@ -77,7 +77,7 @@ Core is the default import; everything else is an explicit subpath.
 : `/coding` — file/shell tools over a sandbox · `/pi` — the same seam with Pi's tool contracts (batch edits, rendered listings, PowerShell) · `/tool-source` — MCP/OpenAPI/GraphQL catalogs as typed or discovered toolkits, with `Credentials` (method / binding / provider, `Redacted` values resolved per call into the sources' `headers` hook) · `/subagent` — delegation as a tool that opens a child session · `/state` — persistent typed application state · `/skills` — metadata-first, load-on-demand capabilities · `/memory` — long-term cross-session recall · `/evals` — behavioural evaluation through the public session · `/observability` — telemetry from the event stream · `/data` — typed forward output to a client/UI · `/connectors` — put an agent behind a webhook / platform · `/hooks` — lifecycle side-effects · `/scheduling` — self-dispatch and recurrence over Effect's own `Schedule` · `/budget` — a token ceiling a session enforces through the loop · `/plugins` — load an Agent Plugins (agent-plugins.org) package over `/skills` + `/mcp`.
 
 **Host & testing**
-: `/sandbox` (portable) + `/sandbox/local` (host) · `/shell` · `/elicitation` · `/testing` (the scripted `TestLanguageModel`, probes, and the conformance suites every client, store, sandbox and channel is held to) · `/compaction`.
+: `/sandbox` (portable) + `/sandbox/local` (host) · `/cloudflare` (host: one Durable Object per session and the Worker that routes to it, on `effect-cf`, an optional peer) · `/shell` · `/elicitation` · `/testing` (the scripted `TestLanguageModel`, probes, and the conformance suites every client, store, sandbox and channel is held to) · `/compaction`.
 
 **Applications in this repository**
 : `apps/tui` — the full-screen local coding harness · `apps/cli` — a
@@ -92,7 +92,7 @@ says what a change there means for you, not how good the code is.
 | --- | --- | --- |
 | **core** | the vocabulary; a breaking change here is a major version | root (`Agent`, `AgentSession`, `AgentLoop`, `AgentEvent`, `Permission`, `Elicitation`, `ContextTransform`, `Snapshot`), `/client`, `/elicitation`, `/testing` |
 | **supported** | contract-tested against the reference apps and the cross-adapter matrix; changes are deliberate and noted in `STATUS.md` | `/http`, `/rpc`, `/mcp`, `/ag-ui`, `/a2a`, `/coding`, `/sandbox`, `/sandbox/local`, `/shell`, `/state`, `/hooks`, `/observability`, `/export`, `/compaction`, `/redaction`, `/budget`, `/subagent` |
-| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/web/cloudflare`, `/pi` |
+| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/web/cloudflare`, `/cloudflare`, `/pi` |
 | **reference** | illustrative, not a dependency: read it, copy it, do not import it | `apps/tui`, `apps/cli`, `examples/` |
 
 Engine-facing seams are not on any of these namespaces. What a durable

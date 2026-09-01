@@ -15,15 +15,16 @@ import { Effect } from "effect"
  * §5.2, and it is why this file lives in `examples/` rather than `src/`.
  *
  * What the worker itself does — one DO per session id, history persisted to
- * DO SQLite per completed submission, events journaled to the delivery log,
- * `events?after=N` gapless across hibernation and process death — is
- * documented and tested at `apps/worker/src/index.ts` and
- * `test/WorkerDurableObject.test.ts`. The model inside the checked-in entry
- * is the scripted test model; a real deployment copies `apps/worker` and
- * swaps `scriptedModel` for a provider layer (for Anthropic:
- * `AnthropicLanguageModel.layer(...)` over `FetchHttpClient.layer`, with the
- * key from a Worker secret), which is deliberately a code change in the
- * *application's* copy, not a flag in the library's.
+ * DO SQLite at every committed turn, events journaled to the delivery log,
+ * `events?after=N` gapless across hibernation and process death, dispatched
+ * work as logical alarms — is `@doeixd/effect-agent/cloudflare`'s, built on
+ * `effect-cf`, and tested at `test/WorkerDurableObject.test.ts`. The model
+ * inside the checked-in entry is the scripted test model; a real deployment
+ * copies `apps/worker` and swaps `scriptedModel` for a provider layer (for
+ * Anthropic: `AnthropicLanguageModel.layer(...)` over `FetchHttpClient.layer`,
+ * with the key read from a Worker secret through `WorkerEnvironment`), which
+ * is deliberately a code change in the *application's* copy, not a flag in
+ * the library's.
  */
 export default class AgentStack extends Alchemy.Stack<AgentStack>()(
   "effect-agent",
@@ -36,7 +37,9 @@ export default class AgentStack extends Alchemy.Stack<AgentStack>()(
       // Alchemy bundles the entry itself; the same file the miniflare test
       // bundles with esbuild, resolved through this repository's sources.
       main: "../../apps/worker/src/index.ts",
-      compatibility: { date: "2025-08-01" },
+      // effect-cf's floor, and `nodejs_compat` for the `node:async_hooks`
+      // it reaches for.
+      compatibility: { date: "2026-08-25", flags: ["nodejs_compat"] },
       // `env` is the typed bindings record: what the Worker sees as `env.*`.
       env: {
         // One Durable Object namespace, SQLite-backed, hosted by this

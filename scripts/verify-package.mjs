@@ -63,6 +63,10 @@ try {
   )
 
   const hostEntries = new Set(["./sandbox/local", "./connectors/slack", "./blob/fs"])
+  // The Cloudflare entry imports `cloudflare:workers`, which only workerd
+  // provides: on Node it can be *resolved* through `exports` and no more.
+  // Importing it is what `test/WorkerDurableObject.test.ts` does, on workerd.
+  const workerdEntries = new Set(["./cloudflare"])
   const hook = pathToFileURL(
     path.join(root, "scripts", "no-node-builtins.mjs")
   ).href
@@ -73,10 +77,14 @@ try {
     // entry is imported under a resolution hook that refuses Node built-ins,
     // so the check is on the artifact a consumer installs, not on the source:
     // a dependency reaching for `node:fs` at import time fails here.
-    const portable = !hostEntries.has(subpath)
+    const portable = !hostEntries.has(subpath) && !workerdEntries.has(subpath)
     fs.writeFileSync(
       path.join(scratch, "probe.mjs"),
-      `const m = await import(${JSON.stringify(specifier)})\n` +
+      workerdEntries.has(subpath)
+        ? `const url = import.meta.resolve(${JSON.stringify(specifier)})\n` +
+          `if (!url.endsWith("/dist/cloudflare/index.js")) throw new Error("resolved to " + url)\n` +
+          `console.log(${JSON.stringify(specifier)}, "(workerd) ->", url)\n`
+        : `const m = await import(${JSON.stringify(specifier)})\n` +
         `if (Object.keys(m).length === 0) throw new Error("no exports")\n` +
         `console.log(${JSON.stringify(specifier)}, ${
           JSON.stringify(portable ? "(portable) ->" : "(host) ->")
