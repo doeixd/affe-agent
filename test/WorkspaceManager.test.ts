@@ -20,6 +20,42 @@ import * as WorkspaceManager from "../src/sandbox/WorkspaceManager.js"
 
 const ws = Sandbox.workspace
 
+/**
+ * A provider that counts builds and gives each one its own world.
+ *
+ * `MemorySandbox` keys its world by workspace label and shares it across
+ * acquisitions regardless of who acquired it, so under it a correctly shared
+ * workspace and a rebuilt one look identical. Counting builds is the only way
+ * to tell reference counting from a plain expiring cache.
+ */
+const counting = (built: Ref.Ref<number>) =>
+  Layer.succeed(Sandbox.SandboxProvider)({
+    acquire: (workspace: Sandbox.Workspace) =>
+      Effect.acquireRelease(
+        Ref.update(built, (n) => n + 1),
+        () => Ref.update(built, (n) => n - 1)
+      ).pipe(
+        Effect.flatMap(() =>
+          Effect.provide(Sandbox.acquire(workspace), MemorySandbox.layer())
+        )
+      )
+  })
+
+const withCounting = <A, E>(
+  use: (
+    manager: WorkspaceManager.Service,
+    built: Ref.Ref<number>
+  ) => Effect.Effect<A, E, Scope.Scope>,
+  options?: WorkspaceManager.Options
+) =>
+  Effect.gen(function* () {
+    const built = yield* Ref.make(0)
+    return yield* Effect.scoped(
+      Effect.flatMap(WorkspaceManager.make(options), (manager) =>
+        use(manager, built))
+    ).pipe(Effect.provide(counting(built)))
+  })
+
 const withManager = <A, E>(
   use: (manager: WorkspaceManager.Service) => Effect.Effect<A, E, Scope.Scope>,
   options?: WorkspaceManager.Options
@@ -103,8 +139,49 @@ describe("WorkspaceManager", () => {
           assert.strictEqual(second.sandbox, first.sandbox)
           yield* second.release
         }),
-      { idleTimeToLive: "30 seconds" }
+      // Deliberately not the default: set to 30s, deleting the option
+      // entirely would change nothing observable.
+      { idleTimeToLive: "10 seconds" }
     ))
+
+  it.effect("a live holder keeps it past the idle window", () =>
+    withCounting(
+      (manager, built) =>
+        Effect.gen(function* () {
+          // The assertion the rest of this file was missing, and without it
+          // the whole module is indistinguishable from an expiring cache: no
+          // other test holds a workspace *across* the window, so every
+          // "shared" result they check is satisfied by the cache alone. An
+          // `acquire` that took no reference at all passed all eight.
+          const held = yield* holder(manager, ws("held"))
+          yield* TestClock.adjust("11 seconds")
+
+          assert.strictEqual(yield* Ref.get(built), 1)
+          const second = yield* holder(manager, ws("held"))
+          assert.strictEqual(second.sandbox, held.sandbox)
+          assert.strictEqual(yield* Ref.get(built), 1)
+
+          yield* second.release
+          yield* held.release
+        }),
+      { idleTimeToLive: "10 seconds" }
+    ))
+
+  it.effect("the default idle window is the documented one", () =>
+    withCounting((manager, built) =>
+      Effect.gen(function* () {
+        // Pins `defaultIdleTimeToLive`, which nothing else reads: every other
+        // test passes its own, so the constant the docstring argues for was
+        // free to be anything at all.
+        const first = yield* holder(manager, ws("default"))
+        yield* first.release
+
+        yield* TestClock.adjust("29 seconds")
+        assert.strictEqual(yield* Ref.get(built), 1)
+
+        yield* TestClock.adjust("2 seconds")
+        assert.strictEqual(yield* Ref.get(built), 0)
+      })))
 
   it.effect("and is released once the window passes", () =>
     withManager(
@@ -113,7 +190,7 @@ describe("WorkspaceManager", () => {
           const first = yield* holder(manager, ws("expiring"))
           yield* first.release
 
-          yield* TestClock.adjust("31 seconds")
+          yield* TestClock.adjust("11 seconds")
 
           const second = yield* holder(manager, ws("expiring"))
           // Asserted as a *different build*, not as a "released" flag: the
@@ -121,11 +198,11 @@ describe("WorkspaceManager", () => {
           assert.notStrictEqual(second.sandbox, first.sandbox)
           yield* second.release
         }),
-      { idleTimeToLive: "30 seconds" }
+      { idleTimeToLive: "10 seconds" }
     ))
 
-  it.effect("`invalidate` forces the next acquire to build again", () =>
-    withManager((manager) =>
+  it.effect("`invalidate` rebuilds without revoking from a live holder", () =>
+    withCounting((manager, built) =>
       Effect.gen(function* () {
         const first = yield* holder(manager, ws("forced"))
         yield* manager.invalidate(ws("forced"))
@@ -133,12 +210,22 @@ describe("WorkspaceManager", () => {
         const second = yield* holder(manager, ws("forced"))
         assert.notStrictEqual(second.sandbox, first.sandbox)
 
-        // The existing holder keeps what it was handed -- its scope still owns
-        // that value -- which is why this is an operator's rebuild and not a
-        // way to revoke a workspace from under someone.
-        assert.strictEqual(first.sandbox, first.sandbox)
+        // The existing holder keeps what it was handed. Asserted as *two live
+        // builds*, because the previous version of this compared a variable to
+        // itself under three lines of comment claiming it proved exactly this,
+        // and would have passed an implementation that tore the workspace out
+        // from under the holder.
+        assert.strictEqual(yield* Ref.get(built), 2)
 
+        // An invalidated entry still honours the idle window on its way out --
+        // it is unkeyed, not force-closed. Checked rather than assumed: the
+        // first version of this comment claimed immediate release and was
+        // wrong.
         yield* first.release
+        assert.strictEqual(yield* Ref.get(built), 2)
+        yield* TestClock.adjust("31 seconds")
+        assert.strictEqual(yield* Ref.get(built), 1)
+
         yield* second.release
       })))
 

@@ -49,8 +49,10 @@ import {
  *
  * `audit-effect-ecosystem.md` E4 rejected `LayerMap` for the agent server's
  * *static* routes, because `HttpRouter.use` binds paths when the layer is
- * built rather than on first request, and reserved it "for a later keyed
- * design". This is that keyed design; the finding does not conflict with it.
+ * built rather than on first request. It reserves `LayerMap` for a different,
+ * still-unbuilt design -- the agent server with the agent name as a path
+ * parameter -- so that finding neither blesses nor forbids this use; it simply
+ * does not conflict with it.
  *
  * ## What this must not become
  *

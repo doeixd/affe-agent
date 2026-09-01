@@ -4773,8 +4773,12 @@ layer -- `Sandbox.currentLayer(workspace)` -- and `LayerMap` is `RcMap`
 specialised to exactly that. `RcMap` is already how `SessionTree` owns live
 branches, for the same reason stated the same way.
 `audit-effect-ecosystem.md` E4 rejected `LayerMap` for the server's *static*
-routes and reserved it "for a later keyed design"; this is that design, so the
-finding does not conflict.
+routes, and reserves it for a different unbuilt design (the agent name as a
+path parameter). So it neither blesses nor forbids this use. An earlier draft
+of this entry and of the module docstring said "this is that keyed design" and
+put a phrase in quotation marks that appears nowhere in the audit -- corrected,
+and worth recording as the error it was: a fabricated citation is worse than no
+citation, because it reads as having been checked.
 
 ## What it must not become
 
@@ -4804,3 +4808,54 @@ flag, because the flag is trivially satisfiable and the identity is not.
 vocabulary and nothing beyond it" failed on the new name, which is what it is
 for; updated deliberately, with the reason the module lives in `/sandbox`
 rather than behind the `/workspace` entry point the plan proposes.
+
+## Post-commit review of `a611f75` — the suite did not test reference counting
+
+Third day running that the review found tests asserting an end state rather
+than a mechanism, and this was the worst instance yet.
+
+**All eight tests passed against an `acquire` that took no reference at all.**
+Replacing it with `Effect.scoped(...)` — build the entry, immediately drop the
+reference, hand back a `Sandbox` no scope holds — destroyed the module's entire
+contract and changed no test result. The reason is that no test held a
+workspace *across* the idle window, so every "shared build" assertion was
+satisfied by the 30-second cache alone. The module was indistinguishable from a
+plain expiring cache, which is precisely what reference counting is supposed to
+be better than.
+
+Fixed by the test that was missing: hold one workspace, advance the clock past
+the window, and assert both that the next acquire is the same build and that
+the provider built exactly once. It fails against the mutant.
+
+**Two more mutations that could not fail.** The `idleTimeToLive` option was
+only ever set to `"30 seconds"` — exactly the default — so deleting the option
+changed nothing observable; the tests now use a non-default value. And
+`defaultIdleTimeToLive` was pinned by nothing at all, so the constant the
+docstring argues for was free to be any value; it now has a test.
+
+**A tautology under three lines of comment.**
+`assert.strictEqual(first.sandbox, first.sandbox)` compared a variable to
+itself while its comment claimed it proved that `invalidate` does not revoke a
+workspace from a live holder. It proved nothing and would have passed an
+implementation that tore the workspace out from under the holder. Replaced with
+a build count over a counting provider — and writing it revealed that the
+comment's *other* claim was also wrong: an invalidated entry does **not** skip
+the idle window on release. It is unkeyed, not force-closed. Checked, then
+written down as observed rather than as assumed.
+
+**A fabricated citation, which is the finding I least want to repeat.** The
+module docstring and the entry above claimed `audit-effect-ecosystem.md` E4
+"reserved [LayerMap] for a later keyed design" and that "this is that design".
+The audit says no such thing: it reserves `LayerMap` for the agent server with
+the agent name as a path parameter, a different and still-unbuilt design, and
+the quoted phrase appears nowhere in it. The honest statement — that E4 neither
+blesses nor forbids this use — was already sufficient. A quotation that has not
+been checked is worse than no quotation, because it reads as though it has.
+
+Left open and recorded rather than fixed: `Presets.coding`'s `workspaces`
+option has no test; `RcMap.get` overlays the *calling* fibre's context, so
+whichever caller first acquires a key decides which `SandboxProvider` backs it,
+regardless of what the manager was built with; `acquire` interrupts rather than
+fails once the manager is closed; and `LayerMap` is created without a
+`capacity`, so a workspace label derived from model input could hold unbounded
+live workspaces.
