@@ -45,6 +45,12 @@ What is missing is mostly the **product shell**:
 - workspace lifecycle and file browsing;
 - artifact rendering;
 - connection/tool configuration;
+- reusable prompts and command discovery;
+- projects/folders and inherited context;
+- knowledge bases, ingestion and RAG;
+- suggestions, mentions and feedback;
+- themes, appearance and user preferences;
+- speech/voice adapters;
 - settings, usage and administration.
 
 The recommended vertical slice is deliberately **Effect-native and UI-framework
@@ -230,13 +236,15 @@ packages/
   protocol/     # Schema-owned product wire API
   client/       # transport-neutral Effect client services
   ui-core/      # pure/scoped projections; no React
+  knowledge/    # ingestion/index/retrieval capabilities
   react/        # optional React bindings
   assistant-ui/ # optional adapter
   server/       # HTTP/RPC composition and auth wiring
 ```
 
-The first six packages should compile without React. `domain`, `protocol`
-and ideally `client` should be browser-safe and contain no Node imports.
+`domain`, `protocol`, `client`, `ui-core`, and the interfaces in
+`knowledge` must compile without React. `domain`, `protocol` and ideally
+`client` should be browser-safe and contain no Node imports.
 
 ### 1. `WorkbenchIds` — pure branded identity schemas
 
@@ -260,6 +268,18 @@ export const ConnectionId =
   Schema.String.pipe(Schema.brand("workbench/ConnectionId"))
 export const ModelProfileId =
   Schema.String.pipe(Schema.brand("workbench/ModelProfileId"))
+export const ProjectId =
+  Schema.String.pipe(Schema.brand("workbench/ProjectId"))
+export const PromptTemplateId =
+  Schema.String.pipe(Schema.brand("workbench/PromptTemplateId"))
+export const CommandId =
+  Schema.String.pipe(Schema.brand("workbench/CommandId"))
+export const KnowledgeCollectionId =
+  Schema.String.pipe(Schema.brand("workbench/KnowledgeCollectionId"))
+export const KnowledgeDocumentId =
+  Schema.String.pipe(Schema.brand("workbench/KnowledgeDocumentId"))
+export const FeedbackId =
+  Schema.String.pipe(Schema.brand("workbench/FeedbackId"))
 ```
 
 Do not use interchangeable naked strings in persistence or protocol schemas.
@@ -797,6 +817,582 @@ For dynamic user-created agents, do not require one statically registered
 by `AgentProfileId` that delegates to the resolved `AgentClient` while
 reusing `AgentProtocol` schemas. That is routing, not a new protocol.
 
+### 17. `PromptCatalog` — reusable typed prompt templates
+
+**Package:** `store` + `domain`  
+**Kind:** `Context.Service`
+
+A saved prompt is data, not a slash command and not a React callback.
+
+```ts
+export const PromptTemplate = Schema.Struct({
+  id: PromptTemplateId,
+  ownerId: UserId,
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  body: Schema.String,
+  parameters: Schema.optional(Schema.Unknown),
+  tags: Schema.Array(Schema.String),
+  version: Schema.Natural
+})
+
+export interface PromptCatalogService {
+  readonly get: (
+    id: PromptTemplateId
+  ) => Effect.Effect<Option.Option<PromptTemplate>, PromptCatalogError>
+
+  readonly search: (
+    query: string
+  ) => Effect.Effect<ReadonlyArray<PromptTemplate>, PromptCatalogError>
+
+  readonly put: (
+    template: PromptTemplate
+  ) => Effect.Effect<void, PromptCatalogError>
+}
+```
+
+The `parameters` field should become a Schema-owned form description rather
+than an arbitrary UI form model. The first implementation may support a small
+portable subset (string/number/boolean/literals/optional) and reject schemas it
+cannot render rather than silently degrading them.
+
+Expansion produces a `Prompt.RawInput` / `PromptWire.Prompt`; it never calls
+a model itself.
+
+This supports Open-WebUI-style reusable prompts, variables, versioning and
+sharing without coupling them to how a composer invokes them.
+
+### 18. `CommandRegistry` — actions discoverable through slash, palette or TUI
+
+**Package:** `runtime` + `domain`  
+**Kind:** `Context.Service`
+
+"Slash command" is a presentation. The domain concept is a discoverable command.
+
+```ts
+export const Command = Schema.Struct({
+  id: CommandId,
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  aliases: Schema.Array(Schema.String),
+  action: Schema.Union([
+    Schema.Struct({
+      _tag: Schema.Literal("Prompt"),
+      templateId: PromptTemplateId
+    }),
+    Schema.Struct({
+      _tag: Schema.Literal("Session"),
+      action: Schema.Literals("interrupt", "compact", "branch")
+    }),
+    Schema.Struct({
+      _tag: Schema.Literal("Skill"),
+      skillId: Schema.String
+    }),
+    Schema.Struct({
+      _tag: Schema.Literal("Navigate"),
+      target: Schema.String
+    }),
+    Schema.Struct({
+      _tag: Schema.Literal("Client"),
+      actionId: Schema.String
+    })
+  ])
+})
+```
+
+`CommandRegistry.search(context, query)` returns what is available here.
+Availability may depend on the current agent, project, conversation, model,
+workspace and deployment capabilities.
+
+Execution is separated from discovery:
+
+- prompt commands resolve through `PromptCatalog` and then use
+  `RemoteSession.prompt/followUp/steer`;
+- session commands use existing session/tree/compaction seams;
+- skill commands resolve through the configured skills capability;
+- navigation/client commands are interpreted by the presentation adapter.
+
+No command record contains a JavaScript callback. The same registry can be
+rendered as `/research`, a command palette, toolbar actions, mobile menus or
+`:research` in a TUI.
+
+### 19. `MentionProvider` — typed `@` references without composer lock-in
+
+**Package:** `client` / `ui-core`  
+**Kind:** small `Context.Service`
+
+Mentions are references the composer can discover and encode, not text parsing
+owned by React.
+
+```ts
+export const Mention = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(
+    "agent",
+    "file",
+    "artifact",
+    "knowledge",
+    "project",
+    "user",
+    "custom"
+  ),
+  label: Schema.String,
+  detail: Schema.optional(Schema.String)
+})
+
+export interface MentionProviderService {
+  readonly search: (
+    context: MentionContext,
+    query: string
+  ) => Effect.Effect<ReadonlyArray<Mention>, MentionError>
+}
+```
+
+The selected mention resolves to an application intent or prompt part through a
+separate resolver. A visual `@` autocomplete, command palette, or TUI chooser
+can all consume the same provider.
+
+### 20. Knowledge / RAG — ingestion and retrieval are real capabilities
+
+**Package:** `domain`, `store`, and a dedicated `knowledge` package  
+**Kind:** several small services, not one vector-database god object
+
+Files alone do not constitute RAG. Keep the pipeline explicit:
+
+```text
+KnowledgeCatalog
+      |
+DocumentLoader
+      |
+    Chunker
+      |
+   Embedding
+      |
+KnowledgeIndex
+      |
+   Reranker
+      |
+KnowledgeRetriever
+```
+
+#### `KnowledgeCatalog`
+
+Owns collection/document metadata and stable references to original content
+(usually `BlobStore.BlobRef`), not embeddings.
+
+```ts
+export const KnowledgeDocument = Schema.Struct({
+  id: KnowledgeDocumentId,
+  collectionId: KnowledgeCollectionId,
+  name: Schema.String,
+  source: BlobStore.BlobRef,
+  mediaType: Schema.String,
+  status: Schema.Literals("pending", "indexing", "ready", "failed")
+})
+```
+
+#### `DocumentLoader`
+
+```ts
+export interface DocumentLoaderService {
+  readonly load: (
+    document: KnowledgeDocument
+  ) => Stream.Stream<DocumentPart, DocumentLoadError>
+}
+```
+
+Provider-specific PDF/HTML/Office/media extraction belongs behind this seam.
+
+#### `Chunker`
+
+A pure/effectful policy:
+
+```ts
+type Chunker = (
+  parts: Stream.Stream<DocumentPart, DocumentLoadError>
+) => Stream.Stream<KnowledgeChunk, ChunkError>
+```
+
+Different chunkers can be selected per document type or collection without
+changing storage or retrieval.
+
+#### `EmbeddingModel`
+
+```ts
+export interface EmbeddingModelService {
+  readonly embed: (
+    texts: ReadonlyArray<string>
+  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<number>>, EmbeddingError>
+}
+```
+
+Do not make a particular vector database's embedding client the contract.
+
+#### `KnowledgeIndex`
+
+```ts
+export interface KnowledgeIndexService {
+  readonly upsert: (
+    chunks: ReadonlyArray<IndexedChunk>
+  ) => Effect.Effect<void, KnowledgeIndexError>
+
+  readonly search: (
+    query: IndexQuery
+  ) => Effect.Effect<ReadonlyArray<IndexHit>, KnowledgeIndexError>
+
+  readonly removeDocument: (
+    id: KnowledgeDocumentId
+  ) => Effect.Effect<void, KnowledgeIndexError>
+}
+```
+
+Implementations may be SQLite/vector extensions, Postgres/pgvector, a remote
+vector service, BM25-only, or hybrid. The caller sees the same typed service.
+
+#### `Reranker`
+
+Optional:
+
+```ts
+export interface RerankerService {
+  readonly rerank: (
+    query: string,
+    hits: ReadonlyArray<RetrievedChunk>
+  ) => Effect.Effect<ReadonlyArray<RetrievedChunk>, RerankError>
+}
+```
+
+A no-op layer is valid.
+
+#### `KnowledgeRetriever`
+
+The high-level seam most agents and UI code consume:
+
+```ts
+export const RetrievedChunk = Schema.Struct({
+  documentId: KnowledgeDocumentId,
+  text: Schema.String,
+  score: Schema.Number,
+  locator: Schema.Struct({
+    page: Schema.optional(Schema.Number),
+    lineStart: Schema.optional(Schema.Number),
+    lineEnd: Schema.optional(Schema.Number)
+  })
+})
+
+export interface KnowledgeRetrieverService {
+  readonly search: (
+    query: KnowledgeQuery
+  ) => Effect.Effect<ReadonlyArray<RetrievedChunk>, RetrievalError>
+}
+```
+
+One retriever can be exposed through **two existing agent seams**:
+
+```text
+KnowledgeRetriever
+     |
+     +-- ContextTransform      # automatic/traditional RAG
+     |
+     +-- Toolkit tool         # agentic search/read
+```
+
+Those are two policies over one retrieval capability, not two knowledge
+systems. A project/agent chooses which policy it wants.
+
+Retrieved chunks should carry source locators so citation/source UI can be
+derived without inventing citation strings in React.
+
+### 21. Four different things may contain bytes; do not call all of them "File"
+
+The product must keep these concepts distinct even when all four ultimately
+reference `BlobStore.BlobRef` or `SandboxPath`:
+
+```text
+Attachment
+  "this content was supplied with this conversation/message"
+
+KnowledgeDocument
+  "this content was ingested and is retrievable"
+
+WorkspaceFile
+  "this path exists in the agent's execution environment"
+
+Artifact
+  "this is an output the agent produced for the user"
+```
+
+Their ownership, deletion, indexing, authorization and presentation semantics
+are different. Conversion between them is an explicit operation:
+
+- attachment → knowledge document: "add to knowledge";
+- artifact → knowledge document: "index this result";
+- artifact → workspace file: "save to workspace";
+- workspace file → attachment: "attach this file".
+
+Never infer one role merely because the bytes are the same.
+
+### 22. `ProjectStore` + `EffectiveConfiguration` — folders with inherited context
+
+**Package:** `store` + `runtime`
+
+Open-WebUI-style folders/projects should be real context boundaries rather than
+a nullable `folderId`.
+
+```ts
+export const Project = Schema.Struct({
+  id: ProjectId,
+  ownerId: UserId,
+  name: Schema.String,
+  instructions: Schema.optional(Schema.String),
+  defaultAgentProfileId: Schema.optional(AgentProfileId),
+  defaultModelProfileId: Schema.optional(ModelProfileId),
+  workspaceId: Schema.optional(WorkspaceId),
+  knowledgeCollectionIds: Schema.Array(KnowledgeCollectionId),
+  toolConnectionIds: Schema.Array(ConnectionId)
+})
+```
+
+`Conversation` may reference a `ProjectId`.
+
+Resolve configuration explicitly:
+
+```text
+Deployment defaults
+       +
+User preferences
+       +
+Project
+       +
+AgentProfile
+       +
+Conversation overrides
+       |
+       v
+EffectiveConfiguration
+```
+
+`EffectiveConfiguration` should be a pure/schema-owned resolved value plus a
+service that computes it. `AgentDirectory` consumes that result when building
+agent layers.
+
+This prevents `Conversation` from accumulating dozens of nullable columns and
+makes inheritance testable.
+
+### 23. `ModelCatalog` — model discovery is distinct from model capability facts
+
+**Package:** `client` / `store`
+
+`ModelCapabilities` answers facts about a model already selected. A product
+also needs to know what models a principal may choose.
+
+```ts
+export interface ModelCatalogService {
+  readonly list: (
+    context: ModelCatalogContext
+  ) => Effect.Effect<ReadonlyArray<ModelSummary>, ModelCatalogError>
+}
+```
+
+`ModelSummary` carries stable provider/model ids, display metadata and
+available `ModelCapabilities` when known. Product-level aliases/presets live
+in `ModelProfileStore`, not in the provider package.
+
+The model picker therefore depends on `ModelCatalog`, while context sizing and
+input affordances depend on `ModelCapabilities`.
+
+### 24. `SuggestionProvider` — composer suggestions are replaceable policy
+
+**Package:** `client` / `ui-core`
+
+```ts
+export interface SuggestionProviderService {
+  readonly suggestions: (
+    context: SuggestionContext
+  ) => Effect.Effect<ReadonlyArray<Suggestion>, SuggestionError>
+}
+```
+
+Implementations may be:
+
+- static examples;
+- agent/profile-provided starters;
+- project-specific prompts;
+- model-generated follow-up suggestions;
+- no suggestions.
+
+The UI only renders the returned data. Suggestion generation is not a
+`ConversationPresenter` responsibility.
+
+### 25. `FeedbackStore` — thumbs, ratings and annotations
+
+**Package:** `store`
+
+```ts
+export const Feedback = Schema.Struct({
+  id: FeedbackId,
+  conversationId: ConversationId,
+  submissionId: Schema.optional(AgentProtocol.SubmissionId),
+  messageKey: Schema.optional(Schema.String),
+  rating: Schema.Literals("up", "down"),
+  comment: Schema.optional(Schema.String)
+})
+```
+
+Feedback is product/evaluation data; it does not mutate canonical history.
+A later eval/export pipeline may consume it.
+
+### 26. `PreferencesStore` + `ThemeRegistry` — themes stay presentation-only
+
+**Package:** `client` / `ui-core`
+
+```ts
+export const AppearancePreferences = Schema.Struct({
+  mode: Schema.Literals("system", "light", "dark"),
+  themeId: Schema.String,
+  density: Schema.Literals("compact", "comfortable"),
+  fontScale: Schema.Number
+})
+```
+
+`PreferencesStore` persists user-level settings.
+
+`ThemeRegistry` is a pure presentation registry mapping `themeId` to design
+tokens/CSS-variable values. Agent/runtime packages never require it.
+
+A downstream fork can replace Tailwind, CSS variables, the entire design
+system, or React itself without migrating product records beyond stable
+appearance preferences.
+
+### 27. Speech is a family of adapters, not conversation state
+
+**Package:** edge/client capability packages
+
+Keep three concerns distinct:
+
+```ts
+export interface SpeechRecognitionService {
+  readonly transcribe: (
+    audio: Stream.Stream<Uint8Array>
+  ) => Effect.Effect<Transcript, SpeechRecognitionError>
+}
+
+export interface SpeechSynthesisService {
+  readonly speak: (
+    text: string
+  ) => Stream.Stream<Uint8Array, SpeechSynthesisError>
+}
+
+export interface VoiceSessionService {
+  readonly connect: (
+    context: VoiceContext
+  ) => Effect.Effect<VoiceSession, VoiceSessionError, Scope.Scope>
+}
+```
+
+Dictation can simply produce composer text. TTS consumes assistant text.
+Realtime duplex voice is a separate later capability with different lifecycle
+and transport requirements.
+
+Microphone state, browser permission prompts and audio-device selection belong
+to the browser adapter, not `ConversationPresenter`.
+
+### 28. `CapabilityResolver` — the UI asks "what can I do here?"
+
+**Package:** `runtime` + `client`
+
+Avoid hard-coded UI conditionals that mirror half the server configuration.
+
+```ts
+export const WorkbenchCapabilities = Schema.Struct({
+  attachments: AttachmentCapabilities,
+  branching: BranchingCapabilities,
+  workspace: Schema.optional(WorkspaceCapabilities),
+  knowledge: Schema.optional(KnowledgeCapabilities),
+  speech: Schema.optional(SpeechCapabilities),
+  feedback: Schema.Boolean,
+  suggestions: Schema.Boolean,
+  commands: Schema.Array(CommandSummary),
+  mentions: Schema.Array(MentionKind),
+  models: ModelSelectionCapabilities
+})
+
+export interface CapabilityResolverService {
+  readonly resolve: (
+    context: CapabilityContext
+  ) => Effect.Effect<WorkbenchCapabilities, CapabilityError>
+}
+```
+
+Resolution may combine:
+
+```text
+principal
++ deployment policy
++ project
++ agent profile
++ model capabilities
++ connections
++ workspace
++ browser/client capabilities
+```
+
+The presenter may expose the resolved snapshot beside conversation state, but
+it does not compute it. React renders available affordances from this typed
+value.
+
+This is the seam that allows the same UI to adapt cleanly to a local install, a
+hosted multi-user deployment, a text-only model, a vision model, a workspace
+agent or a plain chat agent.
+
+### 29. `ViewRegistry` — typed generative UI without model-generated React
+
+**Package:** `ui-core` + presentation adapters
+
+Use `AgentData` as the typed producer side. A renderer registry lives at the
+presentation edge.
+
+Conceptually:
+
+```text
+AgentData.Channel<A>
+       |
+       | Schema A
+       v
+    ViewRegistry
+       |
+       +-- React renderer<A>
+       +-- Solid renderer<A>
+       +-- TUI renderer<A>
+```
+
+The model/tool emits typed data. It does not emit a React component name and an
+unvalidated bag of props.
+
+`ui-core` can define renderer-neutral view descriptors keyed by channel/schema
+identity; framework packages register actual components.
+
+This supports assistant-ui-style generative UI while preserving Effect's type
+boundary.
+
+### 30. `ConversationSearch` — search is a rebuildable projection
+
+**Package:** `store` / `client`
+
+```ts
+export interface ConversationSearchService {
+  readonly search: (
+    query: ConversationSearchQuery
+  ) => Effect.Effect<ReadonlyArray<ConversationSearchHit>, SearchError>
+}
+```
+
+It indexes product metadata and a projection of canonical history. Every hit
+records the session/history position it came from when possible.
+
+Search can be SQLite FTS, Postgres, a hosted search engine or disabled. Failure
+to index/search must never prevent conversation execution or recovery.
+
 ### Dependency rule
 
 The dependency graph should point inward:
@@ -1173,7 +1769,9 @@ Support:
 - follow-up queueing when a run is active;
 - steering as a distinct action from follow-up where the UX can make the
   distinction understandable;
-- slash/skill discovery later.
+- command discovery from `CommandRegistry` (slash syntax is one rendering);
+- mentions from `MentionProvider`;
+- suggestions from `SuggestionProvider`.
 
 The UI must not collapse `steer`, `followUp` and `interrupt` into one
 ambiguous "send while running" behavior.
@@ -1190,6 +1788,26 @@ Phase two adds:
 - structured application state inspector where useful.
 
 Chat remains usable without this panel.
+
+### Cross-cutting UI affordances
+
+The first-party UI may include all of the following without changing execution
+semantics:
+
+- slash commands / command palette;
+- saved prompt templates and parameter forms;
+- `@` mentions;
+- starter and follow-up suggestions;
+- thumbs up/down and comments;
+- light/dark/custom themes;
+- model and agent pickers;
+- conversation folders/projects;
+- knowledge/source panels;
+- speech-to-text and text-to-speech;
+- typed generative UI panels.
+
+Every one of these consumes one of the seams above. None is a reason to add a
+method to `AgentSession` or a field to `ConversationPresenter`.
 
 ---
 
@@ -1244,6 +1862,17 @@ Requirements:
 - remote transports preserve file/media semantics;
 - model capability checks happen before dispatch when possible.
 
+The word "file" must not collapse four product roles:
+
+| role | authority | meaning |
+| --- | --- | --- |
+| Attachment | `AttachmentCatalog + BlobStore` | supplied with a conversation/message |
+| Knowledge document | `KnowledgeCatalog + BlobStore` | ingested and retrievable |
+| Workspace file | `WorkspaceRuntime + Sandbox` | exists in the execution environment |
+| Artifact | `ArtifactCatalog` + blob/workspace/data source | output produced for the user |
+
+Transitions between those roles are explicit user/application operations.
+
 ---
 
 ## Artifacts
@@ -1267,6 +1896,49 @@ preview surface without forcing the kernel to know about React artifact
 components.
 
 Do not allow arbitrary generated HTML/JS to execute in the application origin.
+
+---
+
+## Knowledge and RAG
+
+RAG is a product/runtime subsystem over `KnowledgeRetriever`, not a special
+chat-message format.
+
+A knowledge collection owns source documents and indexing policy. The workbench
+may offer both:
+
+- **automatic retrieval** — a `ContextTransform` searches selected collections
+  and adds retrieved context before a model call;
+- **agentic retrieval** — a toolkit exposes search/read tools backed by the same
+  `KnowledgeRetriever`.
+
+Projects and agent profiles select collections and retrieval policy through
+`EffectiveConfiguration`.
+
+The UI renders source locators from `RetrievedChunk` as citation/source cards.
+It never parses ad-hoc citation syntax to recover source identity.
+
+Ingestion is asynchronous from the user's perspective but not conceptually
+hidden: document state is `pending | indexing | ready | failed`, and clients
+can observe/poll it through the product protocol. A future scheduling/job
+adapter may perform ingestion durably without changing the knowledge services.
+
+---
+
+## Projects and inherited context
+
+A project groups conversations and may supply instructions, knowledge,
+workspace, connections, and defaults. It is more than a visual folder.
+
+The effective agent configuration is resolved from layered product data before
+`AgentDirectory` builds the agent:
+
+```text
+deployment -> user -> project -> agent profile -> conversation override
+```
+
+The resolved value is inspectable, testable and Schema-owned. Do not bury
+inheritance rules in UI conditionals.
 
 ---
 
@@ -1333,7 +2005,11 @@ about what is advertised/loaded.
 
 ### State
 
-Use AG-UI state snapshots/deltas where useful for shared application state.
+Use `AgentState` as the authority and project typed state into `AgentData` or
+other client-facing schemas where useful. An AG-UI adapter may additionally map
+that projection into AG-UI state snapshots/deltas, but `ui-core` must not
+depend on that representation.
+
 This enables agent-native panels without turning every state update into a chat
 message.
 
@@ -1380,11 +2056,12 @@ Minimum indexed fields:
 - archived flag;
 - workspace reference.
 
-Full-text message search should be a projection from canonical history. It must
-be rebuildable and should record the session/history position it indexed.
+Full-text message search is provided through `ConversationSearch` as a
+projection from canonical history. It must be rebuildable and should record the
+session/history position it indexed.
 
-Do not make search availability a requirement for executing or reopening a
-conversation.
+Do not make search/index availability a requirement for executing or reopening
+a conversation.
 
 ---
 
@@ -1424,7 +2101,9 @@ frontend contract.
 - remote or isolated sandboxes;
 - durable/clustered agent clients where required.
 
-The UI speaks to the same product/AG-UI surface in both cases.
+The UI consumes the same product client services and `AgentClient` contract in
+both cases. AG-UI remains an optional interoperability adapter in either
+profile.
 
 ---
 
@@ -1486,6 +2165,29 @@ runtime composition, session identity, or execution semantics.
 **W12 — Product protocols do not duplicate AgentProtocol.** Workbench wire
 schemas cover product concepts only; agent commands and event envelopes remain
 the framework's schemas.
+
+**W13 — UI affordances are data or capabilities, not callbacks in domain
+records.** Commands, prompts, mentions, suggestions and model choices cross
+typed seams before a framework adapter renders them.
+
+**W14 — File roles stay distinct.** Attachment, knowledge document, workspace
+file and artifact are never one generic record merely because each can refer to
+bytes.
+
+**W15 — Retrieval is storage-independent.** Agents consume
+`KnowledgeRetriever`; vector databases, lexical indexes, chunkers and embedding
+providers remain replaceable layers behind it.
+
+**W16 — Capability-driven UI.** The frontend renders what
+`CapabilityResolver` says is available rather than mirroring server
+configuration with ad-hoc conditionals.
+
+**W17 — Appearance is presentation-only.** Themes, density, font scale and
+browser media state cannot change agent execution semantics.
+
+**W18 — Generative UI carries typed data, not executable UI definitions.**
+`AgentData` and Schema values cross the boundary; framework components stay in
+renderer registries at the edge.
 
 ---
 
@@ -1549,11 +2251,18 @@ Add:
 - message actions supported by the underlying session/tree semantics;
 - source/tool cards;
 - pending approvals;
+- `PromptCatalog` and `CommandRegistry`;
+- `MentionProvider` and `SuggestionProvider`;
+- `FeedbackStore`;
+- appearance preferences and theme registry;
+- model/agent pickers driven by catalogs/capabilities;
 - good error/retry states;
 - mobile/responsive layout;
 - keyboard and accessibility pass.
 
-Acceptance: ordinary chat use no longer feels like a framework demo.
+Acceptance: ordinary chat use no longer feels like a framework demo, and the
+same command/prompt/suggestion fixtures render in the plain React and
+assistant-ui adapters.
 
 ### W3 — Workspace
 
@@ -1564,24 +2273,27 @@ Add:
 - file tree;
 - file reader;
 - diffs;
-- shell/tool output panel.
+- shell/tool output panel;
+- explicit attachment/artifact/workspace-file conversions.
 
 Acceptance: a coding agent can modify a workspace and the user can inspect every
 change without leaving the conversation.
 
-### W4 — Artifacts and data UI
+### W4 — Artifacts and typed generative UI
 
 Add:
 
 - artifact registry/projection;
 - HTML/SVG/image/code/JSON/file previews;
-- `/data`-driven application panels;
+- `AgentData`-driven application panels;
+- `ViewRegistry`;
 - safe iframe isolation.
 
 Acceptance: a non-coding agent can produce rich useful outputs without
-pretending they are workspace source files.
+pretending they are workspace source files, and the producer side contains no
+React/component identifiers.
 
-### W5 — Agent builder
+### W5 — Agent builder and capability resolution
 
 Add configuration for:
 
@@ -1592,10 +2304,14 @@ Add configuration for:
 - skills;
 - memory;
 - budget/loop presets;
-- workspace policy.
+- workspace policy;
+- retrieval policy;
+- project defaults/overrides;
+- `CapabilityResolver`.
 
-Acceptance: create two materially different agents entirely from the web UI and
-run them through the same session infrastructure.
+Acceptance: create two materially different agents entirely from the web UI,
+run them through the same session infrastructure, and have the UI automatically
+show only valid affordances for each.
 
 ### W6 — Connections
 
@@ -1604,12 +2320,37 @@ Add:
 - MCP/tool-source configuration;
 - credentials;
 - plugin packages;
+- web/search providers;
 - connection health/test;
-- per-agent capability selection.
+- per-agent/project capability selection.
 
-Acceptance: a user can connect a tool source without editing application code.
+Acceptance: a user can connect a tool source without editing application code,
+and product records retain credential handles/bindings rather than values.
 
-### W7 — Multi-agent and advanced session UX
+### W7 — Knowledge and projects
+
+Add:
+
+- `KnowledgeCatalog`;
+- document loaders;
+- chunking;
+- embedding provider seam;
+- index implementation;
+- optional reranking;
+- `KnowledgeRetriever`;
+- ingestion status/progress;
+- automatic ContextTransform RAG;
+- agentic knowledge tools;
+- `ProjectStore`;
+- `EffectiveConfiguration`;
+- source/citation UI.
+
+Acceptance: the same collection can be used in automatic and agentic retrieval,
+switching the index/embedding implementation requires layer changes rather than
+agent/UI changes, and a project can apply knowledge/instructions/defaults to all
+of its conversations.
+
+### W8 — Multi-agent and advanced session UX
 
 Add:
 
@@ -1617,15 +2358,19 @@ Add:
 - branch/rewind UI over `/tree`;
 - compaction controls/status;
 - queued follow-ups and steering UX;
-- background/durable run reconnection.
+- background/durable run reconnection;
+- conversation search.
 
 Acceptance: long-running and delegated work remains understandable after page
 reload and reconnect.
 
-### W8 — Administration and distribution
+### W9 — Voice, administration and distribution
 
 Add:
 
+- speech recognition adapter;
+- speech synthesis adapter;
+- optional realtime `VoiceSession` adapter;
 - user administration where applicable;
 - usage/telemetry views;
 - import/export;
@@ -1634,7 +2379,8 @@ Add:
 - hosted reference deployment.
 
 Acceptance: another developer can self-host the application from documented
-steps without knowing the repository internals.
+steps without knowing repository internals, and replacing speech/theme/UI
+providers does not touch execution or persistence contracts.
 
 ---
 
@@ -1643,19 +2389,22 @@ steps without knowing the repository internals.
 Do the smallest slice that falsifies the architecture first:
 
 ```text
-W0 integration
+W0 Effect-native integration
   -> W1 conversation persistence
-  -> W2 complete chat
+  -> W2 complete chat + interaction affordances
   -> W3 workspace
-  -> W4 artifacts
-  -> W5 agent builder
+  -> W4 artifacts + typed generative UI
+  -> W5 agent builder + capability resolution
   -> W6 connections
-  -> W7 advanced/multi-agent
-  -> W8 distribution/admin
+  -> W7 knowledge + projects
+  -> W8 advanced/multi-agent
+  -> W9 voice + distribution/admin
 ```
 
-Do not start with an admin panel, marketplace, elaborate RAG interface or a
-full Open WebUI settings clone.
+Do not start with an admin panel, marketplace, elaborate knowledge-management
+interface or a full Open WebUI settings clone. The RAG seams are specified now
+so W7 can compose cleanly, but indexing/retrieval implementation does not block
+W0-W2.
 
 The first serious architectural test is whether `AgentClient`,
 `AgentProtocol`, `AgentEvent` and the proposed product services can support
@@ -1701,8 +2450,11 @@ Borrow product lessons:
 
 - provider/model settings;
 - chat organization/search;
-- knowledge/file UX;
+- knowledge/RAG and source UX;
+- reusable prompt/slash-command UX;
+- projects/folders with inherited context;
 - tool/MCP configuration;
+- model presets and capability-driven controls;
 - admin and multi-user ergonomics.
 
 Do not inherit its source-available licensing or its execution model.
@@ -1769,7 +2521,14 @@ This prevents the reference app from turning the kernel into a web framework.
 12. Add attachments through `BlobStore` / `BlobWire` plus
     `AttachmentCatalog`.
 13. Add `WorkspaceRuntime` as the product-id lookup over `Sandbox.acquire`.
-14. Only after W1/W2 are solid, add artifact/file panes and richer settings.
+14. Implement `PromptCatalog`, `CommandRegistry`,
+    `CapabilityResolver`, preferences and suggestions as independent seams.
+15. Add `ArtifactCatalog` + `ViewRegistry` and workspace/file panes.
+16. Implement knowledge ingestion/retrieval only after the chat/product shell
+    proves the core boundaries; expose `KnowledgeRetriever` through both a
+    ContextTransform and a toolkit in its acceptance test.
+17. Add projects/`EffectiveConfiguration`, then voice/admin/distribution
+    adapters.
 
 ## Success conditions
 
@@ -1787,7 +2546,17 @@ The plan is successful when:
 - replacing assistant-ui with plain React, Solid, or another presentation
   adapter requires changes only at the UI edge;
 - workbench product protocols never redefine `AgentProtocol` operations or
-  `AgentEvent` envelopes.
+  `AgentEvent` envelopes;
+- slash commands, prompts, mentions, suggestions, themes and speech can be
+  replaced or disabled without changing session semantics;
+- attachments, knowledge documents, workspace files and artifacts have
+  separate lifecycle models;
+- automatic and agentic RAG share one `KnowledgeRetriever` contract and can
+  swap indexing/embedding implementations by layer wiring;
+- the UI is driven by `WorkbenchCapabilities` rather than hard-coded knowledge
+  of backend configuration;
+- typed generative UI is carried through `AgentData`/Schema and renderer
+  registries, never model-generated executable component definitions.
 
 The intended result is not merely "chat for effect-agent." It is a permissively
 licensed, general-purpose **agent workbench** whose architecture demonstrates
