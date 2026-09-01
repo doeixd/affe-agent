@@ -4553,3 +4553,51 @@ refusal. `docs/MODULES.md` gains the `/code` row it was missing.
 The isolate executor (the plan's item 9) stays where the plan put it: after
 a published Cloudflare host entry, and not the reason for one.
 
+## 2026-09-01 — the Durable Object host keeps every committed turn, and fires alarms (comparison plan, item 4)
+
+`docs/plan-effect-agent-comparison.md` §3.3 a–b, both in `apps/worker`,
+both proven on workerd through miniflare.
+
+**(a) History at turn boundaries.** The DO wrote history after each
+completed submission, so a runtime lost mid-run lost the run. The session's
+`TurnCompleted` is emitted inside the same uninterruptible region as the
+commit, so persisting on it is a change of *when*, not *what*: a lost
+runtime now costs the turn in flight and nothing before it. The submission
+boundaries are kept too, because a follow-up's prompt is committed before
+its first turn. The header's "loses the run" became "loses the turn in
+flight", and the `session` re-adoption comment says why a row now exists
+after the first committed turn rather than the first completed submission.
+Proven: the scripted model's second prompt in a life runs two tool turns
+and hangs; the runtime is killed with that submission in flight; the next
+life's history holds exactly the two committed turns. Broken once by
+persisting per submission again: the second life saw only the first
+exchange.
+
+**(b) Alarms as an `AgentDispatcher`.** `/scheduling`'s seam, implemented
+over one DO: a `Scheduling.JobStore` over a `worker_jobs` table in DO SQLite
+(`claimDue` deletes by id, which the DO's serial request handling makes
+atomic), `Scheduling.queued(store)` as the dispatcher, `dispatch` arming the
+object's alarm for the earliest due job, `alarm()` prompting the session
+with every due job and re-arming, and a wake re-arming from the table so a
+job outlives the runtime that dispatched it whether or not the platform
+kept its alarm. The route is the host's own (`POST /sessions/{id}/dispatch`),
+outside the HTTP surface, and says so. Proven: dispatch with a delay, kill
+the runtime before it is due, wake a new one with any request, and the
+job's prompt appears in history.
+
+Two things the port changed on the way:
+
+- The worker's agent gained a `tick` tool and `bounded(4)`, and its script
+  a two-tool-turn-then-hang second prompt, because a run cannot be left
+  mid-flight without tool turns to be in the middle of. Every existing
+  assertion still holds: each life's first prompt in a DO still answers
+  `reply-1`.
+- The DO now builds a `ManagedRuntime` once and resolves the client from
+  it, so the HTTP handler and the alarm share one client and therefore one
+  open session per id; `HttpRouter.toWebHandler` is given that client as a
+  layer rather than building its own.
+
+Not done here: a published `/cloudflare` entry (item 43, the category
+decision) and a real deployment (item 19). The host is still a reference
+to read and copy, with the scripted model.
+

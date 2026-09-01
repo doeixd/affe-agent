@@ -610,8 +610,8 @@ sizes; the items are repeated here so this list stays the one tracker.
     `/testing` in `SandboxConformance`'s shape, plus a `DurableSessionStore`
     contract that does not yet exist as one; each with a deliberately wrong
     implementation that fails exactly the promise it breaks.
-39. **DO host: history at turn boundaries, alarms as an `AgentDispatcher`**
-    (plan §3.3 a–b) — a lost runtime costs the turn in flight, not the run;
+39. ~~**DO host: history at turn boundaries, alarms as an `AgentDispatcher`**~~
+    — landed 2026-09-01; see `status-history.md`. As planned (§3.3 a–b): a lost runtime costs the turn in flight, not the run;
     `/scheduling`'s seam gets its Durable Object alarm implementation. Both
     in `apps/worker`, both proved on miniflare, neither needing an account.
 40. ~~**Code mode threat model, stated**~~ — landed 2026-09-01: README

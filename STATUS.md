@@ -192,10 +192,11 @@ divergence, activation); `/web` (+ Brave, HTTP fetch); `/openai`
 (OpenAI-compatible responses).
 
 **Applications.** `apps/tui` (full-screen local coding harness),
-`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (a real
-Durable Object host: one DO per session, history in DO SQLite, events
-journaled to the delivery log, resumption across the runtime's death --
-proven on workerd via miniflare), `examples/` -- every one typechecked;
+`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (a real Durable Object host: one DO per session, history in
+DO SQLite written at every committed turn, events journaled to the delivery
+log, resumption across the runtime's death, and `/scheduling`'s
+`AgentDispatcher` over DO SQLite and the object's alarm -- each proven on
+workerd via miniflare, the alarm across a runtime restart), `examples/` -- every one typechecked;
 `session-tree`, `ref-coding-agent`, `typed-agent` and the worker test also
 run. `examples/deploy-cloudflare/` is the Alchemy stack.
 

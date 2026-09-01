@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Schedule } from "effect"
 import { build } from "esbuild"
 import { convertV4MiniflareOptions, Miniflare } from "miniflare"
 import * as fs from "node:fs/promises"
@@ -46,6 +46,7 @@ const bundleWorker = Effect.fn("WorkerDurableObject.bundle")(function* () {
         "@doeixd/effect-agent/client": path.join(process.cwd(), "src", "client", "index.ts"),
         "@doeixd/effect-agent/durable": path.join(process.cwd(), "src", "durable", "index.ts"),
         "@doeixd/effect-agent/http": path.join(process.cwd(), "src", "http", "index.ts"),
+        "@doeixd/effect-agent/scheduling": path.join(process.cwd(), "src", "scheduling", "index.ts"),
         "@doeixd/effect-agent/testing": path.join(process.cwd(), "src", "testing", "index.ts")
       }
     })
@@ -204,4 +205,117 @@ describe("the Worker entry on workerd", () => {
     }),
     120_000
   )
+
+  /**
+   * History is written as each turn commits, so a runtime lost mid-run
+   * costs the turn in flight and nothing before it. The scripted model's
+   * second prompt in a life runs two tool turns and then hangs; the runtime
+   * is killed with that submission in flight, and the next life holds
+   * exactly the two committed turns. Broken once by persisting per
+   * submission again: the second life saw only the first exchange.
+   */
+  it.live("a runtime lost mid-run keeps every committed turn", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage-turns")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          json(yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create", sessionId: "turns" })))
+          const first = json(yield* call(miniflare, "/sessions/turns/prompt", jsonRequest("POST", {
+            requestId: "prompt-1",
+            input: wireInput("first")
+          })))
+          assert.strictEqual(first.result.text, "reply-1")
+
+          // Admitted, not awaited: turn 3 of this submission never returns.
+          json(yield* call(miniflare, "/sessions/turns/submit", jsonRequest("POST", {
+            requestId: "prompt-2",
+            input: wireInput("second")
+          })))
+          // Wait until both tool turns have committed and been written.
+          yield* Effect.retry(
+            Effect.flatMap(
+              call(miniflare, "/sessions/turns/history", { headers: { authorization: "Bearer worker" } }),
+              (history) =>
+                (history.body.match(/"tool-result"/g) ?? []).length >= 2
+                  ? Effect.void
+                  : Effect.fail("not yet" as const)
+            ),
+            { times: 100, schedule: Schedule.spaced("50 millis") }
+          )
+          // The runtime dies here, with the submission's third turn hung.
+        })
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          const history = json(yield* call(miniflare, "/sessions/turns/history", {
+            headers: { authorization: "Bearer worker" }
+          }))
+          const texts = JSON.stringify(history)
+          assert.include(texts, "first")
+          assert.include(texts, "second")
+          // Exactly the two committed tool turns: no more, and not none.
+          assert.strictEqual((texts.match(/"tool-result"/g) ?? []).length, 2)
+        })
+      )
+    }),
+    120_000
+  )
+
+  /**
+   * A job dispatched through `AgentDispatcher` is persisted to the DO's
+   * SQLite and fires from the alarm -- including when the runtime that
+   * dispatched it died first, because a wake re-arms from the table.
+   */
+  it.live("a dispatched job survives the runtime that dispatched it and fires from the alarm", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage-alarm")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          json(yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create", sessionId: "sched" })))
+          json(yield* call(miniflare, "/sessions/sched/prompt", jsonRequest("POST", {
+            requestId: "prompt-1",
+            input: wireInput("now")
+          })))
+          const dispatched = yield* call(miniflare, "/sessions/sched/dispatch", jsonRequest("POST", {
+            input: "later",
+            delayMillis: 1500
+          }))
+          assert.strictEqual(dispatched.status, 202, dispatched.body)
+          // The runtime dies before the job is due.
+        })
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          // Any request wakes the object, which re-arms the alarm from the
+          // table; the job is then the platform's to fire.
+          json(yield* call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }))
+          yield* Effect.retry(
+            Effect.flatMap(
+              call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }),
+              (history) => history.body.includes("later") ? Effect.void : Effect.fail("not yet" as const)
+            ),
+            { times: 100, schedule: Schedule.spaced("100 millis") }
+          )
+          const history = json(yield* call(miniflare, "/sessions/sched/history", {
+            headers: { authorization: "Bearer worker" }
+          }))
+          const texts = JSON.stringify(history)
+          assert.include(texts, "now")
+          assert.include(texts, "later")
+        })
+      )
+    }),
+    120_000
+  )
 })
+
