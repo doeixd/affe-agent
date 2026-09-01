@@ -1667,6 +1667,11 @@ with a bare message. A run that ends without a `result` is reported as
 *cancelled*, never completed: a caller must not read "it worked" from "it
 stopped".
 
+Two defaults worth knowing: the CLI is **not** run with `--bare` (bare mode
+never reads OAuth credentials, so it needs `ANTHROPIC_API_KEY` and breaks a
+subscription login), and the sandbox's own 10-second timeout is raised to 10
+minutes, because a delegated coding task is not a command you wait on.
+
 #### One policy, two runtimes
 
 On its own the bridge does not touch Claude Code's permission model — the CLI

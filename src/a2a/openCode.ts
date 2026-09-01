@@ -61,6 +61,14 @@ import * as DelegatedPermission from "./internal/delegatedPermission.js"
 export interface Options<R = never> {
   /** Where `opencode serve` is listening. */
   readonly baseUrl: string
+  /**
+   * Headers sent with every request, including the event subscription.
+   *
+   * `opencode serve` warns `OPENCODE_SERVER_PASSWORD is not set; server is
+   * unsecured` -- so it has an authenticated mode, and without this there was
+   * no way to reach one. A secured server needs its credential here.
+   */
+  readonly headers?: Readonly<Record<string, string>> | undefined
   /** The model to run, when the server's default is not the one you want. */
   readonly model?: { readonly providerID: string; readonly modelID: string } | undefined
   /** The OpenCode agent to run as (`build`, `plan`, one of yours). */
@@ -98,6 +106,9 @@ export interface Options<R = never> {
 }
 
 const DEFAULT_HISTORY = 256
+
+/** Keeps two prompts in one process from minting the same message id. */
+let nextMessage = 0
 
 // ---------------------------------------------------------------------------
 // The server's side of the contract
@@ -211,7 +222,15 @@ type Interesting =
  */
 export const readEvent = (
   data: string,
-  sessionId: string
+  sessionId: string,
+  /**
+   * The id of the message *we* sent, whose parts are not progress.
+   *
+   * The server echoes the caller's own prompt back on the bus as a text part,
+   * so without this the bridge reported the question as the agent's first
+   * answer. Found by watching a real server's bus, not by reading its schema.
+   */
+  ownMessageId?: string | undefined
 ): Option.Option<Interesting> => {
   let json: unknown
   try {
@@ -234,7 +253,13 @@ export const readEvent = (
       "text"
     )
     const forUs = stringField(value.properties, "sessionID")
-    return Option.isSome(part) && Option.isSome(forUs) && forUs.value === sessionId
+    const from = stringField(
+      (value.properties as { part?: unknown } | undefined)?.part,
+      "messageID"
+    )
+    const ours = ownMessageId !== undefined && Option.isSome(from) &&
+      from.value === ownMessageId
+    return Option.isSome(part) && Option.isSome(forUs) && forUs.value === sessionId && !ours
       ? Option.some({ _tag: "Text", text: part.value })
       : Option.none()
   }
@@ -405,7 +430,7 @@ export const remote = <R = never>(
     const post = (path: string, body: unknown) =>
       send(HttpClientRequest.post(`${base}${path}`, {
         body: HttpBody.jsonUnsafe(body),
-        headers: { accept: "application/json" }
+        headers: { accept: "application/json", ...options.headers }
       }))
 
     const record = (task: Task) =>
@@ -493,10 +518,14 @@ export const remote = <R = never>(
     }
 
     /** The server's event bus, decoded, filtered to one session. */
-    const events = (sessionId: string, connected: Deferred.Deferred<void>) =>
+    const events = (
+      sessionId: string,
+      connected: Deferred.Deferred<void>,
+      ownMessageId: string
+    ) =>
       HttpClientResponse.stream(
         client.execute(HttpClientRequest.get(`${base}/event`, {
-          headers: { accept: "text/event-stream" }
+          headers: { accept: "text/event-stream", ...options.headers }
         }))
       ).pipe(
         Stream.decodeText(),
@@ -508,7 +537,7 @@ export const remote = <R = never>(
           Effect.as(Deferred.succeed(connected, undefined), event)
         ),
         Stream.flatMap((event) => {
-          const interesting = readEvent(event.data, sessionId)
+          const interesting = readEvent(event.data, sessionId, ownMessageId)
           return Option.isSome(interesting) ? Stream.succeed(interesting.value) : Stream.empty
         }),
         Stream.mapError((error): RemoteAgentError => transport(String(error)))
@@ -548,7 +577,11 @@ export const remote = <R = never>(
         yield* Ref.update(running, (all) =>
           new Map(all).set(taskId, { sessionId, contextId, message }))
 
+        // Minted rather than left to the server, so the echo of this very
+        // message can be told apart from the agent's answer on the bus.
+        const ownMessageId = `msg${taskId.replace(/[^a-zA-Z0-9]/g, "")}${nextMessage++}`
         const body = {
+          messageID: ownMessageId,
           parts: [{ type: "text", text: prompt }],
           ...(options.model === undefined ? {} : { model: options.model }),
           ...(options.agent === undefined ? {} : { agent: options.agent }),
@@ -594,7 +627,7 @@ export const remote = <R = never>(
           Effect.gen(function* () {
             const connected = yield* Deferred.make<void>()
             yield* Effect.forkScoped(
-              Stream.runForEach(events(sessionId, connected), (event) =>
+              Stream.runForEach(events(sessionId, connected, ownMessageId), (event) =>
                 event._tag === "Permission"
                   ? answerPermission(event.asked)
                   : Effect.flatMap(now, (timestamp) =>

@@ -156,6 +156,81 @@ describe("OpenCodeA2A.readEvent", () => {
 })
 
 describe("OpenCodeA2A", () => {
+  it.effect("the caller's own prompt is not reported back as the agent's progress", () =>
+    Effect.gen(function*() {
+      // A real server echoes the message it was sent onto the bus as a text
+      // part. Without telling the two apart, the bridge reported the question
+      // as the first thing the agent said. Found by watching a live bus.
+      const stub = yield* server({ events: "" })
+      const opencode = yield* OpenCodeA2A.remote({ baseUrl: BASE }).pipe(
+        Effect.provide(stub.layer)
+      )
+      yield* opencode.delegate(ask("Fix the parser"))
+      const prompt = (yield* Ref.get(stub.calls)).find((call) => call.path.endsWith("/message"))
+      const ownId = (prompt?.body as { messageID?: string }).messageID
+      assert.isString(ownId, "the bridge did not mint a message id it could recognise")
+
+      const echo = JSON.stringify({
+        type: "message.part.updated",
+        properties: {
+          sessionID: "ses_1",
+          part: { type: "text", text: "Fix the parser", messageID: ownId }
+        }
+      })
+      assert.isTrue(
+        Option.isNone(OpenCodeA2A.readEvent(echo, "ses_1", ownId)),
+        "the caller's own message was read as progress"
+      )
+      // The agent's own parts still are progress.
+      const said = JSON.stringify({
+        type: "message.part.updated",
+        properties: {
+          sessionID: "ses_1",
+          part: { type: "text", text: "reading src", messageID: "msg_assistant" }
+        }
+      })
+      assert.isTrue(Option.isSome(OpenCodeA2A.readEvent(said, "ses_1", ownId)))
+    })
+  )
+
+  it.effect("a secured server can be reached, on every request", () =>
+    Effect.gen(function*() {
+      const seen = yield* Ref.make<ReadonlyArray<string>>([])
+      const client = HttpClient.make((request, url) =>
+        Effect.as(
+          Ref.update(seen, (all) => [
+            ...all,
+            `${url.pathname}:${request.headers["authorization"] ?? "none"}`
+          ]),
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              url.pathname === "/event"
+                ? ""
+                : JSON.stringify(
+                  url.pathname === "/session"
+                    ? { id: "ses_1" }
+                    : { info: {}, parts: [{ type: "text", text: "done" }] }
+                )
+            )
+          )
+        )
+      )
+      const opencode = yield* OpenCodeA2A.remote({
+        baseUrl: BASE,
+        headers: { authorization: "Bearer secret" }
+      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient)(client)))
+      yield* opencode.delegate(ask("go"))
+      const calls = yield* Ref.get(seen)
+      // Including the event subscription: a secured server rejects that too.
+      assert.isTrue(calls.length > 0)
+      assert.isTrue(
+        calls.every((call) => call.endsWith("Bearer secret")),
+        `some requests went unauthenticated: ${JSON.stringify(calls)}`
+      )
+    })
+  )
+
   it.effect("a delegated task completes, and the server's answer is the artifact", () =>
     Effect.gen(function* () {
       const stub = yield* server({})

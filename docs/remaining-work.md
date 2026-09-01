@@ -361,14 +361,42 @@ open, so the next pass does not have to re-derive it.
     then the `LanguageModel` adapter experiment, which the plan itself ranks
     last and least natural.
 
-    **Neither bridge has been run against the real thing.** Every test and this
-    example substitute the seam -- a scripted `Sandbox`, a stubbed `HttpClient`
-    -- which is legitimate for CI and is exactly how the CLI/server contracts
-    could still be wrong in a way nothing here would catch. Same standing
-    caveat as the Anthropic example. The two places to expect it: the
-    permission payload's field casing (both spellings are accepted, so this is
-    hedged) and OpenCode's permission-name table (read from its OpenAPI
-    document, and overridable).
+26g. **Both bridges run live** — 2026-09-01, against Claude Code 2.1.252 and
+    OpenCode 1.18.23 on this machine. Delegation, the result artifact, session
+    capture, resumption of the same conversation by a second message, and the
+    streaming payload sequence all hold against the real runtimes. It found
+    four things no stub could have, which is the argument for having done it:
+
+    - **`bare: true` was the wrong default, and broke every run.** Bare mode
+      never reads OAuth credentials, so against a subscription login the CLI
+      answered `Not logged in - Please run /login` and the bridge dutifully
+      reported a FAILED task carrying that text. (Two things did work exactly
+      as designed there: the failure was FAILED and not COMPLETED, and the
+      reason survived into the artifact.) Now off unless asked for.
+    - **OpenCode could not talk to a secured server.** `opencode serve` warns
+      `OPENCODE_SERVER_PASSWORD is not set; server is unsecured`, so it has an
+      authenticated mode and `Options` had no way to reach it. `headers` now
+      rides on every request, the event subscription included.
+    - **The caller's own prompt came back as the agent's progress.** A real bus
+      echoes the message it was sent as a text part, so `stream()` reported the
+      question as the first thing the agent said. The bridge now mints the user
+      message id (`messageID` on the prompt) and ignores parts carrying it.
+    - **The permissive parsers earned their keep.** Claude Code emits a
+      `rate_limit_event` this bridge has never heard of, and reports
+      `subtype: "success"` *with* `is_error: true` on an auth failure -- both
+      handled, the first by ignoring unknown types and the second by the `||`
+      in the failure check rather than by luck.
+
+    **Still unverified: the permission paths.** Claude Code's
+    `--permission-prompt-tool` was never exercised end to end (it needs the MCP
+    server standing), and OpenCode never emitted a `permission.asked` frame at
+    all -- a write went straight through, and a session created with
+    `permission: [{permission:"edit", pattern:"*", action:"ask"}]` did not
+    change that. So the reply endpoint, the request shape and the payload
+    casing remain read-from-documentation rather than observed. Both parsers
+    hedge (either casing decodes; an unknown permission keeps its own name),
+    but this is the part to prove next, and proving it needs an OpenCode
+    configured to ask.
 
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /

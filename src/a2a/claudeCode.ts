@@ -79,11 +79,17 @@ export interface Options {
   /**
    * `--bare`: skip discovery of hooks, plugins, MCP servers and `CLAUDE.md`.
    *
-   * Default `true` here, and deliberately not the CLI's default. A bridged run
-   * is a scripted one: whatever sits in the workspace or in the host's
-   * `~/.claude` should not silently change what a delegated task does, and a
-   * bridge whose behaviour depends on the machine it runs on is not portable in
-   * any sense this repository means by the word.
+   * **Off by default, having been on.** The argument for defaulting it on is
+   * real -- a bridged run is a scripted one, and whatever sits in the workspace
+   * or the host's `~/.claude` should not silently change what a delegated task
+   * does. But bare mode never reads OAuth credentials, so it requires
+   * `ANTHROPIC_API_KEY`, and against a subscription login *every* delegated run
+   * came back `Not logged in - Please run /login`. Verified against the real
+   * CLI (2.1.252) on 2026-09-01, which is the only way this was ever going to
+   * be found.
+   *
+   * A default that cannot authenticate is not a default. Turn it on when the
+   * environment has an API key and you want the reproducibility.
    */
   readonly bare?: boolean | undefined
   /** Anything else, appended verbatim after the flags above. */
@@ -342,7 +348,7 @@ const argsFor = (
   prompt: string,
   resume: Option.Option<string>
 ): ReadonlyArray<string> => [
-  ...(options.bare === false ? [] : ["--bare"]),
+  ...(options.bare === true ? ["--bare"] : []),
   "-p",
   prompt,
   "--output-format",

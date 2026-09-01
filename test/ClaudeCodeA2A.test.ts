@@ -111,8 +111,18 @@ describe("ClaudeCodeA2A", () => {
       const command = recorded[0]
       assert.strictEqual(command?.executable, "claude")
       assert.include(command?.args ?? [], "Fix the parser")
-      assert.include(command?.args ?? [], "--bare")
+      // Not bare by default. Bare mode never reads OAuth credentials, so against
+      // a subscription login every delegated run came back "Not logged in".
+      // Verified against the real CLI, which is the only way it was findable.
+      assert.notInclude(command?.args ?? [], "--bare")
       assert.include(command?.args ?? [], "stream-json")
+
+      // Asked for, it is passed: the reproducibility argument for bare mode is
+      // real, it is just not a default when it cannot authenticate.
+      const bareRecorded: Array<Sandbox.Command> = []
+      const bare = yield* bridge(scripted([INIT, RESULT("ok")], bareRecorded), { bare: true })
+      yield* bare.delegate(ask("go"))
+      assert.include(bareRecorded[0]?.args ?? [], "--bare")
       assert.notInclude(command?.args ?? [], "--resume")
     }).pipe(Effect.scoped)
   )
