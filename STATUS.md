@@ -15,7 +15,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1820 passing in 168 files, `McpServerConformance` included (it no longer runs separately) |
+| tests | `npm test` | 1853 passing in 170 files, `McpServerConformance` included (it no longer runs separately) |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
@@ -48,8 +48,12 @@ regression. Not yet diagnosed further; recorded rather than fixed.
 
 The kernel vocabulary (`Agent`, `AgentSession`, submission / run / turn,
 `AgentLoop`, `AgentEvent`, `ContextTransform`, `ToolExecution`, `Permission`,
-`Elicitation`, `InputChannel`) has not grown since `0.0.1`. Everything else is
-built *from* it: a Service, a Layer, a toolkit, a transform, an adapter.
+`Elicitation`, `InputChannel`) has grown once since `0.0.1`: on 2026-09-01
+`AgentLoop.Decision` gained `Final` (one tool-less turn, then stop) and an
+optional `reason`, and `State` gained `toolCallsTotal` and `elapsed` -- all
+additive, and the engine's only new knowledge is that a `Final` has one
+turn's notice. Everything else is built *from* the vocabulary: a Service, a
+Layer, a toolkit, a transform, an adapter.
 
 ## What ships
 
@@ -62,7 +66,10 @@ One line per surface; the maturity label is the README's
 keys; typed tool execution with strategies and failure policies; permission
 policy with projections, rules and remembered grants; elicitation with a
 terminal state; snapshots and restore; execution plans; the event ADT with
-the correlation envelope; `PromptWire` so files cross every boundary intact.
+the correlation envelope; `PromptWire` so files cross every boundary intact;
+run policy on the loop seam -- `maxTurns`, `maxToolCalls`, `maxDuration`,
+`limits`, `withFinalTurn` -- with the stop's reason on `RunCompleted`, the
+result and every client.
 
 **Transports.** `/client` is the protocol-neutral seam (`AgentClient`,
 `AgentSessionHost` with capacity, per-session request buckets, authorization,

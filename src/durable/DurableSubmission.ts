@@ -100,7 +100,9 @@ export const Outcome = Schema.Union([
     turns: Schema.Number,
     text: Schema.String,
     /** Optional so a journal written before it existed still decodes. */
-    content: Schema.optional(Schema.Array(PromptWire.Part))
+    content: Schema.optional(Schema.Array(PromptWire.Part)),
+    /** Same rule; `AgentSubmission.Result.stopReason` when the loop gave one. */
+    stopReason: Schema.optional(Schema.String)
   }),
   Schema.TaggedStruct("Failed", {
     submissionId: Schema.String,
@@ -527,7 +529,8 @@ const succeededOutcome = (
   content: Option.match(result.response, {
     onNone: () => [],
     onSome: (response) => History.assistantContent(response.content)
-  })
+  }),
+  ...(Option.isSome(result.stopReason) ? { stopReason: result.stopReason.value } : {})
 })
 
 /** Map an agent failure onto the wire-safe outcome. */

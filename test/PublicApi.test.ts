@@ -161,13 +161,20 @@ describe("public API", () => {
     ])
     assert.deepStrictEqual(Object.keys(Harness.AgentLoop).sort(), [
       "Continue",
+      "Final",
       "Stop",
       "and",
       "bounded",
+      "final",
+      "limits",
       "make",
+      "maxDuration",
+      "maxToolCalls",
       "maxTurns",
       "or",
-      "untilIdle"
+      "stop",
+      "untilIdle",
+      "withFinalTurn"
     ])
     assert.deepStrictEqual(Object.keys(Harness.ContextTransform).sort(), [
       "appendSystem",

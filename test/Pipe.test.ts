@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -34,6 +34,8 @@ describe("pipeable declarative values", () => {
           submissionId: "sub" as never,
           runId: "r" as never,
           turnIndex,
+          toolCallsTotal: turnIndex,
+          elapsed: Duration.zero,
           response: null as never,
           toolCalls: [{ id: "t", name: "x" }] as never
         })

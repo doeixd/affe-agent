@@ -33,6 +33,13 @@ export interface Result<Tools extends Record<string, Tool.Any>, Value = never> {
   readonly runs: number
   readonly turns: number
   readonly text: string
+  /**
+   * Why the last run stopped, when its loop said: the bound or rule named by
+   * `AgentLoop.stop(reason)` / `final(reason)`. `None` when the policy gave
+   * no reason (`untilIdle` stopping on an idle model, a bare `Stop`) and for
+   * an interrupted submission, which no loop decided.
+   */
+  readonly stopReason: Option.Option<string>
   /** The final model response, so usage and finish reason are not discarded. */
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
   /**
@@ -80,6 +87,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     let text = ""
     let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
+    let stopReason: Option.Option<string> = Option.none()
 
     // `session.progress` is zeroed for this submission by `AgentSession.prompt`,
     // in the uninterruptible claim before this fibre exists, so an interrupt
@@ -130,6 +138,9 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
         text = exit.value.text
       }
       response = Option.orElse(exit.value.response, () => response)
+      // The last run's, not the first's: a follow-up that ran to idle after
+      // a bounded first run is a submission that ended by going idle.
+      stopReason = exit.value.stopReason
 
       // Buffered locally rather than re-queued. Putting the tail back on a
       // FIFO one item at a time reverses it, which turned A, B, C into
@@ -216,5 +227,5 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     // submission's landed work is already collected for exactly that reason.
     const { value } = yield* Ref.get(session.progress)
 
-    return { submissionId, runs, turns, text, response, value }
+    return { submissionId, runs, turns, text, response, stopReason, value }
   })

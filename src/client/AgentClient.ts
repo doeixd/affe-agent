@@ -64,7 +64,9 @@ export const RemoteResult = Schema.Struct({
   turns: Schema.Number,
   text: Schema.String,
   /** The final assistant message: text, reasoning and files, in order. */
-  content: Schema.Array(PromptWire.Part)
+  content: Schema.Array(PromptWire.Part),
+  /** Why the last run stopped, when its loop said (`AgentSubmission.Result.stopReason`). */
+  stopReason: Schema.optional(Schema.String)
 })
 export type RemoteResult = typeof RemoteResult.Type
 
@@ -454,7 +456,8 @@ export const fromSession = (
     content: Option.match(result.response, {
       onNone: () => [],
       onSome: (response) => History.assistantContent(response.content)
-    })
+    }),
+    ...(Option.isSome(result.stopReason) ? { stopReason: result.stopReason.value } : {})
   })
 
   /**

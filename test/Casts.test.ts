@@ -133,11 +133,13 @@ const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
   ],
   [
     "src/AgentTurn.ts",
-    1,
-    "merging the output tool back into the agent's toolkit: " +
-      "`Toolkit.WithHandler` is invariant in its tools, so the union the " +
-      "merge produces is not `WithHandler<Tools>` even though the injected " +
-      "tool is the harness's own and never appears in the agent's record"
+    2,
+    "merging the output tool back into the agent's toolkit, and standing " +
+      "an empty toolkit in for the agent's on a `Final` turn: " +
+      "`Toolkit.WithHandler` is invariant in its tools, so neither the union " +
+      "the merge produces nor `Toolkit.empty` is `WithHandler<Tools>`, even " +
+      "though the injected tool is the harness's own and a `Final` turn is " +
+      "documented to offer nothing else"
   ],
   [
     "src/durable/DurableModel.ts",

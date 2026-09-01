@@ -32,6 +32,10 @@ import * as ModelCapabilities from "../model/ModelCapabilities.js"
  * makes the recording unconditional and independent of composition order.
  */
 
+/** Named once, so `RunCompleted.stopReason` says which ceiling it was. */
+const tokenStop = AgentLoop.stop("token budget")
+const costStop = AgentLoop.stop("cost budget")
+
 /** Total tokens in one model response, both directions. */
 const tokensOf = <Tools extends Record<string, Tool.Any>>(
   response: LanguageModel.GenerateTextResponse<Tools, true>
@@ -98,7 +102,7 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
   AgentLoop.make((state) =>
     Effect.flatMap(Budget, (budget) =>
       Effect.flatMap(budget.spend(tokensOf(state.response)), (total) =>
-        total >= limit ? Effect.succeed(AgentLoop.Stop) : inner.decide(state)
+        total >= limit ? Effect.succeed(tokenStop) : inner.decide(state)
       )
     )
   )
@@ -153,6 +157,6 @@ export const cost = <E, R, Tools extends Record<string, Tool.Any>>(
       // every turn counts regardless of what `inner` decides -- the same
       // ordering `within` relies on, and for the same reason.
       const total = yield* budget.spendCost(price)
-      return total >= limit ? AgentLoop.Stop : yield* inner.decide(state)
+      return total >= limit ? costStop : yield* inner.decide(state)
     })
   )

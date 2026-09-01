@@ -750,6 +750,8 @@ const settle = <Tools extends Record<string, Tool.Any>, E, Value = never>(
           turns: landed.turns,
           text: landed.text,
           response: landed.response,
+          // No loop decided this stop.
+          stopReason: Option.none(),
           // An interrupted submission still reports a value it already got.
           // The tool call that produced it committed atomically with its turn,
           // so this is work that landed, not work in flight.

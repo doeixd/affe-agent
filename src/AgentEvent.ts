@@ -151,7 +151,14 @@ export const SubmissionInterrupted = Schema.TaggedStruct(
 
 export const RunStarted = Schema.TaggedStruct("RunStarted", {})
 export const RunCompleted = Schema.TaggedStruct("RunCompleted", {
-  turns: Schema.Number
+  turns: Schema.Number,
+  /**
+   * The reason the loop gave for stopping, when it gave one (`AgentLoop.stop`
+   * / `final` with a reason; `maxTurns`, `maxToolCalls`, `maxDuration` and
+   * `Budget.within` name theirs). Optional so a journal or consumer written
+   * before it existed still decodes.
+   */
+  stopReason: Schema.optional(Schema.String)
 })
 export const RunFailed = Schema.TaggedStruct("RunFailed", {
   failure: Failure

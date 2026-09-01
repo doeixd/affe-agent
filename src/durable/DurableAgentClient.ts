@@ -516,7 +516,8 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
           text: exit.value.text,
           // A journal from before `content` existed reports none, which is
           // what it recorded.
-          content: exit.value.content ?? []
+          content: exit.value.content ?? [],
+          ...(exit.value.stopReason === undefined ? {} : { stopReason: exit.value.stopReason })
         }
       })
 

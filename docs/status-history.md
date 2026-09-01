@@ -4427,3 +4427,59 @@ budget test used plain sequential calls, which halt at the first error
 anyway -- so it passed identically with and without the guard. Removing
 the guard and watching *nothing* fail is what exposed it; the test now
 uses `try`/`catch` and discriminates.
+
+## 2026-09-01 — run policy through the loop seam (comparison plan, item 2)
+
+`docs/plan-effect-agent-comparison.md` §3.1, as specified, with three
+corrections found while building it.
+
+What landed:
+
+- `AgentLoop.State` carries `toolCallsTotal` and `elapsed`, accumulated by
+  `AgentRun` -- the run reads `Clock.currentTimeMillis` once at start and
+  after each turn, so a `TestClock` makes `maxDuration` an assertion.
+- `maxToolCalls(n)`, `maxDuration(input)`, `limits({ maxTurns?,
+  maxToolCalls?, maxDuration?, finalTurn? })` -- the last typed so that
+  `limits({})` and `limits({ finalTurn: true })` do not compile (pinned with
+  `@ts-expect-error`).
+- `Decision` is now `Continue | Stop | Final`; `Stop` and `Final` carry an
+  optional `reason` (`AgentLoop.stop(reason)` / `final(reason)`); the
+  built-in bounds and `Budget.within` / `cost` name theirs.
+- `AgentRun` on `Final` runs one more turn with `withholdTools: true` -- an
+  engine-internal argument to `AgentTurn.execute`, deliberately not a
+  `PromptOptions` field -- and does not consult the loop again. The withheld
+  toolkit is `Toolkit.empty` standing in for `WithHandler<Tools>`, the
+  second erasing cast in `AgentTurn.ts`, inventoried in `AGENTS.md` and
+  `test/Casts.test.ts`.
+- `withFinalTurn(inner)` maps a `Stop` on a turn that still requested tools
+  to `Final` with the same reason; an idle stop is left alone.
+- `RunCompleted.stopReason` (optional), `AgentSubmission.Result.stopReason`
+  (`Option`), `RemoteResult.stopReason` and the durable `Outcome`'s -- all
+  optional on the wire so older journals and clients decode.
+- `TestLanguageModel`'s recorder gained `tools`: the names offered on each
+  call, which is the only way to assert what a `Final` turn withheld, since
+  tools travel beside the prompt rather than in it.
+
+What building it found:
+
+- **`or` lost a single policy's reason.** The first draft seeded the fold
+  with the bare `Stop` constant and kept the accumulator on ties, so
+  `or(stop("s"))` answered `{ _tag: "Stop" }`. Both folds now start from the
+  first policy's own decision. The truth-table test caught it before it
+  shipped, which is what the table is for.
+- **`AgentProbe.make` refused a session with an output.** Its parameter was
+  `AgentSession<any, any>`, two slots for a type that has three, so a test
+  probing an agent with an `AgentOutput` did not compile. Widened; that is
+  a library signature defect of exactly the kind AGENTS.md says to fix in
+  the library.
+- **`Effect.reduce` takes a lazy seed in v4.** A value where a thunk was
+  expected compiled to `zero is not a function` at runtime in every loop.
+
+Broken once: withholding (`withholdTools: false` unconditionally) fails the
+three `Final` tests and nothing else; the `or` seed, above.
+
+Deliberately not built: a per-call tool-call refusal (a `Permission`
+decision, not a loop's), and a replay-stable `elapsed` under `/durable` --
+`State.elapsed`'s JSDoc says why a duration bound can decide differently on
+replay, and `maxDuration` inherits the caveat.
+

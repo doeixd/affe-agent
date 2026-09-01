@@ -588,12 +588,15 @@ what ships here and found a convergent turn model, a much broader surface on
 our side, and six gaps worth closing. Its §2 carries the full ranking with
 sizes; the items are repeated here so this list stays the one tracker.
 
-36. **Getting-started page, lineage note, platforms table** (plan §3.0) —
+36. ~~**Getting-started page, lineage note, platforms table**~~ — landed
+    2026-09-01 (`docs/getting-started.md`, `docs/platforms.md`, README
+    section, `test/GettingStarted.test.ts`). As planned:
     `docs/getting-started.md` over a typechecked `examples/getting-started.ts`
     that runs against the scripted model with no key; `docs/platforms.md`
     (Node, workerd, Bun as *untested*); a four-sentence README section on the
     relation to effect-agent.com. Cheapest item; no decision needed.
-37. **Run policy completeness** (plan §3.1) — `AgentLoop.State` gains
+37. ~~**Run policy completeness**~~ — landed 2026-09-01; see
+    `status-history.md`. As planned: `AgentLoop.State` gains
     `toolCallsTotal` and `elapsed`; `AgentLoop.maxToolCalls`, `maxDuration`
     and `limits({...})`; a third `Decision`, `Final`, that takes one tool-less
     turn (output tool only, for an agent with an `AgentOutput`) so a bounded

@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
 import type { LanguageModel, Response, Tool } from "effect/unstable/ai"
@@ -22,6 +22,27 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
   readonly runId: RunId
   /** 1-based index of the turn that just completed. */
   readonly turnIndex: number
+  /**
+   * Tool calls this run has executed so far, this turn's included.
+   *
+   * Accumulated by the engine rather than by the policy, so a ceiling on it
+   * is a pure function of the state -- and holds under a durable replay,
+   * where the loop runs again from the journal and a `Ref` a policy kept
+   * would start from zero.
+   */
+  readonly toolCallsTotal: number
+  /**
+   * Wall-clock time since this run started, read from `Clock`.
+   *
+   * The one field here that is **not replay-stable**: under `/durable` a
+   * resumed submission runs the loop again and measures its own elapsed
+   * time, so a duration bound can decide differently on replay than it did
+   * live -- and a replay that continues where the live run stopped issues a
+   * model call the journal has no answer for. `turnIndex` and
+   * `toolCallsTotal` are derived from journalled facts and do not have this
+   * property; prefer them for an agent that runs durably.
+   */
+  readonly elapsed: Duration.Duration
   /**
    * The response as the harness received it.
    *
@@ -49,18 +70,58 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
 }
 
-export type Decision = Continue | Stop
+export type Decision = Continue | Stop | Final
 
 export interface Continue {
   readonly _tag: "Continue"
 }
 
+/**
+ * No further turn.
+ *
+ * `reason` names the bound or rule that decided it and surfaces as
+ * `RunCompleted.stopReason` and `Result.stopReason`; the built-in bounds name
+ * theirs. Optional, because "the model went idle" needs no explanation.
+ */
 export interface Stop {
   readonly _tag: "Stop"
+  readonly reason?: string | undefined
+}
+
+/**
+ * Exactly one more turn, with tools withheld, then stop.
+ *
+ * The turn that follows sees no tools -- or, for an agent with an
+ * `AgentOutput`, only the output tool -- so a run that a bound cut short ends
+ * in an answer rather than mid-thought. The loop is not consulted after that
+ * turn: `Final` is a stop with one turn's notice, not a continue.
+ */
+export interface Final {
+  readonly _tag: "Final"
+  readonly reason?: string | undefined
 }
 
 export const Continue: Decision = { _tag: "Continue" }
 export const Stop: Decision = { _tag: "Stop" }
+export const Final: Decision = { _tag: "Final" }
+
+/** `Stop`, with the reason `RunCompleted.stopReason` will carry. */
+export const stop = (reason?: string): Decision =>
+  reason === undefined ? Stop : { _tag: "Stop", reason }
+
+/** `Final`, with the reason `RunCompleted.stopReason` will carry. */
+export const final = (reason?: string): Decision =>
+  reason === undefined ? Final : { _tag: "Final", reason }
+
+/**
+ * How much a decision stops. `and` keeps the most, `or` the least.
+ *
+ * `Final` sits between: it ends the run, but one turn later than `Stop`, so
+ * a conjunction that has a `Stop` anywhere stops now, and one that has only
+ * `Final`s and `Continue`s takes the final turn.
+ */
+const rank = (decision: Decision): number =>
+  decision._tag === "Continue" ? 0 : decision._tag === "Final" ? 1 : 2
 
 /**
  * `E` and `R` are preserved so a policy can depend on its own services — a
@@ -110,7 +171,142 @@ export const maxTurns = <
   max: number
 ): AgentLoop<never, never, Tools> => {
   const bound = positiveInteger("AgentLoop.maxTurns", max)
-  return make((state) => Effect.succeed(state.turnIndex >= bound ? Stop : Continue))
+  const decision = stop("max turns")
+  return make((state) => Effect.succeed(state.turnIndex >= bound ? decision : Continue))
+}
+
+/**
+ * Stop once the run has executed `max` tool calls.
+ *
+ * Checked after the turn, as every loop bound is, so the turn that crosses
+ * the ceiling is the last one and is not cut short: `maxToolCalls(3)` on a
+ * turn that requested five calls runs all five, then stops. A per-call
+ * refusal -- the fourth call denied and the model told -- is a `Permission`
+ * decision, not a loop's.
+ */
+export const maxToolCalls = <
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
+  max: number
+): AgentLoop<never, never, Tools> => {
+  const bound = positiveInteger("AgentLoop.maxToolCalls", max)
+  const decision = stop("max tool calls")
+  return make((state) => Effect.succeed(state.toolCallsTotal >= bound ? decision : Continue))
+}
+
+/**
+ * Stop once the run has been going for `duration`.
+ *
+ * Checked after the turn: the turn in flight when the deadline passes
+ * completes and commits, and no further one starts. That is the difference
+ * from `Effect.timeout` on the prompt, which interrupts the run where it
+ * stands and reports `status: "interrupted"`; both are legitimate, and this
+ * is the one that ends cleanly. Reads `State.elapsed`, and inherits its
+ * caveat: not replay-stable under `/durable`.
+ *
+ * Throws at construction on a non-positive or non-finite duration, as
+ * `maxTurns` does on a bad count: a bound that could never bite is a
+ * misconfiguration, not a policy.
+ */
+export const maxDuration = <
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
+  duration: Duration.Input
+): AgentLoop<never, never, Tools> => {
+  const bound = Duration.fromInputUnsafe(duration)
+  const millis = Duration.toMillis(bound)
+  if (!(millis > 0) || !Number.isFinite(millis)) {
+    throw new RangeError(
+      `AgentLoop.maxDuration: expected a positive finite duration, got ${String(duration)}`
+    )
+  }
+  const decision = stop("max duration")
+  return make((state) =>
+    Effect.succeed(Duration.toMillis(state.elapsed) >= millis ? decision : Continue)
+  )
+}
+
+/**
+ * Turn an inner policy's cut-off into one final, tool-less turn.
+ *
+ * When `inner` says `Stop` while the model was still asking for tools, the
+ * run was cut short rather than finished, and the decision becomes `Final`
+ * with the same reason: one more turn with tools withheld, so the run ends
+ * in an answer. A `Stop` on an idle model -- the model was done -- is left
+ * alone, as is `Continue`. That is the "exhausted" case read straight off
+ * the state, with nothing to keep track of.
+ */
+export const withFinalTurn = <
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
+  inner: AgentLoop<E, R, Tools>
+): AgentLoop<E, R, Tools> =>
+  make((state) =>
+    Effect.map(inner.decide(state), (decision) =>
+      decision._tag === "Stop" && state.toolCalls.length > 0
+        ? final(decision.reason)
+        : decision
+    )
+  )
+
+/** The bounds `limits` accepts. At least one must be given; see `limits`. */
+export interface Limits {
+  /** Stop after this many turns. */
+  readonly maxTurns?: number | undefined
+  /** Stop after this many tool calls, counted across the run. */
+  readonly maxToolCalls?: number | undefined
+  /** Stop once the run has been going this long. */
+  readonly maxDuration?: Duration.Input | undefined
+  /**
+   * When a bound cuts the run short, take one more turn with tools withheld
+   * so it ends in an answer (`withFinalTurn`). Off by default: a bound is a
+   * spend ceiling, and the final turn is one more model call.
+   */
+  readonly finalTurn?: boolean | undefined
+}
+
+/**
+ * At least one bound, so `limits({})` and `limits({ finalTurn: true })` do
+ * not compile: an unbounded `untilIdle` is what a caller reaching for
+ * `limits` was trying not to write.
+ */
+type AtLeastOneBound =
+  | { readonly maxTurns: number }
+  | { readonly maxToolCalls: number }
+  | { readonly maxDuration: Duration.Input }
+
+/**
+ * The usual bounded loop, in one object.
+ *
+ * `and(untilIdle(), ...)` over the bounds given -- exactly what `bounded` is
+ * for `maxTurns` alone -- with `finalTurn` wrapping the result in
+ * `withFinalTurn`. It exists because the first policy most agents want is
+ * "stop when the model is done, but never past these", and writing that as
+ * three combinators invites leaving one off; it lowers into them rather than
+ * adding a second way to say it.
+ *
+ * Tokens and cost are deliberately not here. `Budget.within` and
+ * `Budget.cost` need a `Layer` for their scope -- per session or per
+ * application -- and a pure loop cannot carry one; wrap this in them.
+ */
+export const limits = <
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
+  options: Limits & AtLeastOneBound
+): AgentLoop<never, never, Tools> => {
+  let loop: AgentLoop<never, never, Tools> = untilIdle<Tools>()
+  if (options.maxTurns !== undefined) {
+    loop = and(loop, maxTurns<Tools>(options.maxTurns)) as AgentLoop<never, never, Tools>
+  }
+  if (options.maxToolCalls !== undefined) {
+    loop = and(loop, maxToolCalls<Tools>(options.maxToolCalls)) as AgentLoop<never, never, Tools>
+  }
+  if (options.maxDuration !== undefined) {
+    loop = and(loop, maxDuration<Tools>(options.maxDuration)) as AgentLoop<never, never, Tools>
+  }
+  return options.finalTurn === true ? withFinalTurn(loop) : loop
 }
 
 /**
@@ -157,8 +353,17 @@ export const and = <const Loops extends Policies>(
   ToolsOf<Loops[number]>
 > =>
   make((state) =>
-    Effect.reduce(loops, () => Continue as Decision, (acc, loop) =>
-      acc._tag === "Stop" ? Effect.succeed(acc) : loop.decide(state)
+    // Folded from the first policy's own decision rather than a neutral
+    // seed, so a single policy's reason survives the fold unchanged.
+    Effect.flatMap(loops[0].decide(state), (first) =>
+      Effect.reduce(loops.slice(1), () => first as Decision, (acc, loop) =>
+        // A `Stop` is final and short-circuits; a `Final` keeps looking,
+        // since a later policy may want to stop *now*. The first decision
+        // at the winning rank keeps its reason.
+        acc._tag === "Stop"
+          ? Effect.succeed(acc)
+          : Effect.map(loop.decide(state), (next) => (rank(next) > rank(acc) ? next : acc))
+      )
     )
   ) as AgentLoop<
     ErrorOf<Loops[number]>,
@@ -194,8 +399,14 @@ export const or = <const Loops extends Policies>(
   ToolsOf<Loops[number]>
 > =>
   make((state) =>
-    Effect.reduce(loops, () => Stop as Decision, (acc, loop) =>
-      acc._tag === "Continue" ? Effect.succeed(acc) : loop.decide(state)
+    Effect.flatMap(loops[0].decide(state), (first) =>
+      Effect.reduce(loops.slice(1), () => first as Decision, (acc, loop) =>
+        // The mirror of `and`: a `Continue` wins outright; otherwise the
+        // least stopping decision so far is kept, with its reason.
+        acc._tag === "Continue"
+          ? Effect.succeed(acc)
+          : Effect.map(loop.decide(state), (next) => (rank(next) < rank(acc) ? next : acc))
+      )
     )
   ) as AgentLoop<
     ErrorOf<Loops[number]>,

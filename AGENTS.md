@@ -24,7 +24,7 @@ A plain `x as T` is still checked for overlap — it can narrow, it cannot claim
 string is a number. `src/` has around a hundred of those and they are ordinary.
 What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
 which routes around it. A third form erases too, from the other end: `x as never`, since `never` is
-assignable to everything. **Twenty-three erasing casts exist, in seven files**, and they
+assignable to everything. **Twenty-four erasing casts exist, in seven files**, and they
 are the list below. `test/Casts.test.ts` enforces it: adding one fails the build
 until it is written down here, with its reason.
 
@@ -46,12 +46,17 @@ The erasing casts in `src/` are structural, and each is documented at the site:
 * merging two handled toolkits by delegation (`internal/toolkit.ts`'s
   `mergeHandled`, two), because Effect AI composes toolkits before handlers are
   bound and a `WithHandler` is a closed value;
-* **merging the output tool into the agent's toolkit** (`AgentTurn.ts`, one).
-  An agent that declares an `AgentOutput` has one extra tool injected per turn,
-  whose handler closes over that session's staged value. `Toolkit.WithHandler`
-  is invariant in its tools, so the merged union is not `WithHandler<Tools>` --
-  which is honest, and also not something a caller ever sees: the injected tool
-  is the harness's own and never enters the agent's tool record;
+* **merging the output tool into the agent's toolkit, and withholding it**
+  (`AgentTurn.ts`, two). An agent that declares an `AgentOutput` has one extra
+  tool injected per turn, whose handler closes over that session's staged
+  value. `Toolkit.WithHandler` is invariant in its tools, so the merged union
+  is not `WithHandler<Tools>` -- which is honest, and also not something a
+  caller ever sees: the injected tool is the harness's own and never enters
+  the agent's tool record. The second is its mirror: on the one turn an
+  `AgentLoop.Final` decision asks for, the agent's tools are withheld and
+  `Toolkit.empty` stands in for them, which the same invariance keeps from
+  being a `WithHandler<Tools>`. The turn's result stays typed by the agent's
+  tools, of which that turn can have called none;
 * **mapping a declared tool tuple element-wise** through a function that
   returns each element's own type -- `McpToolkit.bind` (1) and
   `ToolSource.bind` (1) raise a declared tool's approval floor from the

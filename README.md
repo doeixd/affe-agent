@@ -499,6 +499,52 @@ not.
 Composition is heterogeneous: composing transforms that fail differently, or
 need different services, gives the union of both.
 
+### Bounds, and a final turn
+
+The bounds most agents want are loops, and `limits` is the one object that
+composes them:
+
+```ts
+Agent.make({
+  toolkit,
+  loop: AgentLoop.limits({
+    maxTurns: 20,
+    maxToolCalls: 50,
+    maxDuration: "2 minutes",
+    // When a bound cuts the model off mid-work, take one more turn with the
+    // tools withheld so the run ends in an answer rather than mid-thought.
+    finalTurn: true
+  })
+})
+```
+
+`limits` is `and(untilIdle(), ...)` over the bounds given, so it lowers into
+`AgentLoop.maxTurns`, `maxToolCalls` and `maxDuration`, each usable on its
+own. Every bound is checked **after** the turn: the turn that crosses a
+ceiling completes and commits, and no further one starts -- `maxToolCalls(3)`
+on a turn that requested five calls runs all five, then stops. That is what
+makes `maxDuration` different from `Effect.timeout` on the prompt, which
+interrupts the run where it stands. Tokens and money stay in
+[`/budget`](#not-included), because their scope is a `Layer`.
+
+`finalTurn` is a third loop decision, `Final`: exactly one more turn with the
+agent's tools withheld -- or, for an agent with an `AgentOutput`, with only
+the output tool, so the last word is typed -- after which the loop is not
+consulted. `AgentLoop.withFinalTurn(inner)` turns any policy's cut-off into
+one; a stop on an idle model stays a plain stop. `and` keeps the most
+stopping decision and `or` the least, with `Final` between `Continue` and
+`Stop`.
+
+A stop can say why. `AgentLoop.stop("reason")` and `final("reason")` carry it,
+the built-in bounds and `Budget.within` name theirs, and it surfaces as
+`stopReason` on `RunCompleted`, on the result, and across every client --
+so a caller can tell a run that finished from one that was cut off without
+reading the transcript.
+
+One caveat, stated on `State.elapsed`: a duration bound is not replay-stable
+under `/durable`, because a resumed submission measures its own elapsed time.
+Turn and tool-call bounds are derived from journalled facts and are.
+
 ### Authoring an agent, two ways
 
 The object form and the pipeable form build the same `AgentDefinition`; pick

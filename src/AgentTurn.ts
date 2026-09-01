@@ -79,14 +79,17 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
  * resolution, which is what `mergeHandled` already reports.
  */
 const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
-  session: Session<Tools>
+  session: Session<Tools>,
+  withholdTools: boolean
 ): Effect.Effect<Toolkit.WithHandler<Tools>> =>
   Effect.flatMap(
-    // The session env satisfies the toolkit's requirements, so the shared
-    // resolver's `E`/`R` are discharged to `never` here.
-    InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<
-      Toolkit.WithHandler<Tools>
-    >,
+    withholdTools
+      ? withheld<Tools>()
+      // The session env satisfies the toolkit's requirements, so the shared
+      // resolver's `E`/`R` are discharged to `never` here.
+      : InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<
+        Toolkit.WithHandler<Tools>
+      >,
     (resolved) =>
       Option.match(session.agent.output, {
         onNone: () => Effect.succeed(resolved),
@@ -99,6 +102,31 @@ const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
           )
       })
   )
+
+/**
+ * The toolkit a `Final` turn sees: nothing.
+ *
+ * `AgentLoop.Final` asks for one more turn in which the model can only answer,
+ * so the agent's tools are withheld; an `AgentOutput`'s tool is merged back
+ * in by `resolveToolkit` exactly as it is on any other turn, so the answer is
+ * typed. Withholding is done here, by toolkit, rather than through a
+ * provider's tool-choice option: it then means the same thing on every
+ * provider, and under `/durable`'s replay, where the journalled model call is
+ * re-expressed rather than re-issued.
+ *
+ * The erasing cast is the second in this file (`AGENTS.md`): an empty
+ * toolkit is not a `WithHandler<Tools>`, and the type cannot say "the
+ * agent's tools, minus all of them" -- `WithHandler` is invariant in its
+ * tools. The value is exactly what the turn is documented to offer, and no
+ * caller sees the type: the turn's result is still typed by the agent's
+ * tools, of which a `Final` turn can have called none.
+ */
+const withheld = <Tools extends Record<string, Tool.Any>>(): Effect.Effect<
+  Toolkit.WithHandler<Tools>
+> =>
+  Toolkit.empty.pipe(Effect.provide(Toolkit.empty.toLayer({}))) as unknown as Effect.Effect<
+    Toolkit.WithHandler<Tools>
+  >
 
 /**
  * The output tool, handled, for one session.
@@ -329,7 +357,13 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
   submissionId: SubmissionId,
   runId: RunId,
   turn: number,
-  options: Options = {}
+  options: Options = {},
+  /**
+   * Engine-internal, not a `PromptOptions`: whether this is the one turn an
+   * `AgentLoop.Final` decision asked for, on which the agent's tools are
+   * withheld. `AgentRun` sets it; a caller never does.
+   */
+  kind: { readonly withholdTools: boolean } = { withholdTools: false }
 ) {
     // Correlation is passed down rather than read back from state: the caller
     // already knows it, and state is shared mutable data that may have moved on.
@@ -354,7 +388,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       canonicalPrompt,
       prompt: canonicalPrompt
     })
-    const handler = yield* resolveToolkit(session)
+    const handler = yield* resolveToolkit(session, kind.withholdTools)
 
     yield* EventBus.emit(session.bus, correlation, { _tag: "TurnStarted" })
 

@@ -322,10 +322,11 @@ const withOutputStop = <E, R>(
     ? loop
     : AgentLoop.make((state) =>
         Effect.map(loop.decide(state), (decision) =>
-          decision._tag === "Stop" ||
+          // The answer has been given: stop, whatever the inner policy said
+          // -- a `Final` turn after the output would only ask for it again.
           state.toolCalls.some((call) => call.name === output.toolName)
-            ? AgentLoop.Stop
-            : AgentLoop.Continue
+            ? AgentLoop.stop("output reported")
+            : decision
         )
       )
 
