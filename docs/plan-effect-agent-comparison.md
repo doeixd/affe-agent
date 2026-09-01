@@ -115,9 +115,9 @@ one of which owns the domain and the bare npm name.
   ranking, no adjectives.
 
 **Acceptance.** `npm run typecheck` includes the new example; the
-getting-started snippet is the example verbatim, checked by a test that
-reads both files (the README already has precedent for docs-vs-source
-pins). Break it once by editing the doc.
+getting-started snippet is the example verbatim, checked by a new test
+that reads both files — no such docs-vs-source pin exists yet, and this is
+the first place one earns its keep. Break it once by editing the doc.
 
 ### 3.1 Run policy completeness (item 2)
 
@@ -218,10 +218,11 @@ every existing event consumer compiles.
 **Acceptance.** `test/AgentLoop.test.ts` (new; `Budget.test.ts` is the
 model): each constructor at the boundary and one past it; the truth tables
 for `and`/`or` over three values; `withFinalTurn` on an idle stop is a
-plain stop; a `Final` turn sees an empty toolkit (asserted through the
-scripted model's prompt hook, which already exists for `Catalog`), and with
-an `AgentOutput` sees only the output tool and the result's `value` is
-`Some`; `stopReason` crosses HTTP and the durable journal. Each broken
+plain stop; a `Final` turn sees an empty toolkit, and with an `AgentOutput` sees
+only the output tool and the result's `value` is `Some` — which needs
+`TestLanguageModel` to record the tool names offered on each call beside
+the `prompts` it already records, a small additive change to `/testing`
+made in the same pass; `stopReason` crosses HTTP and the durable journal. Each broken
 once. Type-level: `limits({})` is a compile error (an empty bound is the
 `and([])` footgun again), and a loop reading `elapsed` needs nothing in
 `R`.
@@ -431,9 +432,10 @@ such actions), and a provider that exists only as a host binding. Its
 precondition is §3.3c; until then it would be a seam with no
 implementation, which is a plan, not a package.
 
-**Acceptance.** Both capabilities against the test doubles and, behind an
-environment variable as `web/brave.ts`'s live test is, against the real
-API; every bound in the table has a test at the boundary; a redirect off
+**Acceptance.** Both capabilities against the test doubles and against a
+scripted `HttpClient`, as `test/BraveWebSearch.test.ts` does today (there
+is no env-gated live test in the suite, and this item does not add one);
+every bound in the table has a test at the boundary; a redirect off
 the allowed host is refused. Broken once each.
 
 ### 3.7 A review example (item 10)
