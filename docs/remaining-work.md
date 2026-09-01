@@ -653,10 +653,33 @@ and should not until it is committed. Item 30 is untouched.
     local to an in-process session: `AgentClient`'s `RemoteResult` and
     `DurableSubmission`'s `Outcome` are fixed schemas shared by every agent, so
     neither carries it. A remote or durable caller reads the answer out of
-    history instead. The open decision is not the field, it is how a client
-    names the schema to decode the value with — pass the `AgentOutput` on the
-    client side and decode the encoded form, or publish it with the agent's
-    card. Worth doing when a second caller wants it; not before.
+    history instead.
+
+    **The design question is now decided** (2026-09-01): **the schema comes from
+    the call site.** This is not a fresh choice -- `AgentA2A.typed` already
+    solves the same problem across the same kind of boundary, and has for a
+    while. A2A's `SendMessageResult` is `Message | Task`, a fixed wire schema
+    shared by every peer; `typed({ request, result })` encodes through the
+    request codec into a JSON text part and decodes the result through the
+    result codec, and a peer answering off-contract is `AgentA2ARemoteError`
+    with code `BAD_RESULT` -- attributed to the peer rather than treated as a
+    local bug. So the wire stays an agent-agnostic envelope and the caller
+    names what it expects. Following that precedent means one story to
+    document rather than two.
+
+    **Publishing the schema on the agent card was considered and rejected** as
+    the mechanism. A card is discovery metadata fetched at runtime, so a schema
+    published there cannot give a caller a compile-time type: you would decode
+    at the call site anyway, having also paid for the publication, and a card
+    that drifts from its agent silently mistypes every consumer. The card is
+    the right place to *advertise that a typed output exists* -- its JSON
+    Schema, for a human or a model to read -- but it is not a substitute for
+    the caller naming what it expects.
+
+    What remains is the implementation: an opaque encoded field on
+    `RemoteResult` and `Outcome`, and a decode at the edge, shaped after
+    `AgentA2A.typed`. Still ranked here rather than done, because it changes
+    two public wire schemas and no caller has asked for it yet.
 
 ### Known, deliberately left
 
