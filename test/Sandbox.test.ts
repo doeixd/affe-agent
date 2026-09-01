@@ -800,7 +800,13 @@ describe("sandbox composition", () => {
     const surface = await import("../src/sandbox/index.js")
     assert.deepStrictEqual(Object.keys(surface).sort(), [
       "MemorySandbox",
-      "Sandbox"
+      "Sandbox",
+      // Workspace lifetime lives here rather than behind a `/workspace` entry
+      // (`effect-plan-2.txt` §12-13 proposes one): `Workspace` is defined in
+      // `Sandbox.ts` and this manages sandbox acquisitions, so a new entry
+      // point would be ceremony for one module. It earns one when
+      // `ProcessManager` joins it.
+      "WorkspaceManager"
     ])
     const local = await import("../src/sandbox/local.js")
     assert.include(Object.keys(local), "layer")

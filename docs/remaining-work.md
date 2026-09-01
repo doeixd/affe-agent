@@ -580,7 +580,14 @@ open, so the next pass does not have to re-derive it.
     `/tree` (a conversation DAG) and not `AgentSessionHost.size` (a live count
     in one process).
 
-26m. **`SessionInbox`** (`effect-plan-2.txt` §1–5) — a durable queue wrapper
+26m. **`SessionInbox`** — *note (2026-09-01): blocked on having a **producer**,
+    not on plumbing. `session.submit(input, { requestId })` already provides the
+    idempotent admission this was meant to add (item 4, landed 2026-08-29), so
+    the queue is composition sugar over a shipped API. Its named producers --
+    `ProcessManager` (26n) and durable monitors (§16) -- are both unbuilt, so
+    building it now would ship a queue with nothing to enqueue. Do not start it
+    expecting a quick win; build a producer first.* (`effect-plan-2.txt` §1–5) —
+    a durable queue wrapper
     over `PersistedQueue` that accepts a background completion
     (`process:id:exit`, `monitor:id:complete`), waits for the target session to
     be idle, and starts a **new** submission on it idempotently. The plan calls
@@ -591,7 +598,32 @@ open, so the next pass does not have to re-derive it.
     Note `/scheduling`'s `AgentDispatcher` is *not* this — it starts
     independent work rather than resuming a conversation.
 
-26n. **`ProcessManager` / `WorkspaceManager`** (`effect-plan-2.txt` §8–14) —
+26n-a. ~~**`WorkspaceManager`**~~ (`effect-plan-2.txt` §12–13) — SHIPPED
+    2026-09-01, `src/sandbox/WorkspaceManager.ts`, exported from `/sandbox`.
+    A workspace is now a keyed, reference-counted resource over `LayerMap`:
+    built on first request, shared by every holder, released once the last one
+    goes *and* stays gone for `idleTimeToLive` (30s default). The idle window
+    is the load-bearing part -- reference counting alone drops to zero the
+    instant the first holder releases, so without it two consecutive tool calls
+    in one conversation would get two different workspaces, which is §12's bug
+    rather than a detail of it.
+
+    Not a new `/workspace` entry point, though the plan proposes one:
+    `Workspace` is already defined in `Sandbox.ts` and this manages sandbox
+    acquisitions, so an entry point would be ceremony for one module. It earns
+    one when `ProcessManager` joins it.
+
+    `Presets.coding` takes an optional `workspaces` manager. **Opt-in, not the
+    default**, because it changes a lifetime: a caller relying on a private
+    throwaway directory per agent should not have that quietly become a shared
+    one that outlives them.
+
+    Five mutations fail the suite. Deliberately *not* built: anything that owns
+    a process. §13 is right that a process is managed precisely because it
+    outlives its handles, so reference counting would kill it on last drop --
+    workspaces get `LayerMap`, processes will get `FiberMap` and a store.
+
+26n. **`ProcessManager`** (`effect-plan-2.txt` §8–11) —
     process identity and lifetime over Effect's own spawner (`ProcessId`,
     `ManagedProcess`, `FiberMap` supervision, `events`), plus workspace
     lifetime once processes outlive the tool call that started them. Blocked

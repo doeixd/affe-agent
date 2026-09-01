@@ -4731,3 +4731,76 @@ but was not in `check`, so an example whose comment says "breaking any of them
 fails the run" was only ever typechecked. It is in `check` now. `vitest.config.ts`
 was outside `tsconfig.json#include`, so a misspelled option would have failed at
 vitest load rather than at typecheck; it is included now.
+
+---
+
+# 2026-09-01 — Workspace lifetime, and two plan items corrected
+
+`effect-plan-2.txt` §12–13 ships as `src/sandbox/WorkspaceManager.ts`. This is
+the blocker under `ProcessManager` (26n) and therefore under `SessionInbox`
+(26m), attacked at its base rather than routed around.
+
+Two checks came first and both changed the shape of the work.
+
+**§11's spike was already closed, and says something useful.**
+`evaluation-sandbox-effect-platform.md` answered "Effect `ChildProcess` vs
+`sandbox/local`" with *retain the Node adapter*, naming two gaps: a descendant
+holding pipes after a successful child exit, and no `lstat` /
+`realpath.native` on `FileSystem`. §11 asks the same question, and its
+instruction to a future ProcessManager is explicit -- reuse `sandbox/local`'s
+tree-kill semantics, not `ChildProcess`, until those close. So ProcessManager
+was never blocked on a spike. It is blocked on workspaces.
+
+**`SessionInbox` is blocked on a producer, not on plumbing.** Recorded against
+26m so nobody starts it expecting a quick win.
+`session.submit(input, { requestId })` already provides the idempotent
+admission the inbox was meant to add -- it landed 2026-08-29 as item 4 -- so
+the queue is composition sugar over a shipped API. Its named producers,
+`ProcessManager` and durable monitors, are both unbuilt. Building it now would
+ship a queue with nothing to enqueue, which is `SessionProjection`'s mistake
+from two days ago in mirror image.
+
+## The idle window is the design
+
+Reference counting alone is not enough, and the failure is not subtle: it drops
+to zero the instant the first holder releases, so two consecutive tool calls in
+one conversation would get two different workspaces. That is §12's bug, not a
+detail of it. `LayerMap`'s `idleTimeToLive` is what makes "the same workspace
+across calls" true without making it "forever"; the default is 30 seconds.
+
+`LayerMap` rather than a hand-rolled map because the resource genuinely *is* a
+layer -- `Sandbox.currentLayer(workspace)` -- and `LayerMap` is `RcMap`
+specialised to exactly that. `RcMap` is already how `SessionTree` owns live
+branches, for the same reason stated the same way.
+`audit-effect-ecosystem.md` E4 rejected `LayerMap` for the server's *static*
+routes and reserved it "for a later keyed design"; this is that design, so the
+finding does not conflict.
+
+## What it must not become
+
+Nothing here owns a process, and §13's warning is the reason: a process is
+*managed* precisely because it outlives its handles, so reference counting
+would kill it exactly when the last handle drops -- the opposite of the point.
+Workspaces get `LayerMap`; processes will need `FiberMap` and a store owned by
+their manager. The docstring says so, so the next person extending this module
+does not reach for the nearest primitive.
+
+## Opt-in, not default
+
+`Presets.coding` takes an optional `workspaces` manager. Making it the default
+would change a lifetime under existing callers -- a private throwaway directory
+per agent quietly becoming a shared one that outlives them -- and that is not a
+change to make silently to a shipped preset.
+
+## Break-once
+
+Five mutations, all failing: no sharing (a build per acquire, 5 tests), the
+idle window collapsed to zero (2), the window never expiring (1), `invalidate`
+as a no-op (1), and `layer` built independently of the map (1). The
+release-after-idle case asserts a *different build* rather than a "released"
+flag, because the flag is trivially satisfiable and the identity is not.
+
+**A guard caught the export.** `test/Sandbox.test.ts`'s "exports the sandbox
+vocabulary and nothing beyond it" failed on the new name, which is what it is
+for; updated deliberately, with the reason the module lives in `/sandbox`
+rather than behind the `/workspace` entry point the plan proposes.

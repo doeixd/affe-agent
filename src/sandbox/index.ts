@@ -5,4 +5,5 @@
  * in `node:*`.
  */
 export * as Sandbox from "./Sandbox.js"
+export * as WorkspaceManager from "./WorkspaceManager.js"
 export * as MemorySandbox from "./memory.js"

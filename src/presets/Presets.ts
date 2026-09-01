@@ -8,6 +8,7 @@ import * as ToolExecution from "../ToolExecutionPublic.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import * as Sandbox from "../sandbox/Sandbox.js"
+import * as WorkspaceManager from "../sandbox/WorkspaceManager.js"
 
 /**
  * Opinionated assemblies over the primitives
@@ -85,6 +86,20 @@ export interface CodingExtras {
   readonly sandbox: Layer.Layer<Sandbox.SandboxProvider>
   /** Names the workspace this agent acquires. Defaults to `workspace`. */
   readonly workspace?: string | undefined
+  /**
+   * Share the workspace through a manager instead of acquiring it privately.
+   *
+   * Without one, this preset calls `Sandbox.currentLayer`, which acquires per
+   * layer -- and the local provider makes a fresh temporary directory per
+   * acquisition. Two agents naming the same workspace therefore get two
+   * directories, and each dies with the scope that built it. Pass a shared
+   * `WorkspaceManager` and they get one, reference-counted, outliving either.
+   *
+   * Opt-in rather than the default because it changes a lifetime, and a
+   * caller relying on a private throwaway directory per agent should not have
+   * that quietly become a shared one. `docs/effect-plan-2.txt` §12-13.
+   */
+  readonly workspaces?: WorkspaceManager.Service | undefined
 }
 
 /**
@@ -115,7 +130,7 @@ export const coding = <
 >(
   options: Agent.Config<Tools, LE, LR, TE, TR, KE, KR, Bound, PR> & CodingExtras
 ) => {
-  const { sandbox, workspace, ...agentConfig } = options
+  const { sandbox, workspace, workspaces, ...agentConfig } = options
   return {
     agent: Agent.make({
       instructions: CODING_INSTRUCTIONS,
@@ -131,10 +146,12 @@ export const coding = <
       // is "compose, never extend" in code.
       ...agentConfig
     }),
-    workspace: Layer.provide(
-      Sandbox.currentLayer(Sandbox.workspace(workspace ?? "workspace")),
-      sandbox
-    )
+    workspace: workspaces === undefined
+      ? Layer.provide(
+        Sandbox.currentLayer(Sandbox.workspace(workspace ?? "workspace")),
+        sandbox
+      )
+      : workspaces.layer(Sandbox.workspace(workspace ?? "workspace"))
   }
 }
 

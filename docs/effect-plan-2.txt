@@ -1123,6 +1123,20 @@ We need stable workspace lifetimes.
 
 # 13. Use `LayerMap` / `RcMap` for workspace runtimes
 
+STATUS (2026-09-01): **built** -- `src/sandbox/WorkspaceManager.ts`,
+`test/WorkspaceManager.test.ts`, exported from `/sandbox`. `LayerMap` keyed by
+`Workspace`, since the resource genuinely is a layer (`Sandbox.currentLayer`);
+`LayerMap` wraps `RcMap`, which is the same primitive `SessionTree` already
+uses for live branches. Released when the last holder goes *and* an
+`idleTimeToLive` passes -- the window matters, because reference counting alone
+tears the workspace down between two consecutive tool calls, which is the §12
+bug rather than a detail of it. `Presets.coding` takes one optionally; opt-in
+rather than default, because it changes a lifetime.
+
+The warning below was followed: nothing here owns a process. Not a
+`/workspace` entry point either -- `Workspace` lives in `Sandbox.ts` and this
+manages sandbox acquisitions, so one module does not earn an entry.
+
 This is a place where Effect v4 has exactly the right primitive.
 
 `LayerMap` caches layer-built resources by key, reference-counts them via `RcMap`, and can release them after they become unused.

@@ -15,7 +15,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1878 passing in 170 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
+| tests | `npm test` | 1886 passing in 171 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
@@ -105,6 +105,16 @@ no host-wide sequence, because it would record scheduler order dressed as event
 order and `SessionProjection.gap` already detects loss at finer grain.
 `examples/host-events.ts` folds it into per-session projections, which is what
 `/sessions` was built for.
+
+**Workspace lifetime.** `WorkspaceManager` (`/sandbox`) makes a workspace a
+keyed, reference-counted resource over `LayerMap`: shared by every holder,
+released once the last one goes and an idle window passes. Without it,
+`Sandbox.currentLayer` acquires per layer and the local provider makes a fresh
+temp directory per acquisition, so two agents naming one workspace get two
+directories that each die with their acquiring scope. `Presets.coding` takes
+one optionally -- opt-in, because it changes a lifetime. It owns workspaces and
+deliberately not processes: a managed process outlives its handles, so
+reference counting would kill it at exactly the wrong moment.
 
 **Principal.** `Principal.CurrentPrincipal` (root): the caller's subject on
 the fibre that acts -- a `Context.Reference` the host sets per request
