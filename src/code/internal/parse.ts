@@ -37,7 +37,13 @@ export const parse = (code: string): Result.Result<acorn.Program, CodeDiagnostic
         ecmaVersion: 2023,
         sourceType: "script",
         allowReturnOutsideFunction: true,
-        allowAwaitOutsideFunction: true
+        allowAwaitOutsideFunction: true,
+        // Without this acorn attaches no `loc`, so every diagnostic taken
+        // from a *node* -- which is all of them except a parse error,
+        // whose line comes off the thrown error -- reported no line at
+        // all, despite `CodeDiagnostic.line` promising one. Found by
+        // pre-flight asserting the lines it reports; it predates that.
+        locations: true
       })
     )
   } catch (error) {

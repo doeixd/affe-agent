@@ -8,6 +8,7 @@ import { CodeDiagnostic } from "./internal/diagnostics.js"
 import { internalKind, interpret, ProgramThrow, type Invoke, type ProgramFailure } from "./internal/interpret.js"
 import { parse } from "./internal/parse.js"
 import { recover } from "./internal/recover.js"
+import { validate } from "./internal/validate.js"
 import { toData } from "./internal/data.js"
 
 /**
@@ -131,6 +132,18 @@ export type Outcome =
     readonly reason: CodeDiagnostic["reason"]
     readonly line: number | undefined
     readonly fix: string
+    /**
+     * Further problems found in the same pass, when there were several
+     * (`internal/validate.ts`). Empty for a refusal that is one thing.
+     *
+     * The first stays in `reason`/`line`/`fix`, so a caller that reads
+     * only those is unchanged by pre-flight existing.
+     */
+    readonly more: ReadonlyArray<{
+      readonly reason: CodeDiagnostic["reason"]
+      readonly line: number | undefined
+      readonly fix: string
+    }>
   }
 
 export interface ExecuteResult {
@@ -197,6 +210,21 @@ export interface CodeExecutor {
        * suspend never sees one.
        */
       readonly resumeFrom?: unknown | undefined
+      /**
+       * `namespace.name` for every tool the host will accept.
+       *
+       * An engine that can check a program before running it needs to
+       * know what exists, and only the host knows. The owned interpreter
+       * uses it for the one pre-flight check it could not make on its own
+       * (it has never seen the toolkit); a plan-compiling engine uses it
+       * to reject an unknown tool at compile time, which is the same
+       * check earlier.
+       *
+       * Passing it is not optional and ignoring it is fine: an engine
+       * with no ahead-of-time story simply does not read it, and the
+       * host's `invoke` refuses the call when it comes.
+       */
+      readonly knownTools: ReadonlySet<string>
     }
   ) => Effect.Effect<ExecutorOutcome, ProgramFailure, R>
 }
@@ -228,6 +256,27 @@ export const interpreted: CodeExecutor = {
       }
       const parsed = parse(code)
       if (Result.isFailure(parsed)) return yield* parsed.failure
+
+      // Pre-flight, before a single call runs: every context-free problem
+      // at once, rather than the first one the interpreter reaches. The
+      // unknown-tool check is the one that pays for the pass -- at
+      // runtime it arrives only after every call the program already
+      // made.
+      const findings = validate(parsed.success, { knownTools: hooks.knownTools })
+      const [first, ...rest] = findings
+      if (first !== undefined) {
+        return yield* new CodeDiagnostic({
+          reason: first.reason,
+          ...(first.line === undefined ? {} : { line: first.line }),
+          fix: first.fix,
+          ...(rest.length === 0 ? {} : { more: rest.map((finding) => ({
+            reason: finding.reason,
+            ...(finding.line === undefined ? {} : { line: finding.line }),
+            fix: finding.fix
+          })) })
+        })
+      }
+
       const done = yield* interpret(parsed.success, { invoke: hooks.invoke })
       return { _tag: "Completed" as const, result: done.result, logs: done.logs }
     })
@@ -327,7 +376,12 @@ const refusedOf = (diagnostic: CodeDiagnostic): Outcome => ({
   _tag: "Refused",
   reason: diagnostic.reason,
   line: diagnostic.line,
-  fix: diagnostic.fix
+  fix: diagnostic.fix,
+  more: (diagnostic.more ?? []).map((finding) => ({
+    reason: finding.reason,
+    line: finding.line,
+    fix: finding.fix
+  }))
 })
 
 /**
@@ -346,6 +400,19 @@ export const make = <Groups extends ToolGroups, R = never>(
 ): CodeMode<R | ServicesOf<Groups>> => {
   const policy: Permission.Policy<R> = options.permission ?? Permission.allowAll
   const executor = options.executor ?? interpreted
+
+  // Once per runtime, not once per program: the toolkits are fixed when
+  // the runtime is built (the boundary `ref-declarative` recorded -- a
+  // model needs a stable list of what exists), so this cannot go stale.
+  const knownTools: ReadonlySet<string> = new Set(
+    Object.entries(options.tools).flatMap(([namespace, group]) =>
+      // Keys, not `tool.name`. `invoke` resolves a path by
+      // `group.tools[name]`, so keying the check the same way makes
+      // pre-flight agree with runtime resolution by construction rather
+      // than by both happening to read the same field.
+      Object.keys(group.tools).map((name) => `${namespace}.${name}`)
+    )
+  )
 
   const execute = (
     program: string,
@@ -585,6 +652,7 @@ export const make = <Groups extends ToolGroups, R = never>(
       const budget = options.limits?.timeout
       const bounded = executor.run(recovered.code, {
         invoke,
+        knownTools,
         ...(runOptions?.resumeFrom === undefined ? {} : { resumeFrom: runOptions.resumeFrom })
       }).pipe(
         budget === undefined

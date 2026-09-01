@@ -96,7 +96,7 @@ in our own surface, and lands a second executor as the proof the seam is one.
 | --- | --- | --- |
 | 1 | ✅ 2026-09-01. `CodeExecutor` outcome widened to `Completed \| Suspended`; `CodeMode.Outcome` and `CodeTool.Result` gain the variant; resume threaded through `execute`; `onSuspend` carries the state to the host and never to the model (`test/CodeExecutors.test.ts`, three break-once) | nothing |
 | 2 | ✅ 2026-09-01. `CodeTool.searchTool` — `Catalog.search` as a model-facing tool, mentioned by the execute tool only when `searchToolName` names one (`test/CodeSearchTool.test.ts`) | nothing |
-| 3 | `internal/validate.ts` — collect-all pre-flight; `CodeDiagnostic` gains a plural carrier | 1 (for the reason set) |
+| 3 | ✅ 2026-09-01. `internal/validate.ts` — collect-all pre-flight over a context-free subset, `knownTools` on the seam, `CodeDiagnostic.more`, findings numbered for the model (`test/CodePreflight.test.ts`) | 1 (for the reason set) |
 | 4 | `code/callscript.ts` — CallScript behind `CodeExecutor`, as the acceptance test for 1 and 3 | 1, 3 |
 
 Steps 1–3 stand on their own merits and ship whether or not step 4 does.

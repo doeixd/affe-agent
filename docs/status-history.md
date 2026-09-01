@@ -4232,3 +4232,61 @@ by accident:
 - **An empty query matches nothing**, because scoring is additive over query
   tokens. Pinned, because `""` plausibly reads as "list everything" and does
   not -- a model that wants the list already has the catalog.
+
+## 2026-09-01 — pre-flight: every fix in one turn (executors plan, step 3)
+
+The interpreter refuses the first problem it *reaches*. A program that makes
+three expensive calls and then names a fourth tool that does not exist pays
+for all three, returns one diagnostic, and spends the next turn finding the
+next problem. `internal/validate.ts` walks the parsed program first and
+reports everything it can decide.
+
+**The plan's design for this step did not survive contact, and the
+replacement is better.** It assumed the interpreter kept a table of
+supported node kinds that a validator could share. It does not: its refusals
+are inline and several are *contextual* -- "assigning loop variables", "a
+computed destructuring key" -- which is exactly what makes their fixes good.
+Lifting them into a table would flatten the thing worth keeping.
+
+So pre-flight checks the subset decidable from a node alone, which makes it
+a strict *subset* of what the interpreter refuses anyway. That containment
+is the anti-drift property, and it is tested as **behaviour** -- every
+construct pre-flight refuses is run through the interpreter and must be
+refused there too -- rather than asserted by a shared constant. If the
+interpreter ever gains support for one of them, that test fails and names
+it.
+
+- **The unknown-tool check is what pays for the pass**, and the interpreter
+  cannot make it: it has never seen the toolkit. The seam gained
+  `hooks.knownTools` so an engine that can check ahead of time knows what
+  exists -- a plan-compiling engine needs the same fact at compile time.
+  Derived once per runtime from the group record's *keys*, which is what
+  `invoke` resolves against, so pre-flight agrees with runtime resolution by
+  construction rather than by both reading the same field.
+- **A deliberate behaviour change**, recorded because it reverses an earlier
+  decision: a *literal* unknown path used to be a catchable program error,
+  raised when the call was reached -- and reaching it means every earlier
+  call already happened. It is now a refusal before anything runs. A
+  *computed* path is still not checked and still throws catchably, so
+  pre-flight never converts a catchable error into an uncatchable refusal
+  for a path it cannot read statically.
+- **Only fully static paths are checked**, and a program that binds `tools`
+  itself is not checked at all. A false positive here refuses a working
+  program, which costs far more than the round trip it saves.
+- **`CodeDiagnostic.more`** carries the rest; the first finding stays in
+  `reason`/`line`/`fix`, so a caller switching on `reason` is unchanged and
+  a single-finding diagnostic encodes byte-identically -- these cross
+  journals. `CodeTool` numbers them for the model, and renders one finding
+  as one sentence, because a numbered list of one is noise.
+
+**A defect this found, older than the pass.** `parse` never passed
+`locations: true` to acorn, so no diagnostic taken from a *node* has ever
+carried a line -- every AST refusal since the interpreter shipped reported
+`line: undefined` while `CodeDiagnostic.line` promised one. Only parse
+errors had lines, off the thrown error. Fixed; every existing diagnostic is
+better for it, and reverting the flag now fails three pre-flight tests.
+
+`test/CodePreflight.test.ts`, eight tests, three broken once. The cast
+inventory caught two `as unknown as Node` in the first draft of the walker;
+the fix was the signature (`unknown` plus the type guard the walk already
+applies to every child), not an inventory entry.

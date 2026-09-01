@@ -160,17 +160,51 @@ describe("CodeMode", () => {
     })
   )
 
-  it.effect("an unknown path is a catchable program error naming the catalog", () =>
+  it.effect("a literal unknown path is refused before the program runs", () =>
     Effect.gen(function*() {
+      // Changed 2026-09-01 by pre-flight (executors plan step 3), and the
+      // change is deliberate: this used to be a *catchable* program error,
+      // raised when the call was reached. Reaching it means every earlier
+      // call in the program already happened -- so a typo in the fourth
+      // tool name cost three real calls before the model heard about it.
+      // A name written out in the source is decidable before anything
+      // runs, and refusing there is worth more than the ability to catch
+      // it, now that `searchTool` exists for asking what a toolkit has.
       const { data } = yield* fixture
       const runtime = CodeMode.make({ tools: { data } })
       const out = yield* runtime.execute(
         "try {\n  await tools.data.nope({})\n} catch (error) {\n  return error.message\n}"
       )
-      assert.deepStrictEqual(out.outcome, {
-        _tag: "Returned",
-        value: "no tool at tools.data.nope; check the catalog"
-      })
+      assert.strictEqual(out.outcome._tag, "Refused")
+      if (out.outcome._tag === "Refused") {
+        assert.strictEqual(out.outcome.reason, "unknown-tool")
+        assert.include(out.outcome.fix, "tools.data.nope")
+      }
+    })
+  )
+
+  it.effect("a computed path is not pre-flighted, and still throws catchably", () =>
+    Effect.gen(function*() {
+      // Pre-flight only reads paths written out in full: a computed access
+      // is not a finding, because guessing at one would refuse a working
+      // program.
+      //
+      // Worth being exact about what that preserves, because the first
+      // draft of this test overstated it. It is *not* "probing for a tool
+      // still works" -- the interpreter refuses a tool reached through a
+      // variable for its own reason, which pre-dates this. What it
+      // preserves is that pre-flight does not turn a runtime, catchable
+      // program error into an uncatchable host refusal for any path it
+      // cannot read statically.
+      const { data } = yield* fixture
+      const runtime = CodeMode.make({ tools: { data } })
+      const out = yield* runtime.execute(
+        "const name = \"nope\"\ntry {\n  await tools.data[name]({})\n} catch (error) {\n  return \"caught: \" + error.message\n}"
+      )
+      assert.strictEqual(out.outcome._tag, "Returned")
+      if (out.outcome._tag === "Returned") {
+        assert.include(String(out.outcome.value), "caught: ")
+      }
     })
   )
 

@@ -299,7 +299,11 @@ describe("durable and cluster surfaces", () => {
     ])
     assert.deepStrictEqual(Object.keys(code.CodeTool).sort(), [
       "Result",
+      // The search tool and its result schema (executors plan step 2):
+      // `Catalog.search` reachable by the model, not only by the host.
+      "SearchResult",
       "catalogOf",
+      "searchTool",
       "tool"
     ])
     assert.deepStrictEqual(Object.keys(code.CodeMode).sort(), [

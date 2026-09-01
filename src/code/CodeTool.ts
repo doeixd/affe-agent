@@ -183,6 +183,26 @@ export interface Options<Groups extends CodeMode.ToolGroups, R> {
  * a field, not going around the API.
  */
 
+/**
+ * One refusal, or several, as the model should read them.
+ *
+ * Lines are named per finding because they are what the model needs to
+ * locate each one, and the `line` field on the result can only carry the
+ * first.
+ */
+const renderRefusal = (
+  fix: string,
+  line: number | undefined,
+  more: ReadonlyArray<{ readonly line: number | undefined; readonly fix: string }>
+): string => {
+  if (more.length === 0) return fix
+  const at = (where: number | undefined, text: string) =>
+    where === undefined ? text : `line ${where}: ${text}`
+  const all = [at(line, fix), ...more.map((finding) => at(finding.line, finding.fix))]
+  const numbered = all.map((text, index) => `${index + 1}. ${text}`).join("\n")
+  return `${all.length} problems, all of which need fixing:\n${numbered}`
+}
+
 const render = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value) ?? String(value)
 
@@ -324,7 +344,12 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
         case "Refused":
           return {
             outcome: "refused" as const,
-            fix: result.outcome.fix,
+            // Every finding, numbered, when the pre-flight pass found
+            // several. This is the whole value of that pass: four fixes
+            // in one turn instead of four turns. A single finding renders
+            // exactly as it did before, because a numbered list of one is
+            // noise.
+            fix: renderRefusal(result.outcome.fix, result.outcome.line, result.outcome.more),
             ...(result.outcome.line === undefined ? {} : { line: result.outcome.line }),
             logs,
             calls
