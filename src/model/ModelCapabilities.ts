@@ -93,6 +93,66 @@ export class UnknownCurrentModelError
   }
 }
 
+/** A model whose row records no prices, named so the caller can add them. */
+export class UnpricedModelError extends Schema.TaggedError<UnpricedModelError>()(
+  "UnpricedModelError",
+  { provider: Schema.String, model: Schema.String }
+) {
+  override get message() {
+    return `No cost recorded for ${this.provider}/${this.model}. ` +
+      `A money ceiling cannot be enforced without prices; add them to the ` +
+      `model's row, or cap on tokens with Budget.within instead.`
+  }
+}
+
+/**
+ * What one response cost, priced from a model's row.
+ *
+ * The three input rates are applied separately because they *are* separate: a
+ * cache **write** costs more than an uncached token, not less, so a ceiling
+ * that priced only reads would under-count the first turn of every
+ * conversation -- exactly the agents prompt caching is for. `Response.Usage`
+ * separates `uncached` / `cacheRead` / `cacheWrite`, which is what makes this
+ * possible; §12.1 of the plan verified it before this code existed.
+ *
+ * Every field of that usage struct is optional. So `uncached` is taken as
+ * given when the provider reports it, and otherwise reconstructed from
+ * `total` minus the two cache figures -- never below zero, because a provider
+ * reporting inconsistent numbers should not produce a negative charge. A
+ * provider that reports neither is charged nothing for input, which is visible
+ * as a zero rather than guessed at.
+ */
+export const priceOf = (
+  capabilities: Capabilities,
+  usage: {
+    readonly inputTokens: {
+      readonly total?: number | undefined
+      readonly uncached?: number | undefined
+      readonly cacheRead?: number | undefined
+      readonly cacheWrite?: number | undefined
+    }
+    readonly outputTokens: { readonly total?: number | undefined }
+  }
+): Option.Option<number> => {
+  const cost = capabilities.cost
+  if (cost === undefined) return Option.none()
+
+  const cacheRead = usage.inputTokens.cacheRead ?? 0
+  const cacheWrite = usage.inputTokens.cacheWrite ?? 0
+  const uncached = usage.inputTokens.uncached ??
+    Math.max(0, (usage.inputTokens.total ?? 0) - cacheRead - cacheWrite)
+
+  // A rate the row omits falls back to the plain input rate rather than to
+  // zero: an unrecorded price is unknown, not free, and charging zero for a
+  // cache write is the specific under-count this exists to avoid.
+  const perMillion = uncached * cost.input +
+    cacheRead * (cost.cacheRead ?? cost.input) +
+    cacheWrite * (cost.cacheWrite ?? cost.input) +
+    (usage.outputTokens.total ?? 0) * cost.output
+
+  return Option.some(perMillion / 1_000_000)
+}
+
 /** Capabilities per provider, per model name. */
 export type Table = Readonly<Record<string, Readonly<Record<string, Capabilities>>>>
 
@@ -345,3 +405,44 @@ export const budget = (options: {
       keepRecentTokens: options.keepRecent
     })
   )
+
+/**
+ * What one response cost on the model currently in context.
+ *
+ * `priceOf` is the arithmetic and takes no services; this is the lookup around
+ * it, and it lives here so that reading `Model.ProviderName` / `Model.ModelName`
+ * happens in exactly one module. A consumer -- `Budget.cost` is the first --
+ * gets one Effect whose failures already name the model.
+ *
+ * An unpriced model **fails** rather than costing nothing. Treating it as free
+ * turns a money ceiling into no ceiling at the moment it matters, and does it
+ * silently; a caller who would rather continue should cap on tokens instead.
+ */
+export const priceOfCurrent = (usage: {
+  readonly inputTokens: {
+    readonly total?: number | undefined
+    readonly uncached?: number | undefined
+    readonly cacheRead?: number | undefined
+    readonly cacheWrite?: number | undefined
+  }
+  readonly outputTokens: { readonly total?: number | undefined }
+}): Effect.Effect<
+  number,
+  UnknownModelError | UnknownCurrentModelError | UnpricedModelError,
+  ModelCapabilities
+> =>
+  Effect.gen(function*() {
+    const service = yield* ModelCapabilities
+    const capabilities = yield* service.current
+    const price = priceOf(capabilities, usage)
+    if (Option.isSome(price)) return price.value
+
+    // Reached only when the row exists but records no prices, so both tags are
+    // present -- `current` above would have failed otherwise.
+    const provider = yield* Effect.serviceOption(Model.ProviderName)
+    const model = yield* Effect.serviceOption(Model.ModelName)
+    return yield* new UnpricedModelError({
+      provider: Option.getOrElse(provider, () => "unknown"),
+      model: Option.getOrElse(model, () => "unknown")
+    })
+  })

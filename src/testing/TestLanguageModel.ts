@@ -64,7 +64,21 @@ export interface Turn {
    * script that does not care about tokens is unaffected; set it to exercise
    * anything that reads `response.usage` (e.g. `/budget`, `Evals.tokens`).
    */
-  readonly usage?: { readonly input?: number; readonly output?: number }
+  readonly usage?: {
+    readonly input?: number
+    readonly output?: number
+    /**
+     * Input tokens served from the provider's prompt cache, and written to it.
+     *
+     * Separate from `input` because they are billed at separate rates -- a
+     * cache *write* costs more than an uncached token, not less. Both default
+     * to zero, and `input` is the uncached remainder rather than the total, so
+     * a script that ignores caching is unaffected and one that exercises
+     * `Budget.cost` can say exactly what the provider reported.
+     */
+    readonly cacheRead?: number
+    readonly cacheWrite?: number
+  }
   /**
    * Files the model returns alongside its text -- an image, a PDF. Emitted
    * whole in both the batch and the stream shape, since providers do not
@@ -82,14 +96,24 @@ export interface Recorder {
 // Typed as the finish part itself, not the wide union: it belongs to both
 // the batch and stream part unions, and naming it lets both use it.
 const finishPart = (usage?: Turn["usage"]): Response.FinishPartEncoded => {
-  const input = usage?.input ?? 0
+  const uncached = usage?.input ?? 0
+  const cacheRead = usage?.cacheRead ?? 0
+  const cacheWrite = usage?.cacheWrite ?? 0
   const output = usage?.output ?? 0
   return {
     type: "finish",
     reason: "stop",
     // v4 groups token counts by direction rather than a flat record.
     usage: {
-      inputTokens: { total: input, uncached: input, cacheRead: 0, cacheWrite: 0 },
+      inputTokens: {
+        // `total` is every input token however it was served, which is what a
+        // real provider reports and what `Budget.within` counts; `input` in a
+        // script is the uncached share.
+        total: uncached + cacheRead + cacheWrite,
+        uncached,
+        cacheRead,
+        cacheWrite
+      },
       outputTokens: { total: output, text: output, reasoning: 0 }
     }
   }

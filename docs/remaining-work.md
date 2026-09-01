@@ -607,9 +607,12 @@ and should not until it is committed. Item 30 is untouched.
       `Compaction.tokens` accepts unchanged, so the `ResolveBudget` seam
       carried the whole wiring and `src/compaction` did not move. A test hands
       it to `Compaction.tokens` and fails to compile if either shape drifts.
-    - **M4, M5, M6 not started** — `Budget.cost` (which must price
-      `cacheWrite` as well as `cacheRead`), the opt-in pre-flight transform,
-      and the selection example.
+    - **M4 landed 2026-09-01**: `Budget.cost`, a money ceiling on the same
+      loop seam as `Budget.within`, pricing `uncached` / `cacheRead` /
+      `cacheWrite` / output separately. A test pins that a cache write is
+      priced above an uncached token and fails if it is priced as a read.
+    - **M5, M6 not started** — the opt-in pre-flight transform, and the
+      selection example.
 
 28. ~~**`AgentOutput`**~~ — SHIPPED 2026-09-01, `230745d`. A typed value a submission ends with, implemented as
     *a tool the model calls to report its answer* rather than a second model

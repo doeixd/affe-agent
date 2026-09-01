@@ -7,7 +7,7 @@ reachable as the `./model` entry point, which `verify:package` imports from the
 packed tarball; the exhaustiveness test fails the build when the pinned rc names
 a model with no capability row. **M2 done** (`ModelCapabilities.budget`, §8),
 **M3 done** (`ContextTransform.cacheBreakpoint`, `test/PromptCache.test.ts`).
-**M4, M5 and M6 are not started.** Everything above is committed, so `STATUS.md`
+**M4 done** (`Budget.cost`, §8). **M5 and M6 are not started.** Everything above is committed, so `STATUS.md`
 may claim it.
 
 Drafted 2026-09-01, from a question that arrived as a sketch:
@@ -318,7 +318,21 @@ out of scope until someone does.
     error (TS2561, confirmed by breaking it). Indexing the interface by
     `string` instead checks nothing — it resolves to the index signature's
     `Json | null`. That was the first attempt and it silently passed.
-- **M4 — `Budget.cost`.** Unblocked by M0; must price `cacheWrite` as well as `cacheRead` (§11.1).
+- **M4 — `Budget.cost`. ✅ Done 2026-09-01.** The same loop combinator as
+  `within` and the same fail-closed timing, reading money instead of tokens.
+  `Capabilities.cost` prices `uncached`, `cacheRead`, `cacheWrite` and output
+  separately, because §12.1 established they are separate rates and a cache
+  *write* costs more than an uncached token — a ceiling pricing only reads
+  would under-count the first turn of every conversation. A test asserts
+  exactly that, and fails if the write is priced as a read.
+  §12.1's other warning is answered too: `uncached` is reconstructed from
+  `total` minus the cache figures when a provider omits it, and never goes
+  negative. An unpriced model **fails** the run naming the model rather than
+  costing nothing, since charging zero turns a money ceiling into no ceiling
+  silently. `Budget` grew a second counter rather than a second service, so one
+  layer still decides the scope for both axes, and
+  `TestLanguageModel.Turn.usage` grew `cacheRead` / `cacheWrite` so a user can
+  script the case at all.
 - **M5 — The pre-flight `ContextTransform`, opt-in.**
 - **M6 — One example: capability-driven selection as `Layer.unwrap`**, beside
   the budget-driven one `plan-execution-plan.md` already called for.
