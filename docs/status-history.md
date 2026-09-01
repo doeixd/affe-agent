@@ -4427,3 +4427,96 @@ budget test used plain sequential calls, which halt at the first error
 anyway -- so it passed identically with and without the guard. Removing
 the guard and watching *nothing* fail is what exposed it; the test now
 uses `try`/`catch` and discriminates.
+
+---
+
+# 2026-09-01 — `SessionProjection`: the oldest unimplemented plan, in part
+
+`effect-plan-2.txt` (first committed 2026-08-25) is the oldest plan document
+in the repository with unbuilt content. §27's `SessionProjection` now ships as
+`src/sessions/SessionProjection.ts` behind a new `./sessions` entry point —
+48 entry points import from the packed artifact, up from 47.
+
+A session's events folded into what is true *now*: lifecycle, submission / run
+/ turn counts, accumulated `ModelUsage`, tool outcomes, open tool calls,
+unanswered elicitations, last failure. `reduce` is pure and total, which is
+the load-bearing property rather than a stylistic one — a live `Stream`, a
+`DeliveryLog.read({ after })` and a plain array all fold identically, so
+repairing a gap is a re-fold through `since(id, cursor)` and not a second code
+path. That is the claim §27 makes, and the test asserts it by reproducing an
+ungapped fold from a lossy one across every accumulated field.
+
+## What the ledger was hiding
+
+`remaining-work.md` item 26 was **one line covering six unbuilt pieces** —
+relay transport, `SessionInbox`, `ProcessManager`, `SessionDirectory`,
+`SessionProjection`, host-wide events. That is why the oldest unimplemented
+work was also the least visible: nothing said that half of it needs no relay
+and lands in a sitting. Item 26 is now an umbrella over 26k–26p, each with its
+own reason for being open. 26k is this work; 26p (relay) is the genuinely large
+one and the only thing blocking `plan-a2a-layers-bridges.txt` steps 5–7.
+
+The plan's own §27 status line said "not built", and the "Still proposed"
+block listed both `SessionProjection` and `session.submit()` — the latter
+having shipped some time ago with `plan-submit-await.md`. Both corrected, in
+the same spirit as `plan-deployment.md`'s correction on 2026-09-01: a stale
+status line pointing the wrong way costs a future reader more than a missing
+one.
+
+## Three decisions the plan left open
+
+Each could reasonably have gone the other way, so each is recorded rather than
+merely coded:
+
+- **A gapped event is applied, not dropped**, and the gap recorded. Freezing
+  the projection at the discontinuity was the alternative, and it is worse
+  where this is actually used: one lost SSE frame would blank a live view
+  permanently. The counters become lower bounds and `gap` says so.
+- **Only the earliest gap is retained**, with a count. Not a memory
+  compromise — repair reads after it, so every later gap is inside that read.
+  Ranges would grow unbounded and buy nothing.
+- **`empty` vs `since`.** Attaching to a live tail mid-conversation is not a
+  gap; continuing from a known cursor makes the same envelope a gap. `since`
+  is the repair constructor.
+
+An `UnknownEvent` advances the cursor. It occupies a sequence number, so
+skipping it without advancing would report a discontinuity every time a newer
+peer emits a tag this build predates — the normal case across a relay, not an
+error.
+
+## Break-once, and the break that did not bite
+
+Seven deliberate breaks were run against the suite. Six failed as intended:
+gap detection disabled (4 tests), the duplicate guard disabled (2), the
+foreign-session guard disabled (1), `settle` no longer clearing what a
+submission held open (1), output tokens dropped from usage (1), and an
+unknown event skipped without advancing the cursor (2).
+
+The seventh **passed**, and it is the one worth recording. Clearing the cursor
+on an unknown event instead of advancing it left every assertion green,
+because a `None` cursor means "no expectation" — so the *next* known event
+silently re-baselines and the discontinuity never surfaces. `isComplete` was
+true either way, and the test that claimed to cover the behaviour asserted
+exactly that. The fix is a second case that folds an unknown event *last* and
+asserts the cursor while it is the most recent one, which is the state a
+subscriber sits in between frames and the state a repair cursor would be read
+from. A test named for a behaviour it does not pin is worse than no test, and
+only breaking it said so.
+
+## Noted, not fixed
+
+Three places enumerate the export map — `package.json#exports`,
+`tsconfig.json#paths`, and the README's maturity map — and nothing checks that
+they agree. Measured on the way past: `paths` was missing 5 of the 47 declared
+entries and the maturity map 8. `paths` carries a comment claiming it is
+generated from `exports` and that enumerating it makes an undeclared entry a
+compile error, which is the claim that drift quietly falsifies. `/sessions` was
+added to all three by hand. Filed as its own task rather than folded in here.
+
+One number deliberately not regenerated: `STATUS.md`'s tests gate still reads
+1820 in 168 files. The full suite measured green here at **1859 in 169 files**,
+but the working tree also carried another agent's uncommitted item-27 (M5/M6)
+work, which accounts for roughly twenty of those tests. Writing 1859 into
+`STATUS.md` would claim uncommitted work had shipped, and separating the two
+without disturbing their tree is not worth the manoeuvre. Whoever lands M5/M6
+should regenerate the row from `npm test`.

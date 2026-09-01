@@ -92,7 +92,7 @@ says what a change there means for you, not how good the code is.
 | --- | --- | --- |
 | **core** | the vocabulary; a breaking change here is a major version | root (`Agent`, `AgentSession`, `AgentLoop`, `AgentEvent`, `Permission`, `Elicitation`, `ContextTransform`, `Snapshot`), `/client`, `/elicitation`, `/testing` |
 | **supported** | contract-tested against the reference apps and the cross-adapter matrix; changes are deliberate and noted in `STATUS.md` | `/http`, `/rpc`, `/mcp`, `/ag-ui`, `/a2a`, `/coding`, `/sandbox`, `/sandbox/local`, `/shell`, `/state`, `/hooks`, `/observability`, `/export`, `/compaction`, `/redaction`, `/budget`, `/subagent` |
-| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/pi` |
+| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/pi`, `/sessions` |
 | **reference** | illustrative, not a dependency: read it, copy it, do not import it | `apps/tui`, `apps/cli`, `examples/` |
 
 Engine-facing seams are not on any of these namespaces. What a durable

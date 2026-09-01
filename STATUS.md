@@ -182,7 +182,10 @@ itself); `/export` (JSON envelope + JSONL commit log); `/compaction`
 `/data`; `/hooks`; `/scheduling`; `/connectors` (+ Slack, with a channel
 conformance suite); `/plugins`; `/tree` (sessions as a tree: branch, lanes,
 divergence, activation); `/web` (+ Brave, HTTP fetch); `/openai`
-(OpenAI-compatible responses).
+(OpenAI-compatible responses); `/sessions` (`SessionProjection`: a session's
+events folded into what is true now -- lifecycle, counts, accumulated usage,
+tool outcomes, what is still open -- pure, so a gap is repaired by re-folding
+`DeliveryLog.read({ after })` through the same reducer).
 
 **Applications.** `apps/tui` (full-screen local coding harness),
 `apps/cli` (a client for any mounted HTTP agent), `apps/worker` (a real

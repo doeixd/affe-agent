@@ -36,6 +36,7 @@
       "@doeixd/effect-agent/presets": ["./src/presets/index.ts"],
       "@doeixd/effect-agent/tree": ["./src/tree/index.ts"],
       "@doeixd/effect-agent/export": ["./src/export/index.ts"],
+      "@doeixd/effect-agent/sessions": ["./src/sessions/index.ts"],
       "@doeixd/effect-agent/redaction": ["./src/redaction/index.ts"],
       "@doeixd/effect-agent/web": ["./src/web/index.ts"],
       "@doeixd/effect-agent/web/brave": ["./src/web/brave.ts"],

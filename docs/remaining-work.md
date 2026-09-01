@@ -522,6 +522,86 @@ open, so the next pass does not have to re-derive it.
     `ProcessManager`, and the bridge steps listed under 26c.
     `plan-deployment.md` §6.3 narrows when the relay is the right tool.
 
+    **Split out 2026-09-01.** This entry was one line covering six unbuilt
+    pieces, which is why the oldest unimplemented work in the repository
+    (`effect-plan-2.txt`, first committed 2026-08-25) was also the least
+    visible: nothing here said that half of it needs no relay and lands in a
+    sitting. The pieces are 26k–26p below. This line stays as the umbrella;
+    the ranking is in the children.
+
+26k. ~~**`SessionProjection`**~~ (`effect-plan-2.txt` §27) — SHIPPED
+    2026-09-01, `src/sessions/SessionProjection.ts`, entry point `./sessions`.
+    A session's events folded into what is true now: lifecycle, submission /
+    run / turn counts, accumulated `ModelUsage`, tool outcomes, open tool calls
+    and unanswered elicitations, last failure. Pure `(state, envelope) =>
+    state`, so it runs over a live `Stream`, over `DeliveryLog.read({ after })`
+    or over an array and cannot tell the difference — which is what makes
+    repair a re-fold through `since(id, cursor)` rather than a second code
+    path, the claim §27 makes and `test/SessionProjection.test.ts` asserts by
+    reproducing an ungapped fold from a lossy one.
+
+    Three decisions the plan left open, decided here and written down because
+    each could reasonably have gone the other way:
+
+    - **A gapped event is applied, not dropped.** Freezing at the
+      discontinuity would blank a live view permanently on one lost SSE frame.
+      The counters become lower bounds and `gap` says so.
+    - **Only the earliest gap is retained**, with a count. Not a memory
+      compromise — repair reads after it, so every later gap is inside that
+      read. Keeping ranges would grow unbounded and buy nothing.
+    - **`empty` vs `since`.** Joining a live tail mid-conversation is not a
+      gap; continuing from a known cursor makes the same envelope a gap. The
+      distinction is the repair constructor.
+
+    Seven deliberate breaks were run against the suite. One of them —
+    clearing the cursor on an unknown event instead of advancing it — **passed
+    the test that claimed to cover it**, because a trailing known event
+    re-baselines the cursor and `isComplete` stayed true. That is now its own
+    case asserting the cursor while the unknown event is the most recent one.
+    Worth recording: the bug was invisible to the obvious assertion.
+
+26l. **`SessionDirectory`** (`effect-plan-2.txt` §26) — the management/query
+    model over sessions: `get` / `list` / `active` / `stats` / `rename` /
+    `move` / `annotate`, paginated from day one. Needs a backing store, which
+    is why it did not land with 26k; 26k is the reducer it would keep per
+    session to answer `stats`. Explicitly **not** `DurableSessionStore` (that
+    is execution correctness, and the plan says do not merge them), not
+    `/tree` (a conversation DAG) and not `AgentSessionHost.size` (a live count
+    in one process).
+
+26m. **`SessionInbox`** (`effect-plan-2.txt` §1–5) — a durable queue wrapper
+    over `PersistedQueue` that accepts a background completion
+    (`process:id:exit`, `monitor:id:complete`), waits for the target session to
+    be idle, and starts a **new** submission on it idempotently. The plan calls
+    this more important than `ProcessManager` and it is the one piece of
+    §1–14 that needs neither processes nor relay. Phase 0 is closed: keep
+    `/scheduling`'s `JobStore` for due-time dispatch, use `PersistedQueue` for
+    immediate durable handoff (`evaluation-persisted-queue-job-store.md`).
+    Note `/scheduling`'s `AgentDispatcher` is *not* this — it starts
+    independent work rather than resuming a conversation.
+
+26n. **`ProcessManager` / `WorkspaceManager`** (`effect-plan-2.txt` §8–14) —
+    process identity and lifetime over Effect's own spawner (`ProcessId`,
+    `ManagedProcess`, `FiberMap` supervision, `events`), plus workspace
+    lifetime once processes outlive the tool call that started them. Blocked
+    on §11's spike by the plan's own ordering. `Sandbox.exec` is a bounded
+    command, not a managed background process, and the plan is emphatic that
+    `ProcessManager` must not know `AgentSession` exists.
+
+26o. **Host-wide `AgentSessionHost.events`** (`effect-plan-2.txt` §29) — one
+    stream multiplexing every hosted session through `FiberMap`. Per-session
+    `events`, `host.sessions` and the bounded `eventLog` tail all ship; the
+    aggregate does not. 26k's `foreign` counter exists for exactly this
+    consumer, since routing a host-wide stream into per-session projections is
+    where a mis-route would otherwise corrupt an answer silently.
+
+26p. **Relay transport** (`plan-relay.txt`) — server and client, peer
+    directory, enrollment credentials, durable mailbox over `PersistedQueue`,
+    heartbeat/lease, backpressure. The genuinely large one, and the only thing
+    blocking `plan-a2a-layers-bridges.txt` steps 5–7 (both bridges over the
+    relay, at which point local vs remote is transport selection).
+    `plan-deployment.md` §6.3 narrows when it is the right tool.
+
 ### Newly ranked — from the effect-cf research (2026-09-01)
 
 Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).

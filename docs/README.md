@@ -54,7 +54,7 @@ workerd through miniflare). Each file carries its own status line, and
 | [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. **Steps 1–4 landed** — both bridges ship, share one permission decision, and are proven against the real Claude Code and OpenCode runtimes; `examples/ref-delegation.ts` is the reference. Steps 5–7 (relay, then the `LanguageModel` adapter) remain. |
 | [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md) | Whether two third-party Effect packages belong at our host boundary. Decides a category, not just two packages: `effect-cf` is read-and-mine, not adopt; `effect-webtransport` is a falsification test of the RPC seam, not a transport. One guardrail fix stands regardless. Nothing implemented. |
 | [plan-relay.txt](./plan-relay.txt) | A secure addressable transport for services behind NAT, as an `RpcClient.Protocol`. Sixteen phases. |
-| [opencode-completion-plan.md](./opencode-completion-plan.md) · [effect-plan-2.txt](./effect-plan-2.txt) | A design brief for `SessionInbox` / `ProcessManager`; the second is the tree-annotated revision with the implementation order. |
+| [opencode-completion-plan.md](./opencode-completion-plan.md) · [effect-plan-2.txt](./effect-plan-2.txt) | A design brief for `SessionInbox` / `ProcessManager`; the second is the tree-annotated revision with the implementation order. **§27 `SessionProjection` landed 2026-09-01** as `/sessions`; the rest is ranked as [remaining-work.md](./remaining-work.md) 26l–26p rather than the single line it used to be. |
 
 ## Plans — landed
 

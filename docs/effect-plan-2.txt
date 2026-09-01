@@ -84,13 +84,23 @@ Read these before implementing anything in this brief. Paths are relative to
 
 ```text
 SessionInbox over Effect PersistedQueue
-session.submit() — admit a submission without awaiting it
 ProcessManager / ProcessDirectory / ProcessStore / ProcessOutputLog
 WorkspaceManager (LayerMap / RcMap workspace lifetime)
-/sessions — SessionDirectory + SessionProjection
+/sessions — SessionDirectory
 host-wide AgentSessionHost.events + FiberMap session pumps
 /process, /workspace package entries
 ```
+
+Two lines left this list since it was written:
+
+* `session.submit()` shipped with the retention contract
+  ([plan-submit-await.md](./plan-submit-await.md)) — `submit` /
+  `awaitSubmission` on every client, bounded per-session retention, and
+  idempotency by `requestId` at the client/host boundary rather than on the
+  local session, which is where a retry actually originates.
+* `SessionProjection` shipped 2026-09-01 (§27). `SessionDirectory` did not,
+  and is the remaining half of `/sessions`; the ranked entry is
+  [remaining-work.md](./remaining-work.md) 26l.
 
 Do not confuse these with things that already exist under nearby names:
 
@@ -1946,9 +1956,27 @@ The durable delivery log already exists specifically to give clients session-wid
 
 Don't duplicate it.
 
-STATUS (2026-08-26): `DeliveryLog` is that log. A `SessionProjection`
-reducer over it is not built. `Hooks.on` is a typed dispatcher over a live
-event stream, not a durable projection.
+STATUS (2026-09-01): **built** — `src/sessions/SessionProjection.ts`, entry
+point `./sessions`, `test/SessionProjection.test.ts`. `DeliveryLog` is still
+that log and is not duplicated: the reducer folds it. `Hooks.on` remains a
+typed dispatcher over a live stream, not a projection.
+
+Three things this section left open, decided in the implementation:
+
+* **A gapped event is applied, not dropped**, and the gap recorded. Freezing
+  at the discontinuity would blank a live view permanently on one lost SSE
+  frame; the counters become lower bounds and `gap` says so.
+* **Only the earliest gap is retained**, with a count. Repair reads after it,
+  so every later gap is inside that read — keeping ranges would grow without
+  bound and buy nothing.
+* **`empty` vs `since`.** Attaching to a live tail mid-conversation is not a
+  gap; continuing from a known cursor makes the same envelope a gap. `since`
+  is the repair constructor this section's `DeliveryLog.read({ after })` needs.
+
+An `UnknownEvent` **advances the cursor**. It occupies a sequence number, so
+skipping it without advancing reports a discontinuity every time a newer peer
+emits a tag this build predates — the normal case across a relay, not an
+error.
 
 See [transport.md](./transport.md), [plan-durability-hardening.md](./plan-durability-hardening.md)
 (H4b: do not replace with EventLog; H5: resumable SSE already uses this log).
