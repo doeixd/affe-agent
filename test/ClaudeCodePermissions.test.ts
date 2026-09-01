@@ -149,6 +149,34 @@ describe("ClaudeCodePermissions.decide", () => {
     })
   )
 
+  it.effect("two identical prompts at once are two questions, not one", () =>
+    Effect.gen(function* () {
+      // Without a `tool_use_id` the id is derived from the call, and two
+      // concurrent `Bash("npm test")` prompts would share it: one answer would
+      // resolve one question and leave the other waiting forever.
+      const elicitor = yield* Elicitation.memory.make("bridge")
+      const decide = ClaudeCodePermissions.decide({ policy: Permission.askAll, elicitor })
+      const call = () =>
+        decide({
+          toolName: Option.some("Bash"),
+          input: { command: "npm test" },
+          toolUseId: Option.none()
+        })
+      const both = yield* Effect.forkChild(
+        Effect.all([call(), call()], { concurrency: 2 })
+      )
+      const pending = yield* Effect.repeat(elicitor.pending, {
+        until: (requests) => requests.length === 2
+      })
+      assert.strictEqual(new Set(pending.map((request) => request.id)).size, 2)
+      for (const request of pending) {
+        yield* elicitor.respond({ id: request.id, granted: true })
+      }
+      const answers = yield* Fiber.join(both)
+      assert.deepStrictEqual(answers.map((answer) => answer.behavior), ["allow", "allow"])
+    })
+  )
+
   it.effect("a request that names no tool is denied, not guessed at", () =>
     Effect.gen(function* () {
       const seen = yield* Ref.make(0)
@@ -242,6 +270,22 @@ describe("ClaudeCodePermissions.args", () => {
     // Without this the CLI also loads whatever the host has configured, so a
     // delegated run's tool surface would depend on the machine.
     assert.include(flags, "--strict-mcp-config")
+  })
+
+  it("carries headers so the endpoint can be authenticated", () => {
+    // Sending the token is all `args` can do -- the router is the caller's, so
+    // checking it is theirs. It is offered because the alternative is
+    // hand-writing the --mcp-config JSON, which is how the flag and the served
+    // tool come to disagree.
+    const flags = ClaudeCodePermissions.args({
+      url: "http://127.0.0.1:1/x",
+      headers: { Authorization: "Bearer run-token" }
+    })
+    const config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1] ?? "{}")
+    assert.deepStrictEqual(
+      config.mcpServers.effect_agent_permissions.headers,
+      { Authorization: "Bearer run-token" }
+    )
   })
 
   it("a named server is named in both places", () => {

@@ -199,6 +199,17 @@ export interface Options<R = never> {
   readonly serverName?: string | undefined
 }
 
+/**
+ * Distinguishes two otherwise identical prompts that arrive together.
+ *
+ * The CLI's `tool_use_id` already does this when it sends one. When it does
+ * not, the fallback id is derived from the tool and its resource -- and two
+ * concurrent calls to `Bash("npm test")` would then share an elicitation id,
+ * so one answer would resolve one question and leave the other waiting
+ * forever. A counter costs nothing and removes the case.
+ */
+let nextPrompt = 0
+
 const DEFAULT_SERVER = "effect_agent_permissions"
 const DEFAULT_TOOL = "approve"
 
@@ -225,13 +236,31 @@ export const args = (options: {
   /** Where the MCP server is reachable. Loopback, please. */
   readonly url: string
   readonly serverName?: string | undefined
+  /**
+   * Headers the CLI sends with every call, for authenticating the endpoint.
+   *
+   * A per-run bearer token belongs here. **Sending it is all this can do** --
+   * the router is the caller's, so checking it is the caller's too, and a
+   * token that nothing verifies is decoration. It is offered because the
+   * alternative is a caller hand-writing the `--mcp-config` JSON to add one,
+   * which is how the flag and the served tool come to disagree.
+   *
+   * The value reaches the CLI as a process argument, so it is visible to
+   * anything that can list this machine's processes. Mint it per run, keep it
+   * short-lived, and do not reuse a credential that means anything elsewhere.
+   */
+  readonly headers?: Readonly<Record<string, string>> | undefined
   /** Set `false` to let the host's own MCP configuration load as well. */
   readonly strict?: boolean | undefined
 }): ReadonlyArray<string> => [
   "--mcp-config",
   JSON.stringify({
     mcpServers: {
-      [options.serverName ?? DEFAULT_SERVER]: { type: "http", url: options.url }
+      [options.serverName ?? DEFAULT_SERVER]: {
+        type: "http",
+        url: options.url,
+        ...(options.headers === undefined ? {} : { headers: options.headers })
+      }
     }
   }),
   ...(options.strict === false ? [] : ["--strict-mcp-config"]),
@@ -266,7 +295,7 @@ export const decide = <R = never>(
     const projected = project(toolName, request.input)
     const toolCallId = Option.getOrElse(
       request.toolUseId,
-      () => `${toolName}:${projected.resource}`
+      () => `${toolName}:${projected.resource}:${nextPrompt++}`
     )
     const permissionRequest: Permission.Request = {
       sessionId: options.sessionId ?? toolReference(options),
