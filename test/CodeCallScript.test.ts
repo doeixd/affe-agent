@@ -47,14 +47,6 @@ const fixture = Effect.gen(function*() {
   return { data, seen }
 })
 
-/**
- * The gate is consulted synchronously by the engine, inside the promise
- * `executeScript` returns, so it reads a plain box rather than a `Ref`:
- * there is no fibre there to run an `Effect` on. A real host reads its own
- * store the same way -- the predicate is the host's, not the harness's.
- */
-const unsafeApproved = { current: false }
-
 describe("CallScript as a CodeExecutor", () => {
   it.effect("a program runs against the real toolkit through the same seam", () =>
     Effect.gen(function*() {
@@ -200,15 +192,21 @@ describe("CallScript as a CodeExecutor", () => {
       // state, and continues later -- across a process boundary, though
       // this test only crosses two `execute` calls.
       const { data, seen } = yield* fixture
-      const approved = yield* Ref.make(false)
       const held = yield* Ref.make<unknown>(undefined)
+      // The gate is consulted synchronously by the engine, inside the
+      // promise `executeScript` returns, so it reads a plain box rather
+      // than a `Ref`: there is no fibre there to run an `Effect` on. Local
+      // to this test rather than module-level -- a shared box that one
+      // test leaves flipped is how the next test silently stops
+      // suspending.
+      const approved = { current: false }
 
       const runtime = CodeMode.make({
         tools: { data },
         executor: CallScript.executor({
           // The host's gate: unapproved writes park the run.
           suspendOn: (step: { readonly stepId: string; readonly tool: string }) =>
-            step.tool === "data.write" && !unsafeApproved.current
+            step.tool === "data.write" && !approved.current
         })
       })
 
@@ -228,8 +226,7 @@ describe("CallScript as a CodeExecutor", () => {
 
       // The human answers. The gate opens, and the run continues from the
       // state rather than starting again.
-      unsafeApproved.current = true
-      yield* Ref.set(approved, true)
+      approved.current = true
       const state = yield* Ref.get(held)
       const second = yield* runtime.execute(program, { resumeFrom: state })
 
@@ -237,6 +234,34 @@ describe("CallScript as a CodeExecutor", () => {
       // `lookup` was NOT called a second time: settled steps are reused,
       // which is the difference between a resume and a retry.
       assert.deepStrictEqual(seen, ["lookup:a", "write:value-of-a"])
+    })
+  )
+
+  it.effect("a state this engine did not save is refused, not restarted", () =>
+    Effect.gen(function*() {
+      // The same hazard `interpreted` refuses, and the first version of
+      // this adapter had it: an unrecognised state silently started the
+      // program fresh, so a host that swapped executors and kept its
+      // resume path got a retry -- every call the first attempt made, made
+      // again -- and a successful-looking run to go with it. Break once by
+      // ignoring a foreign state and this returns "value-of-a" with the
+      // call recorded.
+      const { data, seen } = yield* fixture
+      const runtime = CodeMode.make({
+        tools: { data },
+        executor: CallScript.executor()
+      })
+
+      const out = yield* runtime.execute(
+        "const one = await data.lookup({ key: \"a\" })\nreturn one.value.found",
+        { resumeFrom: { cursor: 7, note: "some other engine's state" } }
+      )
+
+      assert.strictEqual(out.outcome._tag, "Refused")
+      if (out.outcome._tag === "Refused") {
+        assert.strictEqual(out.outcome.reason, "not-resumable")
+      }
+      assert.deepStrictEqual(seen, [])
     })
   )
 })

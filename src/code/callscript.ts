@@ -86,6 +86,13 @@ export interface Options {
    * This gates a step *before* dispatch and can outlive the process, which
    * is the thing the interpreter cannot do at all. A host that wants
    * neither leaves it unset and nothing suspends.
+   *
+   * **Synchronous**, though the engine would also take a promise. The
+   * predicate is consulted from inside the engine's own promise, where
+   * there is no fibre to run an `Effect` on, so an async gate here would
+   * be an invitation to do I/O outside Effect entirely -- untraced,
+   * uninterruptible, and outside every budget. Read a value the host
+   * already holds; fetch it before the run, not during it.
    */
   readonly suspendOn?: ((step: { readonly stepId: string; readonly tool: string }) => boolean) | undefined
 }
@@ -156,6 +163,30 @@ export const executor = (options?: Options): CodeMode.CodeExecutor => ({
       // promise boundary, which is what lets a nested call still see
       // `CurrentPrincipal` and the toolkits' own services.
       const runPromise = yield* FiberSet.makeRuntimePromise<R>()
+
+      // A state this engine did not produce is refused, not ignored.
+      //
+      // The first version started fresh on an unrecognised value, which is
+      // the *same* hazard `interpreted` refuses and for the same reason: a
+      // host that swapped executors and kept its resume path would get a
+      // silent retry -- every call the first attempt made, made again --
+      // and a successful-looking run to go with it. "I cannot continue
+      // this" is the only safe reading, whichever engine cannot.
+      let resumed: RunState | undefined
+      if (hooks.resumeFrom !== undefined) {
+        if (!isRunState(hooks.resumeFrom)) {
+          return yield* new CodeDiagnostic({
+            reason: "not-resumable",
+            fix:
+              "this suspended state was not produced by the plan engine; resume it with the executor that saved it, or start a new run deliberately"
+          })
+        }
+        // Bound here so the guard's narrowing is what types it: reading
+        // `hooks.resumeFrom` again below would need a cast, and a cast for
+        // something the control flow already proved is the signature's
+        // fault, not the world's.
+        resumed = hooks.resumeFrom
+      }
 
       // The compiler is given the host's tool list, so an unknown tool is
       // a *compile* error naming every offender -- the check the
@@ -229,7 +260,7 @@ export const executor = (options?: Options): CodeMode.CodeExecutor => ({
             },
             ...(options?.limits === undefined ? {} : { limits: options.limits }),
             ...(options?.suspendOn === undefined ? {} : { suspend: options.suspendOn }),
-            ...(isRunState(hooks.resumeFrom) ? { state: hooks.resumeFrom } : {})
+            ...(resumed === undefined ? {} : { state: resumed })
           }),
         // The engine itself failing is the host's problem, never the
         // model's fault, and its cause does not reach the program.
@@ -281,12 +312,9 @@ export const executor = (options?: Options): CodeMode.CodeExecutor => ({
 /**
  * Is this a state this engine produced?
  *
- * A host that switched executors could hand back a state another engine
- * saved. `interpreted` refuses that outright, because it has no resumable
- * state of its own and running the program again would be a *retry* --
- * every call the first attempt made, made twice. Here the shape is
- * checkable, so a foreign state is ignored and the plan simply starts
- * fresh, which is what an unrecognised session means.
+ * Shape-checked rather than trusted, because the seam types it `unknown`
+ * (deliberately: the schema belongs to whichever engine saved it) and a
+ * host holding two executors can hand back the wrong one.
  */
 const isRunState = (value: unknown): value is RunState =>
   typeof value === "object" && value !== null &&

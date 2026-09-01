@@ -4374,3 +4374,38 @@ Two smaller things, each a mistake first:
   artifact.
 
 **`docs/plan-code-mode-executors.md` is complete**, all four steps.
+
+**Post-commit review pass on step 4.** Three findings; the first is the
+step-1 review's own finding, reintroduced one layer down:
+
+- **A foreign resume state was ignored rather than refused.** The adapter
+  shape-checked `resumeFrom` and, not recognising it, started the plan
+  fresh. That is *exactly* the hazard `interpreted` refuses and for exactly
+  the same reason: a host holding two executors that swapped one and kept
+  its resume path would get a silent retry -- every call the first attempt
+  made, made again -- and a successful-looking run to go with it. It is a
+  `not-resumable` diagnostic now, in both engines, and broken once. Worth
+  recording that the fix was written for one executor and the same mistake
+  was then made in the next: "cannot continue this" needs to be the
+  answer everywhere the question is asked, not a property of one file.
+- **The guard left a cast behind.** Narrowing across the early return did
+  not reach the object literal, so the state was read a second time with
+  `as RunState`. Restructured to bind the narrowed value; a cast for
+  something the control flow already proved is the signature's fault.
+- **The suspension test kept its gate in a module-level box** that one
+  test flipped and never reset -- how the *next* test using the gate
+  silently stops suspending. Local to the test now.
+
+Two things checked and deliberately left, recorded so they are not
+mistaken for oversights:
+
+- **The plan engine cannot be interrupted mid-run.** `executeScript`
+  returns a plain promise with no cancellation channel. Interruption still
+  reaches the *calls*: they are forked into a scoped `FiberSet`, so
+  closing the scope interrupts them and the engine sees their failures.
+  The engine's own loop runs to its next await either way.
+- **A host refusal stops the run only once the engine returns**, not at
+  the call that raised it. No further handler runs -- `invoke` refuses
+  every subsequent call itself, which the budget test asserts by checking
+  what the handlers actually saw -- so the cost is wasted plan-engine
+  work, not duplicated effects.
