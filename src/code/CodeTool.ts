@@ -200,7 +200,10 @@ const renderRefusal = (
     where === undefined ? text : `line ${where}: ${text}`
   const all = [at(line, fix), ...more.map((finding) => at(finding.line, finding.fix))]
   const numbered = all.map((text, index) => `${index + 1}. ${text}`).join("\n")
-  return `${all.length} problems, all of which need fixing:\n${numbered}`
+  // "found", not "all the problems there are": `validate` caps how many it
+  // reports and truncates silently, so a message that claimed to list every
+  // one would have the model reasoning from a false premise.
+  return `${all.length} problems found; fix all of them:\n${numbered}`
 }
 
 const render = (value: unknown): string =>

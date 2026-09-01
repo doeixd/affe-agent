@@ -120,6 +120,47 @@ describe("code-mode pre-flight", () => {
     })
   )
 
+  it.effect("the string \"tools\" in a value does not disable the tool check", () =>
+    Effect.gen(function*() {
+      // The shadowing check reads *binding identifiers*. Its first version
+      // matched `JSON.stringify(subtree).includes("\"tools\"")`, a string
+      // search standing in for a scope analysis -- so a default value that
+      // merely contained the word switched the unknown-tool check off for
+      // the whole program, silently, and pre-flight quietly stopped doing
+      // the thing it exists for. Break once by matching on the JSON text
+      // again and this returns rather than refusing.
+      const { data } = yield* fixture
+      const runtime = CodeMode.make({ tools: { data } })
+      const out = yield* runtime.execute([
+        "const [first = \"tools\"] = []",
+        "return await tools.data.ecoh({ text: first })"
+      ].join("\n"))
+      const refused = refusalOf(out.outcome)
+      assert.strictEqual(refused.reason, "unknown-tool")
+    })
+  )
+
+  it.effect("a `tools` bound after the reference still stands the check down", () =>
+    Effect.gen(function*() {
+      // Source order is not binding order: the pass is single-walk, so
+      // tool findings are held until the walk ends rather than decided
+      // where they are met.
+      const { data } = yield* fixture
+      const runtime = CodeMode.make({ tools: { data } })
+      const out = yield* runtime.execute([
+        "const read = () => tools.data.nothing",
+        "const tools = { data: { nothing: 7 } }",
+        "return read()"
+      ].join("\n"))
+      // Not a pre-flight refusal: the program binds its own `tools`, so
+      // the check stands down even though the reference is written first.
+      assert.notStrictEqual(
+        out.outcome._tag === "Refused" ? out.outcome.reason : undefined,
+        "unknown-tool"
+      )
+    })
+  )
+
   it.effect("a valid program is untouched by the pass", () =>
     Effect.gen(function*() {
       // Pre-flight is a diagnostic improvement, never a semantic one.
@@ -192,7 +233,11 @@ describe("code-mode pre-flight", () => {
       const result = events.filter(AgentEvent.is("ToolCallSucceeded"))[0]!.event
         .result as CodeTool.Result
       assert.strictEqual(result.outcome, "refused")
-      assert.include(result.fix ?? "", "2 problems")
+      // "found", not "all the problems there are": the finding cap is
+      // silent, so the wording must not assert a completeness it cannot
+      // promise.
+      assert.include(result.fix ?? "", "2 problems found")
+      assert.notInclude(result.fix ?? "", "all of which")
       assert.include(result.fix ?? "", "1. line 1:")
       assert.include(result.fix ?? "", "2. line 2:")
     })

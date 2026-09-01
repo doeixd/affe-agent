@@ -4290,3 +4290,33 @@ better for it, and reverting the flag now fails three pre-flight tests.
 inventory caught two `as unknown as Node` in the first draft of the walker;
 the fix was the signature (`unknown` plus the type guard the walk already
 applies to every child), not an inventory entry.
+
+**Post-commit review pass on step 3.** Three findings, one of which quietly
+disabled the check the pass exists for:
+
+- **`shadowsTools` matched a string, not a binding.** It asked whether
+  `JSON.stringify(id ?? params)` contained `"tools"` -- a text search
+  standing in for a scope analysis. A program with a default value like
+  `const [first = "tools"] = []` matched, so the unknown-tool check
+  switched itself off for the whole program, silently, and pre-flight
+  stopped doing the thing it was added for with no symptom at all. It reads
+  binding *identifiers* now. Still deliberately over-eager in the safe
+  direction (`const { tools: mine } = x` counts as shadowing), because
+  over-eager costs a diagnostic and under-eager costs the run.
+- **The rendered message asserted completeness the cap cannot promise.**
+  "N problems, all of which need fixing" is false when `MAX_FINDINGS`
+  truncated silently, and a model that believes it has the full list
+  reasons from a false premise. It says "N problems found" now, and the cap
+  went to 20 so truncation stays rare.
+- **Two full AST walks per program** -- one to detect shadowing, one to
+  collect findings -- are now one. Tool findings are held back until the
+  walk ends rather than decided where they are met, which also fixes a case
+  the two-walk version got right by accident and the naive one-walk version
+  would have got wrong: a `const tools` bound *after* the line that reads
+  one. Both are pinned.
+
+The unbounded recursion in `walk` was checked and left alone: `validate`
+only ever runs on an AST acorn already accepted, and acorn refuses
+pathological nesting first (measured in the step-6 hardening pass, "Not
+enough stack space to parse input"), so the walk's depth is bounded below
+the parser's own limit.

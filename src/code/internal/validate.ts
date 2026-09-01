@@ -52,8 +52,14 @@ export interface Finding {
  * once, and a program with fifty problems needs rewriting rather than
  * annotating. It also keeps a pathological program from turning a
  * diagnostic into an output-size problem of its own.
+ *
+ * Truncation is **silent**, which is why the rendered message says
+ * "problems found" rather than claiming to list every one -- the first
+ * wording asserted completeness this cap cannot promise, and a model that
+ * believes it has the full list reasons from a false premise. Twenty
+ * rather than ten so that truncation is rare enough to stay a footnote.
  */
-const MAX_FINDINGS = 10
+const MAX_FINDINGS = 20
 
 const BLOCKED_MEMBERS = new Set(["__proto__", "constructor", "prototype"])
 
@@ -127,21 +133,27 @@ const toolPath = (node: Node): string | undefined => {
   return `${namespace}.${property}`
 }
 
-/** Does the program bind the name `tools` itself? */
-const shadowsTools = (program: acorn.Program): boolean => {
-  let shadowed = false
-  walkFrom(program, (node) => {
-    if (shadowed) return
-    if (node.type === "Identifier" && node["name"] === "tools") return
-    if (
-      (node.type === "VariableDeclarator" || node.type === "ArrowFunctionExpression" ||
-        node.type === "FunctionDeclaration") &&
-      JSON.stringify(node["id"] ?? node["params"] ?? null).includes("\"tools\"")
-    ) {
-      shadowed = true
-    }
+/**
+ * Does this binding position bind the name `tools`?
+ *
+ * Walks the `id`/`params` subtree for an `Identifier` called `tools`. The
+ * first version matched `JSON.stringify(subtree).includes("\"tools\"")`,
+ * which is a string search standing in for a scope analysis: a default
+ * value like `const [a = "tools"] = xs` matched the *string* and silently
+ * disabled the tool check for the whole program.
+ *
+ * Still deliberately over-eager in one direction -- `const { tools: mine }
+ * = x` binds `mine`, not `tools`, and is counted as shadowing because the
+ * key is an `Identifier` with that name. Over-eager here means "check
+ * fewer paths", which costs a diagnostic; under-eager would mean refusing
+ * a working program, which costs the run.
+ */
+const bindsTools = (binding: unknown): boolean => {
+  let found = false
+  walkFrom(binding, (node) => {
+    if (node.type === "Identifier" && node["name"] === "tools") found = true
   })
-  return shadowed
+  return found
 }
 
 /**
@@ -158,15 +170,24 @@ export const validate = (
 ): ReadonlyArray<Finding> => {
   const findings: Array<Finding> = []
   const add = (node: acorn.Node, reason: Finding["reason"], fix: string) => {
-    if (findings.length >= MAX_FINDINGS) return
     findings.push({ reason, line: lineOf(node), fix })
   }
 
-  // A program that binds `tools` itself may legitimately address anything
-  // through it, so the whole check stands down rather than guessing.
-  const checkTools = options.knownTools.size > 0 && !shadowsTools(program)
+  // Tool findings are held back rather than added directly: a program may
+  // bind its own `tools` *after* the line that reads one, so whether they
+  // count is not known until the walk ends. Holding them is what keeps
+  // this to a single pass over the AST -- it runs per model request, and
+  // the catalog's own memoisation is the precedent for caring.
+  const toolFindings: Array<Finding> = []
+  let shadowed = false
 
   walkFrom(program, (node) => {
+    if (
+      node.type === "VariableDeclarator" || node.type === "ArrowFunctionExpression" ||
+      node.type === "FunctionDeclaration"
+    ) {
+      if (bindsTools(node["id"] ?? node["params"] ?? null)) shadowed = true
+    }
     switch (node.type) {
       case "VariableDeclaration":
         if (node["kind"] === "var") add(node, "unsupported-syntax", "var is not supported; use const or let")
@@ -218,14 +239,17 @@ export const validate = (
             return
           }
         }
-        if (!checkTools) return
         const path = toolPath(node)
         // Only a fully static path is checked. `tools[ns][name]` is not a
         // finding, it is simply not checkable -- and a false positive here
         // would refuse a working program, which costs far more than the
         // round trip it saves.
         if (path !== undefined && !options.knownTools.has(path)) {
-          add(node, "unknown-tool", `there is no tool at tools.${path}; check the catalog or search for it`)
+          toolFindings.push({
+            reason: "unknown-tool",
+            line: lineOf(node),
+            fix: `there is no tool at tools.${path}; check the catalog or search for it`
+          })
         }
         return
       }
@@ -234,7 +258,15 @@ export const validate = (
     }
   })
 
+  // A program that binds `tools` itself may legitimately address anything
+  // through it, so those findings are dropped rather than guessed at.
+  const all = shadowed || options.knownTools.size === 0
+    ? findings
+    : [...findings, ...toolFindings]
+
   // Line order, so the model reads them in the order it wrote them.
-  // Stable within a line: `findings` is already in walk order.
-  return [...findings].sort((left, right) => (left.line ?? 0) - (right.line ?? 0))
+  // Stable within a line: each list is already in walk order.
+  return all
+    .sort((left, right) => (left.line ?? 0) - (right.line ?? 0))
+    .slice(0, MAX_FINDINGS)
 }
