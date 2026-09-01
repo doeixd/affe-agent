@@ -92,7 +92,7 @@ says what a change there means for you, not how good the code is.
 | --- | --- | --- |
 | **core** | the vocabulary; a breaking change here is a major version | root (`Agent`, `AgentSession`, `AgentLoop`, `AgentEvent`, `Permission`, `Elicitation`, `ContextTransform`, `Snapshot`), `/client`, `/elicitation`, `/testing` |
 | **supported** | contract-tested against the reference apps and the cross-adapter matrix; changes are deliberate and noted in `STATUS.md` | `/http`, `/rpc`, `/mcp`, `/ag-ui`, `/a2a`, `/coding`, `/sandbox`, `/sandbox/local`, `/shell`, `/state`, `/hooks`, `/observability`, `/export`, `/compaction`, `/redaction`, `/budget`, `/subagent` |
-| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/pi` |
+| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/web/cloudflare`, `/pi` |
 | **reference** | illustrative, not a dependency: read it, copy it, do not import it | `apps/tui`, `apps/cli`, `examples/` |
 
 Engine-facing seams are not on any of these namespaces. What a durable
@@ -640,6 +640,8 @@ constant it names.
 | Pi grep | `GREP_MAX_LINE_LENGTH` | `500 chars` | `PiToolkit.GREP_MAX_LINE_LENGTH` | `... (line truncated to 500 chars)` |
 | Web search | `DEFAULT_LIMIT` / `MAX_LIMIT` / `MAX_RESPONSE_BYTES` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `8` / `10` / `1 MiB` / `15 s` / `4` | `web/brave.ts` | `WebSearchResponseTooLargeError` / `WebSearchTimeoutError` / semaphore queue |
 | Web fetch | `MAX_RESPONSE_BYTES` / `MAX_REDIRECTS` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `1 MiB` / `5` / `20 s` / `4` | `web/http.ts` | `WebFetchResponseTooLargeError` / `RedirectLimitError` / `TimeoutError`; cross-origin redirects refused |
+| Web capture | `MAX_RESPONSE_BYTES` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `2 MiB` / `30 s` / `4` | `web/cloudflare.ts` | `WebCaptureResponseTooLargeError` / `WebCaptureTimeoutError` / semaphore queue; the fetch provider's target guard applies |
+| Web crawl | `DEFAULT_PAGES` → `MAX_PAGES` / `DEFAULT_DEPTH` → `MAX_DEPTH` / `MAX_TOTAL_BYTES` / `DEADLINE_MILLIS` / `CONCURRENCY` | `20` → `100` / `3` → `10` / `8 MiB` / `5 min` / `2` | `web/WebCrawl.ts` | a request above a ceiling is clamped to it; `CrawlResult.stoppedBy` names the bound that ended the crawl; a failed page is a row in `failed`, not a failure |
 | Slack | `toleranceSeconds` | `300 s` | `Connectors.Slack.Options` | replay window guard |
 | Durable polling | `clientOutcome` / `deliveryLog` / `workflowInterrupt` / `result` | `10 ms` / `250 ms` / `25 ms` / `10 ms` | `DurablePolling.defaults` / `EFFECT_AGENT_*_POLL_INTERVAL` | validated positive `Duration` via `Config`; also `DeliveryLog.live` fans out only in-process, cross-node via `read({ after })` |
 | Interrupt | poll | `25 ms` | `DurablePolling.workflowInterrupt` | signal polled while submission runs |
@@ -1624,6 +1626,38 @@ A program that calls `delete` gets a refusal thrown into it, catchably, and
 the call never runs -- the same answer a direct call would get under the same
 policy. Leaving the tool in the catalog is deliberate: the model can see what
 exists and learn from the refusal which route is open.
+
+## Rendered pages
+
+`web_fetch` returns bytes as the server sent them, which for a page that
+builds itself in JavaScript is a shell and a script tag. `WebCapture` renders
+the page and returns its content as Markdown with the links it carries;
+`WebCrawl` follows those links on the same host, breadth-first, within
+bounds. Both are provider-neutral; the first provider is Cloudflare Browser
+Rendering's REST API, which is HTTP and therefore portable:
+
+```ts
+import { WebCrawl, WebToolkit } from "@doeixd/effect-agent/web"
+import * as CloudflareWebCapture from "@doeixd/effect-agent/web/cloudflare"
+
+const Research = Agent.make({ toolkit: WebToolkit.renderedToolkit(), ... })
+
+// Capture from Cloudflare (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`);
+// the crawler is a portable layer over whatever capture is provided.
+const Capture = CloudflareWebCapture.layerConfig.pipe(Layer.provide(FetchHttpClient.layer))
+program.pipe(Effect.provide(Layer.merge(Capture, WebCrawl.layer.pipe(Layer.provide(Capture)))))
+```
+
+The target guard is the fetch provider's, shared: a model-selected URL that
+`web_fetch` refuses is refused here before it reaches a renderer. Rendered
+content is delimited as untrusted in the tool result, as fetched content is.
+A crawl stops at whichever bound is met first and says which
+(`stoppedBy`); a page that fails to render is a row in `failed`, and one bad
+page does not end a crawl. `TestWebCapture` in `/testing` is a scripted
+site, and `WebCrawl.layer` over it is how a crawl is tested without a
+renderer. An interactive browser -- navigate, click, fill -- is a larger
+capability with its own lifetime, and stays parked
+([docs/plan-effect-agent-comparison.md](./docs/plan-effect-agent-comparison.md) §3.6).
 
 ## Sandbox
 

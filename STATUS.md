@@ -15,7 +15,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1873 passing in 173 files, `McpServerConformance` included (it no longer runs separately) |
+| tests | `npm test` | 1887 passing in 175 files, `McpServerConformance` included (it no longer runs separately) |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
@@ -195,7 +195,10 @@ itself); `/export` (JSON envelope + JSONL commit log); `/compaction`
 (token policy, checkpoints, controller, events); `/redaction`; `/budget`;
 `/data`; `/hooks`; `/scheduling`; `/connectors` (+ Slack, with a channel
 conformance suite); `/plugins`; `/tree` (sessions as a tree: branch, lanes,
-divergence, activation); `/web` (+ Brave, HTTP fetch); `/openai`
+divergence, activation); `/web` (+ Brave search, HTTP fetch, and since
+2026-09-01 rendered-page capture over Cloudflare Browser Rendering's REST
+API with a portable bounded crawler over it, sharing the fetch provider's
+target guard); `/openai`
 (OpenAI-compatible responses).
 
 **Applications.** `apps/tui` (full-screen local coding harness),

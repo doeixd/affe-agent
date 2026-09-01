@@ -630,7 +630,9 @@ sizes; the items are repeated here so this list stays the one tracker.
     `AgentInput.Current`, the model sees the rendering, the host decodes JSON
     at the boundary, `/durable` journals the encoded value. One more type
     parameter on `Agent.make`. Wants a design pass before code.
-42. **`WebCapture` and `WebCrawl`** (plan §3.6) — rendered pages and a bounded
+42. ~~**`WebCapture` and `WebCrawl`**~~ — landed 2026-09-01; see
+    `status-history.md`. The interactive browser stays parked behind 43. As
+    planned: rendered pages and a bounded
     same-host crawl over a provider seam in `/web`, Cloudflare Browser
     Rendering's REST API as the first (portable) provider, doubles in
     `/testing`, every bound in the README table. The interactive browser is

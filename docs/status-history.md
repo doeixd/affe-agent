@@ -4688,3 +4688,51 @@ own review (`ToolPermissionDeniedError` on `record_review`). The example
 allows it by name, and the README's "Typed input and output" section and
 `AgentOutput`'s header now say so.
 
+## 2026-09-01 — rendered pages: capture and a bounded crawl (comparison plan, item 7)
+
+`docs/plan-effect-agent-comparison.md` §3.6. `/web` gains two capabilities
+beside search and fetch:
+
+- **`WebCapture`**: a page rendered as a browser would show it, as Markdown
+  with the links it carries. Provider-neutral; the first provider is
+  `/web/cloudflare`, Cloudflare Browser Rendering's REST API (`POST
+  .../browser-rendering/markdown` and `/links` under a bearer token) -- HTTP,
+  so portable to Node and workerd alike, with `layerConfig` reading the
+  `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` names `wrangler` uses.
+  Bounded response (2 MiB), whole-operation timeout (30 s), four in flight,
+  the token redacted where headers are rendered, provider bodies never
+  echoed into errors.
+- **`WebCrawl`**: breadth-first over `WebCapture` on the start page's host,
+  each link once, fragments dropped, cross-host links returned but not
+  followed. Bounds with defaults and ceilings: pages (20 → 100), depth
+  (3 → 10), total bytes (8 MiB), a deadline on Effect's clock (5 min), two
+  captures in flight. A page that fails is a row in `failed`; the start
+  page's failure is the crawl's. `stoppedBy` names the bound that ended it.
+  Built over the capability rather than as a second provider contract, so
+  every provider that renders one page can crawl, and the crawler is
+  portable.
+- **`WebToolkit.renderedToolkit()`**: `web_capture` and `web_crawl`, with
+  `Permission` projections on the origin, results delimited as untrusted,
+  failures turned into instructions the model can act on. The existing
+  `toolkit()` is unchanged, so no caller gains a requirement.
+- **The target guard moved** from the fetch provider to
+  `web/internal/target.ts`, one pure `refusal(url)` both providers name in
+  their own error vocabulary. Two copies of an SSRF guard is how one falls
+  behind; the fetch provider's fifteen tests still pass over the shared one.
+- `TestWebCapture` (a scripted site keyed by URL) and `TestWebCrawl` in
+  `/testing`; the README's limits table gains two rows and a "Rendered
+  pages" section.
+
+Pinned: the provider's endpoints, body, bearer token and redaction; the
+guard's refusals before any request; 401/403, 429 and other statuses;
+provider-reported failure; advertised and actual overflow; a malformed body
+never echoed; the timeout under `TestClock`; the tool's delimiting and
+instruction-shaped failures. The crawler: breadth-first order and
+once-only visits, a failed page skipped, the start failure, the page bound
+and the ceiling clamp, the depth bound, the byte bound (the crossing page
+not kept), the deadline under `TestClock`.
+
+Parked, as planned: the interactive browser -- navigate, click, fill, with
+a session lifetime and an uncertain outcome after a crash -- behind the
+published Cloudflare host entry (item 43).
+

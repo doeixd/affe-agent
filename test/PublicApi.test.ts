@@ -271,6 +271,8 @@ describe("durable and cluster surfaces", () => {
       "NodeStoreConformance",
       "SandboxConformance",
       "TestLanguageModel",
+      "TestWebCapture",
+      "TestWebCrawl",
       "TestWebFetch",
       "TestWebSearch"
     ])

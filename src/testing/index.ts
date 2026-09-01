@@ -1,6 +1,8 @@
 export * as AgentProbe from "./AgentProbe.js"
 export * as ChannelConformance from "./ChannelConformance.js"
 export * as TestLanguageModel from "./TestLanguageModel.js"
+export * as TestWebCapture from "./TestWebCapture.js"
+export * as TestWebCrawl from "./TestWebCrawl.js"
 export * as TestWebFetch from "./TestWebFetch.js"
 export * as TestWebSearch from "./TestWebSearch.js"
 export * as SandboxConformance from "./SandboxConformance.js"

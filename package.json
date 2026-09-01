@@ -91,6 +91,10 @@
       "types": "./dist/web/http.d.ts",
       "default": "./dist/web/http.js"
     },
+    "./web/cloudflare": {
+      "types": "./dist/web/cloudflare.d.ts",
+      "default": "./dist/web/cloudflare.js"
+    },
     "./subagent": {
       "types": "./dist/subagent/index.d.ts",
       "default": "./dist/subagent/index.js"
