@@ -201,6 +201,44 @@ describe("CodeTool.searchTool", () => {
     })
   )
 
+  it.effect("an empty query matches nothing, and a budget-hidden tool is still findable", () =>
+    Effect.gen(function*() {
+      const { billing } = yield* groups
+      const search = CodeTool.searchTool({ tools: { billing } })
+      const run = (query: string) =>
+        withSession(
+          [
+            { toolCalls: [{ id: "s1", name: "search", params: { query } }] },
+            { text: "ok" }
+          ],
+          Agent.make({ tools: [search] }),
+          ({ session }) => AgentSession.prompt(session, "search")
+        ).pipe(
+          Effect.map(({ events }) =>
+            events.filter(AgentEvent.is("ToolCallSucceeded"))[0]!.event.result as CodeTool.SearchResult
+          )
+        )
+
+      // Scoring is additive over query tokens, so no tokens is no score.
+      // Pinned because "" plausibly reads as "list everything" and does
+      // not: a model that wants the list has the catalog.
+      assert.strictEqual((yield* run("")).total, 0)
+
+      // Visibility is not authority. A tool the token budget left out of
+      // the catalog is still findable here, deliberately: what the model
+      // may *call* is the permission policy's decision, never a
+      // side-effect of how many signatures fitted in the prompt.
+      const tight = Catalog.catalog({ billing }, { budgetTokens: 60 })
+      assert.isFalse(tight.complete)
+      const hidden = Catalog.entries({ billing }).filter((entry) =>
+        !tight.inlined.some((shown) => shown.path === entry.path)
+      )
+      assert.isAbove(hidden.length, 0)
+      const found = yield* run(hidden[0]!.name)
+      assert.isTrue(found.results.some((one) => one.path === hidden[0]!.path))
+    })
+  )
+
   it.effect("the execute tool mentions search only when one is mounted", () =>
     Effect.gen(function*() {
       const { billing } = yield* groups

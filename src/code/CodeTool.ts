@@ -396,6 +396,20 @@ const SEARCH_DESCRIPTION = [
  * buys nothing (`Catalog.catalog(tools).complete` is the test). Tell the
  * execute tool it exists with `Options.searchToolName`, so the two
  * descriptions cannot disagree about the name.
+ *
+ * **Pass the same `tools` you passed `tool`.** Nothing checks that they
+ * match, and a mismatch is quiet in the worst direction: the model finds
+ * `tools.billing.list_invoices`, writes a program around it, and the
+ * program is told there is no tool at that path. Recoverable -- the
+ * diagnostic names it -- but a wasted turn for a mistake with no other
+ * symptom. The two take the groups separately because a host may want to
+ * mount one without the other, not because they may differ.
+ *
+ * **Visibility is not authority.** Search reaches every tool in the
+ * groups, including the ones the catalog's token budget left out; that is
+ * the whole point of it. A tool the model must not call is one the
+ * `Permission` policy refuses, never one the budget happened to hide --
+ * budget is a prompt-size decision and makes no security claim.
  */
 export const searchTool = <Groups extends CodeMode.ToolGroups>(
   options: {

@@ -4210,3 +4210,25 @@ findings from writing them, both worth keeping:
   that *is* specific to this module -- that `searchTool` stays a plain
   function rather than becoming an `Effect` for symmetry -- was added and
   broken once.
+
+**Post-commit review pass on step 2.** No defects; two hazards worth stating
+where they bite, and one behaviour worth pinning before someone changes it
+by accident:
+
+- **`searchTool` and `tool` take the groups separately, and nothing checks
+  they match.** A mismatch is quiet in the worst direction: the model finds
+  a path, writes a program around it, and the program is told no tool lives
+  there. Recoverable, since the diagnostic names it, but a wasted turn for
+  a mistake with no other symptom. Recorded at the site, with why they are
+  separate (a host may mount one without the other) rather than left to be
+  inferred.
+- **Visibility is not authority**, now said outright: search reaches every
+  tool in the groups including the ones the token budget left out of the
+  catalog -- that is what it is *for*. A tool the model must not call is one
+  the `Permission` policy refuses, never one the budget happened to hide.
+  Pinned by a test that finds a deliberately budget-hidden tool, so nobody
+  later "fixes" search to respect the budget and turns a prompt-size
+  decision into a security claim it cannot keep.
+- **An empty query matches nothing**, because scoring is additive over query
+  tokens. Pinned, because `""` plausibly reads as "list everything" and does
+  not -- a model that wants the list already has the catalog.
