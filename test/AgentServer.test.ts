@@ -358,7 +358,9 @@ describe("AgentServer", () => {
       events: () => unused,
       sessions: () => unused,
       eventLog: () => unused,
+      hostEvents: () => unused,
       size,
+      pumps: Effect.succeed(0),
       requestBuckets: Effect.succeed(0),
       maxSessions: 4,
       maxRequestsPerSession: 16

@@ -348,3 +348,115 @@ export type EventLogResponse = typeof EventLogResponse.Type
 
 export const EventsResponse = AgentEventEnvelope
 export type EventsResponse = typeof EventsResponse.Type
+
+/**
+ * Why a session stopped being visible on this host.
+ *
+ * None of these is `SessionClosed`; see {@link SessionUnhosted}.
+ */
+export const UnhostReason = Schema.Literals([
+  /** `closeSession` succeeded through this host. */
+  "closed",
+  /** The host itself is shutting down. Says nothing about the session. */
+  "released",
+  /** The session's event stream ran to completion. */
+  "ended",
+  /** The stream failed -- a transport error on a remote session. */
+  "failed"
+])
+export type UnhostReason = typeof UnhostReason.Type
+
+/**
+ * The inventory, delivered once as the first element of the host stream.
+ *
+ * A subscriber attaching to a host that already has sessions would otherwise
+ * receive events for sessions it was never told about, and could not build a
+ * routing table. Ids only: `status` is an `Effect`, and for a remote client a
+ * network call, so gathering N of them while holding the host's registry gate
+ * is not something a subscribe should do. Status is what `sessions()` is for.
+ */
+export const HostAttached = Schema.TaggedStruct("HostAttached", {
+  sessionIds: Schema.Array(SessionId)
+})
+
+/** A session became visible on this host. */
+export const SessionHosted = Schema.TaggedStruct("SessionHosted", {
+  sessionId: SessionId
+})
+
+/**
+ * A session stopped being visible on this host.
+ *
+ * **A statement about this host's visibility, not about the session's
+ * lifetime.** The only statement about the session's own lifetime is
+ * `SessionClosed`, on the inner envelope. For a durable session even
+ * `reason: "closed"` means just that this host released its handle -- the
+ * session persists in its store and is reachable by id from any process.
+ *
+ * `reason` says which of those happened, because the pump cannot infer it: a
+ * closing session's subscription is shut down, which Effect reports as a
+ * `Cause.Done` defect that is indistinguishable in shape from a transport
+ * dying. So whoever removes the session states the reason, and only a session
+ * that left on its own is classified from what the pump saw.
+ *
+ * `lastSequence` is the last per-session sequence this host forwarded, so a
+ * consumer can say "this projection is final at N" -- or, needing certainty
+ * rather than a claim, repair from the durable log.
+ *
+ * There is deliberately no "did this host see `SessionClosed`" flag. One was
+ * written and removed: closing a session shuts its subscription down rather
+ * than delivering a final event to subscribers already attached, so the flag
+ * was `false` even for a session closed through this very host. A field that
+ * is always false is worse than no field, because it reads like evidence.
+ */
+export const SessionUnhosted = Schema.TaggedStruct("SessionUnhosted", {
+  sessionId: SessionId,
+  reason: UnhostReason,
+  lastSequence: Schema.Option(Schema.Number)
+})
+
+/**
+ * One session's event, carried on the host-wide stream.
+ *
+ * Wraps the envelope rather than flattening it: `AgentEventEnvelope`'s tag is
+ * on `.event`, so a flat union would collide with the inner tags, and keeping
+ * it whole means the value reaches `SessionProjection.reduce` unchanged.
+ */
+export const SessionEvent = Schema.TaggedStruct("SessionEvent", {
+  envelope: AgentEventEnvelope
+})
+
+/**
+ * Everything happening on a host: its sessions' events, and its own hosting
+ * lifecycle.
+ *
+ * **Per-session order is preserved. Order across sessions is arbitrary, and
+ * there is deliberately no host-wide sequence.** Such a number would record
+ * which pump fibre the scheduler happened to run first, and publishing it as a
+ * sequence would dress a scheduling accident up as an ordering. Making it mean
+ * even *delivery* order would require a host-wide permit held across every
+ * publish -- the per-session bus's serialisation point, reinstalled one level
+ * up and paid on every event of every session. The one thing it would buy,
+ * detecting loss, the inner `AgentEventEnvelope.sequence` already gives at
+ * finer grain; that is what `SessionProjection.gap` reads.
+ *
+ * Live-only. `HostAttached` carries the inventory and no agent event is
+ * replayed. The finite, cursored read is still `eventLog`, per session, and
+ * stays there because a cursor into a nondeterministic merge would not be a
+ * cursor.
+ *
+ * **Folding this into `SessionProjection`s: seed with `empty(id)`, never
+ * `since(id, 0)`.** A session emits `SessionStarted` at sequence 1 while it is
+ * still being constructed, before any host can subscribe -- the same fact
+ * {@link EventLogResponse}'s `oldest` records when it says the oldest retained
+ * sequence "is normally 2". Seeding with `since(id, 0)` therefore reports a
+ * gap that was never a loss, and `isComplete` stays false for the life of the
+ * projection.
+ */
+export const HostEvent = Schema.Union([
+  HostAttached,
+  SessionHosted,
+  SessionUnhosted,
+  SessionEvent
+])
+export type HostEvent = typeof HostEvent.Type

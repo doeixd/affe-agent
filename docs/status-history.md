@@ -4589,3 +4589,99 @@ they are now asserted while both are still open), and the `closed` guards on
 stream they actually defend against: an event arriving after the close.
 
 28 tests, from 19.
+
+---
+
+# 2026-09-01 — Host-wide events, and what the code said back
+
+`effect-plan-2.txt` §29 (`remaining-work.md` 26o) ships:
+`AgentSessionHost.hostEvents`, one stream carrying `HostAttached`,
+`SessionHosted`, `SessionEvent` and `SessionUnhosted`, with `pumps` counting
+live forwarders so a leak can be named. `examples/host-events.ts` folds it into
+per-session `SessionProjection`s -- the consumer that module shipped without
+yesterday, and the reason its `foreign` counter exists.
+
+Five things the section asked for were built differently, and in each case the
+code was the one that decided.
+
+**No host-wide sequence.** The section allows the outer event "its own
+process-local sequence". It should not have one. Such a number records which
+pump fibre the scheduler ran first; to mean even *delivery* order it needs a
+host-wide permit held across every publish, which is the per-session bus's
+serialisation point reinstalled one level up and paid on every event of every
+session. The only thing it buys is loss detection, and
+`SessionProjection.gap` already provides that per session, which is finer. With
+the sequence gone the outer envelope carried nothing, so the tagged union *is*
+the event.
+
+**`FiberMap` mirrors the pumps; it does not own them.** The section says to
+install pumps in a `FiberMap`. Done literally, that is the leak it is trying to
+prevent: `FiberMap.make` binds to the *host's* scope, so an owned pump would
+survive its session's child scope closing unless someone remembered to remove
+it. The child scope already gives per-key supervision with automatic teardown.
+The map is kept as a mirror because its auto-removal-on-completion makes `size`
+mean *live* pumps -- the one number that can catch a leak, and one
+`sessions.size` cannot, since a leaked pump is precisely one whose session has
+left the registry.
+
+**"Eagerly subscribe" is not expressible here, and the gate that replaced it
+deadlocked.** `RemoteSession.events()` returns a `Stream` that subscribes on
+first pull; `sessionHost.ts` already carried a comment recording that `toPull`
+was tried and is no better. So the first design gated *forwarding* on a
+`Deferred` opened just after `SessionHosted` published. Every host test timed
+out. Exit finalizers run uninterruptibly, and a pump whose stream ended inside
+the window between forking and opening sat in its finalizer waiting for a gate
+nobody was going to open. Publishing `SessionHosted` **before** forking the pump
+gives the identical guarantee by construction, with no gate, no deferred, and
+no finalizer that can block. Both callers already hold the registry gate across
+`host` and the `Ref.update` that follows, and `hostEvents` takes that same gate
+around subscribe-and-snapshot, so "exactly once across
+`HostAttached ∪ SessionHosted`" is exact rather than merely likely.
+
+**A closing session looks exactly like a dying transport.** The reason on
+`SessionUnhosted` was first derived from the pump's exit cause: success meant
+`ended`, interruption meant the remover knew, anything else meant `failed`.
+Every ordinary close reported `failed`. A closing session's subscription is
+*shut down*, which Effect reports as a `Cause.Done` **defect** -- not a
+failure, not an interrupt, and indistinguishable in shape from a transport
+dying. So both removers now state the reason and the pump only classifies the
+genuinely unattended case.
+
+**`releaseAll` could not win its own race.** Marking sessions `released` before
+closing them had no effect: session scopes were forked from the *ambient*
+scope, so they were finalizers of it and closed ahead of the host's own
+finalizer. Measured -- every pump had already published `SessionUnhosted`
+before `releaseAll` ran, so a host shutdown was indistinguishable from a
+session ending on its own. Sessions now hang off a scope the host creates and
+closes itself, which puts the ordering back under the host's control.
+
+## A field deleted rather than shipped
+
+`SessionUnhosted` carried an `observedClose` flag: "this host saw
+`SessionClosed` on the inner stream". It was designed to answer the one case
+where `ended` misleads -- a remote stream ending cleanly while the session
+lives on. It is **always false**. Closing a session shuts its subscription down
+rather than delivering a final event to subscribers already attached, so the
+flag was false even for a session closed through that very host. A field that
+is always false is worse than no field, because it reads like evidence. Deleted,
+with the reason recorded on the schema so nobody adds it back.
+
+## Break-once
+
+Seven mutations, all of which fail the suite: `SessionHosted` published after
+the fork (3 tests), `HostAttached` always empty (1), `SessionUnhosted` moved off
+the pump's exit (2), `releaseAll` leaving the reason unset (1), the pump forked
+into the host scope instead of the session's (2), publish-before-retain (1), and
+`hostEvents` skipping authorization (1). The suite is 170 files, 1878 tests.
+
+## Deliberately not built
+
+A host-wide tail or `after` cursor -- a cursor into a nondeterministic merge is
+not a cursor, and `eventLog` already answers "what did I miss", per session,
+with a bound and an explicit refusal rather than a gap. A transport surface
+(`GET /events`, RPC, MCP): that is `plan-agent-server.md`'s later step and needs
+a per-connection bound plus a resumption story that does not exist, so there is
+also no `HostConformance` row, because that matrix is per-transport and there is
+no transport. And no `ServerEvent` merge helper in `src/`, because §30 is
+explicit that merging host events with a process manager's is the application's
+job; it lives in the example.

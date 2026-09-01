@@ -2106,10 +2106,33 @@ And still:
 
 Especially for durable sessions.
 
-STATUS (2026-08-26): not built. `AgentSessionHost` holds hosted sessions in
-a `Ref<Map>` and `events` forwards `hosted.session.events(...)`. There is
-no host-wide stream, no `SessionHosted` / `SessionUnhosted`, no `FiberMap`.
-`FiberMap` exists in Effect and is unused in `src/`.
+STATUS (2026-09-01): **built** -- `host.hostEvents` in
+`src/client/internal/sessionHost.ts`, the `HostEvent` union in
+`src/client/AgentProtocol.ts`, `test/AgentSessionHostEvents.test.ts`,
+`examples/host-events.ts`. Five departures from the sketch above, each forced
+by the code rather than chosen:
+
+* **No `HostEventEnvelope` and no process-local sequence.** It would record
+  scheduler order dressed as event order, and cost a host-wide permit on every
+  event to mean even that. `SessionProjection.gap` already detects loss, per
+  session, which is finer.
+* **`FiberMap` is a mirror, not the owner.** It binds to the host's scope, so
+  an owned pump outlives its session unless explicitly removed -- the leak this
+  section wants to prevent. The session's child scope owns the fibre; the map
+  exists so `pumps` can count live ones.
+* **"eagerly subscribe" is not expressible.** `RemoteSession.events()` returns
+  a `Stream` that subscribes on first pull; `toPull` was already tried and
+  rejected here. `SessionHosted` is published *before* the fork instead, which
+  gives the ordering with no gate at all. A gate was tried first and
+  deadlocked, because exit finalizers are uninterruptible.
+* **`SessionUnhosted` is published by the pump's exit, and its reason is
+  written by whoever removed the session.** A closing subscription arrives as a
+  `Cause.Done` defect, shaped exactly like a dead transport. Sessions are
+  forked from a host-owned scope so `releaseAll` can mark them before anything
+  tears down.
+* **No "observed close" flag**, because closing a session shuts its
+  subscription instead of delivering `SessionClosed` to an attached
+  subscriber, so it was always false.
 
 Per-session events: [transport.md](./transport.md). Later management SSE
 would extend the completed [plan-agent-server.md](./plan-agent-server.md), not

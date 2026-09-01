@@ -67,7 +67,23 @@ export const Operation = Schema.Literals([
    * later send task content to. Authorizing it as a read would let a read-only
    * principal arrange for updates to keep arriving after their access ends.
    */
-  "configure"
+  "configure",
+  /**
+   * Subscribe to every hosted session at once. A read, addressed to the host.
+   *
+   * Named apart from `events` because granting a stream over *every* session
+   * is not the grant `events` is. `events` is per session, so a policy can
+   * decide it session by session and refuse the ones a principal has no
+   * business reading; this one cannot be narrowed that way once given. Same
+   * reasoning as `listSessions`, one step further -- that tells a caller which
+   * sessions exist, this hands them the contents.
+   *
+   * Worth knowing if you maintain an authorization function written as a
+   * `switch` with a permissive `default`: this literal is new, so such a
+   * policy grants it without anyone deciding to. Deny-by-default policies and
+   * explicit allowlists are unaffected.
+   */
+  "hostEvents"
 ])
 export type Operation = typeof Operation.Type
 

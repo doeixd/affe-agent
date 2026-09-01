@@ -15,7 +15,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1820 passing in 168 files, `McpServerConformance` included (it no longer runs separately) |
+| tests | `npm test` | 1878 passing in 170 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
@@ -27,14 +27,28 @@ Regenerate these from the commands; do not hand-edit the numbers.
 Built on **Effect v4 (`effect@4.0.0-rc.112`)**; the AI modules are the in-tree
 `effect/unstable/ai`. Node 22.5+ only for the host entries.
 
-One caveat on the tests gate, measured 2026-09-01: **the suite is flaky under
-process pressure on Windows.** Three consecutive full runs gave 0, 2 and 20
-failures, every one of them in a test that spawns a real process (`Sandbox`,
-`SandboxDerive`, the MCP stdio pair, `WorkerDurableObject`). The failure mode
-is a vitest worker dying under resource exhaustion, which reports the whole
-*file* as failed — so pure files get dragged down with it and a red run looks
-worse than it is. Re-run the named files alone before reading a failure as a
-regression. Not yet diagnosed further; recorded rather than fixed.
+One caveat on the tests gate, **diagnosed 2026-09-01** (it previously read
+"the suite is flaky under process pressure on Windows", undiagnosed): the
+suite is reliable when it owns the machine and unreliable when it does not.
+Nine consecutive solo runs passed. Two suites run *concurrently* both failed —
+6 and 8 files, and one of them never reported two files at all, because the
+worker died before finishing. That is the 0/2/20 variance: it tracks what else
+was running, and `CLAUDE.md` says other agents may be working here at the same
+time.
+
+Eleven files spawn real child processes, not the four this note used to name:
+`Sandbox`, `SandboxConformance`, `SandboxDerive`, `Cli`, `Portability`,
+`McpClients`, `McpServerConformance`, `McpStdioCompatibility`, `PluginMcp`,
+`CodingToolkit`, `WorkerDurableObject` — about 247 tests. `0xC0000142` is
+Windows refusing a DLL init under handle exhaustion, which is machine-global.
+
+`vitest.config.ts` now caps `maxWorkers` at 8, which costs about 29% on a solo
+run (51s → 66s) and reduces two concurrent suites to a single failure each.
+That failure is `ClusterMultiNode`, which races a real clock and is listed
+below as deliberately left; a worker cap cannot fix a test that races a wall
+clock. Neither can it fix `DurableStreams`' "linear, not quadratic", which
+asserts an asymptotic bound by measuring elapsed time and spawns nothing —
+that one will fail on any busy machine, including CI.
 
 ## The two properties everything rests on
 
@@ -81,6 +95,16 @@ that makes resumption a property of the backing, and a durable client that
 survives the process; `/cluster` makes a session an entity (typed
 `StorageError` on the wire) and adds scheduled agents; `/durable-streams`
 delivers events across nodes.
+
+**Host-wide events.** `AgentSessionHost.hostEvents` is one stream over every
+hosted session plus this host's own hosting lifecycle (`HostAttached`,
+`SessionHosted`, `SessionEvent`, `SessionUnhosted`), authorized as its own
+operation because granting a stream over every session is not the grant
+per-session `events` is. Per-session order is preserved; there is deliberately
+no host-wide sequence, because it would record scheduler order dressed as event
+order and `SessionProjection.gap` already detects loss at finer grain.
+`examples/host-events.ts` folds it into per-session projections, which is what
+`/sessions` was built for.
 
 **Principal.** `Principal.CurrentPrincipal` (root): the caller's subject on
 the fibre that acts -- a `Context.Reference` the host sets per request

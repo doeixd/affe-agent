@@ -1,8 +1,11 @@
 import {
+  Cause,
   Deferred,
   Effect,
   Exit,
+  FiberMap,
   Option,
+  PubSub,
   Ref,
   Schema,
   Scope,
@@ -128,8 +131,38 @@ export interface Host<Principal> {
     Stream.Stream<AgentProtocol.AgentEventEnvelope, AgentProtocol.RemoteError>,
     AgentProtocol.RemoteError
   >
+  /**
+   * Every hosted session's events, plus this host's own hosting lifecycle.
+   *
+   * The aggregate `events` is not: that one is per session and answers "what
+   * is this conversation doing", where this answers "what is happening on
+   * this host". `docs/effect-plan-2.txt` §29.
+   *
+   * Per-session order is preserved; across sessions the merge is arbitrary and
+   * carries no host-wide sequence, for the reasons on
+   * `AgentProtocol.HostEvent`. Live-only, with the inventory delivered once as
+   * a leading `HostAttached`; `eventLog` remains the finite, cursored read.
+   *
+   * The error channel is `never`, unlike per-session `events`. One session's
+   * transport failing must not end everyone else's feed, so it arrives as
+   * `SessionUnhosted` with `reason: "failed"` and the stream carries on.
+   */
+  readonly hostEvents: (
+    principal: Principal
+  ) => Effect.Effect<
+    Stream.Stream<AgentProtocol.HostEvent>,
+    AgentProtocol.RemoteError
+  >
   /** Internal observability used by conformance tests and future metrics. */
   readonly size: Effect.Effect<number>
+  /**
+   * How many session pumps are still forwarding.
+   *
+   * Internal, in `requestBuckets`' idiom: a pump that outlives its session is
+   * a leak nothing else can name. `size` cannot see it, because a leaked pump
+   * is precisely one whose session has already left the registry.
+   */
+  readonly pumps: Effect.Effect<number>
   /**
    * How many request-idempotency buckets are held, live and closed together.
    *
@@ -160,6 +193,22 @@ interface HostedSession {
   readonly session: AgentClient.RemoteSession
   readonly tail: EventTail
   readonly scope: Scope.Closeable
+  /**
+   * Why this session is being unhosted, when the remover is the one who knows.
+   *
+   * The pump publishes `SessionUnhosted` from its own exit and cannot tell a
+   * `closeSession` from a host shutdown -- both reach it as its scope closing
+   * -- so whoever removes the session writes the reason here first and that
+   * decision wins.
+   *
+   * `None` means nobody removed it and the pump should say what it saw. It
+   * has to be an `Option` rather than a defaulted value: at host shutdown the
+   * client layer tears down first, so the session's stream *fails* on the way
+   * out, and a pump that simply overwrote the reason would report `"failed"`
+   * for an orderly release. Measured, not predicted -- it is what the first
+   * version of this did.
+   */
+  readonly reason: Ref.Ref<Option.Option<AgentProtocol.UnhostReason>>
 }
 
 type MutationOperation = Extract<
@@ -257,6 +306,17 @@ export const make = <Principal>(
   Effect.gen(function* () {
     const client = yield* AgentClient.AgentClient
     const parentScope = yield* Effect.scope
+    /**
+     * The scope every hosted session's child scope is forked from.
+     *
+     * Owned by the host rather than taken from the ambient one, so that
+     * `releaseAll` can mark each session's reason *before* anything is torn
+     * down. Forked from the ambient scope, the children are finalizers of it
+     * and close ahead of the host's own finalizer -- measured: every pump had
+     * already published `SessionUnhosted` before `releaseAll` ran, so a
+     * shutdown was indistinguishable from a session ending on its own.
+     */
+    const sessionScope = yield* Scope.make()
     const maxSessions = positiveInteger(
       "AgentSessionHost maxSessions",
       options.maxSessions
@@ -279,7 +339,38 @@ export const make = <Principal>(
      * mid-life is retained from that point; sequences are the session's
      * own, so a reader can still tell what it is missing.
      */
+    /**
+     * The host-wide stream's backing, and the pump mirror.
+     *
+     * Unbounded on purpose. A bound with backpressure would stall every
+     * session's pump behind one slow `hostEvents` reader -- relocating the
+     * unbounded memory into the per-session subscriptions and coupling
+     * sessions to each other on the way. A sliding or dropping bound would
+     * silently discard `SessionHosted` / `SessionUnhosted`, and a consumer
+     * missing the first sees orphan events while one missing the second keeps
+     * a projection for ever. AG-UI's 256-element bound does not transfer: its
+     * producer is a per-request fibre that request-scope interruption
+     * releases, where this is the shared host-lifetime pump with no such
+     * release. The per-connection bound belongs in a transport adapter, where
+     * the producer is disposable again.
+     *
+     * The finalizer is registered *here*, ahead of `releaseAll`'s below,
+     * because finalizers run in reverse order of registration -- so this one
+     * runs last, and every session's `SessionUnhosted` reaches the stream
+     * before the stream carrying it ends.
+     */
+    /** Written by whoever removes a session; see `HostedSession.reason`. */
+    const closedReason: Option.Option<AgentProtocol.UnhostReason> =
+      Option.some("closed")
+    const releasedReason: Option.Option<AgentProtocol.UnhostReason> =
+      Option.some("released")
+
+    const hostBus = yield* PubSub.unbounded<AgentProtocol.HostEvent>()
+    yield* Effect.addFinalizer(() => PubSub.shutdown(hostBus))
+    const pumpFibers = yield* FiberMap.make<AgentProtocol.SessionId>()
+
     const host = (
+      sessionId: AgentProtocol.SessionId,
       session: AgentClient.RemoteSession,
       scope: Scope.Closeable
     ): Effect.Effect<HostedSession> =>
@@ -292,23 +383,110 @@ export const make = <Principal>(
             tail.dropped += 1
           }
         }
+        const reason = yield* Ref.make(
+          Option.none<AgentProtocol.UnhostReason>()
+        )
+        let lastSequence: number | undefined
+
+        const forward = (envelope: AgentProtocol.AgentEventEnvelope) =>
+          Effect.suspend(() => {
+            // Retain first, publish second. `eventLog` is a finite, cursored
+            // read with a bound it can defend; the host stream is an
+            // unbounded broadcast to whoever is listening. Ordering it the
+            // other way would let a slow host-stream consumer hold up the
+            // tail that the log is served from.
+            retain(envelope)
+            lastSequence = envelope.sequence
+            return PubSub.publish(hostBus, { _tag: "SessionEvent", envelope })
+          })
+
+        /**
+         * Announce the unhosting from the pump's own exit.
+         *
+         * Not from whoever removed the session: `closeRaw` deletes the
+         * registry entry under the gate but closes the scope *outside* it, on
+         * purpose, so at the moment of removal this pump is still live and may
+         * still have queued envelopes. Publishing there would let a session's
+         * tail trail its own `SessionUnhosted`. Here it is true by fibre
+         * sequencing, and it covers every exit route -- close, host shutdown,
+         * a stream that ended, a stream that failed -- with one path.
+         */
+        const announce = (
+          exit: Exit.Exit<void, AgentProtocol.RemoteError>
+        ) =>
+          Effect.gen(function* () {
+            const removed = yield* Ref.get(reason)
+            yield* PubSub.publish(hostBus, {
+              _tag: "SessionUnhosted",
+              sessionId,
+              // The remover's word beats what the pump saw. At host shutdown
+              // the client layer tears down first, so the session's stream
+              // fails on the way out and the pump would otherwise report
+              // `"failed"` for an orderly release.
+              reason: Option.isSome(removed)
+                ? removed.value
+                // Nobody removed it, so report what happened. A stream that
+                // ran out means the session closed for an in-process bus and
+                // only that the transport stopped for a remote one.
+                // Nobody removed it, so report what the pump saw. Both
+                // removers state their reason, so this is the genuinely
+                // unattended case: the session's own stream ended or broke
+                // while the host was still holding it.
+                : Exit.isSuccess(exit)
+                ? "ended"
+                : "failed",
+              lastSequence: Option.fromNullishOr(lastSequence)
+            })
+          })
+
+        /**
+         * Announced before the pump exists, so nothing it forwards can
+         * precede it.
+         *
+         * The first attempt gated the *forwarding* on a `Deferred` opened
+         * after this publish, which deadlocked: the pump's exit finalizer
+         * awaited that gate, finalizers run uninterruptibly, and a stream that
+         * ended inside the window between forking and opening left the fibre
+         * waiting for something no longer on its way. Ordering the publish
+         * ahead of the fork makes the same guarantee by construction and
+         * needs no gate, no deferred and no finalizer that can block.
+         *
+         * Safe against a subscriber seeing this before the session is in the
+         * registry, because both callers hold `registryGate` across `host`
+         * and the `Ref.update` that follows it, and `hostEvents` takes that
+         * same gate around its subscribe-and-snapshot.
+         */
+        yield* PubSub.publish(hostBus, { _tag: "SessionHosted", sessionId })
         // Forked into the session's scope, then yielded to, so the child has
         // subscribed before this returns: under the cooperative scheduler the
         // subscription is registered at its first step, ahead of any request
         // the host could serve next. `toPull` was tried and is no better --
         // it subscribes on the first pull, not on the call. Whatever the
         // scheduling, the read reports `oldest`, so nothing is silent.
-        yield* Effect.forkIn(
-          Stream.runForEach(session.events(), (envelope) => Effect.sync(() => retain(envelope))).pipe(
+        const fiber = yield* Effect.forkIn(
+          Stream.runForEach(session.events(), forward).pipe(
+            // `onExit` before `catchCause`, so `announce` sees the real cause
+            // -- reversed, every failure would already have been swallowed
+            // into a success and `reason` could never be `"failed"`.
+            Effect.onExit(announce),
             // The stream ending -- the session closed -- ends the tail; so
             // does a stream failure, which for an in-process session cannot
-            // happen and for a remote one is that transport's to report.
+            // happen and for a remote one is that transport's to report. It
+            // must not reach the host stream's error channel either: one
+            // session's transport dying would end everybody's feed.
             Effect.catchCause(() => Effect.void)
           ),
           scope
         )
         yield* Effect.yieldNow
-        return { session, tail, scope }
+        // A mirror, not the owner. The session's child scope already tears
+        // this fibre down; a `FiberMap` that owned it would be bound to the
+        // *host's* scope instead and would outlive the session unless someone
+        // remembered to remove it -- which is the leak §29 exists to prevent.
+        // Held only so `pumps` can count what is genuinely live, since the map
+        // drops a fibre when it completes.
+        FiberMap.setUnsafe(pumpFibers, sessionId, fiber)
+        return { session, tail, scope, reason }
       })
     const sessions = yield* Ref.make(
       new Map<AgentProtocol.SessionId, HostedSession>()
@@ -388,8 +566,8 @@ export const make = <Principal>(
               capacity: maxSessions
             })
           }
-          const childScope = yield* Scope.fork(parentScope)
-          const hosted = yield* host(addressable, childScope)
+          const childScope = yield* Scope.fork(sessionScope)
+          const hosted = yield* host(sessionId, addressable, childScope)
           yield* Ref.update(sessions, (all) => new Map(all).set(sessionId, hosted))
           return hosted
         })
@@ -586,7 +764,7 @@ export const make = <Principal>(
             })
           }
 
-          const childScope = yield* Scope.fork(parentScope)
+          const childScope = yield* Scope.fork(sessionScope)
           const acquired = yield* Effect.exit(
             Scope.provide(
               client.createSession(
@@ -629,7 +807,7 @@ export const make = <Principal>(
             })
           }
 
-          const hosted = yield* host(session, childScope)
+          const hosted = yield* host(sessionId, session, childScope)
           yield* Ref.update(sessions, (all) => new Map(all).set(sessionId, hosted))
           return {
             requestId: request.requestId,
@@ -668,10 +846,15 @@ export const make = <Principal>(
         // other create and close on the host. The map no longer holds the
         // entry, so this close is the only one.
         Effect.flatMap((found) =>
-          Effect.as(Scope.close(found.scope, Exit.void), {
-            requestId: request.requestId,
-            closed: true
-          })
+          // Say why before closing, as `releaseAll` does. The pump cannot tell
+          // a close from a shutdown -- both arrive as its scope going away --
+          // and it cannot read it off the cause either: a closing session's
+          // subscription shuts down, which Effect reports as a `Cause.Done`
+          // defect, indistinguishable by shape from a transport that died.
+          Ref.set(found.reason, closedReason).pipe(
+            Effect.andThen(Scope.close(found.scope, Exit.void)),
+            Effect.as({ requestId: request.requestId, closed: true })
+          )
         ),
         // The bucket outlives the session, on purpose and not forever: a retry
         // arriving just after the close still joins this answer, and the
@@ -684,11 +867,22 @@ export const make = <Principal>(
       Effect.gen(function* () {
         const open = Array.from((yield* Ref.get(sessions)).values())
         yield* Ref.set(sessions, new Map())
+        // Say why before closing: each pump reads this on its way out, and a
+        // host shutting down is not the same event as a session being closed
+        // through it. Without this every `SessionUnhosted` at shutdown would
+        // claim `"closed"` and imply something about sessions that are, for a
+        // durable client, still very much alive elsewhere.
+        yield* Effect.forEach(
+          open,
+          ({ reason }) => Ref.set(reason, releasedReason),
+          { discard: true }
+        )
         yield* Effect.forEach(
           open,
           ({ scope }) => Scope.close(scope, Exit.void),
           { discard: true }
         )
+        yield* Scope.close(sessionScope, Exit.void)
       })
     )
     yield* Effect.addFinalizer(() => releaseAll)
@@ -1028,6 +1222,43 @@ export const make = <Principal>(
       )
     })
 
+    /**
+     * Subscribe to everything happening on this host.
+     *
+     * The subscribe and the inventory snapshot are taken **together, under
+     * the registry gate**, and that is what makes "exactly once" exact rather
+     * than merely likely. A session hosted before the subscribe had its
+     * `SessionHosted` published before the subscription existed, so only the
+     * snapshot names it; one hosted after the gate releases is not in the
+     * snapshot and arrives live; and one hosted *between* the two is
+     * impossible, because `host` publishes and updates the registry while
+     * holding this same gate.
+     *
+     * Taking the gate here is not the starvation risk it would be on the
+     * event bus: that permit is taken on every emit, this one only on
+     * host, unhost and attach.
+     */
+    const hostEvents = Effect.fn("AgentSessionHost.hostEvents")(function* (
+      principal: Principal
+    ) {
+      yield* authorize(principal, "hostEvents", Option.none())
+      return Stream.unwrap(
+        registryGate.withPermits(1)(
+          Effect.gen(function* () {
+            const subscription = yield* PubSub.subscribe(hostBus)
+            const attached: AgentProtocol.HostEvent = {
+              _tag: "HostAttached",
+              sessionIds: Array.from((yield* Ref.get(sessions)).keys())
+            }
+            return Stream.concat(
+              Stream.make(attached),
+              Stream.fromSubscription(subscription)
+            )
+          })
+        )
+      )
+    })
+
     return {
       createSession,
       closeSession,
@@ -1045,7 +1276,9 @@ export const make = <Principal>(
       events,
       sessions: listSessions,
       eventLog,
+      hostEvents,
       size: Effect.map(Ref.get(sessions), (all) => all.size),
+      pumps: FiberMap.size(pumpFibers),
       requestBuckets: Effect.map(Ref.get(requests), (all) => all.size),
       maxSessions,
       maxRequestsPerSession: maxRequests

@@ -14,15 +14,19 @@ diagnostics, portability and the workerd bundle pass, and
 
 Two things that number hides, both worth knowing before trusting a red run:
 
-- **The suite is flaky under process pressure on Windows.** Three consecutive
-  full runs on 2026-09-01 gave 0, 2 and 20 failures. Every failure was in a
-  test that spawns a real process — `Sandbox.test.ts`, `SandboxDerive.test.ts`,
-  the MCP stdio pair, `WorkerDurableObject.test.ts` — and the cascade shape was
-  vitest workers dying (`0xC0000142`, Windows' DLL-init failure under
-  exhaustion), which fails whole *files* including pure ones like
-  `Casts.test.ts` and `PublicApi.test.ts`. Those pure files pass in isolation.
-  So a red run here is a resource question first and a regression question
-  second; re-run the named files alone before believing it.
+- ~~The suite is flaky under process pressure on Windows.~~ **Diagnosed
+  2026-09-01: the suite assumes it owns the machine.** Nine consecutive solo
+  runs passed; two run concurrently both failed (6 and 8 files, one losing two
+  files entirely to a worker that died before reporting). `0xC0000142` is
+  machine-global handle exhaustion, and `CLAUDE.md` says other agents work here
+  at the same time, so two concurrent runs are normal rather than misuse.
+  `vitest.config.ts` caps `maxWorkers` at 8: about 29% slower solo, and two
+  concurrent suites drop to one failure each. Eleven files spawn real processes
+  (~247 tests), not the four previously named. Two residual load-sensitive
+  tests are **not** fixed by this and want their own entries:
+  `ClusterMultiNode` (races a real ~15s clock; H7 would move it to
+  `TestClock`) and `DurableStreams`' "linear, not quadratic", which asserts an
+  asymptotic bound by measuring wall time and spawns no processes at all.
 - ~~The count includes work that is not committed.~~ No longer true as of
   2026-09-01: item 27's working-tree changes were committed as `be75b83`.
 
@@ -595,12 +599,49 @@ open, so the next pass does not have to re-derive it.
     command, not a managed background process, and the plan is emphatic that
     `ProcessManager` must not know `AgentSession` exists.
 
-26o. **Host-wide `AgentSessionHost.events`** (`effect-plan-2.txt` §29) — one
-    stream multiplexing every hosted session through `FiberMap`. Per-session
-    `events`, `host.sessions` and the bounded `eventLog` tail all ship; the
-    aggregate does not. 26k's `foreign` counter exists for exactly this
-    consumer, since routing a host-wide stream into per-session projections is
-    where a mis-route would otherwise corrupt an answer silently.
+26o. ~~**Host-wide `AgentSessionHost.events`**~~ (`effect-plan-2.txt` §29) —
+    SHIPPED 2026-09-01. `host.hostEvents(principal)` is one stream carrying
+    `HostAttached` (the inventory, once), `SessionHosted`, `SessionEvent` and
+    `SessionUnhosted`, with `pumps` exposing the live forwarder count so a leak
+    can be named. `examples/host-events.ts` folds it into per-session
+    `SessionProjection`s -- 26k's consumer, and its `foreign` counter is
+    asserted there.
+
+    Five decisions departed from the section's literal text, each because the
+    code said so:
+
+    - **No host-wide sequence, so no outer envelope.** Such a number records
+      which pump fibre the scheduler ran first; making it mean even delivery
+      order needs a host-wide permit on every event, which is the per-session
+      bus's bottleneck one level up. Loss detection, the only thing it buys,
+      `SessionProjection.gap` already gives at finer grain.
+    - **`FiberMap` mirrors the pumps rather than owning them.** `FiberMap.make`
+      binds to the *host's* scope, so an owned pump would outlive its session
+      unless someone remembered to remove it -- the leak §29 exists to prevent.
+      The session's child scope already tears it down; the map is there because
+      its auto-removal makes `size` mean *live*, which `sessions.size` cannot.
+    - **`SessionHosted` publishes before the pump is forked.** The first design
+      gated forwarding on a `Deferred` opened afterwards and deadlocked: exit
+      finalizers run uninterruptibly, so a stream ending inside that window
+      waited on a gate nobody would open. Ordering the publish first gives the
+      same guarantee with nothing that can block.
+    - **`SessionUnhosted` comes from the pump's own exit, and its `reason` from
+      whoever removed the session.** A closing subscription reaches the pump as
+      a `Cause.Done` *defect*, indistinguishable in shape from a transport
+      dying, so classifying from the cause reported `failed` for every ordinary
+      close. Sessions now hang off a host-owned scope, because forked from the
+      ambient one they closed before `releaseAll` could mark them and every
+      shutdown looked like a session ending on its own.
+    - **No `observedClose` flag.** One was written and deleted: closing a
+      session shuts its subscription rather than delivering `SessionClosed` to
+      an attached subscriber, so it was false even for a session closed through
+      that host. A field that is always false reads like evidence.
+
+    Deliberately not built: a host-wide tail or `after` cursor (a cursor into a
+    nondeterministic merge is not a cursor -- `eventLog` stays the finite read,
+    per session); a transport surface, which is `plan-agent-server.md`'s later
+    step and needs a per-connection bound; and any `ServerEvent` merge helper in
+    `src/`, which §30 says is the application's.
 
 26p. **Relay transport** (`plan-relay.txt`) — server and client, peer
     directory, enrollment credentials, durable mailbox over `PersistedQueue`,
