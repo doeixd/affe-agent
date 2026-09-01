@@ -120,6 +120,117 @@ export const prependSystem = <E = never, R = never>(
     )
   )
 
+// ---------------------------------------------------------------------------
+// Prompt caching
+// ---------------------------------------------------------------------------
+
+/**
+ * A provider whose prompt-cache breakpoint this module knows how to write.
+ *
+ * Named as strings rather than imported, because `src/` imports no provider
+ * package -- the same rule that keeps `Model` keyed by a provider *string*.
+ */
+export type CacheProvider = "anthropic" | "openai"
+
+/**
+ * The per-message option each provider reads to mark a reusable prefix.
+ *
+ * Both are namespaced keys in `Prompt`'s `options` record, which is a
+ * `Record<string, Json | null>` with an index signature -- so writing one
+ * needs no provider import, and a provider that does not read a key does not
+ * see it. Verified 2026-09-01: `@effect/ai-openai` reads `options.openai?.*`
+ * field by field, so an `anthropic` key is inert to it, and vice versa.
+ */
+const BREAKPOINTS = {
+  anthropic: { cacheControl: { type: "ephemeral" } },
+  openai: { promptCacheBreakpoint: { mode: "explicit" } }
+  // `satisfies` the options object itself, not `Json`: when a provider
+  // package is in the compilation, its declaration merging types
+  // `SystemMessageOptions.anthropic` as a named property, so a typo in
+  // `cacheControl` is a compile error rather than an option the provider
+  // silently ignores. Indexing the interface by `string` instead was tried
+  // first and checks nothing -- it resolves to the index signature's
+  // `Json | null`, which accepts any shape. Without the package present the
+  // index signature is all there is and these go unchecked; that is the
+  // price of `src/` importing no provider, and it is why the values are
+  // pinned by test rather than by type alone.
+} satisfies Prompt.SystemMessageOptions
+
+/**
+ * Marks the end of the stable prompt prefix, so a provider can cache it.
+ *
+ * A long conversation re-sends its instructions and tool definitions on every
+ * single turn, and both providers will bill that prefix at a reduced rate if
+ * told where it ends. For an agent with large instructions and a large toolkit
+ * -- `Presets.coding`, and both reference agents -- that is the largest cost
+ * lever available, and it is one option on one message.
+ *
+ * **Where the breakpoint goes, and why it is not configurable.** It marks the
+ * last message of the *leading run of system messages*: the agent's
+ * instructions as seeded into canonical history, plus anything
+ * `prependSystem` put in front. That run is the part of a prompt which is
+ * byte-identical from one turn to the next, which is the only thing a prefix
+ * cache can reuse. `appendSystem` adds *after* the conversation, so dynamic
+ * per-turn instructions do not disturb it.
+ *
+ * **The compaction interaction, which is the part worth knowing.** A prefix
+ * cache is only a saving while the bytes beneath the breakpoint are
+ * unchanged, and compaction rewrites history. Keeping the breakpoint at the
+ * head -- above everything a compaction can fold -- is what makes it survive
+ * compaction instead of being invalidated by it. A breakpoint placed lower,
+ * at the end of the conversation prefix, would cache more per turn and be
+ * thrown away by the next compaction; that trade is real, but it is not the
+ * default, and moving the breakpoint down is deliberately not an option here.
+ *
+ * **`providers` defaults to Anthropic alone, and the asymmetry is not
+ * favouritism.** An unread namespaced key is inert, so writing Anthropic's
+ * costs a caller on another provider nothing. OpenAI's is not inert: its own
+ * documentation says `promptCacheBreakpoint` *"requires GPT-5.6 or later"*
+ * and that "OpenAI may reject requests that use this option with earlier
+ * models". A default that can turn a working request into a rejected one is
+ * not a default -- so OpenAI's is opt-in, by naming it.
+ *
+ * ```ts
+ * ContextTransform.cacheBreakpoint()
+ * ContextTransform.cacheBreakpoint({ providers: ["anthropic", "openai"] })
+ * ```
+ *
+ * Canonical history is untouched, like every transform: the breakpoint exists
+ * only in the prompt handed to one model call, so it never reaches a
+ * snapshot, an event, or the durable payload.
+ */
+export const cacheBreakpoint = (options?: {
+  readonly providers?: ReadonlyArray<CacheProvider> | undefined
+}): ContextTransform => {
+  const providers = options?.providers ?? ["anthropic"]
+  return make((context) => {
+    const messages = context.prompt.content
+    // The leading run of system messages: the stable prefix, and nothing else.
+    let last = -1
+    for (let index = 0; index < messages.length; index++) {
+      if (messages[index]!.role !== "system") break
+      last = index
+    }
+    if (last === -1 || providers.length === 0) {
+      return Effect.succeed(context.prompt)
+    }
+    const marked = messages.map((message, index) =>
+      index === last
+        ? Prompt.systemMessage({
+            content: (message as Prompt.SystemMessage).content,
+            options: {
+              ...message.options,
+              ...Object.fromEntries(
+                providers.map((provider) => [provider, BREAKPOINTS[provider]])
+              )
+            }
+          })
+        : message
+    )
+    return Effect.succeed(Prompt.fromMessages(marked))
+  })
+}
+
 /**
  * Left-to-right composition.
  *

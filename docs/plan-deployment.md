@@ -4,11 +4,34 @@ Written 2026-08-27. Where an agent built on this package can actually run, how a
 public server delegates work to it, and why the answer is entry points and
 Layers rather than a deployment system.
 
-**Status: in progress.** Sequence step 1 landed 2026-08-27. `apps/worker` is
-typechecked without Node types, checked by the portability scanner, and bundled
-for the browser/workerd resolution path by `verify:workerd` in `npm run check`.
-It needed no portability exception. No real Worker or Durable Object host exists
-yet; steps 2 onward remain design.
+**Status: in progress — §10 steps 1, 2, 3 and 5 have landed; 4, 6, 7 and 8
+remain.** Updated 2026-09-01.
+
+- **Step 1** (2026-08-27). The portable core typechecks for `workerd` without
+  Node types, passes the portability scanner, and bundles for the
+  browser/workerd resolution path by `verify:workerd` in `npm run check`. It
+  needed no portability exception.
+- **Steps 2–3** (2026-08-30). `apps/worker` is a **real Worker and Durable
+  Object host**, not a probe: one DO per session id, the whole `/http` surface
+  over `HttpRouter.toWebHandler`, history persisted to DO SQLite per completed
+  submission, events journaled to the ordinary `DeliveryLog`, and
+  `events?after=N` gapless across *the runtime's death* — a stronger event than
+  hibernation. Proven on real workerd through miniflare by
+  `test/WorkerDurableObject.test.ts`.
+- **Step 5** (2026-08-30). `examples/deploy-cloudflare/` holds the Alchemy
+  stack and a README that states the cost. Typechecked in CI; never run against
+  a real account.
+- **§3.2 item 2 is decided by measurement, not argument**: Effect Workflow does
+  not progress past its first activity on workerd, so a Durable Object *is* the
+  durable execution and `/durable` stays on hosts whose engine runs. This was
+  §11's "largest open design question" and it is now closed.
+
+What is still open, in the order it blocks things: a **real model** through the
+stack (the checked-in entry answers with the scripted test model, so CI can run
+it without a key), a **remote sandbox provider** (step 4 — the `Sandbox.fromExec`
+seam landed 2026-08-30, so this is now an account away rather than a seam away),
+the **mixed gateway** (step 6), **Rivet** (step 7) and **relay** (step 8). §9
+tracks each as a condition rather than a promise.
 
 ## 1. The three targets are one shape
 
@@ -60,6 +83,13 @@ already loads on `workerd`.
    Worker needs a remote one — Cloudflare Containers, or E2B/Daytona. This is
    exactly [plan-integrations.md](./plan-integrations.md) §6.2's `fromExec`:
    one function, and the whole `Sandbox` surface derives.
+
+   **Half-resolved 2026-08-30.** `Sandbox.fromExec` / `fromOperations` ship
+   (`src/sandbox/Sandbox.ts`), with `SandboxConformance` reporting the
+   capabilities a derived provider actually has rather than the ones it claims.
+   So the *seam* exists and a remote sandbox is now one exec function away.
+   What remains is a **provider**, which needs an account (Containers, E2B,
+   Daytona) rather than a design. Until then the Worker has no shell tool.
 2. **`/durable` needs a `WorkflowEngine`.** *Decided 2026-08-30, by
    measurement rather than argument.* `SingleRunner` over
    `@effect/sql-sqlite-do` builds and migrates inside a DO (after two real
@@ -284,18 +314,28 @@ is reached has put the decision in the wrong place.
 
 Four things, none of them a deployment system.
 
-1. **A Worker entry point** (`apps/worker`), using
-   `HttpEffect.toWebHandlerLayer` over `/http`, with `AgentSessionHost` inside a
-   DO class and the Worker routing by session id.
+1. ✅ **A Worker entry point** (`apps/worker`) — landed 2026-08-30, with
+   `HttpRouter.toWebHandler` over `/http`, `AgentSessionHost` inside a DO class
+   and the Worker routing by session id. (`toWebHandler`, not
+   `HttpEffect.toWebHandlerLayer` as written here: the router's own adapter was
+   the one that fit.)
 2. **Store layers for the platform** — D1 via `@effect/sql-d1`, and a DO-storage
-   `KeyValueStore` for `/tree`'s `NodeStore`.
+   `KeyValueStore` for `/tree`'s `NodeStore`. *Not built.* `apps/worker` uses DO
+   SQLite through `@effect/sql-sqlite-do` directly, which was enough for
+   history and the delivery log; D1 and the `NodeStore` are still open. Prior
+   art exists — `effect-cf` has `D1`, `Kv`, `Storage` and `Sqlite` modules
+   (read 2026-09-01, [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)
+   §5.3) — which changes what building these would cost, not whether they are
+   needed. They still block nothing.
 3. **A hostless sandbox provider** via `fromExec`, against Cloudflare Containers
-   first because Alchemy provisions them in the same stack.
+   first because Alchemy provisions them in the same stack. *The seam landed
+   2026-08-30 (§3.2 item 1); the provider has not.*
 4. **A Rivet `InputChannel.Factory` and actor host**, portable across
-   everything Rivet runs on.
+   everything Rivet runs on. *Not started.*
 
 5. **A relay `RpcClient.Protocol`**, if and when §6.3's topology is wanted —
    the transport, not an agent concept. `AgentRpc` runs unchanged on both ends.
+   *Not started; see `remaining-work.md` item 26.*
 
 Plus the example Alchemy stack from §5.2. Note what is **not** on this list:
 nothing for §6.2. A gateway fronting reachable agents ships today.
@@ -311,8 +351,18 @@ deployment.
 
 1. **The library never depends on a deployment tool.** No `alchemy` import in
    `src/`. Layers meet infrastructure in the application.
+
+   **Widened 2026-09-01** by the `effect-cf` question: the rule is not about
+   *deployment tools* specifically but about **any dependency whose presence
+   assumes a host** — a runtime binding library is as coupling as an IaC tool,
+   and being written in Effect earns no exemption. See
+   [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)
+   §3 and §7.
 2. **Host coupling lives behind its own entry point**, as `sandbox/local.ts`
-   does, and is listed in `verify-portability.mjs`'s `HOST_MODULES`.
+   does, and is listed in `verify-portability.mjs`'s `HOST_MODULES`. Note that
+   the scanner's host-package *pattern* is narrower than this invariant — it
+   misses `effect-cf`, `@cloudflare/*` and `@effect/sql-sqlite-do` — which is
+   `remaining-work.md` item 31, and is a defect rather than a design choice.
 3. **Adapters do not learn about platforms.** A DO or an actor hosts an
    `AgentSessionHost`; `/http`, `/mcp` and the rest stay unchanged. If a
    transport needs to know it is inside a DO, the seam is wrong.
@@ -344,14 +394,23 @@ deployment.
       (2026-08-30). Sequences continue across lives because the worker
       shifts each life's events by the journal's last sequence.
 - [ ] A shell tool runs inside that Worker through a `fromExec` provider, and
-      passes `SandboxConformance`.
-- [ ] Either the Worker entry needs no portability exception, **or** the
+      passes `SandboxConformance`. *(The `fromExec` half is done and the suite
+      exists; what is missing is a remote provider with an account behind it —
+      §3.2 item 1.)*
+- [x] Either the Worker entry needs no portability exception, **or** the
       exceptions it needs are written down as findings against the guardrail.
+      **It needed none** (2026-08-27, restated 2026-08-30 once the entry became
+      a real host): `HOST_MODULES` in `verify-portability.mjs` is still exactly
+      `sandbox/local.ts` and `blob/fs.ts`. The guardrail was built for this
+      moment and it did not have to be loosened for it.
 - [ ] A Rivet actor hosts a session with `InputChannel` backed by its queue, and
       steering arriving mid-run reaches the model — the same assertion
       `/cluster` makes.
-- [ ] `examples/deploy-cloudflare/alchemy.run.ts` deploys the above from a clean
-      account, and its README states the cost.
+- [~] `examples/deploy-cloudflare/alchemy.run.ts` deploys the above from a clean
+      account, and its README states the cost. **The stack and the cost note are
+      written** (2026-08-30) and the stack typechecks in CI; **it has never been
+      run against a real account**, so the deploy half is unproven and the cost
+      figure is reasoned rather than observed.
 - [ ] One `AgentServer` serves a DO-backed mount **and** an HTTP-backed remote
       mount, and a client cannot tell them apart from the outside — the §6.2
       claim, exercised rather than asserted.
@@ -366,12 +425,21 @@ deployment.
 1. ✅ **Compile the portable core for `workerd`.** No entry point, no deployment —
    just a bundle. This is the cheapest possible test of the guardrail and it
    either passes or produces the findings that shape everything after it.
-2. **Worker entry point + DO host**, in-memory stores, no sandbox. Prove a
-   submission end to end.
-3. **D1 and DO-storage layers**, then the hibernation resumption assertion.
+2. ✅ **Worker entry point + DO host**, in-memory stores, no sandbox. Prove a
+   submission end to end. *(2026-08-30 — and the stores did not stay in memory:
+   history went to DO SQLite in the same pass, because a DO that forgets its
+   conversation proves nothing about a DO.)*
+3. ✅ **D1 and DO-storage layers**, then the hibernation resumption assertion.
+   *(2026-08-30, in the form that mattered: the resumption assertion holds
+   across the runtime's death, over DO SQLite. **D1 itself was not needed and
+   is not built** — see §7 item 2. This step landed by being reduced, not by
+   being completed as written.)*
 4. **`fromExec` against Cloudflare Containers** — depends on
-   plan-integrations.md steps 1–2 existing first.
-5. **The Alchemy example stack**, once there is something worth provisioning.
+   plan-integrations.md steps 1–2 existing first. *The seam exists; the
+   provider does not.*
+5. ✅ **The Alchemy example stack**, once there is something worth provisioning.
+   *(2026-08-30, `examples/deploy-cloudflare/`. Written and typechecked, never
+   deployed.)*
 6. **The mixed gateway** (§6.2 + §6.1): one server, a DO-backed mount beside a
    remote-backed one. Mostly an assembly and a test, since `agentClientLayer`
    already exists — which is exactly why it is worth doing early as a check on
@@ -385,11 +453,22 @@ Step 1 is worth doing on its own even if nothing else follows.
 
 ## 11. Notes and open questions
 
-- **`/durable` versus the platform.** Both Durable Objects and Rivet actors
-  offer durability directly. Running Effect Workflow *inside* one may be
-  redundant, or may be the right way to get replay semantics the platform does
-  not give. This is the largest open design question here and it deserves its
-  own answer rather than a default.
+- **`/durable` versus the platform — ANSWERED 2026-08-30, for Cloudflare.**
+  This was written as "the largest open design question here", and it was
+  settled by measurement rather than by picking a default. `SingleRunner` over
+  `@effect/sql-sqlite-do` *builds and migrates* inside a DO — after two real
+  findings, both now written up in `docs/upstream/`: the DO driver needs the
+  whole `DurableObjectStorage` rather than just `.sql`, and the engine's own
+  sqlite migration nests a transaction the DO driver correctly refuses. But a
+  bare two-activity workflow then **times out on workerd** where the identical
+  program finishes in ~140ms on Node; the suspend/resume machinery does not
+  progress there. So on Cloudflare the platform's durability is used and
+  `/durable` stays on hosts whose engine runs. Note the shape of the answer:
+  *not* "Workflow is redundant inside a DO" — it may well be the right way to
+  get replay semantics a DO does not give, and if the upstream stall is fixed
+  this is worth re-opening. What is decided is which one runs there today.
+  **The Rivet half of the question is untouched**, because nothing has been
+  built against Rivet yet.
 - **Transcript growth is the unglamorous blocker.** Compaction changes the
   projection; canonical history keeps growing, and DO storage is finite. Export
   plus eviction is the missing piece, and it will surface on the first
@@ -397,6 +476,18 @@ Step 1 is worth doing on its own even if nothing else follows.
 - **Hibernation makes `DeliveryLog` load-bearing.** On Node a dropped connection
   is rare; on a hibernating DO it is the normal case, several times an hour. Any
   looseness in resumption becomes a daily bug.
+
+  *Added 2026-09-01:* that is the recovery path, and it works — resumption is
+  tested across the runtime's death. What we do **not** use is the platform's
+  way of needing it less often: Cloudflare's **Hibernatable WebSockets** keep
+  sockets connected while the DO itself is evicted from memory. Verified: there
+  is no hibernation handling anywhere in `src/` or `apps/`. Before adopting it
+  the question to answer is ours rather than the API's — *does a hibernatable
+  socket carrying `AgentRpc` preserve the resumption contract across eviction,
+  or merely relocate the gap?* — because a socket that survives eviction still
+  has a cursor problem the moment it does not.
+  [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)
+  §5.2 has the reasoning and the prior art to read first.
 - **Rivet is a smaller bet than it looks**, because RivetKit runs on Node too.
   The adapter can be developed and tested locally without adopting a platform.
 - **Alchemy is moving fast** — pushed the day this was written, still on beta

@@ -2,6 +2,7 @@ import { Layer } from "effect"
 import type { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as AgentLoop from "../AgentLoop.js"
+import * as ContextTransform from "../ContextTransform.js"
 import * as Permission from "../Permission.js"
 import * as ToolExecution from "../ToolExecutionPublic.js"
 import * as AgentClient from "../client/AgentClient.js"
@@ -120,6 +121,11 @@ export const coding = <
       instructions: CODING_INSTRUCTIONS,
       permission: codingPolicy,
       loop: AgentLoop.bounded(10),
+      // A coding agent re-sends large instructions and a large toolkit every
+      // turn, so the prefix cache is the biggest saving available to it and
+      // the one a caller is least likely to think of. Anthropic-only by
+      // default -- see `cacheBreakpoint`, where the asymmetry is argued.
+      contextTransform: ContextTransform.cacheBreakpoint(),
       // The caller's config last: every default above is one a caller can
       // simply set, and none of them is behaviour this module owns. That
       // is "compose, never extend" in code.

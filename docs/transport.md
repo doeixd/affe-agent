@@ -161,6 +161,18 @@ with `RpcSerialization.layerNdjson`; `layerJson` and MsgPack are equally
 valid, because nothing here depends on the serialization -- only on the
 schemas.
 
+**How well tested is that agnosticism claim?** Honestly: every protocol it has
+been demonstrated against is one we chose and wired ourselves. The socket path
+is `Socket.Socket` -> `RpcClient.makeProtocolSocket()`
+(`test/AgentRpc.test.ts`), so *any* third-party `Socket` implementation should
+drop in with no change here -- and one exists to try it with
+(`effect-webtransport` returns Effect's own `Socket.Socket`). That would be the
+first independent test of this paragraph rather than a self-consistent one; it
+is ranked, deliberately last, as `remaining-work.md` item 33 and
+[plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md) §4.
+One constraint if anyone tries it: a bare byte stream needs self-delimiting
+serialization, so NDJSON or MsgPack, never `layerJson`.
+
 Use RPC when both ends are Effect. It is the reference the other transports
 are checked against, and the only one that carries *every* operation with no
 loss.

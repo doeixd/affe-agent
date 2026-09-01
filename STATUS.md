@@ -1,6 +1,6 @@
 # Status — what is true now
 
-Last regenerated 2026-08-30. This is the short document: what ships, what
+Last regenerated 2026-09-01. This is the short document: what ships, what
 holds it there, and what is deliberately not done. The chronology -- every
 finding, every falsification, every "what the second subscriber found" --
 moved to [docs/status-history.md](./docs/status-history.md) and keeps growing
@@ -15,17 +15,26 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1580 passing in 139 files (`McpServerConformance` runs separately while under edit) |
+| tests | `npm test` | 1820 passing in 168 files, `McpServerConformance` included (it no longer runs separately) |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
-| portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds |
+| portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. **Narrower than it reads** — the host-package pattern is an allowlist of known-bad and misses `effect-cf`, `@cloudflare/*` and `@effect/sql-sqlite-do` (`remaining-work.md` item 31). None are in `src/`, so the result is honest today; the check is not yet what the claim says. |
 | package | `npm run verify:package` | every published entry point imports from the packed tarball |
 | durability | `npm run verify:durability` | D1–D7 bite when broken; D4b survives by construction |
 | smoke | `smoke:ref-coding`, `smoke:cli`, `smoke:tui` | the reference coding agent, the CLI and the TUI run end to end |
 
-Built on **Effect v4 (`effect@4.0.0-rc.111`)**; the AI modules are the in-tree
+Built on **Effect v4 (`effect@4.0.0-rc.112`)**; the AI modules are the in-tree
 `effect/unstable/ai`. Node 22.5+ only for the host entries.
+
+One caveat on the tests gate, measured 2026-09-01: **the suite is flaky under
+process pressure on Windows.** Three consecutive full runs gave 0, 2 and 20
+failures, every one of them in a test that spawns a real process (`Sandbox`,
+`SandboxDerive`, the MCP stdio pair, `WorkerDurableObject`). The failure mode
+is a vitest worker dying under resource exhaustion, which reports the whole
+*file* as failed — so pure files get dragged down with it and a red run looks
+worse than it is. Re-run the named files alone before reading a failure as a
+regression. Not yet diagnosed further; recorded rather than fixed.
 
 ## The two properties everything rests on
 

@@ -16,9 +16,12 @@ transforms, steering/follow-ups, interruption, model streaming, elicitation
 **Transports & durability** — `/client`, `/rpc`, `/http`, `/ag-ui`, `/a2a`,
 `/mcp` (+v1/v2), `/durable`, `/cluster`, `/durable-streams`, `/openai`.
 
-**Higher-level packages** — `/sandbox` (+local), `/coding`, `/subagent`,
-`/state`, `/skills`, `/memory`, `/evals`, `/observability`, `/data`, `/connectors`,
-`/hooks`, `/scheduling`, `/budget`, `/plugins` (load an Agent Plugins package over /skills + /mcp), and an
+**Higher-level packages** — `/sandbox` (+local), `/coding`, `/pi`, `/shell`,
+`/tool-source`, `/code` (+`/code/callscript`), `/subagent`, `/state`, `/skills`,
+`/memory`, `/evals`, `/observability`, `/data`, `/connectors` (+slack),
+`/hooks`, `/scheduling`, `/budget`, `/blob` (+fs), `/export`, `/compaction`,
+`/redaction`, `/tree`, `/web` (+brave, http), `/presets`,
+`/plugins` (load an Agent Plugins package over /skills + /mcp), and an
 end-to-end integration proving they compose.
 
 ### Issue #4 priority tier (P0/P1) — shipped
