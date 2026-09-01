@@ -20,6 +20,21 @@ that says what is actually next.
 
 | document | what it is |
 | --- | --- |
+| [guide-sessions.md](./guide-sessions.md) | What a local session does: steering, follow-ups, interruption, streaming, elicitation, events, errors, authoring, snapshots, testing. |
+| [guide-permissions.md](./guide-permissions.md) | The `Permission` seam: allow / ask / deny, rules, exceptions, remembered grants. |
+| [guide-sandbox.md](./guide-sandbox.md) | `/sandbox`, the coding toolkits, the `shell` dialect, and the Claude Code / OpenCode bridges. |
+| [guide-transports.md](./guide-transports.md) | `AgentClient` and every adapter over it: HTTP, RPC, AG-UI, OpenAI-compatible, A2A, MCP. |
+| [guide-durable.md](./guide-durable.md) | `/durable`, `/cluster`, the durable client, Durable Streams. |
+| [guide-batteries.md](./guide-batteries.md) | Every battery: subagents, scheduling, hooks, connectors, data, observability, evals, memory, skills, state, compaction, plugins. |
+| [limits.md](./limits.md) | Every bound a user can hit, with its default. |
+| [examples.md](./examples.md) | Every example, one line each. |
+
+These guides were the README's long sections until 2026-09-01; the README now
+holds only the install, quickstart, seam map, package map and stability notes.
+
+
+| document | what it is |
+| --- | --- |
 | [MODULES.md](./MODULES.md) | Every public module — what, why, and what it composes with. The answer to "which module do I need for X". |
 | [remaining-work.md](./remaining-work.md) | The ranking, easiest first, of what is actually left. |
 | [transport.md](./transport.md) | Reference for how a session crosses a process boundary: the client seam and every transport over it. |
