@@ -10,7 +10,18 @@ import {
   type Task,
   type TaskStatusUpdateEvent
 } from "@a2a-js/sdk"
-import { Clock, Deferred, Duration, Effect, Option, Queue, Ref, Schema, Stream } from "effect"
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Option,
+  Queue,
+  Ref,
+  Schedule,
+  Schema,
+  Stream
+} from "effect"
 import { Sse } from "effect/unstable/encoding"
 import {
   HttpBody,
@@ -62,6 +73,22 @@ export interface Options<R = never> {
   /** Where `opencode serve` is listening. */
   readonly baseUrl: string
   /**
+   * Which of OpenCode's two HTTP APIs to speak. Default `v1`.
+   *
+   * Not a path change. v1's prompt returns the finished assistant message; v2's
+   * *admits* it (`POST /api/session/{id}/prompt` -> `SessionInputAdmitted`) and
+   * the run is followed on the event bus until `POST .../wait` returns. The
+   * permission frames differ in field names, and v2's reply carries a `message`
+   * -- so on v2 a policy's reason reaches the delegated agent, which v1 has no
+   * field for.
+   *
+   * Which one a server speaks is a property of its build, not its
+   * configuration: 1.18.23 and the `beta` channel expose `/api/...` but fail it
+   * (`no such table: session_input`), while the `dev` channel serves it. Left at
+   * `v1` because that is what a released server actually answers.
+   */
+  readonly api?: "v1" | "v2" | undefined
+  /**
    * Headers sent with every request, including the event subscription.
    *
    * `opencode serve` warns `OPENCODE_SERVER_PASSWORD is not set; server is
@@ -97,6 +124,24 @@ export interface Options<R = never> {
    * has started, and continuing without the bus is better than not running.
    */
   readonly subscribeTimeout?: Duration.Input | undefined
+  /**
+   * v2 only: how long to wait for the server's agent loop to become busy
+   * before waiting for it to go idle again. Default 30 seconds.
+   *
+   * `wait` means "wait for idle", and a loop that has not started is idle, so
+   * the two waits have to happen in that order. This bounds the first one.
+   */
+  readonly startTimeout?: Duration.Input | undefined
+  /**
+   * v2 only: how often to ask whether the answer has landed. Default 300ms.
+   *
+   * Polling is not the first choice -- it is what is left when the endpoint
+   * that exists for this is unimplemented. The whole run is bounded by
+   * `timeout`.
+   */
+  readonly pollInterval?: Duration.Input | undefined
+  /** The whole delegated run's bound. Default 10 minutes. */
+  readonly timeout?: Duration.Input | undefined
   /** How many finished tasks stay fetchable by `task(id)`. Default 256. */
   readonly historyLimit?: number | undefined
   /** Name and version reported on the generated Agent Card. */
@@ -148,6 +193,95 @@ const BusEvent = Schema.Struct({
   type: Schema.optional(Schema.String),
   properties: Schema.optional(Schema.Unknown)
 })
+
+/** v2 wraps every response in `data`, and its session create is no exception. */
+const SessionV2 = Schema.Struct({
+  data: Schema.Struct({ id: Schema.String })
+})
+
+/** `POST /api/session/{id}/prompt` answers with the admission, not the answer. */
+const AdmittedV2 = Schema.Struct({
+  data: Schema.Struct({
+    id: Schema.optional(Schema.String),
+    /**
+     * When the server admitted *this* prompt.
+     *
+     * The floor for the answer: the message projection is a conversation, so
+     * the newest completed assistant message is the *previous* run's until this
+     * one finishes. Without this a second delegation returned the first one's
+     * answer -- observed live, 2026-09-01.
+     */
+    timeCreated: Schema.optional(Schema.Number)
+  })
+})
+
+/**
+ * A v2 bus frame.
+ *
+ * The envelope carries `data` where v1 carries `properties` -- observed against
+ * a `dev` server on 2026-09-01, along with the run's whole event sequence:
+ * `session.next.prompt.admitted`, `.prompted`, `.step.started`,
+ * `.text.started` / `.text.delta` / `.text.ended`, `.step.ended`.
+ */
+const BusEventV2 = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  data: Schema.optional(Schema.Unknown)
+})
+
+/** `session.next.text.ended`, which carries the whole block, not a delta. */
+const TextEndedV2 = Schema.Struct({
+  sessionID: Schema.String,
+  text: Schema.optional(Schema.String)
+})
+
+/** `session.next.step.failed`, the reason a run produced no answer. */
+const StepFailedV2 = Schema.Struct({
+  sessionID: Schema.String,
+  error: Schema.optional(Schema.Struct({
+    type: Schema.optional(Schema.String),
+    message: Schema.optional(Schema.String)
+  }))
+})
+
+/** `permission.v2.asked`: `action` and `resources` where v1 says `permission` and `patterns`. */
+const PermissionAskedV2 = Schema.Struct({
+  id: Schema.String,
+  sessionID: Schema.String,
+  action: Schema.String,
+  resources: Schema.optional(Schema.Array(Schema.String)),
+  metadata: Schema.optional(Schema.Unknown)
+})
+
+/**
+ * `GET /api/session/{id}/message`, which is projected state rather than a
+ * stream -- so reading the answer from it cannot race the bus.
+ *
+ * `time.completed` is the marker that the assistant has finished; an assistant
+ * message without it is still being written.
+ */
+const MessagesV2 = Schema.Struct({
+  data: Schema.Array(Schema.Struct({
+    id: Schema.optional(Schema.String),
+    type: Schema.optional(Schema.String),
+    time: Schema.optional(Schema.Struct({
+      created: Schema.optional(Schema.Number),
+      completed: Schema.optional(Schema.Number)
+    })),
+    content: Schema.optional(Schema.Array(Schema.Struct({
+      type: Schema.optional(Schema.String),
+      text: Schema.optional(Schema.String)
+    })))
+  }))
+})
+
+const decodeMessagesV2 = Schema.decodeUnknownOption(MessagesV2)
+
+const decodeSessionV2 = Schema.decodeUnknownOption(SessionV2)
+const decodeAdmittedV2 = Schema.decodeUnknownOption(AdmittedV2)
+const decodeEventV2 = Schema.decodeUnknownOption(BusEventV2)
+const decodeTextEndedV2 = Schema.decodeUnknownOption(TextEndedV2)
+const decodeStepFailedV2 = Schema.decodeUnknownOption(StepFailedV2)
+const decodeAskedV2 = Schema.decodeUnknownOption(PermissionAskedV2)
 
 const decodeSession = Schema.decodeUnknownOption(Session)
 const decodePrompt = Schema.decodeUnknownOption(PromptResponse)
@@ -218,6 +352,10 @@ export const defaultProjection = (
 type Interesting =
   | { readonly _tag: "Permission"; readonly asked: PermissionAsked }
   | { readonly _tag: "Text"; readonly text: string }
+  /** v2 only: the run failed, and this is what it said. */
+  | { readonly _tag: "Failed"; readonly reason: string }
+  /** v2 only: the agent loop is now busy on our behalf. See `awaitIdle`. */
+  | { readonly _tag: "Started" }
 
 /**
  * One server-sent frame, read for the two things a bridge needs.
@@ -270,6 +408,68 @@ export const readEvent = (
       ? Option.some({ _tag: "Text", text: part.value })
       : Option.none()
   }
+  return Option.none()
+}
+
+/**
+ * One v2 frame, read for the three things a bridge needs.
+ *
+ * A `permission.v2.asked` is normalised into v1's shape -- `action` becomes
+ * `permission`, `resources` becomes `patterns` -- so one projection serves both
+ * protocols and a policy cannot tell which one answered it. That is the same
+ * reason the bridge exists at all.
+ */
+export const readEventV2 = (
+  data: string,
+  sessionId: string
+): Option.Option<Interesting> => {
+  let json: unknown
+  try {
+    json = JSON.parse(data)
+  } catch {
+    return Option.none()
+  }
+  const decoded = decodeEventV2(json)
+  if (Option.isNone(decoded)) return Option.none()
+  const value = decoded.value
+  if (value.type === "permission.v2.asked") {
+    const asked = decodeAskedV2(value.data)
+    if (Option.isNone(asked) || asked.value.sessionID !== sessionId) return Option.none()
+    return Option.some({
+      _tag: "Permission",
+      asked: {
+        id: asked.value.id,
+        sessionID: asked.value.sessionID,
+        permission: asked.value.action,
+        ...(asked.value.resources === undefined ? {} : { patterns: asked.value.resources }),
+        ...(asked.value.metadata === undefined ? {} : { metadata: asked.value.metadata })
+      }
+    })
+  }
+  if (value.type === "session.next.text.ended") {
+    const ended = decodeTextEndedV2(value.data)
+    return Option.isSome(ended) && ended.value.sessionID === sessionId &&
+        ended.value.text !== undefined && ended.value.text.length > 0
+      ? Option.some({ _tag: "Text", text: ended.value.text })
+      : Option.none()
+  }
+  if (value.type === "session.next.step.started") {
+    const started = decodeTextEndedV2(value.data)
+    return Option.isSome(started) && started.value.sessionID === sessionId
+      ? Option.some({ _tag: "Started" })
+      : Option.none()
+  }
+  if (value.type === "session.next.step.failed") {
+    const failed = decodeStepFailedV2(value.data)
+    return Option.isSome(failed) && failed.value.sessionID === sessionId
+      ? Option.some({
+        _tag: "Failed",
+        reason: failed.value.error?.message ?? failed.value.error?.type ?? "the step failed"
+      })
+      : Option.none()
+  }
+  // Everything else on the bus -- the deltas, the prompt echoed back, plugin
+  // and catalog chatter -- is ignored rather than refused.
   return Option.none()
 }
 
@@ -397,7 +597,16 @@ export const remote = <R = never>(
   options: Options<R>
 ): Effect.Effect<Bridge, never, HttpClient.HttpClient | R> =>
   Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient
+    /**
+     * Status is checked, which it was not.
+     *
+     * `POST /api/session/{id}/wait` answers `503 "Session wait is not available
+     * yet"` on a `dev` server -- the endpoint is documented and unimplemented.
+     * Without this filter its body decoded as ordinary JSON, the bridge read it
+     * as "the run is over", and delegated tasks completed with an empty answer.
+     * Observed 2026-09-01.
+     */
+    const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
     const services = yield* Effect.context<R>()
     const card = cardFor(options)
     const base = options.baseUrl.replace(/\/+$/, "")
@@ -422,6 +631,9 @@ export const remote = <R = never>(
      */
     const cancelled = yield* Ref.make(new Set<string>())
 
+    const v2 = options.api === "v2"
+    const eventPath = v2 ? "/api/event" : "/event"
+
     const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString())
 
     const transport = (detail: string) => new AgentA2ATransportError({ detail })
@@ -433,6 +645,11 @@ export const remote = <R = never>(
         Effect.flatMap((response) => response.json),
         Effect.mapError((error) => transport(String(error)))
       )
+
+    const get = (path: string) =>
+      send(HttpClientRequest.get(`${base}${path}`, {
+        headers: { accept: "application/json", ...options.headers }
+      }))
 
     const post = (path: string, body: unknown) =>
       send(HttpClientRequest.post(`${base}${path}`, {
@@ -478,19 +695,28 @@ export const remote = <R = never>(
           const known = (yield* Ref.get(sessions)).get(contextId)
           if (known !== undefined) return known
         }
-        const created = decodeSession(yield* post("/session", {
-          title: contextId.length > 0 ? contextId : "delegated task"
-        }))
-        if (Option.isNone(created)) {
+        const answer = yield* post(v2 ? "/api/session" : "/session", v2
+          ? {
+            ...(options.agent === undefined ? {} : { agent: options.agent }),
+            ...(options.model === undefined ? {} : {
+              model: { providerID: options.model.providerID, id: options.model.modelID }
+            })
+          }
+          : { title: contextId.length > 0 ? contextId : "delegated task" })
+        // v2 wraps its answer in `data`; v1 returns the session itself.
+        const id = v2
+          ? Option.map(decodeSessionV2(answer), (session) => session.data.id)
+          : Option.map(decodeSession(answer), (session) => session.id)
+        if (Option.isNone(id)) {
           return yield* new AgentA2ARemoteError({
             code: "BAD_RESULT",
             detail: "the server's session did not carry an id"
           })
         }
         if (contextId.length > 0) {
-          yield* Ref.update(sessions, (all) => new Map(all).set(contextId, created.value.id))
+          yield* Ref.update(sessions, (all) => new Map(all).set(contextId, id.value))
         }
-        return created.value.id
+        return id.value
       })
 
     // --- permissions -------------------------------------------------------
@@ -512,9 +738,18 @@ export const remote = <R = never>(
           // approval that the delegated runtime itself remembers, so it stops
           // asking. Our policy remembered it too -- both halves of "always"
           // land, which is the tighter integration the plan predicted.
-          post(`/session/${asked.sessionID}/permissions/${asked.id}`, {
-            response: verdict.allow ? (verdict.remember ? "always" : "once") : "reject"
-          })
+          //
+          // v2 adds a fourth thing: a `message`, so the *reason* a policy
+          // refused reaches the delegated agent instead of a bare refusal it
+          // has to guess about.
+          v2
+            ? post(`/api/session/${asked.sessionID}/permission/${asked.id}/reply`, {
+              reply: verdict.allow ? (verdict.remember ? "always" : "once") : "reject",
+              ...(verdict.reason === undefined ? {} : { message: verdict.reason })
+            })
+            : post(`/session/${asked.sessionID}/permissions/${asked.id}`, {
+              response: verdict.allow ? (verdict.remember ? "always" : "once") : "reject"
+            })
         ),
         // A failure to *deliver* the answer must not fail the delegated run:
         // the server will keep waiting, and its own timeout is a better outcome
@@ -531,7 +766,7 @@ export const remote = <R = never>(
       ownMessageId: string
     ) =>
       HttpClientResponse.stream(
-        client.execute(HttpClientRequest.get(`${base}/event`, {
+        client.execute(HttpClientRequest.get(`${base}${eventPath}`, {
           headers: { accept: "text/event-stream", ...options.headers }
         }))
       ).pipe(
@@ -544,7 +779,9 @@ export const remote = <R = never>(
           Effect.as(Deferred.succeed(connected, undefined), event)
         ),
         Stream.flatMap((event) => {
-          const interesting = readEvent(event.data, sessionId, ownMessageId)
+          const interesting = v2
+            ? readEventV2(event.data, sessionId)
+            : readEvent(event.data, sessionId, ownMessageId)
           return Option.isSome(interesting) ? Stream.succeed(interesting.value) : Stream.empty
         }),
         Stream.mapError((error): RemoteAgentError => transport(String(error)))
@@ -633,38 +870,162 @@ export const remote = <R = never>(
         return Stream.callback<Step, RemoteAgentError>((queue) =>
           Effect.gen(function* () {
             const connected = yield* Deferred.make<void>()
+            /**
+             * v2's answer is not returned by any call -- it arrives as
+             * `session.next.text.ended` blocks while the run works, and the run
+             * is over when `wait` returns. So the bus is not decoration here:
+             * it is where the result comes from.
+             */
+            const spoken = yield* Ref.make<ReadonlyArray<string>>([])
+            const failure = yield* Ref.make(Option.none<string>())
+            /**
+             * Resolved when the server's agent loop is actually working.
+             *
+             * `wait` is "wait for the loop to become idle", and a loop that has
+             * not started yet *is* idle -- so prompting and immediately waiting
+             * returned at once and the answer was read as empty. Observed
+             * against a live dev server on 2026-09-01; the bus showed
+             * `step.started` and three text deltas arriving after the bridge
+             * had already decided the run was over.
+             */
+            const busy = yield* Deferred.make<void>()
+
             yield* Effect.forkScoped(
-              Stream.runForEach(events(sessionId, connected, ownMessageId), (event) =>
-                event._tag === "Permission"
-                  ? answerPermission(event.asked)
-                  : Effect.flatMap(now, (timestamp) =>
-                    Effect.sync(() => {
-                      Queue.offerUnsafe(queue, {
-                        _tag: "Working",
-                        taskId,
-                        contextId,
-                        timestamp,
-                        text: event.text
+              Stream.runForEach(events(sessionId, connected, ownMessageId), (event) => {
+                if (event._tag === "Permission") return answerPermission(event.asked)
+                if (event._tag === "Started") {
+                  return Effect.asVoid(Deferred.succeed(busy, undefined))
+                }
+                if (event._tag === "Failed") {
+                  // A failure ends the run, so nothing is waiting for it to get
+                  // busy any more.
+                  return Effect.flatMap(
+                    Ref.set(failure, Option.some(event.reason)),
+                    () => Effect.asVoid(Deferred.succeed(busy, undefined))
+                  )
+                }
+                return Effect.flatMap(now, (timestamp) =>
+                  Effect.flatMap(
+                    Ref.update(spoken, (all) => [...all, event.text]),
+                    () =>
+                      Effect.sync(() => {
+                        Queue.offerUnsafe(queue, {
+                          _tag: "Working",
+                          taskId,
+                          contextId,
+                          timestamp,
+                          text: event.text
+                        })
                       })
-                    }))).pipe(
-                // The bus ending is not the task ending -- the prompt below is
-                // what answers, and losing progress reports is worth less than
-                // losing the answer. However it ends, nothing may still be
-                // waiting to be told the subscription is live.
+                  ))
+              }).pipe(
+                // The bus ending is not the task ending on v1 -- the prompt
+                // below is what answers there, and losing progress reports is
+                // worth less than losing the answer. However it ends, nothing
+                // may still be waiting to be told the subscription is live.
                 Effect.catchCause(() => Effect.void),
                 Effect.ensuring(Deferred.succeed(connected, undefined))
               )
             )
-            // Wait for the bus only when there is a reason to: a permission
-            // asked before the subscription is live would be asked of nobody,
-            // and the server would block until its own timeout. Progress
-            // reports have no such stake -- missing the first few is not worth
-            // delaying every delegated task for.
-            if (options.permissions !== undefined) {
+            // Wait for the bus when there is a stake in it: a permission asked
+            // before the subscription is live would be asked of nobody, and on
+            // v2 the answer itself would be missed. On v1 with no policy, the
+            // stake is a few progress reports, which is not worth delaying
+            // every delegated task for.
+            if (options.permissions !== undefined || v2) {
               yield* Effect.timeoutOption(
                 Deferred.await(connected),
                 options.subscribeTimeout ?? "2 seconds"
               )
+            }
+
+            const finish = (
+              timestamp: string,
+              outcome:
+                | { readonly _tag: "Answer"; readonly text: string; readonly failed: boolean }
+                | { readonly _tag: "Halted" },
+              stopped: boolean
+            ) => {
+              Queue.offerUnsafe(queue, terminal(timestamp, outcome, stopped))
+              Queue.endUnsafe(queue)
+            }
+
+            if (v2) {
+              const admitted = yield* Effect.exit(
+                post(`/api/session/${sessionId}/prompt`, { prompt: { text: prompt } })
+              )
+              if (admitted._tag === "Failure") {
+                Queue.failCauseUnsafe(queue, admitted.cause)
+                return
+              }
+              if (Option.isNone(decodeAdmittedV2(admitted.value))) {
+                finish(yield* now, { _tag: "Halted" }, false)
+                return
+              }
+              // Busy first: a loop that has not started yet has produced
+              // nothing, and polling for its answer would find the previous
+              // one. Bounded, because a run that never starts must not hold the
+              // caller forever.
+              yield* Effect.timeoutOption(
+                Deferred.await(busy),
+                options.startTimeout ?? "30 seconds"
+              )
+              /**
+               * Then the answer, read from projected state.
+               *
+               * `wait` would be the obvious completion signal and is documented
+               * as one -- it is also `503 "not available yet"` on every build
+               * that serves v2 at all. The message projection is not a
+               * substitute for it, it is better: `time.completed` is a fact
+               * about the finished message, where the bus is a race between the
+               * last text block and whoever asked whether the run was over.
+               */
+              const admittedAt = Option.flatMap(
+                decodeAdmittedV2(admitted.value),
+                (value) => Option.fromUndefinedOr(value.data.timeCreated)
+              )
+              const answered = yield* Effect.exit(
+                Effect.repeat(
+                  Effect.map(
+                    get(`/api/session/${sessionId}/message?order=desc&limit=8`),
+                    (page) =>
+                      Option.flatMap(decodeMessagesV2(page), (messages) =>
+                        Option.fromUndefinedOr(
+                          messages.data.find((entry) =>
+                            entry.type === "assistant" &&
+                            entry.time?.completed !== undefined &&
+                            // Newer than our own prompt, or it is the answer to
+                            // the message before this one.
+                            (Option.isNone(admittedAt) ||
+                              (entry.time?.created ?? 0) >= admittedAt.value)
+                          )
+                        ))
+                  ),
+                  {
+                    until: (found) => Option.isSome(found),
+                    schedule: Schedule.spaced(options.pollInterval ?? "300 millis")
+                  }
+                ).pipe(Effect.timeoutOption(options.timeout ?? "10 minutes"))
+              )
+              const failed = yield* Ref.get(failure)
+              if (answered._tag === "Failure") {
+                Queue.failCauseUnsafe(queue, answered.cause)
+                return
+              }
+              const text = Option.isSome(failed)
+                ? failed.value
+                : Option.isSome(answered.value) && Option.isSome(answered.value.value)
+                ? (answered.value.value.value.content ?? [])
+                  .filter((part) => part.type === "text" && part.text !== undefined)
+                  .map((part) => part.text ?? "")
+                  .join("")
+                : (yield* Ref.get(spoken)).join("")
+              finish(
+                yield* now,
+                { _tag: "Answer", text, failed: Option.isSome(failed) },
+                (yield* Ref.get(cancelled)).has(taskId)
+              )
+              return
             }
 
             const answer = yield* Effect.exit(post(`/session/${sessionId}/message`, body))
@@ -676,23 +1037,18 @@ export const remote = <R = never>(
             const stopped = (yield* Ref.get(cancelled)).has(taskId)
             const decoded = decodePrompt(answer.value)
             if (Option.isNone(decoded)) {
-              Queue.offerUnsafe(queue, terminal(timestamp, { _tag: "Halted" }, stopped))
-              Queue.endUnsafe(queue)
+              finish(timestamp, { _tag: "Halted" }, stopped)
               return
             }
             const text = (decoded.value.parts ?? [])
               .filter((part) => part.type === "text" && part.text !== undefined)
               .map((part) => part.text ?? "")
               .join("")
-            Queue.offerUnsafe(
-              queue,
-              terminal(timestamp, {
-                _tag: "Answer",
-                text,
-                failed: decoded.value.info?.error !== undefined
-              }, stopped)
-            )
-            Queue.endUnsafe(queue)
+            finish(timestamp, {
+              _tag: "Answer",
+              text,
+              failed: decoded.value.info?.error !== undefined
+            }, stopped)
           })
         ).pipe(
           Stream.tap((step) => step._tag === "Final" ? record(step.task) : Effect.void)
@@ -795,7 +1151,12 @@ export const remote = <R = never>(
           // Marked before the abort is sent, so an answer that races back from
           // the server is still read as the interrupted run it is.
           yield* Ref.update(cancelled, (all) => new Set(all).add(id))
-          yield* post(`/session/${inFlight.sessionId}/abort`, {})
+          yield* post(
+            v2
+              ? `/api/session/${inFlight.sessionId}/interrupt`
+              : `/session/${inFlight.sessionId}/abort`,
+            {}
+          )
           const timestamp = yield* now
           const stopped: Task = {
             id,

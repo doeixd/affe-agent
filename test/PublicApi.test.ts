@@ -167,6 +167,7 @@ describe("public API", () => {
     ])
     assert.deepStrictEqual(Object.keys(Harness.ContextTransform).sort(), [
       "appendSystem",
+      "cacheBreakpoint",
       "compose",
       "identity",
       "instructions",
@@ -677,7 +678,10 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(a2a.OpenCodeA2A).sort(), [
       "PermissionAsked",
       "defaultProjection",
+      // One reader per protocol, both exported: they are where somebody else's
+      // evolving event vocabulary would break first.
       "readEvent",
+      "readEventV2",
       "remote"
     ])
     assert.deepStrictEqual(Object.keys(a2a.ClaudeCodePermissions).sort(), [

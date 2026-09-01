@@ -1740,11 +1740,13 @@ Cancellation differs for a real reason and the interface says so: there is no
 process to kill, the run lives in the server, so `cancel` is a request
 (`/session/{id}/abort`) rather than fiber interruption.
 
-This bridge speaks OpenCode's **v1** HTTP API. A current server (1.18.23)
-serves both v1 and the newer `/api/...` surface, so it works today; a v2-only
-server would need a v2 client, and that is more than a path change — v2's
-prompt endpoint returns an *admission* and the answer is assembled from the
-event stream. See `docs/remaining-work.md` 26i for the table.
+Both of OpenCode's HTTP APIs are spoken: `api: "v1"` (the default, and what a
+released server answers) and `api: "v2"` for the `/api/...` surface. v2 is not
+a rename — its prompt endpoint returns an *admission*, and the run's answer is
+read from the message projection once it completes, because the `wait` endpoint
+that exists for this is `503 "not available yet"` on every build that serves v2
+at all. Its permission reply carries a `message`, so on v2 a policy's *reason*
+reaches the delegated agent. See `docs/remaining-work.md` 26i.
 
 ## Subagents
 

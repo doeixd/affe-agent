@@ -181,6 +181,167 @@ describe("OpenCodeA2A: what a real server actually sent", () => {
   })
 })
 
+describe("OpenCodeA2A: v2", () => {
+  const frame = (type: string, data: unknown) => ({ id: "evt_1", type, data })
+
+  it("reads v2's frames, which say `data` where v1 says `properties`", () => {
+    const started = OpenCodeA2A.readEventV2(
+      JSON.stringify(frame("session.next.step.started", { sessionID: "ses_1" })),
+      "ses_1"
+    )
+    assert.isTrue(Option.isSome(started))
+    if (Option.isSome(started)) assert.strictEqual(started.value._tag, "Started")
+
+    const text = OpenCodeA2A.readEventV2(
+      JSON.stringify(frame("session.next.text.ended", { sessionID: "ses_1", text: "V2 OK" })),
+      "ses_1"
+    )
+    assert.isTrue(Option.isSome(text))
+    if (Option.isSome(text) && text.value._tag === "Text") {
+      assert.strictEqual(text.value.text, "V2 OK")
+    }
+
+    // The deltas are ignored: `text.ended` carries the whole block, so
+    // reassembling from deltas would only be a way to get it wrong.
+    assert.isTrue(
+      Option.isNone(OpenCodeA2A.readEventV2(
+        JSON.stringify(frame("session.next.text.delta", { sessionID: "ses_1", delta: "V" })),
+        "ses_1"
+      ))
+    )
+
+    const failed = OpenCodeA2A.readEventV2(
+      JSON.stringify(frame("session.next.step.failed", {
+        sessionID: "ses_1",
+        error: { type: "unknown", message: "Provider request failed with HTTP 503" }
+      })),
+      "ses_1"
+    )
+    assert.isTrue(Option.isSome(failed))
+    if (Option.isSome(failed) && failed.value._tag === "Failed") {
+      assert.include(failed.value.reason, "503")
+    }
+
+    // Another session's frames are not ours.
+    assert.isTrue(
+      Option.isNone(OpenCodeA2A.readEventV2(
+        JSON.stringify(frame("session.next.text.ended", { sessionID: "ses_2", text: "x" })),
+        "ses_1"
+      ))
+    )
+  })
+
+  it("normalises a v2 permission into v1's shape, so one projection serves both", () => {
+    // v2 says `action` and `resources`; v1 says `permission` and `patterns`.
+    // A policy must not be able to tell which protocol answered it.
+    const asked = OpenCodeA2A.readEventV2(
+      JSON.stringify(frame("permission.v2.asked", {
+        id: "per_1",
+        sessionID: "ses_1",
+        action: "edit",
+        resources: ["src/parse.ts"]
+      })),
+      "ses_1"
+    )
+    assert.isTrue(Option.isSome(asked))
+    if (!Option.isSome(asked) || asked.value._tag !== "Permission") return
+    assert.strictEqual(asked.value.asked.permission, "edit")
+    assert.deepStrictEqual(
+      OpenCodeA2A.defaultProjection(asked.value.asked.permission, asked.value.asked),
+      { action: "write", resource: "src/parse.ts" }
+    )
+  })
+
+  it("prompts, waits for the loop to start, then reads the answer from projected state", () =>
+    Effect.runPromise(Effect.gen(function*() {
+      const calls = yield* Ref.make<ReadonlyArray<string>>([])
+      const client = HttpClient.make((request, url) =>
+        Effect.gen(function*() {
+          yield* Ref.update(calls, (all) => [...all, `${request.method} ${url.pathname}`])
+          const json = (value: unknown) =>
+            HttpClientResponse.fromWeb(request, new Response(JSON.stringify(value)))
+          if (url.pathname === "/api/event") {
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                `data: ${JSON.stringify(frame("session.next.step.started", { sessionID: "ses_1" }))}\n\n`,
+                { headers: { "content-type": "text/event-stream" } }
+              )
+            )
+          }
+          if (url.pathname === "/api/session") return json({ data: { id: "ses_1" } })
+          if (url.pathname.endsWith("/prompt")) {
+            return json({ data: { id: "msg_1", timeCreated: 100 } })
+          }
+          if (url.pathname.endsWith("/message")) {
+            return json({
+              data: [
+                // The previous run's answer, which must not be mistaken for
+                // this one's: it is older than our prompt.
+                {
+                  id: "msg_0",
+                  type: "assistant",
+                  time: { created: 50, completed: 60 },
+                  content: [{ type: "text", text: "an older answer" }]
+                },
+                {
+                  id: "msg_2",
+                  type: "assistant",
+                  time: { created: 120, completed: 130 },
+                  content: [{ type: "text", text: "V2 OK" }]
+                }
+              ],
+              cursor: {}
+            })
+          }
+          return json({ data: true })
+        })
+      )
+
+      const opencode = yield* OpenCodeA2A.remote({
+        baseUrl: BASE,
+        api: "v2",
+        startTimeout: "1 second"
+      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient)(client)))
+
+      const task = yield* opencode.delegate(ask("go"))
+      assert.strictEqual(task.status?.state, TaskState.TASK_STATE_COMPLETED)
+      assert.deepStrictEqual(
+        task.artifacts.flatMap((artifact) =>
+          artifact.parts.map((part) => part.content?.$case === "text" ? part.content.value : "")
+        ),
+        ["V2 OK"]
+      )
+      const seen = yield* Ref.get(calls)
+      assert.include(seen, "POST /api/session/ses_1/prompt")
+      // The answer comes from the projection, not from the bus and not from
+      // `wait` -- which is documented and returns 503 on every build that
+      // serves v2 at all.
+      assert.isTrue(seen.some((call) => call.includes("/message")))
+      assert.isFalse(seen.some((call) => call.includes("/wait")))
+    }).pipe(Effect.scoped)))
+
+  it("a non-2xx answer is a failure, not a result", () =>
+    Effect.runPromise(Effect.gen(function*() {
+      // The bug this prevents: `POST .../wait` answered 503 with a JSON body,
+      // the body decoded, and the bridge read it as "the run is over" and
+      // completed the task with an empty answer.
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify({ _tag: "ServiceUnavailableError" }), { status: 503 })
+          )
+        )
+      )
+      const opencode = yield* OpenCodeA2A.remote({ baseUrl: BASE, api: "v2" }).pipe(
+        Effect.provide(Layer.succeed(HttpClient.HttpClient)(client))
+      )
+      const exit = yield* Effect.exit(opencode.delegate(ask("go")))
+      assert.isTrue(Exit.isFailure(exit))
+    }).pipe(Effect.scoped)))
+})
+
 describe("OpenCodeA2A.readEvent", () => {
   it("reads the two frames that matter and ignores the rest", () => {
     const permission = OpenCodeA2A.readEvent(JSON.stringify(asked()), "ses_1")

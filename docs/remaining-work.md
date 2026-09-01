@@ -420,33 +420,54 @@ open, so the next pass does not have to re-derive it.
     above. The request payload's casing remains the hedged part (both
     spellings decode).
 
-26i. **OpenCode v2 (`/api/...`) is a second client, not a rename.** Asked
-    2026-09-01. `OpenCodeA2A` speaks the v1 API (`/session`,
-    `/session/{id}/message`, `/event`, `/session/{id}/permissions/{id}`), and
-    the installed server (1.18.23) serves **both** surfaces -- verified by
-    probing, which is why every live run above worked. A v2-only server would
-    not answer any of them.
+26i. **OpenCode v2** — SHIPPED 2026-09-01, `OpenCodeA2A.remote({ api: "v2" })`.
+    Verified live against a `dev` server: two delegations in one context
+    returned their own answers (`V2 BRIDGE OK`, then `SECOND V2 OK`), the
+    session was reused, and a provider outage came back as a FAILED task
+    carrying the provider's own message.
 
-    The delta is not paths. `POST /api/session/{id}/prompt` takes
-    `{ prompt: { text }, delivery?, resume? }` and returns
-    `SessionInputAdmitted` -- an *admission*, not an answer -- so the run's
-    result has to be assembled from the event stream instead of returned by
-    the call. That is a different run loop, and it is the whole of the work:
+    It is a second client, not a rename, and the run loop is the reason:
 
-    | | v1 (shipped) | v2 |
+    | | v1 | v2 |
     | --- | --- | --- |
-    | prompt | `POST /session/{id}/message` → the finished assistant message | `POST /api/session/{id}/prompt` → `SessionInputAdmitted`, then follow events |
+    | prompt | `POST /session/{id}/message` → the finished message | `POST /api/session/{id}/prompt` → `SessionInputAdmitted` |
+    | completion | the prompt returning | see below |
     | permission event | `permission.asked` `{ permission, patterns }` | `permission.v2.asked` `{ action, resources }` |
-    | reply | `POST /session/{id}/permissions/{id}` `{ response }` | `POST /api/session/{id}/permission/{id}/reply` `{ reply, message? }` |
-    | reply values | `once` / `always` / `reject` | identical |
-    | cancel | `POST /session/{id}/abort` | `POST /api/session/{id}/interrupt` |
+    | reply | `/session/{id}/permissions/{id}` `{ response }` | `/api/session/{id}/permission/{id}/reply` `{ reply, message? }` |
+    | cancel | `/session/{id}/abort` | `/api/session/{id}/interrupt` |
+    | envelope | `properties` | `data` |
 
-    Two things make v2 *easier* when it is done: its `action` is already this
-    repository's vocabulary (`edit`, `shell`), so `defaultProjection` mostly
-    goes away, and its permission reply carries a `message` -- so a policy's
-    reason can reach the delegated agent, which v1 has no field for. The work
-    is the async run loop, and it is testable live against the installed
-    server, since that serves `/api` today.
+    Three things only a live run could have established, each of which the
+    first design got wrong:
+
+    - **`POST /wait` does not work.** It is documented as "wait for a session
+      agent loop to become idle" and answers
+      `503 "Session wait is not available yet"` on every build that serves v2.
+      Completion is read from the message projection instead
+      (`GET /api/session/{id}/message`, `time.completed`), which is not a
+      substitute but an improvement: a fact about the finished message rather
+      than a race with the bus.
+    - **The answer must be newer than the prompt.** The projection is a
+      conversation, so the newest completed assistant message is the *previous*
+      run's until this one finishes. The admission's `timeCreated` is the floor;
+      without it a second delegation returned the first one's answer.
+    - **A non-2xx answer was being read as a result.** The 503 above decoded as
+      ordinary JSON and the bridge called the run finished, completing tasks
+      with an empty answer. The client now filters on status — a v1 fix too.
+
+    v2 is the better protocol to be on once it is released: its `action` is
+    already this repository's vocabulary, and its permission reply carries a
+    `message`, so a policy's *reason* reaches the delegated agent — v1 has no
+    field for that. Default stays `v1`, because that is what a released server
+    answers: 1.18.23 and `beta` expose `/api/...` and fail it
+    (`no such table: session_input`); only `dev` serves it.
+
+    Not verified: `permission.v2.asked` end to end. The frame is decoded and
+    normalised into v1's shape (so one projection serves both, and a policy
+    cannot tell which protocol answered it), and that normalisation is tested —
+    but no live v2 run has asked for permission, because the free provider on
+    the `dev` build 503s on tool-using runs. The v1 permission loop *is*
+    verified live (26h), and the two share their decision.
 
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
