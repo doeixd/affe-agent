@@ -110,6 +110,17 @@ const INSTRUCTIONS = [
   ""
 ].join("\n")
 
+/**
+ * The line that tells the model a search tool exists, when one does.
+ *
+ * Conditional on purpose: a model told to search when nothing can search
+ * is worse off than one told nothing, because it will spend a turn
+ * calling a tool that is not there. The name is threaded through rather
+ * than hard-coded so the two descriptions cannot disagree about it.
+ */
+const searchLine = (name: string): string =>
+  `If a tool you need is not listed below, call \`${name}\` to find it -- the results carry full signatures, ready to use here.\n\n`
+
 export interface Options<Groups extends CodeMode.ToolGroups, R> {
   readonly tools: Groups
   /** The tool's name. `execute` by default, as in every code-mode host. */
@@ -140,6 +151,21 @@ export interface Options<Groups extends CodeMode.ToolGroups, R> {
   readonly onSuspend?:
     | ((suspension: { readonly state: unknown; readonly reason: string }) => Effect.Effect<void>)
     | undefined
+  /**
+   * The name of the `searchTool` mounted beside this one, if there is one.
+   *
+   * Set it and the description tells the model to search when a tool it
+   * needs is not listed; leave it and the description says nothing about
+   * searching. A name rather than a boolean because the two descriptions
+   * must not be able to disagree about what the tool is called -- a model
+   * told to call `search` when the host mounted it as `find_tools` spends
+   * a turn on a tool that does not exist.
+   *
+   * Worth setting exactly when `Catalog.catalog(tools).complete` is
+   * false. A search tool over a complete catalog is prompt cost for
+   * nothing.
+   */
+  readonly searchToolName?: string | undefined
 }
 
 /**
@@ -199,7 +225,9 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
   })
 
   const definition = Tool.make(options.name ?? "execute", {
-    description: `${INSTRUCTIONS}${catalog.text}`,
+    description: `${INSTRUCTIONS}${
+      options.searchToolName === undefined ? "" : searchLine(options.searchToolName)
+    }${catalog.text}`,
     parameters: Parameters,
     success: Result
   })
@@ -303,6 +331,103 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
           }
       }
     }).pipe(Effect.provide(environment))
+
+  return Agent.tool(definition, handler)
+}
+
+// ---------------------------------------------------------------------------
+// Search: the other half of a PARTIAL catalog
+
+/**
+ * What the model asks for.
+ *
+ * `offset` rather than a page token, because `Catalog.search` is
+ * deterministic: the same query scores the same tools in the same order
+ * every time, so an offset means exactly what the model thinks it does.
+ */
+const SearchParameters = Schema.Struct({
+  query: Schema.String,
+  /** Continue a previous search from `nextOffset`. Omit to start. */
+  offset: Schema.optional(Schema.Number)
+})
+
+/**
+ * What comes back: the same generated signature the inline catalog
+ * carries, so a found tool is immediately callable and there is no second
+ * "describe this one" round trip. That is why one tool covers what other
+ * code-mode surfaces split into `search` and `describe`.
+ */
+export const SearchResult = Schema.Struct({
+  results: Schema.Array(Schema.Struct({
+    /** `tools.github.list_issues` -- callable as written. */
+    path: Schema.String,
+    description: Schema.optional(Schema.String),
+    signature: Schema.String
+  })),
+  /** Matches in total, so the model can tell "none" from "more". */
+  total: Schema.Number,
+  /** Pass back as `offset` for the next page. Absent when there is none. */
+  nextOffset: Schema.optional(Schema.Number)
+})
+export type SearchResult = typeof SearchResult.Type
+
+const SEARCH_DESCRIPTION = [
+  "Find tools by name, description or parameter, when the catalog above is",
+  "partial or you are not sure a tool exists. Returns each match's full",
+  "signature, ready to call from a program -- there is nothing further to look up.",
+  "Scoring is deterministic, so the same query always returns the same order."
+].join("\n")
+
+/**
+ * `Catalog.search` as a tool the model can actually call.
+ *
+ * The budgeted catalog states its own completeness, and a PARTIAL one
+ * tells the model to search for the rest -- which, until this existed,
+ * was a promise the design did not keep: `Catalog.search` was a function
+ * only the host could reach.
+ *
+ * Not an `Effect`, unlike `tool`: search reads the tool *declarations*,
+ * never a handler or a policy, so there is no requirement to discharge
+ * and nothing to bind. That is also why it is safe to mount beside any
+ * agent -- it cannot call anything.
+ *
+ * **Mount it only when it earns its place.** A second tool is prompt cost
+ * on every request, and for a toolkit whose catalog fits the budget it
+ * buys nothing (`Catalog.catalog(tools).complete` is the test). Tell the
+ * execute tool it exists with `Options.searchToolName`, so the two
+ * descriptions cannot disagree about the name.
+ */
+export const searchTool = <Groups extends CodeMode.ToolGroups>(
+  options: {
+    readonly tools: Groups
+    /** Defaults to `search`. */
+    readonly name?: string | undefined
+    /** Matches per page. Defaults to 10, as `Catalog.search` does. */
+    readonly limit?: number | undefined
+  }
+) => {
+  const definition = Tool.make(options.name ?? "search", {
+    description: SEARCH_DESCRIPTION,
+    parameters: SearchParameters,
+    success: SearchResult
+  })
+
+  const handler: Agent.Handler<typeof definition> = ({ offset, query }) =>
+    Effect.sync(() => {
+      const found = Catalog.search(options.tools, query, {
+        ...(offset === undefined ? {} : { offset }),
+        ...(options.limit === undefined ? {} : { limit: options.limit })
+      })
+      return {
+        results: found.results.map((entry) => ({
+          path: entry.path,
+          ...(entry.description === undefined ? {} : { description: entry.description }),
+          signature: entry.signature
+        })),
+        total: found.total,
+        ...(found.next === undefined ? {} : { nextOffset: found.next.offset })
+      }
+    })
 
   return Agent.tool(definition, handler)
 }

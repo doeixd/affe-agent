@@ -4164,3 +4164,49 @@ was:
   each program should reach, and doing that immediately caught a wrong
   assumption in the test itself: `throw new Error(...)` is a *refusal*,
   because `new` is outside the subset, not the `Threw` it claimed.
+
+## 2026-09-01 — search becomes a tool the model can call (executors plan, step 2)
+
+`Catalog.search` was good and unreachable. The budgeted catalog states its
+own completeness, and a PARTIAL one renders the header *"use search for the
+rest"* -- a promise the design did not keep, because search was a function
+only the host could call. A model that was told a tool might exist had no
+way to look.
+
+`CodeTool.searchTool` is that function as a tool. One tool rather than the
+`search` + `describe` pair other code-mode surfaces expose, because
+`Catalog.search` already returns each match's full generated signature: a
+found tool is immediately callable and there is nothing further to look up.
+
+- **Not an `Effect`, unlike `tool`.** It reads tool *declarations*, never a
+  handler or a policy, so there is no requirement to discharge and nothing
+  to bind -- which is also why it is safe to mount beside any agent: it
+  cannot call anything.
+- **Mounted only when it earns its place.** A second tool is prompt cost on
+  every request and buys nothing for a catalog that fits its budget
+  (`Catalog.catalog(tools).complete` is the test). The execute tool
+  mentions searching only when `Options.searchToolName` names one, because a
+  model told to search when nothing can search spends a turn on a tool that
+  is not there.
+- **A name, not a boolean.** The two descriptions must not be able to
+  disagree about what the tool is called; a model told to call `search`
+  when the host mounted `find_tools` loses the same turn.
+- **No matches is an answer** (`total: 0`), not a failure: "no such tool"
+  is something a model can act on, and a failed tool call is not.
+
+`test/CodeSearchTool.test.ts`, five tests and four compile-time pins. Two
+findings from writing them, both worth keeping:
+
+- The first draft built forty tools with `Object.fromEntries` and reached
+  for `as never` to get the handler record past `Agent.toolkit`. Test code
+  counts as user code, so the tools are written out instead -- seven with
+  long descriptions overflow a small budget just as well.
+- `_SearchNeedsNothing` **cannot be broken from the library side**:
+  `Agent.Handler` already requires `never` and `Agent.tool` rejects a
+  requirement before the pin is consulted (confirmed by injecting one, and
+  seeing the error land in `CodeTool.ts` rather than the test). It is kept
+  as a regression pin on that seam and labelled as guaranteed upstream,
+  because an assertion that cannot fail should at least say so. The pin
+  that *is* specific to this module -- that `searchTool` stays a plain
+  function rather than becoming an `Effect` for symmetry -- was added and
+  broken once.
