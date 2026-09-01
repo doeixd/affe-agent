@@ -374,8 +374,21 @@ export const remote = <R = never>(
     /** A2A context id -> the OpenCode session it maps to. */
     const sessions = yield* Ref.make(new Map<string, string>())
     const tasks = yield* Ref.make(new Map<string, Task>())
-    /** Task id -> the OpenCode session running it, for `cancel`. */
-    const running = yield* Ref.make(new Map<string, string>())
+    /** Task id -> the run in flight, for `cancel` and for refusing a second. */
+    const running = yield* Ref.make(new Map<string, {
+      readonly sessionId: string
+      readonly contextId: string
+      readonly message: Message
+    }>())
+    /**
+     * Tasks `cancel` has stopped.
+     *
+     * The prompt request is still outstanding when `cancel` returns -- aborting
+     * makes the *server* return, and what it returns then is an interrupted
+     * run, which must not be reported as a completed one. So the run remembers
+     * it was cancelled and says so when it finishes.
+     */
+    const cancelled = yield* Ref.make(new Set<string>())
 
     const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis).toISOString())
 
@@ -398,6 +411,10 @@ export const remote = <R = never>(
     const record = (task: Task) =>
       Effect.gen(function* () {
         yield* Ref.update(tasks, (all) => {
+          const held = all.get(task.id)
+          // A cancellation is final. A late answer from an aborted run must not
+          // quietly replace it with "completed".
+          if (held?.status?.state === TaskState.TASK_STATE_CANCELED) return all
           const next = new Map(all)
           next.delete(task.id)
           next.set(task.id, task)
@@ -513,7 +530,23 @@ export const remote = <R = never>(
           )
         }
         const sessionId = yield* sessionFor(contextId)
-        yield* Ref.update(running, (all) => new Map(all).set(taskId, sessionId))
+        // One conversation, one run. Two prompts against one OpenCode session
+        // is a `SessionBusyError` on its side, and on this side it would make
+        // the permission subscription ambiguous -- both runs watch the same
+        // session, so both would answer the other's questions.
+        const busy = Array.from((yield* Ref.get(running)).values()).some(
+          (entry) => entry.sessionId === sessionId
+        )
+        if (busy) {
+          return Stream.fail(
+            new AgentA2ARemoteError({
+              code: "SESSION_BUSY",
+              detail: `${contextId} already has a run in flight; wait for it or use another context`
+            })
+          )
+        }
+        yield* Ref.update(running, (all) =>
+          new Map(all).set(taskId, { sessionId, contextId, message }))
 
         const body = {
           parts: [{ type: "text", text: prompt }],
@@ -526,12 +559,13 @@ export const remote = <R = never>(
           timestamp: string,
           outcome:
             | { readonly _tag: "Answer"; readonly text: string; readonly failed: boolean }
-            | { readonly _tag: "Halted" }
+            | { readonly _tag: "Halted" },
+          wasCancelled: boolean
         ): Step => {
-          const artifact = outcome._tag === "Answer"
+          const artifact = outcome._tag === "Answer" && !wasCancelled
             ? Option.some(resultArtifact(taskId, outcome.text))
             : Option.none<Artifact>()
-          const state = outcome._tag === "Halted"
+          const state = wasCancelled || outcome._tag === "Halted"
             ? TaskState.TASK_STATE_CANCELED
             : outcome.failed
             ? TaskState.TASK_STATE_FAILED
@@ -599,9 +633,10 @@ export const remote = <R = never>(
               Queue.failCauseUnsafe(queue, answer.cause)
               return
             }
+            const stopped = (yield* Ref.get(cancelled)).has(taskId)
             const decoded = decodePrompt(answer.value)
             if (Option.isNone(decoded)) {
-              Queue.offerUnsafe(queue, terminal(timestamp, { _tag: "Halted" }))
+              Queue.offerUnsafe(queue, terminal(timestamp, { _tag: "Halted" }, stopped))
               Queue.endUnsafe(queue)
               return
             }
@@ -615,7 +650,7 @@ export const remote = <R = never>(
                 _tag: "Answer",
                 text,
                 failed: decoded.value.info?.error !== undefined
-              })
+              }, stopped)
             )
             Queue.endUnsafe(queue)
           })
@@ -710,29 +745,32 @@ export const remote = <R = never>(
        */
       cancel: (id) =>
         Effect.gen(function* () {
-          const sessionId = (yield* Ref.get(running)).get(id)
-          if (sessionId === undefined) {
+          const inFlight = (yield* Ref.get(running)).get(id)
+          if (inFlight === undefined) {
             const known = (yield* Ref.get(tasks)).get(id)
             return known === undefined
               ? yield* new AgentA2ARemoteError({ code: "TASK_NOT_FOUND", detail: id })
               : known
           }
-          yield* post(`/session/${sessionId}/abort`, {})
+          // Marked before the abort is sent, so an answer that races back from
+          // the server is still read as the interrupted run it is.
+          yield* Ref.update(cancelled, (all) => new Set(all).add(id))
+          yield* post(`/session/${inFlight.sessionId}/abort`, {})
           const timestamp = yield* now
-          const cancelled: Task = {
+          const stopped: Task = {
             id,
-            contextId: "",
+            contextId: inFlight.contextId,
             status: {
               state: TaskState.TASK_STATE_CANCELED,
               message: undefined,
               timestamp
             },
             artifacts: [],
-            history: [],
-            metadata: { openCodeSessionId: sessionId }
+            history: [inFlight.message],
+            metadata: { openCodeSessionId: inFlight.sessionId }
           }
-          yield* record(cancelled)
-          return cancelled
+          yield* record(stopped)
+          return stopped
         })
     } satisfies Bridge
   })

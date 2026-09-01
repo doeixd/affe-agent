@@ -314,6 +314,69 @@ describe("OpenCodeA2A", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.effect("a cancelled run is not completed by the answer that races back", () =>
+    Effect.gen(function* () {
+      // Aborting makes the *server* return, so the prompt request completes
+      // moments later with an interrupted run. Reading that as "completed"
+      // would be the worst possible outcome of asking to stop.
+      const answered = yield* Deferred.make<void>()
+      const stub = yield* server({
+        prompt: () =>
+          Effect.as(
+            Deferred.await(answered),
+            { info: {}, parts: [{ type: "text", text: "half a change" }] }
+          )
+      })
+      const opencode = yield* OpenCodeA2A.remote({ baseUrl: BASE }).pipe(
+        Effect.provide(stub.layer)
+      )
+      const running = yield* Effect.forkChild(opencode.delegate(ask("go")))
+      yield* Effect.repeat(
+        Effect.map(Ref.get(stub.calls), (calls) =>
+          calls.some((call) => call.path.endsWith("/message"))),
+        { until: (found) => found }
+      )
+      yield* opencode.cancel("t1")
+      yield* Deferred.succeed(answered, undefined)
+
+      const task = yield* Fiber.join(running)
+      assert.strictEqual(task.status?.state, TaskState.TASK_STATE_CANCELED)
+      assert.deepStrictEqual(task.artifacts, [], "a cancelled run kept its half-answer")
+      // And the stored task stays cancelled rather than being overwritten.
+      assert.strictEqual(
+        (yield* opencode.task("t1")).status?.state,
+        TaskState.TASK_STATE_CANCELED
+      )
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("one conversation runs one task at a time", () =>
+    Effect.gen(function* () {
+      // Two prompts against one OpenCode session is SessionBusyError on its
+      // side; on this side both runs would watch the same session and answer
+      // each other's permission questions.
+      const answered = yield* Deferred.make<void>()
+      const stub = yield* server({
+        prompt: () => Effect.as(Deferred.await(answered), { info: {}, parts: [] })
+      })
+      const opencode = yield* OpenCodeA2A.remote({ baseUrl: BASE }).pipe(
+        Effect.provide(stub.layer)
+      )
+      const first = yield* Effect.forkChild(opencode.delegate(ask("go", { taskId: "t1" })))
+      yield* Effect.repeat(
+        Effect.map(Ref.get(stub.calls), (calls) =>
+          calls.some((call) => call.path.endsWith("/message"))),
+        { until: (found) => found }
+      )
+      const second = yield* Effect.exit(
+        opencode.delegate(ask("also go", { taskId: "t2", messageId: "m2" }))
+      )
+      assert.isTrue(Exit.isFailure(second))
+      yield* Deferred.succeed(answered, undefined)
+      yield* Fiber.join(first)
+    }).pipe(Effect.scoped)
+  )
+
   it.effect("a finished task is fetchable, an unknown one is refused", () =>
     Effect.gen(function* () {
       const stub = yield* server({})
