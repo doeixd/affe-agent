@@ -1,5 +1,9 @@
 # Plan: code-mode executors — suspension, pre-flight, discovery, CallScript
 
+**Status: complete — all four steps landed 2026-09-01** (see the table in
+"Steps"). Step 4 was the acceptance test for 1 and 3, so the seam claim is
+evidenced rather than asserted. Not yet committed at the time of writing.
+
 Drafted 2026-09-01, after reading Vercel Labs' CallScript
 (<https://www.callscript.dev>, `vercel-labs/callscript`) against the finished
 `/code` engine (`plan-code-mode-engine.md`, complete 2026-08-31).
@@ -97,7 +101,7 @@ in our own surface, and lands a second executor as the proof the seam is one.
 | 1 | ✅ 2026-09-01. `CodeExecutor` outcome widened to `Completed \| Suspended`; `CodeMode.Outcome` and `CodeTool.Result` gain the variant; resume threaded through `execute`; `onSuspend` carries the state to the host and never to the model (`test/CodeExecutors.test.ts`, three break-once) | nothing |
 | 2 | ✅ 2026-09-01. `CodeTool.searchTool` — `Catalog.search` as a model-facing tool, mentioned by the execute tool only when `searchToolName` names one (`test/CodeSearchTool.test.ts`) | nothing |
 | 3 | ✅ 2026-09-01. `internal/validate.ts` — collect-all pre-flight over a context-free subset, `knownTools` on the seam, `CodeDiagnostic.more`, findings numbered for the model (`test/CodePreflight.test.ts`) | 1 (for the reason set) |
-| 4 | `code/callscript.ts` — CallScript behind `CodeExecutor`, as the acceptance test for 1 and 3 | 1, 3 |
+| 4 | ✅ 2026-09-01. `code/callscript.ts` — CallScript behind `CodeExecutor`, as the acceptance test for 1 and 3. `./code/callscript` is its own entry point with `callscript` an *optional* peer dependency, so a caller who does not want it does not install it (`test/CodeCallScript.test.ts`, 6 tests) | 1, 3 |
 
 Steps 1–3 stand on their own merits and ship whether or not step 4 does.
 Step 4 is what proves the seam is a seam: a second executor is the only real

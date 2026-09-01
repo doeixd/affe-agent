@@ -4320,3 +4320,57 @@ only ever runs on an AST acorn already accepted, and acorn refuses
 pathological nesting first (measured in the step-6 hardening pass, "Not
 enough stack space to parse input"), so the walk's depth is bounded below
 the parser's own limit.
+
+## 2026-09-01 — CallScript behind the seam (executors plan, step 4)
+
+`@doeixd/effect-agent/code/callscript` mounts Vercel Labs' CallScript as a
+`CodeExecutor`. `callscript` is an **optional peer** (its own `ai` and `eve`
+peers are optional too, so its core pulls only `acorn` and `zod`, both
+already here), the pattern `/blob/fs` and `/sandbox/local` establish.
+
+This is the acceptance test for steps 1 and 3, not a test of CallScript. A
+seam is only shown to be a seam by a second implementation, and it holds:
+
+- **The same toolkit, policy, limits and `CodeTool` above it.** Every tool
+  is a shim onto the host's `invoke` -- never `fromMCP` or
+  `fromAISDKTools` -- so a nested call takes the same `Permission`
+  decision, emits the same events, and is redacted the same way. Pinned by
+  running one program through both executors and asserting the same
+  outcome and the same observed calls, and by a policy denial that never
+  reaches the handler.
+- **Suspension is real, and proven.** A gated plan parks, hands the host a
+  serialisable state through `onSuspend`, and a later `execute` continues
+  from it -- with the settled `lookup` **not** repeated, which is the whole
+  difference between a resume and a retry. That is the claim decision 7
+  parked for the interpreter and the reason step 1 widened the outcome set
+  before any of this existed.
+- **Its pre-flight is the half ours cannot do.** `validateScript` checks
+  the whole plan and reports every issue; they arrive through
+  `CodeDiagnostic.more` as `plan-invalid`, which is why step 3 came first.
+
+**The finding worth having, which a happy-path test would have missed.**
+CallScript hands a rejected `call` to the step's own `onError` policy, so a
+step marked `onError: "skip"` would **swallow** it. That is correct for a
+tool's declared failure and for a policy refusal -- both are the program's
+to handle, and the interpreter lets `try`/`catch` take them too -- and
+wrong for a `CodeDiagnostic`, which is the *host* refusing: `tool-limit`, a
+value that cannot cross the data boundary, a handler defect. Those are
+deliberately uncatchable in the interpreter, and a plan skipping past one
+would make code mode's budget advisory. The adapter captures the first and
+re-raises it after the engine returns, whatever the plan decided. Broken
+once: without it, `maxToolCalls` stops binding.
+
+Two smaller things, each a mistake first:
+
+- `parseJsScript`'s own `tools` option only disambiguates a detached call
+  from a plain expression. Unknown *names* are `validateScript`'s business,
+  and compiling without it produced a plan that failed at the call, one
+  name per turn -- the runtime behaviour this whole plan exists to replace,
+  arrived at by accident. Broken once.
+- `verify:package` installed only the `effect` peer, so an entry that
+  exists *because* of an optional peer could not import. It installs every
+  declared peer now, which also strengthens the gate for
+  `@modelcontextprotocol/sdk`. 46 entry points verified from the packed
+  artifact.
+
+**`docs/plan-code-mode-executors.md` is complete**, all four steps.

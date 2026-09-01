@@ -43,6 +43,11 @@ try {
   )
   // The real dependency tree, so a missing peer shows up here rather than for
   // a user.
+  //
+  // Every peer, not just `effect`: an entry point that exists *because* of an
+  // optional peer (`./code/callscript`) cannot be imported without it, and
+  // skipping it would drop the gate for exactly the entries most likely to
+  // break -- the ones whose dependency this package does not control.
   run(
     "npm",
     [
@@ -50,7 +55,9 @@ try {
       "--no-audit",
       "--no-fund",
       packed,
-      `effect@${manifest.peerDependencies.effect}`
+      ...Object.entries(manifest.peerDependencies).map(
+        ([name, range]) => `${name}@${range}`
+      )
     ],
     scratch
   )

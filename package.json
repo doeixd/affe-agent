@@ -179,6 +179,10 @@
       "types": "./dist/code/index.d.ts",
       "default": "./dist/code/index.js"
     },
+    "./code/callscript": {
+      "types": "./dist/code/callscript.d.ts",
+      "default": "./dist/code/callscript.js"
+    },
     "./blob": {
       "types": "./dist/blob/index.d.ts",
       "default": "./dist/blob/index.js"
@@ -252,10 +256,14 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",
-    "effect": ">=4.0.0-rc.111 <5.0.0"
+    "effect": ">=4.0.0-rc.111 <5.0.0",
+    "callscript": ">=0.1.0 <0.2.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "callscript": {
       "optional": true
     }
   },
@@ -281,6 +289,7 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "@types/node": "^20.19.43",
     "alchemy": "^2.0.0-beta.75",
+    "callscript": "^0.1.0",
     "effect": "^4.0.0-rc.112",
     "esbuild": "^0.28.2",
     "miniflare": "^5.20260828.0-alpha",
