@@ -308,15 +308,26 @@ describe("ClaudeCodePermissions.layer: the wire, as the CLI reads it", () => {
     )
   })
 
-  /** The decision the CLI would parse: the one text block, decoded. */
+  /**
+   * The decision the CLI would parse: the one text block, decoded.
+   *
+   * `text` is declared optional rather than the block being cast to a shape
+   * that has it. A content block is a union and only the text member carries
+   * `text`, so the cast was asserting exactly what the assertion below is
+   * there to establish -- and test code counts as user code, which is the rule
+   * that says a call site should not need one.
+   */
   const decisionOf = (result: {
-    readonly content: ReadonlyArray<{ readonly type: string }>
+    readonly content: ReadonlyArray<{
+      readonly type: string
+      readonly text?: string | undefined
+    }>
   }): unknown => {
     assert.strictEqual(result.content.length, 1, "expected a single content block")
     const block = result.content[0]
     assert.strictEqual(block?.type, "text")
-    if (block === undefined || block.type !== "text") return undefined
-    return JSON.parse((block as { readonly text: string }).text)
+    assert.isString(block?.text, "a text block carries its text")
+    return block?.text === undefined ? undefined : JSON.parse(block.text)
   }
 
   it.live("answers with exactly one text block, and nothing else", () =>
