@@ -23,7 +23,8 @@ Two things that number hides, both worth knowing before trusting a red run:
   `Casts.test.ts` and `PublicApi.test.ts`. Those pure files pass in isolation.
   So a red run here is a resource question first and a regression question
   second; re-run the named files alone before believing it.
-- **The count includes work that is not committed.** See item 27.
+- ~~The count includes work that is not committed.~~ No longer true as of
+  2026-09-01: item 27's working-tree changes were committed as `be75b83`.
 
 ## Already done — do not restart
 
@@ -252,7 +253,11 @@ open, so the next pass does not have to re-derive it.
     relay work, item 26.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.
-25. **Per-principal credentials** (`plan-tool-credentials.md` §6) — the
+25. **Per-principal credentials** — *note (2026-09-01): item 6 still says
+    multi-user is "blocked on the principal reaching the tool fibre". That
+    mechanism shipped 2026-08-31, recorded in this very entry, so the blocker
+    is stale and items 6 and 25 are one piece of open work described twice.
+    Merge them the next time either is touched.* (`plan-tool-credentials.md` §6) — the
     principal decision is made and its mechanism SHIPPED 2026-08-31
     (`docs/plan-principal-on-tool-fibre.md`, decided as recommended):
     `Principal.CurrentPrincipal` on the root, set by
@@ -522,8 +527,13 @@ open, so the next pass does not have to re-derive it.
 Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).
 Split out because one of these is a defect and the rest are options.
 
-31. **Extend the portability guardrail's host-package pattern** (that plan's
-    C1) — **do this one regardless of every other decision here.**
+31. ~~**Extend the portability guardrail's host-package pattern**~~ (that
+    plan's C1) — **landed 2026-09-01.** `hostPackages` now also rejects
+    `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do`, and the `bun:` /
+    `deno` specifiers, each proved to fire by a probe import and each checked
+    not to flag `effect`, `@effect/platform` or `@effect/ai-anthropic`. It
+    changed no current result, which was the argument for doing it then. What
+    follows is the entry as it stood.
     `verify-portability.mjs` rejects host packages by a hardcoded allowlist of
     known-bad (`platform-node|…|sql-d1|sql-libsql`), so it does **not** catch
     `effect-cf`, `@cloudflare/*`, or `@effect/sql-sqlite-do` — the last being a
@@ -588,12 +598,11 @@ and should not until it is committed. Item 30 is untouched.
       the cached rate, with `Presets.coding` setting it by default.
       `test/PromptCache.test.ts` pins placement, wire survival, and that
       canonical history is untouched.
-    - **M1 written but unreachable**: `src/model/ModelCapabilities.ts` (the
+    - **M1 landed 2026-09-01**: `src/model/ModelCapabilities.ts` (the
       `Capabilities` value, the service, `fromTable`, `builtin`, and the
       exhaustiveness test that fails the build when the pinned rc names a model
-      with no row). **`package.json` has no `./model` export**, so it is not
-      importable and `verify:package` does not see it. One entry fixes that,
-      and it is the immediate next step.
+      with no row), committed as `be75b83` and reachable: `./model` is entry
+      point 48 and `verify:package` imports it from the packed tarball.
     - **M2, M4, M5, M6 not started** — `Compaction.tokens` wiring, `Budget.cost`
       (which must price `cacheWrite` as well as `cacheRead`), the opt-in
       pre-flight transform, and the selection example.
@@ -620,14 +629,19 @@ and should not until it is committed. Item 30 is untouched.
     ("a second executor is the only real evidence"), so landing it is the
     claim that seam is a seam.
 
-30. **Two junk files at the repository root**, untracked: `nul.d.ts` (170KB of
+30. ~~**Two junk files at the repository root**~~ — **deleted 2026-09-01**,
+    and `nul` / `nul.d.ts` added to `.gitignore` so a stray redirect is never
+    committed. `{})` turned out to be *tracked*, not untracked. Nothing in
+    `package.json` or `scripts/` performs the redirect that made it, so nothing
+    regenerates it. The entry as it stood: two junk files, untracked:
+    `nul.d.ts` (170KB of
     generated declarations — the result of a `> nul` redirect on Windows, where
     `nul` is a device name, so `tsc` wrote a file instead of discarding output)
     and a zero-byte file literally named `{})`. Neither is referenced by
     anything. Delete both, and add `nul.d.ts` to `.gitignore` if the redirect
     that made it is in a script somebody still runs.
 
-31. **A typed output across the remote and durable boundaries.**
+35. **A typed output across the remote and durable boundaries.**
     `AgentOutput` landed (`plan-structured-output.md`), and `Result.value` is
     local to an in-process session: `AgentClient`'s `RemoteResult` and
     `DurableSubmission`'s `Outcome` are fixed schemas shared by every agent, so

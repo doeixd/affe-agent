@@ -20,7 +20,7 @@ transforms, steering/follow-ups, interruption, model streaming, elicitation
 `/tool-source`, `/code` (+`/code/callscript`), `/subagent`, `/state`, `/skills`,
 `/memory`, `/evals`, `/observability`, `/data`, `/connectors` (+slack),
 `/hooks`, `/scheduling`, `/budget`, `/blob` (+fs), `/export`, `/compaction`,
-`/redaction`, `/tree`, `/web` (+brave, http), `/presets`,
+`/redaction`, `/tree`, `/web` (+brave, http), `/presets`, `/model`,
 `/plugins` (load an Agent Plugins package over /skills + /mcp), and an
 end-to-end integration proving they compose.
 

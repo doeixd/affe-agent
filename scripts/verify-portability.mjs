@@ -40,8 +40,31 @@ const sourceRoot = process.argv[2] === undefined
 const HOST_MODULES = new Set(["sandbox/local.ts", "blob/fs.ts"])
 
 const builtins = new Set(builtinModules)
-const hostPackages =
-  /^@effect\/(platform-node|platform-bun|platform-deno|sql-sqlite-node|sql-sqlite-bun|sql-pg|sql-mysql2|sql-d1|sql-libsql)/
+/**
+ * Packages that bind a module to one host, by name.
+ *
+ * An allowlist of known-bad rather than a rule, which is a real weakness: the
+ * check only stops what somebody thought to name. It missed `effect-cf`,
+ * `@cloudflare/*` and `@effect/sql-sqlite-do` -- the last a platform package
+ * `apps/worker` already uses -- so anything in that set imported into `src/`
+ * passed the check built to stop it.
+ *
+ * Extended while none of them are in `src/`, so it changes no current result.
+ * That is the argument for doing it now rather than when it is a debate about
+ * a module somebody has already written.
+ */
+const hostPackages = new RegExp(
+  [
+    // Effect's own host bindings: a runtime, or a driver that speaks to one.
+    "^@effect/(platform-node|platform-bun|platform-deno",
+    "|sql-sqlite-node|sql-sqlite-bun|sql-sqlite-do|sql-pg|sql-mysql2|sql-d1|sql-libsql)",
+    // Cloudflare: the Workers runtime, and the community Effect bindings for
+    // it. `apps/worker` is the right place for these; `src/` is not.
+    "|^effect-cf(/|$)|^@cloudflare/",
+    // Bun and Deno expose themselves as specifiers as well as globals.
+    "|^bun:|^(bun|deno)(/|$)"
+  ].join("")
+)
 
 const walk = (dir) =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

@@ -13,3 +13,9 @@ flue.md
 # not history. Local by design -- a claim from another machine's session is
 # noise at best and a stale lock at worst.
 COLLABORATION.md
+
+# `tsc ... > nul` on Windows writes a file: `nul` is a device name in cmd.exe
+# but not in the POSIX shells used here, so the redirect is captured instead of
+# discarded. Ignored so a stray one is never committed again.
+nul
+nul.d.ts

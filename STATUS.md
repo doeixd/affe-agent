@@ -19,7 +19,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
-| portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. **Narrower than it reads** — the host-package pattern is an allowlist of known-bad and misses `effect-cf`, `@cloudflare/*` and `@effect/sql-sqlite-do` (`remaining-work.md` item 31). None are in `src/`, so the result is honest today; the check is not yet what the claim says. |
+| portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. Widened 2026-09-01 to reject `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do` and the `bun:` / `deno` specifiers as well as Effect's own host bindings, each proved to fire; the check now covers what the claim says. |
 | package | `npm run verify:package` | every published entry point imports from the packed tarball |
 | durability | `npm run verify:durability` | D1–D7 bite when broken; D4b survives by construction |
 | smoke | `smoke:ref-coding`, `smoke:cli`, `smoke:tui` | the reference coding agent, the CLI and the TUI run end to end |

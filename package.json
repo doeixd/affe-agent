@@ -211,6 +211,10 @@
       "types": "./dist/pi/index.d.ts",
       "default": "./dist/pi/index.js"
     },
+    "./model": {
+      "types": "./dist/model/index.d.ts",
+      "default": "./dist/model/index.js"
+    },
     "./package.json": "./package.json"
   },
   "types": "./dist/index.d.ts",
