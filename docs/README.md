@@ -100,6 +100,7 @@ Treat as dated. Each names the commit or the date it was read.
 
 | document | subject |
 | --- | --- |
+| [flue.md](./flue.md) | Every Flue concept mapped onto an existing Effect or harness primitive; the correspondence `plan-primitives.md` and `plan-integrations.md` take as settled. Committed 2026-09-01 after living outside the repo. |
 | [research-effect-workflow.md](./research-effect-workflow.md) | Why Effect Workflow integration is a reason for the project to exist, and the one boundary to preserve. Moved from the root 2026-09-01. |
 | [review-2026-08-20.md](./review-2026-08-20.md) | The first implementation review; its findings are folded into [status-history.md](./status-history.md). |
 | [research-opencode-tools.md](./research-opencode-tools.md) | opencode v2's built-in tools — the edit replacer chain, truncation, prompts, permissions. |

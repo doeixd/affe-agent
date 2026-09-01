@@ -313,5 +313,5 @@ Steps 1 and 2 are independent and can run in parallel.
   Alchemy, and fronting; the Worker entry point as a portability test.
 - [MODULES.md](./MODULES.md) — the inventory §2's gap tables are measured
   against.
-- `flue.md` — the capability correspondence this plan takes as settled.
+- [flue.md](./flue.md) — the capability correspondence this plan takes as settled.
 - `ROADMAP.md` — the rule in §3, and the completed capability roadmap.

@@ -4037,8 +4037,8 @@ both directions -- `dependencies: [tag]` for the service, and a
 job and is worth knowing before writing the first stateful tool; the
 first draft of this file did neither and did not compile. And
 `docs/flue.md`, which this plan cites as the mapping the ergonomics
-claim rests on, is not in the repository, so that mapping cannot be
-checked here.
+claim rests on, was not in the repository at the time, so that mapping
+could not be checked here. (Committed as `docs/flue.md` on 2026-09-01.)
 
 ## A runnable durable-resume walkthrough (2026-08-31)
 

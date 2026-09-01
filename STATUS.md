@@ -175,9 +175,9 @@ What `ref-declarative` found:
   `dependencies: [tag]` for the service and a `failure` for the store's
   error. That is the type system doing its job, and it is worth knowing
   before writing the first stateful tool.
-- **`docs/flue.md` is referenced by this plan but absent** from the
-  repository, so the mapping this reference argues against is not
-  checkable here.
+- **`docs/flue.md` was referenced by this plan but absent** from the
+  repository until 2026-09-01; it is committed now, so the mapping this
+  reference argues against can be checked.
 
 - **Gap: no in-memory MCP transport.** An MCP surface can be *typechecked*
   in an example but not *built*, because every transport binds either the

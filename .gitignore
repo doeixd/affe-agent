@@ -4,10 +4,9 @@ dist/
 .DS_Store
 doeixd-effect-agent-*.tgz
 
-# Internal research and roadmap notes — not published.
-# Remove these lines to include them in the repo.
+# Internal research notes -- not published.
+# Remove this line to include it in the repo.
 ADDITIONAL.md
-flue.md
 
 # Live coordination between agents sharing this working tree: claims on files,
 # not history. Local by design -- a claim from another machine's session is

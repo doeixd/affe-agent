@@ -459,7 +459,7 @@ Steps 1–3 are independent of the tool-source work and can run alongside it.
 - [research-tool-sources.md](./research-tool-sources.md) — the other integration
   axis: tools, not infrastructure. §7's credential layers apply to provider
   secrets here too.
-- `flue.md` — the capability correspondence this builds on.
+- [flue.md](./flue.md) — the capability correspondence this builds on.
 
 ## Sources
 
