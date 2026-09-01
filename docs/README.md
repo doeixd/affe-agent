@@ -20,6 +20,8 @@ that says what is actually next.
 
 | document | what it is |
 | --- | --- |
+| [getting-started.md](./getting-started.md) | One typed agent, running against the scripted model with no key. The code is `examples/getting-started.ts`, pinned by a test. |
+| [platforms.md](./platforms.md) | Node and Cloudflare Workers, one table: what runs where and what survives what on each. Bun is untested and says so. |
 | [MODULES.md](./MODULES.md) | Every public module — what, why, and what it composes with. The answer to "which module do I need for X". |
 | [remaining-work.md](./remaining-work.md) | The ranking, easiest first, of what is actually left. |
 | [transport.md](./transport.md) | Reference for how a session crosses a process boundary: the client seam and every transport over it. |

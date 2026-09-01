@@ -33,7 +33,7 @@ That layer is all this library is.
 
 ## Contents
 
-- [Install](#install) · [Quickstart](#quickstart)
+- [Install](#install) · [Quickstart](#quickstart) · [Getting started](./docs/getting-started.md) · [Platforms](./docs/platforms.md)
 - [The mental model: one kernel, a few seams](#the-mental-model-one-kernel-a-few-seams) — the map that makes the rest legible
 - [Package map](#package-map) — every entry point, one line each
 - [Stability](#stability) — what "pre-release" means for you
@@ -135,6 +135,9 @@ required only by the host entries (`/sandbox/local`, `/durable`'s SQLite journal
 the portable core has no engine requirement.
 
 ## Quickstart
+
+> New here? [docs/getting-started.md](./docs/getting-started.md) is one typed
+> agent, running against a scripted model with no key, in one screen.
 
 ```ts
 import { Effect, Schema } from "effect"
@@ -597,6 +600,20 @@ constant it names.
 
 STATUS.md keeps the history of how each was found; the JSDoc above is where a
 user meets it.
+
+## Relation to effect-agent.com
+
+[effect-agent.com](https://effect-agent.com/) documents a different project,
+`danieljvdm/effect-agent`, published as `effect-agent` on npm. The two are
+independent, on the same substrate (Effect 4 and `effect/unstable/ai`), and
+arrived at the same turn model: prepare context, call the model, execute the
+tool batch, commit, drain steering, decide whether to continue. Where they
+part: this library puts the session behind a protocol-neutral client seam
+with HTTP, RPC, AG-UI, A2A and MCP adapters over it, runs the same agent
+durably inside an Effect Workflow, and lets code mode reach any tool through
+the ordinary permission decision; theirs ships a first-class Cloudflare host,
+a typed input projection and an isolate-per-program code mode. A read of one
+against the other is [docs/plan-effect-agent-comparison.md](./docs/plan-effect-agent-comparison.md).
 
 ## Stability
 
