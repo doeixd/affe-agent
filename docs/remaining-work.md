@@ -414,11 +414,35 @@ open, so the next pass does not have to re-derive it.
     answer. A fresh context behaved correctly. That may be OpenCode session
     state rather than anything here, and it is not reproduced in a test.
 
-    **Still unverified: Claude Code's prompt tool.** `--permission-prompt-tool`
-    has not been exercised end to end -- it needs the MCP server standing next
-    to a real run, which is a live test with more moving parts than the two
-    above. The request payload's casing remains the hedged part (both
-    spellings decode).
+26j. **Claude Code's permission tool, proven live** — 2026-09-01, against CLI
+    2.1.252. An MCP server standing on loopback, a real `claude -p` pointed at
+    it by `ClaudeCodePermissions.args`, and both directions hold: **deny** put
+    our own reason (`this workspace is read-only`) in the `tool_result`, Claude
+    explained the block in those terms, and the file was never created;
+    **allow** let the write through and the file exists. The projection was
+    right first time (`tool=Write action=write resource=<path>`).
+
+    Everything else about it was wrong, and only the real CLI could say so.
+    `McpServer.registerToolkit` attaches `structuredContent` and declares an
+    `outputSchema` whenever the success value is an object, and the CLI refuses
+    such a result outright -- *Expected a single text block param with
+    type="text" and a string text value*. The module as shipped could never
+    have worked.
+
+    Worse than not working: the run was blocked **by that error**, so from the
+    outside it looked exactly like the gate doing its job. The first live run
+    "passed" that way, and what gave it away was Claude's own account of it --
+    "not by a denial, but by an error in the permission-checking layer itself".
+    A test that only asserted "the write did not happen" would have agreed with
+    the bug. The regression test therefore asserts the *envelope*: one text
+    block, no `structuredContent`, no `outputSchema`, through a real MCP client.
+
+    Also changed on the strength of it: a request that cannot be decoded is
+    answered with a denial rather than a failed tool call, because a broken
+    permission layer and a refusal must not look alike to whoever is watching.
+
+    The request payload's casing is still the hedged part -- the live runs only
+    exercised whatever this CLI version sends, and both spellings decode.
 
 26i. **OpenCode v2** — SHIPPED 2026-09-01, `OpenCodeA2A.remote({ api: "v2" })`.
     Verified live against a `dev` server: two delegations in one context
