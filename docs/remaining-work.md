@@ -775,7 +775,7 @@ sizes; the items are repeated here so this list stays the one tracker.
     `/scheduling`'s seam gets its Durable Object alarm implementation. Both
     in `apps/worker`, both proved on miniflare, neither needing an account.
 40. ~~**Code mode threat model, stated**~~ — landed 2026-09-01: README
-    "Code mode" section, `test/CodeModeThreatModel.test.ts` pins the
+    "Code mode" section (since 2026-09-02 `docs/guide-code-mode.md`, after the README trim dropped it), `test/CodeModeThreatModel.test.ts` pins the
     citations. As planned: the interpreter
     confines by construction of the language and `Permission` is the
     authority boundary; neither is an isolate, and the doc says so, each
