@@ -21,3 +21,6 @@ nul.d.ts
 
 # Alchemy local state (examples/deploy-cloudflare)
 .alchemy/
+
+# provider keys and Cloudflare tokens for the deployment examples
+.env

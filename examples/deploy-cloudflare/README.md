@@ -16,7 +16,8 @@ npx wrangler deploy
 npx wrangler deploy --config wrangler.free.jsonc   # the free-plan entry, see below
 
 # or as the Alchemy stack, with CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
-# (Alchemy keeps its own credentials and does not read wrangler's login)
+# (Alchemy keeps its own credentials and does not read wrangler's login;
+#  beta.75 exits silently here, see docs/upstream/alchemy-silent-exit.md)
 npx alchemy dev      # local, on miniflare/workerd
 npx alchemy deploy   # for real
 ```

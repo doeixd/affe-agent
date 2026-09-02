@@ -5362,3 +5362,10 @@ from a `wrangler login`:
 Left for the owner: upgrade the plan and `npx wrangler deploy` the
 checked-in `apps/worker` unchanged, and put a provider key in a Worker
 secret for a real model. The README in the example says both.
+
+Later the same day, with a scoped API token created in the dashboard
+(`Edit Cloudflare Workers` template, the personal account only, stored in
+the example's gitignored `.env`): Alchemy still exits 1 with no output.
+Every variable was eliminated in turn; the write-up is
+`docs/upstream/alchemy-silent-exit.md`. The stack stays typechecked and
+documented; wrangler is the path that deploys today.
