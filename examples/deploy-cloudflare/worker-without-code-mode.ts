@@ -1,6 +1,5 @@
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
-import { Schema } from "effect"
 import { DurableObjectState } from "effect-cf"
 import { Agent, AgentLoop } from "@doeixd/effect-agent"
 import * as CloudflareHost from "@doeixd/effect-agent/cloudflare"

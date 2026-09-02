@@ -8,7 +8,7 @@
 // `tsconfig` is what resolves `@doeixd/effect-agent/*` to this repository's
 // sources (esbuild honours its `paths`), as the miniflare test's aliases do.
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "effect-agent",
   "main": "../../apps/worker/src/index.ts",
   "tsconfig": "../../apps/worker/tsconfig.json",

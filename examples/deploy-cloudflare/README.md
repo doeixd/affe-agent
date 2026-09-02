@@ -21,8 +21,8 @@ npx alchemy dev      # local, on miniflare/workerd
 npx alchemy deploy   # for real
 ```
 
-Two accounts, two configs, more than one account on the login: set
-`CLOUDFLARE_ACCOUNT_ID`, or wrangler refuses to choose non-interactively.
+If the login can see more than one account, set `CLOUDFLARE_ACCOUNT_ID`:
+wrangler refuses to choose one non-interactively.
 
 ## Proved on real Cloudflare, 2026-09-02
 

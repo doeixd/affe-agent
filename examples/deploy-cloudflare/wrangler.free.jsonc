@@ -2,7 +2,7 @@
 // no Worker Loader, because Dynamic Workers is the one binding that needs a
 // paid plan. `npx wrangler deploy --config wrangler.free.jsonc`.
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "effect-agent-free",
   "main": "worker-without-code-mode.ts",
   "tsconfig": "../../apps/worker/tsconfig.json",
