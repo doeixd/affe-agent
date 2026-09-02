@@ -250,7 +250,11 @@ target guard); `/openai`
 (OpenAI-compatible responses); `/sessions` (`SessionProjection`: a session's
 events folded into what is true now -- lifecycle, counts, accumulated usage,
 tool outcomes, what is still open -- pure, so a gap is repaired by re-folding
-`DeliveryLog.read({ after })` through the same reducer).
+`DeliveryLog.read({ after })` through the same reducer; `SessionDirectory`,
+2026-09-02: the management/query model over sessions -- get / list / active /
+stats / rename / move / annotate, keyset-paginated, memory or SQL, fed from
+`hostEvents` by `follow` -- kept apart from `DurableSessionStore` as
+`effect-plan-2.txt` §26 insists).
 
 **Applications.** `apps/tui` (full-screen local coding harness),
 `apps/cli` (a client for any mounted HTTP agent), `apps/worker` (the published `/cloudflare` entry with the scripted model:

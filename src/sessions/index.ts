@@ -8,10 +8,11 @@
  * costs. Merging them makes every dashboard query a risk to a running
  * conversation.
  *
- * `SessionProjection` is the query half's foundation and ships here. The
+ * `SessionProjection` is the query half's foundation: the pure reducer. The
  * `SessionDirectory` that §26 specifies -- `list` / `active` / `stats` /
- * `rename` / `move` / `annotate`, paginated from day one -- is not built; it
- * needs a backing store, and this is the reducer it would keep per session to
- * answer `stats`.
+ * `rename` / `move` / `annotate`, paginated from day one -- keeps that
+ * reducer's counts per session in a store (memory or SQL) and is fed from
+ * the host-wide event stream by `SessionDirectory.follow`.
  */
 export * as SessionProjection from "./SessionProjection.js"
+export * as SessionDirectory from "./SessionDirectory.js"

@@ -5467,3 +5467,49 @@ renders once, a refused value opens nothing). The cluster test builds its
 runtime once and shares the context: providing the layer twice built two
 engines, and the second's sharding was not the first's -- which is what
 the `getShardId is not a function` defect on the first draft was.
+
+## 2026-09-02 — `SessionDirectory` (effect-plan-2 §26, remaining-work 26l)
+
+The management/query model over sessions, the oldest unbuilt piece of the
+session-management layer. `src/sessions/SessionDirectory.ts`:
+
+- **One interface, two stores.** `get` / `list` / `active` / `stats` /
+  `rename` / `move` / `annotate`, plus `observe` and `record` for whoever
+  keeps it current. `memory` is one `Ref` with every mutation a single
+  `Ref.modify`; `sql` is over any `SqlClient` (`sqlWithTable` creates the
+  table and its listing index), with the create-if-absent written as
+  `INSERT … SELECT … WHERE NOT EXISTS` for the read-committed reason the
+  durable store documents. Not `DurableSessionStore`: nothing here is read
+  by a running conversation.
+- **Paginated from day one, by keyset.** `list` and `active` order by
+  `sessionId` and take `after` as the previous page's `next`; a page fetches
+  one row past `limit` so `next` needs no count. `limit` is floored at 1
+  and capped at `maxLimit` (500). `active` is an indexed integer column
+  written with the stats, not derived from the JSON at query time.
+- **`Stats` is the persisted core of `SessionProjection`.** The projection
+  stays a plain interface and stays pure; the directory makes the wire
+  decision the projection's doc reserved for it -- a `Schema.Struct` of
+  the counts, `Option`s included, with the transient lists left out.
+  `statsOf(projection)` is the pure step between them.
+- **`follow(directory, hostEvents)` keeps it current** without the host
+  knowing the directory exists (26o's stream, not a call threaded through
+  every mutation): `HostAttached` / `SessionHosted` observe, every
+  `SessionEvent` is folded into a per-session projection seeded with
+  `empty` (never `since(id, 0)`, per the `HostEvent` note) and its stats
+  written through, `SessionUnhosted` drops the fold and keeps the record.
+- **A distinct error for a distinct failure.** `SessionNotIndexed`
+  (session, operation) for a mutation on a session the directory has never
+  seen; `StorageError` stays the store's own.
+
+Pinned in `test/SessionDirectory.test.ts`: `SessionDirectoryConformance`
+(ten cases, shipped from `/testing`) against both stores -- idempotent
+`observe`, the three typed misses, merge-and-remove `annotate`, `move`
+versus namespace listing, `active` following `record`, an exact `Stats`
+round trip through JSON, keyset walking with an exactly-full last page,
+`limit` bounds, `active` paging by namespace, `createdAt` fixed while
+`updatedAt` moves; `follow` over a fixture (joining at sequence 2 is not a
+gap; unhost-then-rehost folds fresh) and over a real `AgentSessionHost`
+with the scripted model; type-level, the error channels are exactly the
+named ones and `follow` needs no service. Broken once: the annotate
+removal (two conformance cases failed, in both stores) and the `rename`
+error assertion (one compile error).

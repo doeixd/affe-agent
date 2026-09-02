@@ -577,7 +577,10 @@ open, so the next pass does not have to re-derive it.
     case asserting the cursor while the unknown event is the most recent one.
     Worth recording: the bug was invisible to the obvious assertion.
 
-26l. **`SessionDirectory`** (`effect-plan-2.txt` §26) — the management/query
+26l. ~~**`SessionDirectory`**~~ (`effect-plan-2.txt` §26) — **SHIPPED 2026-09-02**
+    (`src/sessions/SessionDirectory.ts`, memory + SQL behind one interface,
+    `SessionDirectoryConformance` in `/testing`, `follow` over `hostEvents`;
+    see `status-history.md`). Was: the management/query
     model over sessions: `get` / `list` / `active` / `stats` / `rename` /
     `move` / `annotate`, paginated from day one. Needs a backing store, which
     is why it did not land with 26k; 26k is the reducer it would keep per
