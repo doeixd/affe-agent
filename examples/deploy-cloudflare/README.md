@@ -1,8 +1,9 @@
 # Deploying the agent to Cloudflare with Alchemy
 
 `alchemy.run.ts` provisions what [`apps/worker`](../../apps/worker/src/index.ts)
-serves: one Worker, one SQLite-backed Durable Object namespace, one DO per
-session id. It is a single Effect program — resources are Effects, bindings
+serves -- `@doeixd/effect-agent/cloudflare` with the scripted model: one
+Worker, one SQLite-backed Durable Object namespace, one DO per session id,
+`nodejs_compat` on and the compatibility date at `effect-cf`'s floor. It is a single Effect program — resources are Effects, bindings
 are typed, and there is no YAML — per `docs/plan-deployment.md` §5.
 
 ## Run it
@@ -27,9 +28,10 @@ routing key to the Durable Object.
   (`test/WorkerDurableObject.test.ts`). A real deployment copies
   `apps/worker`, swaps `scriptedModel` for a provider layer, and puts the
   key in a Worker secret.
-- **Durability is the platform's.** History persists to DO SQLite per
-  completed submission; events are journaled to the ordinary `DeliveryLog`;
-  `events?after=N` resumes gaplessly across hibernation and process death.
+- **Durability is the platform's.** History persists to DO SQLite at every
+  committed turn; events are journaled to the ordinary `DeliveryLog`;
+  `events?after=N` resumes gaplessly across hibernation and process death;
+  dispatched work is a logical alarm that outlives the runtime.
   Effect Workflow does not run inside a DO today (measured — see
   `docs/status-history.md`, 2026-08-30), so `/durable` stays on hosts whose
   engine runs.

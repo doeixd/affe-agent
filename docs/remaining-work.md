@@ -740,6 +740,84 @@ Split out because one of these is a defect and the rest are options.
     Recorded only so the next person to want them does not start from the
     Cloudflare docs.
 
+### Newly ranked — from the effect-agent.com comparison (2026-09-01)
+
+[plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) read
+the other `effect-agent` (danieljvdm's, the `effect-cf` author's) against
+what ships here and found a convergent turn model, a much broader surface on
+our side, and six gaps worth closing. Its §2 carries the full ranking with
+sizes; the items are repeated here so this list stays the one tracker.
+
+36. ~~**Getting-started page, lineage note, platforms table**~~ — landed
+    2026-09-01 (`docs/getting-started.md`, `docs/platforms.md`, README
+    section, `test/GettingStarted.test.ts`). As planned:
+    `docs/getting-started.md` over a typechecked `examples/getting-started.ts`
+    that runs against the scripted model with no key; `docs/platforms.md`
+    (Node, workerd, Bun as *untested*); a four-sentence README section on the
+    relation to effect-agent.com. Cheapest item; no decision needed.
+37. ~~**Run policy completeness**~~ — landed 2026-09-01; see
+    `status-history.md`. As planned: `AgentLoop.State` gains
+    `toolCallsTotal` and `elapsed`; `AgentLoop.maxToolCalls`, `maxDuration`
+    and `limits({...})`; a third `Decision`, `Final`, that takes one tool-less
+    turn (output tool only, for an agent with an `AgentOutput`) so a bounded
+    run ends in an answer; `withFinalTurn(inner)`; an optional `stopReason` on
+    `RunCompleted` and the result. Additive throughout. The first growth of
+    the kernel vocabulary since `0.0.1`, and `STATUS.md` should say so when
+    it lands.
+38. ~~**Ship the contracts**~~ — landed 2026-09-01; see `status-history.md`.
+    As planned: `AgentClientContract`,
+    `DeliveryLogContract` and `NodeStoreContract` move from `test/` to
+    `/testing` in `SandboxConformance`'s shape, plus a `DurableSessionStore`
+    contract that does not yet exist as one; each with a deliberately wrong
+    implementation that fails exactly the promise it breaks.
+39. ~~**DO host: history at turn boundaries, alarms as an `AgentDispatcher`**~~
+    — landed 2026-09-01; see `status-history.md`. As planned (§3.3 a–b): a lost runtime costs the turn in flight, not the run;
+    `/scheduling`'s seam gets its Durable Object alarm implementation. Both
+    in `apps/worker`, both proved on miniflare, neither needing an account.
+40. ~~**Code mode threat model, stated**~~ — landed 2026-09-01: README
+    "Code mode" section, `test/CodeModeThreatModel.test.ts` pins the
+    citations. As planned: the interpreter
+    confines by construction of the language and `Permission` is the
+    authority boundary; neither is an isolate, and the doc says so, each
+    confinement citing its test. The readonly recipe is a `Permission` rule
+    set, shown rather than built.
+41. ~~**Typed input**~~ — phase 1 landed 2026-09-01 (in-process:
+    `AgentSession`, `Agent.run`, tools, permissions, transforms, the event);
+    see `status-history.md`. **Phase 2 stays open**: the remote surfaces and
+    the durable interpreter still take `Prompt.RawInput` and refuse a
+    typed-input agent at compile time. As planned: `AgentInput.make(schema, render)` as the
+    mirror of `AgentOutput`: the full value reaches tools as
+    `AgentInput.Current`, the model sees the rendering, the host decodes JSON
+    at the boundary, `/durable` journals the encoded value. One more type
+    parameter on `Agent.make`. Wants a design pass before code.
+42. ~~**`WebCapture` and `WebCrawl`**~~ — landed 2026-09-01; see
+    `status-history.md`. The interactive browser stays parked behind 43. As
+    planned: rendered pages and a bounded
+    same-host crawl over a provider seam in `/web`, Cloudflare Browser
+    Rendering's REST API as the first (portable) provider, doubles in
+    `/testing`, every bound in the README table. The interactive browser is
+    parked behind item 43.
+43. ~~**A published Cloudflare host entry**~~ — landed 2026-09-01 as
+    `@doeixd/effect-agent/cloudflare` on `effect-cf` (decision:
+    `plan-effect-cf-and-webtransport.md` §3a; see `status-history.md`).
+    **The real deployment (§3.3d) still needs an account** and is item 19's
+    remaining half. As planned (plan §3.3 c–d) — after 39: `@doeixd/effect-agent/cloudflare` as a host module in
+    `/sandbox/local`'s shape, with its own exemption in
+    `verify-portability.mjs` and still no `effect-cf`. This is the category
+    decision of `plan-effect-cf-and-webtransport.md` §3 applied to our own
+    code and should be recorded there. Item 19's real-model deployment
+    re-ranks behind it.
+44. ~~**An isolate executor behind `CodeExecutor`**~~ — landed 2026-09-01
+    as `IsolateExecutor` in `/cloudflare`; see `status-history.md`. As
+    planned (§3.5, later) — a
+    Dynamic Worker with `globalOutbound: null` per program, tool calls back
+    over RPC; lives in item 43's entry and cannot precede it. No Node
+    equivalent is pretended.
+45. ~~**`examples/pr-review.ts`**~~ — landed 2026-09-01; see
+    `status-history.md`. As planned: `Presets.coding` + an
+    `AgentOutput` review schema + `Budget.within` + `Evals.tokens`, against
+    the scripted model. A reference, not a package.
+
 ### In flight (2026-09-01)
 
 Items 28 and 29 **landed while this section was being written** — `230745d`

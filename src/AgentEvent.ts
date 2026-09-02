@@ -137,7 +137,14 @@ export const SessionClosed = Schema.TaggedStruct("SessionClosed", {})
  * A submission is the externally observed unit of work: the initial prompt plus
  * every follow-up queued before the session reaches quiescence.
  */
-export const SubmissionStarted = Schema.TaggedStruct("SubmissionStarted", {})
+export const SubmissionStarted = Schema.TaggedStruct("SubmissionStarted", {
+  /**
+   * The submission's typed input in its encoded form, for an agent that
+   * declares an `AgentInput`. Absent otherwise, and optional so a journal or
+   * consumer written before it existed still decodes.
+   */
+  input: Schema.optional(Schema.Unknown)
+})
 export const SubmissionCompleted = Schema.TaggedStruct("SubmissionCompleted", {
   runs: Schema.Number
 })
@@ -151,7 +158,14 @@ export const SubmissionInterrupted = Schema.TaggedStruct(
 
 export const RunStarted = Schema.TaggedStruct("RunStarted", {})
 export const RunCompleted = Schema.TaggedStruct("RunCompleted", {
-  turns: Schema.Number
+  turns: Schema.Number,
+  /**
+   * The reason the loop gave for stopping, when it gave one (`AgentLoop.stop`
+   * / `final` with a reason; `maxTurns`, `maxToolCalls`, `maxDuration` and
+   * `Budget.within` name theirs). Optional so a journal or consumer written
+   * before it existed still decodes.
+   */
+  stopReason: Schema.optional(Schema.String)
 })
 export const RunFailed = Schema.TaggedStruct("RunFailed", {
   failure: Failure

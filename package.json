@@ -95,6 +95,10 @@
       "types": "./dist/web/http.d.ts",
       "default": "./dist/web/http.js"
     },
+    "./web/cloudflare": {
+      "types": "./dist/web/cloudflare.d.ts",
+      "default": "./dist/web/cloudflare.js"
+    },
     "./subagent": {
       "types": "./dist/subagent/index.d.ts",
       "default": "./dist/subagent/index.js"
@@ -215,6 +219,10 @@
       "types": "./dist/pi/index.d.ts",
       "default": "./dist/pi/index.js"
     },
+    "./cloudflare": {
+      "types": "./dist/cloudflare/index.d.ts",
+      "default": "./dist/cloudflare/index.js"
+    },
     "./model": {
       "types": "./dist/model/index.d.ts",
       "default": "./dist/model/index.js"
@@ -236,7 +244,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.cloudflare.json",
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit",
     "typecheck:cli": "tsc --noEmit --project apps/cli",
@@ -245,7 +253,7 @@
     "lint:cli": "node scripts/effect-diagnostics.mjs apps/cli/tsconfig.json",
     "lint:tui": "node scripts/effect-diagnostics.mjs apps/tui/tsconfig.json",
     "lint:portability": "node scripts/verify-portability.mjs",
-    "check": "npm run typecheck && npm run typecheck:cli && npm run typecheck:tui && npm run typecheck:worker && npm run build && npm run lint && npm run lint:cli && npm run lint:tui && npm run lint:portability && npm run verify:workerd && npm run test && npm run verify:mutations && npm run verify:package && npm run smoke:ref-coding && npm run smoke:ref-gateway && npm run smoke:ref-declarative && npm run smoke:ref-delegation && npm run smoke:host-events && npm run smoke:cli && npm run smoke:tui",
+    "check": "npm run typecheck && npm run typecheck:cli && npm run typecheck:tui && npm run typecheck:worker && npm run typecheck:cloudflare && npm run build && npm run lint && npm run lint:cli && npm run lint:tui && npm run lint:cloudflare && npm run lint:portability && npm run verify:workerd && npm run test && npm run verify:mutations && npm run verify:package && npm run smoke:ref-coding && npm run smoke:ref-gateway && npm run smoke:ref-declarative && npm run smoke:ref-delegation && npm run smoke:host-events && npm run smoke:cli && npm run smoke:tui",
     "cli": "npm --prefix apps/cli run dev --",
     "prepublishOnly": "npm run check",
     "verify:package": "node scripts/verify-package.mjs",
@@ -262,18 +270,24 @@
     "smoke:ref-delegation": "tsx examples/ref-delegation.ts",
     "smoke:durable-resume": "tsx examples/durable-resume.ts",
     "smoke:host-events": "tsx examples/host-events.ts",
-    "smoke:tui": "node scripts/tui-smoke.mjs"
+    "smoke:tui": "node scripts/tui-smoke.mjs",
+    "typecheck:cloudflare": "tsc --noEmit --project tsconfig.cloudflare.json",
+    "lint:cloudflare": "node scripts/effect-diagnostics.mjs tsconfig.cloudflare.json"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",
+    "callscript": ">=0.1.0 <0.2.0",
     "effect": ">=4.0.0-rc.111 <5.0.0",
-    "callscript": ">=0.1.0 <0.2.0"
+    "effect-cf": ">=0.39.0 <1.0.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
       "optional": true
     },
     "callscript": {
+      "optional": true
+    },
+    "effect-cf": {
       "optional": true
     }
   },
@@ -301,6 +315,7 @@
     "alchemy": "^2.0.0-beta.75",
     "callscript": "^0.1.0",
     "effect": "^4.0.0-rc.112",
+    "effect-cf": "^0.39.0",
     "esbuild": "^0.28.2",
     "miniflare": "^5.20260828.0-alpha",
     "typescript": "^5.9.0",

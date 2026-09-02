@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Schedule } from "effect"
 import { build } from "esbuild"
 import { convertV4MiniflareOptions, Miniflare } from "miniflare"
 import * as fs from "node:fs/promises"
@@ -40,12 +40,18 @@ const bundleWorker = Effect.fn("WorkerDurableObject.bundle")(function* () {
       conditions: ["workerd", "browser"],
       outfile,
       logLevel: "silent",
+      // workerd provides its own runtime module, and the Node built-ins
+      // effect-cf reaches for (`node:async_hooks`) under `nodejs_compat`.
+      external: ["cloudflare:*", "node:*"],
       alias: {
         "@doeixd/effect-agent": path.join(process.cwd(), "src", "index.ts"),
+        "@doeixd/effect-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts"),
+        "@doeixd/effect-agent/code": path.join(process.cwd(), "src", "code", "index.ts"),
         "@doeixd/effect-agent/AgentSession": path.join(process.cwd(), "src", "AgentSession.ts"),
         "@doeixd/effect-agent/client": path.join(process.cwd(), "src", "client", "index.ts"),
         "@doeixd/effect-agent/durable": path.join(process.cwd(), "src", "durable", "index.ts"),
         "@doeixd/effect-agent/http": path.join(process.cwd(), "src", "http", "index.ts"),
+        "@doeixd/effect-agent/scheduling": path.join(process.cwd(), "src", "scheduling", "index.ts"),
         "@doeixd/effect-agent/testing": path.join(process.cwd(), "src", "testing", "index.ts")
       }
     })
@@ -60,10 +66,13 @@ const workerAt = (outfile: string, persist: string) =>
       // travels through the converter it ships for exactly this.
       new Miniflare(convertV4MiniflareOptions({
         modules: [{ type: "ESModule", path: outfile }],
-        compatibilityDate: "2025-08-01",
+        compatibilityDate: "2026-08-25",
+        compatibilityFlags: ["nodejs_compat"],
         durableObjects: {
           SESSIONS: { className: "AgentSessionObject", useSQLite: true }
         },
+        // The Worker Loader binding the isolate executor loads programs through.
+        workerLoaders: { LOADER: {} },
         resourcePersistencePath: persist
       }))
     ),
@@ -199,6 +208,173 @@ describe("the Worker entry on workerd", () => {
             Math.max(...sequences) > Math.max(...sequencesBefore),
             "the resumed stream must include events from the second life"
           )
+        })
+      )
+    }),
+    120_000
+  )
+
+  /**
+   * History is written as each turn commits, so a runtime lost mid-run
+   * costs the turn in flight and nothing before it. The scripted model's
+   * second prompt in a life runs two tool turns and then hangs; the runtime
+   * is killed with that submission in flight, and the next life holds
+   * exactly the two committed turns. Broken once by persisting per
+   * submission again: the second life saw only the first exchange.
+   */
+  it.live("a runtime lost mid-run keeps every committed turn", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage-turns")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          json(yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create", sessionId: "turns" })))
+          const first = json(yield* call(miniflare, "/sessions/turns/prompt", jsonRequest("POST", {
+            requestId: "prompt-1",
+            input: wireInput("first")
+          })))
+          assert.strictEqual(first.result.text, "reply-1")
+
+          // Admitted, not awaited: turn 3 of this submission never returns.
+          json(yield* call(miniflare, "/sessions/turns/submit", jsonRequest("POST", {
+            requestId: "prompt-2",
+            input: wireInput("second")
+          })))
+          // Wait until both tool turns have committed and been written.
+          yield* Effect.retry(
+            Effect.flatMap(
+              call(miniflare, "/sessions/turns/history", { headers: { authorization: "Bearer worker" } }),
+              (history) =>
+                (history.body.match(/"tool-result"/g) ?? []).length >= 2
+                  ? Effect.void
+                  : Effect.fail("not yet" as const)
+            ),
+            { times: 100, schedule: Schedule.spaced("50 millis") }
+          )
+          // The runtime dies here, with the submission's third turn hung.
+        })
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          const history = json(yield* call(miniflare, "/sessions/turns/history", {
+            headers: { authorization: "Bearer worker" }
+          }))
+          const texts = JSON.stringify(history)
+          assert.include(texts, "first")
+          assert.include(texts, "second")
+          // Exactly the two committed tool turns: no more, and not none.
+          assert.strictEqual((texts.match(/"tool-result"/g) ?? []).length, 2)
+        })
+      )
+    }),
+    120_000
+  )
+
+  /**
+   * A job dispatched through `AgentDispatcher` is persisted to the DO's
+   * SQLite and fires from the alarm -- including when the runtime that
+   * dispatched it died first, because a wake re-arms from the table.
+   */
+  it.live("a dispatched job survives the runtime that dispatched it and fires from the alarm", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage-alarm")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          json(yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create", sessionId: "sched" })))
+          json(yield* call(miniflare, "/sessions/sched/prompt", jsonRequest("POST", {
+            requestId: "prompt-1",
+            input: wireInput("now")
+          })))
+          // Five seconds out: long enough that the next life's first read
+          // lands before it is due, which is what tells "fired after the
+          // delay" from "fired at once" -- the difference a delay coerced to
+          // zero would hide.
+          const dispatched = yield* call(miniflare, "/sessions/sched/dispatch", jsonRequest("POST", {
+            input: "later",
+            delayMillis: 5000
+          }))
+          assert.strictEqual(dispatched.status, 202, dispatched.body)
+          // The runtime dies before the job is due.
+        })
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          // Any request wakes the object, which re-arms the alarm from the
+          // table; the job is then the platform's to fire -- and not yet.
+          const early = json(yield* call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }))
+          assert.notInclude(JSON.stringify(early), "later", "the job fired before its delay")
+          yield* Effect.retry(
+            Effect.flatMap(
+              call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }),
+              (history) => history.body.includes("later") ? Effect.void : Effect.fail("not yet" as const)
+            ),
+            { times: 100, schedule: Schedule.spaced("100 millis") }
+          )
+          const history = json(yield* call(miniflare, "/sessions/sched/history", {
+            headers: { authorization: "Bearer worker" }
+          }))
+          const texts = JSON.stringify(history)
+          assert.include(texts, "now")
+          assert.include(texts, "later")
+        })
+      )
+    }),
+    120_000
+  )
+
+  /**
+   * Code mode in an isolate: the program runs in a Dynamic Worker with no
+   * network, and reaches its tools only through the object's broker. Two
+   * programs: one calls a tool and returns its answer; one reaches for
+   * `fetch` and is refused by the platform.
+   */
+  it.live("a program runs in an isolate with no network, calling tools through the broker", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage-code")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          json(yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create", sessionId: "code-1" })))
+          const answered = json(yield* call(miniflare, "/sessions/code-1/prompt", jsonRequest("POST", {
+            requestId: "prompt-1",
+            input: wireInput("compute")
+          })))
+          assert.strictEqual(answered.result.text, "done")
+          const history = json(yield* call(miniflare, "/sessions/code-1/history", {
+            headers: { authorization: "Bearer worker" }
+          }))
+          const texts = JSON.stringify(history)
+          // The first program's tool call went through the broker and its
+          // answer came back into the program's return value, in the same
+          // `{ ok, value }` shape the interpreter hands a program.
+          assert.include(texts, '"answer":{"ok":true,"value":"echoed: hello from the isolate"}')
+          // The second program had no fetch to call: the value it returned
+          // is the refusal, not the network. (Its source, which mentions
+          // reaching the network, is in the transcript as the tool call.)
+          assert.include(texts, '"value":"blocked: the network is not available to a program; call a tool"')
+          assert.notInclude(texts, '"value":"reached the network"')
+
+          // The broker route exists on the object only, at `/code/invoke`;
+          // through the public Worker every path carries the session segment,
+          // so from outside the route does not exist at all -- a forged call
+          // is a 404 before any token is looked at.
+          const forged = yield* call(miniflare, "/sessions/code-1/code/invoke", jsonRequest("POST", {
+            token: "not-a-run",
+            path: ["data", "echo"],
+            input: { text: "x" }
+          }))
+          assert.strictEqual(forged.status, 404)
+          assert.notInclude(forged.body, "echoed")
         })
       )
     }),

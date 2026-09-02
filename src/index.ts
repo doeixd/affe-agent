@@ -1,5 +1,6 @@
 export * as Agent from "./Agent.js"
 export * as AgentEvent from "./AgentEvent.js"
+export * as AgentInput from "./AgentInput.js"
 export * as AgentLoop from "./AgentLoop.js"
 export * as AgentOutput from "./AgentOutput.js"
 export * as AgentRun from "./AgentRun.js"

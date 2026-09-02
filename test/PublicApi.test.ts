@@ -13,6 +13,9 @@ describe("public API", () => {
       "AgentClosedError",
       "AgentEvent",
       "AgentIdleError",
+      // The shape a submission is asked in: the mirror of `AgentOutput`,
+      // and a noun for the same reason -- it changes `prompt`'s parameter.
+      "AgentInput",
       "AgentLoop",
       // The shape a submission is asked to end in. A first-class noun because
       // it changes an agent's *type* -- `Result.value` is `Option<never>`
@@ -74,6 +77,9 @@ describe("public API", () => {
       // changes the signature -- a planned agent no longer needs a
       // `LanguageModel` from its environment.
       "withExecutionPlan",
+      // The typed-input mirror of `output`: the one combinator that replaces
+      // the agent's `Input` slot rather than threading it.
+      "withInput",
       "withInstructions",
       "withLoop",
       "withPermission",
@@ -161,13 +167,20 @@ describe("public API", () => {
     ])
     assert.deepStrictEqual(Object.keys(Harness.AgentLoop).sort(), [
       "Continue",
+      "Final",
       "Stop",
       "and",
       "bounded",
+      "final",
+      "limits",
       "make",
+      "maxDuration",
+      "maxToolCalls",
       "maxTurns",
       "or",
-      "untilIdle"
+      "stop",
+      "untilIdle",
+      "withFinalTurn"
     ])
     assert.deepStrictEqual(Object.keys(Harness.ContextTransform).sort(), [
       "appendSystem",
@@ -250,10 +263,16 @@ describe("durable and cluster surfaces", () => {
   it("exports the testing vocabulary and nothing beyond it", async () => {
     const testing = await import("../src/testing/index.js")
     assert.deepStrictEqual(Object.keys(testing).sort(), [
+      "AgentClientConformance",
       "AgentProbe",
       "ChannelConformance",
+      "DeliveryLogConformance",
+      "DurableSessionStoreConformance",
+      "NodeStoreConformance",
       "SandboxConformance",
       "TestLanguageModel",
+      "TestWebCapture",
+      "TestWebCrawl",
       "TestWebFetch",
       "TestWebSearch"
     ])

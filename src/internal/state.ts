@@ -92,7 +92,7 @@ export interface Session<
    * signature to say nothing the engine uses -- `AgentSession` is where the
    * type is restored, at the boundary that hands it to a caller.
    */
-  readonly agent: AgentDefinition<Tools, E, R, any, any>
+  readonly agent: AgentDefinition<Tools, E, R, any, any, any>
   readonly state: SubscriptionRef.SubscriptionRef<SessionState>
   /**
    * Canonical history, held apart from the observable runtime state.

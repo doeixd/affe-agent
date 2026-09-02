@@ -4904,3 +4904,434 @@ the first attempt read `tail`'s status and looked like a pass.
 The sixteen mutations are the ones verified by hand this week, so the table
 starts as a record of work already done rather than as an aspiration. Every one
 bites at `2026-09-01`; the run is recorded in `mutations.json`.
+---
+
+## 2026-09-01 — run policy through the loop seam (comparison plan, item 2)
+
+`docs/plan-effect-agent-comparison.md` §3.1, as specified, with three
+corrections found while building it.
+
+What landed:
+
+- `AgentLoop.State` carries `toolCallsTotal` and `elapsed`, accumulated by
+  `AgentRun` -- the run reads `Clock.currentTimeMillis` once at start and
+  after each turn, so a `TestClock` makes `maxDuration` an assertion.
+- `maxToolCalls(n)`, `maxDuration(input)`, `limits({ maxTurns?,
+  maxToolCalls?, maxDuration?, finalTurn? })` -- the last typed so that
+  `limits({})` and `limits({ finalTurn: true })` do not compile (pinned with
+  `@ts-expect-error`).
+- `Decision` is now `Continue | Stop | Final`; `Stop` and `Final` carry an
+  optional `reason` (`AgentLoop.stop(reason)` / `final(reason)`); the
+  built-in bounds and `Budget.within` / `cost` name theirs.
+- `AgentRun` on `Final` runs one more turn with `withholdTools: true` -- an
+  engine-internal argument to `AgentTurn.execute`, deliberately not a
+  `PromptOptions` field -- and does not consult the loop again. The withheld
+  toolkit is `Toolkit.empty` standing in for `WithHandler<Tools>`, the
+  second erasing cast in `AgentTurn.ts`, inventoried in `AGENTS.md` and
+  `test/Casts.test.ts`.
+- `withFinalTurn(inner)` maps a `Stop` on a turn that still requested tools
+  to `Final` with the same reason; an idle stop is left alone.
+- `RunCompleted.stopReason` (optional), `AgentSubmission.Result.stopReason`
+  (`Option`), `RemoteResult.stopReason` and the durable `Outcome`'s -- all
+  optional on the wire so older journals and clients decode.
+- `TestLanguageModel`'s recorder gained `tools`: the names offered on each
+  call, which is the only way to assert what a `Final` turn withheld, since
+  tools travel beside the prompt rather than in it.
+
+What building it found:
+
+- **`or` lost a single policy's reason.** The first draft seeded the fold
+  with the bare `Stop` constant and kept the accumulator on ties, so
+  `or(stop("s"))` answered `{ _tag: "Stop" }`. Both folds now start from the
+  first policy's own decision. The truth-table test caught it before it
+  shipped, which is what the table is for.
+- **`AgentProbe.make` refused a session with an output.** Its parameter was
+  `AgentSession<any, any>`, two slots for a type that has three, so a test
+  probing an agent with an `AgentOutput` did not compile. Widened; that is
+  a library signature defect of exactly the kind AGENTS.md says to fix in
+  the library.
+- **`Effect.reduce` takes a lazy seed in v4.** A value where a thunk was
+  expected compiled to `zero is not a function` at runtime in every loop.
+
+Broken once: withholding (`withholdTools: false` unconditionally) fails the
+three `Final` tests and nothing else; the `or` seed, above.
+
+Deliberately not built: a per-call tool-call refusal (a `Permission`
+decision, not a loop's), and a replay-stable `elapsed` under `/durable` --
+`State.elapsed`'s JSDoc says why a duration bound can decide differently on
+replay, and `maxDuration` inherits the caveat.
+
+## 2026-09-01 — the contract suites ship (comparison plan, item 3)
+
+`docs/plan-effect-agent-comparison.md` §3.2. `AgentClientContract`,
+`DeliveryLogContract` and `NodeStoreContract` lived in `test/`, so a client
+or store written outside this repository could not be certified against
+them; `SandboxConformance` and `ChannelConformance` had already shown the
+shape that fixes it. Now in `/testing`:
+
+- `AgentClientConformance`, `DeliveryLogConformance`, `NodeStoreConformance`
+  and -- new as a suite, having only been an in-file `describe` --
+  `DurableSessionStoreConformance`. Each is `cases(options)` as named
+  Effects failing with the suite's own tagged `Failure`, and
+  `run(options)` returning a `Report`. No `@effect/vitest` import: the
+  runner wiring is one `it.live` or `it.effect` per case in the caller's
+  file, which is exactly what the four `test/*Contract.ts` wrappers are now.
+- `src/testing/internal/conformance.ts` holds what the suites share:
+  `report`, a structural `deepEqual` (arrays, byte arrays, dates, plain
+  objects -- which covers `Option` and tagged structs), `show`, and the
+  `checks` vocabulary (`that`, `equal`, `failureOf`). `failureOf` exists
+  because `Effect.flip` puts an unexpected *success* on the error channel,
+  where a case's declared error type has no room for it; a case that
+  expected a failure and got a value is the case failing, and the report
+  says so.
+- The protocol-error half of the old client contract (`failingHost`,
+  `protocolErrors`, `runProtocolErrors`) stays in `test/`: it is a fixture
+  about transports, not a contract a client implements.
+
+Falsified: `test/ShippedConformance.test.ts` runs each suite against an
+in-tree implementation from the published entry and then against the same
+implementation with one method replaced -- a log that reports a conflict as
+a duplicate, a store whose roots are every node, a session store that
+accepts a replayed `finish`, a client that cannot reach a session by id --
+and asserts the report names exactly that case. A fifth case checks that a
+failure through the client's own error surfaces as the suite's comparison
+rather than a defect dump.
+
+Found while porting: the `attachExecution` case compared the claim's
+`executionId` as an `Option` where the schema has it `optional`, and the
+first count of client cases was one short (the streaming case is
+conditional, and was counted as absent). Both caught by the falsification
+file before anything depended on them.
+
+Not shipped: `McpServerConformance` and the cross-adapter host matrix.
+Both are about this repository's adapters against this repository's host,
+not a contract a third party implements.
+
+## 2026-09-01 — code mode says what its boundary is (comparison plan, item 5)
+
+`docs/plan-effect-agent-comparison.md` §3.5, the documentation half. The
+README had no section on `/code` at all -- the module was documented in its
+own header and in `examples/code-mode.ts` -- and a reader arriving from a
+code mode that runs each program in a fresh isolate would have assumed the
+same here.
+
+Now stated, in the README's new "Code mode" section and the `CodeMode`
+header: the program is confined by construction of the language (an owned
+tree-walking interpreter over a subset, no host authority reachable but the
+`invoke` hook, the prototype routes to `Function` refused on every access)
+and its authority is decided per call by `Permission`; it is not an OS or
+isolate boundary, and an interpreter bug is a host bug. Twelve confinements
+are listed, each cited from the test that pins it, and
+`test/CodeModeThreatModel.test.ts` reads the list and looks every name up in
+the file it cites -- broken once by editing a citation, it failed. The
+read-only recipe is `Permission.rules` over annotated tools, shown rather
+than built, with the tool left in the catalog so the model learns from the
+refusal. `docs/MODULES.md` gains the `/code` row it was missing.
+
+The isolate executor (the plan's item 9) stays where the plan put it: after
+a published Cloudflare host entry, and not the reason for one.
+
+## 2026-09-01 — the Durable Object host keeps every committed turn, and fires alarms (comparison plan, item 4)
+
+`docs/plan-effect-agent-comparison.md` §3.3 a–b, both in `apps/worker`,
+both proven on workerd through miniflare.
+
+**(a) History at turn boundaries.** The DO wrote history after each
+completed submission, so a runtime lost mid-run lost the run. The session's
+`TurnCompleted` is emitted inside the same uninterruptible region as the
+commit, so persisting on it is a change of *when*, not *what*: a lost
+runtime now costs the turn in flight and nothing before it. The submission
+boundaries are kept too, because a follow-up's prompt is committed before
+its first turn. The header's "loses the run" became "loses the turn in
+flight", and the `session` re-adoption comment says why a row now exists
+after the first committed turn rather than the first completed submission.
+Proven: the scripted model's second prompt in a life runs two tool turns
+and hangs; the runtime is killed with that submission in flight; the next
+life's history holds exactly the two committed turns. Broken once by
+persisting per submission again: the second life saw only the first
+exchange.
+
+**(b) Alarms as an `AgentDispatcher`.** `/scheduling`'s seam, implemented
+over one DO: a `Scheduling.JobStore` over a `worker_jobs` table in DO SQLite
+(`claimDue` deletes by id, which the DO's serial request handling makes
+atomic), `Scheduling.queued(store)` as the dispatcher, `dispatch` arming the
+object's alarm for the earliest due job, `alarm()` prompting the session
+with every due job and re-arming, and a wake re-arming from the table so a
+job outlives the runtime that dispatched it whether or not the platform
+kept its alarm. The route is the host's own (`POST /sessions/{id}/dispatch`),
+outside the HTTP surface, and says so. Proven: dispatch with a delay, kill
+the runtime before it is due, wake a new one with any request, and the
+job's prompt appears in history.
+
+Two things the port changed on the way:
+
+- The worker's agent gained a `tick` tool and `bounded(4)`, and its script
+  a two-tool-turn-then-hang second prompt, because a run cannot be left
+  mid-flight without tool turns to be in the middle of. Every existing
+  assertion still holds: each life's first prompt in a DO still answers
+  `reply-1`.
+- The DO now builds a `ManagedRuntime` once and resolves the client from
+  it, so the HTTP handler and the alarm share one client and therefore one
+  open session per id; `HttpRouter.toWebHandler` is given that client as a
+  layer rather than building its own.
+
+Not done here: a published `/cloudflare` entry (item 43, the category
+decision) and a real deployment (item 19). The host is still a reference
+to read and copy, with the scripted model.
+
+## 2026-09-01 — typed input, phase 1 (comparison plan, item 6)
+
+`docs/plan-effect-agent-comparison.md` §3.4, the in-process half.
+`AgentInput.make(schema, render)` declared on the agent (`Config.input`,
+`Agent.withInput`) makes `prompt`, `submit` and `Agent.run` take the
+schema's type instead of `Prompt.RawInput`; the encoded value is provided
+on the submission's fibre as `AgentInput.Current` (a `Context.Reference`,
+as `CurrentPrincipal` is) and carried on `SubmissionStarted.input`; the
+rendering -- `render(value)`, plain or an `Effect` whose `E`/`R` join the
+agent's -- is what enters canonical history. `AgentInput.current(input)`
+decodes the fibre's value against the schema it is asked with, so a tool
+wired into the wrong agent gets the schema's error rather than a mistyped
+value.
+
+The type parameter: `AgentDefinition` and `AgentSession` gained
+`Input = never`, invariant like `Value` and for the same reason -- a data
+slot the caller passes, with nothing downstream to catch a mismatch. Every
+combinator threads it; `withInput` is the one that replaces it. `Config`
+gained `Input`, `IE`, `IR`. `PromptInput<Input>` is `Prompt.RawInput` for
+`never`, the type otherwise, and the input parameter is `NoInfer` so
+`Input` is inferred from the agent alone -- the first draft let the argument
+drive inference and every `prompt(session, "text")` in the repository
+stopped typechecking.
+
+Two things building it found:
+
+- **Rendering after the claim would have leaked the claim.** A renderer
+  that fails must not leave the session `running`; rendering now happens
+  before `claim`, and `submit`'s error gains the agent's `E`, which it must:
+  the renderer runs at admission. Pinned: a failing render leaves the
+  session `idle` and the next prompt runs.
+- **The definition field's channels decide the public error type.** With
+  `input: Option<AgentInput<Input, any, any, any>>` on the definition, the
+  renderer's `Effect<_, any, any>` made `prompt`'s error channel `any`
+  end to end, and five examples' `_ErrorNotUnknown` assertions caught it.
+  The field is `AgentInput<Input, any, E, R>`: the renderer's channels are
+  the agent's, by `Config`'s construction, and now by the type.
+
+What the boundary is, and where it is stated: the remote surfaces
+(`AgentClient` and every transport) and the durable interpreter still take
+`Prompt.RawInput`, and the invariant `Input` makes them *refuse* a
+typed-input agent at compile time rather than mis-render it at runtime.
+Carrying the value across a wire means deciding how a client names the
+schema to encode it with; that is phase 2, tracked as the open half of
+item 41.
+
+Pinned in `test/AgentInput.test.ts`: the model and history see the
+rendering and not the id; a tool reads the typed value; `None` outside a
+submission and under an agent without an input; a permission policy
+refuses on the value where the rendering would allow (broken once by not
+providing `Current` around the submission -- the tool and permission cases
+both failed); a renderer's service joins `R`; a transform sees the value;
+and type-level, the input is the schema's type, not `any`, and a string is
+refused for a typed agent as a ticket is for an untyped one.
+`examples/typed-agent.ts` gained the `Support` agent with the same
+assertions; the README gained "Typed input and output".
+
+## 2026-09-01 — a pull-request reviewer from existing parts (comparison plan, item 10)
+
+`docs/plan-effect-agent-comparison.md` §3.7. `examples/pr-review.ts`:
+`Presets.coding` for the workspace and the read-only tools, an
+`AgentOutput` so the review is a typed value (verdict, summary, findings
+with path, line and severity), `Budget.within` for the ceiling, and
+`Evals` to assert what happened and report what it cost. Runs against the
+scripted model; typechecked with the rest; `npx tsx examples/pr-review.ts`.
+
+Two library gaps the example found, both fixed in the library as
+`AGENTS.md` says to:
+
+- **`Presets.coding` could not take an `output`** (or an `input`): its
+  `Config` generics stopped at `PR`, so `Value` was `never` and an
+  `AgentOutput` was refused. The preset now threads `Value`, `Input`, `IE`
+  and `IR` -- a coding agent that must answer in a shape is still a coding
+  agent.
+- **`Evals` could not take an agent with a typed output or input.**
+  `Eval.agent` was `AgentDefinition<Tools, E, R>`, so an invariant `Value`
+  made a reviewer unassignable and `t.send`'s `result.value` was `never`.
+  `EvalContext`, `Eval`, `defineEval`, `run` and `runAll` thread `Value`
+  and `Input`; `send` takes `PromptInput<Input>`.
+
+And one thing worth knowing before writing the first output-bearing agent
+under a strict policy: **the output tool is a tool, and a default-deny
+`Permission` policy denies it.** The first run of the example refused its
+own review (`ToolPermissionDeniedError` on `record_review`). The example
+allows it by name, and the README's "Typed input and output" section and
+`AgentOutput`'s header now say so.
+
+## 2026-09-01 — rendered pages: capture and a bounded crawl (comparison plan, item 7)
+
+`docs/plan-effect-agent-comparison.md` §3.6. `/web` gains two capabilities
+beside search and fetch:
+
+- **`WebCapture`**: a page rendered as a browser would show it, as Markdown
+  with the links it carries. Provider-neutral; the first provider is
+  `/web/cloudflare`, Cloudflare Browser Rendering's REST API (`POST
+  .../browser-rendering/markdown` and `/links` under a bearer token) -- HTTP,
+  so portable to Node and workerd alike, with `layerConfig` reading the
+  `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` names `wrangler` uses.
+  Bounded response (2 MiB), whole-operation timeout (30 s), four in flight,
+  the token redacted where headers are rendered, provider bodies never
+  echoed into errors.
+- **`WebCrawl`**: breadth-first over `WebCapture` on the start page's host,
+  each link once, fragments dropped, cross-host links returned but not
+  followed. Bounds with defaults and ceilings: pages (20 → 100), depth
+  (3 → 10), total bytes (8 MiB), a deadline on Effect's clock (5 min), two
+  captures in flight. A page that fails is a row in `failed`; the start
+  page's failure is the crawl's. `stoppedBy` names the bound that ended it.
+  Built over the capability rather than as a second provider contract, so
+  every provider that renders one page can crawl, and the crawler is
+  portable.
+- **`WebToolkit.renderedToolkit()`**: `web_capture` and `web_crawl`, with
+  `Permission` projections on the origin, results delimited as untrusted,
+  failures turned into instructions the model can act on. The existing
+  `toolkit()` is unchanged, so no caller gains a requirement.
+- **The target guard moved** from the fetch provider to
+  `web/internal/target.ts`, one pure `refusal(url)` both providers name in
+  their own error vocabulary. Two copies of an SSRF guard is how one falls
+  behind; the fetch provider's fifteen tests still pass over the shared one.
+- `TestWebCapture` (a scripted site keyed by URL) and `TestWebCrawl` in
+  `/testing`; the README's limits table gains two rows and a "Rendered
+  pages" section.
+
+Pinned: the provider's endpoints, body, bearer token and redaction; the
+guard's refusals before any request; 401/403, 429 and other statuses;
+provider-reported failure; advertised and actual overflow; a malformed body
+never echoed; the timeout under `TestClock`; the tool's delimiting and
+instruction-shaped failures. The crawler: breadth-first order and
+once-only visits, a failed page skipped, the start failure, the page bound
+and the ceiling clamp, the depth bound, the byte bound (the crossing page
+not kept), the deadline under `TestClock`.
+
+Parked, as planned: the interactive browser -- navigate, click, fill, with
+a session lifetime and an uncertain outcome after a crash -- behind the
+published Cloudflare host entry (item 43).
+
+## 2026-09-01 — the Cloudflare host is a published entry, on effect-cf (comparison plan, item 8c)
+
+The owner decided: utilise `effect-cf` where appropriate. Under
+`plan-effect-cf-and-webtransport.md` §3's own reasoning that has one
+answer, and §3a records it: the Cloudflare host entry, and nowhere else.
+
+`@doeixd/effect-agent/cloudflare` (`src/cloudflare/index.ts`):
+`CloudflareHost.make({ agent, layer, ... })` returns the Durable Object
+class and the Worker class a deployment exports. Inside it is what
+`apps/worker` used to hand-roll, on `effect-cf`'s services instead:
+
+- `DurableObject.make` for the class, the per-instance runtime and
+  `DurableObjectState`; `DurableObjectSqlite.layer()` for the object's
+  SQLite as `SqlClient`; `Worker.make` and `DurableObjectNamespace` for the
+  router and the stub as an Effect client.
+- `DurableObjectAlarm` replaced the hand-rolled jobs table, `setAlarm` and
+  re-arm-on-wake: `/scheduling`'s `AgentDispatcher` is now one logical
+  alarm per job (`scheduleAlarm` persists it and reconciles the platform
+  alarm in one transaction), and the alarm handler is `processDue` --
+  at-least-once, a failed run retried after `retryFailedAfter`. The
+  object's session id is the name it was created under (`state.id.name`),
+  so the meta table went too.
+- History at every committed turn, the delivery-log journal and gapless
+  `events?after=N` are unchanged from the worker, now the entry's.
+
+What made it a separate compile: `effect-cf`'s types reach the Workers
+globals, which collide with the DOM lib the main build uses, so the entry
+is its own program (`tsconfig.cloudflare.json`, `typecheck:cloudflare`,
+`lint:cloudflare`, a second `tsc` in `build` into the same `dist`). And
+what made `verify-package` special-case it: the entry imports
+`cloudflare:workers`, which only workerd provides, so on Node the check
+resolves it through `exports` and stops; `test/WorkerDurableObject.test.ts`
+imports it on workerd, with `cloudflare:*` and `node:*` external to the
+bundle and `nodejs_compat` on (effect-cf reaches for
+`node:async_hooks`). `effect-cf` is an optional peer, `>=0.39.0 <1.0.0`.
+
+`apps/worker` is now twenty lines: the agent, the scripted model, and the
+two exports. Its three miniflare tests pass unchanged over the entry -- a
+session surviving the runtime's death with its log, the turn-boundary
+persistence, and the dispatched job firing after a restart, now through
+`effect-cf`'s alarm rather than the table it replaced. `verify:workerd`
+and `verify:package` pass; the portability lint exempts the entry by name
+and still rejects `effect-cf` everywhere else.
+
+Not done: the real deployment (item 19, plan §3.3d). This container has no
+Cloudflare account, and the owner's wrangler login is on their machine;
+the Alchemy stack is updated for the entry and waits for one.
+
+## 2026-09-01 — code mode in an isolate (comparison plan, item 9)
+
+`docs/plan-effect-agent-comparison.md` §3.5, the later half.
+`IsolateExecutor` in `/cloudflare`: a `CodeExecutor` that loads each
+program as its own Dynamic Worker through the Worker Loader binding and
+discards it when the program ends. Real JavaScript, compiled by the
+runtime (Workers forbid `eval`), with CPU and subrequest limits.
+
+**How the isolate reaches its tools, and nothing else.** The object's own
+stub is the isolate's `globalOutbound`, so a fetch to any URL lands on the
+object; the main module captures the real `fetch` for its broker call and
+then removes `fetch` and `WebSocket` from the program's globals. A
+program therefore has no network at all, and the main module has one
+road: `POST /code/invoke` under a per-run token, which `CodeBroker` (in
+the host) answers by the run's own `invoke` hook, provided with the
+context the run started with -- so the same `Permission` decision, the
+same events and the same `CurrentPrincipal` as a call the interpreter
+makes. The reply shape is the interpreter's (`{ ok, value }` for a
+result, a throw the program can catch for a refusal or a declared
+failure), and a `CodeDiagnostic` the host raised is recorded by the broker
+and wins the run whatever the program returned.
+
+Found while building it: workerd refuses to serialise a namespace
+binding into a dynamic worker's `env` ("does not support
+serialization"), which is why the callback rides on `globalOutbound`
+rather than on a binding -- and why blanking the program's `fetch` is
+load-bearing, not tidiness: with the object as the only outbound, a
+program *with* fetch could reach the object's other routes.
+
+Proven on miniflare (`workerLoaders: { LOADER: {} }`): a program calls
+`tools.data.echo` and returns its answer through the broker; a program
+that reaches for `fetch` returns the refusal; and the broker route is
+unreachable from the public Worker (every public path carries the session
+segment, so `/code/invoke` is a 404 there before any token is read), while
+inside the object a bad token is a 403. `apps/worker` builds the
+executor once per object and hands it to `CodeTool.tool` from a
+per-turn toolkit, and its scripted model is chosen by the object's name
+-- the thing a per-instance layer can do that a module-level one cannot.
+
+Not done: suspension (an isolate's state is its heap) and a Node
+equivalent (there is no honest one).
+
+## 2026-09-01 — review pass over the comparison-plan work
+
+A read of everything the plan landed, with fixes. What it found:
+
+- **The alarm dispatcher dropped every string delay.** `Dispatched.delay`
+  is a `Duration.Input`; the first draft coerced it with `Number`, so
+  `"1500 millis"` became zero and every job was due at once -- and the
+  alarm test could not tell "fired after the delay" from "fired
+  immediately". Now `Duration.fromInputUnsafe`; the test dispatches five
+  seconds out, checks the job has *not* fired on the first read after the
+  restart, then waits for it.
+- **A dispatched run that failed would have retried forever.** The alarm
+  handler let every failure reschedule the job; an agent failure is the
+  run's outcome, so it repeated a failing model call every thirty seconds.
+  Now only a busy session or a transport fault reschedules; an execution
+  failure and an undecodable payload are logged and acknowledged.
+- **The crawler's depth bound had two holes.** A `maxDepth` of zero was
+  treated as absent, and a link past the bound could be dropped without
+  `stoppedBy` saying so. Depth is now clamped from zero and checked where
+  links are enqueued, which also removed the per-batch filtering.
+- **The isolate's `console` shim only had `log`**; `console.error` in a
+  program was a `TypeError`. All five methods record.
+- Stale prose: the executor header still described the abandoned design
+  (a namespace binding in the isolate's `env`, `globalOutbound: null`);
+  `/cloudflare` had two prompt codecs for one thing and a doc block
+  orphaned above the `Host` interface. `AgentInput` now says that `steer`
+  and `followUp` still take `Prompt.RawInput`, and why.
+
+Full suite after the pass: 1888 tests in 175 files, green; the entry, the
+worker and the main program typecheck and lint clean.
+

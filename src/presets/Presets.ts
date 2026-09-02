@@ -126,9 +126,15 @@ export const coding = <
   KE = never,
   KR = never,
   Bound extends ReadonlyArray<Agent.BoundTool<Tool.Any>> = [],
-  PR = never
+  PR = never,
+  Value = never,
+  Input = never,
+  IE = never,
+  IR = never
 >(
-  options: Agent.Config<Tools, LE, LR, TE, TR, KE, KR, Bound, PR> & CodingExtras
+  // Every `Config` slot, `output` and `input` included: a coding agent that
+  // must answer in a shape -- a review, a plan -- is still a coding agent.
+  options: Agent.Config<Tools, LE, LR, TE, TR, KE, KR, Bound, PR, Value, Input, IE, IR> & CodingExtras
 ) => {
   const { sandbox, workspace, workspaces, ...agentConfig } = options
   return {

@@ -1,6 +1,9 @@
 # Plan: effect-cf and effect-webtransport — what to take, what to read, what to refuse
 
-**Status: proposed. Nothing here is implemented.** Written 2026-09-01 from a
+**Status: §3 revised and implemented 2026-09-01.** The owner's decision
+reversed item 3 below for one place: `effect-cf` is adopted *at the host
+boundary* -- `@doeixd/effect-agent/cloudflare`, `src/cloudflare/index.ts`,
+an optional peer -- and nowhere else. See §3a. Written 2026-09-01 from a
 research pass over [danieljvdm/effect-cf](https://github.com/danieljvdm/effect-cf)
 and its `packages/effect-webtransport`, prompted by the question "should we
 integrate this". The short answer is **one yes, one no, and one hole to close
@@ -75,6 +78,38 @@ the one we should mostly not depend on.
 
 And, independent of all three, §6: close the guardrail hole this research
 exposed.
+
+### 3a. Revised 2026-09-01: adopted at the host boundary, and only there
+
+The owner decided to utilise `effect-cf` where appropriate, and "where
+appropriate" has exactly one answer under §3's own reasoning: the Cloudflare
+host entry. Item 1 stands -- host coupling lives behind its own entry point
+-- and that entry *is* the Cloudflare host, so the package that makes
+Cloudflare's primitives Effect services is what it should be built on rather
+than re-derived. Item 3 is therefore reversed for `src/cloudflare/` and for
+nothing else:
+
+- `@doeixd/effect-agent/cloudflare` is built on `DurableObject.make`,
+  `DurableObjectSqlite`, `DurableObjectAlarm`, `DurableObjectNamespace` and
+  `Worker.make`. `effect-cf` is an **optional peer** (`>=0.39.0 <1.0.0`):
+  a consumer who never imports the entry never installs it.
+- The portable core is unchanged and `verify-portability` still rejects
+  `effect-cf` outside `cloudflare/index.ts` (a named host module, as
+  `sandbox/local.ts` is). `verify-package` resolves the entry through
+  `exports` but does not import it on Node -- it imports
+  `cloudflare:workers`, which only workerd provides -- and
+  `test/WorkerDurableObject.test.ts` is where it is imported, on workerd.
+- The entry compiles under `tsconfig.cloudflare.json`: `effect-cf`'s types
+  reach the Workers globals, which collide with the DOM lib the main build
+  uses, so it is its own program with the same `outDir`.
+- What §5.3 called the shopping list is now simply used: logical alarms
+  over the one platform alarm (`DurableObjectAlarm`, at-least-once with
+  retry, reconciled in the same transaction as the schedule) replaced the
+  hand-rolled jobs table and `setAlarm` of `apps/worker`. §5.2's WebSocket
+  hibernation prototype stays open.
+
+Item 2 (`effect-webtransport` as a falsification test) is unchanged and
+still not done.
 
 ## 4. Track A — WebTransport as a falsification of the RPC seam
 

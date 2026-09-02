@@ -20,6 +20,8 @@ constant it names.
 | Pi grep | `GREP_MAX_LINE_LENGTH` | `500 chars` | `PiToolkit.GREP_MAX_LINE_LENGTH` | `... (line truncated to 500 chars)` |
 | Web search | `DEFAULT_LIMIT` / `MAX_LIMIT` / `MAX_RESPONSE_BYTES` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `8` / `10` / `1 MiB` / `15 s` / `4` | `web/brave.ts` | `WebSearchResponseTooLargeError` / `WebSearchTimeoutError` / semaphore queue |
 | Web fetch | `MAX_RESPONSE_BYTES` / `MAX_REDIRECTS` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `1 MiB` / `5` / `20 s` / `4` | `web/http.ts` | `WebFetchResponseTooLargeError` / `RedirectLimitError` / `TimeoutError`; cross-origin redirects refused |
+| Web capture | `MAX_RESPONSE_BYTES` / `TIMEOUT_MILLIS` / `MAX_CONCURRENT` | `2 MiB` / `30 s` / `4` | `web/cloudflare.ts` | `WebCaptureResponseTooLargeError` / `WebCaptureTimeoutError` / semaphore queue; the fetch provider's target guard applies |
+| Web crawl | `DEFAULT_PAGES` → `MAX_PAGES` / `DEFAULT_DEPTH` → `MAX_DEPTH` / `MAX_TOTAL_BYTES` / `DEADLINE_MILLIS` / `CONCURRENCY` | `20` → `100` / `3` → `10` / `8 MiB` / `5 min` / `2` | `web/WebCrawl.ts` | a request above a ceiling is clamped to it; `CrawlResult.stoppedBy` names the bound that ended the crawl; a failed page is a row in `failed`, not a failure |
 | Slack | `toleranceSeconds` | `300 s` | `Connectors.Slack.Options` | replay window guard |
 | Durable polling | `clientOutcome` / `deliveryLog` / `workflowInterrupt` / `result` | `10 ms` / `250 ms` / `25 ms` / `10 ms` | `DurablePolling.defaults` / `EFFECT_AGENT_*_POLL_INTERVAL` | validated positive `Duration` via `Config`; also `DeliveryLog.live` fans out only in-process, cross-node via `read({ after })` |
 | Interrupt | poll | `25 ms` | `DurablePolling.workflowInterrupt` | signal polled while submission runs |

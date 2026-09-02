@@ -112,8 +112,8 @@ const toolCallsOf = (history: Prompt.Prompt): ReadonlyArray<{ readonly name: str
       : []
   )
 
-const totalTokens = <Tools extends Record<string, Tool.Any>>(
-  result: AgentSession.Result<Tools>
+const totalTokens = <Tools extends Record<string, Tool.Any>, Value>(
+  result: AgentSession.Result<Tools, Value>
 ): Option.Option<number> =>
   Option.map(result.response, (response) => (response.usage.inputTokens.total ?? 0) + (response.usage.outputTokens.total ?? 0))
 
@@ -121,12 +121,19 @@ const totalTokens = <Tools extends Record<string, Tool.Any>>(
  * What a test drives and asserts against. Every assertion returns an Effect
  * that records a check; `send` drives the session and returns its `Result`.
  */
-export interface EvalContext<Tools extends Record<string, Tool.Any>, E> {
+export interface EvalContext<
+  Tools extends Record<string, Tool.Any>,
+  E,
+  /** The agent's `AgentOutput` value, so `send`'s result carries it typed. */
+  Value = never,
+  /** The agent's `AgentInput` type, so `send` takes it rather than `Prompt.RawInput`. */
+  Input = never
+> {
   /** Prompt the agent, recording nothing; returns the run's `Result`. */
   readonly send: (
-    input: Prompt.RawInput,
+    input: AgentSession.PromptInput<Input>,
     options?: AgentSession.PromptOptions
-  ) => Effect.Effect<AgentSession.Result<Tools>, AgentSession.PromptError<Tools, E>>
+  ) => Effect.Effect<AgentSession.Result<Tools, Value>, AgentSession.PromptError<Tools, E>>
   /** The last send completed rather than being interrupted. */
   readonly succeeded: () => Effect.Effect<void>
   /** The named tool was called at least once in the conversation. */
@@ -163,34 +170,34 @@ export const parseVerdict = (text: string): boolean =>
 // Defining and running
 // ---------------------------------------------------------------------------
 
-export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TE, TR> {
+export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = never> {
   readonly name: string
-  readonly agent: AgentDefinition<Tools, E, R>
+  readonly agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>
   /**
    * The test body. Its error `TE` is inferred from what the body actually raises
    * (a bare `t.send` surfaces the agent's `PromptError`; a body that only records
    * checks raises nothing) -- honest, never `unknown`. `run` discharges it: any
    * failure or defect is caught and recorded as a failed check.
    */
-  readonly test: (t: EvalContext<Tools, E>) => Effect.Effect<void, TE, TR>
+  readonly test: (t: EvalContext<Tools, E, Value, Input>) => Effect.Effect<void, TE, TR>
 }
 
-/** Define an eval. Identity at runtime; it exists so `t` infers the agent's tools. */
-export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TE = never, TR = never>(
-  options: Eval<Tools, E, R, TE, TR>
-): Eval<Tools, E, R, TE, TR> => options
+/** Define an eval. Identity at runtime; it exists so `t` infers the agent's tools, output and input. */
+export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TE = never, TR = never, Value = never, Input = never>(
+  options: Eval<Tools, E, R, TE, TR, Value, Input>
+): Eval<Tools, E, R, TE, TR, Value, Input> => options
 
 /**
  * Run one eval to an `EvalResult`. Never fails: a send that errors, or a defect
  * in the test, is recorded as a failed check so the report is always complete.
  */
-export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
-  evaluation: Eval<Tools, E, R, TE, TR>
+export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = never>(
+  evaluation: Eval<Tools, E, R, TE, TR, Value, Input>
 ): Effect.Effect<EvalResult, never, LanguageModel.LanguageModel | R | TR> =>
   Effect.scoped(
     Effect.gen(function* () {
       const checks = yield* Ref.make<ReadonlyArray<Check>>([])
-      const last = yield* Ref.make<Option.Option<AgentSession.Result<Tools>>>(Option.none())
+      const last = yield* Ref.make<Option.Option<AgentSession.Result<Tools, Value>>>(Option.none())
       const record = (label: string, passed: boolean, detail?: string) =>
         Ref.update(checks, (all) => [...all, { label, passed, ...(detail === undefined ? {} : { detail }) }])
 
@@ -198,7 +205,7 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
 
       const withLast = <R2 = never>(
         label: string,
-        use: (result: AgentSession.Result<Tools>) => Effect.Effect<void, never, R2>
+        use: (result: AgentSession.Result<Tools, Value>) => Effect.Effect<void, never, R2>
       ): Effect.Effect<void, never, R2> =>
         Effect.flatMap(Ref.get(last), Option.match({
           onNone: () => record(label, false, "no send yet"),
@@ -208,7 +215,7 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
       const withCalls = (use: (calls: ReadonlyArray<{ readonly name: string; readonly params: unknown }>) => Effect.Effect<void>) =>
         Effect.flatMap(AgentSession.history(session), (history) => use(toolCallsOf(history)))
 
-      const t: EvalContext<Tools, E> = {
+      const t: EvalContext<Tools, E, Value, Input> = {
         send: (input, options) =>
           AgentSession.prompt(session, input, options ?? {}).pipe(
             Effect.tap((result) => Ref.set(last, Option.some(result)))
@@ -274,8 +281,8 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
   )
 
 /** Run many evals, optionally concurrently. Each result is independent. */
-export const runAll = <Tools extends Record<string, Tool.Any>, E, R, TE, TR>(
-  evaluations: ReadonlyArray<Eval<Tools, E, R, TE, TR>>,
+export const runAll = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = never>(
+  evaluations: ReadonlyArray<Eval<Tools, E, R, TE, TR, Value, Input>>,
   options?: { readonly concurrency?: number | "unbounded" | undefined }
 ): Effect.Effect<ReadonlyArray<EvalResult>, never, LanguageModel.LanguageModel | R | TR> =>
   Effect.all(evaluations.map(run), { concurrency: options?.concurrency ?? 1 })

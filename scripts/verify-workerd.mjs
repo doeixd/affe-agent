@@ -70,7 +70,7 @@ const hasEsbuild = (() => {
 if (hasEsbuild) {
   step("workerd: esbuild --bundle apps/worker/src/index.ts --platform=browser --format=esm", () => {
     const out = path.join(root, "dist", "worker-probe.mjs")
-    run("npx", ["esbuild", "apps/worker/src/index.ts", "--bundle", "--platform=browser", "--format=esm", `--outfile=${out}`, "--external:effect", "--external:effect/*"], {
+    run("npx", ["esbuild", "apps/worker/src/index.ts", "--bundle", "--platform=browser", "--format=esm", `--outfile=${out}`, "--external:effect", "--external:effect/*", "--external:cloudflare:*", "--external:node:*"], {
       cwd: root
     })
     console.log(`  → ${out}`)

@@ -29,7 +29,9 @@ import { Tool } from "effect/unstable/ai"
  *   it would mean deciding how a client names the schema to decode it with,
  *   which is a second feature rather than a field;
  * - permission, failure policy, streaming and `ExecutionPlan` need to know
- *   nothing about it.
+ *   nothing about it -- which cuts both ways: a `Permission` policy that
+ *   denies by default denies this tool too, and must allow it by name
+ *   (`{ tool: output.toolName, decision: Permission.allow }`).
  *
  * The alternative — one `generateObject` over the finished history after the
  * loop goes idle — was rejected for the first two reasons. A result no turn

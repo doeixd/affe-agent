@@ -32,7 +32,7 @@ That layer is all this library is.
 
 ## Contents
 
-- [Install](#install) · [Quickstart](#quickstart)
+- [Install](#install) · [Quickstart](#quickstart) · [Getting started](./docs/getting-started.md) · [Platforms](./docs/platforms.md)
 - [The mental model: one kernel, a few seams](#the-mental-model-one-kernel-a-few-seams)
 - [Package map](#package-map) · [Maturity map](#maturity-map)
 - [Design commitments](#design-commitments) · [Stability](#stability) · [Runtimes](#runtimes)
@@ -68,6 +68,9 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 ```
 
 ## Quickstart
+
+> New here? [docs/getting-started.md](./docs/getting-started.md) is one typed
+> agent, running against a scripted model with no key, in one screen.
 
 ```ts
 import { Effect, Schema } from "effect"
@@ -173,7 +176,8 @@ per-module reference, with what each composes with, is
 **Batteries** (capabilities over a seam)
 : `/coding` and `/pi` — file/shell tool batteries over a sandbox ·
 `/shell` — construction-time shell dialects · `/web` (`/web/brave`,
-`/web/http`) — search and guarded fetch · `/tool-source` — MCP / OpenAPI /
+`/web/http`, `/web/cloudflare`) — search, guarded fetch, rendered-page
+capture and a bounded crawl · `/tool-source` — MCP / OpenAPI /
 GraphQL catalogs as toolkits, with `Credentials` · `/code` (`/code/callscript`)
 — code mode: one `execute` tool over a confined interpreter · `/subagent` ·
 `/state` · `/skills` · `/memory` · `/compaction` · `/budget` — token and money
@@ -186,13 +190,16 @@ and JSONL commit log · `/blob` (`/blob/fs`) — content-addressed blob storage 
 `Presets.coding` and `Presets.gateway`, composition and defaults only.
 
 **Host and testing**
-: `/sandbox` (portable) + `/sandbox/local` (Node) · `/elicitation` ·
-`/testing` — the scripted `TestLanguageModel`, `AgentProbe` and web doubles.
+: `/sandbox` (portable) + `/sandbox/local` (Node) · `/cloudflare` — one
+Durable Object per session and the Worker that routes to it, on `effect-cf`
+(an optional peer) · `/elicitation` · `/testing` — the scripted
+`TestLanguageModel`, `AgentProbe`, web doubles, and the conformance suites
+every client and store is held to.
 
 **Applications in this repository**
 : `apps/tui` — the full-screen local coding harness · `apps/cli` — a
-conventional client for any mounted HTTP agent · `apps/worker` — a Cloudflare
-Durable Object host, one DO per session.
+conventional client for any mounted HTTP agent · `apps/worker` — the
+`/cloudflare` entry deployed with the scripted model, one DO per session.
 
 ### Maturity map
 
@@ -203,7 +210,7 @@ says what a change there means for you, not how good the code is.
 | --- | --- | --- |
 | **core** | the vocabulary; a breaking change here is a major version | root, `/client`, `/elicitation`, `/testing` |
 | **supported** | contract-tested against the reference apps and the [cross-adapter matrix](./docs/conformance-matrix.md); changes are deliberate and noted in `STATUS.md` | `/http`, `/rpc`, `/mcp`, `/mcp/v1`, `/mcp/v2`, `/ag-ui`, `/a2a`, `/coding`, `/sandbox`, `/sandbox/local`, `/shell`, `/state`, `/hooks`, `/observability`, `/export`, `/compaction`, `/redaction`, `/budget`, `/subagent` |
-| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/code`, `/code/callscript`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/sessions`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/pi`, `/model`, `/blob`, `/blob/fs`, `/presets` |
+| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/code`, `/code/callscript`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/sessions`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/web/cloudflare`, `/cloudflare`, `/pi`, `/model`, `/blob`, `/blob/fs`, `/presets` |
 | **reference** | illustrative, not a dependency: read it, copy it, do not import it | `apps/tui`, `apps/cli`, `apps/worker`, `examples/` |
 
 Engine-facing seams are on none of these namespaces. What a durable
@@ -230,6 +237,20 @@ Deliberately *not* in the core, and built on top of it without modifying it:
 durability (`/durable` runs the same agent definition inside an Effect
 `Workflow`), and memory, skills, sandboxes and subagents (each is a service, a
 transform, or a tool, packaged).
+
+## Relation to effect-agent.com
+
+[effect-agent.com](https://effect-agent.com/) documents a different project,
+`danieljvdm/effect-agent`, published as `effect-agent` on npm. The two are
+independent, on the same substrate (Effect 4 and `effect/unstable/ai`), and
+arrived at the same turn model: prepare context, call the model, execute the
+tool batch, commit, drain steering, decide whether to continue. Where they
+part: this library puts the session behind a protocol-neutral client seam
+with HTTP, RPC, AG-UI, A2A and MCP adapters over it, runs the same agent
+durably inside an Effect Workflow, and lets code mode reach any tool through
+the ordinary permission decision; theirs ships a first-class Cloudflare host,
+a typed input projection and an isolate-per-program code mode. A read of one
+against the other is [docs/plan-effect-agent-comparison.md](./docs/plan-effect-agent-comparison.md).
 
 ## Stability
 
@@ -272,6 +293,7 @@ SQLite through `node:sqlite`).
 | [guide-sessions.md](./docs/guide-sessions.md) | Steering, follow-ups, interruption, canonical history and transforms, streaming, elicitation, tool progress, events, errors, tool failure and concurrency policy, per-turn toolkits, authoring styles, snapshots, testing, tracing |
 | [guide-permissions.md](./docs/guide-permissions.md) | `Permission`: allow / ask / deny, rules, exceptions, remembered grants, the `needsApproval` floor, journalling under `/durable` |
 | [guide-sandbox.md](./docs/guide-sandbox.md) | `/sandbox`, `execStream`, the `/coding` and `/pi` toolkits, the `shell` tool and its dialect, Claude Code and OpenCode as A2A agents under one policy |
+| [guide-code-mode.md](./docs/guide-code-mode.md) | `/code`: one `execute` tool over a confined interpreter, what the boundary is (each confinement citing its test), the read-only recipe |
 | [guide-transports.md](./docs/guide-transports.md) | `AgentClient`, `submit` / `awaitSubmission`, `AgentServer`, the CLI, AG-UI, OpenAI-compatible completions, A2A v1 both directions, MCP both directions |
 | [guide-durable.md](./docs/guide-durable.md) | `/durable`, `/cluster`, the durable client, polling configuration, Durable Streams |
 | [guide-batteries.md](./docs/guide-batteries.md) | Subagents, scheduling, hooks, connectors, structured data, observability, evals, memory, skills, agent state, compaction, Agent Plugins |

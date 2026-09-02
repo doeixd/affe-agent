@@ -23,6 +23,7 @@ that says what is actually next.
 | [guide-sessions.md](./guide-sessions.md) | What a local session does: steering, follow-ups, interruption, streaming, elicitation, events, errors, authoring, snapshots, testing. |
 | [guide-permissions.md](./guide-permissions.md) | The `Permission` seam: allow / ask / deny, rules, exceptions, remembered grants. |
 | [guide-sandbox.md](./guide-sandbox.md) | `/sandbox`, the coding toolkits, the `shell` dialect, and the Claude Code / OpenCode bridges. |
+| [guide-code-mode.md](./guide-code-mode.md) | `/code`: the `execute` tool, the interpreter's boundary with each confinement cited to its test, the read-only recipe. |
 | [guide-transports.md](./guide-transports.md) | `AgentClient` and every adapter over it: HTTP, RPC, AG-UI, OpenAI-compatible, A2A, MCP. |
 | [guide-durable.md](./guide-durable.md) | `/durable`, `/cluster`, the durable client, Durable Streams. |
 | [guide-batteries.md](./guide-batteries.md) | Every battery: subagents, scheduling, hooks, connectors, data, observability, evals, memory, skills, state, compaction, plugins. |
@@ -35,6 +36,8 @@ holds only the install, quickstart, seam map, package map and stability notes.
 
 | document | what it is |
 | --- | --- |
+| [getting-started.md](./getting-started.md) | One typed agent, running against the scripted model with no key. The code is `examples/getting-started.ts`, pinned by a test. |
+| [platforms.md](./platforms.md) | Node and Cloudflare Workers, one table: what runs where and what survives what on each. Bun is untested and says so. |
 | [MODULES.md](./MODULES.md) | Every public module — what, why, and what it composes with. The answer to "which module do I need for X". |
 | [remaining-work.md](./remaining-work.md) | The ranking, easiest first, of what is actually left. |
 | [transport.md](./transport.md) | Reference for how a session crosses a process boundary: the client seam and every transport over it. |
@@ -68,6 +71,7 @@ workerd through miniflare). Each file carries its own status line, and
 | [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. **Phases 1–14 landed**; only phase 15 (provider-overflow recovery) remains, deliberately parked. |
 | [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. **Steps 1–4 landed** — both bridges ship, share one permission decision, and are proven against the real Claude Code and OpenCode runtimes; `examples/ref-delegation.ts` is the reference. Steps 5–7 (relay, then the `LanguageModel` adapter) remain. |
 | [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md) | Whether two third-party Effect packages belong at our host boundary. Decides a category, not just two packages: `effect-cf` is read-and-mine, not adopt; `effect-webtransport` is a falsification test of the RPC seam, not a transport. One guardrail fix stands regardless. Nothing implemented. |
+| [plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) | What to take from [effect-agent.com](https://effect-agent.com/) — the other `effect-agent`, read 2026-09-01 — and what to leave. Finds a convergent turn model and six gaps: onboarding, run-policy completeness (`maxToolCalls`, `maxDuration`, a `Final` decision), shipped contracts, the Cloudflare host, typed input, rendered pages. Ranked in §2; items 36–45 of [remaining-work.md](./remaining-work.md). Nothing implemented. |
 | [plan-relay.txt](./plan-relay.txt) | A secure addressable transport for services behind NAT, as an `RpcClient.Protocol`. Sixteen phases. |
 | [opencode-completion-plan.md](./opencode-completion-plan.md) · [effect-plan-2.txt](./effect-plan-2.txt) | A design brief for `SessionInbox` / `ProcessManager`; the second is the tree-annotated revision with the implementation order. **§27 `SessionProjection` landed 2026-09-01** as `/sessions`; the rest is ranked as [remaining-work.md](./remaining-work.md) 26l–26p rather than the single line it used to be. |
 

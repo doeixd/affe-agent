@@ -63,8 +63,16 @@ that one will fail on any busy machine, including CI.
 
 The kernel vocabulary (`Agent`, `AgentSession`, submission / run / turn,
 `AgentLoop`, `AgentEvent`, `ContextTransform`, `ToolExecution`, `Permission`,
-`Elicitation`, `InputChannel`) has not grown since `0.0.1`. Everything else is
-built *from* it: a Service, a Layer, a toolkit, a transform, an adapter.
+`Elicitation`, `InputChannel`) has grown once since `0.0.1`: on 2026-09-01
+`AgentLoop.Decision` gained `Final` (one tool-less turn, then stop) and an
+optional `reason`, and `State` gained `toolCallsTotal` and `elapsed` -- all
+additive, and the engine's only new knowledge is that a `Final` has one
+turn's notice -- and the same day `AgentInput` joined `AgentOutput` as a
+root noun: the value a submission is asked with, split from the rendering
+the model sees, carried on the fibre as a `Context.Reference` and on
+`SubmissionStarted`. `Agent.make` and `AgentSession` gained an `Input` type
+parameter, defaulting to `never` (`Prompt.RawInput`). Everything else is built *from* the vocabulary: a Service, a
+Layer, a toolkit, a transform, an adapter.
 
 ## What ships
 
@@ -77,7 +85,13 @@ One line per surface; the maturity label is the README's
 keys; typed tool execution with strategies and failure policies; permission
 policy with projections, rules and remembered grants; elicitation with a
 terminal state; snapshots and restore; execution plans; the event ADT with
-the correlation envelope; `PromptWire` so files cross every boundary intact.
+the correlation envelope; `PromptWire` so files cross every boundary intact;
+typed input (`AgentInput`: value on the fibre, rendering in history,
+in-process only -- the remote and durable surfaces refuse it at compile
+time until phase 2);
+run policy on the loop seam -- `maxTurns`, `maxToolCalls`, `maxDuration`,
+`limits`, `withFinalTurn` -- with the stop's reason on `RunCompleted`, the
+result and every client.
 
 **Transports.** `/client` is the protocol-neutral seam (`AgentClient`,
 `AgentSessionHost` with capacity, per-session request buckets, authorization,
@@ -121,6 +135,18 @@ reference counting would kill it at exactly the wrong moment.
 the fibre that acts -- a `Context.Reference` the host sets per request
 (`AgentSessionHost.Options.subject`), `None` outside any host, carried on
 the durable claim/payload so replays see what the claimer saw.
+
+**Cloudflare host.** `@doeixd/effect-agent/cloudflare` (since 2026-09-01):
+`CloudflareHost.make({ agent, layer })` returns the Durable Object class and
+the Worker class a deployment exports. Built on `effect-cf`, an optional
+peer, by the owner's decision (`docs/plan-effect-cf-and-webtransport.md`
+§3a) -- the one place it enters `src/`, compiled as its own program
+(`tsconfig.cloudflare.json`) and exempted by name in the portability lint.
+Durability is the platform's: `/durable`'s engine still stalls on workerd.
+`IsolateExecutor` (same entry) is code mode in a Dynamic Worker: no
+network but the object's broker route, every call still through the
+host's `invoke`; proven on miniflare with a program that reaches for
+`fetch` and gets nothing.
 
 **Presets.** `@doeixd/effect-agent/presets`: `Presets.coding` (toolkit, a
 policy that asks before anything changes, an acquired workspace) and
@@ -216,26 +242,34 @@ itself); `/export` (JSON envelope + JSONL commit log); `/compaction`
 (token policy, checkpoints, controller, events); `/redaction`; `/budget`;
 `/data`; `/hooks`; `/scheduling`; `/connectors` (+ Slack, with a channel
 conformance suite); `/plugins`; `/tree` (sessions as a tree: branch, lanes,
-divergence, activation); `/web` (+ Brave, HTTP fetch); `/openai`
+divergence, activation); `/web` (+ Brave search, HTTP fetch, and since
+2026-09-01 rendered-page capture over Cloudflare Browser Rendering's REST
+API with a portable bounded crawler over it, sharing the fetch provider's
+target guard); `/openai`
 (OpenAI-compatible responses); `/sessions` (`SessionProjection`: a session's
 events folded into what is true now -- lifecycle, counts, accumulated usage,
 tool outcomes, what is still open -- pure, so a gap is repaired by re-folding
 `DeliveryLog.read({ after })` through the same reducer).
 
 **Applications.** `apps/tui` (full-screen local coding harness),
-`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (a real
-Durable Object host: one DO per session, history in DO SQLite, events
-journaled to the delivery log, resumption across the runtime's death --
-proven on workerd via miniflare), `examples/` -- every one typechecked;
+`apps/cli` (a client for any mounted HTTP agent), `apps/worker` (the published `/cloudflare` entry with the scripted model:
+one DO per session, history in DO SQLite written at every committed turn,
+events journaled to the delivery log, resumption across the runtime's
+death, and `/scheduling`'s `AgentDispatcher` as logical alarms -- each
+proven on workerd via miniflare, the alarm across a runtime restart), `examples/` -- every one typechecked;
 `session-tree`, `ref-coding-agent`, `typed-agent` and the worker test also
 run. `examples/deploy-cloudflare/` is the Alchemy stack.
 
 ## What holds it there
 
-- Contract suites: `AgentClientContract` (every client), `DeliveryLogContract`
-  and `NodeStoreContract` (every store), `McpServerConformance`,
-  `SandboxConformance`, `ChannelConformance`, and the cross-adapter host
-  matrix.
+- Contract suites, **shipped from `/testing`** since 2026-09-01 so a client
+  or store outside this repository is held to the same rows:
+  `AgentClientConformance` (every client), `DeliveryLogConformance`,
+  `NodeStoreConformance` and `DurableSessionStoreConformance` (every store),
+  beside `SandboxConformance` and `ChannelConformance`; `McpServerConformance`
+  and the cross-adapter host matrix stay in `test/`. Each shipped suite has a
+  deliberately wrong implementation that fails exactly the promise it breaks
+  (`test/ShippedConformance.test.ts`).
 - Break-once discipline: a mechanism is not done until its test has been
   broken once and seen to fail. The history records each.
 - Falsification: `scripts/falsify.mjs` re-runs the durability harness; the
@@ -263,8 +297,10 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
   on workerd (upstream; minimal repro in the history). The DO host uses the
   platform's durability instead; `/durable` runs where its engine runs.
 - **The DO worker's model** is the scripted test model until a deployment
-  wires a real one; the Alchemy stack is written but has not been run
-  against a real account.
+  wires a real one; the Alchemy stack is written for the `/cloudflare` entry
+  (`nodejs_compat`, compatibility date 2026-08-25) but has not been run
+  against a real account -- this container has none, and the owner's
+  wrangler login is on their machine.
 
 The larger parked work -- the reference gateway, code mode, filetypes
 phase 5, the relay and bridge packages, compaction's overflow-recovery

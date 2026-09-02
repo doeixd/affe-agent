@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "WebWorker"],
+    "lib": ["ES2022", "WebWorker"],
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
@@ -16,7 +16,7 @@
       "@doeixd/effect-agent/tool-source": ["./src/toolSource/index.ts"],
       "@doeixd/effect-agent/*": ["./src/*", "./src/*/index.ts", "./src/*.ts"]
     },
-    "types": [],
+    "types": ["@cloudflare/workers-types"],
     "plugins": [{ "name": "@effect/language-service" }]
   },
   "include": ["src"]

@@ -6,6 +6,10 @@ typecheck`. The ones marked *runs in CI* also execute, against the scripted
 
 ## Start here
 
+- [`getting-started.ts`](../examples/getting-started.ts) — the agent from
+  [getting-started.md](./getting-started.md), verbatim: one typed agent
+  against the scripted model, no key. `test/GettingStarted.test.ts` pins the
+  two together. *Runs in CI.*
 - [`typed-agent.ts`](../examples/typed-agent.ts) — a fully typed agent, with
   compile-time assertions that inference stays precise. *Runs in CI.*
 - [`authoring.ts`](../examples/authoring.ts) — the pipeable and object
@@ -32,6 +36,9 @@ typecheck`. The ones marked *runs in CI* also execute, against the scripted
 Built only from the public surface, with compile-time assertions that
 inference stayed precise. All *run in CI* as the `smoke:ref-*` scripts.
 
+- [`pr-review.ts`](../examples/pr-review.ts) — a pull-request reviewer from
+  parts that already exist: `Presets.coding`, an `AgentOutput` for a typed
+  verdict, `Budget.within` for the ceiling, `Evals` for what it spent
 - [`ref-coding-agent.ts`](../examples/ref-coding-agent.ts) — the coding
   agent, over `Presets.coding`
 - [`ref-gateway.ts`](../examples/ref-gateway.ts) — an integration gateway:

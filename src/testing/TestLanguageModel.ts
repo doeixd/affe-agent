@@ -90,6 +90,12 @@ export interface Turn {
 export interface Recorder {
   /** The exact model-facing prompt seen by each call, in order. */
   readonly prompts: Effect.Effect<ReadonlyArray<Prompt.Prompt>>
+  /**
+   * The names of the tools offered on each call, in order, in the order the
+   * provider was handed them. What a `Final` turn withholds is asserted here:
+   * the prompt alone cannot show it, since tools travel beside it.
+   */
+  readonly tools: Effect.Effect<ReadonlyArray<ReadonlyArray<string>>>
   readonly calls: Effect.Effect<number>
 }
 
@@ -200,6 +206,7 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
 export const make = (turns: ReadonlyArray<Turn>) =>
   Effect.gen(function* () {
     const seen = yield* Ref.make<Array<Prompt.Prompt>>([])
+    const offered = yield* Ref.make<Array<ReadonlyArray<string>>>([])
     const index = yield* Ref.make(0)
 
     /**
@@ -209,9 +216,13 @@ export const make = (turns: ReadonlyArray<Turn>) =>
      * the cursor moves once, `during` runs at the same point, and `hang` and
      * `fail` behave identically.
      */
-    const nextTurn = (options: { readonly prompt: Prompt.Prompt }) =>
+    const nextTurn = (options: {
+      readonly prompt: Prompt.Prompt
+      readonly tools: ReadonlyArray<{ readonly name: string }>
+    }) =>
       Effect.gen(function* () {
         yield* Ref.update(seen, (all) => [...all, options.prompt])
+        yield* Ref.update(offered, (all) => [...all, options.tools.map((tool) => tool.name)])
         const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
         const turn = turns[i]
         if (turn === undefined) {
@@ -232,7 +243,10 @@ export const make = (turns: ReadonlyArray<Turn>) =>
         return turn
       })
 
-    const next = (options: { readonly prompt: Prompt.Prompt }) =>
+    const next = (options: {
+      readonly prompt: Prompt.Prompt
+      readonly tools: ReadonlyArray<{ readonly name: string }>
+    }) =>
       Effect.map(nextTurn(options), (turn) =>
         turn === undefined ? [finishPart()] : partsFor(turn)
       )
@@ -255,6 +269,7 @@ export const make = (turns: ReadonlyArray<Turn>) =>
 
     const recorder: Recorder = {
       prompts: Ref.get(seen),
+      tools: Ref.get(offered),
       calls: Ref.get(index)
     }
 

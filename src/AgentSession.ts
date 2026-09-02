@@ -19,6 +19,7 @@ import type { AgentDefinition } from "./Agent.js"
 import * as Elicitation from "./Elicitation.js"
 import * as InputChannel from "./InputChannel.js"
 import * as AgentEvent from "./AgentEvent.js"
+import * as AgentInput from "./AgentInput.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
 import * as PromptWire from "./PromptWire.js"
@@ -39,6 +40,12 @@ export type { Status }
 export type { SessionState as State }
 export type Result<Tools extends Record<string, Tool.Any> = {}, Value = never> =
   AgentSubmission.Result<Tools, Value>
+
+/**
+ * What `prompt` and `submit` take: the agent's declared input type, or
+ * `Prompt.RawInput` for an agent that declares none (`Input = never`).
+ */
+export type PromptInput<Input> = [Input] extends [never] ? Prompt.RawInput : Input
 export type SubmissionReceipt = AgentSubmission.Receipt
 
 
@@ -82,7 +89,9 @@ export interface AgentSession<
    * agent declares no output. Comes straight from the `AgentDefinition`, so a
    * caller never states it.
    */
-  Value = never
+  Value = never,
+  /** The typed input this session's submissions are asked with; see `AgentInput`. */
+  Input = never
 > {
   readonly [SessionTypeId]: Session<any, any, any>
 
@@ -94,7 +103,7 @@ export interface AgentSession<
 
   /** Begin a submission. Resolves at quiescence. */
   readonly prompt: (
-    input: Prompt.RawInput,
+    input: PromptInput<Input>,
     options?: PromptOptions
   ) => Effect.Effect<Result<Tools, Value>, PromptError<Tools, E>>
 
@@ -107,9 +116,9 @@ export interface AgentSession<
    * client boundary; this process-local primitive admits each call once.
    */
   readonly submit: (
-    input: Prompt.RawInput,
+    input: PromptInput<Input>,
     options?: PromptOptions
-  ) => Effect.Effect<SubmissionReceipt, SubmitError>
+  ) => Effect.Effect<SubmissionReceipt, SubmitError | E>
 
   /**
    * Wait for a submission admitted by `submit`, and get what `prompt` would
@@ -261,11 +270,12 @@ export const make = <
   E,
   R,
   Model = LanguageModel.LanguageModel,
-  Value = never
+  Value = never,
+  Input = never
 >(
-  agent: AgentDefinition<Tools, E, R, Model, Value>,
+  agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   options?: MakeOptions
-): Effect.Effect<AgentSession<Tools, E, Value>, never, Scope.Scope | Model | R> =>
+): Effect.Effect<AgentSession<Tools, E, Value, Input>, never, Scope.Scope | Model | R> =>
   makeEngine(agent, options)
 
 /**
@@ -280,11 +290,12 @@ export const makeEngine = <
   E,
   R,
   Model = LanguageModel.LanguageModel,
-  Value = never
+  Value = never,
+  Input = never
 >(
-  agent: AgentDefinition<Tools, E, R, Model, Value>,
+  agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   options?: MakeOptions & EngineOptions
-): Effect.Effect<AgentSession<Tools, E, Value>, never, Scope.Scope | Model | R> =>
+): Effect.Effect<AgentSession<Tools, E, Value, Input>, never, Scope.Scope | Model | R> =>
   Effect.gen(function* () {
     // Captured once, so the session handle carries no residual requirements
     // and a child session can run under an entirely different model layer.
@@ -370,7 +381,7 @@ export const makeEngine = <
 
     const session: Session<Tools, E, R> = {
       id,
-      agent: agent as AgentDefinition<any, any, any, any, any>,
+      agent: agent as AgentDefinition<any, any, any, any, any, any>,
       state,
       history,
       progress,
@@ -423,7 +434,7 @@ export const makeEngine = <
     // The action methods delegate to this module's own functions, so there is
     // one implementation and one set of spans. They are safe to reference
     // before `handle` is initialised because they are only *called* later.
-    const handle: AgentSession<Tools, E, Value> = {
+    const handle: AgentSession<Tools, E, Value, Input> = {
       [SessionTypeId]: session,
       id,
       prompt: (input, options) => prompt(handle, input, options),
@@ -484,7 +495,10 @@ export type PromptError<Tools extends Record<string, Tool.Any>, E = never> =
   // Whatever the agent's own loop or context transform can fail with.
   | E
 
-/** Admission can fail only before execution has begun. */
+/**
+ * Admission can fail only before execution has begun. An agent with an
+ * `AgentInput` whose renderer fails adds its own `E` at the signature.
+ */
 export type SubmitError = AgentBusyError | AgentClosedError
 
 type Claim =
@@ -585,14 +599,38 @@ const release = (self: Session<any>): Effect.Effect<void> =>
 const startSubmission = Effect.fn("AgentSession.startSubmission")(
   function* <Tools extends Record<string, Tool.Any>, E>(
     self: Session<Tools, E, never>,
-    input: Prompt.RawInput,
+    // `PromptInput<Input>` at every public signature; here the agent's own
+    // declaration decides which it is, so the parameter is the union the
+    // two branches below narrow.
+    input: unknown,
     options: PromptOptions
   ) {
+    // The value and its rendering, per `AgentInput`, resolved *before* the
+    // claim: a renderer that fails must not leave the session claimed, and
+    // a busy session is refused after rendering rather than holding the
+    // claim across it. Rendering runs under the captured environment, since
+    // the renderer's `R` joined the agent's; its failure is the agent's `E`,
+    // which `PromptError` and `submit` carry. Encoding a value the signature
+    // typed cannot fail except by a schema bug, which is a defect.
+    const declaredInput = self.agent.input
+    const resolved: { readonly prompt: Prompt.Prompt; readonly encoded: Option.Option<unknown> } =
+      Option.isSome(declaredInput)
+        ? yield* Effect.gen(function* () {
+          const declared = declaredInput.value
+          const encoded = yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
+          const raw = yield* AgentInput.rendered(declared, input).pipe(Effect.provide(self.env))
+          return { prompt: Prompt.make(raw), encoded: Option.some(encoded) }
+        })
+        // An agent without an input is asked with `Prompt.RawInput`, by
+        // the public signatures; the widening above is undone here.
+        : { prompt: Prompt.make(input as Prompt.RawInput), encoded: Option.none() }
+
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const claimed = yield* claim(self)
         if (claimed._tag !== "Claimed") return claimed
         const submissionId = claimed.submissionId
+
 
         // Zero this submission's progress before the fibre exists, inside the
         // uninterruptible claim: an interrupt in this window must never report
@@ -614,10 +652,14 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
             AgentSubmission.execute(
               self,
               submissionId,
-              Prompt.make(input),
-              options
+              resolved.prompt,
+              options,
+              resolved.encoded
             )
           ),
+          // The input on the fibre that acts: every tool handler, permission
+          // decision and transform under this submission reads it.
+          Effect.provideService(AgentInput.Current, resolved.encoded),
           // The captured environment satisfies the model and any tool-handler
           // services; providing it leaves the submission with no requirements.
           Effect.provide(self.env)
@@ -663,10 +705,11 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
  */
 export const submit = Effect.fn("AgentSession.submit")(function* <
   Tools extends Record<string, Tool.Any>,
-  E
+  E,
+  Input = never
 >(
-  session: AgentSession<Tools, E, any>,
-  input: Prompt.RawInput,
+  session: AgentSession<Tools, E, any, Input>,
+  input: NoInfer<PromptInput<Input>>,
   options: PromptOptions = {}
 ) {
     const self = unwrap(session)
@@ -691,10 +734,11 @@ export const submit = Effect.fn("AgentSession.submit")(function* <
 export const prompt = Effect.fn("AgentSession.prompt")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
-  Value = never
+  Value = never,
+  Input = never
 >(
-  session: AgentSession<Tools, E, Value>,
-  input: Prompt.RawInput,
+  session: AgentSession<Tools, E, Value, Input>,
+  input: NoInfer<PromptInput<Input>>,
   options: PromptOptions = {}
 ) {
     const self = unwrap(session)
@@ -750,6 +794,8 @@ const settle = <Tools extends Record<string, Tool.Any>, E, Value = never>(
           turns: landed.turns,
           text: landed.text,
           response: landed.response,
+          // No loop decided this stop.
+          stopReason: Option.none(),
           // An interrupted submission still reports a value it already got.
           // The tool call that produced it committed atomically with its turn,
           // so this is work that landed, not work in flight.
