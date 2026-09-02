@@ -847,6 +847,17 @@ sizes; the items are repeated here so this list stays the one tracker.
     them. Widening alone is mechanical; Scheduling and DurableAgent need the
     payload change to be useful rather than merely compile. About half a day.
 
+46. **Every agent has an input; the prompt is the default**
+    (`plan-input-default.md`, 2026-09-02). Removes the `Input = never` /
+    `PromptInput<Input>` conditional that caused every awkwardness in 41
+    and 41b: `AgentInput.prompt` as the default, one wire shape (the
+    session's encoded input, byte-identical to today's prompt wire for an
+    untyped agent), `AgentInput.Current` always set, and then the same for
+    output (`AgentOutput.text` as the default `Value`, which finishes item
+    35 as a consequence). A refactor across ~100 signatures, nearly all of
+    which get shorter; sequenced after 26l/26n/26p land so it does not
+    cross their edits. Acceptance and the six steps are in the plan.
+
 ### In flight (2026-09-01)
 
 Items 28 and 29 **landed while this section was being written** — `230745d`
