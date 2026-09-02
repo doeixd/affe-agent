@@ -8,9 +8,13 @@ signature, not the call site. Test code counts as user code.
 Compiling is not proof that inference is precise — `any` compiles too. Assert
 it, and break the assertion once to confirm it is enforced.
 
+**Use the `effect-best-practices` skill** whenever you write or review Effect
+code, before touching the file. AGENTS.md's "Effect usage" section is this
+repository's specifics on top of it.
+
 **Always review your code after committing.** A double check, on the commit you
 just made: correctness, edge cases addressed, TypeScript DX, performance, anti
-AI slop patterns, hardening, and that the tests are robust, well designed,
+AI slop patterns, hardening, adherence to the `effect-best-practices` skill, and that the tests are robust, well designed,
 correct, and will actually find bugs. Fix what it finds in a follow-up commit
 rather than leaving it.
 

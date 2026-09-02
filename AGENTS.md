@@ -171,6 +171,11 @@ as a build failure. It must stay at zero.
 
 ## Effect usage
 
+**Load the `effect-best-practices` skill before writing or reviewing Effect
+code** (`Effect.Service`, `Schema.TaggedError`, `Layer` composition, atoms).
+The bullets below are this repository's specifics; the skill is the baseline
+they sit on, and the post-commit review checks the commit against both.
+
 * Prefer an existing Effect primitive to an agent-specific invention. Fibers for
   cancellation, `Layer` for wiring, `Schedule` for retries, `Stream`/`PubSub`
   for events.
@@ -276,7 +281,8 @@ would make live billed requests.
 
 **Always review your code after committing.** A double check, on the commit you
 just made: correctness, edge cases addressed, TypeScript DX, performance, anti
-AI slop patterns, hardening, and that the tests are robust, well designed,
+AI slop patterns, hardening, adherence to the `effect-best-practices` skill and the
+"Effect usage" section above, and that the tests are robust, well designed,
 correct, and will actually find bugs. Fix what it finds in a follow-up commit
 rather than leaving it.
 
