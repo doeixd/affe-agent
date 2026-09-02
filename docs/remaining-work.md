@@ -827,6 +827,18 @@ sizes; the items are repeated here so this list stays the one tracker.
     `AgentOutput` review schema + `Budget.within` + `Evals.tokens`, against
     the scripted model. A reference, not a package.
 
+41b. **Typed agents everywhere else** — after phase 2 (2026-09-02) the
+    remaining surfaces whose signatures pin `Input` to `never`:
+    `src/scheduling/Scheduling.ts` (three signatures, and its persisted
+    `input: Prompt.RawInput` would need to carry the typed form),
+    `src/subagent/Subagent.ts` (two), `DurableAgent.workflow` / `submit` and
+    the cluster `EntityClient` / `ScheduledAgent` over it (the payload is a
+    `Prompt`; wants the same optional `input` as `DurableSubmission.Payload`),
+    and `src/cloudflare/index.ts` (two; it uses `fromSession`, so the runtime
+    path already works once the signature widens). `Evals` already accepts
+    them. Widening alone is mechanical; Scheduling and DurableAgent need the
+    payload change to be useful rather than merely compile. About half a day.
+
 ### In flight (2026-09-01)
 
 Items 28 and 29 **landed while this section was being written** — `230745d`
