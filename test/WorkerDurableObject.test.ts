@@ -292,9 +292,13 @@ describe("the Worker entry on workerd", () => {
             requestId: "prompt-1",
             input: wireInput("now")
           })))
+          // Five seconds out: long enough that the next life's first read
+          // lands before it is due, which is what tells "fired after the
+          // delay" from "fired at once" -- the difference a delay coerced to
+          // zero would hide.
           const dispatched = yield* call(miniflare, "/sessions/sched/dispatch", jsonRequest("POST", {
             input: "later",
-            delayMillis: 1500
+            delayMillis: 5000
           }))
           assert.strictEqual(dispatched.status, 202, dispatched.body)
           // The runtime dies before the job is due.
@@ -305,8 +309,9 @@ describe("the Worker entry on workerd", () => {
         Effect.gen(function* () {
           const miniflare = yield* workerAt(outfile, persist)
           // Any request wakes the object, which re-arms the alarm from the
-          // table; the job is then the platform's to fire.
-          json(yield* call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }))
+          // table; the job is then the platform's to fire -- and not yet.
+          const early = json(yield* call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }))
+          assert.notInclude(JSON.stringify(early), "later", "the job fired before its delay")
           yield* Effect.retry(
             Effect.flatMap(
               call(miniflare, "/sessions/sched/history", { headers: { authorization: "Bearer worker" } }),

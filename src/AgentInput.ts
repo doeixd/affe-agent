@@ -30,6 +30,11 @@ import type { Prompt } from "effect/unstable/ai"
  * requirements the agent's `R`, so a rendering that reads a service says so
  * in the type.
  *
+ * `prompt` and `submit` take the value; `steer` and `followUp` still take
+ * `Prompt.RawInput`, because they add to a conversation the input already
+ * opened rather than opening one, and the value on the fibre stays the
+ * submission's for its follow-up runs.
+ *
  * **Scope, stated.** This is the in-process seam: `AgentSession`,
  * `Agent.run`, tools, permissions and the `SubmissionStarted` event. The
  * remote surfaces (`AgentClient` and every transport over it) and the

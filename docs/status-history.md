@@ -4826,3 +4826,34 @@ per-turn toolkit, and its scripted model is chosen by the object's name
 Not done: suspension (an isolate's state is its heap) and a Node
 equivalent (there is no honest one).
 
+## 2026-09-01 — review pass over the comparison-plan work
+
+A read of everything the plan landed, with fixes. What it found:
+
+- **The alarm dispatcher dropped every string delay.** `Dispatched.delay`
+  is a `Duration.Input`; the first draft coerced it with `Number`, so
+  `"1500 millis"` became zero and every job was due at once -- and the
+  alarm test could not tell "fired after the delay" from "fired
+  immediately". Now `Duration.fromInputUnsafe`; the test dispatches five
+  seconds out, checks the job has *not* fired on the first read after the
+  restart, then waits for it.
+- **A dispatched run that failed would have retried forever.** The alarm
+  handler let every failure reschedule the job; an agent failure is the
+  run's outcome, so it repeated a failing model call every thirty seconds.
+  Now only a busy session or a transport fault reschedules; an execution
+  failure and an undecodable payload are logged and acknowledged.
+- **The crawler's depth bound had two holes.** A `maxDepth` of zero was
+  treated as absent, and a link past the bound could be dropped without
+  `stoppedBy` saying so. Depth is now clamped from zero and checked where
+  links are enqueued, which also removed the per-batch filtering.
+- **The isolate's `console` shim only had `log`**; `console.error` in a
+  program was a `TypeError`. All five methods record.
+- Stale prose: the executor header still described the abandoned design
+  (a namespace binding in the isolate's `env`, `globalOutbound: null`);
+  `/cloudflare` had two prompt codecs for one thing and a doc block
+  orphaned above the `Host` interface. `AgentInput` now says that `steer`
+  and `followUp` still take `Prompt.RawInput`, and why.
+
+Full suite after the pass: 1888 tests in 175 files, green; the entry, the
+worker and the main program typecheck and lint clean.
+

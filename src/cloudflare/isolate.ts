@@ -12,21 +12,25 @@ import { type Invoke, ProgramThrow } from "../code/internal/interpret.js"
  * The owned interpreter confines a program by construction of the
  * language and runs it in the host's process; this one confines it by the
  * platform. Each program is loaded as its own worker through the Worker
- * Loader binding, with `globalOutbound: null` -- `fetch` throws -- and CPU
- * and subrequest limits, and it is discarded when the program ends. The
- * program is real JavaScript, compiled by the runtime rather than
- * evaluated (Workers forbid `eval`), so a program that would have been
- * refused by the interpreter's subset runs here in full.
+ * Loader binding, with CPU and subrequest limits, and is discarded when
+ * the program ends. The program is real JavaScript, compiled by the
+ * runtime rather than evaluated (Workers forbid `eval`), so a program the
+ * interpreter's subset would refuse runs here in full.
  *
  * **Every nested call is still a tool call**, and that is the whole point
- * of the seam: the isolate reaches its tools through one route only -- a
- * `POST /code/invoke` on the Durable Object that started it, carried by
- * the namespace binding the loader hands it -- and that route answers by
- * the `invoke` hook `CodeMode` gave this executor, on a fibre carrying the
- * context the run started with. So the same `Permission` decision, the
- * same events and the same `CurrentPrincipal` as a call the interpreter
- * makes. A per-run token, minted here and never shown to the model, is
- * what lets the broker tell the run's own calls from anyone else's.
+ * of the seam. The isolate's `globalOutbound` is the Durable Object's own
+ * stub, so any request it makes lands on the object; the main module
+ * keeps the real `fetch` for its broker call and removes `fetch` and
+ * `WebSocket` from the program's globals, so the program itself can reach
+ * nothing. (A TCP socket from `cloudflare:sockets` follows the same
+ * outbound to a stub that does not speak TCP.) The broker route,
+ * `POST /code/invoke`, answers by the `invoke` hook `CodeMode` gave this
+ * executor, on a fibre carrying the context the run started with -- the
+ * same `Permission` decision, the same events and the same
+ * `CurrentPrincipal` as a call the interpreter makes. A per-run token,
+ * minted here and never shown to the program, is what lets the broker tell
+ * the run's own calls from anyone else's; and the route is unreachable
+ * from the public Worker, whose paths all carry the session segment.
  *
  * Two things this executor does not do. It never suspends: a Dynamic
  * Worker's state is its heap, and a paused program is a program that is
@@ -156,7 +160,8 @@ export default {
   async fetch(request, env) {
     const { known } = await request.json()
     const logs = []
-    const console = { log: (...args) => { logs.push(args) } }
+    const record = (...args) => { logs.push(args) }
+    const console = { log: record, info: record, warn: record, error: record, debug: record }
     try {
       const value = await program(toolsFor(env, known), console)
       return Response.json(value === undefined ? { tag: "RanOffTheEnd", logs } : { tag: "Returned", value, logs })
@@ -269,11 +274,15 @@ export const executor = (options?: Options): Effect.Effect<
             })
             return (await response.json()) as unknown
           },
-          catch: (cause) =>
-            new CodeDiagnostic({
-              reason: "internal",
-              fix: `the isolate could not run the program: ${cause instanceof Error ? cause.message : String(cause)}`
-            })
+          catch: (cause) => {
+            const message = cause instanceof Error ? cause.message : String(cause)
+            // The runtime compiles the program when the worker loads, so a
+            // program that does not parse fails here, not in the interpreter's
+            // parser; it gets the same diagnostic the interpreter would give.
+            return cause instanceof SyntaxError || /SyntaxError/.test(message)
+              ? new CodeDiagnostic({ reason: "parse-error", fix: `the program does not parse: ${message}` })
+              : new CodeDiagnostic({ reason: "internal", fix: `the isolate could not run the program: ${message}` })
+          }
         }).pipe(Effect.ensuring(registration.release))
 
         const verdict = yield* Ref.get(refused)

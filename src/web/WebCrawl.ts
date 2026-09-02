@@ -1,4 +1,4 @@
-import { Clock, Context, Duration, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Schema } from "effect"
 import * as WebCapture from "./WebCapture.js"
 
 /**
@@ -78,8 +78,11 @@ export class WebCrawl extends Context.Service<WebCrawl, Service>()(
   "@doeixd/effect-agent/web/WebCrawl"
 ) {}
 
-const clamp = (asked: number | undefined, fallback: number, ceiling: number): number =>
-  asked === undefined || !Number.isFinite(asked) || asked < 1 ? Math.min(fallback, ceiling) : Math.min(Math.floor(asked), ceiling)
+/** A requested bound, or its default, never above its ceiling; `floor` is the least a caller may ask for. */
+const clamp = (asked: number | undefined, fallback: number, ceiling: number, floor: number): number =>
+  asked === undefined || !Number.isFinite(asked) || asked < floor
+    ? Math.min(fallback, ceiling)
+    : Math.min(Math.floor(asked), ceiling)
 
 const sameHost = (a: URL, b: URL): boolean => a.protocol === b.protocol && a.host === b.host
 
@@ -98,8 +101,9 @@ export const make: Effect.Effect<Service, never, WebCapture.WebCapture> = Effect
 
   const crawl: Service["crawl"] = (start, options) =>
     Effect.gen(function* () {
-      const maxPages = clamp(options?.maxPages, DEFAULT_PAGES, MAX_PAGES)
-      const maxDepth = clamp(options?.maxDepth, DEFAULT_DEPTH, MAX_DEPTH)
+      const maxPages = clamp(options?.maxPages, DEFAULT_PAGES, MAX_PAGES, 1)
+      // Depth 0 is a legitimate ask: the start page and nothing it links to.
+      const maxDepth = clamp(options?.maxDepth, DEFAULT_DEPTH, MAX_DEPTH, 0)
       const startedAt = yield* Clock.currentTimeMillis
       const deadline = startedAt + DEADLINE_MILLIS
 
@@ -128,31 +132,35 @@ export const make: Effect.Effect<Service, never, WebCapture.WebCapture> = Effect
       const seen = new Set<string>([origin.href])
       let bytes = byteLength(first.markdown)
       let stoppedBy: StopReason | undefined
-      // The frontier: links of the last captured layer, with their depth.
+      // A link past the depth bound is noted, not queued: the crawl then
+      // reports "depth" if nothing else ended it, even when every page it
+      // did visit fit.
+      let beyondDepth = false
+      // The frontier, breadth-first: each link once, with its depth.
       const frontier: Array<{ url: URL; depth: number }> = []
       const enqueue = (links: ReadonlyArray<string>, base: URL, depth: number) => {
         for (const link of links) {
           const url = normalise(link, base)
           if (url === undefined || seen.has(url.href)) continue
           seen.add(url.href)
+          if (depth > maxDepth) {
+            beyondDepth = true
+            continue
+          }
           frontier.push({ url, depth })
         }
       }
       enqueue(first.links, origin, 1)
 
-      while (frontier.length > 0 && stoppedBy === undefined) {
+      crawl: while (frontier.length > 0) {
         if (pages.length >= maxPages) {
           stoppedBy = "pages"
           break
         }
+        // A batch never overshoots the page bound; failures do not count.
         const batch = frontier.splice(0, Math.min(CONCURRENCY, maxPages - pages.length))
-        if (batch.every((entry) => entry.depth > maxDepth)) {
-          stoppedBy = "depth"
-          break
-        }
-        const within = batch.filter((entry) => entry.depth <= maxDepth)
         const captured = yield* Effect.forEach(
-          within,
+          batch,
           (entry) => Effect.map(Effect.result(capture.capture(entry.url)), (result) => ({ entry, result })),
           { concurrency: CONCURRENCY }
         )
@@ -161,28 +169,21 @@ export const make: Effect.Effect<Service, never, WebCapture.WebCapture> = Effect
             failed.push({ url: entry.url.href, error: result.failure._tag })
             continue
           }
-          const now = yield* Clock.currentTimeMillis
-          if (now >= deadline) {
+          if ((yield* Clock.currentTimeMillis) >= deadline) {
             stoppedBy = "deadline"
-            break
+            break crawl
           }
           const size = byteLength(result.success.markdown)
           if (bytes + size > MAX_TOTAL_BYTES) {
             stoppedBy = "bytes"
-            break
+            break crawl
           }
           bytes = bytes + size
           pages.push({ url: result.success.url, depth: entry.depth, markdown: result.success.markdown })
           enqueue(result.success.links, entry.url, entry.depth + 1)
-          if (pages.length >= maxPages && frontier.length > 0) {
-            stoppedBy = "pages"
-            break
-          }
-        }
-        if (stoppedBy === undefined && frontier.length > 0 && frontier.every((entry) => entry.depth > maxDepth)) {
-          stoppedBy = "depth"
         }
       }
+      if (stoppedBy === undefined && beyondDepth) stoppedBy = "depth"
 
       return {
         pages,
@@ -199,6 +200,3 @@ export const layer: Layer.Layer<WebCrawl, never, WebCapture.WebCapture> = Layer.
 
 /** Provide an already-constructed crawl service, for a double. */
 export const layerService = (service: Service): Layer.Layer<WebCrawl> => Layer.succeed(WebCrawl)(service)
-
-/** How long a crawl may take, as a `Duration`, for a caller wrapping it. */
-export const deadline: Duration.Duration = Duration.millis(DEADLINE_MILLIS)

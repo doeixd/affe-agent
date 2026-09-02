@@ -1,5 +1,4 @@
-import { Context, DateTime, Effect, Layer, Option, Schema, Scope, Stream } from "effect"
-import type { Duration } from "effect"
+import { Context, DateTime, Duration, Effect, Layer, Option, Schema, Scope, Stream } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import { HttpRouter } from "effect/unstable/http"
@@ -95,7 +94,7 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
   readonly retryFailedAfter?: Duration.Input | undefined
 }
 
-const HistoryJson = Schema.toCodecJson(PromptWire.Prompt)
+/** A prompt as JSON text: stored history, and a dispatched job's payload. */
 const PromptJson = Schema.toCodecJson(PromptWire.Prompt)
 
 /** The dispatched job as a logical alarm's payload: the prompt, encoded. */
@@ -126,13 +125,13 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         Effect.flatMap((rows) => {
           const raw = rows[0]?.history
           if (typeof raw !== "string") return Effect.succeedNone
-          return Schema.decodeEffect(HistoryJson)(JSON.parse(raw)).pipe(Effect.orDie, Effect.asSome)
+          return Schema.decodeEffect(PromptJson)(JSON.parse(raw)).pipe(Effect.orDie, Effect.asSome)
         })
       )
 
     const persistHistory = (sessionId: string, session: AgentSessionEngine.AgentSession<any, any, any>) =>
       AgentSessionEngine.history(session).pipe(
-        Effect.flatMap((history) => Schema.encodeEffect(HistoryJson)(history)),
+        Effect.flatMap((history) => Schema.encodeEffect(PromptJson)(history)),
         Effect.flatMap((encoded) => {
           const text = JSON.stringify(encoded)
           return sql`INSERT INTO effect_agent_history (session_id, history) VALUES (${sessionId}, ${text})
@@ -263,18 +262,6 @@ const dispatchRequest = (request: Request) =>
   })
 
 /**
- * Build the host: the Durable Object class and the Worker class.
- *
- * ```ts
- * const host = CloudflareHost.make({ agent, layer: AnthropicModel })
- * export const AgentSessionObject = host.SessionObject
- * export default host.Worker
- * ```
- *
- * with `SESSIONS` bound to `AgentSessionObject` in `wrangler.jsonc` (or the
- * Alchemy stack in `examples/deploy-cloudflare/`).
- */
-/**
  * What `make` returns: the two classes a Worker entry exports.
  *
  * Typed by effect-cf's class shapes with the RPC surface empty -- this host
@@ -287,6 +274,19 @@ export interface Host {
   readonly Worker: Worker.WorkerClass<Record<never, never>, never>
 }
 
+/**
+ * Build the host: the Durable Object class and the Worker class.
+ *
+ * ```ts
+ * const host = CloudflareHost.make({ agent, layer: AnthropicModel })
+ * export const AgentSessionObject = host.SessionObject
+ * export default host.Worker
+ * ```
+ *
+ * with `SESSIONS` bound to `AgentSessionObject` in `wrangler.jsonc` (or the
+ * Alchemy stack in `examples/deploy-cloudflare/`), and `LOADER` a Worker
+ * Loader if `IsolateExecutor` is used.
+ */
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Options<Tools, E, R>): Host => {
   const namespace = options.namespace ?? "SESSIONS"
   const Host = AgentSessionHost.Tag<string>("@doeixd/effect-agent/cloudflare/host")
@@ -331,8 +331,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
         Effect.orDie(
           Effect.gen(function* () {
             const now = yield* DateTime.now
-            const delay = job.delay === undefined ? 0 : Number(job.delay) || 0
-            const runAt = DateTime.addDuration(now, `${delay} millis`)
+            // `Dispatched.delay` is a `Duration.Input` -- "5 seconds" as
+            // readily as a number -- and the seam's `queued` reads it the
+            // same way. (The first draft coerced it with `Number`, which
+            // made every string delay zero and the alarm test unable to
+            // tell "fired after the delay" from "fired at once".)
+            const runAt = job.delay === undefined
+              ? now
+              : DateTime.addDuration(now, Duration.fromInputUnsafe(job.delay))
             const payload = yield* Schema.encodeEffect(PromptJson)(Prompt.make(job.input)).pipe(Effect.orDie)
             yield* alarms.scheduleAlarm({
               tag: DISPATCH_TAG,
@@ -355,22 +361,47 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
     Layer.provideMerge(DurableObjectSqlite.layer())
   )
 
-  /** Prompt this object's session with every due job; failures retry. */
+  /**
+   * Prompt this object's session with every due job.
+   *
+   * A handler failure makes `processDue` reschedule the job, so only what a
+   * later attempt can fix is allowed to fail: a session busy with a
+   * caller's own prompt, or a transport fault. An agent failure is the
+   * run's outcome -- it is in history and the journal, and running it
+   * again would repeat a failing model call every `retryFailedAfter`
+   * forever -- and a payload that no longer decodes will never decode;
+   * both are logged and the job is acknowledged.
+   */
   const drain = Effect.gen(function* () {
     const sessionId = yield* sessionIdOfObject
     if (Option.isNone(sessionId)) return
     const client = yield* AgentClient.AgentClient
     // Explicit channels: the handler's failure is what makes `processDue`
     // retry the job, and inference does not carry it through the seam.
-    yield* DurableObjectAlarm.processDue<never, Schema.SchemaError | AgentClient.RemoteError>(
+    yield* DurableObjectAlarm.processDue<never, AgentClient.RemoteError>(
       (event) =>
         Effect.gen(function* () {
           if (event.tag !== DISPATCH_TAG) return
-          const prompt = yield* Schema.decodeUnknownEffect(PromptJson)(event.payload)
+          const decoded = yield* Effect.result(Schema.decodeUnknownEffect(PromptJson)(event.payload))
+          if (decoded._tag === "Failure") {
+            return yield* Effect.logError("cloudflare: a dispatched job's prompt does not decode; dropped", {
+              sessionId: sessionId.value,
+              alarm: event.id,
+              error: decoded.failure.message
+            })
+          }
           const session = yield* client.session(sessionId.value).pipe(
             Effect.catchTag("AgentSessionNotFoundError", () => client.createSession({ sessionId: sessionId.value }))
           )
-          yield* session.prompt(prompt)
+          yield* session.prompt(decoded.success).pipe(
+            Effect.catchTag("AgentExecutionError", (error) =>
+              Effect.logError("cloudflare: a dispatched run failed; not retried", {
+                sessionId: sessionId.value,
+                alarm: event.id,
+                tag: error.tag,
+                detail: error.detail
+              }))
+          )
         }).pipe(Effect.scoped),
       { retryFailedAfter: options.retryFailedAfter ?? "30 seconds" }
     )
