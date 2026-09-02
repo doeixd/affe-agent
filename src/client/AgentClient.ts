@@ -508,6 +508,12 @@ export const fromSession = <Value, Input>(
         )
       )
 
+  // What `admit` decoded is what the session's signature asks for: the
+  // schema it decoded with is the one the session declares, so the value is
+  // `PromptInput<Input>` by construction. The compiler cannot resolve that
+  // conditional for an abstract `Input`, hence the one widening, here.
+  const asked = (value: unknown) => value as AgentSession.PromptInput<Input>
+
   /**
    * The boundary decode. A typed value is decoded with the schema the
    * session declares; a prompt passes through for an agent without one.
@@ -544,11 +550,6 @@ export const fromSession = <Value, Input>(
     )
   }
 
-  // What `admit` decoded is what the session's signature asks for: the
-  // schema it decoded with is the one the session declares, so the value is
-  // `PromptInput<Input>` by construction. The compiler cannot resolve that
-  // conditional for an abstract `Input`, hence the one widening, here.
-  const asked = (value: unknown) => value as AgentSession.PromptInput<Input>
 
   const remember = (
     submissionId: string,

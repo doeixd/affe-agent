@@ -497,6 +497,9 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
               outcome.claim.key === promptOptions.idempotencyKey
             ) {
               const recorded = yield* DurableSessionStore.encodeHistory(request.prompt)
+              // The value is compared as sent, like the prompt: a retry
+              // is the same bytes, and a caller that reorders keys has
+              // written a different request.
               if (
                 recorded !== outcome.claim.prompt ||
                 JSON.stringify(request.input) !== JSON.stringify(outcome.claim.input)

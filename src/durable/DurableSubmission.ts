@@ -676,8 +676,13 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
                   Effect.map(Prompt.make),
                   // The renderer's failure is the agent's `E`, which has no
                   // schema; it crosses the journal as the projection every
-                  // other durable failure does.
-                  Effect.catchCause((cause) => Effect.fail(DurableAgent.durableFailure(cause)))
+                  // other durable failure does. An interruption is not a
+                  // failure: a suspension that lands mid-render must stay
+                  // one, or the journal would record a failed submission.
+                  Effect.catchCauseIf(
+                    (cause) => !Cause.hasInterrupts(cause),
+                    (cause) => Effect.fail(DurableAgent.durableFailure(cause))
+                  )
                 )
               })
               : rendering
