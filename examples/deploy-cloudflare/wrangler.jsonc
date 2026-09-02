@@ -1,0 +1,23 @@
+// The same deployment as `alchemy.run.ts`, for `wrangler deploy` — the path
+// a `wrangler login` reaches without an API token. Both describe one Worker,
+// one SQLite-backed Durable Object namespace and one Worker Loader; keep
+// them in step. Deploy from this directory:
+//
+//   npx wrangler deploy
+//
+// `tsconfig` is what resolves `@doeixd/effect-agent/*` to this repository's
+// sources (esbuild honours its `paths`), as the miniflare test's aliases do.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "effect-agent",
+  "main": "../../apps/worker/src/index.ts",
+  "tsconfig": "../../apps/worker/tsconfig.json",
+  "compatibility_date": "2026-08-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "SESSIONS", "class_name": "AgentSessionObject" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AgentSessionObject"] }],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "observability": { "enabled": true }
+}

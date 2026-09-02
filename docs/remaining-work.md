@@ -192,8 +192,14 @@ open, so the next pass does not have to re-derive it.
     `test/WorkerDurableObject.test.ts` through miniflare, and the
     `/durable`-on-DO decision is recorded (no: the engine's resume machinery
     stalls on workerd -- measured minimal repro in `status-history.md`).
-    `examples/deploy-cloudflare/` holds the Alchemy stack. Left: a real
-    model wired through the stack and deployed from a clean account; Rivet.
+    `examples/deploy-cloudflare/` holds the Alchemy stack and, since
+    2026-09-02, a `wrangler.jsonc` that mirrors it. **Deployed for real
+    2026-09-02** (`worker-without-code-mode.ts` as `effect-agent-free`, from
+    a Workers free plan; the HTTPS smoke matched the miniflare test). Left:
+    the code tool needs Dynamic Workers, which is paid-plan only (error
+    10195), so `apps/worker` as checked in deploys once the account is
+    upgraded; a real model still wants a provider key in a Worker secret;
+    Rivet.
     `Sandbox.fromExec` / `fromOperations` landed 2026-08-30 (a remote
     sandbox for the Worker is now one exec function away); a real remote
     provider (E2B/Daytona) still needs an account. The two upstream findings

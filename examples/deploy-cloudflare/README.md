@@ -1,4 +1,4 @@
-# Deploying the agent to Cloudflare with Alchemy
+# Deploying the agent to Cloudflare
 
 `alchemy.run.ts` provisions what [`apps/worker`](../../apps/worker/src/index.ts)
 serves -- `@doeixd/effect-agent/cloudflare` with the scripted model: one
@@ -8,11 +8,39 @@ are typed, and there is no YAML — per `docs/plan-deployment.md` §5.
 
 ## Run it
 
+Two ways to the same Worker, from this directory:
+
 ```bash
-# from this directory, with a Cloudflare account configured for alchemy
+# with `wrangler login` done -- wrangler.jsonc mirrors the stack below
+npx wrangler deploy
+npx wrangler deploy --config wrangler.free.jsonc   # the free-plan entry, see below
+
+# or as the Alchemy stack, with CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
+# (Alchemy keeps its own credentials and does not read wrangler's login)
 npx alchemy dev      # local, on miniflare/workerd
 npx alchemy deploy   # for real
 ```
+
+Two accounts, two configs, more than one account on the login: set
+`CLOUDFLARE_ACCOUNT_ID`, or wrangler refuses to choose non-interactively.
+
+## Proved on real Cloudflare, 2026-09-02
+
+`worker-without-code-mode.ts` deployed as `effect-agent-free` from a Workers
+**free** plan, and the smoke over HTTPS did what the miniflare test does:
+`POST /sessions` twice made two Durable Objects; each `prompt` ran a
+two-turn scripted submission whose tool call echoed the object's own name
+back; `events?after=0` streamed the journal from sequence 1; a second prompt
+on the first session ran as `submission-2` with the first still there.
+
+What that deployment leaves out is the code tool. **Dynamic Workers -- the
+`LOADER` binding the isolate executor loads programs through -- is the one
+binding that needs a paid plan** (Cloudflare refuses the upload with error
+10195); SQLite-backed Durable Objects and alarms are on free. `apps/worker`
+as checked in, with the loader, deploys the moment the account is upgraded;
+nothing in it changes. The model in both entries is still the scripted one,
+so the remaining half of "a real deployment" is a provider key in a Worker
+secret, exactly the swap the entry's header describes.
 
 The stack's output is the Worker URL. The HTTP surface is the same one every
 other deployment serves (`/sessions`, `/sessions/{id}/prompt`, `…/events`);
@@ -38,7 +66,9 @@ routing key to the Durable Object.
 
 ## Cost
 
-A deployment from a clean account uses: Workers (paid plan required for
-Durable Objects with SQLite storage), one DO namespace, and DO storage
-billed per stored byte and per billed request unit. There is no D1, R2 or
-Container in this stack. Tear it down with `npx alchemy destroy`.
+A deployment from a clean account uses: Workers, one SQLite-backed DO
+namespace (on the free plan), DO storage billed per stored byte and per
+billed request unit, and -- for `apps/worker`'s code tool -- Dynamic
+Workers, which needs the paid plan. There is no D1, R2 or
+Container in this stack. Tear it down with `npx alchemy destroy`, or `npx wrangler delete` for a
+wrangler deployment.

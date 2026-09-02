@@ -46,7 +46,10 @@ export default class AgentStack extends Alchemy.Stack<AgentStack>()(
         // Worker: the class is `AgentSessionObject` in the entry above.
         SESSIONS: Cloudflare.DurableObject("Sessions", {
           className: "AgentSessionObject"
-        })
+        }),
+        // The Worker Loader the isolate executor loads code-mode programs
+        // through: one fresh isolate per program, `globalOutbound: null`.
+        LOADER: Cloudflare.WorkerLoader("LOADER")
       }
     })
     return { url: worker.url }

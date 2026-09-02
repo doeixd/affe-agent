@@ -5,8 +5,10 @@
 and 10 (§3.7) landed 2026-09-01, and item 8's entry (§3.3c) the same day:
 `@doeixd/effect-agent/cloudflare`, on `effect-cf` by the owner's decision
 (recorded in `plan-effect-cf-and-webtransport.md` §3a). Item 9 (§3.5, the
-isolate executor) landed the same day. What remains is 8's real deployment
-(§3.3d, needs an account) and phase 2 of typed input. Written 2026-09-01 from a
+isolate executor) landed the same day. 8's real deployment (§3.3d) happened
+2026-09-02: the host without the code tool, from a Workers free plan, smoke
+green over HTTPS; the code tool's Dynamic Workers binding is paid-plan only,
+and a real model still needs a key. What remains is phase 2 of typed input. Written 2026-09-01 from a
 read of [effect-agent.com](https://effect-agent.com/) — the documentation
 site for `danieljvdm/effect-agent`, the same author as `effect-cf`, which
 [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)
@@ -365,6 +367,34 @@ replay re-renders the journaled value and commits identical history.
 **Not this item.** A per-`prompt` input schema. `AgentOutput` is on the
 agent because the instructions and the schema are written together; the
 same argument holds here.
+
+**Phase 2 design (2026-09-02).** One wire shape, decoded once, at the
+host. The protocol's `input` becomes a union: the prompt it always was, or
+`AgentInput.Typed` -- `{ _tag: "TypedInput", value }`, the schema-encoded
+value as JSON. Nothing names the schema on the wire: the session the value
+is addressed to already declares it, so the host decodes with
+`session.input` (the declaration, now exposed on the handle) and refuses a
+mismatch as `AgentInvalidRequestError` -- a prompt to a typed agent, a value
+to an untyped one, or a value the schema rejects. `RemoteSession.prompt`
+and `submit` take `RemoteInput = Prompt.RawInput | AgentInput.Typed`;
+`steer` and `followUp` stay `Prompt.RawInput`, as they do locally. The
+typed spelling is `AgentClient.typed(agent)`: the same `createSession` /
+`session`, whose sessions' `prompt` and `submit` take `PromptInput<Input>`
+and encode with the agent's schema before the call -- the client-side
+mirror of the host decode, so a caller writes the value and never the wire
+form. Every adapter (HTTP, RPC, AG-UI, A2A, MCP, OpenAI, Slack) carries the
+union without change: those that build prompts still build prompts. Under
+`/durable`, the claim and the workflow payload gain an optional `input`
+holding the encoded value; the durable client validates at admission and
+journals the value, the workflow decodes it and asks the in-workflow
+session with it, and an Effect-valued `render` runs as an activity named
+`render` so a replay re-renders from the journal rather than the renderer.
+A pure `render` is replayed by being pure. Rendering into the claim was
+refused: the renderer may need services the client process does not have,
+and the claim is what the client holds. `DurableAgent.workflow` (the
+embedded API, keyed by session, a `Prompt` payload) is left as it is and
+still refuses a typed agent at compile time; the remote surface is the
+durable client.
 
 ### 3.5 Code mode: say what the boundary is (items 5 and 9)
 

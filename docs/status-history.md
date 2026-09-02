@@ -5335,3 +5335,30 @@ A read of everything the plan landed, with fixes. What it found:
 Full suite after the pass: 1888 tests in 175 files, green; the entry, the
 worker and the main program typecheck and lint clean.
 
+## 2026-09-02 — the Cloudflare host deployed for real (comparison plan, item 8d)
+
+`examples/deploy-cloudflare/` had been written and never run. Run today
+from a `wrangler login`:
+
+- **Alchemy does not read wrangler's login.** It keeps its own profile
+  store and wants `CLOUDFLARE_API_TOKEN`; without one it exits 1 and
+  prints nothing. Wrangler's OAuth bearer works on account endpoints but
+  is refused by `/user/tokens/verify`, so the stack stayed typechecked and
+  `wrangler.jsonc` now mirrors it -- one Worker, one SQLite DO namespace,
+  one Worker Loader -- for the path a login reaches. `alchemy.run.ts`
+  gained the `LOADER` binding it had been missing (`Cloudflare.WorkerLoader`).
+- **Dynamic Workers is paid-plan only.** Both accounts on the login are
+  free; the upload of `apps/worker` fails with error 10195 on the
+  `worker_loaders` binding and nothing else. SQLite-backed Durable Objects
+  are on free. So `worker-without-code-mode.ts` -- `apps/worker` minus the
+  code tool, the same host -- deployed as `effect-agent-free`.
+- **The smoke over HTTPS matched the miniflare test.** Two `POST /sessions`
+  made two objects; each prompt ran a two-turn scripted submission whose
+  `echo` call returned the object's own name (`hello from smoke-a`,
+  `hello from smoke-b`); `events?after=0` streamed the journal from
+  sequence 1 as SSE; a second prompt on the first session ran as
+  `submission-2`. Upload 1.76 MiB, 350 KiB gzipped, 66 ms startup.
+
+Left for the owner: upgrade the plan and `npx wrangler deploy` the
+checked-in `apps/worker` unchanged, and put a provider key in a Worker
+secret for a real model. The README in the example says both.

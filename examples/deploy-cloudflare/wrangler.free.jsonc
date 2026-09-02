@@ -1,0 +1,16 @@
+// `worker-without-code-mode.ts` on a Workers free plan: the same host with
+// no Worker Loader, because Dynamic Workers is the one binding that needs a
+// paid plan. `npx wrangler deploy --config wrangler.free.jsonc`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "effect-agent-free",
+  "main": "worker-without-code-mode.ts",
+  "tsconfig": "../../apps/worker/tsconfig.json",
+  "compatibility_date": "2026-08-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "SESSIONS", "class_name": "AgentSessionObject" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AgentSessionObject"] }],
+  "observability": { "enabled": true }
+}
