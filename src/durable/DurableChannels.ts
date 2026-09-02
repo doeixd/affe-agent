@@ -142,8 +142,7 @@ export interface PendingDispatch {
   readonly input?: unknown
 }
 
-const PendingDispatchRecord = Schema.Struct({
-  _tag: Schema.Literal("PendingDispatch"),
+const PendingDispatchRecord = Schema.TaggedStruct("PendingDispatch", {
   prompt: Schema.String,
   input: Schema.optional(Schema.Unknown)
 })

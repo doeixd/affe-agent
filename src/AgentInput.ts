@@ -124,8 +124,7 @@ export const rendered = <A, I, E, R>(
  * to declares it, and the host decodes with that -- which is why the value
  * is `unknown` here and typed everywhere a caller writes it.
  */
-export const Typed = Schema.Struct({
-  _tag: Schema.Literal("TypedInput"),
+export const Typed = Schema.TaggedStruct("TypedInput", {
   value: Schema.Unknown
 })
 export type Typed = typeof Typed.Type
