@@ -792,9 +792,10 @@ sizes; the items are repeated here so this list stays the one tracker.
     phase 2 landed 2026-09-02 (the wire form `AgentInput.Typed`, the host
     decode in every `RemoteSession`, `AgentClient.typed`, the durable
     client's claim and payload, an Effect-valued render as an activity);
-    see `status-history.md`. Left as it is: `DurableAgent.workflow`, the
-    embedded session-keyed API, still refuses a typed agent at compile
-    time. As planned: `AgentInput.make(schema, render)` as the
+    see `status-history.md`; the rest of the surfaces (issue #81:
+    `Scheduling`, `Subagent`, `DurableAgent.workflow` and the cluster entity,
+    the Cloudflare alarm dispatcher) followed the same day through one
+    shared boundary, `internal/inputBoundary.ts`. As planned: `AgentInput.make(schema, render)` as the
     mirror of `AgentOutput`: the full value reaches tools as
     `AgentInput.Current`, the model sees the rendering, the host decodes JSON
     at the boundary, `/durable` journals the encoded value. One more type
@@ -827,7 +828,11 @@ sizes; the items are repeated here so this list stays the one tracker.
     `AgentOutput` review schema + `Budget.within` + `Evals.tokens`, against
     the scripted model. A reference, not a package.
 
-41b. **Typed agents everywhere else** — after phase 2 (2026-09-02) the
+41b. ~~**Typed agents everywhere else**~~ — landed 2026-09-02 (issue #81
+    closed; see `status-history.md`): every surface below now admits a typed
+    agent through `src/internal/inputBoundary.ts`; `src/cloudflare/index.ts`
+    got the two-line alarm change only, its `agent` signatures still pin
+    `Input`. Was: after phase 2 (2026-09-02) the
     remaining surfaces whose signatures pin `Input` to `never`:
     `src/scheduling/Scheduling.ts` (three signatures, and its persisted
     `input: Prompt.RawInput` would need to carry the typed form),

@@ -42,7 +42,9 @@ import type { Prompt } from "effect/unstable/ai"
  * spelling that writes the value and never the wire form. Under `/durable`
  * the encoded value is journalled and re-rendered on replay; an
  * Effect-valued `render` runs there as an activity, so a replay reads the
- * rendering back rather than rendering again.
+ * rendering back rather than rendering again. Every other entry point --
+ * `Scheduling`, the cluster entity, a `Subagent` tool (whose parameters
+ * become the child's schema) -- admits the same way, through one boundary.
  */
 export interface AgentInput<A, I, E = never, R = never> {
   readonly schema: Schema.Codec<A, I>

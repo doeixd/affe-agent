@@ -3,14 +3,13 @@ import type { Context } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { WorkflowEngine } from "effect/unstable/workflow"
-import { Schema } from "effect"
 import type { AgentDefinition } from "../Agent.js"
-import * as AgentInput from "../AgentInput.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentPrincipal } from "../Principal.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
-import { AgentInvalidRequestError, AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
+import { AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
 import * as History from "../internal/history.js"
 import * as Ids from "../internal/ids.js"
 import * as DurableAgent from "./DurableAgent.js"
@@ -188,38 +187,13 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
   const pollInterval = options.pollInterval ?? DurablePolling.defaults.clientOutcome
 
   /**
-   * The boundary decode, as `AgentClient.fromSession` does it: a typed
-   * value is validated against the agent's schema here, where the caller
-   * can be told, and journalled encoded; a prompt passes through for an
-   * agent without an input. Either the other way is an invalid request.
+   * The boundary decode, shared with every other boundary: a typed value is
+   * validated against the agent's schema here, where the caller can be
+   * told, and journalled encoded; a prompt passes through for an agent
+   * without an input.
    */
-  const boundary = (
-    operation: "prompt" | "submit",
-    input: AgentClient.RemoteInput
-  ): Effect.Effect<{ readonly prompt: Prompt.Prompt; readonly input?: unknown }, AgentInvalidRequestError> =>
-    Option.match(agent.input, {
-      onNone: () =>
-        AgentInput.isTyped(input)
-          ? Effect.fail(
-            new AgentInvalidRequestError({
-              operation,
-              detail: "this session's agent is asked with a prompt, not a typed input"
-            })
-          )
-          : Effect.succeed({ prompt: Prompt.make(input) }),
-      onSome: (declared) =>
-        AgentInput.isTyped(input)
-          ? Schema.decodeUnknownEffect(declared.schema)(input.value).pipe(
-            Effect.mapError((error) => new AgentInvalidRequestError({ operation, detail: error.message })),
-            Effect.as({ prompt: Prompt.empty, input: input.value })
-          )
-          : Effect.fail(
-            new AgentInvalidRequestError({
-              operation,
-              detail: "this session's agent declares a typed input; send its value, not a prompt"
-            })
-          )
-    })
+  const boundary = (operation: "prompt" | "submit", input: AgentClient.RemoteInput) =>
+    InputBoundary.admit(agent.input, operation, input)
 
   /**
    * The execution id for a claim, derived without dispatching anything.

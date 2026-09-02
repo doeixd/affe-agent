@@ -1,6 +1,6 @@
 import { Clock, Cron, Effect } from "effect"
-import { Prompt } from "effect/unstable/ai"
 import { ClusterCron } from "effect/unstable/cluster"
+import type { RemoteInput } from "../client/AgentClient.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
 import type * as DurableChannels from "../durable/DurableChannels.js"
 
@@ -55,8 +55,12 @@ export const layer = <
    * on `perFiring` for what a constant id does.
    */
   readonly sessionId?: Effect.Effect<string, E, R> | undefined
-  /** `RawInput`, so a scheduled submission can be multimodal like any other. */
-  readonly input: Prompt.RawInput
+  /**
+   * `RawInput`, so a scheduled submission can be multimodal like any other;
+   * or `AgentInput.typed(value)` for an agent that declares an input, decoded
+   * by the entity with the agent's schema on every firing.
+   */
+  readonly input: RemoteInput
 }) =>
   ClusterCron.make({
     name: options.name,

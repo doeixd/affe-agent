@@ -4,6 +4,10 @@ import type { Tool } from "effect/unstable/ai"
 import { LanguageModel } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
+import * as AgentInput from "../AgentInput.js"
+import type * as AgentSession from "../AgentSession.js"
+import type { RemoteInput } from "../client/AgentClient.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
 
 /**
  * Scheduling and self-dispatch (issue #4 §14).
@@ -31,7 +35,13 @@ import type { AgentDefinition } from "../Agent.js"
 
 /** A unit of dispatched work: an input to run the dispatcher's agent with, later. */
 export interface Dispatched {
-  readonly input: Prompt.RawInput
+  /**
+   * A prompt, or `AgentInput.typed(value)` for an agent that declares an
+   * input. The dispatcher does not know the agent; whoever runs the job
+   * decodes the value with the agent's schema, and a value that does not
+   * fit fails that run like any other failure.
+   */
+  readonly input: RemoteInput
   /** How long to wait before running. Omit to run as soon as possible. */
   readonly delay?: Duration.Input | undefined
 }
@@ -57,8 +67,8 @@ export class AgentDispatcher extends Context.Service<AgentDispatcher, {
  * For durability, provide a Workflow/queue implementation of `AgentDispatcher`
  * instead; the tool that calls `dispatch` does not change.
  */
-export const local = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>
+export const local = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>
 ): Layer.Layer<AgentDispatcher, never, LanguageModel.LanguageModel | R> =>
   Layer.effect(
     AgentDispatcher,
@@ -67,9 +77,8 @@ export const local = <Tools extends Record<string, Tool.Any>, E, R>(
       const env = yield* Effect.context<LanguageModel.LanguageModel | R>()
       return {
         dispatch: (job) => {
-          const delayed = job.delay === undefined
-            ? Agent.run(agent, job.input)
-            : Effect.delay(Agent.run(agent, job.input), job.delay)
+          const run = InputBoundary.run(agent, "submit", job.input)
+          const delayed = job.delay === undefined ? run : Effect.delay(run, job.delay)
           return delayed.pipe(
             Effect.provide(env),
             Effect.catchCause((cause): Effect.Effect<void> =>
@@ -103,6 +112,8 @@ export const dispatch = (job: Dispatched): Effect.Effect<void, never, AgentDispa
  */
 export interface PersistedJob {
   readonly prompt: Prompt.Prompt
+  /** A typed input's encoded value; `prompt` is then empty. */
+  readonly input?: unknown
   readonly runAfterMillis: number
 }
 
@@ -156,7 +167,9 @@ export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
         const now = yield* Clock.currentTimeMillis
         const delayMillis = job.delay === undefined ? 0 : Duration.toMillis(job.delay)
         yield* store.enqueue({
-          prompt: Prompt.make(job.input),
+          ...(AgentInput.isTyped(job.input)
+            ? { prompt: Prompt.empty, input: job.input.value }
+            : { prompt: Prompt.make(job.input) }),
           runAfterMillis: now + delayMillis
         })
       })
@@ -178,8 +191,8 @@ export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
  * yield* Effect.forkScoped(Scheduling.worker(Assistant, store))
  * ```
  */
-export const worker = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>,
+export const worker = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   store: JobStore,
   options?: { readonly pollInterval?: Duration.Input | undefined }
 ): Effect.Effect<never, never, LanguageModel.LanguageModel | R> =>
@@ -193,7 +206,7 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R>(
         yield* Effect.forEach(
           due,
           (job) =>
-            Agent.run(agent, job.prompt).pipe(
+            InputBoundary.runRecorded(agent, job).pipe(
               Effect.catchCause((cause): Effect.Effect<void> =>
                 Cause.hasInterruptsOnly(cause)
                   ? Effect.void
@@ -220,9 +233,10 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R>(
  * `CronParseError` if its expression is invalid, and that surfaces here rather
  * than being swallowed.
  */
-export const recurring = <Tools extends Record<string, Tool.Any>, E, R, SO, SE, SR>(
-  agent: AgentDefinition<Tools, E, R>,
-  input: Prompt.RawInput,
+export const recurring = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, SO, SE, SR>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  /** The agent's declared input, or `Prompt.RawInput` for an agent without one. */
+  input: NoInfer<AgentSession.PromptInput<Input>>,
   schedule: Schedule.Schedule<SO, unknown, SE, SR>
 ): Effect.Effect<SO, SE, LanguageModel.LanguageModel | R | SR> =>
   Agent.run(agent, input).pipe(

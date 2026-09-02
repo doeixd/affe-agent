@@ -10,6 +10,7 @@ import {
 import type { Sharding } from "effect/unstable/cluster"
 import type { WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
+import * as AgentInput from "../src/AgentInput.js"
 import * as ScheduledAgent from "../src/cluster/ScheduledAgent.js"
 import type { AgentIdleError } from "../src/Errors.js"
 import type { AgentTransportError } from "../src/client/AgentClient.js"
@@ -277,6 +278,72 @@ describe("agent client", () => {
     )
   )
 
+  /**
+   * Typed input (issue #81) through the entity: the value crosses the RPC
+   * as `AgentInput.Typed`, the entity admits it with the agent's schema, and
+   * the outbox row carries it so a recovery renders the same value.
+   */
+  it.live("submits a typed input through the entity, and a recorded typed dispatch is carried forward", () =>
+    Effect.gen(function* () {
+      const Ticket = AgentInput.make(
+        Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+        ({ body }) => `A customer writes:\n\n${body}`
+      )
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([{ text: "handled" }, { text: "again" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("TypedEntity", Agent.make({ input: Ticket }), { store })
+      // Built once and shared: the engine is one cluster, and every `provide`
+      // below must see the same one rather than build another.
+      const runtime = yield* Layer.build(
+        durable.layer.pipe(
+          Layer.provideMerge(ClusterWorkflowEngine.layer),
+          Layer.provideMerge(modelLayer)
+        )
+      )
+      const handlers = entityLayer(durable, store).pipe(Layer.provideMerge(Layer.succeedContext(runtime)))
+      const makeRaw = yield* Entity.makeTestClient(AgentEntity, handlers)
+
+      // A prompt to a typed agent is refused on the wire, as a typed error.
+      const refused = yield* Effect.flip(EntityClient.wrap(yield* makeRaw("typed-refused")).submit("just text"))
+      assert.strictEqual(refused._tag, "AgentTransportError")
+      assert.include(refused.detail, "AgentInvalidRequestError")
+
+      const client = EntityClient.wrap(yield* makeRaw("typed-1"))
+      const executionId = yield* client.submit(AgentInput.typed({ customerId: "c-42", body: "my order is late" }))
+      assert.isString(executionId)
+      yield* Effect.retry(
+        Effect.flatMap(recorder.prompts, (seen) =>
+          seen.some((p) => FakeModel.userTexts(p).includes("A customer writes:\n\nmy order is late"))
+            ? Effect.void
+            : Effect.fail("not yet" as const)),
+        { times: 200, schedule: Schedule.spaced(Duration.millis(10)) }
+      ).pipe(Effect.provideContext(runtime))
+      assert.notInclude(JSON.stringify((yield* recorder.prompts)[0]), "c-42")
+
+      // What a process that admitted a typed value and then died leaves behind.
+      yield* DurableChannels.recordPendingDispatch(store, "typed-lost", {
+        prompt: Prompt.empty,
+        input: { customerId: "c-7", body: "lost and found" }
+      })
+      // Any handler carries the outbox forward (R172); steering is expected
+      // to fail as idle, and the failure is not what is asserted.
+      const lost = yield* makeRaw("typed-lost")
+      yield* Effect.exit(lost.steer({ input: Prompt.make("some steering") }))
+      yield* Effect.retry(
+        Effect.flatMap(recorder.prompts, (seen) =>
+          seen.some((p) => FakeModel.userTexts(p).includes("A customer writes:\n\nlost and found"))
+            ? Effect.void
+            : Effect.fail("not yet" as const)),
+        { times: 200, schedule: Schedule.spaced(Duration.millis(10)) }
+      ).pipe(Effect.provideContext(runtime))
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(TestRunner.layer, ShardingConfig.layerDefaults)
+      )
+    )
+  )
+
   it.live("keeps the one error a caller can act on, and drops the rest", () =>
     Effect.gen(function* () {
       const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
@@ -444,7 +511,7 @@ describe("approval across the cluster", () => {
       yield* DurableChannels.recordPendingDispatch(
         store,
         "session-lost",
-        Prompt.make("the lost submission")
+        { prompt: Prompt.make("the lost submission") }
       )
       assert.strictEqual(
         yield* store.size(DurableChannels.dispatchKey("session-lost")),
@@ -517,7 +584,7 @@ describe("approval across the cluster", () => {
       yield* DurableChannels.recordPendingDispatch(
         store,
         "session-steered",
-        Prompt.make("the lost submission")
+        { prompt: Prompt.make("the lost submission") }
       )
 
       const makeClient = yield* Entity.makeTestClient(AgentEntity, handlers)

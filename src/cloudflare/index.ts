@@ -13,6 +13,7 @@ import {
   WorkerEnvironment
 } from "effect-cf"
 import * as Agent from "../Agent.js"
+import * as AgentInput from "../AgentInput.js"
 import * as AgentSessionEngine from "../AgentSession.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
@@ -339,7 +340,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
             const runAt = job.delay === undefined
               ? now
               : DateTime.addDuration(now, Duration.fromInputUnsafe(job.delay))
-            const payload = yield* Schema.encodeEffect(PromptJson)(Prompt.make(job.input)).pipe(Effect.orDie)
+            // A typed input (`AgentInput.Typed`) rides the alarm as it is and
+            // is decoded by the session's own boundary when it fires; a
+            // prompt is encoded through the wire codec as before.
+            const payload: Schema.Json = AgentInput.isTyped(job.input)
+              // The value is the schema's encoded form, JSON by construction;
+              // the wire type says `unknown` because no schema is named there.
+              ? { _tag: "TypedInput", value: job.input.value as Schema.Json }
+              : yield* Schema.encodeEffect(PromptJson)(Prompt.make(job.input)).pipe(Effect.orDie)
             yield* alarms.scheduleAlarm({
               tag: DISPATCH_TAG,
               id: crypto.randomUUID(),
@@ -382,7 +390,9 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
       (event) =>
         Effect.gen(function* () {
           if (event.tag !== DISPATCH_TAG) return
-          const decoded = yield* Effect.result(Schema.decodeUnknownEffect(PromptJson)(event.payload))
+          const decoded = AgentInput.isTyped(event.payload)
+            ? { _tag: "Success" as const, success: event.payload }
+            : yield* Effect.result(Schema.decodeUnknownEffect(PromptJson)(event.payload))
           if (decoded._tag === "Failure") {
             return yield* Effect.logError("cloudflare: a dispatched job's prompt does not decode; dropped", {
               sessionId: sessionId.value,

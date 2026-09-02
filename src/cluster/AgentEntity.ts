@@ -3,6 +3,8 @@ import { Prompt } from "effect/unstable/ai"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc } from "effect/unstable/rpc"
 import { AgentIdleError, StorageError, isStorageError } from "../Errors.js"
+import { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
+import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
 import * as DurableAgent from "../durable/DurableAgent.js"
@@ -31,9 +33,11 @@ export const AgentEntity = Entity.make("AgentSession", [
   // or return a 503, none of which a defect allows. `StorageError` is a
   // `Schema.TaggedError` and crosses the cluster like `AgentIdleError` does.
   Rpc.make("submit", {
-    payload: { input: PromptWire.Prompt },
+    // A prompt, or a typed input's encoded value for an agent that declares
+    // one (`AgentInput`); the entity decodes it with the agent's schema.
+    payload: { input: AgentProtocol.Input },
     success: Schema.String,
-    error: StorageError
+    error: Schema.Union([StorageError, AgentInvalidRequestError])
   }),
   // Admission is a real answer, not a crash. A client that steers a session
   // which has already finished should be able to tell that apart from a runner
@@ -116,7 +120,7 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             Effect.catchCause(
               DurableAgent.throughShardReassignment(
                 agent.definition.execute(
-                  { sessionId, prompt: pending },
+                  { sessionId, ...pending },
                   { discard: true }
                 )
               ),
@@ -143,10 +147,13 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
           Effect.gen(function* () {
             yield* carryForward
 
-            const prompt = payload.input
+            const admitted = yield* agent.admit("submit", payload.input)
+            const dispatch: DurableChannels.PendingDispatch = admitted.input === undefined
+              ? { prompt: admitted.prompt }
+              : { prompt: admitted.prompt, input: admitted.input }
             const executionId = yield* agent.definition.executionId({
               sessionId,
-              prompt
+              ...dispatch
             })
             // Admission opens before dispatch, so a client that steers straight
             // after submitting is not told the session is idle.
@@ -185,10 +192,10 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
              * because it must be, but it is no longer the only record that a
              * submission exists.
              */
-            yield* DurableChannels.recordPendingDispatch(store, sessionId, prompt)
+            yield* DurableChannels.recordPendingDispatch(store, sessionId, dispatch)
             yield* Effect.forkDetach(
               DurableAgent.throughShardReassignment(
-                agent.definition.execute({ sessionId, prompt }, { discard: true })
+                agent.definition.execute({ sessionId, ...dispatch }, { discard: true })
               )
                 .pipe(
                   // Dispatch landed, so the outbox row has done its job. A row
@@ -226,7 +233,10 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
           }).pipe(
             // A store failure before the caller has been told anything is
             // the declared answer; anything else here is a bug and dies.
-            Effect.catch((error) => isStorageError(error) ? Effect.fail(error) : Effect.die(error))
+            Effect.catch((error) =>
+              isStorageError(error) || error instanceof AgentInvalidRequestError
+                ? Effect.fail(error)
+                : Effect.die(error))
           ),
         // Admission failures cross as `AgentIdleError` and store failures as
         // `StorageError`, both declared by the RPCs above, so a remote caller

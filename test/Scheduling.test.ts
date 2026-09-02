@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cron, Deferred, Effect, Layer, Option, Schedule } from "effect"
+import { Cron, Deferred, Effect, Layer, Option, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import * as Agent from "../src/Agent.js"
+import * as AgentInput from "../src/AgentInput.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { Scheduling } from "../src/scheduling/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -15,6 +16,94 @@ import { TestLanguageModel } from "../src/testing/index.js"
  */
 
 const Simple = Agent.make({ loop: AgentLoop.bounded(2) })
+
+const TicketSchema = Schema.Struct({ customerId: Schema.String, body: Schema.String })
+const Ticket = AgentInput.make(TicketSchema, ({ body }) => `A customer writes:\n\n${body}`)
+const ticket = { customerId: "c-42", body: "my order is late" }
+const rendering = "A customer writes:\n\nmy order is late"
+const Support = Agent.make({ input: Ticket, loop: AgentLoop.bounded(1) })
+
+/**
+ * Typed input (issue #81): a dispatched job carries `AgentInput.typed(value)`,
+ * whoever runs it decodes with the agent's schema, and the model sees the
+ * rendering. A value the schema rejects fails that run, isolated like any
+ * other failing run.
+ */
+describe("Scheduling with a typed agent", () => {
+  it.effect("the local dispatcher decodes the value and the model sees the rendering", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "done", started }])
+      yield* Effect.gen(function* () {
+        yield* Scheduling.dispatch({ input: AgentInput.typed(ticket) })
+        yield* Deferred.await(started)
+      }).pipe(
+        Effect.provide(Layer.merge(Scheduling.local(Support).pipe(Layer.provide(model)), TestClock.layer())),
+        Effect.scoped
+      )
+      const prompts = yield* recorder.prompts
+      assert.deepStrictEqual(TestLanguageModel.userTexts(prompts[0]!), [rendering])
+      assert.notInclude(JSON.stringify(prompts[0]), "c-42")
+    })
+  )
+
+  it.effect("a queued job persists the value, and a worker renders it", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "done", started }])
+      const store = yield* Scheduling.memoryStore
+      yield* Scheduling.dispatch({ input: AgentInput.typed(ticket) }).pipe(Effect.provide(Scheduling.queued(store)))
+      // The store holds the value, not a rendering: rendering is the worker's.
+      const due = yield* store.claimDue(Number.MAX_SAFE_INTEGER)
+      assert.deepStrictEqual(due.map((job) => job.input), [ticket])
+      assert.deepStrictEqual(TestLanguageModel.userTexts(due[0]!.prompt), [])
+      yield* Effect.forEach(due, (job) => store.enqueue(job))
+      yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(Scheduling.worker(Support, store, { pollInterval: "1 millis" }))
+        yield* Deferred.await(started)
+      }).pipe(Effect.provide(model), Effect.scoped)
+      assert.deepStrictEqual(TestLanguageModel.userTexts((yield* recorder.prompts)[0]!), [rendering])
+    })
+  )
+
+  it.effect("a value the schema rejects fails its run and nothing else; a prompt to a typed agent likewise", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "done", started }])
+      yield* Effect.gen(function* () {
+        yield* Scheduling.dispatch({ input: AgentInput.typed({ customerId: 42 }) })
+        yield* Scheduling.dispatch({ input: "a prompt" })
+        yield* Scheduling.dispatch({ input: AgentInput.typed(ticket) })
+        yield* Deferred.await(started)
+      }).pipe(
+        Effect.provide(Layer.merge(Scheduling.local(Support).pipe(Layer.provide(model)), TestClock.layer())),
+        Effect.scoped
+      )
+      // Only the well-formed job reached the model.
+      assert.strictEqual(yield* recorder.calls, 1)
+    })
+  )
+
+  it.effect("recurring takes the schema's type", () =>
+    Effect.gen(function* () {
+      const s1 = yield* Deferred.make<void>()
+      const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "one", started: s1 }])
+      yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(Scheduling.recurring(Support, ticket, Schedule.fixed("1 hour")))
+        yield* Deferred.await(s1)
+      }).pipe(Effect.provide(Layer.merge(model, TestClock.layer())), Effect.scoped)
+      assert.deepStrictEqual(TestLanguageModel.userTexts((yield* recorder.prompts)[0]!), [rendering])
+    })
+  )
+})
+
+/** Type-level: the recurring input is the schema's type; a string is refused. */
+export const _recurringIsTyped = () => ({
+  // @ts-expect-error -- a string is not a Ticket
+  wrong: Scheduling.recurring(Support, "tick", Schedule.fixed("1 hour")),
+  // @ts-expect-error -- a Ticket is not Prompt.RawInput
+  wrongForSimple: Scheduling.recurring(Simple, ticket, Schedule.fixed("1 hour"))
+})
 
 describe("Scheduling.local dispatcher", () => {
   it.effect("a job with no delay runs promptly", () =>

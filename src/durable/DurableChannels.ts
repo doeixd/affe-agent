@@ -132,13 +132,48 @@ export const steeringOpenKey = (sessionId: string): string =>
 export const dispatchKey = (sessionId: string): string => `${sessionId}:dispatch`
 
 /** Record a submission owed a dispatch. Durable before the caller is told. */
+/**
+ * What a recorded dispatch holds: the prompt, and a typed input's encoded
+ * value when the agent declares one. Rows written before the value existed
+ * are the encoded prompt alone, and still read.
+ */
+export interface PendingDispatch {
+  readonly prompt: Prompt.Prompt
+  readonly input?: unknown
+}
+
+const PendingDispatchRecord = Schema.Struct({
+  _tag: Schema.Literal("PendingDispatch"),
+  prompt: Schema.String,
+  input: Schema.optional(Schema.Unknown)
+})
+
 export const recordPendingDispatch = (
   store: Store,
   sessionId: string,
-  input: Prompt.RawInput
+  dispatch: PendingDispatch
 ): Effect.Effect<void, StorageError> =>
-  Effect.flatMap(encodePrompt(Prompt.make(input)), (encoded) =>
-    store.offer(dispatchKey(sessionId), encoded))
+  Effect.flatMap(encodePrompt(dispatch.prompt), (prompt) =>
+    store.offer(
+      dispatchKey(sessionId),
+      JSON.stringify({
+        _tag: "PendingDispatch",
+        prompt,
+        ...(dispatch.input === undefined ? {} : { input: dispatch.input })
+      })
+    ))
+
+const decodePendingDispatch = (encoded: string): Effect.Effect<PendingDispatch, StorageError> =>
+  Effect.try(() => JSON.parse(encoded) as unknown).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(PendingDispatchRecord)),
+    Effect.matchEffect({
+      // A row from before the record existed: the encoded prompt alone.
+      onFailure: () => Effect.map(decodePrompt(encoded), (prompt): PendingDispatch => ({ prompt })),
+      onSuccess: (record) =>
+        Effect.map(decodePrompt(record.prompt), (prompt): PendingDispatch =>
+          record.input === undefined ? { prompt } : { prompt, input: record.input })
+    })
+  )
 
 /**
  * Take everything owed a dispatch, oldest first.
@@ -153,9 +188,9 @@ export const recordPendingDispatch = (
 export const takePendingDispatches = (
   store: Store,
   sessionId: string
-): Effect.Effect<ReadonlyArray<Prompt.Prompt>, StorageError> =>
+): Effect.Effect<ReadonlyArray<PendingDispatch>, StorageError> =>
   Effect.flatMap(store.takeAll(dispatchKey(sessionId)), (encoded) =>
-    Effect.forEach(encoded, decodePrompt))
+    Effect.forEach(encoded, decodePendingDispatch))
 
 /**
  * Offer input from outside the workflow.

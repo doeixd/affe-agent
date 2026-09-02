@@ -5420,3 +5420,50 @@ rendered once across a replay (broken once by not wrapping the renderer),
 the event carries the value through the delivery log, a refused value
 takes no claim and journals nothing. `DurableSessionStoreConformance`
 gains "persists a typed input's value on the claim" (16 cases).
+
+## 2026-09-02 — every entry point admits a typed agent (issue #81)
+
+The surfaces phase 2 left pinning `Input` to `never` now take a typed
+agent, through one shared boundary, `src/internal/inputBoundary.ts`:
+`admit` (a prompt or `AgentInput.Typed`, decoded with the declared schema,
+a mismatch refused as `AgentInvalidRequestError`), `askedOf` (a recorded
+admission back to what the session is asked with), and `run` /
+`runRecorded`, which hold the one widening from the decoded `unknown` to
+`PromptInput<Input>`. `AgentClient.fromSession` and the durable client
+were rewritten onto it, so the message strings and the rule live once.
+
+- `Scheduling`: `Dispatched.input` and `PersistedJob.input` carry the
+  value; `local` and `worker` decode at run time (a value that does not
+  fit fails that run, isolated like any other); `recurring` takes
+  `PromptInput<Input>` and is refused a string for a typed agent at compile
+  time (pinned with `@ts-expect-error` both ways).
+- `Subagent.tool` / `toolScoped`: the tool's parameters are the child's
+  input schema when it declares one, so the parent model writes the value
+  and the child renders it; `{ prompt }` otherwise. The parameters schema
+  is typed `Schema.Codec<unknown, unknown>` rather than `Schema.Top` -- the
+  latter's `DecodingServices: unknown` turned every parent's `R` into
+  `unknown`, which the helper tests caught.
+- `DurableAgent.workflow`: the payload gains an optional `input`; the
+  returned record gains `admit`; `submit` takes `RemoteInput` and refuses
+  before anything is opened; `durableInput` (the render-as-activity
+  wrapper) moved here from `DurableSubmission`, which now shares it.
+- The cluster: the `submit` RPC payload is `AgentProtocol.Input` and its
+  error union gains `AgentInvalidRequestError`; `EntityClient.submit` takes
+  `RemoteInput`; the outbox row (`PendingDispatch`) records the value, and
+  reads rows written before the field existed. `ScheduledAgent.input` is
+  `RemoteInput`.
+- The Cloudflare alarm dispatcher carries a typed job as it is and hands
+  it to the session's own boundary when it fires (two lines in
+  `src/cloudflare/index.ts`, the minimum that keeps it compiling; its
+  `agent` signatures were not widened here).
+
+Pinned: `Scheduling.test.ts` (local, queued + worker, rejected values
+isolated, `recurring` typed), `Subagent.helper.test.ts` (the child's
+schema as parameters, the child's tool reading the value),
+`Cluster.test.ts` (typed submit through the entity, a prompt to a typed
+agent refused on the wire as a typed error, a recorded typed dispatch
+carried forward), `Durable.test.ts` (`submit` admits and the workflow
+renders once, a refused value opens nothing). The cluster test builds its
+runtime once and shares the context: providing the layer twice built two
+engines, and the second's sharding was not the first's -- which is what
+the `getShardId is not a function` defect on the first draft was.

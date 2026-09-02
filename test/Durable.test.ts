@@ -5,6 +5,7 @@ import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import { Activity, DurableDeferred } from "effect/unstable/workflow"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
+import * as AgentInput from "../src/AgentInput.js"
 import * as Ids from "../src/internal/ids.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -66,6 +67,45 @@ describe("durable submissions", () => {
       )
 
       assert.isTrue(Exit.isSuccess(text))
+    })
+  )
+
+  /**
+   * Typed input through the embedded API (issue #81): `submit` admits the
+   * value with the agent's schema, the payload journals it, and the
+   * workflow renders -- an Effect-valued renderer as an activity.
+   */
+  it.live("a typed input is admitted by submit, journalled, and rendered in the workflow", () =>
+    Effect.gen(function* () {
+      const renders = yield* Ref.make(0)
+      const Ticket = AgentInput.make(
+        Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+        ({ body }) => Ref.update(renders, (n) => n + 1).pipe(Effect.as(`A customer writes:\n\n${body}`))
+      )
+      const { layer: modelLayer, recorder } = yield* FakeModel.layer([{ text: "handled" }])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow("TypedSupport", Agent.make({ input: Ticket }), { store })
+      const layer = durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))
+
+      const { refused, result } = yield* Effect.gen(function* () {
+        const refused = yield* Effect.flip(DurableAgent.submit(durable, store, "typed-bad", AgentInput.typed({ customerId: 1 })))
+        const executionId = yield* DurableAgent.submit(
+          durable,
+          store,
+          "typed-1",
+          AgentInput.typed({ customerId: "c-42", body: "my order is late" })
+        )
+        return { refused, result: yield* DurableAgent.result(durable, executionId) }
+      }).pipe(Effect.provide(layer))
+
+      assert.strictEqual(refused._tag, "AgentInvalidRequestError")
+      assert.isTrue(Exit.isSuccess(result))
+      assert.strictEqual(yield* Ref.get(renders), 1)
+      const prompts = yield* recorder.prompts
+      assert.deepStrictEqual(FakeModel.userTexts(prompts[0]!), ["A customer writes:\n\nmy order is late"])
+      assert.notInclude(JSON.stringify(prompts[0]), "c-42")
+      // Nothing was opened for the refused value.
+      assert.strictEqual(yield* store.size(DurableChannels.openKey("typed-bad")), 0)
     })
   )
 

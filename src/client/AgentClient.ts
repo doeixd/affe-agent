@@ -8,6 +8,7 @@ import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentInput from "../AgentInput.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
 import * as AgentSession from "../AgentSession.js"
 import type * as Elicitation from "../Elicitation.js"
 import { SubmissionId } from "../internal/ids.js"
@@ -293,7 +294,7 @@ export type SubmissionReceipt = typeof SubmissionReceipt.Type
  * the other as `AgentInvalidRequestError`. `typed` below is the spelling
  * that never lets a caller build the wire form by hand.
  */
-export type RemoteInput = Prompt.RawInput | AgentInput.Typed
+export type RemoteInput = InputBoundary.RemoteInput
 
 export interface RemoteSession {
   readonly id: string
@@ -508,48 +509,11 @@ export const fromSession = <Value, Input>(
         )
       )
 
-  // What `admit` decoded is what the session's signature asks for: the
-  // schema it decoded with is the one the session declares, so the value is
-  // `PromptInput<Input>` by construction. The compiler cannot resolve that
-  // conditional for an abstract `Input`, hence the one widening, here.
-  const asked = (value: unknown) => value as AgentSession.PromptInput<Input>
-
-  /**
-   * The boundary decode. A typed value is decoded with the schema the
-   * session declares; a prompt passes through for an agent without one.
-   * Either the other way is an invalid request, named as such rather than
-   * mis-rendered: the model would otherwise be shown JSON, or a string
-   * would be encoded as a struct.
-   */
-  const admit = (
-    operation: "prompt" | "submit",
-    input: RemoteInput
-  ): Effect.Effect<AgentSession.PromptInput<Input>, AgentInvalidRequestError> => {
-    const declared = session.input
-    if (Option.isNone(declared)) {
-      return AgentInput.isTyped(input)
-        ? Effect.fail(
-          new AgentInvalidRequestError({
-            operation,
-            detail: "this session's agent is asked with a prompt, not a typed input"
-          })
-        )
-        : Effect.succeed(asked(input))
-    }
-    if (!AgentInput.isTyped(input)) {
-      return Effect.fail(
-        new AgentInvalidRequestError({
-          operation,
-          detail: "this session's agent declares a typed input; send its value, not a prompt"
-        })
-      )
-    }
-    return Schema.decodeUnknownEffect(declared.value.schema)(input.value).pipe(
-      Effect.map(asked),
-      Effect.mapError((error) => new AgentInvalidRequestError({ operation, detail: error.message }))
-    )
-  }
-
+  // The boundary decode, in the one place every boundary shares; see
+  // `internal/inputBoundary.ts` for why `asked` is the one widening.
+  const admit = (operation: "prompt" | "submit", input: RemoteInput) =>
+    Effect.map(InputBoundary.admit(session.input, operation, input), (admitted) =>
+      InputBoundary.asked<Input>(admitted.asked))
 
   const remember = (
     submissionId: string,

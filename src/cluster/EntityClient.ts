@@ -3,6 +3,8 @@ import { Prompt } from "effect/unstable/ai"
 import type * as Elicitation from "../Elicitation.js"
 import { AgentIdleError } from "../Errors.js"
 import { AgentTransportError } from "../client/AgentClient.js"
+import type { RemoteInput } from "../client/AgentClient.js"
+import * as AgentProtocol from "../client/AgentProtocol.js"
 import { AgentEntity } from "./AgentEntity.js"
 import { detailOf } from "../internal/detail.js"
 import * as Schedules from "../internal/schedules.js"
@@ -42,7 +44,7 @@ export interface EntityClient {
    * defect.
    */
   readonly submit: (
-    input: Prompt.RawInput
+    input: RemoteInput
   ) => Effect.Effect<string, AgentTransportError>
   /** Queue steering, applied at the next turn boundary. */
   readonly steer: (
@@ -74,7 +76,7 @@ export interface EntityClient {
  */
 export interface RawEntityClient<E> {
   readonly submit: (payload: {
-    readonly input: Prompt.Prompt
+    readonly input: AgentProtocol.Input
   }) => Effect.Effect<string, E>
   readonly steer: (payload: {
     readonly input: Prompt.Prompt
@@ -221,7 +223,7 @@ const admitting = <A, E, R>(
  */
 export const wrap = <E>(raw: RawEntityClient<E>): EntityClient => ({
   submit: (input) =>
-    infrastructural(raw.submit({ input: Prompt.make(input) })),
+    infrastructural(raw.submit({ input: AgentProtocol.input(input) })),
   steer: (input) => admitting(raw.steer({ input: Prompt.make(input) })),
   followUp: (input) => admitting(raw.followUp({ input: Prompt.make(input) })),
   interrupt: infrastructural(raw.interrupt()),

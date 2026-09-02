@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Data, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { Cause, Data, Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import * as AgentInput from "../src/AgentInput.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as Permission from "../src/Permission.js"
 import { Subagent } from "../src/subagent/index.js"
@@ -26,6 +27,59 @@ class MissingApiKey extends Data.TaggedError("MissingApiKey")<{}> {
     return "no api key"
   }
 }
+
+/**
+ * A child with an `AgentInput` (issue #81): the tool's parameters are the
+ * child's input schema, so the parent model writes the value; the child
+ * renders it and reads the value from its own fibre.
+ */
+describe("Subagent.tool with a typed child", () => {
+  it.effect("the parent fills in the child's input schema; the child renders it and a child tool reads the value", () =>
+    Effect.gen(function* () {
+      const Ticket = AgentInput.make(
+        Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+        ({ body }) => `A customer writes:\n\n${body}`
+      )
+      const Lookup = Tool.make("lookup", { parameters: Schema.Struct({}), success: Schema.String })
+      const child = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCall("lookup", {}, { id: "l1" }),
+        TestLanguageModel.text("child: handled")
+      ])
+      const parent = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "d1", name: "support", params: { customerId: "c-42", body: "my order is late" } }] },
+        TestLanguageModel.text("parent: done")
+      ])
+      const Support = Agent.make({
+        instructions: "Support.",
+        input: Ticket,
+        tools: [
+          Agent.tool(Lookup, () =>
+            Effect.map(AgentInput.current(Ticket), (t) =>
+              Option.match(t, { onNone: () => "no ticket", onSome: ({ customerId }) => `customer ${customerId}` })
+            ).pipe(Effect.orDie))
+        ]
+      })
+      const support = Subagent.tool("support", Support, {
+        description: "Hand a customer ticket to support.",
+        provide: child.layer
+      })
+      const Lead = Agent.make({ instructions: "You delegate.", tools: [support] })
+
+      const result = yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(Lead), (s) => s.prompt("route the ticket"))
+      ).pipe(Effect.provide(parent.layer))
+      assert.strictEqual(result.text, "parent: done")
+
+      const childPrompts = yield* child.recorder.prompts
+      // The child saw the rendering, never the id; its tool read the id.
+      assert.deepStrictEqual(TestLanguageModel.userTexts(childPrompts[0]!), ["A customer writes:\n\nmy order is late"])
+      assert.notInclude(JSON.stringify(childPrompts[0]), "c-42")
+      assert.include(JSON.stringify(childPrompts[1]), "customer c-42")
+      // The parent was offered the tool, and filled in the child's schema.
+      assert.deepStrictEqual((yield* parent.recorder.tools)[0], ["support"])
+    })
+  )
+})
 
 describe("Subagent.tool", () => {
   it.effect("delegates a prompt to a child running under its own model; the two conversations stay apart", () =>

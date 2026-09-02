@@ -1,8 +1,9 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
 
 /**
  * Subagents (issue #4 item 4): ergonomics for the pattern the library already
@@ -57,6 +58,35 @@ const Parameters = Schema.Struct({
   /** The task or question to hand to the subagent, in natural language. */
   prompt: Schema.String
 })
+
+/**
+ * What the parent model fills in to delegate: `{ prompt }` for a child asked
+ * with a prompt, or the child's own input schema when it declares an
+ * `AgentInput` -- the parent model then writes the value, and the child
+ * renders it as it would for any other caller. The schema must describe an
+ * object, as every tool's parameters must.
+ */
+const parametersOf = (declared: InputBoundary.Declared): Schema.Codec<unknown, unknown> =>
+  Option.match(declared, {
+    onNone: (): Schema.Codec<unknown, unknown> => Parameters,
+    onSome: (input): Schema.Codec<unknown, unknown> => input.schema
+  })
+
+/**
+ * The child, asked with what the tool decoded: the value itself for a
+ * typed child, the `prompt` field otherwise -- the two shapes
+ * `parametersOf` declares, so the reads here are exact.
+ */
+const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  params: unknown
+) =>
+  Agent.run(
+    agent,
+    InputBoundary.asked<Input>(
+      Option.isSome(agent.input) ? params : (params as SubagentParams).prompt
+    )
+  )
 
 /** How a child failure reaches the parent. Defects are not covered: see the module doc. */
 export type OnError =
@@ -131,20 +161,20 @@ const describeError = (error: unknown): string => {
  * pool or reads config it is the whole cost of delegating. Use
  * {@link toolScoped} there, which builds once and shares.
  */
-export const tool = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
+export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, LE = never>(
   name: string,
-  agent: AgentDefinition<Tools, E, R>,
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   options: Options<R, LE>
 ) => {
   const definition = Tool.make(name, {
     description: options.description,
-    parameters: Parameters,
+    parameters: parametersOf(agent.input),
     success: Schema.String,
     failure: Schema.String
   })
 
-  const run = ({ prompt }: SubagentParams) =>
-    Agent.run(agent, prompt).pipe(
+  const run = (params: unknown) =>
+    askChild(agent, params).pipe(
       Effect.map((result) => result.text),
       // The child's `LanguageModel | R` is discharged here and only here, so
       // the tool carries no requirement of its own and parent and child never
@@ -192,21 +222,21 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
  * is why this is a separate function and not a flag: the caller has to choose
  * that lifetime, and scoping is how Effect asks them to.
  */
-export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, LE = never>(
+export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, LE = never>(
   name: string,
-  agent: AgentDefinition<Tools, E, R>,
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   options: Options<R, LE>
 ) =>
   Effect.map(Layer.build(options.provide), (services) => {
     const definition = Tool.make(name, {
       description: options.description,
-      parameters: Parameters,
+      parameters: parametersOf(agent.input),
       success: Schema.String,
       failure: Schema.String
     })
 
-    const run = ({ prompt }: SubagentParams) =>
-      Agent.run(agent, prompt).pipe(
+    const run = (params: unknown) =>
+      askChild(agent, params).pipe(
         Effect.map((result) => result.text),
         // The already-built services, not the layer: this is the whole
         // difference from `tool`. The child's `LanguageModel | R` is still

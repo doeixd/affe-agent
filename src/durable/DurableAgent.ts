@@ -1,14 +1,17 @@
 import { Cause, Config, Deferred, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
-import { Workflow, WorkflowEngine } from "effect/unstable/workflow"
+import { Activity, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import * as AgentEvent from "../AgentEvent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Ids from "../internal/ids.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
+import type { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
@@ -182,15 +185,55 @@ export const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure
   })
 }
 
-export const workflow = <Tools extends Record<string, Tool.Any>>(
+/**
+ * An agent's declared input, with an Effect-valued renderer run as an
+ * activity so a replay reads the rendering back from the journal rather
+ * than rendering again -- the rule the model and the tools live by. A pure
+ * renderer is replayed by being pure, and is left alone: journalling a
+ * function of its argument would buy nothing. The renderer's failure is the
+ * agent's `E`, which has no schema; it crosses the journal as the projection
+ * every other durable failure does. An interruption is not a failure: a
+ * suspension that lands mid-render must stay one.
+ */
+export const durableInput = (declared: InputBoundary.Declared, prefix: string): InputBoundary.Declared =>
+  Option.map(declared, (input) => ({
+    schema: input.schema,
+    render: (value) => {
+      const rendering = input.render(value)
+      return Effect.isEffect(rendering)
+        ? Activity.make({
+          name: `${prefix}render`,
+          success: PromptWire.Prompt,
+          error: DurableAgentFailure,
+          execute: rendering.pipe(
+            Effect.map(Prompt.make),
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterrupts(cause),
+              (cause) => Effect.fail(durableFailure(cause))
+            )
+          )
+        })
+        : rendering
+    }
+  }))
+
+export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
-  agent: AgentDefinition<Tools, any, any>,
+  agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
   options: Options
 ) => {
   const definition = Workflow.make(name, {
     // The dedicated wire codec preserves each file-data runtime variant across
     // the workflow journal rather than relying on incidental JSON behaviour.
-    payload: { sessionId: Schema.String, prompt: PromptWire.Prompt },
+    payload: {
+      sessionId: Schema.String,
+      prompt: PromptWire.Prompt,
+      /**
+       * A typed input's encoded value (`AgentInput`); `prompt` is then empty
+       * and the workflow renders. Optional and additive.
+       */
+      input: Schema.optional(Schema.Unknown)
+    },
     idempotencyKey: (payload) => `${name}:${payload.sessionId}`,
     success: Schema.String,
     // A submission's failure is declared, not flattened into a defect.
@@ -296,8 +339,9 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       const durableAgent = {
         ...agent,
         toolkit: durableTools,
-        permission: durablePermission
-      } as AgentDefinition<Tools, any, any>
+        permission: durablePermission,
+        input: durableInput(agent.input, "")
+      } as AgentDefinition<Tools, any, any, any, any, any>
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -349,7 +393,8 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
             Effect.forkIn(scope)
           )
 
-          const result = yield* AgentSession.prompt(session, payload.prompt, {
+          const asked = yield* InputBoundary.askedOf(agent.input, payload)
+          const result = yield* AgentSession.prompt(session, asked, {
             stream: options.stream === true
           })
           return result.text
@@ -435,7 +480,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
     })
   )
 
-  return { definition, layer } as const
+  /** The boundary decode for this agent; what `submit` and the cluster entity admit with. */
+  const admit = (operation: "prompt" | "submit", input: InputBoundary.RemoteInput) =>
+    InputBoundary.admit(agent.input, operation, input)
+
+  return { definition, layer, admit } as const
 }
 
 /**
@@ -556,14 +605,18 @@ export const submit = <W extends ReturnType<typeof workflow>>(
   agent: W,
   store: DurableChannels.Store,
   sessionId: string,
-  input: Prompt.RawInput
-): Effect.Effect<string, StorageError, WorkflowEngine.WorkflowEngine> =>
+  input: InputBoundary.RemoteInput
+): Effect.Effect<string, StorageError | AgentInvalidRequestError, WorkflowEngine.WorkflowEngine> =>
   Effect.gen(function* () {
-    const prompt = Prompt.make(input)
-    const executionId = yield* agent.definition.executionId({
+    // Decoded before anything is recorded: a value the schema rejects is
+    // refused with nothing opened.
+    const admitted = yield* agent.admit("submit", input)
+    const payload = {
       sessionId,
-      prompt
-    })
+      prompt: admitted.prompt,
+      ...(admitted.input === undefined ? {} : { input: admitted.input })
+    }
+    const executionId = yield* agent.definition.executionId(payload)
     // The key is the session, so the engine answers a second submit with the
     // execution it already has -- including a *finished* one. Opening
     // admission for that would accept steering and follow-ups into channels
@@ -582,7 +635,7 @@ export const submit = <W extends ReturnType<typeof workflow>>(
     // caller holding an execution id is told the session is idle.
     yield* open(store, sessionId)
     yield* throughReassignment(
-      agent.definition.execute({ sessionId, prompt }, { discard: true })
+      agent.definition.execute(payload, { discard: true })
     )
     return executionId
   })

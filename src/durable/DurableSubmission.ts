@@ -1,6 +1,6 @@
 import { Cause, Deferred, Duration, Effect, Exit, Option, Ref, Schedule, Schema } from "effect"
 import * as PromptWire from "../PromptWire.js"
-import * as AgentInput from "../AgentInput.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentPrincipal } from "../Principal.js"
 import * as History from "../internal/history.js"
 import { Prompt } from "effect/unstable/ai"
@@ -656,60 +656,16 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const durablePermission = yield* DurablePermission.wrap(agent.permission, {
         prefix: scopePrefix
       })
-      // An Effect-valued renderer runs as an activity, so a replay reads
-      // the rendering back from the journal rather than rendering again --
-      // the same rule the model and the tools live by. A pure renderer is
-      // replayed by being pure, and is left alone: journalling a function
-      // of its argument would buy nothing.
-      const durableInput = Option.map(
-        agent.input,
-        (declared): AgentInput.AgentInput<any, any, any, any> => ({
-          schema: declared.schema,
-          render: (value) => {
-            const rendering = declared.render(value)
-            return Effect.isEffect(rendering)
-              ? Activity.make({
-                name: `${scopePrefix}render`,
-                success: PromptWire.Prompt,
-                error: DurableAgent.DurableAgentFailure,
-                execute: rendering.pipe(
-                  Effect.map(Prompt.make),
-                  // The renderer's failure is the agent's `E`, which has no
-                  // schema; it crosses the journal as the projection every
-                  // other durable failure does. An interruption is not a
-                  // failure: a suspension that lands mid-render must stay
-                  // one, or the journal would record a failed submission.
-                  Effect.catchCauseIf(
-                    (cause) => !Cause.hasInterrupts(cause),
-                    (cause) => Effect.fail(DurableAgent.durableFailure(cause))
-                  )
-                )
-              })
-              : rendering
-          }
-        })
-      )
       const durableAgent = {
         ...agent,
         toolkit: durableTools,
         permission: durablePermission,
-        input: durableInput
+        input: DurableAgent.durableInput(agent.input, scopePrefix)
       } as AgentDefinition<Tools, any, any, any, any, any>
 
       // The value the client validated at admission, decoded again here
-      // with the agent's own schema. A payload carrying one for an agent
-      // that declares none -- or one the schema now rejects -- is a bug in
-      // whoever dispatched it, and dies as one.
-      const asked: Effect.Effect<unknown> =
-        payload.input === undefined
-          ? Effect.succeed(payload.prompt)
-          : Option.match(agent.input, {
-            onNone: () =>
-              Effect.die(
-                new Error("DurableSubmission: the payload carries a typed input, but the agent declares none")
-              ),
-            onSome: (declared) => Effect.orDie(Schema.decodeUnknownEffect(declared.schema)(payload.input))
-          })
+      // with the agent's own schema; see `InputBoundary.askedOf`.
+      const asked = InputBoundary.askedOf(agent.input, payload)
 
       // History as of the moment the prompt settled, whatever way it settled.
       // Captured inside the scope where the session lives, read outside it by
