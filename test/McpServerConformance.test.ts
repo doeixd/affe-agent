@@ -40,6 +40,7 @@ import { AgentMcp } from "../src/mcp/index.js"
 import { McpClientV1 } from "../src/mcp/v1/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 import * as McpStdioFixture from "./mcp/stdioFixtures.js"
+import { promptOf } from "./helpers.js"
 
 const promise = <A>(evaluate: () => PromiseLike<A>) => Effect.promise(evaluate)
 
@@ -137,7 +138,7 @@ const serverFixture = Effect.fn("McpServerConformance.serverFixture")(
             prompt: (input) =>
               Effect.gen(function* () {
                 // The host hands the session a `Prompt`; read its last user text.
-                const texts = TestLanguageModel.userTexts(Prompt.make(input))
+                const texts = TestLanguageModel.userTexts(promptOf(input))
                 const text = texts[texts.length - 1] ?? "non-text"
                 const count = yield* Ref.updateAndGet(
                   promptCount,

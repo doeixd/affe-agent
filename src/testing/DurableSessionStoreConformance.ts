@@ -150,6 +150,34 @@ export const cases = <E>(options: Options<E>): ReadonlyArray<Case<E>> => {
       })),
 
     /**
+     * A typed input (`AgentInput`) is claimed as its encoded value with an
+     * empty prompt: the rendering is the workflow's to produce. The value
+     * has to survive the store as it was given, because the workflow
+     * decodes it with the agent's schema and a replay renders the same one.
+     */
+    make("persists a typed input's value on the claim, and no value when there is none", (store) =>
+      Effect.gen(function* () {
+        const name = "persists a typed input's value on the claim, and no value when there is none"
+        yield* store.getOrCreate("typed", historyWith("system"))
+        const value = { customerId: "c-42", tags: ["late", "refund"], nested: { count: 2 } }
+        const outcome = yield* store.claim("typed", { prompt: Prompt.empty, input: value, stream: false })
+        yield* that(name)(outcome._tag === "Claimed", `expected Claimed, got ${outcome._tag}`)
+        if (outcome._tag !== "Claimed") return
+        yield* equal(name)(outcome.claim.input, value, "the value on the returned claim")
+        const record = yield* recordOf(name, store, "typed")
+        yield* that(name)(Option.isSome(record.claim), "expected a live claim on the record")
+        if (Option.isNone(record.claim)) return
+        yield* equal(name)(record.claim.value.input, value, "the value as a later process reads it")
+        yield* equal(name)(yield* userTexts(record.claim.value.prompt), [], "no rendering on the claim")
+
+        yield* store.getOrCreate("plain", historyWith("system"))
+        const plain = yield* store.claim("plain", { prompt: historyWith("go"), stream: false })
+        yield* that(name)(plain._tag === "Claimed", `expected Claimed, got ${plain._tag}`)
+        if (plain._tag !== "Claimed") return
+        yield* that(name)(!("input" in plain.claim) || plain.claim.input === undefined, "a prompt claim carries no value")
+      })),
+
+    /**
      * A `StorageError` from `claim` means "unknown", not "did not happen".
      * The key makes a retry recognisable as the same request, which is what
      * turns an indeterminate failure into a safe one.

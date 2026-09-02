@@ -26,6 +26,7 @@ import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentA2A } from "../src/a2a/index.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import type * as Elicitation from "../src/Elicitation.js"
+import { promptOf } from "./helpers.js"
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
@@ -305,8 +306,8 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
             id,
             prompt: (input) =>
               Effect.gen(function* () {
-                const text = promptText(Prompt.make(input))
-                yield* Ref.set(lastInput, Option.some(Prompt.make(input)))
+                const text = promptText(promptOf(input))
+                yield* Ref.set(lastInput, Option.some(promptOf(input)))
                 const count = yield* Ref.updateAndGet(
                   promptCount,
                   (current) => current + 1

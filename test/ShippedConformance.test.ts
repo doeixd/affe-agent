@@ -82,7 +82,7 @@ describe("DurableSessionStoreConformance", () => {
     Effect.gen(function* () {
       const report = yield* DurableSessionStoreConformance.run({ store: DurableSessionStore.memoryStore })
       assert.deepStrictEqual(report.failed, [])
-      assert.strictEqual(report.passed.length, 15)
+      assert.strictEqual(report.passed.length, 16)
     })
   )
 

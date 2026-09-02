@@ -13,11 +13,12 @@ import {
   Schema,
   Stream
 } from "effect"
-import { Prompt, Tool } from "effect/unstable/ai"
+import { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
+import * as AgentInput from "../src/AgentInput.js"
 import { breakingClaim, detail, failure } from "./storageFaults.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
@@ -89,10 +90,10 @@ Contract.run(harness)
  * durable state. Genuine process loss (a runner dying, another taking its
  * shards) is the SQL suite's job.
  */
-const fixture = (
+const fixture = <Value, Input>(
   // `any` requirements: the workflow body supplies the engine context, which
   // an agent that suspends on a durable gate (the replay test) needs.
-  agent: Agent.AgentDefinition<any, any, any>,
+  agent: Agent.AgentDefinition<any, any, any, LanguageModel.LanguageModel, Value, Input>,
   turns: ReadonlyArray<TestLanguageModel.Turn>,
   delivery?: DeliveryLog.DeliveryLog,
   /**
@@ -201,6 +202,113 @@ const auditedLog = (underlying: DeliveryLog.DeliveryLog) =>
 
 
 describe("DurableAgentClient (durability specifics)", () => {
+  /**
+   * Typed input, phase 2 (`docs/plan-effect-agent-comparison.md` §3.4): the
+   * client validates the value at admission and journals it encoded; the
+   * workflow decodes it and renders; an Effect-valued renderer is an
+   * activity, so a replay reads the rendering back rather than rendering
+   * again. The value reaches the tool on the workflow's fibre exactly as it
+   * does locally.
+   */
+  it.live("a typed input is journalled encoded, rendered in the workflow, and replayed from the journal", () =>
+    Effect.gen(function* () {
+      const renders = yield* Ref.make(0)
+      const Ticket = AgentInput.make(
+        Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+        ({ body }) => Ref.update(renders, (n) => n + 1).pipe(Effect.as(`A customer writes:\n\n${body}`))
+      )
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const Gate = DurableDeferred.make("TypedInputReplayGate", { success: Schema.String })
+      // Suspend once before turn 1's model call: resuming replays the
+      // rendering, which happened before the suspension.
+      const suspendOnce = yield* Ref.make(true)
+      const gating = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          if (yield* Ref.getAndSet(suspendOnce, false)) {
+            const token = yield* DurableDeferred.token(Gate)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(Gate)
+          }
+          return context.canonicalPrompt
+        })
+      )
+      const Support = Agent.make({
+        instructions: "Support.",
+        input: Ticket,
+        toolkit: Agent.toolkit([Search], {
+          search: () =>
+            Effect.map(AgentInput.current(Ticket), (ticket) =>
+              Option.match(ticket, { onNone: () => "no ticket", onSome: (t) => `customer ${t.customerId}` })
+            ).pipe(Effect.orDie)
+        }),
+        contextTransform: gating,
+        loop: AgentLoop.bounded(4)
+      })
+      const f = yield* fixture(Support, [
+        { toolCalls: [{ id: "s1", name: "search", params: { query: "orders" } }] },
+        { text: "settled" }
+      ])
+
+      const { history, result } = yield* using(f.client, () =>
+        Effect.gen(function* () {
+          const client = yield* AgentClient.typed(Support)
+          const session = yield* Effect.scoped(client.createSession({ sessionId: "typed" }))
+          const running = yield* Effect.forkChild(session.prompt({ customerId: "c-42", body: "my order is late" }))
+          const token = yield* Deferred.await(gateReady)
+          yield* DurableDeferred.succeed(Gate, { token, value: "go" })
+          const result = yield* Fiber.join(running)
+          return { result, history: yield* session.history }
+        })
+      )
+      assert.strictEqual(result.text, "settled")
+      // Rendered once: the replay took the rendering from the journal.
+      assert.strictEqual(yield* Ref.get(renders), 1)
+      assert.deepStrictEqual(TestLanguageModel.userTexts(history), ["A customer writes:\n\nmy order is late"])
+      assert.include(JSON.stringify(history), "customer c-42", "the tool read the value on the workflow's fibre")
+      const prompts = yield* f.recorder.prompts
+      assert.notInclude(JSON.stringify(prompts[0]), "c-42", "the model saw the rendering, not the value")
+      // The event carries the encoded value, once, through the delivery log.
+      const started = (yield* f.delivery.read("typed")).flatMap((e) =>
+        e.event._tag === "SubmissionStarted" ? [e.event.input] : []
+      )
+      assert.deepStrictEqual(started, [{ customerId: "c-42", body: "my order is late" }])
+      // Nothing of the claim survives the finish; the session is reusable.
+      const record = yield* f.sessionStore.get("typed")
+      assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim))
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("a typed value the schema rejects is refused before the claim, and nothing is journalled", () =>
+    Effect.gen(function* () {
+      const Ticket = AgentInput.make(
+        Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+        ({ body }) => body
+      )
+      const Support = Agent.make({ input: Ticket, loop: AgentLoop.bounded(1) })
+      const f = yield* fixture(Support, [{ text: "never" }])
+      const { claim, prompted, refused, status } = yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const session = yield* Effect.scoped(client.createSession({ sessionId: "refused" }))
+          const refused = yield* Effect.flip(session.prompt(AgentInput.typed({ customerId: 42 })))
+          const prompted = yield* Effect.flip(session.prompt("a prompt, to a typed agent"))
+          const record = yield* f.sessionStore.get("refused")
+          return {
+            refused,
+            prompted,
+            status: yield* session.status,
+            claim: Option.isSome(record) ? record.value.claim : Option.none()
+          }
+        })
+      )
+      assert.strictEqual(refused._tag, "AgentInvalidRequestError")
+      assert.strictEqual(prompted._tag, "AgentInvalidRequestError")
+      assert.strictEqual(status, "idle")
+      assert.isTrue(Option.isNone(claim), "no claim was taken for a refused value")
+      assert.strictEqual(yield* f.recorder.calls, 0)
+      assert.deepStrictEqual(yield* f.delivery.read("refused"), [])
+    }).pipe(Effect.scoped)
+  )
+
   it.live("a streamed submission delivers the provider's chunks live, and commits the same history", () =>
     Effect.gen(function* () {
       const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(2) }), [

@@ -86,9 +86,10 @@ keys; typed tool execution with strategies and failure policies; permission
 policy with projections, rules and remembered grants; elicitation with a
 terminal state; snapshots and restore; execution plans; the event ADT with
 the correlation envelope; `PromptWire` so files cross every boundary intact;
-typed input (`AgentInput`: value on the fibre, rendering in history,
-in-process only -- the remote and durable surfaces refuse it at compile
-time until phase 2);
+typed input (`AgentInput`: value on the fibre, rendering in history; across
+every `RemoteSession` as `AgentInput.Typed`, decoded by the host with the
+session's schema, `AgentClient.typed` for the caller; journalled by the
+durable client and rendered in the workflow);
 run policy on the loop seam -- `maxTurns`, `maxToolCalls`, `maxDuration`,
 `limits`, `withFinalTurn` -- with the stop's reason on `RunCompleted`, the
 result and every client.

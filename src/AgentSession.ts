@@ -101,6 +101,18 @@ export interface AgentSession<
    */
   readonly id: Ids.SessionId
 
+  /**
+   * What this session's submissions are asked with, when the agent declares
+   * it; `None` for an agent asked with `Prompt.RawInput`.
+   *
+   * Exposed so a boundary that receives the value encoded -- a transport,
+   * the durable client -- decodes it with the schema the session actually
+   * holds, rather than with one the caller claims. Typed `any` on purpose:
+   * a boundary holds `unknown` and decodes, and naming `Input` here would
+   * make a handle invariant in a parameter every internal helper widens.
+   */
+  readonly input: Option.Option<AgentInput.AgentInput<any, any, any, any>>
+
   /** Begin a submission. Resolves at quiescence. */
   readonly prompt: (
     input: PromptInput<Input>,
@@ -437,6 +449,7 @@ export const makeEngine = <
     const handle: AgentSession<Tools, E, Value, Input> = {
       [SessionTypeId]: session,
       id,
+      input: agent.input,
       prompt: (input, options) => prompt(handle, input, options),
       submit: (input, options) => submit(handle, input, options),
       awaitSubmission: (submissionId) => awaitSubmission(handle, submissionId),

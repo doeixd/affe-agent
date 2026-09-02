@@ -31,6 +31,7 @@ import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentRpc } from "../src/rpc/index.js"
 import * as Contract from "./AgentClientContract.js"
+import { promptOf } from "./helpers.js"
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
@@ -109,7 +110,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
             prompt: (input) =>
               Effect.gen(function* () {
                 yield* record("prompt")
-                yield* Ref.update(promptInputs, (all) => [...all, Prompt.make(input)])
+                yield* Ref.update(promptInputs, (all) => [...all, promptOf(input)])
                 const currentSpan = yield* Effect.option(Effect.currentSpan)
                 if (Option.isSome(currentSpan)) {
                   yield* Deferred.succeed(

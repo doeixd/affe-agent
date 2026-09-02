@@ -5369,3 +5369,54 @@ the example's gitignored `.env`): Alchemy still exits 1 with no output.
 Every variable was eliminated in turn; the write-up is
 `docs/upstream/alchemy-silent-exit.md`. The stack stays typechecked and
 documented; wrangler is the path that deploys today.
+
+## 2026-09-02 — typed input crosses the wire (comparison plan, item 6, phase 2)
+
+`docs/plan-effect-agent-comparison.md` §3.4, "phase 2 design". One wire
+shape: `AgentProtocol.Input` is the prompt it always was or
+`AgentInput.Typed` (`{ _tag: "TypedInput", value }`), tried tag-first.
+`RemoteSession.prompt` / `submit` take `RemoteInput`; `steer` / `followUp`
+stay `Prompt.RawInput`. The host decodes with the schema the session
+declares -- `AgentSession.input` is now on the handle for exactly that --
+and refuses a mismatch as `AgentInvalidRequestError` before the claim, in
+`AgentClient.fromSession` and in the durable client alike. Every adapter
+carries the union unchanged; the HTTP body schema and the client's request
+builder learned it, the rest build prompts as before. `AgentClient.typed`
+and `typedSession` are the caller's spelling: `prompt` takes
+`PromptInput<Input>`, encodes with the schema, and never shows the wire
+form. `/durable`: the claim and the workflow payload carry an optional
+`input`; the client validates at admission and journals the value; the
+workflow decodes it and asks the in-workflow session; an Effect-valued
+`render` runs as the activity `render`, so a replay reads the rendering
+back (pinned: a suspension before turn one and a resume render once).
+`durableFailure` now returns an already-projected `DurableAgentFailure` as
+itself rather than re-projecting it, which the render activity needed.
+
+Three things building it found:
+
+- **Phase 1's type assertions were vacuous.** `typeof A extends
+  AgentDefinition<any, any, any, any, any, infer I> ? I : never` never
+  matched -- `Value` is invariant and `never` is not `any` both ways -- so
+  `I` was `never`, and `never extends Ticket` is true. `Agent.InputOf` /
+  `ValueOf` infer every invariant parameter, and the assertions in
+  `test/AgentInput.test.ts` and `examples/typed-agent.ts` now rule out
+  `never` before checking the shape. Broken once each way: the old
+  spelling fails the new guard; a wrong field type fails the check.
+- **`AgentSession` is invariant in `Input` too**, through the conditional
+  `PromptInput<Input>`, so a boundary that takes "any session" must be
+  generic in it: `fromSession<Value, Input>`, and one internal widening
+  from the decoded `unknown` to `PromptInput<Input>`, justified there.
+- **`DurableAgent.workflow`** (session-keyed, `Prompt` payload) is left
+  refusing a typed agent at compile time; the remote surface is the durable
+  client, and adding a second payload shape there was not this item.
+
+Pinned in `test/AgentInput.test.ts` ("across a boundary"): the typed
+client end to end in-process and over a real HTTP socket (model sees the
+rendering, tool reads the value, 400 for a prompt to a typed agent); a
+value the schema rejects runs nothing and leaves the session idle (broken
+once by skipping the decode); both mismatches refused; idempotency keys
+compare the value. In `test/DurableAgentClient.test.ts`: journalled,
+rendered once across a replay (broken once by not wrapping the renderer),
+the event carries the value through the delivery log, a refused value
+takes no claim and journals nothing. `DurableSessionStoreConformance`
+gains "persists a typed input's value on the claim" (16 cases).

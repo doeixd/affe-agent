@@ -7,6 +7,7 @@ import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
+import * as AgentInput from "../AgentInput.js"
 import * as AgentSession from "../AgentSession.js"
 import type * as Elicitation from "../Elicitation.js"
 import { SubmissionId } from "../internal/ids.js"
@@ -284,10 +285,20 @@ export interface RemotePromptOptions {
 export const SubmissionReceipt = Schema.Struct({ submissionId: SubmissionId })
 export type SubmissionReceipt = typeof SubmissionReceipt.Type
 
+/**
+ * What a remote session is asked with: a prompt, or a typed input's
+ * encoded value (`AgentInput.Typed`) for an agent that declares one.
+ *
+ * The host decides which it must be, from the session's agent, and refuses
+ * the other as `AgentInvalidRequestError`. `typed` below is the spelling
+ * that never lets a caller build the wire form by hand.
+ */
+export type RemoteInput = Prompt.RawInput | AgentInput.Typed
+
 export interface RemoteSession {
   readonly id: string
   readonly prompt: (
-    input: Prompt.RawInput,
+    input: RemoteInput,
     options?: RemotePromptOptions
   ) => Effect.Effect<RemoteResult, RemoteError>
   /**
@@ -298,7 +309,7 @@ export interface RemoteSession {
    * same key is `AgentRequestConflictError`.
    */
   readonly submit: (
-    input: Prompt.RawInput,
+    input: RemoteInput,
     options?: RemotePromptOptions
   ) => Effect.Effect<SubmissionReceipt, RemoteError>
   /**
@@ -415,8 +426,8 @@ export class AgentClient extends Context.Service<AgentClient, Service>()(
  * Wearing the same tag would turn a caller's retry policy into a loop, with a
  * model call on every attempt.
  */
-export const fromSession = (
-  session: AgentSession.AgentSession<any, any>,
+export const fromSession = <Value, Input>(
+  session: AgentSession.AgentSession<any, any, Value, Input>,
   options: {
     /** Where settled outcomes are observed; the session's own scope. */
     readonly scope: Scope.Scope
@@ -447,7 +458,7 @@ export const fromSession = (
       )
     )
 
-  const toRemoteResult = (result: AgentSession.Result<any>): RemoteResult => ({
+  const toRemoteResult = (result: AgentSession.Result<any, any>): RemoteResult => ({
     submissionId: result.submissionId,
     status: result.status,
     runs: result.runs,
@@ -487,13 +498,57 @@ export const fromSession = (
    */
   const byKey = new Map<string, { readonly fingerprint: string; readonly submissionId: string }>()
 
-  const fingerprintOf = (input: Prompt.RawInput, stream: boolean): Effect.Effect<string, RemoteError> =>
-    Schema.encodeEffect(PromptWire.Prompt)(Prompt.make(input)).pipe(
-      Effect.map((encoded) => JSON.stringify({ input: encoded, stream })),
-      Effect.mapError((error) =>
-        new AgentInvalidRequestError({ operation: "submit", detail: error.message })
+  const fingerprintOf = (input: RemoteInput, stream: boolean): Effect.Effect<string, RemoteError> =>
+    AgentInput.isTyped(input)
+      ? Effect.succeed(JSON.stringify({ typed: input.value, stream }))
+      : Schema.encodeEffect(PromptWire.Prompt)(Prompt.make(input)).pipe(
+        Effect.map((encoded) => JSON.stringify({ input: encoded, stream })),
+        Effect.mapError((error) =>
+          new AgentInvalidRequestError({ operation: "submit", detail: error.message })
+        )
       )
+
+  /**
+   * The boundary decode. A typed value is decoded with the schema the
+   * session declares; a prompt passes through for an agent without one.
+   * Either the other way is an invalid request, named as such rather than
+   * mis-rendered: the model would otherwise be shown JSON, or a string
+   * would be encoded as a struct.
+   */
+  const admit = (
+    operation: "prompt" | "submit",
+    input: RemoteInput
+  ): Effect.Effect<AgentSession.PromptInput<Input>, AgentInvalidRequestError> => {
+    const declared = session.input
+    if (Option.isNone(declared)) {
+      return AgentInput.isTyped(input)
+        ? Effect.fail(
+          new AgentInvalidRequestError({
+            operation,
+            detail: "this session's agent is asked with a prompt, not a typed input"
+          })
+        )
+        : Effect.succeed(asked(input))
+    }
+    if (!AgentInput.isTyped(input)) {
+      return Effect.fail(
+        new AgentInvalidRequestError({
+          operation,
+          detail: "this session's agent declares a typed input; send its value, not a prompt"
+        })
+      )
+    }
+    return Schema.decodeUnknownEffect(declared.value.schema)(input.value).pipe(
+      Effect.map(asked),
+      Effect.mapError((error) => new AgentInvalidRequestError({ operation, detail: error.message }))
     )
+  }
+
+  // What `admit` decoded is what the session's signature asks for: the
+  // schema it decoded with is the one the session declares, so the value is
+  // `PromptInput<Input>` by construction. The compiler cannot resolve that
+  // conditional for an abstract `Input`, hence the one widening, here.
+  const asked = (value: unknown) => value as AgentSession.PromptInput<Input>
 
   const remember = (
     submissionId: string,
@@ -536,18 +591,20 @@ export const fromSession = (
   return {
     id: session.id,
     prompt: (input, promptOptions) =>
-      remote(session.prompt(input, { stream: promptOptions?.stream === true })).pipe(
+      admit("prompt", input).pipe(
+        Effect.flatMap((value) => remote(session.prompt(value, { stream: promptOptions?.stream === true }))),
         Effect.map(toRemoteResult),
         // A prompted outcome is retained like a submitted one, so the two
         // surfaces tell one story about what this session has done.
         Effect.tap((result) => remember(result.submissionId, Effect.succeed(result)))
       ),
-    submit: (input, promptOptions) =>
+    submit: (raw, promptOptions) =>
       Effect.gen(function* () {
         const stream = promptOptions?.stream === true
         const key = promptOptions?.idempotencyKey
+        const input = yield* admit("submit", raw)
         if (key !== undefined) {
-          const fingerprint = yield* fingerprintOf(input, stream)
+          const fingerprint = yield* fingerprintOf(raw, stream)
           const known = byKey.get(key)
           if (known !== undefined) {
             if (known.fingerprint !== fingerprint) {
@@ -618,8 +675,8 @@ const defaultRetainedSubmissions = 64
  * remotely tomorrow writes the same code either way — and useful as the
  * reference every other implementation is checked against.
  */
-export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
-  agent: AgentDefinition<Tools, E, R>,
+export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
+  agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   /**
    * How the sessions this transport creates are built — where out-of-band
    * input waits, where a paused run waits for an answer.
@@ -636,12 +693,12 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
      */
     readonly maxRetainedSubmissions?: number | undefined
   }
-): Layer.Layer<AgentClient, never, LanguageModel.LanguageModel | R> =>
+): Layer.Layer<AgentClient, never, Model | R> =>
   Layer.effect(
     AgentClient,
     Effect.gen(function* () {
       const open = yield* Ref.make(new Map<string, RemoteSession>())
-      const env = yield* Effect.context<LanguageModel.LanguageModel | R>()
+      const env = yield* Effect.context<Model | R>()
 
       const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
@@ -682,3 +739,78 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R>(
       }
     })
   )
+
+// -- Typed sessions -----------------------------------------------------------------
+
+/**
+ * A remote session whose `prompt` and `submit` take the agent's declared
+ * input -- `PromptInput<Input>`: the schema's type, or `Prompt.RawInput`
+ * for an agent without one. Everything else is the `RemoteSession` it wraps.
+ */
+export interface TypedSession<Input> extends Omit<RemoteSession, "prompt" | "submit"> {
+  readonly prompt: (
+    input: AgentSession.PromptInput<Input>,
+    options?: RemotePromptOptions
+  ) => Effect.Effect<RemoteResult, RemoteError>
+  readonly submit: (
+    input: AgentSession.PromptInput<Input>,
+    options?: RemotePromptOptions
+  ) => Effect.Effect<SubmissionReceipt, RemoteError>
+}
+
+/** `Service`, with its sessions typed by the agent's input. */
+export interface TypedService<Input> {
+  readonly createSession: (options?: {
+    readonly sessionId?: string | undefined
+  }) => Effect.Effect<TypedSession<Input>, RemoteError, Scope.Scope>
+  readonly session: (sessionId: string) => Effect.Effect<TypedSession<Input>, RemoteError>
+}
+
+/**
+ * Address a remote session with the agent's declared input.
+ *
+ * The value is encoded with the agent's schema here and decoded with the
+ * same schema by whichever host holds the session, so a caller writes the
+ * value and never the wire form. Nothing is added to the transport: the
+ * wrapped session's `prompt` receives `AgentInput.Typed`, which every
+ * adapter already carries. For an agent without an input this is the
+ * session unchanged, so one spelling serves both.
+ */
+export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
+  agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
+  session: RemoteSession
+): TypedSession<Input> =>
+  Option.match(agent.input, {
+    // No declared input means `Input` is `never` and `PromptInput<Input>` is
+    // `Prompt.RawInput`, which the session takes as it is. The conditional
+    // type is what these two casts restate; the compiler cannot resolve it
+    // for an abstract `Input`, and the branches are exactly its two cases.
+    onNone: () => session as TypedSession<Input>,
+    onSome: (input) => ({
+      ...session,
+      prompt: (value, options) =>
+        Effect.flatMap(AgentInput.encode(input, value as Input), (typed) => session.prompt(typed, options)),
+      submit: (value, options) =>
+        Effect.flatMap(AgentInput.encode(input, value as Input), (typed) => session.submit(typed, options))
+    })
+  })
+
+/**
+ * The `AgentClient` in context, with its sessions typed by `agent`'s input.
+ *
+ * ```ts
+ * const client = yield* AgentClient.typed(Support)
+ * const session = yield* client.createSession()
+ * yield* session.prompt({ customerId: "c-42", body: "my order is late" })
+ * ```
+ *
+ * `agent` is the definition the far side serves; the client cannot check
+ * that, and a mismatch is reported by the host as an invalid request.
+ */
+export const typed = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
+  agent: AgentDefinition<Tools, E, R, Model, Value, Input>
+): Effect.Effect<TypedService<Input>, never, AgentClient> =>
+  Effect.map(AgentClient, (client): TypedService<Input> => ({
+    createSession: (options) => Effect.map(client.createSession(options), (session) => typedSession(agent, session)),
+    session: (sessionId) => Effect.map(client.session(sessionId), (session) => typedSession(agent, session))
+  }))

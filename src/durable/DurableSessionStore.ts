@@ -55,6 +55,14 @@ export const Claim = Schema.Struct({
   submissionId: Schema.String,
   /** JSON-encoded `Prompt`, the same wire form the channels use. */
   prompt: Schema.String,
+  /**
+   * A typed input's encoded value, for an agent that declares one
+   * (`AgentInput`); `prompt` is then empty, because the rendering is the
+   * workflow's to produce -- the renderer may need services this process
+   * does not have. Optional and additive: claims written before this field
+   * decode unchanged.
+   */
+  input: Schema.optional(Schema.Unknown),
   /** Part of the payload, so replay makes the same choice the original did. */
   stream: Schema.Boolean,
   /** Present once the workflow has been dispatched. */
@@ -156,6 +164,8 @@ export interface DurableSessionStore {
     sessionId: string,
     submission: {
       readonly prompt: Prompt.Prompt
+      /** A typed input's encoded value; see `Claim.input`. */
+      readonly input?: unknown
       readonly stream: boolean
       /** The submitter's subject, persisted on the claim. */
       readonly principal?: string | undefined
@@ -422,6 +432,7 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
             const claim: Claim = {
               submissionId: `${sessionId}:submission-${found.submissionCount + 1}`,
               prompt: encoded,
+              ...(submission.input === undefined ? {} : { input: submission.input }),
               stream: submission.stream,
               ...(submission.key === undefined ? {} : { key: submission.key }),
               ...(submission.principal === undefined ? {} : { principal: submission.principal })
@@ -805,6 +816,7 @@ export const sqlStore = (
                 const claim: Claim = {
                   submissionId: `${sessionId}:submission-${record.submissionCount + 1}`,
                   prompt: encoded,
+                  ...(submission.input === undefined ? {} : { input: submission.input }),
                   stream: submission.stream,
                   ...(submission.key === undefined ? {} : { key: submission.key }),
                   ...(submission.principal === undefined ? {} : { principal: submission.principal })

@@ -56,7 +56,7 @@ const SubmissionPath = Schema.Struct({
 const CloseBody = Schema.Struct({ requestId: AgentProtocol.RequestId })
 const PromptBody = Schema.Struct({
   requestId: AgentProtocol.RequestId,
-  input: PromptWire.Prompt,
+  input: AgentProtocol.Input,
   options: Schema.optional(AgentProtocol.RemotePromptOptions)
 })
 const InputBody = Schema.Struct({
@@ -396,7 +396,7 @@ export const fromGenerated = (
             requestId: promptOptions?.idempotencyKey === undefined
               ? nextRequestId()
               : AgentProtocol.RequestId.make(promptOptions.idempotencyKey),
-            input: Prompt.make(input),
+            input: AgentProtocol.input(input),
             options: { stream: promptOptions?.stream === true }
           }
         })
@@ -410,7 +410,7 @@ export const fromGenerated = (
             requestId: promptOptions?.idempotencyKey === undefined
               ? nextRequestId()
               : AgentProtocol.RequestId.make(promptOptions.idempotencyKey),
-            input: Prompt.make(input),
+            input: AgentProtocol.input(input),
             options: { stream: promptOptions?.stream === true }
           }
         })

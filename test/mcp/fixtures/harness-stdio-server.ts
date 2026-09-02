@@ -9,6 +9,7 @@ import { AgentClient, AgentProtocol } from "../../../src/client/index.js"
 import { AgentSessionHost } from "../../../src/client/index.js"
 import { AgentMcp } from "../../../src/mcp/index.js"
 import { TestLanguageModel } from "../../../src/testing/index.js"
+import { promptOf } from "../../helpers.js"
 
 const lifecycleDirectory = process.argv[2]
 if (lifecycleDirectory === undefined) {
@@ -47,7 +48,7 @@ const client = Layer.effect(
             id,
             prompt: (input) =>
               Effect.gen(function* () {
-                const texts = TestLanguageModel.userTexts(Prompt.make(input))
+                const texts = TestLanguageModel.userTexts(promptOf(input))
                 const text = texts[texts.length - 1] ?? "non-text"
                 const count = yield* Ref.updateAndGet(
                   promptCount,

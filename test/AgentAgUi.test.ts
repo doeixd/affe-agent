@@ -19,6 +19,7 @@ import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentAgUi } from "../src/ag-ui/index.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
+import { promptOf } from "./helpers.js"
 
 type Assert<T extends true> = T
 type Equal<A, B> =
@@ -561,7 +562,7 @@ const serverFixture = (fixtureOptions?: {
         prompt: (input) =>
           Effect.gen(function* () {
             yield* Ref.update(promptCalls, (count) => count + 1)
-            yield* Ref.set(lastInput, Option.some(Prompt.make(input)))
+            yield* Ref.set(lastInput, Option.some(promptOf(input)))
             yield* Deferred.succeed(promptStarted, void 0)
             if (fixtureOptions?.elicitation === true) {
               yield* Effect.forEach(

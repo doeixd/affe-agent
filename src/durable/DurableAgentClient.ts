@@ -3,12 +3,14 @@ import type { Context } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { WorkflowEngine } from "effect/unstable/workflow"
+import { Schema } from "effect"
 import type { AgentDefinition } from "../Agent.js"
+import * as AgentInput from "../AgentInput.js"
 import { CurrentPrincipal } from "../Principal.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
-import { AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
+import { AgentInvalidRequestError, AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
 import * as History from "../internal/history.js"
 import * as Ids from "../internal/ids.js"
 import * as DurableAgent from "./DurableAgent.js"
@@ -55,7 +57,7 @@ import type { StorageError } from "../Errors.js"
 
 /** Derive the initial canonical history for a fresh durable session. */
 const initialHistory = (
-  agent: AgentDefinition<any, any, any>
+  agent: AgentDefinition<any, any, any, any, any, any>
 ): Prompt.Prompt =>
   Option.match(agent.instructions, {
     onNone: () => Prompt.empty,
@@ -173,9 +175,9 @@ const noSuchSession = (sessionId: string) =>
  * forgot to provide one should learn that from the compiler, not from a
  * defect on the first prompt.
  */
-export const layer = <Tools extends Record<string, Tool.Any>>(
+export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
-  agent: AgentDefinition<Tools, any, any>,
+  agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
   options: Options
 ): Layer.Layer<
   AgentClient.AgentClient,
@@ -184,6 +186,40 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
 > => {
   const submission = DurableSubmission.workflow(name, agent, options)
   const pollInterval = options.pollInterval ?? DurablePolling.defaults.clientOutcome
+
+  /**
+   * The boundary decode, as `AgentClient.fromSession` does it: a typed
+   * value is validated against the agent's schema here, where the caller
+   * can be told, and journalled encoded; a prompt passes through for an
+   * agent without an input. Either the other way is an invalid request.
+   */
+  const boundary = (
+    operation: "prompt" | "submit",
+    input: AgentClient.RemoteInput
+  ): Effect.Effect<{ readonly prompt: Prompt.Prompt; readonly input?: unknown }, AgentInvalidRequestError> =>
+    Option.match(agent.input, {
+      onNone: () =>
+        AgentInput.isTyped(input)
+          ? Effect.fail(
+            new AgentInvalidRequestError({
+              operation,
+              detail: "this session's agent is asked with a prompt, not a typed input"
+            })
+          )
+          : Effect.succeed({ prompt: Prompt.make(input) }),
+      onSome: (declared) =>
+        AgentInput.isTyped(input)
+          ? Schema.decodeUnknownEffect(declared.schema)(input.value).pipe(
+            Effect.mapError((error) => new AgentInvalidRequestError({ operation, detail: error.message })),
+            Effect.as({ prompt: Prompt.empty, input: input.value })
+          )
+          : Effect.fail(
+            new AgentInvalidRequestError({
+              operation,
+              detail: "this session's agent declares a typed input; send its value, not a prompt"
+            })
+          )
+    })
 
   /**
    * The execution id for a claim, derived without dispatching anything.
@@ -280,6 +316,9 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
         sessionId,
         submissionId: claim.submissionId,
         prompt,
+        // The typed value the claim recorded, onto the journalled payload:
+        // the workflow renders it, and a replay renders the same value.
+        ...(claim.input === undefined ? {} : { input: claim.input }),
         initialHistory,
         stream: claim.stream,
         // The subject the claim recorded, forward onto the journalled
@@ -397,8 +436,15 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
      * and `submit`: the only difference between them is whether the caller
      * then waits.
      */
-    const admit = (input: Prompt.RawInput, promptOptions: AgentClient.RemotePromptOptions | undefined) =>
+    const admit = (
+      operation: "prompt" | "submit",
+      input: AgentClient.RemoteInput,
+      promptOptions: AgentClient.RemotePromptOptions | undefined
+    ) =>
       Effect.gen(function* () {
+        // Decoded before the claim, so a value the schema rejects is
+        // refused with the session still idle and nothing recorded.
+        const request = yield* boundary(operation, input)
         // Claim and dispatch are one uninterruptible step. The claim is the
         // atomic transition — idle -> running plus the allocated submission
         // id, with the request itself recorded — and once it has been taken
@@ -412,7 +458,8 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
             // caller's context is present (docs/plan-principal-on-tool-fibre.md).
             const principal = yield* CurrentPrincipal
             const outcome = yield* options.sessionStore.claim(sessionId, {
-              prompt: Prompt.make(input),
+              prompt: request.prompt,
+              ...(request.input === undefined ? {} : { input: request.input }),
               stream: promptOptions?.stream === true,
               ...(Option.isNone(principal) ? {} : { principal: principal.value }),
               // The caller's key, forwarded verbatim. Without it a retry
@@ -449,8 +496,11 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
               promptOptions?.idempotencyKey !== undefined &&
               outcome.claim.key === promptOptions.idempotencyKey
             ) {
-              const recorded = yield* DurableSessionStore.encodeHistory(Prompt.make(input))
-              if (recorded !== outcome.claim.prompt) {
+              const recorded = yield* DurableSessionStore.encodeHistory(request.prompt)
+              if (
+                recorded !== outcome.claim.prompt ||
+                JSON.stringify(request.input) !== JSON.stringify(outcome.claim.input)
+              ) {
                 return yield* new AgentRequestConflictError({
                   sessionId: Option.some(Ids.sessionId(sessionId)),
                   requestId: RequestId.make(promptOptions.idempotencyKey)
@@ -526,13 +576,13 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
 
     prompt: (input, promptOptions) =>
       Effect.gen(function* () {
-        const dispatched = yield* admit(input, promptOptions)
+        const dispatched = yield* admit("prompt", input, promptOptions)
         return yield* settled(dispatched.claim.submissionId, dispatched.executionId)
       }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
     submit: (input, promptOptions) =>
       Effect.gen(function* () {
-        const dispatched = yield* admit(input, promptOptions)
+        const dispatched = yield* admit("submit", input, promptOptions)
         return { submissionId: Ids.submissionId(dispatched.claim.submissionId) }
       }).pipe(storageAsTransport(sessionId), Effect.provide(env)),
 
@@ -810,9 +860,9 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
  * defaults exported by `DurablePolling`; malformed or non-positive values fail
  * layer construction with the typed `ConfigError`.
  */
-export const layerConfig = <Tools extends Record<string, Tool.Any>>(
+export const layerConfig = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
-  agent: AgentDefinition<Tools, any, any>,
+  agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
   options: ConfigOptions
 ): Layer.Layer<
   AgentClient.AgentClient,

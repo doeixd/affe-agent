@@ -35,13 +35,14 @@ import type { Prompt } from "effect/unstable/ai"
  * opened rather than opening one, and the value on the fibre stays the
  * submission's for its follow-up runs.
  *
- * **Scope, stated.** This is the in-process seam: `AgentSession`,
- * `Agent.run`, tools, permissions and the `SubmissionStarted` event. The
- * remote surfaces (`AgentClient` and every transport over it) and the
- * durable interpreter still take `Prompt.RawInput`; an agent with an input
- * is refused by them at compile time rather than mis-rendered at runtime.
- * Carrying the value across a wire means deciding how a client names the
- * schema to encode it with, which is the next phase, not a field.
+ * **Across a boundary.** A remote caller sends the encoded value as
+ * `Typed` -- `{ _tag: "TypedInput", value }` -- and the host decodes it with
+ * the schema the session's agent declares, refusing a mismatch as an invalid
+ * request rather than mis-rendering it. `AgentClient.typed(agent)` is the
+ * spelling that writes the value and never the wire form. Under `/durable`
+ * the encoded value is journalled and re-rendered on replay; an
+ * Effect-valued `render` runs there as an activity, so a replay reads the
+ * rendering back rather than rendering again.
  */
 export interface AgentInput<A, I, E = never, R = never> {
   readonly schema: Schema.Codec<A, I>
@@ -112,3 +113,41 @@ export const rendered = <A, I, E, R>(
   const result = input.render(value)
   return Effect.isEffect(result) ? result : Effect.succeed(result)
 }
+
+/**
+ * A typed input as it crosses a boundary: the schema-encoded value, tagged
+ * so a transport can tell it from a prompt without a second endpoint.
+ *
+ * Nothing on the wire names the schema. The session the value is addressed
+ * to declares it, and the host decodes with that -- which is why the value
+ * is `unknown` here and typed everywhere a caller writes it.
+ */
+export const Typed = Schema.Struct({
+  _tag: Schema.Literal("TypedInput"),
+  value: Schema.Unknown
+})
+export type Typed = typeof Typed.Type
+
+/** Wrap an encoded value for the wire. */
+export const typed = (value: unknown): Typed => ({ _tag: "TypedInput", value })
+
+/**
+ * Whether a remote input is a typed value rather than a prompt.
+ *
+ * A `Prompt.RawInput` is a string, an iterable of messages or a `Prompt`;
+ * none carries this tag, so the test is exact rather than structural.
+ */
+export const isTyped = (input: unknown): input is Typed =>
+  typeof input === "object" &&
+  input !== null &&
+  !Array.isArray(input) &&
+  (input as { readonly _tag?: unknown })._tag === "TypedInput"
+
+/**
+ * Encode a value for the wire with the agent's declared input.
+ *
+ * Encoding a value the signature typed cannot fail except by a schema bug,
+ * which dies as one -- the same rule the session applies.
+ */
+export const encode = <A, I>(input: AgentInput<A, I, any, any>, value: A): Effect.Effect<Typed> =>
+  Effect.map(Effect.orDie(Schema.encodeUnknownEffect(input.schema)(value)), typed)

@@ -26,6 +26,7 @@ import * as SseBody from "../src/http/internal/sse.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError } from "../src/Errors.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
 import { AgentHttp } from "../src/http/index.js"
+import { promptOf } from "./helpers.js"
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
@@ -119,7 +120,7 @@ const fixture = (options?: {
             prompt: (input) =>
               Effect.gen(function* () {
                 yield* record("prompt")
-                yield* Ref.update(promptInputs, (all) => [...all, Prompt.make(input)])
+                yield* Ref.update(promptInputs, (all) => [...all, promptOf(input)])
                 yield* Ref.update(promptCalls, (count) => count + 1)
                 yield* Deferred.succeed(promptStarted, void 0)
                 if (options?.blockPrompt === true) {

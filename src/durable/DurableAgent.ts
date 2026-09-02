@@ -167,6 +167,13 @@ export const resolveToolkit = (
 
 /** The wire-safe projection of a submission's cause. */
 export const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure => {
+  // A failure that already crossed a journal -- a rendering activity's, say
+  // -- is the projection; projecting it again would report its tag as
+  // `DurableAgentFailure` and bury the original in the detail.
+  const error = Cause.findErrorOption(cause)
+  if (Option.isSome(error) && error.value instanceof DurableAgentFailure) {
+    return error.value
+  }
   const failure = AgentEvent.failureFromCause(cause)
   return new DurableAgentFailure({
     tag: failure.tag,

@@ -4,7 +4,22 @@ import { Tool, Toolkit } from "effect/unstable/ai"
 import type { AgentDefinition } from "../src/Agent.js"
 import type { AgentEventEnvelope } from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as AgentInput from "../src/AgentInput.js"
+import type * as AgentClient from "../src/client/AgentClient.js"
+import { Prompt } from "effect/unstable/ai"
 import * as FakeModel from "./FakeModel.js"
+
+/**
+ * What a `RemoteSession` double was asked, as a prompt. The doubles here
+ * stand in for agents without a typed input; a typed value reaching one is
+ * a test wiring error, and dies as one rather than being rendered.
+ */
+export const promptOf = (input: AgentClient.RemoteInput): Prompt.Prompt => {
+  if (AgentInput.isTyped(input)) {
+    throw new Error("this session double is asked with a prompt, not a typed input")
+  }
+  return Prompt.make(input)
+}
 
 /**
  * Toolkits are built the way a user builds them: one `Toolkit.make`, bound to

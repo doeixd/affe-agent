@@ -469,6 +469,22 @@ export const tool = <T extends Tool.Any>(
 ): BoundTool<T> => ({ tool, handler })
 
 /** The tool record a tuple of bound tools contributes. */
+/**
+ * The typed input an agent declares (`AgentInput`), or `never` for one
+ * asked with `Prompt.RawInput`.
+ *
+ * Written once here because the obvious spelling is a trap:
+ * `A extends AgentDefinition<any, any, any, any, any, infer I>` fails to
+ * match -- `Value` is invariant, and `never` is not `any` in both directions
+ * -- so its false branch yields `never`, and `never extends T` is true for
+ * every `T`. A type assertion built on it passes vacuously. This infers
+ * every invariant parameter.
+ */
+export type InputOf<A> = A extends AgentDefinition<any, any, any, infer _Model, infer _Value, infer Input> ? Input : never
+
+/** The typed output an agent declares (`AgentOutput`), or `never`. See `InputOf` for why it is spelled this way. */
+export type ValueOf<A> = A extends AgentDefinition<any, any, any, infer _Model, infer Value, infer _Input> ? Value : never
+
 export type ToolsOf<Bound extends ReadonlyArray<BoundTool<Tool.Any>>> = {
   readonly [B in Bound[number] as Tool.Name<B["tool"]>]: B["tool"]
 }

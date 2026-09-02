@@ -80,6 +80,29 @@ lookup that can never succeed is not a transport hiccup either. Failures that
 `AgentClient.layer(agent)` is the in-process implementation: useful on its own,
 and the reference other transports are checked against.
 
+### Typed input over a transport
+
+An agent that declares an `AgentInput` is asked with the schema's type
+locally, and the same over any transport. `AgentClient.typed(agent)` is the
+spelling: the same `createSession` / `session`, whose sessions' `prompt` and
+`submit` take the value. It is encoded with the agent's schema on the way
+out and decoded with the same schema by the host that holds the session,
+which refuses a mismatch -- a prompt to a typed agent, a value to an untyped
+one, or a value the schema rejects -- as `AgentInvalidRequestError` (400)
+before anything runs. On the wire the value is `{ "_tag": "TypedInput",
+"value": ... }` in the `input` field of a prompt or submit; nothing names
+the schema, because the session already declares it. `steer` and `followUp`
+still take a prompt, as they do locally. The durable client journals the
+encoded value and renders it inside the workflow, where the renderer's
+services are; an Effect-valued renderer runs as an activity, so a replay
+reads the rendering back instead of rendering again.
+
+```ts
+const client = yield* AgentClient.typed(Support)
+const session = yield* client.createSession()
+yield* session.prompt({ customerId: "c-42", body: "my order is late" })
+```
+
 ### Multiple agents and authentication
 
 `AgentServer` composes several HTTP-backed hosts without taking ownership of

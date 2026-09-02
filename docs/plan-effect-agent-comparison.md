@@ -8,7 +8,8 @@ and 10 (§3.7) landed 2026-09-01, and item 8's entry (§3.3c) the same day:
 isolate executor) landed the same day. 8's real deployment (§3.3d) happened
 2026-09-02: the host without the code tool, from a Workers free plan, smoke
 green over HTTPS; the code tool's Dynamic Workers binding is paid-plan only,
-and a real model still needs a key. What remains is phase 2 of typed input. Written 2026-09-01 from a
+and a real model still needs a key. Phase 2 of typed input (§3.4) landed
+2026-09-02 as well; nothing in this plan remains open. Written 2026-09-01 from a
 read of [effect-agent.com](https://effect-agent.com/) — the documentation
 site for `danieljvdm/effect-agent`, the same author as `effect-cf`, which
 [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md)

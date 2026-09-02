@@ -1,9 +1,10 @@
 import { Cause, Deferred, Duration, Effect, Exit, Option, Ref, Schedule, Schema } from "effect"
 import * as PromptWire from "../PromptWire.js"
+import * as AgentInput from "../AgentInput.js"
 import { CurrentPrincipal } from "../Principal.js"
 import * as History from "../internal/history.js"
 import { Prompt } from "effect/unstable/ai"
-import type { Tool } from "effect/unstable/ai"
+import type { LanguageModel, Tool } from "effect/unstable/ai"
 import {
   Activity,
   DurableDeferred,
@@ -53,6 +54,14 @@ export const Payload = Schema.Struct({
   sessionId: Schema.String,
   submissionId: Schema.String,
   prompt: Prompt.Prompt,
+  /**
+   * A typed input's encoded value, for an agent that declares one. The
+   * workflow decodes it with the agent's schema and asks the in-workflow
+   * session with the value, so the rendering is produced -- and, for an
+   * Effect-valued renderer, journalled -- where the agent's services are.
+   * `prompt` is empty when this is present. Optional and additive.
+   */
+  input: Schema.optional(Schema.Unknown),
   /**
    * Canonical history up to this submission.
    *
@@ -550,9 +559,9 @@ const failedOutcome = (
  * — model and tools become activities, out-of-band input moves to the channels
  * factory — reused rather than copied, so the two paths cannot drift.
  */
-export const workflow = <Tools extends Record<string, Tool.Any>>(
+export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
-  agent: AgentDefinition<Tools, any, any>,
+  agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
   options: {
     readonly store: DurableChannels.Store
     readonly sessionStore: DurableSessionStore.DurableSessionStore
@@ -647,11 +656,55 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
       const durablePermission = yield* DurablePermission.wrap(agent.permission, {
         prefix: scopePrefix
       })
+      // An Effect-valued renderer runs as an activity, so a replay reads
+      // the rendering back from the journal rather than rendering again --
+      // the same rule the model and the tools live by. A pure renderer is
+      // replayed by being pure, and is left alone: journalling a function
+      // of its argument would buy nothing.
+      const durableInput = Option.map(
+        agent.input,
+        (declared): AgentInput.AgentInput<any, any, any, any> => ({
+          schema: declared.schema,
+          render: (value) => {
+            const rendering = declared.render(value)
+            return Effect.isEffect(rendering)
+              ? Activity.make({
+                name: `${scopePrefix}render`,
+                success: PromptWire.Prompt,
+                error: DurableAgent.DurableAgentFailure,
+                execute: rendering.pipe(
+                  Effect.map(Prompt.make),
+                  // The renderer's failure is the agent's `E`, which has no
+                  // schema; it crosses the journal as the projection every
+                  // other durable failure does.
+                  Effect.catchCause((cause) => Effect.fail(DurableAgent.durableFailure(cause)))
+                )
+              })
+              : rendering
+          }
+        })
+      )
       const durableAgent = {
         ...agent,
         toolkit: durableTools,
-        permission: durablePermission
-      } as AgentDefinition<Tools, any, any>
+        permission: durablePermission,
+        input: durableInput
+      } as AgentDefinition<Tools, any, any, any, any, any>
+
+      // The value the client validated at admission, decoded again here
+      // with the agent's own schema. A payload carrying one for an agent
+      // that declares none -- or one the schema now rejects -- is a bug in
+      // whoever dispatched it, and dies as one.
+      const asked: Effect.Effect<unknown> =
+        payload.input === undefined
+          ? Effect.succeed(payload.prompt)
+          : Option.match(agent.input, {
+            onNone: () =>
+              Effect.die(
+                new Error("DurableSubmission: the payload carries a typed input, but the agent declares none")
+              ),
+            onSome: (declared) => Effect.orDie(Schema.decodeUnknownEffect(declared.schema)(payload.input))
+          })
 
       // History as of the moment the prompt settled, whatever way it settled.
       // Captured inside the scope where the session lives, read outside it by
@@ -749,9 +802,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>>(
           // absorbed the interrupt — and committing a terminal projection for
           // it would finalise work that is merely parked.
           const exit = yield* Effect.exit(
-            AgentSession.prompt(session, payload.prompt, {
-              stream: payload.stream
-            }).pipe(
+            Effect.flatMap(asked, (input) =>
+              AgentSession.prompt(session, input, {
+                stream: payload.stream
+              })
+            ).pipe(
               // The submitter's subject, onto the fibre the run forks from
               // -- the durable twin of the host's provideService, replay-
               // stable because it rides the journalled payload.

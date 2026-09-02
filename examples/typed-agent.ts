@@ -1,6 +1,7 @@
 import { Effect, Fiber, Option, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import { AgentClient } from "../src/client/index.js"
 import * as AgentInput from "../src/AgentInput.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -162,12 +163,33 @@ export const Support = Agent.make({
 // `prompt` takes the schema's type -- inferred, not annotated.
 export const support = Agent.run(Support, { customerId: "c-42", body: "my order is late" })
 
-type SupportInput = typeof Support extends Agent.AgentDefinition<any, any, any, any, any, infer I> ? I : never
+// Over a transport, the same value: the typed client encodes it with the
+// schema on the way out, and the host decodes it with the same schema
+// before the session sees it. The transport underneath is whatever the
+// `AgentClient` in context is -- `AgentClient.layer(Support)` in-process,
+// or the HTTP, RPC or durable client -- and this code does not change.
+export const remoteSupport = Effect.gen(function* () {
+  const client = yield* AgentClient.typed(Support)
+  const session = yield* client.createSession()
+  return yield* session.prompt({ customerId: "c-42", body: "my order is late" })
+}).pipe(Effect.scoped)
+
+type SupportInput = Agent.InputOf<typeof Support>
+// Guarded against a silent `never` first: `never extends T` holds for every
+// `T`, and an extraction that fails to match would pass the next line.
+export type _SupportInputNotNever = Assert<[SupportInput] extends [never] ? false : true>
 export type _SupportInputIsTheTicket = Assert<
   SupportInput extends { readonly customerId: string; readonly body: string } ? true : false
 >
 export type _SupportInputNotAny = Assert<IsAny<SupportInput> extends false ? true : false>
+// The typed client's `prompt` is the same type, with no annotation at the call.
+type RemoteSupportInput = Parameters<AgentClient.TypedSession<SupportInput>["prompt"]>[0]
+export type _RemoteSupportInputIsTheTicket = Assert<
+  [RemoteSupportInput] extends [never] ? false
+    : RemoteSupportInput extends { readonly customerId: string; readonly body: string } ? true
+    : false
+>
 // An agent without an input is still asked with `Prompt.RawInput`.
-type ResearcherInput = typeof Researcher extends Agent.AgentDefinition<any, any, any, any, any, infer I> ? I : never
+type ResearcherInput = Agent.InputOf<typeof Researcher>
 export type _ResearcherTakesRawInput = Assert<[ResearcherInput] extends [never] ? true : false>
 

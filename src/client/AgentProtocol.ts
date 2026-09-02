@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as AgentEvent from "../AgentEvent.js"
+import * as AgentInput from "../AgentInput.js"
 import * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
 import {
@@ -182,10 +183,23 @@ export type GetSessionRequest = typeof GetSessionRequest.Type
 export const GetSessionResponse = Session
 export type GetSessionResponse = typeof GetSessionResponse.Type
 
+/**
+ * What a prompt or submit carries: the prompt it always did, or a typed
+ * input's encoded value for an agent that declares one. The tag is tried
+ * first, so an array of messages never reaches the typed branch and an
+ * object never reaches the prompt codec.
+ */
+export const Input = Schema.Union([AgentInput.Typed, PromptWire.Prompt])
+export type Input = typeof Input.Type
+
+/** A `RemoteInput` as the wire carries it. */
+export const input = (raw: AgentClient.RemoteInput): Input =>
+  AgentInput.isTyped(raw) ? raw : Prompt.make(raw)
+
 export const PromptRequest = Schema.Struct({
   requestId: RequestId,
   sessionId: SessionId,
-  input: PromptWire.Prompt,
+  input: Input,
   options: Schema.optional(RemotePromptOptions)
 })
 export type PromptRequest = typeof PromptRequest.Type
@@ -200,7 +214,7 @@ export type PromptResponse = typeof PromptResponse.Type
 export const SubmitRequest = Schema.Struct({
   requestId: RequestId,
   sessionId: SessionId,
-  input: PromptWire.Prompt,
+  input: Input,
   options: Schema.optional(RemotePromptOptions)
 })
 export type SubmitRequest = typeof SubmitRequest.Type

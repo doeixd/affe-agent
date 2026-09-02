@@ -1,12 +1,17 @@
 import { assert, describe, it } from "@effect/vitest"
+import { NodeHttpServer } from "@effect/platform-node"
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
+import { FetchHttpClient, HttpRouter } from "effect/unstable/http"
+import { createServer } from "node:http"
 import * as Agent from "../src/Agent.js"
 import * as AgentInput from "../src/AgentInput.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as Permission from "../src/Permission.js"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
+import { AgentHttp } from "../src/http/index.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -193,6 +198,149 @@ describe("AgentInput", () => {
   )
 })
 
+/**
+ * Phase 2 (`docs/plan-effect-agent-comparison.md` §3.4, "phase 2 design"):
+ * the value crosses a boundary encoded, and the host decodes it with the
+ * schema the session declares. The in-process client is the reference
+ * boundary; the HTTP round trip below proves the wire form survives a real
+ * socket and the same decode runs on the far side.
+ */
+describe("AgentInput across a boundary", () => {
+  const Support = Agent.make({
+    instructions: "Support.",
+    input: Ticket,
+    tools: [lookup],
+    loop: AgentLoop.bounded(3)
+  })
+  const ticket = { customerId: "c-42", body: "my order is late" }
+  const rendering = "A customer writes:\n\nmy order is late"
+
+  /** A run that calls the tool once, so the value's reaching the fibre is visible in history. */
+  const turns = [TestLanguageModel.toolCall("lookup", {}, { id: "l1" }), TestLanguageModel.text("done")]
+
+  it.effect("the typed client encodes the value; the host decodes it, the model sees the rendering, the tool reads the value", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script(turns)
+      const { history, result } = yield* Effect.gen(function* () {
+        const client = yield* AgentClient.typed(Support)
+        const session = yield* client.createSession()
+        // The schema's type, with no annotation and no wire form in sight.
+        const result = yield* session.prompt(ticket)
+        return { result, history: yield* session.history }
+      }).pipe(Effect.provide(AgentClient.layer(Support).pipe(Layer.provide(layer))), Effect.scoped)
+
+      assert.strictEqual(result.text, "done")
+      assert.deepStrictEqual(TestLanguageModel.userTexts(history), [rendering])
+      // The first call is the rendering alone; the second carries the
+      // tool's result, which is the value's business, not the rendering's.
+      const prompts = yield* recorder.prompts
+      assert.notInclude(JSON.stringify(prompts[0]), "c-42", "the model never sees the id")
+      assert.include(JSON.stringify(history), "customer c-42", "the tool read the value from the fibre")
+    })
+  )
+
+  it.effect("a value the schema rejects is an invalid request: nothing runs, the session stays idle", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script(turns)
+      const { failure, status } = yield* Effect.gen(function* () {
+        const client = yield* AgentClient.AgentClient
+        const session = yield* client.createSession()
+        // The wire form by hand, as a foreign client would send it.
+        const failure = yield* Effect.flip(session.prompt(AgentInput.typed({ customerId: 42 })))
+        return { failure, status: yield* session.status }
+      }).pipe(Effect.provide(AgentClient.layer(Support).pipe(Layer.provide(layer))), Effect.scoped)
+
+      assert.strictEqual(failure._tag, "AgentInvalidRequestError")
+      assert.strictEqual(status, "idle")
+      assert.strictEqual(yield* recorder.calls, 0, "no model call for a refused value")
+    })
+  )
+
+  it.effect("a prompt to a typed agent, and a typed value to an untyped one, are both refused rather than rendered", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("never")])
+      const Plain = Agent.make({ instructions: "Plain.", loop: AgentLoop.bounded(1) })
+      const remote = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
+        agent: Agent.AgentDefinition<Tools, E, R, Model, Value, Input>,
+        input: AgentClient.RemoteInput
+      ) =>
+        Effect.gen(function* () {
+          const client = yield* AgentClient.AgentClient
+          const session = yield* client.createSession()
+          return yield* Effect.flip(session.submit(input))
+        }).pipe(Effect.provide(AgentClient.layer(agent).pipe(Layer.provide(layer))), Effect.scoped)
+
+      const promptToTyped = yield* remote(Support, "just text")
+      assert.strictEqual(promptToTyped._tag, "AgentInvalidRequestError")
+      assert.include(promptToTyped.message, "typed input")
+      const valueToPlain = yield* remote(Plain, AgentInput.typed(ticket))
+      assert.strictEqual(valueToPlain._tag, "AgentInvalidRequestError")
+      assert.include(valueToPlain.message, "prompt")
+    })
+  )
+
+  it.effect("under an idempotency key, the same value rejoins the submission and a different one conflicts", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script(turns)
+      yield* Effect.gen(function* () {
+        const client = yield* AgentClient.typed(Support)
+        const session = yield* client.createSession()
+        const first = yield* session.submit(ticket, { idempotencyKey: "req-1" })
+        const again = yield* session.submit(ticket, { idempotencyKey: "req-1" })
+        assert.strictEqual(again.submissionId, first.submissionId)
+        const other = yield* Effect.flip(
+          session.submit({ ...ticket, body: "something else" }, { idempotencyKey: "req-1" })
+        )
+        assert.strictEqual(other._tag, "AgentRequestConflictError")
+        const result = yield* session.awaitSubmission(first.submissionId)
+        assert.strictEqual(result.text, "done")
+      }).pipe(Effect.provide(AgentClient.layer(Support).pipe(Layer.provide(layer))), Effect.scoped)
+      assert.strictEqual(yield* recorder.calls, 2, "one submission ran")
+    })
+  )
+
+  it.effect("the value survives HTTP: encoded by the client, decoded by the host, rendered once", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script(turns)
+      const Host = AgentSessionHost.Tag<string>(`test/AgentInput/http/${globalThis.crypto.randomUUID()}`)
+      const host = AgentSessionHost.layer(Host, {
+        principal: { resolve: () => Effect.succeed("typed-http") },
+        authorization: AgentSessionHost.allowAll(),
+        maxSessions: 4,
+        maxRequestsPerSession: 16
+      }).pipe(Layer.provide(AgentClient.layer(Support)), Layer.provide(layer))
+      const server = HttpRouter.serve(AgentHttp.serverLayer({ host: Host }).pipe(Layer.provide(host)), {
+        disableLogger: true,
+        disableListenLog: true
+      }).pipe(Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, gracefulShutdownTimeout: 100 })))
+      const overHttp = AgentHttp.agentClientFromServer().pipe(
+        Layer.provide(FetchHttpClient.layer),
+        Layer.provide(Layer.orDie(server))
+      )
+
+      const { history, refused, result } = yield* Effect.gen(function* () {
+        const client = yield* AgentClient.typed(Support)
+        const session = yield* client.createSession({ sessionId: "typed-over-http" })
+        const result = yield* session.prompt(ticket)
+        // The same refusal, with a 400 behind it rather than a local error.
+        const raw = yield* AgentClient.AgentClient
+        const untyped = yield* raw.session("typed-over-http")
+        const refused = yield* Effect.flip(untyped.prompt("just text"))
+        return { result, refused, history: yield* session.history }
+      }).pipe(Effect.provide(overHttp), Effect.scoped)
+
+      assert.strictEqual(result.text, "done")
+      assert.deepStrictEqual(TestLanguageModel.userTexts(history), [rendering])
+      assert.include(JSON.stringify(history), "customer c-42")
+      assert.notInclude(JSON.stringify((yield* recorder.prompts)[0]), "c-42")
+      assert.strictEqual(refused._tag, "AgentInvalidRequestError")
+      assert.strictEqual(AgentHttp.errorStatus(refused), 400)
+      // The wire request is the tagged value, and the protocol names it.
+      assert.deepStrictEqual(AgentProtocol.input(AgentInput.typed(ticket)), { _tag: "TypedInput", value: ticket })
+    })
+  )
+})
+
 // --- Type assertions -------------------------------------------------------
 // Test code counts as user code: nothing above needed a cast, and these pin
 // that the input is the schema's type at the call site.
@@ -201,20 +349,41 @@ type IsAny<T> = 0 extends 1 & T ? true : false
 type Assert<T extends true> = T
 
 const Typed = Agent.make({ input: Ticket })
-type TypedInput = typeof Typed extends Agent.AgentDefinition<any, any, any, any, any, infer I> ? I : never
+type TypedInput = Agent.InputOf<typeof Typed>
+// `never extends T` is true for every `T`, so an extraction that silently
+// failed would pass the assertion below; this one rules that out first.
+// (The first spelling of the extraction did exactly that -- see `InputOf`.)
+export type _InputNotNever = Assert<[TypedInput] extends [never] ? false : true>
 export type _InputIsTheSchema = Assert<
   TypedInput extends { readonly customerId: string; readonly body: string } ? true : false
 >
 export type _InputNotAny = Assert<IsAny<TypedInput> extends false ? true : false>
 
 const Untyped = Agent.make({})
-type UntypedInput = typeof Untyped extends Agent.AgentDefinition<any, any, any, any, any, infer I> ? I : never
+type UntypedInput = Agent.InputOf<typeof Untyped>
 export type _NoInputIsNever = Assert<[UntypedInput] extends [never] ? true : false>
 
-/** The remote seam refuses a typed-input agent at compile time, as `AgentInput` says. */
-export const _typedInputIsLocalOnly = () => ({
+/** Each shape is held to its declaration, locally and through the typed client alike. */
+export const _inputShapesAreEnforced = () => ({
   // @ts-expect-error -- a string is not a Ticket
   wrongForTyped: Agent.run(Typed, "just text"),
   // @ts-expect-error -- a Ticket is not Prompt.RawInput
-  wrongForUntyped: Agent.run(Untyped, { customerId: "c", body: "b" })
+  wrongForUntyped: Agent.run(Untyped, { customerId: "c", body: "b" }),
+  remote: Effect.gen(function* () {
+    const typed = yield* AgentClient.typed(Typed)
+    const session = yield* typed.createSession()
+    // @ts-expect-error -- the typed client's prompt is the schema's type too
+    yield* session.prompt("just text")
+    const plain = yield* AgentClient.typed(Untyped)
+    const plainSession = yield* plain.createSession()
+    // @ts-expect-error -- and an untyped agent's client still takes a prompt
+    yield* plainSession.prompt({ customerId: "c", body: "b" })
+  })
 })
+
+type RemotePromptInput = Parameters<AgentClient.TypedSession<TypedInput>["prompt"]>[0]
+export type _RemotePromptNotNever = Assert<[RemotePromptInput] extends [never] ? false : true>
+export type _RemotePromptIsTheSchema = Assert<
+  RemotePromptInput extends { readonly customerId: string; readonly body: string } ? true : false
+>
+export type _RemotePromptNotAny = Assert<IsAny<RemotePromptInput> extends false ? true : false>
