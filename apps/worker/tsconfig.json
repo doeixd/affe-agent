@@ -19,5 +19,7 @@
     "types": ["@cloudflare/workers-types"],
     "plugins": [{ "name": "@effect/language-service" }]
   },
-  "include": ["src"]
+  // The deployment example imports this host entry and is excluded from the
+  // root program for the Workers globals; it is typechecked here instead.
+  "include": ["src", "../../examples/deploy-cloudflare"]
 }

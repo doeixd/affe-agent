@@ -73,5 +73,9 @@
   "include": ["src", "test", "examples", "vitest.config.ts"],
   // The Cloudflare host entry compiles under tsconfig.cloudflare.json: its
   // types reach the Workers globals, which collide with the DOM lib here.
-  "exclude": ["src/cloudflare"]
+  // `examples/deploy-cloudflare` is excluded for the same reason and by the
+  // same rule: it *imports* that entry, which would drag the Workers globals
+  // back into this program. It typechecks under apps/worker/tsconfig.json
+  // (`npm run typecheck:worker`), where those globals are declared.
+  "exclude": ["src/cloudflare", "examples/deploy-cloudflare"]
 }
