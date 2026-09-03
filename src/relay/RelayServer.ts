@@ -1,0 +1,182 @@
+import { Clock, Context, Effect, Layer, Option, Queue, Stream } from "effect"
+import type { Headers } from "effect/unstable/http"
+import type { Rpc, RpcGroup } from "effect/unstable/rpc"
+import * as Relay from "./Relay.js"
+import * as RelayProtocol from "./RelayProtocol.js"
+
+/**
+ * The relay: an in-memory route table keyed by `PeerId`, one bounded inbound
+ * queue per online peer, and a directory. It knows source, destination,
+ * endpoint and an opaque frame, and nothing about agents.
+ *
+ * Authentication is a service the deployment provides
+ * (`RelayAuthenticator`): the relay never trusts a `from` a caller sends;
+ * the source of every envelope is whoever the connection authenticated as.
+ */
+
+/** Resolve the connection's headers to the peer they belong to. */
+export interface AuthenticatorService {
+  readonly authenticate: (
+    headers: Headers.Headers
+  ) => Effect.Effect<Relay.PeerId, Relay.RelayUnauthorizedError>
+}
+
+export class RelayAuthenticator extends Context.Service<RelayAuthenticator, AuthenticatorService>()(
+  "@doeixd/effect-agent/relay/RelayAuthenticator"
+) {}
+
+/**
+ * The V1 credential scheme's simplest form: a fixed map from bearer token to
+ * peer. Enrollment, rotation and revocation arrive as a store behind the
+ * same service; the relay's routing does not change when they do.
+ */
+export const bearerTokens = (
+  tokens: Readonly<Record<string, Relay.PeerId>>
+): Layer.Layer<RelayAuthenticator> =>
+  Layer.succeed(RelayAuthenticator, {
+    authenticate: (headers) => {
+      const authorization = headers["authorization"]
+      if (authorization === undefined) {
+        return Effect.fail(new Relay.RelayUnauthorizedError({ reason: "no authorization header" }))
+      }
+      const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : authorization
+      const peer = tokens[token]
+      return peer === undefined
+        ? Effect.fail(new Relay.RelayUnauthorizedError({ reason: "unknown credential" }))
+        : Effect.succeed(peer)
+    }
+  })
+
+/**
+ * The coarse routing rule. Default: any authenticated peer may reach any
+ * other; a deployment narrows it (same account, explicit sharing) here.
+ */
+export interface Authorization {
+  readonly authorize: (options: {
+    readonly from: Relay.PeerId
+    readonly to: Relay.PeerId
+    readonly endpoint: Relay.EndpointId
+  }) => Effect.Effect<void, Relay.RelayForbiddenError>
+}
+
+export const allowAll: Authorization = { authorize: () => Effect.void }
+
+export interface Options {
+  readonly authorization?: Authorization | undefined
+  /**
+   * Frames buffered per online peer before `send` suspends its caller.
+   * Backpressure, not a drop: a slow reader slows its senders rather than
+   * growing the relay's memory. Default 1024.
+   */
+  readonly inboundCapacity?: number | undefined
+}
+
+interface Connection {
+  readonly queue: Queue.Queue<Relay.Envelope, Relay.RelaySupersededError>
+  readonly connectedAt: number
+}
+
+interface Entry {
+  readonly connection: Option.Option<Connection>
+  readonly lastSeenAt: number
+}
+
+/**
+ * The protocol's handlers. Mount them the way `AgentRpc.serverLayer` is
+ * mounted: `RpcServer.layerHttp({ group: RelayProtocol.Protocol, protocol:
+ * "websocket", path })` over an HTTP server, with an `RpcSerialization`.
+ */
+export const layer = (
+  options?: Options
+): Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof RelayProtocol.Protocol>>, never, RelayAuthenticator> =>
+  RelayProtocol.Protocol.toLayer(
+    Effect.gen(function* () {
+      const authenticator = yield* RelayAuthenticator
+      const authorization = options?.authorization ?? allowAll
+      const capacity = options?.inboundCapacity ?? 1024
+      const peers = new Map<Relay.PeerId, Entry>()
+
+      const touch = (peer: Relay.PeerId, now: number) => {
+        const entry = peers.get(peer)
+        peers.set(peer, { connection: entry === undefined ? Option.none() : entry.connection, lastSeenAt: now })
+      }
+
+      const listen = Effect.fn("RelayServer.listen")(function* (headers: Headers.Headers) {
+        const peer = yield* authenticator.authenticate(headers)
+        yield* Effect.annotateCurrentSpan("relay.peer", peer)
+        const now = yield* Clock.currentTimeMillis
+        const queue = yield* Queue.make<Relay.Envelope, Relay.RelaySupersededError>({ capacity, strategy: "suspend" })
+        const previous = peers.get(peer)
+        if (previous !== undefined && Option.isSome(previous.connection)) {
+          // Newest authenticated connection wins; the old stream ends with the reason.
+          yield* Queue.fail(previous.connection.value.queue, new Relay.RelaySupersededError({ peer }))
+        }
+        const connection: Connection = { queue, connectedAt: now }
+        peers.set(peer, { connection: Option.some(connection), lastSeenAt: now })
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            const current = peers.get(peer)
+            // Only the connection that registered itself marks the peer offline;
+            // a superseded one leaving must not evict its successor.
+            if (current !== undefined && Option.isSome(current.connection) && current.connection.value === connection) {
+              peers.set(peer, { connection: Option.none(), lastSeenAt: yield* Clock.currentTimeMillis })
+            }
+            yield* Queue.shutdown(queue)
+          })
+        )
+        return Stream.fromQueue(queue)
+      })
+
+      const send = Effect.fn("RelayServer.send")(function* (outbound: Relay.Outbound, headers: Headers.Headers) {
+        const from = yield* authenticator.authenticate(headers)
+        yield* Effect.annotateCurrentSpan("relay.from", from)
+        yield* Effect.annotateCurrentSpan("relay.to", outbound.to)
+        yield* Effect.annotateCurrentSpan("relay.endpoint", outbound.endpoint)
+        yield* authorization.authorize({ from, to: outbound.to, endpoint: outbound.endpoint })
+        touch(from, yield* Clock.currentTimeMillis)
+        const target = peers.get(outbound.to)
+        if (target === undefined || Option.isNone(target.connection)) {
+          return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
+        }
+        const envelope: Relay.Envelope = {
+          from,
+          to: outbound.to,
+          endpoint: outbound.endpoint,
+          channel: outbound.channel,
+          frame: outbound.frame
+        }
+        const accepted = yield* Queue.offer(target.connection.value.queue, envelope)
+        if (!accepted) {
+          return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
+        }
+      })
+
+      const heartbeat = Effect.fn("RelayServer.heartbeat")(function* (headers: Headers.Headers) {
+        const peer = yield* authenticator.authenticate(headers)
+        const now = yield* Clock.currentTimeMillis
+        touch(peer, now)
+        return { serverTime: now }
+      })
+
+      const list = Effect.fn("RelayServer.peers")(function* (headers: Headers.Headers) {
+        yield* authenticator.authenticate(headers)
+        const all: Array<Relay.PeerInfo> = []
+        for (const [id, entry] of peers) {
+          all.push({
+            id,
+            status: Option.isSome(entry.connection) ? "online" : "offline",
+            connectedAt: Option.map(entry.connection, (connection) => connection.connectedAt),
+            lastSeenAt: entry.lastSeenAt
+          })
+        }
+        return all
+      })
+
+      return {
+        listen: (_, context) => Stream.unwrap(listen(context.headers)),
+        send: (outbound, context) => send(outbound, context.headers),
+        heartbeat: (_, context) => heartbeat(context.headers),
+        peers: (_, context) => list(context.headers)
+      }
+    })
+  )

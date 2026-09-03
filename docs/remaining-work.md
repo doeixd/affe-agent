@@ -779,77 +779,49 @@ open, so the next pass does not have to re-derive it.
     `HEAD`, and `ProcessManager` with its corrected test waits in the working
     tree.
 
-26p. **Relay transport** (`plan-relay.txt`) — server and client, peer
-    directory, enrollment credentials, durable mailbox over `PersistedQueue`,
-    heartbeat/lease, backpressure. The genuinely large one, and the only thing
-    blocking `plan-a2a-layers-bridges.txt` steps 5–7 (both bridges over the
-    relay, at which point local vs remote is transport selection).
-    `plan-deployment.md` §6.3 narrows when it is the right tool.
+26p. ~~**Relay transport**~~ (`plan-relay.txt`) — **landed 2026-09-03.**
+    `src/relay/` is the whole slice: `Relay.ts` (the vocabulary — `PeerId`,
+    `EndpointId`, `ChannelId`, `Envelope`, the errors), `RelayProtocol.ts`
+    (the public protocol as an `RpcGroup`, so the relay invents no framing of
+    its own), `RelayServer.ts` (the route table, the directory, bearer
+    credentials, coarse authorization), `RelayClient.ts` (a node's one
+    `listen` stream and its dispatch) and `RelayRpc.ts` (Effect RPC in both
+    directions over it). `AgentRpc` runs across it unchanged, which is the
+    claim `test/Relay.test.ts` makes: calls, a streamed response, the
+    directory, supersession, a refused credential, and — the one that matters
+    for the design — a forged `PEER_HEADER` losing to the relay's own stamp,
+    so reaching a target through the relay never bypasses its authorization.
 
-    **Built 2026-09-02 and not committed: calls cross it, streams do not.**
-    `src/relay/` (protocol, server, client, RPC bridge, ~780 lines) and
-    `test/Relay.test.ts` are in the working tree. `tsc`, `lint` and
-    `lint:portability` are clean and **three of the four tests pass** --
-    including the one that matters most for the design, that a forged
-    `PEER_HEADER` on a call loses to the relay's own stamp, so relay access
-    never bypasses the target's authorization.
+    **Both bugs the last two passes named are closed, and they were not the
+    same kind of thing.**
 
-    The fourth hangs, and tracing every frame across both ends narrows it
-    precisely. `createSession` and `prompt` complete in both directions
-    (`Request` out, `Exit` back, delivered). For the streamed `events` RPC:
-    the `Request` reaches the server, **the server emits no `Chunk` at all**,
-    the client interrupts within milliseconds, and the server's post-interrupt
-    `Exit` is *never routed back* -- which is why the symptom is a hang rather
-    than an empty stream, since the interrupt has nothing to complete against.
+    The dropped `Exit` was real, and the fix is in `clientProtocol`'s
+    finalizer. A caller that interrupts a streaming request waits for the far
+    end's `Exit`; the relay does route it; but by then the scope has
+    unsubscribed, so `RelayClient.dispatch` finds no handler and discards the
+    envelope. The hang was therefore uninterruptible — an outer timeout fires,
+    interrupts the request, and waits forever on an acknowledgement that was
+    thrown away. A transport being torn down cannot promise a remote
+    acknowledgement, so it no longer makes its own shutdown depend on one: it
+    fails every outstanding request as interrupted first, which is the truth,
+    and only then sends `Eof`.
 
-    Eliminated, so the next attempt does not repeat them:
+    The missing `Chunk` was not a transport fault at all. `events` without
+    `after` is a **live tail**, so a subscription taken after the prompt has
+    already completed waits for events that have gone by — correctly, and
+    forever. The socket suite's equivalent passes because of its ordering, not
+    because of its transport. The test now subscribes before it prompts and
+    asserts what a tail taken at that moment actually sees, and it is `it.live`
+    rather than `it.effect` because real sockets and real sleeps need a clock
+    someone advances. The suspicion recorded at the end of the last pass — that
+    the expectation was wrong rather than the transport — was the right one.
 
-    - **Not the test's collection idiom.** It now mirrors
-      `test/AgentRpc.test.ts` line for line -- `Stream.runCollect` over
-      `client.events(...)` after a completed prompt -- which passes over a
-      socket and hangs over the relay. That comparison is the point: the
-      difference is the transport.
-    - **Not `after` / resumption.** An earlier version asked for `after: 0`,
-      which fails loudly and correctly ("this session has no delivery log, so
-      events cannot be resumed from a sequence") because resumable delivery is
-      the durable client's. Fixed in the test.
-    - **Not ack negotiation.** `supportsAck: false` on both protocols changes
-      nothing.
-
-    **Traced again at the bus, which names the second bug exactly.** Logging
-    every frame inside `RelayServer.send` gives the whole conversation:
-
-    ```text
-    vps -> desktop Request  (createSession)   desktop -> vps Exit   routed
-    vps -> desktop Request  (prompt)          desktop -> vps Exit   routed
-    vps -> desktop Request  (events)          <nothing back>
-    vps -> desktop Interrupt
-    vps -> desktop Eof
-                                              desktop -> vps Exit   routed
-    ```
-
-    So two distinct faults, and the second is now precise:
-
-    1. **No chunk is ever produced for the streamed response.** The `events`
-       request reaches the target and `RpcServer` sends nothing for it, for as
-       long as it is left alone. Not acks (`supportsAck: false` on both ends
-       changes nothing), not the caller's idiom (it mirrors the socket test
-       that passes), not resumption. Note the stream *hangs* rather than
-       returning empty, so the response is open and waiting, not finished --
-       worth checking whether this host's `events` is a live tail that never
-       completes where `test/AgentRpc.test.ts`'s completes, which would make
-       the test's expectation wrong rather than the transport.
-    2. **The final `Exit` is routed by the relay and then dropped by the
-       caller.** The last line above shows the relay delivering it. By that
-       point the caller has sent `Eof` and `RelayClient`'s `subscribe`
-       finalizer has already run `handlers.delete(id)`, so `dispatch` finds no
-       handler and drops the envelope on an `Effect.logDebug`. The in-flight
-       request therefore never completes, which is why the symptom is an
-       *uninterruptible* hang: an outer `Effect.timeout` fires, interrupts the
-       request, and then waits forever for an acknowledgement that was thrown
-       away. A protocol must not unsubscribe while it still has requests
-       outstanding, and a dropped envelope for a channel that existed a
-       moment ago deserves better than a debug line.
+    Still open, and none of it blocks the bridges: the durable mailbox over
+    `PersistedQueue` (a peer that is offline now gets `RelayPeerOfflineError`,
+    which is honest but not durable), reconnection (`status` goes `offline`
+    for good and says why), lease-based heartbeat expiry, and enrollment
+    beyond the fixed token map. `plan-a2a-layers-bridges.txt` steps 5–7 are
+    unblocked.
 
 ### Newly ranked — from the effect-cf research (2026-09-01)
 

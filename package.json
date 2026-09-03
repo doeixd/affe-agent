@@ -75,13 +75,13 @@
       "types": "./dist/export/index.d.ts",
       "default": "./dist/export/index.js"
     },
-    "./process": {
-      "types": "./dist/process/index.d.ts",
-      "default": "./dist/process/index.js"
-    },
     "./sessions": {
       "types": "./dist/sessions/index.d.ts",
       "default": "./dist/sessions/index.js"
+    },
+    "./relay": {
+      "types": "./dist/relay/index.d.ts",
+      "default": "./dist/relay/index.js"
     },
     "./redaction": {
       "types": "./dist/redaction/index.d.ts",
@@ -210,6 +210,10 @@
     "./sandbox/local": {
       "types": "./dist/sandbox/local.d.ts",
       "default": "./dist/sandbox/local.js"
+    },
+    "./process": {
+      "types": "./dist/process/index.d.ts",
+      "default": "./dist/process/index.js"
     },
     "./mcp/v1": {
       "types": "./dist/mcp/v1/index.d.ts",
