@@ -5621,3 +5621,32 @@ Also fixed on the way (`437f5a8`): `PublicApi.test.ts` had been red at HEAD
 since `3132ff8`, which shipped `SessionDirectoryConformance` without adding it
 to the list that test pins. The test was doing its job.
 
+## 2026-09-02 — `SessionInbox` (item 26m)
+
+Shipped (`bc65708`) the same day as its producer, which is why it could ship
+at all: 26m had been parked since 2026-09-01 with the note "building it now
+would ship a queue with nothing to enqueue", and `ProcessManager` is the
+something.
+
+`src/sessions/SessionInbox.ts` over `PersistedQueue`. The rule it exists to
+enforce is §5's -- a ping-back is future session input, never implicitly a
+follow-up -- so a delivery starts a *new* submission on an idle session and
+never joins one in flight. Idempotency is the item's identity and is enforced
+twice over: `offer` ignores an id already queued, and the delivery submits
+under that same id, so a producer that can only promise at-least-once is safe
+to write.
+
+**The design changed while the tests were being written, and the change is the
+interesting part.** The first draft polled the session's status inside the
+delivery, waiting up to 30 seconds for it to go idle. Two tests hung at
+vitest's 5s default before it became clear why: `PersistedQueue.take` already
+retries a failed delivery, up to ten attempts by default, so the in-delivery
+wait was a second copy of the queue's own machinery -- and one that held a
+queue slot open while doing nothing. A busy session now fails its attempt at
+once, and `maxAttempts` is the wait. The module says so where the option is
+declared, because the tempting version is the wrong one.
+
+Broken once by dropping the idempotency key from `offer`: the duplicate is
+queued and arrives instead of the next completion. Four tests, `tsc`, `lint`
+and `lint:portability` clean.
+

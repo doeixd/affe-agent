@@ -589,7 +589,17 @@ open, so the next pass does not have to re-derive it.
     `/tree` (a conversation DAG) and not `AgentSessionHost.size` (a live count
     in one process).
 
-26m. **`SessionInbox`** — *note (2026-09-01): blocked on having a **producer**,
+26m. ~~**`SessionInbox`**~~ — **SHIPPED 2026-09-02** (`bc65708`), once
+    `ProcessManager` (26n) existed to be its producer. `src/sessions/SessionInbox.ts`
+    over `PersistedQueue`: `enqueue` idempotent on the item's id, `deliver`
+    starting a *new* submission on an idle session, `run` looping.
+    The design correction the tests forced is worth carrying forward: a
+    first draft polled for an idle session inside the delivery, which
+    duplicated `PersistedQueue.take`'s own retry and held a queue slot doing
+    nothing. A busy session now fails its attempt immediately and the queue
+    schedules the next; `maxAttempts` is the wait. Boundary stated in the
+    module: an item carries a prompt, so a typed-input agent cannot be fed
+    from here until item 46. Original scope: *(2026-09-01): blocked on having a **producer**,
     not on plumbing. `session.submit(input, { requestId })` already provides the
     idempotent admission this was meant to add (item 4, landed 2026-08-29), so
     the queue is composition sugar over a shipped API. Its named producers --
