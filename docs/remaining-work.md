@@ -786,6 +786,43 @@ open, so the next pass does not have to re-derive it.
     relay, at which point local vs remote is transport selection).
     `plan-deployment.md` §6.3 narrows when it is the right tool.
 
+    **Built 2026-09-02 and not committed: calls cross it, streams do not.**
+    `src/relay/` (protocol, server, client, RPC bridge, ~780 lines) and
+    `test/Relay.test.ts` are in the working tree. `tsc`, `lint` and
+    `lint:portability` are clean and **three of the four tests pass** --
+    including the one that matters most for the design, that a forged
+    `PEER_HEADER` on a call loses to the relay's own stamp, so relay access
+    never bypasses the target's authorization.
+
+    The fourth hangs, and tracing every frame across both ends narrows it
+    precisely. `createSession` and `prompt` complete in both directions
+    (`Request` out, `Exit` back, delivered). For the streamed `events` RPC:
+    the `Request` reaches the server, **the server emits no `Chunk` at all**,
+    the client interrupts within milliseconds, and the server's post-interrupt
+    `Exit` is *never routed back* -- which is why the symptom is a hang rather
+    than an empty stream, since the interrupt has nothing to complete against.
+
+    Eliminated, so the next attempt does not repeat them:
+
+    - **Not the test's collection idiom.** It now mirrors
+      `test/AgentRpc.test.ts` line for line -- `Stream.runCollect` over
+      `client.events(...)` after a completed prompt -- which passes over a
+      socket and hangs over the relay. That comparison is the point: the
+      difference is the transport.
+    - **Not `after` / resumption.** An earlier version asked for `after: 0`,
+      which fails loudly and correctly ("this session has no delivery log, so
+      events cannot be resumed from a sequence") because resumable delivery is
+      the durable client's. Fixed in the test.
+    - **Not ack negotiation.** `supportsAck: false` on both protocols changes
+      nothing.
+
+    So the fault is in how `serverProtocol` drives `RpcServer` for a streaming
+    response -- no chunk is produced -- and, separately, in the return routing
+    for a frame sent after the caller has interrupted. Both are in
+    `src/relay/RelayRpc.ts`. Fix the first and the second may not matter, but
+    it is a real bug on its own: a response sent to a live channel was
+    dropped.
+
 ### Newly ranked — from the effect-cf research (2026-09-01)
 
 Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).
