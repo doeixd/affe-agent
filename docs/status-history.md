@@ -5513,3 +5513,51 @@ with the scripted model; type-level, the error channels are exactly the
 named ones and `follow` needs no service. Broken once: the annotate
 removal (two conformance cases failed, in both stores) and the `rename`
 error assertion (one compile error).
+
+## 2026-09-02 — their Workflow RFC, read against `/durable` (item 47)
+
+`danieljvdm/effect-agent#286` proposes running agents on any Effect
+`WorkflowEngine` supplied as a `Layer`. That is where `/durable` started, so
+most of it is not a gap for us; `plan-rfc-286-durable.md` records the read and
+ranks the three things that are.
+
+**The one worth taking (47a, not started).** We wrap every tool handler as an
+`Activity`. Reading upstream's `Activity.ts` for the first time shows it wraps
+each one in `retryOnInterrupt`, policy
+`Schedule.while((meta) => meta.attempt <= 10 && Cause.hasInterrupts(meta.input))`
+— an interrupted activity is re-executed up to ten times. So a tool
+interrupted mid-request reissues it, and nothing in our code asked for that.
+The RFC's answer is right: only the tool knows whether its effect is
+repeatable, so it should say, where it already says `needsApproval`, and a
+non-retry-safe tool with an unresolved outcome should park the submission the
+way an `Ask` does rather than replay. Our docs' "we do not claim exactly-once"
+remains true either way; what changes is who makes the choice.
+
+**The one answered on the spot (47b, done).** The RFC works around a race in
+the pinned `ClusterWorkflowEngine`: its exported `resume` returns silently when
+the execution has not yet recorded a `Suspended` reply
+(`ClusterWorkflowEngine.ts:273`), so a wake that overtakes its own suspension
+is dropped. That is true of our pinned version too. **It does not reach us**,
+and a test now says so instead of a comment: we never call that `resume`, we
+reach the engine through `DurableDeferred`, and a deferred answered *before*
+the workflow awaits it is stored durably and read when the await arrives. "An
+answer that arrives before the workflow suspends is not lost" in
+`test/Durable.test.ts` answers an elicitation immediately after launch, while
+the run is still in its first model call — expressible only because the
+elicitation id is derived rather than discovered. Bounded under vitest's 5s
+default so that breaking it once, by deleting the answer, fails with the
+sentence naming the ordering rather than a bare timeout. 19 tests in the file
+pass.
+
+**The one that fits a host we already have (47c, not started).** Their
+dispatch intents — persist before launch, repair in bounded passes, delete only
+after checking the canonical settlement — are the right shape for
+`apps/worker`, where the engine measurably cannot run
+(`upstream/effect-workflow-on-workerd.md`) and the Durable Object alarm is
+already a durable trigger. Host-local; `src/durable` does not change.
+
+Not taken, with reasons in the plan's §4: the FIFO lane and Attempt
+vocabulary, the separate ledger, `awaitSettlement` as a third spelling of
+submit-and-await, and the driver-only shape — which would not have survived
+workerd either, since the stall was in suspend and resume.
+
