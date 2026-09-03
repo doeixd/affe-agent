@@ -632,7 +632,9 @@ open, so the next pass does not have to re-derive it.
     outlives its handles, so reference counting would kill it on last drop --
     workspaces get `LayerMap`, processes will get `FiberMap` and a store.
 
-26n. **`ProcessManager`** (`effect-plan-2.txt` §8–11) —
+26n. ~~**`ProcessManager`**~~ — **SHIPPED 2026-09-02** (`fb0c73b`), with the
+    sandbox bug it exposed fixed in `6dc6d57`. Original scope
+    (`effect-plan-2.txt` §8–11) —
     process identity and lifetime over Effect's own spawner (`ProcessId`,
     `ManagedProcess`, `FiberMap` supervision, `events`), plus workspace
     lifetime once processes outlive the tool call that started them. Blocked
@@ -684,11 +686,10 @@ open, so the next pass does not have to re-derive it.
     step and needs a per-connection bound; and any `ServerEvent` merge helper in
     `src/`, which §30 says is the application's.
 
-    **Built 2026-09-02, and deliberately not committed.** The code is in the
-    working tree (`src/process/`, ~26KB, plus `test/ProcessManager.test.ts`
-    and the §11 spike); `tsc` and `lint` are clean and all 35 tests pass. It
-    is held back because one of those passing tests is wrong, and the bug it
-    hides is the module's central claim.
+    **The day it took, recorded because the lesson is the point.** The module
+    was written quickly and then held back for hours, because one of its
+    passing tests was wrong and the bug it hid was the module's central
+    claim.
 
     `terminate` interrupts the output pump and then records
     `{ _tag: "Terminated" }` unconditionally, on the stated assumption that

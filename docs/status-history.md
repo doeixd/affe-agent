@@ -5561,3 +5561,63 @@ vocabulary, the separate ledger, `awaitSettlement` as a third spelling of
 submit-and-await, and the driver-only shape — which would not have survived
 workerd either, since the stall was in suspend and resume.
 
+## 2026-09-02 — `ProcessManager`, and the sandbox bug it found (item 26n)
+
+`ProcessManager` ships (`fb0c73b`): a process that outlives the tool call
+that started it, with identity, output, `wait`, `info` and `terminate`, the
+manager's scope owning every one through a `FiberMap`, and a workspace held
+for exactly as long as a process runs. Built over `Sandbox.execStream`, so it
+is portable and every provider gets it; §11's spike is
+`test/ProcessSpike.test.ts`. It is the producer `SessionInbox` (26m) has been
+waiting for.
+
+**It sat finished but uncommitted for most of a day, and that is the part
+worth recording.** All 35 of its tests passed. One of them was wrong, and the
+thing it got wrong was the module's central claim.
+
+"Terminate ends a real process tree" asserted the manager's own bookkeeping --
+a status `finish` writes whether or not the operating system agreed -- and
+stopped its stopwatch just before the teardown that did the waiting. It was
+green while the process it claimed to have killed ran for its full thirty
+seconds. The tell was arithmetic: the test took 30.4s with a 30s child, and
+8.8s when that child was changed to sleep 8s. The duration tracked the
+child's *natural lifetime*, so nothing was killing it.
+
+Two better assertions were tried and rejected before the right one. The
+reported status is bookkeeping. A file the child writes later is deleted by
+the workspace's own one-second idle cleanup before it can be read, so that
+passes vacuously too. What holds is: once the manager has closed, removing the
+workspace must succeed, because Windows will not delete a directory a live
+process holds as its cwd. Two seconds of budget for handle release, none for
+waiting a child out.
+
+**The bug was not in `ProcessManager`.** A twelve-line probe -- fork a fibre
+reading `execStream`, interrupt it -- reproduced it with the module out of the
+picture, so it reached every caller of the sandbox. `Sandbox.test.ts` covers
+the path where a stream *completes*, which always worked; interruption was
+untested.
+
+The cause, after two wrong fixes (`spawnSync` hangs the release outright, 62s
+against a 60s timeout; polling for the process's actual death does not help
+because it never dies): `killTree`'s Windows branch spawned
+`taskkill /pid <n> /T /F` and returned, making a separate process this module
+cannot await the only thing ending a command. Reduced to twenty lines with no
+Effect and no vitest, that async `taskkill` emits neither `exit` nor `error`
+for more than eight seconds while the child runs on, and run synchronously it
+returns "this operation returned because the timeout period expired". Async
+spawning is fine in general -- `taskkill /?` exits 0 the same way -- so it is
+this invocation, on a loaded machine, that does not arrive. Meanwhile Node's
+own `child.kill()` ends the process in about 60ms, and the branch never called
+it.
+
+Fixed in `6dc6d57`: kill the command directly first, then ask `taskkill` to
+reap whatever it started. A childless command is gone before `taskkill`
+finishes loading, and the tree sweep keeps its meaning for the rest. The
+corrected test drops from 30s to 178ms; broken once by removing the direct
+kill, the process outlives terminate again and the test says so. 236 tests
+across the sandbox and toolkit suites pass, and the full suite is 1992 green.
+
+Also fixed on the way (`437f5a8`): `PublicApi.test.ts` had been red at HEAD
+since `3132ff8`, which shipped `SessionDirectoryConformance` without adding it
+to the list that test pins. The test was doing its job.
+
