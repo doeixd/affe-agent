@@ -166,14 +166,39 @@ export const layer = (options?: {
                   if (started.pid === undefined) return
                   if (process.platform === "win32") {
                     // No graceful signal exists on Windows; both phases end the
-                    // whole tree. `taskkill` failing (already gone) is fine.
+                    // whole tree. Two calls, in this order, and the order is
+                    // the point.
+                    //
+                    // `taskkill /T` is the only way to reach *descendants*
+                    // here, but it is a separate process this module spawns
+                    // and cannot await, and it is not dependable: on a loaded
+                    // machine it has been measured emitting neither `exit` nor
+                    // `error` for more than eight seconds, and returning "this
+                    // operation returned because the timeout period expired"
+                    // when run synchronously. Leaving it as the only kill is
+                    // what let a terminated command keep running for its full
+                    // lifetime, holding its workspace open behind it
+                    // (`docs/remaining-work.md` 26n).
+                    //
+                    // So end the command itself first, with the direct kill
+                    // that is immediate and dependable (measured ~60ms), and
+                    // then ask `taskkill` to reap whatever it started. A
+                    // childless command -- almost all of them -- is now gone
+                    // before `taskkill` has finished loading.
+                    try {
+                      started.kill()
+                    } catch {
+                      // Already gone; the tree sweep below still runs.
+                    }
                     try {
                       spawn("taskkill", ["/pid", String(started.pid), "/T", "/F"], {
                         stdio: "ignore",
                         windowsHide: true
                       }).on("error", () => {})
                     } catch {
-                      started.kill()
+                      // `taskkill` missing or refused: the direct kill above
+                      // already ended the command, and a descendant that
+                      // outlives it is the documented Windows limitation.
                     }
                     return
                   }
