@@ -1025,6 +1025,39 @@ sizes; the items are repeated here so this list stays the one tracker.
       (the measured workerd stall), and the DO alarm is already the durable
       trigger it needs. Host-local: `src/durable` does not change.
 
+48. **Making the failure paths provable**
+    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03). A read of
+    their *source* rather than their RFC, plus the relay's own post-commit
+    review. The finding is not a missing feature: their durable tests can
+    crash a pass at a named point and ours cannot, so every "what if the
+    process dies here" question in `/durable`, `/cluster` and `/relay` is
+    currently answered by reading the code. This session is the example --
+    the relay review found two real defects and the test written for them
+    passes with the fix removed. Ranked in that plan's §2:
+    - **48a. Retry safety on the tool** -- 47a restated, still unimplemented
+      (`grep retrySafe src/` is empty). Ships first because it is a live bug:
+      an interrupted tool is reissued up to ten times by upstream's
+      `Activity`, which nothing asked for.
+    - **48b. Failpoints** -- a `Context.Reference` defaulting to a no-op,
+      called at named durable boundaries, with a closed location schema per
+      subsystem. The largest new idea, and what makes 48a, 48c and 48d
+      provable rather than argued.
+    - **48c. Never acknowledge on the engine's word** -- reconcile the
+      engine's answer against canonical state before completing a waiter,
+      and retain the intent on disagreement.
+    - **48d. The teardown contract belongs in `AgentClientConformance`** --
+      a torn-down transport must settle its in-flight requests locally. True
+      of every transport, tested for none; one case covers five
+      implementations.
+    - **48e. The relay's deferred half** -- lease expiry, reconnection,
+      durable mailbox, enrollment, in that order.
+
+    Recorded there so it is not re-derived: our submission idempotency key is
+    already identity-based rather than input-based, which is the property
+    their RFC is careful about; and their no-Activities, canonical-records
+    bet is deliberately *not* taken, because our `DeliveryLog` deduplicates
+    by semantic key precisely since we replay.
+
 ### In flight (2026-09-01)
 
 Items 28 and 29 **landed while this section was being written** — `230745d`
