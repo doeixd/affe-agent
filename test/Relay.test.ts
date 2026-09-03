@@ -193,6 +193,48 @@ describe("Relay", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("a caller can be torn down and dialled again on the same node", () =>
+    Effect.gen(function* () {
+      const url = yield* relay()
+      const target = yield* targetHost
+      yield* Layer.build(
+        RelayRpc.serve(AgentEndpoint).pipe(
+          Layer.provide(target.serve),
+          Layer.provideMerge(node(url, TARGET, "desktop-secret"))
+        )
+      )
+      const connection = yield* Layer.build(node(url, CALLER, "vps-secret"))
+      const forged = { headers: {} }
+
+      // Each dial is its own channel, so the target mints a fresh RPC client
+      // for it. The first one's teardown sends `Eof` and releases that client;
+      // the second must be unaffected, which is what the release path has to
+      // get right -- announcing a disconnect twice, or minting a client just
+      // to release it, would tear down the wrong one.
+      const dial = <A, E>(use: (client: AgentRpc.Client["Service"]) => Effect.Effect<A, E>) =>
+        Effect.gen(function* () {
+          const caller = yield* Layer.build(
+            AgentRpc.clientLayer.pipe(
+              Layer.provide(RelayRpc.clientProtocol({ peer: TARGET, endpoint: AgentEndpoint }))
+            )
+          ).pipe(Effect.provide(connection))
+          return yield* use(yield* Effect.provide(AgentRpc.Client, caller))
+        }).pipe(Effect.scoped)
+
+      const first = sessionId("first")
+      yield* dial((client) => client.createSession({ requestId: requestId("a"), sessionId: first }, forged))
+      // A dial that opens and closes without ever calling: its `Eof` names a
+      // channel the target has never seen, which must not mint a client just
+      // to announce its disconnect.
+      yield* dial(() => Effect.void)
+      // The first caller's scope has closed: its `Eof` has been sent and its
+      // client released. A second dial over the same relay connection still
+      // reaches the same host, and sees the session the first one made.
+      const status = yield* dial((client) => client.status({ sessionId: first }, forged))
+      assert.strictEqual(status.status, "idle")
+    }).pipe(Effect.scoped)
+  )
+
   it.effect("live traffic to an offline peer fails now, as the caller's RPC error", () =>
     Effect.gen(function* () {
       const url = yield* relay()

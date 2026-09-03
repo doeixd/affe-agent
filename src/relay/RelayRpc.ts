@@ -277,21 +277,31 @@ const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Lay
           ids.add(client.id)
           return client
         }
+        // Idempotent on purpose: a caller's `Eof` and the server's own `end`
+        // can both arrive for one client, and announcing the same disconnect
+        // twice would have `RpcServer` tear down a client id that may by then
+        // have been reused.
         const release = (client: Client) => {
+          if (!ids.has(client.id)) return Effect.void
           byRoute.delete(route(client.from, client.channel))
           byId.delete(client.id)
           ids.delete(client.id)
-          return Queue.offer(disconnects, client.id)
+          return Effect.asVoid(Queue.offer(disconnects, client.id))
         }
 
         yield* relay.subscribe(target.id, (envelope) =>
           decodeClientFrame(envelope.frame).pipe(
             Effect.flatMap((frame): Effect.Effect<void> => {
-              const client = clientFor(envelope.from, envelope.channel)
               switch (frame._tag) {
-                case "Eof":
-                  return Effect.asVoid(release(client))
+                case "Eof": {
+                  // Look the channel up rather than minting one: an `Eof` for
+                  // a channel that sent nothing must not create a client just
+                  // to announce its disconnect.
+                  const existing = byRoute.get(route(envelope.from, envelope.channel))
+                  return existing === undefined ? Effect.void : release(existing)
+                }
                 case "Request": {
+                  const client = clientFor(envelope.from, envelope.channel)
                   const headers: Array<readonly [string, string]> = [[Relay.PEER_HEADER, envelope.from]]
                   for (const header of frame.headers) {
                     if (header[0].toLowerCase() !== Relay.PEER_HEADER) headers.push(header)
@@ -299,7 +309,7 @@ const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Lay
                   return writeRequest(client.id, requestFromFrame(frame, headers))
                 }
                 default:
-                  return writeRequest(client.id, frame)
+                  return writeRequest(clientFor(envelope.from, envelope.channel).id, frame)
               }
             }),
             Effect.catch((error) =>
@@ -324,7 +334,7 @@ const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Lay
           },
           end: (clientId) => {
             const client = byId.get(clientId)
-            return client === undefined ? Effect.void : Effect.asVoid(release(client))
+            return client === undefined ? Effect.void : release(client)
           },
           clientIds: Effect.sync(() => ids),
           initialMessage: Effect.succeedNone,
