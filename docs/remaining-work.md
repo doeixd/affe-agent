@@ -684,6 +684,36 @@ open, so the next pass does not have to re-derive it.
     step and needs a per-connection bound; and any `ServerEvent` merge helper in
     `src/`, which §30 says is the application's.
 
+    **Built 2026-09-02, and deliberately not committed.** The code is in the
+    working tree (`src/process/`, ~26KB, plus `test/ProcessManager.test.ts`
+    and the §11 spike); `tsc` and `lint` are clean and all 35 tests pass. It
+    is held back because one of those passing tests is wrong, and the bug it
+    hides is the module's central claim.
+
+    `terminate` interrupts the output pump and then records
+    `{ _tag: "Terminated" }` unconditionally, on the stated assumption that
+    "interrupting the pump interrupts `execStream`, and the sandbox ends the
+    tree" (`ProcessManager.ts:355`). **On Windows the tree is not ended.**
+    Measured, not inferred: the test's child runs
+    `setTimeout(() => {}, 30000)` and the test takes 30.4s; change that sleep
+    to 8000 and the test takes 8.8s. The duration tracks the child's *natural
+    lifetime*, so nothing is killing it -- the run only finishes when the
+    child exits by itself and finally releases the workspace directory the
+    outer `fs.rm` is retrying against.
+
+    The test passes throughout because it asserts the manager's own
+    bookkeeping (`status` is `Terminated`, which `finish` set regardless) and
+    because its stopwatch stops *before* the teardown that does the waiting.
+    A test that is green while the behaviour it names is false is the case
+    `CLAUDE.md` singles out, so the first job here is the assertion, not the
+    timeout: assert the process is actually gone -- the workspace removes
+    promptly, or total elapsed is far below the child's sleep -- and watch it
+    fail. Then decide whether the fix belongs in `ProcessManager` (observe the
+    exit rather than assume it) or in the local sandbox provider's
+    interruption path (`Sandbox.execStream`), which is where the tree-kill is
+    supposed to live. Only the second makes `Terminated` honest for every
+    caller of the sandbox, not just this one.
+
 26p. **Relay transport** (`plan-relay.txt`) — server and client, peer
     directory, enrollment credentials, durable mailbox over `PersistedQueue`,
     heartbeat/lease, backpressure. The genuinely large one, and the only thing
