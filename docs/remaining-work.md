@@ -816,12 +816,40 @@ open, so the next pass does not have to re-derive it.
     - **Not ack negotiation.** `supportsAck: false` on both protocols changes
       nothing.
 
-    So the fault is in how `serverProtocol` drives `RpcServer` for a streaming
-    response -- no chunk is produced -- and, separately, in the return routing
-    for a frame sent after the caller has interrupted. Both are in
-    `src/relay/RelayRpc.ts`. Fix the first and the second may not matter, but
-    it is a real bug on its own: a response sent to a live channel was
-    dropped.
+    **Traced again at the bus, which names the second bug exactly.** Logging
+    every frame inside `RelayServer.send` gives the whole conversation:
+
+    ```text
+    vps -> desktop Request  (createSession)   desktop -> vps Exit   routed
+    vps -> desktop Request  (prompt)          desktop -> vps Exit   routed
+    vps -> desktop Request  (events)          <nothing back>
+    vps -> desktop Interrupt
+    vps -> desktop Eof
+                                              desktop -> vps Exit   routed
+    ```
+
+    So two distinct faults, and the second is now precise:
+
+    1. **No chunk is ever produced for the streamed response.** The `events`
+       request reaches the target and `RpcServer` sends nothing for it, for as
+       long as it is left alone. Not acks (`supportsAck: false` on both ends
+       changes nothing), not the caller's idiom (it mirrors the socket test
+       that passes), not resumption. Note the stream *hangs* rather than
+       returning empty, so the response is open and waiting, not finished --
+       worth checking whether this host's `events` is a live tail that never
+       completes where `test/AgentRpc.test.ts`'s completes, which would make
+       the test's expectation wrong rather than the transport.
+    2. **The final `Exit` is routed by the relay and then dropped by the
+       caller.** The last line above shows the relay delivering it. By that
+       point the caller has sent `Eof` and `RelayClient`'s `subscribe`
+       finalizer has already run `handlers.delete(id)`, so `dispatch` finds no
+       handler and drops the envelope on an `Effect.logDebug`. The in-flight
+       request therefore never completes, which is why the symptom is an
+       *uninterruptible* hang: an outer `Effect.timeout` fires, interrupts the
+       request, and then waits forever for an acknowledgement that was thrown
+       away. A protocol must not unsubscribe while it still has requests
+       outstanding, and a dropped envelope for a channel that existed a
+       moment ago deserves better than a debug line.
 
 ### Newly ranked — from the effect-cf research (2026-09-01)
 
