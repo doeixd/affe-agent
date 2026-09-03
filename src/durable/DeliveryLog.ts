@@ -4,6 +4,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 import * as DurablePolling from "./DurablePolling.js"
+import * as Failpoint from "../internal/failpoint.js"
 
 /**
  * Client-facing event delivery, kept apart from the Workflow journal.
@@ -140,6 +141,17 @@ export const decodeEnvelope = (
   )
 
 /**
+ * The durable boundaries inside one `append`, for a test that needs to stop
+ * between them (`src/internal/failpoint.ts`).
+ *
+ * `after-commit` is the one that earns its name. The row is durable and the
+ * publication has not happened, which is exactly the window both
+ * implementations are made uninterruptible to protect and which nothing could
+ * previously reach on purpose.
+ */
+export const failpoints = Failpoint.group("DeliveryLog", ["before-commit", "after-commit"])
+
+/**
  * Payload equality for conflict detection ignores the per-process `sequence`
  * the envelope arrived with: two replays legitimately number the same event
  * differently, and the offset the log assigned is what clients see.
@@ -224,6 +236,7 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
       append: (sessionId, key, envelope) =>
         Effect.gen(function* () {
           const offered = yield* encodeEnvelope(envelope)
+          yield* failpoints.hit("before-commit")
           const outcome = yield* Ref.modify(
             sessions,
             (all): [Staged, Map<string, ReadonlyArray<Entry>>] => {
@@ -249,6 +262,7 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
             }
           )
           if (outcome._tag !== "Pending") return outcome
+          yield* failpoints.hit("after-commit")
           const bus = yield* busFor(sessionId)
           yield* PubSub.publish(bus, outcome.stored)
           return { _tag: "Appended", sequence: outcome.sequence } as const
@@ -399,6 +413,7 @@ export const sqlLog = (
       append: (sessionId, key, envelope) =>
         Effect.gen(function* () {
           const offered = yield* encodeEnvelope(envelope)
+          yield* failpoints.hit("before-commit")
           const outcome = yield* sql
             .withTransaction(
               Effect.gen(function* () {
@@ -428,6 +443,7 @@ export const sqlLog = (
             )
             .pipe(storage("append", sessionId))
           if (outcome._tag !== "Pending") return outcome
+          yield* failpoints.hit("after-commit")
           const bus = yield* busFor(sessionId)
           yield* PubSub.publish(bus, outcome.stored)
           return { _tag: "Appended", sequence: outcome.sequence } as const

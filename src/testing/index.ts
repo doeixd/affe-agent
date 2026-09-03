@@ -1,4 +1,5 @@
 export * as AgentProbe from "./AgentProbe.js"
+export * as Failpoints from "./Failpoints.js"
 export * as ChannelConformance from "./ChannelConformance.js"
 export * as TestLanguageModel from "./TestLanguageModel.js"
 export * as TestWebCapture from "./TestWebCapture.js"

@@ -268,6 +268,7 @@ describe("durable and cluster surfaces", () => {
       "ChannelConformance",
       "DeliveryLogConformance",
       "DurableSessionStoreConformance",
+      "Failpoints",
       "NodeStoreConformance",
       "SandboxConformance",
       "SessionDirectoryConformance",
