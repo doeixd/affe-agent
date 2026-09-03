@@ -858,6 +858,34 @@ sizes; the items are repeated here so this list stays the one tracker.
     which get shorter; sequenced after 26l/26n/26p land so it does not
     cross their edits. Acceptance and the six steps are in the plan.
 
+47. **What to take from their Workflow RFC** (`plan-rfc-286-durable.md`,
+    2026-09-02). A read of `danieljvdm/effect-agent#286` against `/durable`.
+    Their headline goal — any `WorkflowEngine` as a `Layer` — is where
+    `/durable` started, so most of the RFC is not a gap for us. Three items
+    are, ranked in the plan's §2:
+    - **47a. Retry safety declared on the tool.** The one real correctness
+      gap. `DurableToolkit` wraps every handler as an `Activity`, and
+      upstream's `Activity` retries an *interrupted* effect up to ten times
+      (`retryOnInterrupt`, `Schedule.while(attempt <= 10 && hasInterrupts)`) —
+      so a tool interrupted mid-request reissues it, which nothing in our code
+      asked for. A tool should declare `retrySafe` where it already declares
+      `needsApproval`, defaulting to today's behaviour; a non-retry-safe tool
+      whose outcome is unresolved parks the submission the way an `Ask` does,
+      using `DurableDeferred` machinery we already have. Ranked above most of
+      what is left in this list.
+    - **47b. The resume-before-suspension race.** Verified present in the
+      pinned engine: `ClusterWorkflowEngine.resume` returns silently when the
+      execution has not yet recorded a `Suspended` reply
+      (`ClusterWorkflowEngine.ts:273`). We never call it directly and reach it
+      only through `DurableDeferred`, whose engine path looks more careful, so
+      the answer may be "we are fine" — but that is worth *testing* rather
+      than assuming. One test: answer an elicitation before the run awaits it.
+    - **47c. Dispatch intents for the Durable Object host.** Persist an intent
+      before launch, repair in bounded passes, delete only after checking the
+      canonical settlement. It fits precisely where the engine cannot run
+      (the measured workerd stall), and the DO alarm is already the durable
+      trigger it needs. Host-local: `src/durable` does not change.
+
 ### In flight (2026-09-01)
 
 Items 28 and 29 **landed while this section was being written** — `230745d`
