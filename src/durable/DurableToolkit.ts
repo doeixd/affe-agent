@@ -1,7 +1,6 @@
-import { Cause, Effect, Ref, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Ref, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
-import { Toolkit } from "effect/unstable/ai"
-import type { Tool } from "effect/unstable/ai"
+import { Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import { activityName, nextOccurrence } from "../internal/toolActivity.js"
 
@@ -48,6 +47,42 @@ type Journalled = {
 type Outcome =
   | { readonly _tag: "Succeeded"; readonly results: ReadonlyArray<Journalled> }
   | { readonly _tag: "Failed"; readonly failure: AgentEvent.Failure }
+  | { readonly _tag: "Unresolved" }
+
+/**
+ * Whether a tool's handler may be reissued after an interruption.
+ *
+ * Read from `Tool.Idempotent`, upstream's own annotation, rather than from a
+ * field of our own. Its meaning is already exactly the question being asked --
+ * "can this be called again with the same parameters without changing anything
+ * beyond the first call" -- and it is what a tool author annotates anyway,
+ * because it is emitted as the MCP `idempotentHint`. Inventing a second name
+ * for one fact would have every tool declare it twice and eventually disagree.
+ *
+ * Upstream defaults it to `false`, which is the safe default and the one we
+ * want: a tool nobody has thought about is assumed to have side effects.
+ */
+export const isRetrySafe = (tool: Tool.Any): boolean => Context.get(tool.annotations, Tool.Idempotent)
+
+/**
+ * Raised when a tool's outcome cannot be known.
+ *
+ * The handler was interrupted after it may already have done its work, and the
+ * tool is not annotated `Tool.Idempotent`, so running it again could issue the
+ * side effect twice. Neither answer is available, and inventing one would be
+ * worse than saying so.
+ */
+export class DurableToolUnresolvedError extends Schema.TaggedError<DurableToolUnresolvedError>()(
+  "DurableToolUnresolvedError",
+  {
+    toolName: Schema.String,
+    toolCallId: Schema.String
+  }
+) {
+  override get message() {
+    return `Tool ${this.toolName} was interrupted and is not retry-safe, so its outcome is unknown`
+  }
+}
 
 /**
  * The schema a tool's results are journalled under.
@@ -118,17 +153,20 @@ export class DurableToolFailure extends Schema.TaggedError<DurableToolFailure>()
   }
 }
 
+/**
+ * What running an `Activity` needs, named once.
+ *
+ * Callers -- including tests -- otherwise have to restate the pair, and a
+ * caller restating a requirement is a signature the library should have
+ * provided.
+ */
+export type WorkflowContext = WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>
-): Effect.Effect<
-  Toolkit.WithHandler<Tools>,
-  never,
-  WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
-> =>
+): Effect.Effect<Toolkit.WithHandler<Tools>, never, WorkflowContext> =>
   Effect.gen(function* () {
-    const workflowContext = yield* Effect.context<
-      WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
-    >()
+    const workflowContext = yield* Effect.context<WorkflowContext>()
 
     // See `nextOccurrence`: identity counts repeats of a given call, rather
     // than position in a global sequence.
@@ -165,8 +203,10 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
 
         const outcomeSchema = Schema.Union([
           Schema.TaggedStruct("Succeeded", { results: resultsSchema(tool) }),
-          Schema.TaggedStruct("Failed", { failure: AgentEvent.Failure })
+          Schema.TaggedStruct("Failed", { failure: AgentEvent.Failure }),
+          Schema.TaggedStruct("Unresolved", {})
         ])
+        const retrySafe = isRetrySafe(tool)
 
         const outcome = (yield* Activity.make({
           name: activityName(index, String(name), id),
@@ -182,20 +222,53 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
                 results: results.map(toJournal)
               })
             ),
-            Effect.catchCause((cause): Effect.Effect<Outcome> =>
-              // Interruption is the run going away, not a tool outcome; it must
-              // stay interruption rather than becoming a persisted failure.
-              Cause.hasInterruptsOnly(cause)
-                ? // Interruption carries no typed error, so re-raising it
-                  // cannot widen the outcome's error channel.
-                  (Effect.failCause(cause) as unknown as Effect.Effect<Outcome>)
-                : Effect.succeed<Outcome>({
-                    _tag: "Failed",
-                    failure: AgentEvent.failureFromCause(cause)
-                  })
-            )
+            Effect.catchCause((cause): Effect.Effect<Outcome> => {
+              if (!Cause.hasInterruptsOnly(cause)) {
+                return Effect.succeed<Outcome>({
+                  _tag: "Failed",
+                  failure: AgentEvent.failureFromCause(cause)
+                })
+              }
+              // An interrupted handler, and what upstream does with it.
+              //
+              // `Activity.make` wraps its `execute` in `retryOnInterrupt`,
+              // whose default schedule retries *while the cause has
+              // interrupts*, up to ten attempts. So re-raising interruption
+              // here does not end the call: it reissues the handler, and a
+              // tool that charges a card charges it again. Nothing in this
+              // library asked for that, and it is invisible because the retry
+              // looks like ordinary durability.
+              //
+              // For a retry-safe tool that behaviour is fine and is kept:
+              // re-raising is what lets an interrupted-by-infrastructure call
+              // resume. Interruption carries no typed error, so re-raising it
+              // cannot widen the outcome's error channel.
+              if (retrySafe) {
+                return Effect.failCause(cause) as unknown as Effect.Effect<Outcome>
+              }
+              // Otherwise the call must not run twice. Recording `Unresolved`
+              // as a *success* of the activity is what stops it: the cause the
+              // retry schedule inspects no longer has interrupts, so nothing
+              // is reissued, and the journal now holds an entry for this call,
+              // so a later replay returns it instead of executing the handler
+              // again. The wrapper turns it back into a typed failure below.
+              //
+              // What this does not do: if the process dies before the engine
+              // persists this entry, the call is unjournalled and a replay
+              // will run it. No code here can close that window -- only the
+              // engine's write can -- so the claim is at-most-once for
+              // interruption, not for power loss.
+              return Effect.succeed<Outcome>({ _tag: "Unresolved" })
+            })
           )
         }).pipe(Effect.provide(workflowContext))) as Outcome
+
+        if (outcome._tag === "Unresolved") {
+          return yield* new DurableToolUnresolvedError({
+            toolName: String(name),
+            toolCallId: id
+          })
+        }
 
         if (outcome._tag === "Failed") {
           return yield* new DurableToolFailure({
