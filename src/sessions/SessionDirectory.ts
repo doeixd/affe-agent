@@ -416,8 +416,8 @@ const rowToEntry = (row: Row): Effect.Effect<Entry, StorageError> =>
 export const sql = (
   options?: { readonly table?: string | undefined }
 ): Effect.Effect<SessionDirectory, never, SqlClient.SqlClient> =>
-  Effect.map(SqlClient.SqlClient, (sql) => {
-    const table = sql.literal(escapeIdentifier(options?.table ?? sqlTable))
+  Effect.map(SqlClient.SqlClient, (client) => {
+    const table = client.literal(escapeIdentifier(options?.table ?? sqlTable))
 
     const storage =
       (operation: string, sessionId?: string) =>
@@ -432,7 +432,7 @@ export const sql = (
               }))
 
     const readRow = (sessionId: string) =>
-      sql<Row>`SELECT * FROM ${table} WHERE session_id = ${sessionId}`.pipe(
+      client<Row>`SELECT * FROM ${table} WHERE session_id = ${sessionId}`.pipe(
         Effect.map((rows) => Option.fromNullishOr(rows[0]))
       )
 
@@ -460,20 +460,30 @@ export const sql = (
      */
     const ensure = (sessionId: string, now: number) =>
       Effect.flatMap(Effect.all([encodeStats(emptyStats), encodeAttributes({})]), ([stats, attributes]) =>
-        sql`INSERT INTO ${table} (session_id, name, namespace, attributes, stats, active, created_at, updated_at) SELECT ${sessionId}, NULL, ${defaultNamespace}, ${attributes}, ${stats}, 0, ${now}, ${now} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE session_id = ${sessionId})`)
+        client`INSERT INTO ${table} (session_id, name, namespace, attributes, stats, active, created_at, updated_at) SELECT ${sessionId}, NULL, ${defaultNamespace}, ${attributes}, ${stats}, 0, ${now}, ${now} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE session_id = ${sessionId})`)
 
+    /**
+     * Read, change, write, in one transaction. Under read-committed
+     * isolation a concurrent `annotate` can commit between the read and
+     * the write and lose its keys to this one: last writer wins on the
+     * whole row. Tolerable for an index whose every field a human can
+     * re-set and whose stats the next event rewrites -- and named here
+     * rather than papered over, as the durable store does for its own
+     * remaining gap on `takeAnswer`. A directory that needs the merge to
+     * be exact under contention wants a per-key table, not a JSON column.
+     */
     const update = (
       operation: string,
       sessionId: SessionId,
       change: (entry: Entry, now: number) => Entry
     ): Effect.Effect<Entry, SessionNotIndexed | StorageError> =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        sql.withTransaction(
+        client.withTransaction(
           Effect.gen(function* () {
             const current = yield* entryOrMissing(operation, sessionId)
             const next = change(current, now)
             const [stats, attributes] = yield* Effect.all([encodeStats(next.stats), encodeAttributes(next.attributes)])
-            yield* sql`UPDATE ${table} SET name = ${Option.getOrNull(next.name)}, namespace = ${next.namespace}, attributes = ${attributes}, stats = ${stats}, active = ${isActive(next.stats) ? 1 : 0}, updated_at = ${next.updatedAt} WHERE session_id = ${sessionId}`
+            yield* client`UPDATE ${table} SET name = ${Option.getOrNull(next.name)}, namespace = ${next.namespace}, attributes = ${attributes}, stats = ${stats}, active = ${isActive(next.stats) ? 1 : 0}, updated_at = ${next.updatedAt} WHERE session_id = ${sessionId}`
             return next
           })
         ).pipe(storageKeeping(operation, sessionId)))
@@ -495,11 +505,11 @@ export const sql = (
         // One more than asked, so `next` is known without a count query.
         const rows = yield* (namespace === undefined
           ? (onlyActive
-            ? sql<Row>`SELECT * FROM ${table} WHERE session_id > ${after} AND active = 1 ORDER BY session_id LIMIT ${limit + 1}`
-            : sql<Row>`SELECT * FROM ${table} WHERE session_id > ${after} ORDER BY session_id LIMIT ${limit + 1}`)
+            ? client<Row>`SELECT * FROM ${table} WHERE session_id > ${after} AND active = 1 ORDER BY session_id LIMIT ${limit + 1}`
+            : client<Row>`SELECT * FROM ${table} WHERE session_id > ${after} ORDER BY session_id LIMIT ${limit + 1}`)
           : (onlyActive
-            ? sql<Row>`SELECT * FROM ${table} WHERE session_id > ${after} AND namespace = ${namespace} AND active = 1 ORDER BY session_id LIMIT ${limit + 1}`
-            : sql<Row>`SELECT * FROM ${table} WHERE session_id > ${after} AND namespace = ${namespace} ORDER BY session_id LIMIT ${limit + 1}`))
+            ? client<Row>`SELECT * FROM ${table} WHERE session_id > ${after} AND namespace = ${namespace} AND active = 1 ORDER BY session_id LIMIT ${limit + 1}`
+            : client<Row>`SELECT * FROM ${table} WHERE session_id > ${after} AND namespace = ${namespace} ORDER BY session_id LIMIT ${limit + 1}`))
         const entries = yield* Effect.forEach(rows.slice(0, limit), rowToEntry)
         const last = entries[entries.length - 1]
         return {
@@ -532,10 +542,10 @@ export const sql = (
       record: (sessionId, stats) =>
         Effect.flatMap(Clock.currentTimeMillis, (now) =>
           Effect.flatMap(encodeStats(stats), (encoded) =>
-            sql.withTransaction(
+            client.withTransaction(
               ensure(sessionId, now).pipe(
                 Effect.andThen(
-                  sql`UPDATE ${table} SET stats = ${encoded}, active = ${isActive(stats) ? 1 : 0}, updated_at = ${now} WHERE session_id = ${sessionId}`
+                  client`UPDATE ${table} SET stats = ${encoded}, active = ${isActive(stats) ? 1 : 0}, updated_at = ${now} WHERE session_id = ${sessionId}`
                 ),
                 Effect.andThen(entryOrMissing("record", sessionId))
               )
@@ -585,11 +595,11 @@ export const sqlWithTable = (
  * an index, and an index that lags by a debounce window answers "is this
  * session active" wrongly for exactly that window.
  */
-export const follow = (
+export const follow: (
   directory: SessionDirectory,
   events: Stream.Stream<AgentProtocol.HostEvent, never>
-): Effect.Effect<void, StorageError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<void, StorageError> = Effect.fn("SessionDirectory.follow")(
+  function* (directory: SessionDirectory, events: Stream.Stream<AgentProtocol.HostEvent, never>) {
     const projections = yield* Ref.make<ReadonlyMap<SessionId, SessionProjection.Projection>>(new Map())
 
     const fold = (envelope: AgentEventEnvelope) =>
@@ -619,4 +629,5 @@ export const follow = (
           })
       }
     })
-  })
+  }
+)
