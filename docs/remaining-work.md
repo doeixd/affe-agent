@@ -737,15 +737,36 @@ open, so the next pass does not have to re-derive it.
     reliably enough, the scope closes with the tree alive, and the workspace
     stays held until the child ends on its own.
 
-    **The fix is in `src/sandbox/local.ts`, and one obvious form of it is
-    wrong**: making the Windows kill `spawnSync` hangs the release outright
-    (measured: 62s against a 60s timeout). What is wanted is for the release
-    to await the process actually being gone -- poll `process.kill(pid, 0)`
-    rather than trust a fixed deadline and a `taskkill` this platform does not
-    promise to complete promptly. Fixing it makes `Terminated` honest for
-    every caller of `execStream`, which is why it belongs there and not here.
-    `ProcessManager` and its corrected test are in the working tree waiting on
-    it.
+    **The fix is in `src/sandbox/local.ts`. Two forms of it are already
+    eliminated, and the third finding changes what the fix has to be.**
+
+    - Making the Windows kill `spawnSync` hangs the release outright
+      (measured: 62s against a 60s timeout).
+    - Having the release *poll* `process.kill(pid, 0)` until the process is
+      really gone, instead of trusting the exit event and a fixed deadline,
+      does not help either -- because the process never dies at all.
+    - **`spawn("taskkill", ...)` does not run in this environment.** Reduced
+      to twenty lines with no Effect and no vitest: async-spawn `taskkill
+      /pid <n> /T /F` against a live `node -e setTimeout` child and it emits
+      **neither `exit` nor `error`**, and the child is still alive seconds
+      later. Four option sets were tried -- `stdio:"ignore"` with
+      `windowsHide`, each alone, and plain defaults -- with identical
+      results. `spawnSync` with the same arguments *does* run it, returning
+      status 1 and "This operation returned because the timeout period
+      expired" while the child dies a few hundred milliseconds afterwards.
+
+    So the tree-kill's Windows branch is firing into the void: no signal
+    reaches the child, which is why every deadline and every poll above only
+    changed how long we waited to observe the same live process. Before
+    writing a fix, settle whether that async-spawn failure is a property of
+    this machine (it is under heavy process pressure -- `vitest.config.ts`
+    already documents Windows handle exhaustion here, `0xC0000142`, from
+    concurrent runs) or of Windows generally, because the answer decides
+    whether the fix is a more reliable kill or a retry-and-verify loop around
+    an unreliable one. Reproduce on an idle machine first. Nothing is
+    committed from this attempt: `src/sandbox/local.ts` is untouched at
+    `HEAD`, and `ProcessManager` with its corrected test waits in the working
+    tree.
 
 26p. **Relay transport** (`plan-relay.txt`) — server and client, peer
     directory, enrollment credentials, durable mailbox over `PersistedQueue`,
