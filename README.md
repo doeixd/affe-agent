@@ -211,7 +211,7 @@ says what a change there means for you, not how good the code is.
 | --- | --- | --- |
 | **core** | the vocabulary; a breaking change here is a major version | root, `/client`, `/elicitation`, `/testing` |
 | **supported** | contract-tested against the reference apps and the [cross-adapter matrix](./docs/conformance-matrix.md); changes are deliberate and noted in `STATUS.md` | `/http`, `/rpc`, `/mcp`, `/mcp/v1`, `/mcp/v2`, `/ag-ui`, `/a2a`, `/coding`, `/sandbox`, `/sandbox/local`, `/shell`, `/state`, `/hooks`, `/observability`, `/export`, `/compaction`, `/redaction`, `/budget`, `/subagent` |
-| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/code`, `/code/callscript`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/sessions`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/web/cloudflare`, `/cloudflare`, `/pi`, `/model`, `/blob`, `/blob/fs`, `/presets` |
+| **experimental** | the fastest-moving surface; shapes may change between minors as the plans under `docs/` land | `/durable`, `/cluster`, `/durable-streams`, `/tool-source`, `/code`, `/process`, `/code/callscript`, `/plugins`, `/skills`, `/memory`, `/evals`, `/scheduling`, `/data`, `/connectors`, `/connectors/slack`, `/tree`, `/sessions`, `/openai`, `/web`, `/web/brave`, `/web/http`, `/web/cloudflare`, `/cloudflare`, `/pi`, `/model`, `/blob`, `/blob/fs`, `/presets` |
 | **reference** | illustrative, not a dependency: read it, copy it, do not import it | `apps/tui`, `apps/cli`, `apps/worker`, `examples/` |
 
 Engine-facing seams are on none of these namespaces. What a durable

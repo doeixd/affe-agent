@@ -75,6 +75,10 @@
       "types": "./dist/export/index.d.ts",
       "default": "./dist/export/index.js"
     },
+    "./process": {
+      "types": "./dist/process/index.d.ts",
+      "default": "./dist/process/index.js"
+    },
     "./sessions": {
       "types": "./dist/sessions/index.d.ts",
       "default": "./dist/sessions/index.js"
