@@ -1034,14 +1034,27 @@ sizes; the items are repeated here so this list stays the one tracker.
     currently answered by reading the code. This session is the example --
     the relay review found two real defects and the test written for them
     passes with the fix removed. Ranked in that plan's §2:
-    - **48a. Retry safety on the tool** -- 47a restated, still unimplemented
-      (`grep retrySafe src/` is empty). Ships first because it is a live bug:
-      an interrupted tool is reissued up to ten times by upstream's
-      `Activity`, which nothing asked for.
-    - **48b. Failpoints** -- a `Context.Reference` defaulting to a no-op,
-      called at named durable boundaries, with a closed location schema per
-      subsystem. The largest new idea, and what makes 48a, 48c and 48d
-      provable rather than argued.
+    - **48a. Retry safety on the tool** -- ~~open~~ **SHIPPED 2026-09-03**
+      (`8c46e3a`). Read from `Tool.Idempotent` rather than a `retrySafe` field
+      of our own: the annotation already means exactly this, is emitted as the
+      MCP `idempotentHint`, and defaults to `false`, which is the safe default.
+      An interrupted non-idempotent handler journals `Unresolved` as a
+      *success* of the activity, which is what stops the reissue -- the cause
+      the retry schedule inspects no longer has interrupts -- and also stops a
+      replay from running it. Raised as `DurableToolUnresolvedError`.
+      Deliberately a behaviour change for every existing agent. The window it
+      does not close, stated in the code: a process that dies before the
+      engine persists that entry leaves the call unjournalled. At-most-once
+      for interruption, not for power loss.
+    - **48b. Failpoints** -- ~~open~~ **SHIPPED 2026-09-03** (`de132b4`).
+      `src/internal/failpoint.ts` is the seam, `src/testing/Failpoints.ts` the
+      half a test provides. `DeliveryLog.append` is instrumented in both
+      implementations with `before-commit` / `after-commit`, and the test that
+      matters crashes the SQL log after the commit: the row is there once, the
+      retry is a `Duplicate`, and the next event is 2 rather than 3, because a
+      crash must not burn an offset. Removing the boundary makes it fail.
+      Still to point it at, from this plan's §3.2: the model-call boundary in
+      `DurableSubmission`, and the relay's teardown.
     - **48c. Never acknowledge on the engine's word** -- reconcile the
       engine's answer against canonical state before completing a waiter,
       and retain the intent on disagreement.
