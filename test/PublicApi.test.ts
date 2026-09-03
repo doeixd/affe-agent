@@ -270,6 +270,7 @@ describe("durable and cluster surfaces", () => {
       "DurableSessionStoreConformance",
       "NodeStoreConformance",
       "SandboxConformance",
+      "SessionDirectoryConformance",
       "TestLanguageModel",
       "TestWebCapture",
       "TestWebCrawl",
