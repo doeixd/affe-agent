@@ -61,10 +61,7 @@ describe("SessionInbox", () => {
           const first = yield* inbox.deliver
           const second = yield* inbox.deliver
           assert.deepStrictEqual(
-            [
-              first._tag === "Some" ? first.value.id : "",
-              second._tag === "Some" ? second.value.id : ""
-            ],
+            [first.item.id, second.item.id],
             ["process:proc-1:exit", "monitor:deploy-health:healthy"],
             "the duplicate was enqueued: it arrived instead of the next completion"
           )
@@ -125,23 +122,27 @@ describe("SessionInbox", () => {
 
           yield* inbox.enqueue(item())
           const delivered = yield* inbox.deliver
-          assert.isTrue(delivered._tag === "Some")
-          assert.strictEqual(
-            delivered._tag === "Some" ? delivered.value.id : "",
-            "process:proc-1:exit"
-          )
+          assert.strictEqual(delivered._tag, "Delivered")
+          assert.strictEqual(delivered.item.id, "process:proc-1:exit")
         }))
       }).pipe(Effect.provide(layer))
     }))
 
-  it.effect("an unknown session is reported once, not retried ten times", () =>
+  it.effect("an unknown session is consumed and reported, not retried", () =>
     Effect.gen(function* () {
+      // The distinction the `Outcome` type exists for. `PersistedQueue.take`
+      // retries whatever fails, so a permanent problem expressed as a failure
+      // would be attempted ten times to learn the same thing ten times. An
+      // item addressed to a session that cannot be reached is therefore a
+      // *success* -- consumed, with a reason -- and only the transient cases
+      // fail.
       const layer = yield* harness([TestLanguageModel.text("noted")])
       yield* Effect.gen(function* () {
-        const inbox = yield* SessionInbox.make({ maxAttempts: 2 })
+        const inbox = yield* SessionInbox.make()
         yield* inbox.enqueue(item({ sessionId: "never-created" }))
-        const outcome = yield* Effect.exit(inbox.deliver)
-        assert.isTrue(outcome._tag === "Failure", "delivering to an unknown session succeeded")
+        const outcome = yield* inbox.deliver
+        assert.strictEqual(outcome._tag, "Undeliverable")
+        assert.strictEqual(outcome.item.sessionId, "never-created")
       }).pipe(Effect.provide(layer))
     }))
 })
