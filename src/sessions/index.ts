@@ -16,3 +16,4 @@
  */
 export * as SessionProjection from "./SessionProjection.js"
 export * as SessionDirectory from "./SessionDirectory.js"
+export * as SessionInbox from "./SessionInbox.js"
