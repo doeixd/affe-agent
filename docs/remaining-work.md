@@ -701,18 +701,51 @@ open, so the next pass does not have to re-derive it.
     child exits by itself and finally releases the workspace directory the
     outer `fs.rm` is retrying against.
 
-    The test passes throughout because it asserts the manager's own
+    The test passed throughout because it asserted the manager's own
     bookkeeping (`status` is `Terminated`, which `finish` set regardless) and
-    because its stopwatch stops *before* the teardown that does the waiting.
-    A test that is green while the behaviour it names is false is the case
-    `CLAUDE.md` singles out, so the first job here is the assertion, not the
-    timeout: assert the process is actually gone -- the workspace removes
-    promptly, or total elapsed is far below the child's sleep -- and watch it
-    fail. Then decide whether the fix belongs in `ProcessManager` (observe the
-    exit rather than assume it) or in the local sandbox provider's
-    interruption path (`Sandbox.execStream`), which is where the tree-kill is
-    supposed to live. Only the second makes `Terminated` honest for every
-    caller of the sandbox, not just this one.
+    because its stopwatch stopped *before* the teardown that did the waiting.
+    A test green while the behaviour it names is false is the case `CLAUDE.md`
+    singles out.
+
+    **Diagnosed 2026-09-02, and it is not `ProcessManager`'s bug.** Chased to
+    the bottom, in this order. A corrected assertion first: once the manager
+    has closed, removing the workspace with `maxRetries: 0` must succeed,
+    because Windows will not delete a directory that a live process holds as
+    its cwd. That fails in 4s with the process still holding it. Two weaker
+    assertions were tried and rejected on the way -- the reported status, and
+    a file the child writes later, which the workspace's own one-second idle
+    cleanup deletes before it can be read, so it passes vacuously.
+
+    A twelve-line probe then took `ProcessManager` out of the picture
+    entirely: fork a fibre running `Stream.runForEach` over
+    `sandbox.execStream`, interrupt it, and the child still holds the
+    directory. **So interrupting an `execStream` reader does not end the tree,
+    and that is true for every caller of the sandbox, not just this module.**
+    Note the contrast with `Sandbox.test.ts`'s "stopping ends it", which
+    passes: a stream that *completes* (`Stream.take(1)`) does kill the tree.
+    Completion is tested; interruption was not.
+
+    Instrumenting `local.ts` shows the release is not the problem and neither
+    is the manager: on interruption the release does run, does see a live
+    child, and does call `killTree` with a valid pid (twice -- `SIGTERM`, then
+    the 1s `SIGKILL`). The Windows branch of `killTree` spawns
+    `taskkill /pid <n> /T /F` **asynchronously and never waits for it**, and
+    the release then resumes on its own 2.5s deadline. Measured directly
+    outside Effect on this machine, that `taskkill` returns status 1 with
+    "This operation returned because the timeout period expired" and the child
+    dies only some hundreds of milliseconds later -- so the 2.5s window is not
+    reliably enough, the scope closes with the tree alive, and the workspace
+    stays held until the child ends on its own.
+
+    **The fix is in `src/sandbox/local.ts`, and one obvious form of it is
+    wrong**: making the Windows kill `spawnSync` hangs the release outright
+    (measured: 62s against a 60s timeout). What is wanted is for the release
+    to await the process actually being gone -- poll `process.kill(pid, 0)`
+    rather than trust a fixed deadline and a `taskkill` this platform does not
+    promise to complete promptly. Fixing it makes `Terminated` honest for
+    every caller of `execStream`, which is why it belongs there and not here.
+    `ProcessManager` and its corrected test are in the working tree waiting on
+    it.
 
 26p. **Relay transport** (`plan-relay.txt`) — server and client, peer
     directory, enrollment credentials, durable mailbox over `PersistedQueue`,
