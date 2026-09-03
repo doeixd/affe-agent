@@ -1,6 +1,6 @@
 # Plan: what to take from their Workflow RFC, and what to leave
 
-**Status: specified 2026-09-02, nothing implemented.** Written from a read of
+**Status: specified 2026-09-02; §3.2 answered and pinned the same day, §3.1 and §3.3 not started.** Written from a read of
 [danieljvdm/effect-agent#286](https://github.com/danieljvdm/effect-agent/issues/286),
 "RFC: Run agents with any Effect Workflow engine", opened the same day by the
 author of `effect-cf` — the same project
@@ -53,7 +53,7 @@ better.
 | # | item | size | why here |
 | --- | --- | --- | --- |
 | 1 | **Retry safety declared on the tool** (§3.1) | medium | A real correctness gap on the one thing durability exists to protect: an external side effect. Ranked above most of what is left in `remaining-work.md`. |
-| 2 | **The resume-before-suspension race** (§3.2) | small | Verified present in our pinned engine. Cheap to test, and either result is worth having. |
+| 2 | ~~**The resume-before-suspension race**~~ (§3.2) | small | **Done 2026-09-02**: verified present in the engine, verified *not* to reach us, and pinned by a test. |
 | 3 | **Dispatch intents for the Durable Object host** (§3.3) | medium | The one structural idea that fits a host where the workflow engine cannot run. |
 
 ## 3. The items
@@ -153,8 +153,17 @@ sends a persisted entity message rather than returning. So the answer may well
 be "the deferred path is durable and we are fine", which is a good result to
 record rather than a milestone to miss.
 
-**Acceptance.** One test: answer an elicitation *before* the run reaches its
-await, and assert the submission still completes. If it parks forever, the
+**Answered 2026-09-02: it does not reach us.** The test below was written and
+passes: an elicitation answered immediately after launch -- while the run is
+still in its first model call and has not reached the elicitation at all -- is
+honoured, and honoured once. `DurableDeferred` stores the answer durably, so
+the workflow reads it when it later awaits rather than needing a wake to
+arrive in the right order. Broken once by deleting the answer, which parks the
+submission and fails with that sentence. So the deferred indirection is what
+saves us, and it is now pinned rather than assumed.
+
+**Acceptance (met).** One test: answer an elicitation *before* the run reaches
+its await, and assert the submission still completes. If it parks forever, the
 race reaches us and the fix is ours to choose. Either way the outcome is
 recorded in `status-history.md`, and if it is upstream's, it joins
 `docs/upstream/` beside the workerd finding.

@@ -873,7 +873,14 @@ sizes; the items are repeated here so this list stays the one tracker.
       whose outcome is unresolved parks the submission the way an `Ask` does,
       using `DurableDeferred` machinery we already have. Ranked above most of
       what is left in this list.
-    - **47b. The resume-before-suspension race.** Verified present in the
+    - **47b.** ~~**The resume-before-suspension race.**~~ **Answered
+      2026-09-02: it does not reach us.** The race is real in the pinned
+      engine, and the indirection saves us. Pinned by "an answer that arrives
+      before the workflow suspends is not lost" in `test/Durable.test.ts`,
+      which answers an elicitation immediately after launch, while the run is
+      still in its first model call; broken once by deleting the answer, which
+      parks the submission and reports exactly that. Original scope: verified
+      present in the
       pinned engine: `ClusterWorkflowEngine.resume` returns silently when the
       execution has not yet recorded a `Suspended` reply
       (`ClusterWorkflowEngine.ts:273`). We never call it directly and reach it

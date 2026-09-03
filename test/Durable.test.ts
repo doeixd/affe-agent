@@ -1023,6 +1023,86 @@ describe("elicitation under durability", () => {
       assert.strictEqual(yield* Ref.get(ran), 1)
     })
   )
+
+  it.live("an answer that arrives before the workflow suspends is not lost", () =>
+    Effect.gen(function* () {
+      // `remaining-work.md` 47b, from their RFC (`plan-rfc-286-durable.md`
+      // Sec 3.2). The pinned `ClusterWorkflowEngine.resume` returns silently
+      // when the execution has not yet recorded a `Suspended` reply
+      // (`ClusterWorkflowEngine.ts:273`), so a wake that overtakes the
+      // suspension it is meant to answer can be dropped. We never call that
+      // `resume`; we reach the engine through `DurableDeferred`. This asks
+      // whether that indirection saves us.
+      //
+      // The sibling test above sleeps 300ms first, so the workflow has
+      // certainly suspended before the answer arrives -- the easy ordering.
+      // This one answers immediately after launch, while the run is still in
+      // its first model call and has not reached the elicitation at all. The
+      // elicitation id is derived, not discovered, which is what makes
+      // answering a question that has not been asked yet expressible.
+      const ran = yield* Ref.make(0)
+      const Dangerous = Tool.make("wipe", {
+        parameters: Schema.Struct({}),
+        success: Schema.String
+      }).setNeedsApproval(true)
+
+      const toolkit = yield* Agent.toolkit([Dangerous], {
+        wipe: () => Ref.update(ran, (n) => n + 1).pipe(Effect.as("wiped"))
+      })
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: model } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "w1", name: "wipe", params: {} }] },
+        { text: "done" }
+      ])
+
+      const durable = DurableAgent.workflow(
+        "ApprovalEarly",
+        Agent.make({ toolkit, loop: AgentLoop.bounded(4) }),
+        { store }
+      )
+
+      yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "answer-early", "go")
+
+        // No sleep: this is the whole point of the test.
+        yield* DurableElicitation.respond({
+          workflow: durable.definition,
+          executionId,
+          response: { id: Ids.elicitationId("submission-1", 1), granted: true }
+        })
+
+        // Bounded *under* vitest's 5s default, so a dropped answer fails with
+        // the sentence below rather than with a bare "test timed out" that
+        // says nothing about which of the two orderings broke.
+        const exit = yield* DurableAgent.result(durable, executionId, {
+          interval: Duration.millis(20)
+        }).pipe(
+          Effect.timeout(Duration.seconds(3)),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.die(
+              new Error(
+                "the submission never settled: the answer arrived before the suspension and was dropped"
+              )
+            ))
+        )
+        assert.isTrue(
+          Exit.isSuccess(exit),
+          `the early-approved submission did not finish: ${JSON.stringify(exit)}`
+        )
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      // The answer was honoured, and honoured once.
+      assert.strictEqual(yield* Ref.get(ran), 1)
+    })
+  )
 })
 
 describe("compaction under durability", () => {
