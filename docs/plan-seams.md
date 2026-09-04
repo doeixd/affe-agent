@@ -48,8 +48,8 @@ ordinary tool" is elegant, and is exactly why nobody ever had to choose.
    item 53 are all instances of it.
 3. ~~**C. One accessor for an agent's effective tools**~~ — **shipped**; the
    audit found one caller rather than many, and §3.3 records the correction.
-4. **D. A combination matrix** — so the next gap is a blank cell rather than an
-   outage.
+4. ~~**D. A combination matrix**~~ — **shipped**; §3.4 records what it found,
+   and items 56–57 are the backlog it generated.
 5. **E. `Agent.Any`, extracted from item 46** — cheap, and users hit it.
 6. **F. Make `remaining-work.md` unable to lie** — it misdirected twice today.
 
@@ -185,7 +185,7 @@ already run and came back nearly empty.
 
 **Size.** Small, and it stayed small.
 
-### 3.4 (D) A combination matrix
+### 3.4 (D) A combination matrix — **shipped 2026-09-04**
 
 **The gap.** Tests are organised by module, so pairs are untested *by
 construction*. Every bug in §1 would have been a blank cell.
@@ -209,6 +209,23 @@ the point.
 
 **Size.** The table is an afternoon. The missing cells are the backlog it
 generates, which is the value.
+
+**Shipped**, as the second table in `conformance-matrix.md`, eleven concerns
+against four contexts. Two things the sketch above did not anticipate:
+
+* One cell could not be filled by writing a footnote, because it made a claim
+  nothing had run — principal crossing a delegation, asserted in §1 from
+  reading the mechanism. `test/SubagentPrincipal.test.ts` now asserts it in
+  both directions (a child reads the caller's identity; a child under no
+  principal reads `None` rather than a previous run's). It matters more than
+  its neighbours because it is the *only* row in that column that crosses, and
+  a reader who learned the pattern from budget and approval would assume the
+  opposite.
+* The backlog it generated is smaller than expected and is **items 56 and 57**:
+  run limits across a delegation (suspected, unmeasured, same shape as 52) and
+  a tool holding a resource when the connection rather than the run dies. The
+  rest of the blanks turned out to be honest `n/a`s with reasons, which is the
+  discipline the adapter table already had.
 
 ### 3.5 (E) `Agent.Any`, extracted from item 46
 

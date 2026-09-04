@@ -70,3 +70,96 @@ cursor has no A2A form.
   interrupted" as the test's failure unless it drains rather than pre-empts
   (`disablePreemptiveShutdown`), and two prompts racing to open one session
   must treat `AgentSessionAlreadyExistsError` as success.
+
+
+# Cross-cutting concerns against execution contexts
+
+*Added 2026-09-04 (`plan-seams.md` item D), after a pass of tests that combine
+features rather than exercise them one at a time. Every bug that pass found was
+a blank cell in this table before the table existed.*
+
+The matrix above compares five adapters answering the same questions. This one
+asks a different thing: a concern that is *cross-cutting* -- a ceiling, a
+policy, an identity, a lifetime -- has to keep meaning the same when the run it
+governs is replayed, carried over a wire, or handed to another agent. It
+usually does not, and it fails silently: the submission settles, the text reads
+correctly, and the number is wrong.
+
+Same discipline as above. A cell is a test, or it is a declaration with a
+reason. **"Not tested" is written as such and is the point of the table** --
+the empty cells are its output, not its incompleteness.
+
+| concern | in-process | durable (replay) | behind a wire | delegated (subagent) |
+| --- | --- | --- | --- | --- |
+| token / cost ceiling | `Budget` | `BudgetCombinations` ¹ | n/a ² | **item 52** ³ |
+| run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | **not tested** ⁵ |
+| tool approval | `Permission` | `DurablePermission` | contract row | **item 53** ⁶ |
+| elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | **item 53** ⁶ |
+| principal | `Principal` | `Principal` | `Principal`, relay stamp | `SubagentPrincipal` ⁷ |
+| declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | text only ⁸ |
+| typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
+| cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | **not tested** ⁹ | `Subagent.helper`, `ToolCleanup` |
+| tool retry safety | n/a ¹⁰ | `DurableToolRetry` | n/a ¹⁰ | `SubagentDurable` ¹¹ |
+| events resumption | n/a ¹² | contract row | contract row | n/a ¹³ |
+| idempotent mutation | contract row | contract row | contract row | n/a ¹⁴ |
+
+¹ **Found here, fixed here.** A two-turn script that suspended once made two
+model calls and recorded three turns of spend: the journal replayed the call
+correctly, but the *loop* ran again and charged a response already paid for.
+Fixed by keying each charge on `(runId, turnIndex)`; the test asserted the
+wrong number until the fix landed, deliberately, so the suite stayed green
+while recording a bug it could not yet fix.
+
+² A ceiling is a property of the loop, not of the transport. No wire carries or
+enforces one, and a host that wanted to would be imposing its own.
+
+³ `Budget.within` is a loop combinator and a child agent has its own loop, so
+an unbudgeted child spends through a model and is charged to nobody. A parent
+capped at N can spend without limit by delegating -- which is the shape of an
+agent capped *because* it delegates.
+
+⁴ The rule the budget broke, verified positively here: `maxTurns` and
+`maxToolCalls` read derived state and are replay-safe, and `maxDuration` does
+**not** count the time a run spent parked. Had it, the runs a duration limit
+killed would have been exactly the ones durability exists for -- parked on an
+approval, or on a human who went home.
+
+⁵ Expected to be the same gap as ³, for the same reason -- a child has its own
+loop -- but untested. A blank cell rather than an assumption.
+
+⁶ A tool marked `needsApproval` asks for an approval, and a session answers
+that from its elicitation seam. `Subagent.tool` opens the child with
+`Agent.run`, which has no elicitor, so the request is refused and the tool
+never runs. The child's *policy* does not decide it: `allowAll` changes
+nothing, which is what separates this from an ordinary denial. Marking a tool
+as needing approval disables it rather than protecting it.
+
+⁷ Verified rather than assumed. `plan-seams.md` claimed principal crosses a
+delegation because a `Context.Reference` on the fibre crosses; that was read
+from the mechanism, and is now read from a test.
+
+⁸ Not a bug: `Subagent.tool` declares `success: Schema.String` and maps the
+child's result to its text. A child's declared `Value` therefore does not reach
+the parent as a value. Worth knowing before designing a typed child.
+
+⁹ A tool holding a process or a lock when the *connection* dies, rather than
+when the run is interrupted, is a different question from the one `ToolCleanup`
+answers, and nobody has asked it.
+
+¹⁰ Reissue is a property of replay. Without a journal there is nothing to
+replay and nothing to reissue.
+
+¹¹ Structurally insulated, and not by anyone's design: a child session absorbs
+interruption, so an interrupted delegation returns partial text rather than
+raising, and nothing interrupt-shaped reaches `DurableToolkit`. The corollary
+is item 50 -- a parent cannot tell a cut-short delegation from a finished one.
+
+¹² The in-process client has no delivery log, so it **must refuse** a cursor
+rather than quietly returning a live stream. That refusal is itself a contract
+row, in both directions.
+
+¹³ A child has no event stream of its own that a caller can subscribe to; its
+events are the parent's tool call.
+
+¹⁴ A delegation is a tool call, and tool calls are made idempotent by the
+journal rather than by a request id.
