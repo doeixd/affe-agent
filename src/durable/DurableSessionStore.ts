@@ -590,7 +590,6 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
 export const sqlSessionTable = "effect_agent_session"
 export const sqlElicitationTable = "effect_agent_elicitation"
 
-
 interface SessionRow {
   readonly session_id: string
   readonly status: string

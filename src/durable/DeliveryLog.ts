@@ -334,7 +334,6 @@ export interface SqlLogConfigOptions extends Omit<SqlLogOptions, "pollInterval">
   readonly pollInterval?: Config.Config<Duration.Duration> | undefined
 }
 
-
 /**
  * A delivery log backed by SQL.
  *

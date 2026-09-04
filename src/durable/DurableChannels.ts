@@ -371,7 +371,6 @@ export const factory = (
  */
 export const sqlStoreTable = "effect_agent_channel_input"
 
-
 /**
  * Build a SQL-backed store over an existing table.
  *

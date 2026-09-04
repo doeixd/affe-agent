@@ -117,7 +117,6 @@ export const memory: Effect.Effect<Service> = Effect.sync(() => {
   }
 })
 
-
 export const sqlTable = "relay_credentials"
 
 export interface SqlOptions {

@@ -530,6 +530,38 @@ describe("durable and cluster surfaces", () => {
     ])
   })
 
+  /**
+   * The relay is a published entry (`./relay` in `package.json`) and was the
+   * only one without a pin, so an export could come or go unnoticed. Both
+   * directions are breaking for a published package: a helper leaking out by
+   * accident, and one being dropped.
+   */
+  it("exports the relay vocabulary and nothing beyond it", async () => {
+    const relay = await import("../src/relay/index.js")
+    assert.deepStrictEqual(Object.keys(relay).sort(), [
+      "Relay",
+      "RelayClient",
+      "RelayCredentials",
+      "RelayProtocol",
+      "RelayRpc",
+      "RelayServer"
+    ])
+    assert.deepStrictEqual(Object.keys(relay.RelayCredentials).sort(), [
+      "RelayCredentials",
+      "authenticator",
+      "memory",
+      "sql",
+      "sqlTable",
+      "sqlWithTable"
+    ])
+    assert.deepStrictEqual(Object.keys(relay.RelayServer).sort(), [
+      "RelayAuthenticator",
+      "allowAll",
+      "bearerTokens",
+      "layer"
+    ])
+  })
+
   it("exports the rpc vocabulary and nothing beyond it", async () => {
     const rpc = await import("../src/rpc/index.js")
     assert.deepStrictEqual(Object.keys(rpc).sort(), ["AgentRpc"])
