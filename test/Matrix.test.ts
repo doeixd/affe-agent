@@ -458,10 +458,12 @@ describe("events", () => {
       )
 
       // Turn numbering restarts per run, not per submission.
+      // Run ids are qualified by their session (`internal/ids.ts`); the
+      // session's own prefix is stripped so the pin reads as the counter.
       const perRun = events
         .filter(AgentEvent.is("TurnStarted"))
         .map((e) => [
-          Option.getOrNull(Option.map(e.runId, (id) => `${id}`)),
+          Option.getOrNull(Option.map(e.runId, (id) => `${id}`.slice(`${e.sessionId}:`.length))),
           Option.getOrNull(e.turn)
         ])
       assert.deepStrictEqual(perRun, [

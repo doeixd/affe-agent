@@ -24,10 +24,19 @@ export const submissionId = (value: string): SubmissionId =>
 export const runId = (value: string): RunId => value as RunId
 
 /**
- * Session-local counters.
+ * Session-local counters, qualified by the session.
  *
  * Ids are sequential rather than random: deterministic tests can assert on
- * them, and a session's event log stays readable.
+ * them, and a session's event log stays readable. They carry the session
+ * that minted them (`session-3:run-1`) because a counter alone is unique
+ * only inside one session, and two things that share state across sessions
+ * found that out in one day: a budget shared across sessions dropped the
+ * second session's charges as replays of the first's, and a child's
+ * forwarded approval had exactly the id of its parent's own. Each was fixed
+ * with a local prefix; this is the prefix in the one place ids are made,
+ * so the next shared structure is safe by construction. The durable store
+ * already minted `${sessionId}:submission-N`; this makes the in-memory
+ * session agree with it.
  */
 export interface IdSource {
   readonly nextRun: Effect.Effect<RunId>
@@ -49,7 +58,7 @@ export interface IdSource {
 export const elicitationId = (submissionId: string, n: number): string =>
   `${submissionId}:elicit-${n}`
 
-export const makeIdSource = Effect.gen(function* () {
+export const makeIdSource = (sessionId: SessionId) => Effect.gen(function* () {
   const runs = yield* Ref.make(0)
   // Only the current submission's counter is ever needed: a session claims one
   // submission at a time, and a submission that has settled never asks another
@@ -61,7 +70,7 @@ export const makeIdSource = Effect.gen(function* () {
 
   return {
     nextRun: Ref.updateAndGet(runs, (n) => n + 1).pipe(
-      Effect.map((n) => runId(`run-${n}`))
+      Effect.map((n) => runId(`${sessionId}:run-${n}`))
     ),
     nextElicitation: (submissionId) =>
       Ref.modify(elicitations, (state) => {
@@ -70,6 +79,10 @@ export const makeIdSource = Effect.gen(function* () {
       })
   } satisfies IdSource
 })
+
+/** The default name of a session's n-th submission: qualified by the session, as the durable store's are. */
+export const submissionName = (sessionId: string, count: number): string =>
+  `${sessionId}:submission-${count}`
 
 let sessionCounter = 0
 

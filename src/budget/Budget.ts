@@ -66,22 +66,20 @@ const tokensOf = <Tools extends Record<string, Tool.Any>>(
 export type Occurrence = string
 
 /**
- * The coordinate for a turn: the session, the run within it, and the turn's
- * place in that run.
+ * The coordinate for a turn: the run it belongs to, and its place in that run.
  *
- * The session is part of the key because run ids are minted per session
- * (`run-1`, `run-2`, ...), and a `Budget` is explicitly allowed to span
- * sessions -- "once for the whole application" is one of the two scopes
- * `layer` documents. Keyed on the run alone, two sessions sharing a budget
- * collide on their first turns and the second session's charges are dropped
- * as replays. Found when a delegated child, which is a session of its own,
- * charged its parent's counter and silently erased the parent's own turns.
+ * A run id carries the session that minted it (`internal/ids.ts`), which is
+ * what makes this key safe for a `Budget` that spans sessions -- "once for
+ * the whole application" is one of the two scopes `layer` documents. It was
+ * not always so: keyed on a per-session `run-N`, two sessions sharing a
+ * budget collided on their first turns and the second's charges were dropped
+ * as replays, found when a delegated child silently erased its parent's own
+ * turns. `Budget.test` keeps the two-session row that found it.
  */
 export const occurrence = (state: {
-  readonly sessionId: string
   readonly runId: string
   readonly turnIndex: number
-}): Occurrence => `${state.sessionId}:${state.runId}:${state.turnIndex}`
+}): Occurrence => `${state.runId}:${state.turnIndex}`
 
 export class Budget extends Context.Service<Budget, {
   /**

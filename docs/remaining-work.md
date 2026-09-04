@@ -1400,8 +1400,10 @@ and should not until it is committed. Item 30 is untouched.
     documents "once for the whole application" as a supported scope -- so any
     two sessions sharing a budget collided on their first turns and the
     second's charges were dropped as replays. A delegated child is a session,
-    which is how it surfaced: the parent's own turns vanished. The key now
-    includes the session id, and `test/Budget.test.ts` pins two sessions on
+    which is how it surfaced: the parent's own turns vanished. The key
+    included the session id for a day; since `plan-after-seams.md` item 1
+    the *run id* carries its session, so the key is the run again and the
+    fix lives where ids are made. `test/Budget.test.ts` pins two sessions on
     one budget summing rather than deduplicating.
 
     One residue, stated in `Budget.charge`'s doc: it records cost only when a
@@ -1415,7 +1417,7 @@ and should not until it is committed. Item 30 is untouched.
 
     ```text
     verify: grep "Budget.charge(inner)" src/subagent/Subagent.ts
-    verify: grep "${state.sessionId}:${state.runId}:${state.turnIndex}" src/budget/Budget.ts
+    verify: grep "${sessionId}:run-${n}" src/internal/ids.ts
     ```
 
 53. **A child agent's approval-requiring tool cannot be approved by anyone**
@@ -1479,8 +1481,10 @@ and should not until it is committed. Item 30 is untouched.
     by the review -- a forwarded request and the parent's own asked at once.
     Elicitation ids are `submission-N:elicit-M` with both counters per
     session, so a child's first request had exactly the parent's first id and
-    the elicitor kept one waiter; the forwarded id is now namespaced by the
-    child session, and the row hangs without it.
+    the elicitor kept one waiter. The forwarded id was namespaced by the
+    child session for a day; since `plan-after-seams.md` item 1 a submission
+    id carries its session and an elicitation id inherits it, so `Subagent`
+    rewrites nothing and the row still hangs if that stops being so.
 
     ```text
     verify: grep "Effect.provideService(Elicitation.Current, Option.some(forwardable))" src/ToolExecution.ts
@@ -1591,6 +1595,22 @@ for: the gap is recorded as a gap rather than assumed either way.*
     ```text
     verify: no-grep "CurrentPrincipal" test/AgentHttp.test.ts
     verify: no-grep "CurrentPrincipal" test/AgentRpc.test.ts
+    ```
+
+### Newly ranked — after the seams pass (2026-09-04)
+
+59. **[plan-after-seams.md](./plan-after-seams.md)** -- eight items the
+    seams pass tripped over, ranked: ids carry their session (**done**, the
+    same evening: `session-N:submission-M`, `session-N:run-M`, and the two
+    local prefixes deleted); the construction-time refusal at
+    `AgentSession.make`, which defaults to `denied` and so has item 53's
+    silent disable for every agent; item 46; the engine recording usage so
+    the loop only decides; naming what a tool can see of its session; the
+    static toolkit as the common case in the type; a typed child returning
+    its value; and this file becoming a list again.
+
+    ```text
+    verify: grep "Ids.makeIdSource(id)" src/AgentSession.ts
     ```
 
 ### Known, deliberately left

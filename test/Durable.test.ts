@@ -999,8 +999,10 @@ describe("elicitation under durability", () => {
         yield* DurableElicitation.respond({
           workflow: durable.definition,
           executionId: derived,
-          // One execution per session here, so its one submission is `submission-1`.
-          response: { id: Ids.elicitationId("submission-1", 1), granted: true }
+          // One execution per session here, so its one submission is the
+          // session's first -- and the id is derivable from the session id
+          // alone, which is the whole point of answering from outside.
+          response: { id: Ids.elicitationId(Ids.submissionName("approve-1", 1), 1), granted: true }
         })
 
         const exit = yield* DurableAgent.result(durable, executionId, {
@@ -1069,7 +1071,7 @@ describe("elicitation under durability", () => {
         yield* DurableElicitation.respond({
           workflow: durable.definition,
           executionId,
-          response: { id: Ids.elicitationId("submission-1", 1), granted: true }
+          response: { id: Ids.elicitationId(Ids.submissionName("answer-early", 1), 1), granted: true }
         })
 
         // Bounded *under* vitest's 5s default, so a dropped answer fails with

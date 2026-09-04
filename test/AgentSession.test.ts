@@ -656,7 +656,8 @@ describe("run lifecycle and events", () => {
         ({ session }) =>
           Effect.gen(function* () {
             const receipt = yield* session.submit("go")
-            assert.strictEqual(`${receipt.submissionId}`, "submission-1")
+            // Qualified by the session that minted it; see `internal/ids.ts`.
+            assert.strictEqual(`${receipt.submissionId}`, `${session.id}:submission-1`)
 
             // The receipt is available while the admitted child is still in
             // the model, rather than being a renamed terminal Result.
@@ -771,12 +772,14 @@ describe("run lifecycle and events", () => {
           e.event._tag
         )
       )
+      // Ids are qualified by the session that minted them (`internal/ids.ts`),
+      // so the shape is asserted against the envelope's own session.
       assert.isTrue(
-        inRun.every((e) => Option.exists(e.runId, (id) => `${id}` === "run-1"))
+        inRun.every((e) => Option.exists(e.runId, (id) => `${id}` === `${e.sessionId}:run-1`))
       )
       assert.isTrue(
         inRun.every((e) =>
-          Option.exists(e.submissionId, (id) => `${id}` === "submission-1")
+          Option.exists(e.submissionId, (id) => `${id}` === `${e.sessionId}:submission-1`)
         )
       )
       assert.deepStrictEqual(
@@ -1081,7 +1084,7 @@ describe("follow-ups and quiescence", () => {
         events
           .filter(AgentEvent.is("RunStarted"))
           .map((e) => Option.getOrNull(Option.map(e.runId, (id) => `${id}`))),
-        ["run-1", "run-2", "run-3"]
+        [1, 2, 3].map((n) => `${session.id}:run-${n}`)
       )
       assert.strictEqual(
         events.filter(AgentEvent.is("SubmissionStarted")).length,

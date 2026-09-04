@@ -134,36 +134,23 @@ export interface Inherit {
  * so a delegation of a delegation reads as the path it took). Outside any
  * session `Current` is `None` and the child refuses, as it always did.
  *
- * **Ids are namespaced by the child session.** Elicitation ids are
- * `submission-N:elicit-M`, and both counters are per session, so a child's
- * first request has exactly the id of the parent's own first request. Under
- * parallel tool execution the parent can be asking both at once, and the
- * parent's elicitor keeps one waiter per id. The child's id is prefixed
- * with its session on the way up and stripped on the way back, so the
- * parent's consumers see a distinct id and the child sees its own.
+ * The forwarded id is the child's own. It is distinct from any of the
+ * parent's because an elicitation id is qualified by its submission and a
+ * submission by its session (`internal/ids.ts`); this used to prefix the
+ * child session here, until the ids carried it themselves.
+ * `PermissionSubagent` keeps the row that found the collision.
  */
 const forwarded = (via: string): Elicitation.Factory => ({
   make: (sessionId) =>
     Effect.flatMap(Elicitation.Current, (current) =>
       Option.match(current, {
         onNone: () => Elicitation.denied.make(sessionId),
-        onSome: (parent) => {
-          const prefix = `${sessionId}/`
-          const up = (id: string) => `${prefix}${id}`
-          const down = (id: string) => (id.startsWith(prefix) ? id.slice(prefix.length) : id)
-          return Effect.succeed<Elicitation.Elicitor>({
-            elicit: (request, announce) =>
-              Effect.map(
-                parent.elicit({ ...stamped(request, via), id: up(request.id) }, announce),
-                (response) => ({ ...response, id: request.id })
-              ),
-            respond: (response) => parent.respond({ ...response, id: up(response.id) }),
-            pending: Effect.map(parent.pending, (all) =>
-              all
-                .filter((request) => request.id.startsWith(prefix))
-                .map((request) => ({ ...request, id: down(request.id) })))
+        onSome: (parent) =>
+          Effect.succeed<Elicitation.Elicitor>({
+            elicit: (request, announce) => parent.elicit(stamped(request, via), announce),
+            respond: parent.respond,
+            pending: parent.pending
           })
-        }
       }))
 })
 

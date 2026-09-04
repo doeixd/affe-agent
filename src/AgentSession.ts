@@ -242,7 +242,9 @@ export interface MakeOptions {
  */
 export interface EngineOptions {
   /**
-   * How submissions are named. Defaults to `submission-${n}`.
+   * How submissions are named. Defaults to `${sessionId}:submission-${n}`,
+   * the shape the durable store mints, and qualified by the session for the
+   * reason `internal/ids.ts` gives.
    *
    * Elicitation ids are namespaced by the submission id, so the name is
    * what makes a question's id unique across submissions. The durable
@@ -387,8 +389,8 @@ export const makeEngine = <
       value: Option.none()
     })
     const pendingOutput = yield* Ref.make<Option.Option<unknown>>(Option.none())
-    const ids = yield* Ids.makeIdSource
-    const submissionName = options?.submissionIds ?? ((count: number) => `submission-${count}`)
+    const ids = yield* Ids.makeIdSource(id)
+    const submissionName = options?.submissionIds ?? ((count: number) => Ids.submissionName(id, count))
     const beforeClose = options?.beforeClose ?? Effect.void
 
     const session: Session<Tools, E, R> = {
