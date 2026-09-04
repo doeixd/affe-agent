@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 
 /**
@@ -106,3 +106,28 @@ export const make = <A, I>(
     })
   }
 }
+
+/**
+ * The value, in the shape a wire can carry.
+ *
+ * The mirror of `AgentInput.encode`, and it dies on failure for the same
+ * reason that one does: the value came *from* this agent's own run, checked
+ * against this agent's own schema, so a value that will not encode is a bug
+ * here rather than something a caller could act on.
+ */
+export const encode = <A, I>(output: AgentOutput<A, I>, value: A): Effect.Effect<unknown> =>
+  Effect.orDie(Schema.encodeUnknownEffect(output.schema)(value))
+
+/**
+ * The value, read back at the far end of a wire.
+ *
+ * This one *fails*, where `encode` dies, and the asymmetry is the point. A
+ * value that does not decode means the thing that answered is not the agent
+ * this caller thinks it is -- a different version, a different agent behind
+ * the same id -- which is a fact about the far end and not a local defect.
+ * `AgentA2A.typed` draws the same line, attributing a bad result to the peer.
+ */
+export const decode = <A, I>(
+  output: AgentOutput<A, I>,
+  encoded: unknown
+): Effect.Effect<A, Schema.SchemaError> => Schema.decodeUnknownEffect(output.schema)(encoded)

@@ -3,6 +3,7 @@ import * as History from "../internal/history.js"
 import { positiveInteger } from "../internal/positive.js"
 import * as PromptWire from "../PromptWire.js"
 import * as AgentEvent from "../AgentEvent.js"
+import * as AgentOutput from "../AgentOutput.js"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
@@ -68,7 +69,22 @@ export const RemoteResult = Schema.Struct({
   /** The final assistant message: text, reasoning and files, in order. */
   content: Schema.Array(PromptWire.Part),
   /** Why the last run stopped, when its loop said (`AgentSubmission.Result.stopReason`). */
-  stopReason: Schema.optional(Schema.String)
+  stopReason: Schema.optional(Schema.String),
+  /**
+   * The agent's declared output, encoded, when it declares one and produced it.
+   *
+   * Deliberately opaque here. This schema is shared by every agent, so it
+   * cannot name any particular agent's `Value`; what crosses is the encoded
+   * form, and the *caller* names what it expects -- `typedSession` decodes it
+   * with the agent's own output schema. The alternative, publishing the schema
+   * for a caller to fetch, buys nothing: you would still decode at the call
+   * site, and a published schema that drifts from its agent silently mistypes
+   * every consumer.
+   *
+   * Absent for an agent with no declared output, and absent when a run ended
+   * without producing one -- interrupted, or stopped before it answered.
+   */
+  value: Schema.optional(Schema.Unknown)
 })
 export type RemoteResult = typeof RemoteResult.Type
 
@@ -434,6 +450,14 @@ export const fromSession = <Value, Input>(
     readonly scope: Scope.Scope
     /** How many submissions' outcomes this session keeps. */
     readonly maxRetainedSubmissions: number
+    /**
+     * The agent's declared output, when it has one.
+     *
+     * Passed in rather than read off the session, because a session does not
+     * carry its agent's schemas -- and a host that does not supply it simply
+     * does not carry the typed value, which is what every host did until now.
+     */
+    readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
   }
 ): RemoteSession => {
   const capacity = positiveInteger(
@@ -459,18 +483,33 @@ export const fromSession = <Value, Input>(
       )
     )
 
-  const toRemoteResult = (result: AgentSession.Result<any, any>): RemoteResult => ({
-    submissionId: result.submissionId,
-    status: result.status,
-    runs: result.runs,
-    turns: result.turns,
-    text: result.text,
-    content: Option.match(result.response, {
-      onNone: () => [],
-      onSome: (response) => History.assistantContent(response.content)
-    }),
-    ...(Option.isSome(result.stopReason) ? { stopReason: result.stopReason.value } : {})
-  })
+  const declaredOutput = options.output ?? Option.none()
+
+  const toRemoteResult = (
+    result: AgentSession.Result<any, any>
+  ): Effect.Effect<RemoteResult> =>
+    Effect.map(
+      // Both `None` cases mean the same thing on the wire -- no value -- but
+      // they are different facts: no declared output at all, versus a run that
+      // ended without reaching one.
+      Option.match(Option.zipWith(declaredOutput, result.value, (output, value) => ({ output, value })), {
+        onNone: () => Effect.succeedNone,
+        onSome: ({ output, value }) => Effect.asSome(AgentOutput.encode(output, value))
+      }),
+      (encoded) => ({
+        submissionId: result.submissionId,
+        status: result.status,
+        runs: result.runs,
+        turns: result.turns,
+        text: result.text,
+        content: Option.match(result.response, {
+          onNone: () => [],
+          onSome: (response) => History.assistantContent(response.content)
+        }),
+        ...(Option.isSome(result.stopReason) ? { stopReason: result.stopReason.value } : {}),
+        ...(Option.isSome(encoded) ? { value: encoded.value } : {})
+      })
+    )
 
   /**
    * The retained outcomes, oldest first.
@@ -558,7 +597,7 @@ export const fromSession = <Value, Input>(
     prompt: (input, promptOptions) =>
       admit("prompt", input).pipe(
         Effect.flatMap((value) => remote(session.prompt(value, { stream: promptOptions?.stream === true }))),
-        Effect.map(toRemoteResult),
+        Effect.flatMap(toRemoteResult),
         // A prompted outcome is retained like a submitted one, so the two
         // surfaces tell one story about what this session has done.
         Effect.tap((result) => remember(result.submissionId, Effect.succeed(result)))
@@ -583,7 +622,7 @@ export const fromSession = <Value, Input>(
           const receipt = yield* remote(session.submit(input, { stream }))
           yield* remember(
             receipt.submissionId,
-            remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.map(toRemoteResult)),
+            remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.flatMap(toRemoteResult)),
             key
           )
           byKey.set(key, { fingerprint, submissionId: receipt.submissionId })
@@ -592,7 +631,7 @@ export const fromSession = <Value, Input>(
         const receipt = yield* remote(session.submit(input, { stream }))
         yield* remember(
           receipt.submissionId,
-          remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.map(toRemoteResult))
+          remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.flatMap(toRemoteResult))
         )
         return receipt
       }),
@@ -676,6 +715,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
           }).pipe(Effect.provide(env))
 
           const remote = fromSession(session, {
+            output: agent.output,
             scope: yield* Effect.scope,
             maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions
           })
@@ -712,23 +752,39 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
  * input -- `PromptInput<Input>`: the schema's type, or `Prompt.RawInput`
  * for an agent without one. Everything else is the `RemoteSession` it wraps.
  */
-export interface TypedSession<Input> extends Omit<RemoteSession, "prompt" | "submit"> {
+/**
+ * A result whose declared output has been read back.
+ *
+ * `value` is `None` for an agent that declares no output, and for a run that
+ * ended without producing one -- interrupted, or stopped before it answered.
+ * The two are different facts and both mean "there is nothing to read".
+ */
+export interface TypedResult<Value> extends RemoteResult {
+  readonly value: Option.Option<Value>
+}
+
+export interface TypedSession<Input, Value = never>
+  extends Omit<RemoteSession, "prompt" | "submit" | "awaitSubmission">
+{
   readonly prompt: (
     input: AgentSession.PromptInput<Input>,
     options?: RemotePromptOptions
-  ) => Effect.Effect<RemoteResult, RemoteError>
+  ) => Effect.Effect<TypedResult<Value>, RemoteError>
   readonly submit: (
     input: AgentSession.PromptInput<Input>,
     options?: RemotePromptOptions
   ) => Effect.Effect<SubmissionReceipt, RemoteError>
+  readonly awaitSubmission: (
+    submissionId: string
+  ) => Effect.Effect<TypedResult<Value>, RemoteError>
 }
 
-/** `Service`, with its sessions typed by the agent's input. */
-export interface TypedService<Input> {
+/** `Service`, with its sessions typed by the agent's input and output. */
+export interface TypedService<Input, Value = never> {
   readonly createSession: (options?: {
     readonly sessionId?: string | undefined
-  }) => Effect.Effect<TypedSession<Input>, RemoteError, Scope.Scope>
-  readonly session: (sessionId: string) => Effect.Effect<TypedSession<Input>, RemoteError>
+  }) => Effect.Effect<TypedSession<Input, Value>, RemoteError, Scope.Scope>
+  readonly session: (sessionId: string) => Effect.Effect<TypedSession<Input, Value>, RemoteError>
 }
 
 /**
@@ -744,21 +800,57 @@ export interface TypedService<Input> {
 export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   session: RemoteSession
-): TypedSession<Input> =>
-  Option.match(agent.input, {
+): TypedSession<Input, Value> => {
+  /**
+   * Read the declared output back, or say who got it wrong.
+   *
+   * A value that will not decode is a statement about the *far end* -- a
+   * different version of the agent, or a different agent behind the same id --
+   * so it is reported as a codec error against the response rather than dying
+   * as a local bug. `AgentA2A.typed` draws the same line for the same reason.
+   */
+  const withValue = (result: RemoteResult): Effect.Effect<TypedResult<Value>, RemoteError> =>
+    Option.match(Option.zipWith(agent.output, Option.fromNullishOr(result.value), (output, encoded) => ({ output, encoded })), {
+      onNone: () => Effect.succeed({ ...result, value: Option.none<Value>() }),
+      onSome: ({ output, encoded }) =>
+        AgentOutput.decode(output, encoded).pipe(
+          Effect.map((value): TypedResult<Value> => ({ ...result, value: Option.some(value as Value) })),
+          Effect.mapError((error) =>
+            new AgentProtocolCodecError({
+              operation: "prompt",
+              phase: "response",
+              detail: `the agent's declared output did not decode: ${error.message}`
+            })
+          )
+        )
+    })
+
+  const readingValue = {
+    ...session,
+    prompt: (input: Prompt.RawInput | AgentInput.Typed, options?: RemotePromptOptions) =>
+      Effect.flatMap(session.prompt(input, options), withValue),
+    awaitSubmission: (submissionId: string) =>
+      Effect.flatMap(session.awaitSubmission(submissionId), withValue)
+  }
+
+  return Option.match(agent.input, {
     // No declared input means `Input` is `never` and `PromptInput<Input>` is
     // `Prompt.RawInput`, which the session takes as it is. The conditional
-    // type is what these two casts restate; the compiler cannot resolve it
-    // for an abstract `Input`, and the branches are exactly its two cases.
-    onNone: () => session as TypedSession<Input>,
+    // type is what this cast restates; the compiler cannot resolve it for an
+    // abstract `Input`, and the branches are exactly its two cases.
+    onNone: () => readingValue as TypedSession<Input, Value>,
     onSome: (input) => ({
-      ...session,
+      ...readingValue,
       prompt: (value, options) =>
-        Effect.flatMap(AgentInput.encode(input, value as Input), (typed) => session.prompt(typed, options)),
+        Effect.flatMap(
+          AgentInput.encode(input, value as Input),
+          (typed) => readingValue.prompt(typed, options)
+        ),
       submit: (value, options) =>
         Effect.flatMap(AgentInput.encode(input, value as Input), (typed) => session.submit(typed, options))
     })
   })
+}
 
 /**
  * The `AgentClient` in context, with its sessions typed by `agent`'s input.
@@ -774,8 +866,8 @@ export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model
  */
 export const typed = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>
-): Effect.Effect<TypedService<Input>, never, AgentClient> =>
-  Effect.map(AgentClient, (client): TypedService<Input> => ({
+): Effect.Effect<TypedService<Input, Value>, never, AgentClient> =>
+  Effect.map(AgentClient, (client): TypedService<Input, Value> => ({
     createSession: (options) => Effect.map(client.createSession(options), (session) => typedSession(agent, session)),
     session: (sessionId) => Effect.map(client.session(sessionId), (session) => typedSession(agent, session))
   }))
