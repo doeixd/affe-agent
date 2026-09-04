@@ -379,11 +379,21 @@ committing per `CLAUDE.md`.
 * ~~`test/BudgetCombinations.test.ts` asserts `2_000`, and items 51–53 are closed
   by tests that assert the decided behaviour rather than describe the current
   one.~~ Done.
-* `grep -rn "alsoDescribing" src/` finds nothing outside `Agent.effectiveTools`'
-  callers.
-* The matrix has no blank cell without either a test name or a reason.
-* A stale claim in `remaining-work.md` fails `npm run check`.
-* The full suite, `lint`, `lint:portability` green.
+* ~~`grep -rn "alsoDescribing" src/` finds nothing outside `Agent.effectiveTools`'
+  callers.~~ Done; the accessor is `internal/describedTools.ts`, and nothing
+  spells `alsoDescribing`.
+* ~~The matrix has no blank cell without either a test name or a reason.~~
+  Done; the blank cells are items 56–58.
+* ~~A stale claim in `remaining-work.md` fails `npm run check`.~~ Done, and
+  confirmed by breaking one.
+* ~~The full suite, `lint`, `lint:portability` green.~~ 2151 tests, both lints
+  clean, at `5ac72c4`.
+
+**All six items shipped 2026-09-04.** What the plan did not predict is
+recorded under each: two bugs found while closing B (the budget key omitted
+the session; a forwarded approval collided with the parent's own), the
+reason E could not be an alias, and D's own unrun cell. The next pass is
+item 46 proper, which E showed the exact shape of.
 
 ## Related
 

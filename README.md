@@ -312,7 +312,7 @@ SQLite through `node:sqlite`).
 ## Development
 
 ```bash
-npm run check   # typecheck, build, lint, portability, tests, mutations, package, smokes
+npm run check   # typecheck, build, lint, portability, remaining-work claims, tests, mutations, package, smokes
 npm run test
 npm run verify:package
 ```
