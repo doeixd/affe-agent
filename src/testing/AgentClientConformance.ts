@@ -1,9 +1,10 @@
-import { Deferred, Duration, Effect, Fiber, Ref, Schedule, Schema, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
 import type { Layer } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentEvent from "../AgentEvent.js"
+import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentLoop from "../AgentLoop.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as Elicitation from "../Elicitation.js"
@@ -56,6 +57,20 @@ export interface Options {
     /** For the retention cases: how many outcomes a session keeps. */
     readonly maxRetainedSubmissions?: number | undefined
   }) => Effect.Effect<Layer.Layer<AgentClient.AgentClient>>
+  /**
+   * `true` when this client can resume `events({ after })` from a sequence.
+   *
+   * Not an opt-out: both answers are asserted. A client that says `false` must
+   * *fail* when handed a cursor, because the one thing the seam forbids is
+   * quietly returning a live stream to a caller who asked to resume -- they
+   * would lose every event in between and have no way to find out. So
+   * forgetting to set this on a client that can resume is caught too: the
+   * failing branch is checked and will not fail.
+   *
+   * Resumption needs a delivery log, which is a real difference between
+   * backings rather than an artefact of testing.
+   */
+  readonly resumesEvents?: boolean | undefined
   /**
    * Where settled outcomes live. `bounded` is the in-process table with the
    * eviction rule; `journal` is the durable engine, which keeps every
@@ -621,6 +636,117 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           })
         )
     )),
+
+    /**
+     * Resumption, and the silent failure it exists to prevent.
+     *
+     * The seam is emphatic about this and nothing was checking it: a caller
+     * reconnecting from sequence 41 and quietly handed events from 60 onward
+     * has lost eighteen and has no way to find out. So an implementation that
+     * cannot resume owes a *failure*, which is the branch below; one that can
+     * owes exactly the events above the cursor, which is the branch after it.
+     */
+    options.resumesEvents === true
+      ? make("resumes events from a sequence, with no gap and no repeat", withClient(
+        options,
+        { agent: Agent.make({ loop: AgentLoop.bounded(2) }), turns: [TestLanguageModel.text("done")] },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const name = "resumes events from a sequence, with no gap and no repeat"
+              const session = yield* client.createSession()
+              yield* session.prompt("go")
+
+              /**
+               * A cursored read, bounded.
+               *
+               * The submission has already settled, so a correct resumption
+               * replays what was recorded and reaches the end immediately. A
+               * client that ignored the cursor hands back a *live* stream on a
+               * finished session, which produces nothing and would otherwise
+               * hang here until the runner killed the case -- reporting a
+               * timeout where the real answer is "the cursor was ignored".
+               */
+              const read = (after: number) =>
+                Stream.runCollect(
+                  Stream.takeUntil(
+                    session.events({ after }),
+                    (entry) => entry.event._tag === "SubmissionCompleted"
+                  )
+                ).pipe(
+                  Effect.map(Option.some),
+                  Effect.timeout(Duration.seconds(5)),
+                  Effect.catchTag("TimeoutError", () => Effect.succeedNone)
+                )
+
+              const fromStart = yield* read(0)
+              yield* that(name)(
+                Option.isSome(fromStart),
+                "reading from the beginning never reached the submission's end: the cursor was ignored and a live stream returned"
+              )
+              const all = Option.getOrElse(fromStart, (): ReadonlyArray<AgentEventEnvelope> => [])
+              yield* that(name)(all.length >= 3, `a settled submission recorded ${all.length} events`)
+              yield* equal(name)(
+                all.map((entry) => entry.sequence),
+                all.map((_, index) => index + 1),
+                "sequences from the beginning"
+              )
+
+              // Resuming from the second one must deliver the third onward:
+              // nothing skipped, and nothing delivered twice.
+              const cursor = all[1]!.sequence
+              const fromCursor = yield* read(cursor)
+              yield* that(name)(
+                Option.isSome(fromCursor),
+                "resuming from a cursor never reached the submission's end: the cursor was ignored and a live stream returned"
+              )
+              const resumed = Option.getOrElse(fromCursor, (): ReadonlyArray<AgentEventEnvelope> => [])
+              yield* equal(name)(
+                resumed.map((entry) => entry.sequence),
+                all.slice(2).map((entry) => entry.sequence),
+                "sequences after the cursor"
+              )
+              yield* equal(name)(
+                resumed.map((entry) => entry.event._tag),
+                all.slice(2).map((entry) => entry.event._tag),
+                "events after the cursor"
+              )
+            })
+          )
+      ))
+      : make("refuses to resume events rather than quietly returning a live stream", withClient(
+        options,
+        { agent: Agent.make({ loop: AgentLoop.bounded(2) }), turns: [TestLanguageModel.text("done")] },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const name = "refuses to resume events rather than quietly returning a live stream"
+              const session = yield* client.createSession()
+              // Three outcomes are distinguishable, and only one is allowed.
+              //
+              // Blocking counts as wrong, not as inconclusive: a client that
+              // hands back a live stream and waits has already failed to
+              // refuse, and reporting that as a hang would leave the reader to
+              // guess. A correct client fails immediately, so the bound costs
+              // nothing unless something is broken.
+              const outcome = yield* Stream.runCollect(
+                Stream.take(session.events({ after: 0 }), 1)
+              ).pipe(
+                Effect.as("delivered a live event" as const),
+                Effect.catchCause(() => Effect.succeed("refused" as const)),
+                Effect.timeout(Duration.seconds(5)),
+                Effect.catchTag("TimeoutError", () => Effect.succeed("returned a stream that never produced" as const))
+              )
+              yield* equal(
+                name
+              )(
+                outcome,
+                "refused",
+                "resuming from a cursor this client cannot honour: it must fail, because silently starting from now loses every event in between"
+              )
+            })
+          )
+      )),
 
     make("streams deltas when asked, and not otherwise",
       Effect.gen(function* () {

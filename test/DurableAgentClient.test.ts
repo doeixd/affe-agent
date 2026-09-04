@@ -55,6 +55,9 @@ const harness: Contract.Harness = {
   name: "durable-memory",
   // The engine's journal keeps every outcome; there is no eviction to test.
   outcomeRetention: "journal",
+  // The delivery log is what makes resumption answerable, and this is the
+  // only backing that has one.
+  resumesEvents: true,
   layer: ({ agent, turns }) =>
     Effect.gen(function* () {
       const store = yield* DurableChannels.memoryStore
