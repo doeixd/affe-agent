@@ -823,6 +823,20 @@ open, so the next pass does not have to re-derive it.
     beyond the fixed token map. `plan-a2a-layers-bridges.txt` steps 5–7 are
     unblocked.
 
+49. **Event resumption is a contract row** — **SHIPPED 2026-09-03**
+    (`5111fbb`). Recorded because it is the third gap this pass found by
+    asking what the seam *says* it owes rather than what an implementation
+    happens to do. `AgentClient.events`'s own comment forbids quietly
+    returning a live stream to a caller who asked to resume — a lost-events
+    bug with no symptom — and nineteen rows never passed a cursor.
+    `resumesEvents` picks which of two rows applies and neither is a skip, so
+    a client that can resume but forgets the flag fails the refusal row.
+    Bounded, because the first version reported a runner timeout where the
+    answer was "the cursor was ignored".
+
+    The pattern worth reusing: read an interface's emphatic sentences and ask
+    which of them a suite would notice being broken.
+
 ### Newly ranked — from the effect-cf research (2026-09-01)
 
 Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).
