@@ -71,6 +71,16 @@ export interface Options {
   readonly outcomeRetention?: "bounded" | "journal" | undefined
 }
 
+/**
+ * How long a cancelled request may take to unwind before the interruption row
+ * calls it a hang.
+ *
+ * Exported because `ShippedConformance` falsifies that row with a client
+ * deliberately slower than this, and a bound the falsification cannot see is a
+ * bound someone raises until the proof silently stops proving anything.
+ */
+export const cancellationBound = Duration.seconds(5)
+
 /** What a case can fail with: the suite's own failure, or the client's. */
 export type CaseError = Failure | AgentClient.RemoteError
 
@@ -663,7 +673,7 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
             // never come does not come back here.
             return yield* Fiber.interrupt(running).pipe(
               Effect.as(true),
-              Effect.timeout(Duration.seconds(5)),
+              Effect.timeout(cancellationBound),
               Effect.catchTag("TimeoutError", () => Effect.succeed(false))
             )
           }).pipe(Effect.provide(layer))

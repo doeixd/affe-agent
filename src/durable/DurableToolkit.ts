@@ -264,10 +264,31 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         }).pipe(Effect.provide(workflowContext))) as Outcome
 
         if (outcome._tag === "Unresolved") {
-          return yield* new DurableToolUnresolvedError({
-            toolName: String(name),
-            toolCallId: id
-          })
+          // A defect, deliberately, and this is the half of the fix that
+          // matters most.
+          //
+          // A *typed* failure here is handed to `ToolExecution`, which under
+          // the default `ReturnToModel` policy commits it as a failed tool
+          // result and lets the model see it. The model's entirely reasonable
+          // next move is to call the tool again -- so stopping upstream's ten
+          // automatic retries would have bought nothing, because the model
+          // would issue the eleventh. An unknown outcome reported as "it
+          // failed" is a lie that invites exactly the double side effect this
+          // whole mechanism exists to prevent.
+          //
+          // `ToolExecution` never returns a defect to the model ("a defect
+          // means the handler is broken, not that the model asked for
+          // something the tool could refuse"), so the run ends. And
+          // `DurableSubmission.isInfrastructure` matches only storage-shaped
+          // defects, so this settles as a terminal `Failed` rather than the
+          // retryable `Infrastructure`, which would invite the caller to
+          // resubmit instead.
+          return yield* Effect.die(
+            new DurableToolUnresolvedError({
+              toolName: String(name),
+              toolCallId: id
+            })
+          )
         }
 
         if (outcome._tag === "Failed") {

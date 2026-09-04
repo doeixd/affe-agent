@@ -38,6 +38,17 @@ const tempDatabase = Effect.acquireRelease(
 /** An envelope as a recorder would offer it; the conformance suite's own shape. */
 const event = (sequence: number) => DeliveryLogConformance.envelope(sequence, { _tag: "RunStarted" })
 
+/**
+ * Named through the group rather than written out.
+ *
+ * A test that arms `"DeliveryLog:after-comit"` reads exactly like one that
+ * passes, and reports nothing when the boundary it meant is never reached --
+ * which is the failure mode the closed location set exists to prevent, walked
+ * straight back in through a string literal.
+ */
+const afterCommit = DeliveryLog.failpoints.qualified("after-commit")
+const beforeCommit = DeliveryLog.failpoints.qualified("before-commit")
+
 describe("failpoints", () => {
   it.effect("the seam is a no-op unless a test provides one", () =>
     Effect.gen(function* () {
@@ -51,7 +62,7 @@ describe("failpoints", () => {
 
   it.effect("a crash records the boundaries it reached, in order", () =>
     Effect.gen(function* () {
-      const crash = yield* Failpoints.at("DeliveryLog:after-commit")
+      const crash = yield* Failpoints.at(afterCommit)
       const log = yield* DeliveryLog.memoryLog
 
       const exit = yield* log.append("s1", "k1", event(1)).pipe(
@@ -68,10 +79,7 @@ describe("failpoints", () => {
       }
       // Both boundaries were reached, in the order the code claims: the commit
       // happens before the publication.
-      assert.deepStrictEqual(yield* crash.hits, [
-        "DeliveryLog:before-commit",
-        "DeliveryLog:after-commit"
-      ])
+      assert.deepStrictEqual(yield* crash.hits, [beforeCommit, afterCommit])
       assert.strictEqual(yield* crash.reached, 1)
     })
   )
@@ -81,7 +89,7 @@ describe("failpoints", () => {
       const file = yield* tempDatabase
       yield* Effect.gen(function* () {
         const log = yield* DeliveryLog.sqlLogWithTable()
-        const crash = yield* Failpoints.at("DeliveryLog:after-commit")
+        const crash = yield* Failpoints.at(afterCommit)
 
         // The process stops with the row committed and nothing published.
         const exit = yield* log.append("s1", "k1", event(1)).pipe(
@@ -117,7 +125,7 @@ describe("failpoints", () => {
 
   it.effect("the crash can be aimed at a later occurrence, so the first pass gets through", () =>
     Effect.gen(function* () {
-      const crash = yield* Failpoints.at("DeliveryLog:after-commit", { occurrence: 2 })
+      const crash = yield* Failpoints.at(afterCommit, { occurrence: 2 })
       const log = yield* DeliveryLog.memoryLog
 
       const first = yield* log.append("s1", "k1", event(1)).pipe(Effect.provide(crash.layer))
@@ -140,10 +148,7 @@ describe("failpoints", () => {
       const appended = yield* log.append("s1", "k1", event(1)).pipe(Effect.provide(crash.layer))
 
       assert.strictEqual(appended._tag, "Appended")
-      assert.deepStrictEqual(yield* crash.hits, [
-        "DeliveryLog:before-commit",
-        "DeliveryLog:after-commit"
-      ])
+      assert.deepStrictEqual(yield* crash.hits, [beforeCommit, afterCommit])
       assert.strictEqual(yield* crash.reached, 0)
     })
   )

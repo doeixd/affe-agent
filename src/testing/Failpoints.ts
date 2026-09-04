@@ -85,10 +85,6 @@ export const at = (location: string, options?: Options): Effect.Effect<Crash> =>
     }
   })
 
-/** Records every boundary reached and crashes at none. */
-export const record = (): Effect.Effect<Crash> =>
-  at("@doeixd/effect-agent/testing/Failpoints/never")
-
 /** What a `"die"` crash dies with, so a test can recognise its own. */
 export class FailpointCrash extends Error {
   constructor(readonly location: string) {

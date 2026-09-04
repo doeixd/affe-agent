@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect } from "effect"
 
 /**
  * A place a durable pass can be made to die, named.
@@ -38,12 +38,11 @@ export const Failpoint = Context.Reference<Service>(
 /**
  * A subsystem's own typed door onto the shared reference.
  *
- * The locations are a closed tuple, so a call site cannot name a boundary that
- * does not exist and a test cannot pin one that was deleted -- adding a
- * boundary is a deliberate edit to the list, which someone reviews. The
- * `Schema.Literals` is exported alongside for the same closure at runtime,
- * which is what lets a test's own configuration be validated rather than
- * silently ignored when a name is misspelled.
+ * The locations are a closed tuple, so neither a call site nor a test can name
+ * a boundary that does not exist: adding one is a deliberate edit to the list,
+ * which someone reviews. `qualified` is how a test should name a boundary --
+ * a misspelled string literal is the one way back into the failure mode this
+ * closure exists to prevent.
  *
  * Locations are qualified with the subsystem on the way out, so two subsystems
  * may both have a `before-persist` without a test having to disambiguate them
@@ -55,17 +54,9 @@ export const group = <const Locations extends readonly [string, ...Array<string>
 ) => {
   const qualified = (location: Locations[number]) => `${subsystem}:${location}`
   return {
-    subsystem,
-    locations,
-    /** Every location of this group, qualified, for a test that wants the list. */
-    all: locations.map((location) => `${subsystem}:${location}`),
-    schema: Schema.Literals(locations),
+    /** The name a test arms, checked against the closed set above. */
     qualified,
     hit: (location: Locations[number]): Effect.Effect<void> =>
       Effect.flatMap(Failpoint, (failpoint) => failpoint.hit(qualified(location)))
   } as const
 }
-
-export type Group<Locations extends readonly [string, ...Array<string>]> = ReturnType<
-  typeof group<Locations>
->

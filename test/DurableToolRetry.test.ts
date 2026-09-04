@@ -1,9 +1,14 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Effect, Exit, Layer, Ref, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { Workflow } from "effect/unstable/workflow"
+import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
+import * as DurableAgent from "../src/durable/DurableAgent.js"
+import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableToolkit from "../src/durable/DurableToolkit.js"
+import * as FakeModel from "./FakeModel.js"
 
 /**
  * Retry safety for durable tool calls (`docs/plan-failure-paths.md` 48a).
@@ -126,6 +131,65 @@ describe("durable tool retry safety", () => {
       )
     }),
     60_000
+  )
+
+  /**
+   * The half of 48a that matters most, and the one the first version of this
+   * file missed.
+   *
+   * Stopping upstream's ten automatic retries buys nothing on its own. A tool
+   * failure raised as a *typed* error is handed to `ToolExecution`, which
+   * under the default `ReturnToModel` policy commits it as a failed tool
+   * result and shows it to the model -- whose reasonable next move is to call
+   * the tool again. The eleventh charge would simply come from the model
+   * instead of the schedule.
+   *
+   * So an unresolved outcome is a defect, and the observable consequence is
+   * this: the model is never asked a second time.
+   */
+  it.live("an unresolved tool ends the run rather than inviting the model to try again", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const toolkit = Toolkit.make(Charge)
+      const handled = yield* toolkit.pipe(
+        Effect.provide(
+          toolkit.toLayer({
+            charge: () => Effect.flatMap(Ref.update(attempts, (n) => n + 1), () => Effect.interrupt)
+          })
+        )
+      )
+
+      // Two turns are scripted. If the unresolved call were returned to the
+      // model, it would take the second one and could charge again.
+      const { layer: model, recorder } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "charge", params: { amount: "500" } }] },
+        { text: "charged after all" }
+      ])
+      const store = yield* DurableChannels.memoryStore
+      const durable = DurableAgent.workflow(
+        "UnresolvedCharge",
+        Agent.make({ toolkit: handled, loop: AgentLoop.bounded(4) }),
+        { store }
+      )
+
+      const result = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "unresolved-1", "refund me")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(
+        Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(model)))
+      )
+
+      assert.isTrue(Exit.isFailure(result), "an unknown tool outcome must not settle as a success")
+      assert.strictEqual(yield* Ref.get(attempts), 1, "the tool handler ran more than once")
+      // The decisive one: the model was asked exactly once, so it never had
+      // the chance to reissue the call it was told had failed.
+      assert.strictEqual(
+        (yield* recorder.prompts).length,
+        1,
+        "the model was asked again after a tool whose outcome is unknown"
+      )
+    }),
+    30_000
   )
 
   it.effect("retry safety is read from the tool's own idempotency annotation", () =>

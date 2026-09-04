@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentClient } from "../src/client/index.js"
@@ -171,12 +171,16 @@ describe("AgentClientConformance", () => {
             createSession: (options) =>
               Effect.map(real.createSession(options), (session) => ({
                 ...session,
-                // Longer than the row's own bound. This is the shape of the
-                // relay bug -- cancellation parked on something that has not
-                // arrived -- without needing a relay.
+                // Derived from the row's own bound rather than written out,
+                // so raising the bound cannot quietly turn this proof into a
+                // test that passes for the wrong reason. This is the shape of
+                // the relay bug -- cancellation parked on something that has
+                // not arrived -- without needing a relay.
                 prompt: (input, promptOptions) =>
                   session.prompt(input, promptOptions).pipe(
-                    Effect.onInterrupt(() => Effect.sleep("8 seconds"))
+                    Effect.onInterrupt(() =>
+                      Effect.sleep(Duration.times(AgentClientConformance.cancellationBound, 2))
+                    )
                   )
               }))
           }))
