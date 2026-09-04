@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { Cause, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
@@ -407,6 +407,139 @@ describe("approval across a delegation", () => {
       const exit = yield* Effect.exit(research.handler({ prompt: "go" }, { preliminary: () => Effect.void }))
       assert.isTrue(exit._tag === "Failure", "the child ran an approval-requiring tool with nobody asked")
       assert.strictEqual(yield* Ref.get(wiped), 0)
+    }),
+    30_000
+  )
+
+  it.live("a delegation of a delegation: `via` is the path, outermost first, and one answer reaches the grandchild", () =>
+    Effect.gen(function* () {
+      const wiped = yield* Ref.make(0)
+      const grandchild = Agent.make({
+        instructions: "grandchild",
+        tools: [Agent.tool(Wipe, () => Effect.as(Ref.update(wiped, (n) => n + 1), "wiped"))],
+        loop: AgentLoop.bounded(3)
+      })
+      const grandchildModel = yield* FakeModel.layer([
+        { toolCalls: [{ id: "g1", name: "wipe", params: {} }] },
+        { text: "the grandchild finished" }
+      ])
+      const child = Agent.make({
+        instructions: "child",
+        tools: [
+          Subagent.tool("sub", grandchild, {
+            description: "Delegate further.",
+            provide: grandchildModel.layer,
+            inherit: { approval: "parent" }
+          })
+        ],
+        loop: AgentLoop.bounded(3)
+      })
+      const childModel = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "sub", params: { prompt: "go" } }] },
+        { text: "the child finished" }
+      ])
+      const parent = Agent.make({
+        instructions: "Delegate.",
+        tools: [
+          Subagent.tool("research", child, {
+            description: "Delegate research.",
+            provide: childModel.layer,
+            inherit: { approval: "parent" }
+          })
+        ],
+        loop: AgentLoop.bounded(4)
+      })
+      const { layer: parentModel } = yield* FakeModel.script([
+        { toolCalls: [{ id: "r1", name: "research", params: { prompt: "go" } }] },
+        { text: "the parent answered" }
+      ])
+
+      const via = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(parent, { elicitation: Elicitation.memory })
+          const probe = yield* AgentProbe.make(session)
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          const asked = yield* probe.awaitEvent("ElicitationRequested")
+          const request = AgentEvent.is("ElicitationRequested")(asked) ? asked.event : undefined
+          assert.isDefined(request)
+          const detail = Schema.decodeUnknownSync(Permission.ApprovalDetail)(request!.detail)
+          yield* AgentSession.respond(session, { id: request!.id, granted: true })
+          yield* Fiber.join(running)
+          return detail.via
+        })
+      ).pipe(Effect.provide(parentModel))
+
+      assert.deepStrictEqual(via, ["research", "sub"], "the path is not outermost first")
+      assert.strictEqual(yield* Ref.get(wiped), 1, "the answer did not reach the grandchild")
+    }),
+    30_000
+  )
+
+  it.live("a forwarded request and the parent's own, asked at once, have distinct ids", () =>
+    Effect.gen(function* () {
+      /**
+       * Elicitation ids are `submission-N:elicit-M`, both counters per
+       * session -- so a child's first request has exactly the id of the
+       * parent's own first request. Under parallel tool execution the parent
+       * asks both at once, and an elicitor keeps one waiter per id. The
+       * forwarded id is namespaced by the child session; this row is what
+       * fails if that stops being so, and the failure was an overwritten
+       * waiter and a run that hung.
+       */
+      const child = Agent.make({
+        instructions: "child",
+        tools: [Agent.tool(Wipe, () => Effect.succeed("wiped"))],
+        loop: AgentLoop.bounded(3)
+      })
+      const childModel = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "wipe", params: {} }] },
+        { text: "the child finished" }
+      ])
+      const Own = Tool.make("own", { parameters: Schema.Struct({}), success: Schema.String })
+        .setNeedsApproval(true)
+      const parent = Agent.make({
+        instructions: "Delegate, and act.",
+        tools: [
+          Subagent.tool("research", child, {
+            description: "Delegate research.",
+            provide: childModel.layer,
+            inherit: { approval: "parent" }
+          }),
+          Agent.tool(Own, () => Effect.succeed("done"))
+        ],
+        loop: AgentLoop.bounded(4)
+      })
+      const { layer: parentModel } = yield* FakeModel.script([
+        {
+          toolCalls: [
+            { id: "r1", name: "research", params: { prompt: "go" } },
+            { id: "o1", name: "own", params: {} }
+          ]
+        },
+        { text: "the parent answered" }
+      ])
+
+      const ids = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(parent, { elicitation: Elicitation.memory })
+          // Two requests from one turn; subscribed before the prompt so
+          // neither can be missed.
+          const asked = yield* Effect.forkChild(
+            Stream.runCollect(
+              Stream.take(Stream.filter(session.events, AgentEvent.is("ElicitationRequested")), 2)
+            )
+          )
+          const running = yield* Effect.forkChild(session.prompt("go"))
+          const ids = Array.from(yield* Fiber.join(asked)).map((envelope) =>
+            AgentEvent.is("ElicitationRequested")(envelope) ? envelope.event.id : "?"
+          )
+          for (const id of ids) yield* AgentSession.respond(session, { id, granted: true })
+          yield* Fiber.join(running)
+          return ids
+        })
+      ).pipe(Effect.provide(parentModel))
+
+      assert.notStrictEqual(ids[0], ids[1], "the child's request and the parent's own share an id")
     }),
     30_000
   )

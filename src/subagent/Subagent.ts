@@ -9,7 +9,6 @@ import * as Budget from "../budget/Budget.js"
 import * as Elicitation from "../Elicitation.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
-import type * as ModelCapabilities from "../model/ModelCapabilities.js"
 
 /**
  * Subagents (issue #4 item 4): ergonomics for the pattern the library already
@@ -134,18 +133,37 @@ export interface Inherit {
  * request is stamped with this tool's name (`detail.via`, outermost first,
  * so a delegation of a delegation reads as the path it took). Outside any
  * session `Current` is `None` and the child refuses, as it always did.
+ *
+ * **Ids are namespaced by the child session.** Elicitation ids are
+ * `submission-N:elicit-M`, and both counters are per session, so a child's
+ * first request has exactly the id of the parent's own first request. Under
+ * parallel tool execution the parent can be asking both at once, and the
+ * parent's elicitor keeps one waiter per id. The child's id is prefixed
+ * with its session on the way up and stripped on the way back, so the
+ * parent's consumers see a distinct id and the child sees its own.
  */
 const forwarded = (via: string): Elicitation.Factory => ({
   make: (sessionId) =>
     Effect.flatMap(Elicitation.Current, (current) =>
       Option.match(current, {
         onNone: () => Elicitation.denied.make(sessionId),
-        onSome: (parent) =>
-          Effect.succeed<Elicitation.Elicitor>({
-            elicit: (request, announce) => parent.elicit(stamped(request, via), announce),
-            respond: parent.respond,
-            pending: parent.pending
+        onSome: (parent) => {
+          const prefix = `${sessionId}/`
+          const up = (id: string) => `${prefix}${id}`
+          const down = (id: string) => (id.startsWith(prefix) ? id.slice(prefix.length) : id)
+          return Effect.succeed<Elicitation.Elicitor>({
+            elicit: (request, announce) =>
+              Effect.map(
+                parent.elicit({ ...stamped(request, via), id: up(request.id) }, announce),
+                (response) => ({ ...response, id: request.id })
+              ),
+            respond: (response) => parent.respond({ ...response, id: up(response.id) }),
+            pending: Effect.map(parent.pending, (all) =>
+              all
+                .filter((request) => request.id.startsWith(prefix))
+                .map((request) => ({ ...request, id: down(request.id) })))
           })
+        }
       }))
 })
 
@@ -167,13 +185,8 @@ const stamped = (request: Elicitation.Request, via: string): Elicitation.Request
 const charging = (inherit: Inherit | undefined) =>
   <E, R, Tools extends Record<string, Tool.Any>>(
     inner: AgentLoop.AgentLoop<E, R, Tools>
-  ): AgentLoop.AgentLoop<
-    E | ModelCapabilities.UnknownModelError
-      | ModelCapabilities.UnknownCurrentModelError
-      | ModelCapabilities.UnpricedModelError,
-    R | Budget.Budget,
-    Tools
-  > => inherit?.budget === false ? inner : Budget.charge(inner)
+  ): AgentLoop.AgentLoop<E, R | Budget.Budget, Tools> =>
+    inherit?.budget === false ? inner : Budget.charge(inner)
 
 /**
  * The `Budget` the child runs under: the parent's when there is one, which is

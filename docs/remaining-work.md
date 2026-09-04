@@ -1371,6 +1371,15 @@ and should not until it is committed. Item 30 is untouched.
     includes the session id, and `test/Budget.test.ts` pins two sessions on
     one budget summing rather than deduplicating.
 
+    One residue, stated in `Budget.charge`'s doc: it records cost only when a
+    table in context prices the child's model, and records nothing for cost
+    otherwise -- the opposite of `cost`'s fail-on-unpriced rule, because
+    `charge` has no ceiling and cannot know whether money is watched, and a
+    table is often in context for the context-window check. So a parent
+    capped with `cost` whose child runs on an unpriced model is not charged
+    for that child's money. Give the child a priced model, or its own `cost`
+    cap.
+
 53. **A child agent's approval-requiring tool cannot be approved by anyone**
     (found 2026-09-04 by `test/PermissionSubagent.test.ts`). A tool marked
     `needsApproval` asks for an approval, and a session answers that from its
@@ -1427,8 +1436,13 @@ and should not until it is committed. Item 30 is untouched.
     default stays the construction-time refusal, because forwarding puts a
     real question to a person about an agent they cannot see. Outside any
     session `Current` is `None` and the child refuses as it always did. Three
-    rows in `test/PermissionSubagent.test.ts`: granted, refused, and no
-    session. This is also the answer for the MCP-bound child above, which the
+    rows in `test/PermissionSubagent.test.ts`: granted, refused, no
+    session, a delegation of a delegation (`via` is the path), and -- found
+    by the review -- a forwarded request and the parent's own asked at once.
+    Elicitation ids are `submission-N:elicit-M` with both counters per
+    session, so a child's first request had exactly the parent's first id and
+    the elicitor kept one waiter; the forwarded id is now namespaced by the
+    child session, and the row hangs without it. This is also the answer for the MCP-bound child above, which the
     static check cannot see: forward, and the person decides.
 
     Two things that *are* right and are pinned in the same file: a child's

@@ -624,7 +624,6 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
       handler
         .handle(call.name, call.params, call.id)
         .pipe(
-          Effect.provideService(Elicitation.Current, Option.some(forwardable)),
           Effect.flatMap((stream) =>
             Stream.runFoldEffect(
               stream,
@@ -650,6 +649,9 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
               )
             )
           ),
+          // Around the fold as well as the handle: a streaming handler's body
+          // runs when its stream is consumed, which is here, not above.
+          Effect.provideService(Elicitation.Current, Option.some(forwardable)),
           // A finalizer, not an uninterruptible block: once the fiber is
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.

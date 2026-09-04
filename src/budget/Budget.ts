@@ -203,21 +203,21 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
  * this -- a ceiling it should observe *inside one delegation* is the child's
  * own `within`, which shares the counter.
  *
- * Tokens are always recorded. Cost is recorded when a `ModelCapabilities` is
- * in context, and follows `cost`'s rule there: a model the table has no price
- * for fails the turn rather than being counted as free. Without a table,
- * cost is not recorded, so a parent capped with `cost` must give the child a
- * table too -- the same requirement `cost` itself has.
+ * Tokens are always recorded. Cost is recorded when a `ModelCapabilities` in
+ * context prices the child's model, and **not otherwise** -- which is the
+ * opposite of `cost`'s rule, deliberately. `cost` fails an unpriced model
+ * because its caller declared a money ceiling and silently counting zero
+ * would void it. `charge` has no ceiling of its own and cannot know whether
+ * money is being watched at all: a table may be in context for the
+ * context-window check, and failing every delegated child under it, on a
+ * fake or unlisted model, would be a worse silence than the one it avoids.
+ * The residue is stated: a parent capped with `cost` whose child runs on a
+ * model the table cannot price is not charged for that child's money, and
+ * should give the child a priced model or its own `cost` cap.
  */
 export const charge = <E, R, Tools extends Record<string, Tool.Any>>(
   inner: AgentLoop.AgentLoop<E, R, Tools>
-): AgentLoop.AgentLoop<
-  E | ModelCapabilities.UnknownModelError
-    | ModelCapabilities.UnknownCurrentModelError
-    | ModelCapabilities.UnpricedModelError,
-  R | Budget,
-  Tools
-> =>
+): AgentLoop.AgentLoop<E, R | Budget, Tools> =>
   AgentLoop.make((state) =>
     Effect.gen(function*() {
       const budget = yield* Budget
@@ -226,9 +226,10 @@ export const charge = <E, R, Tools extends Record<string, Tool.Any>>(
       const capabilities = yield* Effect.serviceOption(ModelCapabilities.ModelCapabilities)
       if (Option.isSome(capabilities)) {
         const price = yield* ModelCapabilities.priceOfCurrent(state.response.usage).pipe(
-          Effect.provideService(ModelCapabilities.ModelCapabilities, capabilities.value)
+          Effect.provideService(ModelCapabilities.ModelCapabilities, capabilities.value),
+          Effect.option
         )
-        yield* budget.spendCost(price, key)
+        if (Option.isSome(price)) yield* budget.spendCost(price.value, key)
       }
       return yield* inner.decide(state)
     })
