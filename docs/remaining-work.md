@@ -1378,6 +1378,22 @@ and should not until it is committed. Item 30 is untouched.
     own tool, and the parent is asked only about the delegation), and a parent
     approving a delegation is not approving what the child then does with it.
 
+54. **Deciding what happens at the seams** ([plan-seams.md](./plan-seams.md),
+    2026-09-04). The synthesis of items 50-53 and the fatal durable/output
+    defect: none of them is a bug *inside* a module, and each is silent. The
+    delegation boundary is the sharpest case, because the answers do not merely
+    fail to exist -- they disagree. Principal crosses (a fibre reference),
+    budget does not (a loop combinator), approval does not (a session option),
+    and none of that was chosen.
+
+    Ranked there: fix the budget under replay (a live bug that terminates
+    correct work); decide the delegation boundary, starting with making a
+    child's unapprovable tool fail at construction rather than silently at
+    runtime; give injected tools one accessor, since the fatal defect was one
+    caller of a set with no single definition; add a combination matrix so the
+    next gap is a blank cell; extract `Agent.Any` from item 46; and make this
+    file's claims verifiable, since it misdirected twice in one day.
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:

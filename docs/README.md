@@ -65,6 +65,7 @@ workerd through miniflare). Each file carries its own status line, and
 
 | document | what it is |
 | --- | --- |
+| [plan-seams.md](./plan-seams.md) | Deciding what happens *between* the parts: the budget is wrong under replay, the delegation boundary is undecided (budget, approval and principal each cross or not by accident of mechanism), injected tools have no single definition, and pairs are untested by construction. Every item is backed by a test in the tree. |
 | [plan-failure-paths.md](./plan-failure-paths.md) | Making the failure paths provable: a read of `danieljvdm/effect-agent`'s source, which crashes durable passes at named points where we could not. Failpoints, tool retry safety, cancellation and resumption as contract rows, the relay's deferred half. 48a/48b/48d/48e/48f landed; the durable mailbox is withdrawn, with the walk-through. |
 | [plan-agent-product-control-plane.md](./plan-agent-product-control-plane.md) | Persistent named-agent product/control-plane architecture: `AgentSpec -> AgentDefinition`, organizations, projects/tasks, SessionDirectory + Needs You, browser/computer, connections/OAuth, automations, artifacts, knowledge, frontend, and an ordered build sequence over the existing kernel. |
 | [plan-workbench.md](./plan-workbench.md) | A fully open-source Open WebUI/bb-class workbench with Effect-native product/runtime/UI seams: `AgentClient` stays the execution contract, `AgentEvent` drives a UI-neutral projection, and React/assistant-ui/AG-UI are replaceable edge adapters. |
