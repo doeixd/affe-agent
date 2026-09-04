@@ -1,9 +1,11 @@
-import { Cause, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import * as Accumulator from "../internal/streamAccumulator.js"
 import { AiError, LanguageModel, Response, Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
+import type * as AgentOutput from "../AgentOutput.js"
+import { describedTools } from "../internal/describedTools.js"
 
 /**
  * Makes every model call of a submission a durable `Activity`.
@@ -71,21 +73,20 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
   options?: {
     readonly prefix?: string | undefined
     /**
-     * Tools the journal must be able to *describe* but never executes.
+     * The agent's declared output, when it has one.
      *
-     * An agent that declares an `AgentOutput` has its output tool injected per
-     * turn by `AgentTurn`; it is the harness's own and deliberately never
-     * enters the agent's tool record. The journal still sees it, because the
-     * model calls it -- and a part schema built from the agent's toolkit alone
-     * has no member for that call, so encoding the response fails and the
-     * submission dies with a `SchemaError` naming a union the reader has no
-     * way to connect to a missing output tool.
+     * Its tool is injected per turn by `AgentTurn` and never enters the
+     * agent's tool record, so the journal's part schema has to be told about
+     * it separately -- see `internal/describedTools.ts` for why that set has a
+     * name. Without it, encoding a response that calls the output tool fails
+     * and the submission dies with a `SchemaError` naming a union the reader
+     * has no way to connect to a missing output tool.
      *
-     * Only the schemas are affected. Handlers are not touched here, which is
-     * right: the injected tool's handler closes over one session's staged
-     * value and is not an activity to replay.
+     * Only the schemas are affected. Handlers are untouched, which is right:
+     * the injected tool's handler closes over one session's staged value and
+     * is not an activity to replay.
      */
-    readonly alsoDescribing?: ReadonlyArray<Tool.Any> | undefined
+    readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
   }
 ): Effect.Effect<
   Layer.Layer<LanguageModel.LanguageModel>,
@@ -120,10 +121,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     // codec encoded parameter schemas; result schemas remain unchanged.
     // Everything a response can mention: the agent's own tools, plus whatever
     // the harness injects per turn and the agent's record therefore omits.
-    const described = [
-      ...Object.values(toolkit.tools),
-      ...(options?.alsoDescribing ?? [])
-    ]
+    const described = describedTools(toolkit.tools, { output: options?.output ?? Option.none() })
     // Left over the agent's own toolkit on purpose: this one is used only for
     // its *type* parameters, which the cast below restates, and widening it to
     // `Tool.Any` erases `Tools` and takes the stream's element type with it.

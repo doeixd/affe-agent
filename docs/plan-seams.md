@@ -46,8 +46,8 @@ ordinary tool" is elegant, and is exactly why nobody ever had to choose.
    that silently terminates correct work.
 2. **B. Decide the delegation boundary** — the structural item; A, item 52 and
    item 53 are all instances of it.
-3. **C. One accessor for an agent's effective tools** — the fatal bug was one
-   caller of a set that has no single definition.
+3. ~~**C. One accessor for an agent's effective tools**~~ — **shipped**; the
+   audit found one caller rather than many, and §3.3 records the correction.
 4. **D. A combination matrix** — so the next gap is a blank cell rather than an
    outage.
 5. **E. `Agent.Any`, extracted from item 46** — cheap, and users hit it.
@@ -159,13 +159,31 @@ I fixed that caller by threading `alsoDescribing` into `DurableModel`. That is
 a patch: the set has no single definition, so the next caller will get it wrong
 the same way.
 
-**Design.** `Agent.effectiveTools(agent)` — the agent's own tools plus whatever
-the harness injects — and every enumerating caller uses it. `DurableModel`'s
-`alsoDescribing` becomes internal or disappears.
+**Design.** One named accessor, used by every enumerating caller, so the set
+has a definition rather than a patch threaded through one function's options.
 
-**First audit, before writing any code:** `grep -rn "toolkit.tools\|Object.values(.*tools)" src/`, and check each hit against the question "does this need the injected ones?". MCP tool listing and the permission projection are the two I would expect to be wrong.
+**SHIPPED 2026-09-04, and the audit corrected this entry.** I expected several
+wrong callers and predicted MCP tool listing and the permission projection.
+Both predictions were wrong, and the blast radius is **one file**:
 
-**Size.** Small, plus however many callers the audit turns up.
+* `AgentTurn.resolveToolkit` is where the injection *happens*, and is correct
+  by construction.
+* `DurableModel` was the only other enumerator, and was the fatal bug.
+* MCP exposes nine fixed tools rather than the agent's toolkit.
+* `code/Catalog` and `code/CodeMode` enumerate caller-supplied namespaced
+  groups, which is a different set entirely.
+
+So this is `src/internal/describedTools.ts`, and it exists to give the concept
+a *name* rather than because the set is hard to compute or widely got wrong.
+`DurableModel.wrap` now takes `output: agent.output` instead of a vague
+`alsoDescribing` list, which also removed the same `Option.match` duplicated at
+both call sites.
+
+Recorded at length because overstating a risk in a plan is the same failure as
+understating one, and the next reader should not inherit a hunt that was
+already run and came back nearly empty.
+
+**Size.** Small, and it stayed small.
 
 ### 3.4 (D) A combination matrix
 

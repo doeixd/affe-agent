@@ -294,12 +294,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       const toolkit = options.toolkit ?? (yield* resolveToolkit(agent.toolkit))
       const durableTools = yield* DurableToolkit.wrap(toolkit)
-      const modelLayer = yield* DurableModel.wrap(durableTools, {
-        alsoDescribing: Option.match(agent.output, {
-          onNone: () => [],
-          onSome: (output) => [output.tool]
-        })
-      })
+      const modelLayer = yield* DurableModel.wrap(durableTools, { output: agent.output })
       const channels = yield* DurableChannels.factory(options.store)
       // Substituted, not defaulted: a paused run under durability suspends the
       // workflow rather than parking a fibre, so a submission waiting on a
