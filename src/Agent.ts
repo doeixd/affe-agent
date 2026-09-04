@@ -264,21 +264,27 @@ export interface Config<
 export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
   tools: Tools,
   handlers: Toolkit.HandlersFrom<Toolkit.ToolsByName<Tools>>
-): Effect.Effect<
-  Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>,
+): InternalToolkit.Declared<
+  Toolkit.ToolsByName<Tools>,
   never,
   Tool.HandlerServices<
     Toolkit.ToolsByName<Tools>[keyof Toolkit.ToolsByName<Tools>]
   >
 > => {
   const built = Toolkit.make(...tools)
-  return built.pipe(Effect.provide(built.toLayer(handlers))) as Effect.Effect<
-    Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>,
-    never,
-    Tool.HandlerServices<
-      Toolkit.ToolsByName<Tools>[keyof Toolkit.ToolsByName<Tools>]
-    >
-  >
+  // Still an Effect, and it also says what it holds: the list is static
+  // here, so a reader that needs the tools before the agent runs (a wiring
+  // check in `Subagent`, say) can have them. See `InternalToolkit.Declared`.
+  return InternalToolkit.declare(
+    built.pipe(Effect.provide(built.toLayer(handlers))) as Effect.Effect<
+      Toolkit.WithHandler<Toolkit.ToolsByName<Tools>>,
+      never,
+      Tool.HandlerServices<
+        Toolkit.ToolsByName<Tools>[keyof Toolkit.ToolsByName<Tools>]
+      >
+    >,
+    built.tools
+  )
 }
 
 /**
@@ -501,7 +507,7 @@ export type ServicesOf<Bound extends ReadonlyArray<BoundTool<Tool.Any>>> =
  */
 const boundToolkit = <const Bound extends ReadonlyArray<BoundTool<Tool.Any>>>(
   bound: Bound
-): Effect.Effect<Toolkit.WithHandler<ToolsOf<Bound>>, never, ServicesOf<Bound>> => {
+): InternalToolkit.Declared<ToolsOf<Bound>, never, ServicesOf<Bound>> => {
   const handlers: Record<string, unknown> = {}
   for (const { tool, handler } of bound) {
     // `Object.hasOwn`, not `in`: a tool named `constructor` or `toString`
@@ -519,11 +525,7 @@ const boundToolkit = <const Bound extends ReadonlyArray<BoundTool<Tool.Any>>>(
   return toolkit(
     bound.map((entry) => entry.tool),
     handlers as Toolkit.HandlersFrom<Toolkit.ToolsByName<ReadonlyArray<Tool.Any>>>
-  ) as unknown as Effect.Effect<
-    Toolkit.WithHandler<ToolsOf<Bound>>,
-    never,
-    ServicesOf<Bound>
-  >
+  ) as unknown as InternalToolkit.Declared<ToolsOf<Bound>, never, ServicesOf<Bound>>
 }
 
 const resolveToolkit = <Tools extends Record<string, Tool.Any>, E, R>(
@@ -582,9 +584,15 @@ export const withTools =
     > = Effect.flatMap(resolveToolkit(agent.toolkit), (existing) =>
       Effect.map(added, (extra) => InternalToolkit.mergeHandled(existing, extra))
     )
+    // The declaration follows the merge: known when what it was added to was
+    // known, and the same union `mergeHandled` will produce. A toolkit
+    // resolved per turn stays undeclared, since its tools are not known yet.
+    const declared = InternalToolkit.declaredTools(agent.toolkit)
     return definition<Tools & ToolsOf<Bound>, E, R | ServicesOf<Bound>, Model, Value, Input>({
       ...agent,
-      toolkit: merged
+      toolkit: Option.isSome(declared)
+        ? InternalToolkit.declare(merged, { ...declared.value, ...added.tools })
+        : merged
     })
   }
 

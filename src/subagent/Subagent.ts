@@ -4,6 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
+import * as InternalToolkit from "../internal/toolkit.js"
 
 /**
  * Subagents (issue #4 item 4): ergonomics for the pattern the library already
@@ -131,6 +132,56 @@ const describeError = (error: unknown): string => {
 }
 
 /**
+ * A child's approval-requiring tools, if its toolkit can be read now.
+ *
+ * Nobody can answer an approval a delegated agent asks for. A tool marked
+ * `needsApproval` asks through the session's elicitation seam, and the child
+ * is opened with `Agent.run`, which has no elicitor: the parent's is not
+ * passed down and nothing else supplies one, so the request is refused and
+ * the tool never runs. The child's policy does not decide it -- `allowAll`
+ * changes nothing -- which is what separates this from an ordinary denial.
+ * Marking a tool as needing approval *disables* it, and the only report is a
+ * string the parent model reads three delegations in.
+ *
+ * So it is refused here instead, before the agent starts, the way
+ * `Agent.make` refuses two toolkits. That is a decision about *when* the
+ * fault is reported and deliberately not about what the answer should be:
+ * forwarding the parent's elicitor is the obvious fix and has a real question
+ * inside it -- the parent's user is asked to approve a tool call from an agent
+ * they cannot see, named by a tool they did not choose. Until that is
+ * decided, loud beats silent.
+ *
+ * A `needsApproval` given as a function counts. It may ask, and nobody could
+ * answer it either; deciding at construction that it never will would need
+ * the parameters.
+ *
+ * A toolkit resolved per turn from runtime state declares nothing before it
+ * runs, so that child cannot be checked here and keeps the runtime refusal;
+ * the doc on `tool` says so. Everything built from a static list --
+ * `tools: [...]`, `Agent.toolkit`, `withTools`, the presets -- declares.
+ */
+const unapprovable = (agent: { readonly toolkit: Agent.ToolkitInput<any, any, any> }): ReadonlyArray<string> =>
+  Option.match(InternalToolkit.declaredTools(agent.toolkit), {
+    onNone: () => [],
+    onSome: (tools: Readonly<Record<string, Tool.Any>>) =>
+      Object.values(tools)
+        .filter((tool) => tool.needsApproval !== undefined && tool.needsApproval !== false)
+        .map((tool) => tool.name)
+  })
+
+const refuseUnapprovable = (name: string, agent: { readonly toolkit: Agent.ToolkitInput<any, any, any> }): void => {
+  const names = unapprovable(agent)
+  if (names.length > 0) {
+    throw new Error(
+      `Subagent "${name}": the child holds ${names.length === 1 ? "a tool" : "tools"} marked needsApproval ` +
+        `(${names.map((n) => `"${n}"`).join(", ")}) and nobody can answer for a delegated agent, ` +
+        `so ${names.length === 1 ? "it" : "they"} would be refused on every call. ` +
+        `Drop the annotation on the child's tool, or wrap it in a tool of the parent's that asks instead.`
+    )
+  }
+}
+
+/**
  * A tool that delegates one prompt to a child agent and returns its answer.
  *
  * ```ts
@@ -160,12 +211,22 @@ const describeError = (error: unknown): string => {
  * provider already memoises) it costs nothing; for one that opens a connection
  * pool or reads config it is the whole cost of delegating. Use
  * {@link toolScoped} there, which builds once and shares.
+ *
+ * **A child whose tools need approval is refused here**, by throwing, the
+ * way `Agent.make` refuses a misconfigured agent. Nobody can answer an
+ * approval a delegated agent asks for -- the child has no elicitor -- so a
+ * tool marked `needsApproval` would be refused on every call and the only
+ * report would be a string in the parent model's context. Better a wiring
+ * fault before the agent starts. The one child this cannot inspect is one
+ * whose toolkit is resolved per turn from runtime state and so declares no
+ * tools up front; that child keeps the runtime refusal.
  */
 export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, LE = never>(
   name: string,
   agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   options: Options<R, LE>
 ) => {
+  refuseUnapprovable(name, agent)
   const definition = Tool.make(name, {
     description: options.description,
     parameters: parametersOf(agent.input),
@@ -227,7 +288,12 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
   agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   options: Options<R, LE>
 ) =>
-  Effect.map(Layer.build(options.provide), (services) => {
+  // The same refusal as `tool`, and before the layer is built: a wiring
+  // fault should not cost a connection pool to discover.
+  Effect.suspend(() => {
+    refuseUnapprovable(name, agent)
+    return Layer.build(options.provide)
+  }).pipe(Effect.map((services) => {
     const definition = Tool.make(name, {
       description: options.description,
       parameters: parametersOf(agent.input),
@@ -250,4 +316,4 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
         : run(params).pipe(Effect.mapError(describeError))
 
     return Agent.tool(definition, handler)
-  })
+  }))

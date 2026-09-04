@@ -1,5 +1,45 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import type { Tool, Toolkit } from "effect/unstable/ai"
+
+/**
+ * A toolkit input that says what it holds before it is resolved.
+ *
+ * Upstream `Toolkit` is already an Effect with a `tools` property, and this
+ * keeps that shape through the harness's own lowering: `Agent.toolkit`,
+ * `Agent.make({ tools })` and `withTools` all build from a static list, so
+ * the Effect they return can carry it. A toolkit resolved from runtime state
+ * is a bare Effect and declares nothing, which is the honest answer.
+ *
+ * The declared record is exactly what the Effect resolves to. `withTools`
+ * merges the two records the same way `mergeHandled` merges the toolkits, so
+ * the declaration cannot drift from the resolution.
+ */
+export interface Declared<Tools extends Record<string, Tool.Any>, E, R>
+  extends Effect.Effect<Toolkit.WithHandler<Tools>, E, R> {
+  readonly tools: Tools
+}
+
+/** Attach the static record to a toolkit Effect. */
+export const declare = <Tools extends Record<string, Tool.Any>, E, R>(
+  effect: Effect.Effect<Toolkit.WithHandler<Tools>, E, R>,
+  tools: Tools
+): Declared<Tools, E, R> => Object.assign(effect, { tools })
+
+/**
+ * The tools a toolkit input declares, if it declares them.
+ *
+ * `Some` for a handled toolkit value and for a `Declared` Effect; `None` for
+ * an Effect that will only say what it holds once it has run. Anything that
+ * wants to inspect an agent's tools before the agent runs -- a wiring check,
+ * a listing -- reads this, so the "can we know yet?" question is answered in
+ * one place.
+ */
+export const declaredTools = <Tools extends Record<string, Tool.Any>, E, R>(
+  input: Toolkit.WithHandler<Tools> | Effect.Effect<Toolkit.WithHandler<Tools>, E, R>
+): Option.Option<Tools> =>
+  "tools" in input && typeof input.tools === "object" && input.tools !== null
+    ? Option.some(input.tools as Tools)
+    : Option.none()
 
 /**
  * Resolve a toolkit that is either a plain value or an `Effect` (the form

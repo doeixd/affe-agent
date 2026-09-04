@@ -1373,6 +1373,23 @@ and should not until it is committed. Item 30 is untouched.
     the delegation's blast radius, decided when you write the child" is a
     defensible answer too. What is not defensible is the current silence.
 
+    **The silence is closed (2026-09-04, `plan-seams.md` B, first half); the
+    policy question is still open.** `Subagent.tool` and `toolScoped` now
+    refuse at construction -- by throwing, the way `Agent.make` refuses two
+    toolkits -- a child holding any tool marked `needsApproval`, the function
+    form included, since it may ask and nobody could answer it either.
+    `toolScoped` refuses before building the child's layer. To read a child's
+    tools before the child runs, a toolkit built from a static list now
+    *declares* them (`Agent.toolkit`, `tools: [...]`, `withTools`; see
+    `internal/toolkit.ts`), which is what `Agent.toolkit` returning a bare
+    Effect had made impossible. The one child the check cannot reach is one
+    whose toolkit is resolved per turn from runtime state, which declares
+    nothing until it runs; that child keeps the runtime refusal, and
+    `test/PermissionSubagent.test.ts` pins it in the direction that fails when
+    someone closes it. The second half -- an `inherit.approval` option that
+    forwards the parent's elicitor with the child's name attached -- is B's
+    remaining commit.
+
     Two things that *are* right and are pinned in the same file: a child's
     tools are governed by the child's own policy (a denying child blocks its
     own tool, and the parent is asked only about the delegation), and a parent

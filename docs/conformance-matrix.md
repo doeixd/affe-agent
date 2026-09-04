@@ -93,8 +93,8 @@ the empty cells are its output, not its incompleteness.
 | --- | --- | --- | --- | --- |
 | token / cost ceiling | `Budget` | `BudgetCombinations` ¹ | n/a ² | **item 52** ³ |
 | run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | **not tested** ⁵ |
-| tool approval | `Permission` | `DurablePermission` | contract row | **item 53** ⁶ |
-| elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | **item 53** ⁶ |
+| tool approval | `Permission` | `DurablePermission` | contract row | refused at construction ⁶ |
+| elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | refused at construction ⁶ |
 | principal | `Principal` | `Principal` | **not tested** ⁷ | `SubagentPrincipal` ⁸ |
 | declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | text only ⁹ |
 | typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
@@ -127,12 +127,17 @@ approval, or on a human who went home.
 ⁵ Expected to be the same gap as ³, for the same reason -- a child has its own
 loop -- but untested. A blank cell rather than an assumption.
 
-⁶ A tool marked `needsApproval` asks for an approval, and a session answers
-that from its elicitation seam. `Subagent.tool` opens the child with
-`Agent.run`, which has no elicitor, so the request is refused and the tool
-never runs. The child's *policy* does not decide it: `allowAll` changes
-nothing, which is what separates this from an ordinary denial. Marking a tool
-as needing approval disables it rather than protecting it.
+⁶ **Was item 53; now loud rather than silent, and still not crossing.** A tool
+marked `needsApproval` asks for an approval, and a session answers that from
+its elicitation seam. `Subagent.tool` opens the child with `Agent.run`, which
+has no elicitor, so the request was refused and the tool never ran; the
+child's *policy* did not decide it, and marking a tool as needing approval
+disabled it rather than protecting it. `Subagent.tool` and `toolScoped` now
+refuse such a child at construction (`PermissionSubagent`), so the fault is
+found before the agent starts. Whether an approval *should* cross -- the
+parent's user asked about an agent they cannot see -- is B's open half. A
+child whose toolkit is resolved per turn declares nothing up front and keeps
+the runtime refusal; that row is pinned too.
 
 ⁷ **Caught reviewing this table, which is the table working.** This cell first
 read "`Principal`, relay stamp" -- and neither backs it. `Principal.test.ts`

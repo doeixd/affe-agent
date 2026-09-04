@@ -145,6 +145,28 @@ asserted" comments come out.
 **Size.** Medium. The construction-time check is the fiddly part, because it
 means reaching into a child's resolved toolkit before the child has run.
 
+**First half shipped 2026-09-04: the construction-time refusal.** The fiddly
+part was exactly where predicted, and the shape of the fix is worth recording
+because it was not the one planned. There is no "resolved toolkit" to reach
+into: `Agent.make` lowers `tools: [...]` through `Agent.toolkit`, which
+returned a bare Effect, so *every* child looked like the per-turn case and a
+naive check never fired -- the first draft of the test proved that by failing.
+The fix is that a toolkit built from a static list now **declares** its tools
+on the Effect it returns (`InternalToolkit.Declared`, the same shape upstream
+`Toolkit` already has), `withTools` merges the declaration the way it merges
+the toolkits, and one reader (`declaredTools`) answers "can we know yet?".
+`test/DeclaredToolkit.test.ts` pins that the declaration is what the Effect
+resolves to, and that adding to an undeclared toolkit does not invent one.
+
+What is refused: any tool with `needsApproval` set, the function form
+included -- it may ask, nobody could answer, and deciding otherwise at
+construction would need the parameters. `toolScoped` refuses before building
+the layer. What is not: a toolkit resolved per turn from runtime state, which
+keeps the runtime refusal and is pinned in the direction that fails when
+someone closes it.
+
+The second half, `inherit`, is next.
+
 ### 3.3 (C) One accessor for an agent's effective tools
 
 **The gap.** An agent that declares an `AgentOutput` has its output tool

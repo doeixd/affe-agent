@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Ref, Schema } from "effect"
+import { Cause, Effect, Layer, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -33,7 +33,12 @@ describe("approval across a delegation", () => {
       const wiped = yield* Ref.make(0)
       const parentAsked = yield* Ref.make<ReadonlyArray<string>>([])
 
-      const wipe = Agent.tool(Wipe, () => Effect.as(Ref.update(wiped, (n) => n + 1), "wiped"))
+      // A plain tool, deliberately: this row measures whose *policy* governs
+      // a child's tool, and a tool marked `needsApproval` can no longer be
+      // delegated at all (the rows below). The policy question is the same
+      // either way.
+      const PlainWipe = Tool.make("wipe", { parameters: Schema.Struct({}), success: Schema.String })
+      const wipe = Agent.tool(PlainWipe, () => Effect.as(Ref.update(wiped, (n) => n + 1), "wiped"))
 
       // The child denies everything. If the parent's policy governed the
       // child's tools, the parent's `allowAll` would override this.
@@ -91,36 +96,37 @@ describe("approval across a delegation", () => {
     30_000
   )
 
-  it.live("a child's tool that needs approval cannot be approved by anyone", () =>
+  /**
+   * The finding, and what was decided about it.
+   *
+   * A tool marked `needsApproval` asks for an approval, and a session answers
+   * that from its elicitation seam. `Subagent.tool` opens the child with
+   * `Agent.run`, which has no elicitor to give it -- the parent's is not
+   * passed down and nothing else supplies one -- so the request is refused
+   * and the tool never runs. The child's *policy* is not what decides it:
+   * `allowAll` makes no difference, which is exactly what separates this
+   * from an ordinary denial. A tool marked as needing approval was not so
+   * much protected as disabled, and the only report was a string the parent
+   * model read.
+   *
+   * Item 53 recorded that. `plan-seams.md` B decided the first half: not
+   * *who* should answer -- asking the parent's user to approve a tool they
+   * cannot see is a real question -- but *when* the fault is reported. It is
+   * now refused at construction, the way `Agent.make` refuses two toolkits,
+   * so a wiring fault is found before the agent starts rather than three
+   * delegations in.
+   *
+   * The control from the original finding is kept: same child, same policy,
+   * one tool marked `needsApproval` and one not. The plain child delegates
+   * and its tool runs; the approving child cannot be made into a tool at all.
+   */
+  it.live("a child holding an approval-requiring tool is refused at construction", () =>
     Effect.gen(function* () {
-      /**
-       * The finding, isolated by running the same shape twice.
-       *
-       * A tool marked `needsApproval` asks for an approval, and a session
-       * answers that from its elicitation seam. `Subagent.tool` opens the
-       * child with `Agent.run`, which has no elicitor to give it -- the
-       * parent's is not passed down and nothing else supplies one -- so the
-       * request is refused and the tool never runs. The child's *policy* is
-       * not what decides it: `allowAll` makes no difference, which is exactly
-       * what separates this from an ordinary denial.
-       *
-       * The control is the proof. Same child, same policy, same script, one
-       * tool marked `needsApproval` and one not: the plain tool runs and the
-       * approving one is dead. So a delegated agent may hold any tool it
-       * likes as long as nobody has to approve it, and a tool marked as
-       * needing approval is not so much protected as disabled.
-       *
-       * Written down rather than fixed, as item 53: passing the parent's
-       * elicitor to the child is one answer and *asking the parent's user to
-       * approve a tool they cannot see* is a real question about it.
-       */
-      const approvingRan = yield* Ref.make(0)
       const plainRan = yield* Ref.make(0)
 
-      // The tool that needs approval.
       const approvingChild = Agent.make({
         instructions: "child",
-        tools: [Agent.tool(Wipe, () => Effect.as(Ref.update(approvingRan, (n) => n + 1), "did it"))],
+        tools: [Agent.tool(Wipe, () => Effect.succeed("did it"))],
         permission: Permission.allowAll,
         loop: AgentLoop.bounded(3)
       })
@@ -128,13 +134,19 @@ describe("approval across a delegation", () => {
         { toolCalls: [{ id: "c1", name: "wipe", params: {} }] },
         { text: "the child finished" }
       ])
-      const approvingResearch = Subagent.tool("research", approvingChild, {
-        description: "Delegate research.",
-        provide: approvingModel.layer,
-        onError: "return"
-      })
 
-      // The same thing, without the annotation.
+      // Refused by throwing, at the call, before any run exists.
+      assert.throws(
+        () =>
+          Subagent.tool("research", approvingChild, {
+            description: "Delegate research.",
+            provide: approvingModel.layer
+          }),
+        /"wipe"/,
+        "a child with an unanswerable approval was accepted: its tool would be refused on every call, and nobody told anyone"
+      )
+
+      // The control: the same thing, without the annotation, delegates.
       const Plain = Tool.make("plain", { parameters: Schema.Struct({}), success: Schema.String })
       const plainChild = Agent.make({
         instructions: "child",
@@ -148,27 +160,12 @@ describe("approval across a delegation", () => {
       ])
       const plainResearch = Subagent.tool("research", plainChild, {
         description: "Delegate research.",
-        provide: plainModel.layer,
-        onError: "return"
+        provide: plainModel.layer
       })
-
-      const parentScript = [
+      const withPlain = yield* FakeModel.script([
         { toolCalls: [{ id: "r1", name: "research", params: { prompt: "go" } }] },
         { text: "the parent answered" }
-      ] as const
-
-      const withApproving = yield* FakeModel.script([...parentScript])
-      yield* Agent.run(
-        Agent.make({
-          instructions: "Delegate.",
-          tools: [approvingResearch],
-          permission: Permission.allowAll,
-          loop: AgentLoop.bounded(4)
-        }),
-        "go"
-      ).pipe(Effect.scoped, Effect.provide(withApproving.layer))
-
-      const withPlain = yield* FakeModel.script([...parentScript])
+      ])
       yield* Agent.run(
         Agent.make({
           instructions: "Delegate.",
@@ -182,12 +179,110 @@ describe("approval across a delegation", () => {
       assert.strictEqual(
         yield* Ref.get(plainRan),
         1,
-        "the control did not run either, so this test is measuring something other than approval"
+        "the control did not run, so the refusal above is measuring something other than approval"
       )
+    }),
+    30_000
+  )
+
+  it.live("`toolScoped` refuses the same child, before its layer is built", () =>
+    Effect.gen(function* () {
+      const builds = yield* Ref.make(0)
+      const approvingChild = Agent.make({
+        instructions: "child",
+        tools: [Agent.tool(Wipe, () => Effect.succeed("did it"))],
+        loop: AgentLoop.bounded(3)
+      })
+      const model = yield* FakeModel.layer([{ text: "unused" }])
+      const counted = Layer.effectDiscard(Ref.update(builds, (n) => n + 1)).pipe(
+        Layer.provideMerge(model.layer)
+      )
+
+      const exit = yield* Effect.exit(
+        Effect.scoped(
+          Subagent.toolScoped("research", approvingChild, {
+            description: "Delegate research.",
+            provide: counted
+          })
+        )
+      )
+
+      assert.isTrue(exit._tag === "Failure", "an unanswerable approval was accepted by toolScoped")
+      assert.include(
+        exit._tag === "Failure" ? String(Cause.squash(exit.cause)) : "",
+        "\"wipe\""
+      )
+      // A wiring fault should not cost a connection pool to discover.
+      assert.strictEqual(yield* Ref.get(builds), 0, "the child's layer was built before the refusal")
+    })
+  )
+
+  it.live("a `needsApproval` given as a function counts, because nobody could answer it either", () =>
+    Effect.gen(function* () {
+      // Asks only sometimes. Deciding at construction that it never will
+      // would need the parameters, so it is treated as a tool that may ask.
+      const Sometimes = Tool.make("sometimes", {
+        parameters: Schema.Struct({ force: Schema.Boolean }),
+        success: Schema.String
+      }).setNeedsApproval((params) => params.force)
+      const child = Agent.make({
+        instructions: "child",
+        tools: [Agent.tool(Sometimes, () => Effect.succeed("did it"))],
+        loop: AgentLoop.bounded(3)
+      })
+      const model = yield* FakeModel.layer([{ text: "unused" }])
+      assert.throws(
+        () => Subagent.tool("research", child, { description: "Delegate.", provide: model.layer }),
+        /"sometimes"/
+      )
+    })
+  )
+
+  it.live("a child whose toolkit is resolved per turn cannot be inspected, and keeps the runtime refusal", () =>
+    Effect.gen(function* () {
+      /**
+       * The one shape the construction-time check cannot reach: a toolkit
+       * resolved per turn from runtime state, which declares nothing until it
+       * has run. (`Agent.toolkit` and `tools: [...]` both declare, so this
+       * has to be a bare Effect.) Pinned so the gap is a row rather than a surprise.
+       * The tool is still dead -- this is the original item 53 behaviour --
+       * and the test says so, in the direction that will fail if someone
+       * closes the gap, so they come here and delete it.
+       */
+      const ran = yield* Ref.make(0)
+      const child = Agent.make({
+        instructions: "child",
+        toolkit: Effect.suspend(() =>
+          Agent.toolkit([Wipe], {
+            wipe: () => Effect.as(Ref.update(ran, (n) => n + 1), "did it")
+          })
+        ),
+        permission: Permission.allowAll,
+        loop: AgentLoop.bounded(3)
+      })
+      const childModel = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "wipe", params: {} }] },
+        { text: "the child finished" }
+      ])
+      // Accepted: there is nothing to read.
+      const research = Subagent.tool("research", child, {
+        description: "Delegate research.",
+        provide: childModel.layer
+      })
+      const parentModel = yield* FakeModel.script([
+        { toolCalls: [{ id: "r1", name: "research", params: { prompt: "go" } }] },
+        { text: "the parent answered" }
+      ])
+      const result = yield* Agent.run(
+        Agent.make({ instructions: "Delegate.", tools: [research], loop: AgentLoop.bounded(4) }),
+        "go"
+      ).pipe(Effect.scoped, Effect.provide(parentModel.layer))
+
+      assert.strictEqual(result.text, "the parent answered")
       assert.strictEqual(
-        yield* Ref.get(approvingRan),
+        yield* Ref.get(ran),
         0,
-        "a child's approval-requiring tool now runs: somebody is answering for it, and who should be written down"
+        "the tool ran: someone is answering approvals for a delegated child now, and the construction-time refusal should go"
       )
     }),
     30_000
