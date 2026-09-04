@@ -345,11 +345,11 @@ for (const mutation of selected) {
   }
 }
 
-writeFileSync("mutations.json", JSON.stringify(rows, null, 2))
+writeFileSync("docs/reports/mutations.json", JSON.stringify(rows, null, 2))
 
 const bad = rows.filter((row) => row.verdict !== "bites")
 console.log(
-  `\n${rows.length - bad.length}/${rows.length} mutations bite; wrote mutations.json`
+  `\n${rows.length - bad.length}/${rows.length} mutations bite; wrote docs/reports/mutations.json`
 )
 if (bad.length > 0) {
   console.error(`\n${bad.length} did not:`)

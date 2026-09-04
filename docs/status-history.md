@@ -4902,7 +4902,7 @@ the first attempt read `tail`'s status and looked like a pass.
 
 The sixteen mutations are the ones verified by hand this week, so the table
 starts as a record of work already done rather than as an aspiration. Every one
-bites at `2026-09-01`; the run is recorded in `mutations.json`.
+bites at `2026-09-01`; the run is recorded in `docs/reports/mutations.json`.
 ---
 
 ## 2026-09-01 — run policy through the loop seam (comparison plan, item 2)

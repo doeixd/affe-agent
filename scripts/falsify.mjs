@@ -292,5 +292,5 @@ for (const brk of breaks) {
   }
 }
 
-writeFileSync("falsification.json", JSON.stringify(rows, null, 2))
-console.log("\nwrote falsification.json")
+writeFileSync("docs/reports/falsification.json", JSON.stringify(rows, null, 2))
+console.log("\nwrote docs/reports/falsification.json")

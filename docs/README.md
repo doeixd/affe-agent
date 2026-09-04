@@ -146,6 +146,10 @@ Superseded by whatever landed since; useful for the reasoning, not the verdicts.
   is a finding nobody will act on.
 - `.txt` files are earlier, less-edited briefs; `.md` files have been through a
   pass. The extension carries no other meaning.
+- `reports/` holds **generated** run output, not prose: `mutations.json` from
+  `npm run verify:mutations`, `falsification.json` from `npm run
+  verify:durability`. Each is overwritten wholesale by its script -- edit the
+  script, never the file.
 
 - [status-history.md](./status-history.md) — the chronology that used to be
   `STATUS.md`: every dated finding and falsification, oldest first; new work
