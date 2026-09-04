@@ -281,11 +281,25 @@ open, so the next pass does not have to re-derive it.
     relay work, item 26.
 24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
     serialisation actually bites.
-25. **Per-principal credentials** — *note (2026-09-01): item 6 still says
-    multi-user is "blocked on the principal reaching the tool fibre". That
-    mechanism shipped 2026-08-31, recorded in this very entry, so the blocker
-    is stale and items 6 and 25 are one piece of open work described twice.
-    Merge them the next time either is touched.* (`plan-tool-credentials.md` §6) — the
+25. ~~**Per-principal credentials**~~ — **CLOSED 2026-09-04, as already
+    done.** Its own note asked whoever touched it to merge it with item 6,
+    which is what this is. Item 6 records `plan-tool-credentials.md` as
+    complete, and the code agrees: `Credentials.Bindings` selects by
+    `(integration, subject)` with the user binding winning over the org one,
+    `resolveFor` reads `CurrentPrincipal`, `methodFromOpenApi` derives methods
+    from `securitySchemes`, and `withReauth` turns a `reauthRequired` failure
+    into an elicitation and retries exactly once --
+    `test/CredentialsReauth.test.ts` pins the five cases that matter,
+    including that a misconfiguration is never turned into a question and
+    that a reconnect which did not help fails rather than asking forever.
+
+    The tail below said all four of those were "still queued". They were
+    already built when it was written; the entry was never updated. It is
+    left in place, struck through, because the misdirection is the point: a
+    ranked list that says the top item is open when it shipped costs whoever
+    reads it a session. *(Original text follows.)*
+
+    (`plan-tool-credentials.md` §6) — the
     principal decision is made and its mechanism SHIPPED 2026-08-31
     (`docs/plan-principal-on-tool-fibre.md`, decided as recommended):
     `Principal.CurrentPrincipal` on the root, set by
