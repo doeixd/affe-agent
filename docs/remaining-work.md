@@ -1351,6 +1351,33 @@ and should not until it is committed. Item 30 is untouched.
     child's loop when the parent's context carries a `Budget`, and the
     question it raises is whether a delegation should be able to opt out.
 
+53. **A child agent's approval-requiring tool cannot be approved by anyone**
+    (found 2026-09-04 by `test/PermissionSubagent.test.ts`). A tool marked
+    `needsApproval` asks for an approval, and a session answers that from its
+    elicitation seam. `Subagent.tool` opens the child with `Agent.run`, which
+    has no elicitor: the parent's is not passed down and nothing else supplies
+    one, so the request is refused and the tool never runs.
+
+    The child's *policy* is not what decides it, which is what separates this
+    from an ordinary denial: `Permission.allowAll` on the child makes no
+    difference. Isolated with a control -- same child, same policy, same
+    script, one tool annotated and one not; the plain tool runs and the
+    annotated one is dead. So a delegated agent may hold any tool it likes as
+    long as nobody has to approve it, and marking a tool as needing approval
+    disables it rather than protecting it.
+
+    The obvious fix -- pass the parent's elicitor to the child -- has a real
+    question inside it: the parent's user would be asked to approve a tool
+    call from an agent they cannot see, named by a tool they did not choose.
+    `Subagent.Options` is where an answer would go, and "the child's tools are
+    the delegation's blast radius, decided when you write the child" is a
+    defensible answer too. What is not defensible is the current silence.
+
+    Two things that *are* right and are pinned in the same file: a child's
+    tools are governed by the child's own policy (a denying child blocks its
+    own tool, and the parent is asked only about the delegation), and a parent
+    approving a delegation is not approving what the child then does with it.
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
