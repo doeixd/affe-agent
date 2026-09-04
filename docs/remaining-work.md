@@ -6,10 +6,10 @@ plans, tools/toolkit plans, and the progress files themselves). This is the
 live list; `STATUS.md` is what is true now, `docs/status-history.md` the
 chronology, and `ROADMAP.md` the capability view.
 
-State of play, re-measured 2026-09-01: every issue through #80 is closed, #4
-(the roadmap tracker) last, on 2026-08-30. `npm test` is green at **1820 tests
-in 168 files** (up from 1466 in 131 when this was written), zero Effect
-diagnostics, portability and the workerd bundle pass, and
+State of play, re-measured 2026-09-03: every issue through #80 is closed, #4
+(the roadmap tracker) last, on 2026-08-30. `npm test` is green at **2071 tests
+in 189 files** (1820 in 168 on 2026-09-01; 1466 in 131 when this was written),
+zero Effect diagnostics, portability and the workerd bundle pass, and
 `npm run verify:durability` shows D1–D7 biting (D4b survives by construction).
 
 Two things that number hides, both worth knowing before trusting a red run:
@@ -30,8 +30,21 @@ Two things that number hides, both worth knowing before trusting a red run:
   2n and compares them, because load is exactly what a ratio cancels. The
   bound and the size are both measured -- at half the size the same regression
   hides inside a fold dominated by parsing, which an earlier draft discovered
-  by passing with the bug restored. `ClusterMultiNode` remains: it races a
-  real ~15s clock, and H7 would move it to `TestClock`.
+  by passing with the bug restored. `ClusterMultiNode` remains, and **the fix recorded for
+  it does not work.** H7 said move it to `TestClock`; it cannot go. It drives
+  a real two-node cluster -- HTTP runners, liveness pings, shared SQL storage
+  -- and the durable suites already run `it.live` because the engine's timers
+  do not advance under a test clock. Nor is it sleeping on fixed durations:
+  it already polls on conditions every 10ms, which is the pattern one would
+  migrate *to*.
+
+  Its load sensitivity is inherent rather than a defect. The cluster's windows
+  are real timeouts, so a node starved for longer than `shardLockExpiration`
+  genuinely loses its shards and the scenario under test becomes a different
+  one. The honest options are to widen those windows in the fixture, trading
+  duration for headroom, or to accept that this one wants a quiet machine.
+  Neither is `TestClock`, and nobody should spend a session discovering that
+  again.
 - ~~The count includes work that is not committed.~~ No longer true as of
   2026-09-01: item 27's working-tree changes were committed as `be75b83`.
 
