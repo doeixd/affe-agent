@@ -321,62 +321,91 @@ describe("DurableStreamsDeliveryLog internals", () => {
     Effect.gen(function* () {
       /**
        * A session's log is unbounded and never truncated, so the cost of
-       * folding it is a cost that only grows. It used to rebuild `entries`
-       * and `payloads` per record -- `[...index.entries, entry]` and a fresh
-       * `Map` -- making the fold O(n^2), and `append` walked the key map
-       * linearly to recover its own sequence on top of that.
+       * folding it is a cost that only grows. It used to rebuild `entries` and
+       * `payloads` per record -- `[...index.entries, entry]` and a fresh `Map`
+       * -- making the fold O(n^2), and `append` walked the key map linearly to
+       * recover its own sequence on top of that.
        *
-       * The guard is deliberately loose. It is not a benchmark; it is here to
-       * fail if the linear scan comes back. At this size the fold takes
-       * ~240ms with the fix and ~4.7s without it, so the bound sits with
-       * room on both sides rather than on a knife edge.
-       * Only the *rebuild* is timed: the writes below are network-bound and
-       * would drown the signal.
+       * **Measured as a ratio, not against a stopwatch.** This used to fold one
+       * log and assert it finished inside 1.5 seconds, which is a claim about
+       * this machine rather than about the algorithm: it failed when the suite
+       * ran beside another one, which `remaining-work.md` records as a known
+       * flake, and it would have passed a quadratic fold on a fast enough box.
+       *
+       * Folding n and 2n back to back and comparing them tests the thing the
+       * name promises. Load is the reason the old form was unreliable and is
+       * exactly what a ratio cancels: whatever slows one measurement slows the
+       * other.
+       *
+       * The bound is measured rather than guessed. Restoring the original
+       * regression -- the spread *and* the per-record `new Map`, since the
+       * spread alone is not the expensive half -- gives 841ms then 3807ms, a
+       * ratio of 4.5; the fixed code gives 236ms then 434ms, a ratio of 1.8.
+       * The size matters as much as the bound: at half this n the quadratic
+       * term is a minority of a fold dominated by parsing, and the same
+       * regression only reaches 2.6, which is why an earlier draft of this
+       * test passed with the bug restored.
+       *
+       * Only the *rebuilds* are timed. The writes are network-bound and would
+       * drown the signal.
        */
       const { url } = yield* server
       const options = { baseUrl: `${url}/long` }
-      const raw = DurableStreamsDeliveryLog.streamFor(options, "s")
-      yield* raw.ensure
 
-      const count = 5_000
-      yield* Effect.forEach(
-        Array.from({ length: count }, (_, i) => i),
-        (i) =>
-          raw.append({
-            key: `k${i}`,
-            envelope: envelope(i + 1, { _tag: "RunStarted" })
-          }),
-        // Concurrent on purpose: the writes are network-bound and are not
-        // what is being measured. Nothing below depends on their order --
-        // the assertion is that the sequences are the record positions
-        // 1..n, whatever order the stream ended up in.
-        { discard: true, concurrency: 32 }
-      )
+      const half = 4_000
+      const write = (session: string, count: number) =>
+        Effect.gen(function* () {
+          const raw = DurableStreamsDeliveryLog.streamFor(options, session)
+          yield* raw.ensure
+          yield* Effect.forEach(
+            Array.from({ length: count }, (_, i) => i),
+            (i) => raw.append({ key: `k${i}`, envelope: envelope(i + 1, { _tag: "RunStarted" }) }),
+            // Concurrent on purpose: the writes are network-bound and are not
+            // what is being measured. Nothing below depends on their order --
+            // the assertion is that the sequences are the record positions
+            // 1..n, whatever order the stream ended up in.
+            { discard: true, concurrency: 32 }
+          )
+        })
 
-      // A log that has never seen this session: its first read is the fold.
-      const log = yield* DurableStreamsDeliveryLog.make(options)
-      const started = Date.now()
-      const events = yield* log.read("s")
-      const elapsed = Date.now() - started
+      yield* write("small", half)
+      yield* write("large", half * 2)
 
-      assert.strictEqual(events.length, count)
+      /** A log that has never seen this session: its first read is the fold. */
+      const foldOf = (session: string) =>
+        Effect.gen(function* () {
+          const log = yield* DurableStreamsDeliveryLog.make(options)
+          const started = performance.now()
+          const events = yield* log.read(session)
+          return { elapsed: performance.now() - started, events, log }
+        })
+
+      const small = yield* foldOf("small")
+      const large = yield* foldOf("large")
+
+      assert.strictEqual(small.events.length, half)
+      assert.strictEqual(large.events.length, half * 2)
       // Numbering survives the rewrite: first, last, and no gaps.
-      assert.strictEqual(events[0]?.sequence, 1)
-      assert.strictEqual(events[count - 1]?.sequence, count)
+      assert.strictEqual(large.events[0]?.sequence, 1)
+      assert.strictEqual(large.events[half * 2 - 1]?.sequence, half * 2)
       assert.isTrue(
-        events.every((event, i) => event.sequence === i + 1),
+        large.events.every((event, i) => event.sequence === i + 1),
         "sequences are not the record positions"
       )
+
+      const ratio = large.elapsed / Math.max(small.elapsed, 1)
       assert.isTrue(
-        elapsed < 1_500,
-        `rebuilding ${count} records took ${elapsed}ms; the linear scan is back`
+        ratio < 2.75,
+        `folding ${half * 2} records took ${ratio.toFixed(1)}x folding ${half} ` +
+          `(${small.elapsed.toFixed(0)}ms then ${large.elapsed.toFixed(0)}ms); ` +
+          "doubling the input should roughly double the work, so the linear scan is back"
       )
 
       // And an append onto that log still names its own position by lookup
       // rather than by walking the keys.
       assert.deepStrictEqual(
-        yield* log.append("s", "last", envelope(1, { _tag: "SubmissionStarted" })),
-        { _tag: "Appended", sequence: count + 1 }
+        yield* large.log.append("large", "last", envelope(1, { _tag: "SubmissionStarted" })),
+        { _tag: "Appended", sequence: half * 2 + 1 }
       )
     }).pipe(Effect.scoped),
     120_000
