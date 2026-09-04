@@ -1609,11 +1609,14 @@ for: the gap is recorded as a gap rather than assumed either way.*
     `AgentSession.make` (**withdrawn** the same evening: the `denied`
     default is fail-closed *and loud* -- the run fails with
     `ToolApprovalRequiredError` -- and only the delegation was silent);
-    item 46; the engine recording usage so the loop only decides; naming
-    what a tool can see of its session; the static toolkit as the common
-    case in the type; a typed child returning its value (**done**:
-    `Subagent.Answer`, the matrix's "text only" cell is a test); and this
-    file becoming a list again.
+    item 46; the engine recording usage so the loop only decides (**done**:
+    `Budget.record` in `AgentRun`, `within` and `cost` pure, and a memo-map
+    sharing bug found by the `budget: false` row on the way); naming what a
+    tool can see of its session (**done**: `guide-sessions.md`); the static
+    toolkit as the common case in the type; a typed child returning its
+    value (**done**: `Subagent.Answer`, the matrix's "text only" cell is a
+    test); and this file becoming a list again. Open: item 46, the static
+    toolkit, and the split of this file.
 
     ```text
     verify: grep "Ids.makeIdSource(id)" src/AgentSession.ts
