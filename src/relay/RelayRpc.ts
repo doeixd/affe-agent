@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Queue, Schema } from "effect"
+import { Effect, Layer, Option, Queue, Schema, Stream, SubscriptionRef } from "effect"
 import type { Rpc, RpcGroup, RpcMessage } from "effect/unstable/rpc"
 import { RpcClient, RpcClientError, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import * as Relay from "./Relay.js"
@@ -174,6 +174,47 @@ export const clientProtocol = <Rpcs extends Rpc.Any>(
           ),
         { channel }
       )
+      /**
+       * A dropped connection settles what was in flight, rather than leaving
+       * it waiting for an answer that can no longer come.
+       *
+       * The far end does not survive the gap, which is what forces this. When
+       * the relay drops this node it marks it offline, so the target's next
+       * `send` fails with `RelayPeerOfflineError`, and its server protocol
+       * treats that as a disconnect and releases the RPC client holding the
+       * request. The response is genuinely gone. Reconnecting cannot recover
+       * it without a durable mailbox, and there is not one.
+       *
+       * So the honest answer is a transport failure, which the seam already
+       * documents as the one worth retrying. It goes out as the protocol's own
+       * `ClientProtocolError` rather than a synthesised `Exit`, because that is
+       * the frame Effect RPC defines for "the transport failed underneath you"
+       * and it fails every pending request without this module having to
+       * encode anyone else's error schema.
+       *
+       * Only when something is actually outstanding: the status starts at
+       * `connecting`, and announcing a protocol error to a client with nothing
+       * in flight would be inventing a failure.
+       */
+      yield* Effect.forkScoped(
+        SubscriptionRef.changes(relay.status).pipe(
+          Stream.filter((state) => state._tag !== "online"),
+          Stream.tap(() =>
+            requestClientMap.size === 0 ? Effect.void : Effect.gen(function* () {
+              requestClientMap.clear()
+              yield* broadcast({
+                _tag: "ClientProtocolError",
+                error: clientDefect(
+                  "the relay connection dropped while this request was in flight",
+                  options.peer
+                )
+              })
+            })
+          ),
+          Stream.runDrain
+        )
+      )
+
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           // Settle whatever is still in flight, locally, before the channel

@@ -74,10 +74,20 @@ export interface Options {
    * before that -- the directory saying "online" for a peer nothing can reach
    * is worse than saying nothing.
    *
-   * Evaluated when the relay is already doing something (a send, a listing),
-   * not by a reaper fibre: the relay has no background loop, and a peer whose
-   * lease has lapsed is by definition not talking, so there is nothing to be
-   * timely about.
+   * Collected when the relay is already doing something (a send, a listing),
+   * not by a reaper fibre: the relay has no background loop and should not
+   * grow one, and whoever asks is the one who collects, so the answer a caller
+   * gets and the state the relay holds cannot disagree.
+   *
+   * The consequence is worth stating, because it surprises people: a lapsed
+   * peer is not dropped until somebody asks about it, so a node nobody is
+   * trying to reach can stay registered long past its lease. Nothing is lost
+   * by that. Expiry exists so a sender is not routed into a queue nobody
+   * drains and so the directory does not claim an unreachable peer is online,
+   * and both of those are questions, answered when they are asked. A node that
+   * has genuinely gone is not there to be told sooner either way -- and one
+   * that is still there, on a socket that merely looks alive to the relay,
+   * finds out the moment its first would-be caller does.
    */
   readonly lease?: Duration.Duration | undefined
   /**
