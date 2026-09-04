@@ -975,16 +975,6 @@ describe("DurableAgentClient (durability specifics)", () => {
         readonly roles: ReadonlyArray<string>
         readonly status: string
       }>()
-      // A false positive from the Effect language service, not a real missing
-      // service: `tsc` accepts this file, and the diagnostic appears or
-      // disappears with the *shape of the program* rather than with anything
-      // here -- adding any export to `src/testing/index.js`, even
-      // `export const dummy = 1`, is enough to make it fire. Narrowing
-      // `using`'s callback to `Effect<A, E>` is not the fix either: these
-      // bodies genuinely need `AgentClient` and `WorkflowEngine`, and doing it
-      // produces three real errors. Suppressed at the one site rather than
-      // silencing the rule.
-      // @effect-diagnostics-next-line effect/missingEffectContext:off
       yield* using(f.client, (client) =>
         Effect.gen(function* () {
           const session = yield* Effect.scoped(client.createSession({ sessionId: "order" }))

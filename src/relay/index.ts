@@ -1,5 +1,6 @@
 export * as Relay from "./Relay.js"
 export * as RelayProtocol from "./RelayProtocol.js"
 export * as RelayServer from "./RelayServer.js"
+export * as RelayCredentials from "./RelayCredentials.js"
 export * as RelayClient from "./RelayClient.js"
 export * as RelayRpc from "./RelayRpc.js"

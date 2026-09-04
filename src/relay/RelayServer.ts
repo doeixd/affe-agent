@@ -1,6 +1,7 @@
 import { Clock, Context, Duration, Effect, Layer, Option, Queue, Stream } from "effect"
 import type { Headers } from "effect/unstable/http"
 import type { Rpc, RpcGroup } from "effect/unstable/rpc"
+import { StorageError } from "../Errors.js"
 import * as Relay from "./Relay.js"
 import * as RelayProtocol from "./RelayProtocol.js"
 
@@ -14,11 +15,22 @@ import * as RelayProtocol from "./RelayProtocol.js"
  * the source of every envelope is whoever the connection authenticated as.
  */
 
-/** Resolve the connection's headers to the peer they belong to. */
+/**
+ * Resolve the connection's headers to the peer they belong to.
+ *
+ * The error channel carries `StorageError` as well as
+ * `RelayUnauthorizedError`, and the distinction is load-bearing rather than
+ * tidy: an authenticator backed by a store can fail to *ask* the question, and
+ * `RelayClient` treats an unauthorized answer as terminal -- retrying a wrong
+ * credential is a slower way of being wrong. Folding a database blip into that
+ * answer would take every node in a fleet permanently offline over a
+ * transient. A store that cannot answer says so, and the node comes back when
+ * it can.
+ */
 export interface AuthenticatorService {
   readonly authenticate: (
     headers: Headers.Headers
-  ) => Effect.Effect<Relay.PeerId, Relay.RelayUnauthorizedError>
+  ) => Effect.Effect<Relay.PeerId, Relay.RelayUnauthorizedError | StorageError>
 }
 
 export class RelayAuthenticator extends Context.Service<RelayAuthenticator, AuthenticatorService>()(

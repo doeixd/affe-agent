@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import { StorageError } from "../Errors.js"
 
 /**
  * The relay's vocabulary: who a node is, which endpoint on it a message is
@@ -145,7 +146,11 @@ export const RelayError = Schema.Union([
   RelayPeerOfflineError,
   RelaySupersededError,
   RelayLeaseExpiredError,
-  RelayForbiddenError
+  RelayForbiddenError,
+  // An authenticator with a store behind it can fail to ask its question.
+  // Typed rather than a defect, because the caller's correct response is to
+  // try again, and a defect does not say that.
+  StorageError
 ])
 export type RelayError = typeof RelayError.Type
 
