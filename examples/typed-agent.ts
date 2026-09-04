@@ -1,5 +1,6 @@
 import { Effect, Fiber, Option, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
+import type { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import { AgentClient } from "../src/client/index.js"
 import * as AgentInput from "../src/AgentInput.js"
@@ -189,7 +190,11 @@ export type _RemoteSupportInputIsTheTicket = Assert<
     : RemoteSupportInput extends { readonly customerId: string; readonly body: string } ? true
     : false
 >
-// An agent without an input is still asked with `Prompt.RawInput`.
+// An agent without a declared input is asked with `Prompt.RawInput` -- the
+// default input, not an absence: `InputOf` is the prompt type, and neither
+// `never` (which nothing generic could unify with) nor `any`.
 type ResearcherInput = Agent.InputOf<typeof Researcher>
-export type _ResearcherTakesRawInput = Assert<[ResearcherInput] extends [never] ? true : false>
+export type _ResearcherTakesRawInput = Assert<
+  (<T>() => T extends ResearcherInput ? 1 : 2) extends (<T>() => T extends Prompt.RawInput ? 1 : 2) ? true : false
+>
 

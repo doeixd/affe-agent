@@ -10,7 +10,7 @@ evidence is named, and where it is a test it is in the tree.*
 | --- | --- | --- | --- |
 | 1 | **Ids carry their session** | two bugs in one day from ids unique only within a session | small |
 | 2 | ~~**Refuse at construction, at the top level too**~~ | **withdrawn**: the premise was wrong, see §2.2 | -- |
-| 3 | **Item 46: every agent has an input** | E showed the exact shape of the cost; three inlined helpers, one un-runnable alias | large |
+| 3 | **Item 46: every agent has an input** | steps 1–2 **shipped**; 3–6 open | large |
 | 4 | ~~**The engine records usage; the loop only decides**~~ | **shipped**; `Budget.charge` is gone | medium |
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
@@ -105,6 +105,13 @@ be run. `plan-input-default.md` has the six steps; nothing in them has moved.
 **What E leaves for it.** `Any` and the extractors stay; when the conditional
 goes, `Any` can become the alias it was meant to be, and the
 `@ts-expect-error` row in `AgentAny.test.ts` is the line that says when.
+
+**Steps 1 and 2 shipped 2026-09-04.** The conditional is gone and `Input`
+defaults to `Prompt.RawInput`. The `@ts-expect-error` row did say when: it
+became an unused directive the same run, and the row now pins the weaker
+truth -- `Agent.run` on an `Any` compiles and erases -- because `Value`
+still defaults to `never`, which is step 5. Steps 3 to 6 are open and the
+plan's own status header says what each still owes.
 
 ### 2.4 The engine records usage; the loop only decides
 

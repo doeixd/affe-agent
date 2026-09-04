@@ -66,11 +66,12 @@ export interface AgentDefinition<
    */
   in out Value = never,
   /**
-   * The typed value this agent's submissions are asked with, or `never` for
-   * `Prompt.RawInput`. Invariant for the same reason `Value` is: a caller
-   * passes it, and nothing downstream would catch a mismatch.
+   * The typed value this agent's submissions are asked with:
+   * `Prompt.RawInput` unless the agent declares an `AgentInput`. Invariant
+   * for the same reason `Value` is: a caller passes it, and nothing
+   * downstream would catch a mismatch.
    */
-  in out Input = never
+  in out Input = Prompt.RawInput
 > extends Pipeable {
   readonly instructions: Option.Option<string>
   /**
@@ -114,7 +115,7 @@ export interface AgentDefinition<
    * Absent by default: `prompt` takes `Prompt.RawInput`. See `AgentInput`
    * for the value/rendering split it introduces and what reads the value.
    */
-  readonly input: Option.Option<AgentInput.AgentInput<Input, any, E, R>>
+  readonly input: AgentInput.AgentInput<Input, any, E, R>
 }
 
 /**
@@ -147,7 +148,7 @@ export interface Config<
   Bound extends ReadonlyArray<BoundTool<Tool.Any>> = [],
   PR = never,
   Value = never,
-  Input = never,
+  Input = Prompt.RawInput,
   IE = never,
   IR = never
 > {
@@ -302,7 +303,7 @@ export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
  * parameters even when the value is exactly right. A spread of a definition
  * keeps `pipe` as an own property, so derived values pipe too.
  */
-const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel, Value = never, Input = never>(
+const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel, Value = never, Input = Prompt.RawInput>(
   fields: Omit<Any, "pipe">
 ): AgentDefinition<Tools, E, R, Model, Value, Input> =>
   ({
@@ -366,7 +367,7 @@ export const make = <
   const Bound extends ReadonlyArray<BoundTool<Tool.Any>> = [],
   PR = never,
   Value = never,
-  Input = never,
+  Input = Prompt.RawInput,
   IE = never,
   IR = never
 >(
@@ -421,7 +422,9 @@ export const make = <
     permission: config?.permission ?? Permission.allowAll,
     toolDenialPolicy: config?.toolDenialPolicy ?? ToolExecution.FailRun,
     output: Option.fromUndefinedOr(config?.output),
-    input: Option.fromUndefinedOr(config?.input),
+    // Every agent has an input; the prompt is the default. See
+    // `AgentInput.prompt` for why this is a value rather than an absence.
+    input: config?.input ?? AgentInput.prompt,
     // Not in `Config`, deliberately. A plan is a combinator
     // (`withExecutionPlan`) because it changes the *signature* -- it
     // discharges `LanguageModel` -- and `Config` cannot express that.
@@ -513,16 +516,16 @@ export type ModelOf<A> = A extends AgentDefinition<any, any, any, infer Model, i
  * of "an agent, whatever its parameters".
  *
  * What it is not for: a *parameter type* in a helper that then runs the
- * agent. `Any` is not an `AgentDefinition`, deliberately, so
- * `Agent.run(agent, ...)` on one does not compile -- which beats the
- * alternative, a result typed `any` that asks nothing of the environment.
- * That helper stays generic over the six parameters, as `Subagent.tool` is;
- * use `Any` as the *constraint* (`<A extends Agent.Any>`) and
- * `ToolsOfAgent<A>`, `ErrorOf<A>`, `RequirementsOf<A>`, `InputOf<A>`,
- * `ValueOf<A>` to say what comes out. What that construction still cannot
- * express is asking a generic agent with a literal prompt, because
- * `PromptInput<Input>` is conditional on `Input`; that is item 46, and this
- * is the part of it that could land first.
+ * agent. Since every agent has an input (`plan-input-default.md` step 2)
+ * `Any` structurally satisfies `Agent.run`, so that helper compiles -- and
+ * infers `Tools`, `E` and `R` as `any`, asking the environment for nothing
+ * checkable. That helper stays generic over the six parameters, as
+ * `Subagent.tool` is; use `Any` as the *constraint* (`<A extends
+ * Agent.Any>`) and `ToolsOfAgent<A>`, `ErrorOf<A>`, `RequirementsOf<A>`,
+ * `InputOf<A>`, `ValueOf<A>` to say what comes out. This stays an interface
+ * rather than becoming `AgentDefinition<any, ...>` because `Value` still
+ * defaults to `never`, which `any` does not admit; step 5 of the same plan
+ * is what would let it be the alias.
  */
 export interface Any extends Pipeable {
   readonly instructions: Option.Option<string>
@@ -536,15 +539,12 @@ export interface Any extends Pipeable {
   readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
   readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
   /**
-   * Both spellings, because `AgentInput` is invariant in its value through
-   * `render`'s parameter: an untyped agent's `AgentInput<never, ...>` is not
-   * assignable to `AgentInput<any, ...>` (`any` is assignable to everything
-   * but `never`), and a typed agent's is not assignable to
-   * `AgentInput<never, ...>`. The union admits each.
+   * Since every agent has an input and the default is `Prompt.RawInput`,
+   * one spelling admits all of them. (Before `plan-input-default.md` step
+   * 2 the default was `never`, which `any` does not admit, and this was a
+   * union of two instantiations.)
    */
-  readonly input: Option.Option<
-    AgentInput.AgentInput<any, any, any, any> | AgentInput.AgentInput<never, any, any, any>
-  >
+  readonly input: AgentInput.AgentInput<any, any, any, any>
 }
 
 export type ToolsOf<Bound extends ReadonlyArray<BoundTool<Tool.Any>>> = {
@@ -946,7 +946,7 @@ export const withInput =
   <Tools extends Record<string, Tool.Any>, E, R, Model, Value, _Input>(
     agent: AgentDefinition<Tools, E, R, Model, Value, _Input>
   ): AgentDefinition<Tools, E | IE, R | IR, Model, Value, A> =>
-    definition<Tools, E | IE, R | IR, Model, Value, A>({ ...agent, input: Option.some(input) })
+    definition<Tools, E | IE, R | IR, Model, Value, A>({ ...agent, input })
 
 // ---------------------------------------------------------------------------
 // One-shot
@@ -960,9 +960,9 @@ export const withInput =
  * quiescence. Reach for `AgentSession` when the conversation continues:
  * steering, follow-ups, interruption, answers, observation, identity.
  */
-export const run = <Tools extends Record<string, Tool.Any>, E, R, Value = never, Input = never>(
+export const run = <Tools extends Record<string, Tool.Any>, E, R, Value = never, Input = Prompt.RawInput>(
   agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
-  input: NoInfer<AgentSession.PromptInput<Input>>,
+  input: NoInfer<Input>,
   options?: AgentSession.PromptOptions
 ): Effect.Effect<
   AgentSession.Result<Tools, Value>,

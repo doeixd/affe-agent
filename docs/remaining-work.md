@@ -1060,8 +1060,24 @@ sizes; the items are repeated here so this list stays the one tracker.
     the `PromptInput<Input>` conditional that a helper hits when it *asks* a
     generic agent is what this item still owes.
 
+    **Steps 1 and 2 landed 2026-09-04.** `AgentInput.prompt` is the default
+    input -- the prompt wire codec as its schema, the identity as its render
+    -- `Agent.make` fills it in, `Input` defaults to `Prompt.RawInput`,
+    `PromptInput` is deleted, `definition.input` is never an `Option`, and
+    `AgentInput.Current` is set on every submission (the encoded prompt under
+    the default, so `None` means exactly "not inside a submission", and a
+    tool asking for a ticket there gets the schema's own error). The
+    `verify:` line that pinned the conditional as present is what said this
+    entry was stale, which is the checker doing its job. What is still owed:
+    step 3 (one wire shape; `AgentInput.Typed` and `InputBoundary.declared`
+    survive until it), step 4 (journals carry `input`), step 5 (`Value`, the
+    same way, which is also what lets `Agent.Any` become an alias) and step
+    6 (the guide).
+
     ```text
-    verify: grep "export type PromptInput<Input> = [Input] extends [never]" src/AgentSession.ts
+    verify: grep "export const prompt: AgentInput<Prompt.RawInput, unknown, never, never>" src/AgentInput.ts
+    verify: no-grep "export type PromptInput" src/AgentSession.ts
+    verify: grep "export const declared = " src/internal/inputBoundary.ts
     verify: grep "export interface Any extends Pipeable" src/Agent.ts
     ```
 

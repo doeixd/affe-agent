@@ -192,7 +192,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
    * without an input.
    */
   const boundary = (operation: "prompt" | "submit", input: AgentClient.RemoteInput) =>
-    InputBoundary.admit(agent.input, operation, input)
+    InputBoundary.admit(InputBoundary.declared(agent), operation, input)
 
   /**
    * The execution id for a claim, derived without dispatching anything.

@@ -551,7 +551,7 @@ export const fromSession = <Value, Input>(
   // The boundary decode, in the one place every boundary shares; see
   // `internal/inputBoundary.ts` for why `asked` is the one widening.
   const admit = (operation: "prompt" | "submit", input: RemoteInput) =>
-    Effect.map(InputBoundary.admit(session.input, operation, input), (admitted) =>
+    Effect.map(InputBoundary.admit(InputBoundary.declared(session), operation, input), (admitted) =>
       InputBoundary.asked<Input>(admitted.asked))
 
   const remember = (
@@ -748,9 +748,9 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
 // -- Typed sessions -----------------------------------------------------------------
 
 /**
- * A remote session whose `prompt` and `submit` take the agent's declared
- * input -- `PromptInput<Input>`: the schema's type, or `Prompt.RawInput`
- * for an agent without one. Everything else is the `RemoteSession` it wraps.
+ * A remote session whose `prompt` and `submit` take the agent's `Input`:
+ * the schema's type, or `Prompt.RawInput` for an agent with the default
+ * input. Everything else is the `RemoteSession` it wraps.
  */
 /**
  * A result whose declared output has been read back.
@@ -767,11 +767,11 @@ export interface TypedSession<Input, Value = never>
   extends Omit<RemoteSession, "prompt" | "submit" | "awaitSubmission">
 {
   readonly prompt: (
-    input: AgentSession.PromptInput<Input>,
+    input: Input,
     options?: RemotePromptOptions
   ) => Effect.Effect<TypedResult<Value>, RemoteError>
   readonly submit: (
-    input: AgentSession.PromptInput<Input>,
+    input: Input,
     options?: RemotePromptOptions
   ) => Effect.Effect<SubmissionReceipt, RemoteError>
   readonly awaitSubmission: (
@@ -833,11 +833,10 @@ export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model
       Effect.flatMap(session.awaitSubmission(submissionId), withValue)
   }
 
-  return Option.match(agent.input, {
-    // No declared input means `Input` is `never` and `PromptInput<Input>` is
-    // `Prompt.RawInput`, which the session takes as it is. The conditional
-    // type is what this cast restates; the compiler cannot resolve it for an
-    // abstract `Input`, and the branches are exactly its two cases.
+  return Option.match(InputBoundary.declared(agent), {
+    // The default input is the prompt, which the session takes as it is:
+    // `Input` is `Prompt.RawInput` there, and the cast restates that for an
+    // abstract `Input` the compiler cannot narrow.
     onNone: () => readingValue as TypedSession<Input, Value>,
     onSome: (input) => ({
       ...readingValue,

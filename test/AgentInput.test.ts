@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
+import type { Prompt } from "effect/unstable/ai"
 import { FetchHttpClient, HttpRouter } from "effect/unstable/http"
 import { createServer } from "node:http"
 import * as Agent from "../src/Agent.js"
@@ -86,20 +87,40 @@ describe("AgentInput", () => {
     })
   )
 
-  it.effect("outside a submission, or under an agent without an input, the value is None", () =>
+  it.effect("outside a submission the value is None; under the default input it is the encoded prompt", () =>
     Effect.gen(function* () {
       assert.isTrue(Option.isNone(yield* AgentInput.current(Ticket)))
+
+      // Every agent has an input, so inside a submission the fibre always
+      // holds one: for the default, the prompt in its wire form. A tool
+      // asking for a ticket there gets the schema's own error -- the same
+      // honest answer it gets when wired into the wrong typed agent -- rather
+      // than a `None` that would mean two different things.
+      const Probe = Tool.make("probe", { parameters: Schema.Struct({}), success: Schema.String })
+      const seen = yield* Ref.make<Option.Option<unknown>>(Option.none())
+      const probe = Agent.tool(Probe, () =>
+        Effect.gen(function* () {
+          yield* Effect.flatMap(AgentInput.Current, (raw) => Ref.set(seen, raw))
+          return yield* AgentInput.current(Ticket).pipe(
+            Effect.map(() => "decoded a ticket under a prompt"),
+            Effect.catchTag("SchemaError", () => Effect.succeed("the schema's own error"))
+          )
+        }))
       const { layer } = yield* TestLanguageModel.script([
-        TestLanguageModel.toolCall("lookup", {}, { id: "l1" }),
+        TestLanguageModel.toolCall("probe", {}, { id: "p1" }),
         TestLanguageModel.text("done")
       ])
-      const Plain = Agent.make({ tools: [lookup], loop: AgentLoop.bounded(3) })
+      const Plain = Agent.make({ tools: [probe], loop: AgentLoop.bounded(3) })
       const history = yield* Effect.gen(function* () {
         const session = yield* AgentSession.make(Plain)
         yield* session.prompt("hello")
         return yield* session.history
       }).pipe(Effect.provide(layer), Effect.scoped)
-      assert.include(JSON.stringify(history), "no ticket on this fibre")
+      assert.include(JSON.stringify(history), "the schema's own error")
+      // The encoded prompt: today's prompt wire, holding the text.
+      const raw = yield* Ref.get(seen)
+      assert.isTrue(Option.isSome(raw), "nothing on the fibre under the default input")
+      assert.include(JSON.stringify(Option.getOrNull(raw)), "hello")
     })
   )
 
@@ -361,7 +382,12 @@ export type _InputNotAny = Assert<IsAny<TypedInput> extends false ? true : false
 
 const Untyped = Agent.make({})
 type UntypedInput = Agent.InputOf<typeof Untyped>
-export type _NoInputIsNever = Assert<[UntypedInput] extends [never] ? true : false>
+// Every agent has an input, and the default is the prompt: not `never`,
+// which nothing generic could unify with, and not `any`.
+export type _NoInputIsThePrompt = Assert<
+  (<T>() => T extends UntypedInput ? 1 : 2) extends (<T>() => T extends Prompt.RawInput ? 1 : 2) ? true : false
+>
+export type _NoInputNotAny = Assert<IsAny<UntypedInput> extends false ? true : false>
 
 /** Each shape is held to its declaration, locally and through the typed client alike. */
 export const _inputShapesAreEnforced = () => ({

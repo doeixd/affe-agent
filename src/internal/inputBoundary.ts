@@ -4,7 +4,6 @@ import type { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentInput from "../AgentInput.js"
-import type * as AgentSession from "../AgentSession.js"
 import { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
 
 /**
@@ -19,15 +18,25 @@ import { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
  *
  * `asked` is what the session's `prompt` takes, and it is typed `unknown`
  * because the decode that produced it is the proof, not the type: the schema
- * is the agent's, so the value is `PromptInput<Input>` by construction. The
- * compiler cannot resolve that conditional for an abstract `Input`, so `run`
- * below holds the one widening and every boundary goes through it.
+ * is the agent's, so the value is `Input` by construction. `run` below holds
+ * the one widening and every boundary goes through it.
+ *
+ * `Declared` is `None` for the default input (`AgentInput.prompt`) and
+ * `Some` for a declared one, because the wire still carries two shapes --
+ * a prompt, or a tagged typed value -- until `plan-input-default.md` step
+ * 3. Every boundary reads it through `declared` so the distinction lives in
+ * one place and goes when the second shape does.
  */
 
 /** A prompt, or a typed input's encoded value. */
 export type RemoteInput = Prompt.RawInput | AgentInput.Typed
 
 export type Declared = Option.Option<AgentInput.AgentInput<any, any, any, any>>
+
+/** The agent's declared input, or `None` for the default prompt. See the module note. */
+export const declared = (agent: {
+  readonly input: AgentInput.AgentInput<any, any, any, any>
+}): Declared => AgentInput.isPrompt(agent.input) ? Option.none() : Option.some(agent.input)
 
 export interface Admitted {
   /** The prompt, or empty when the value is typed: the rendering is the session's to produce. */
@@ -95,8 +104,7 @@ export const askedOf = (declared: Declared, recorded: Recorded): Effect.Effect<u
  * The one widening: from what a boundary decoded to what the session's
  * signature asks for. See the module note.
  */
-export const asked = <Input>(value: unknown): AgentSession.PromptInput<Input> =>
-  value as AgentSession.PromptInput<Input>
+export const asked = <Input>(value: unknown): Input => value as Input
 
 /** Admit, then run the agent with what was admitted. */
 export const run = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
@@ -104,7 +112,7 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, 
   operation: "prompt" | "submit",
   input: RemoteInput
 ) =>
-  Effect.flatMap(admit(agent.input, operation, input), (admitted) =>
+  Effect.flatMap(admit(declared(agent), operation, input), (admitted) =>
     Agent.run(agent, asked<Input>(admitted.asked)))
 
 /** Run the agent with a recorded admission. */
@@ -112,4 +120,4 @@ export const runRecorded = <Tools extends Record<string, Tool.Any>, E, R, Model,
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   recorded: Recorded
 ) =>
-  Effect.flatMap(askedOf(agent.input, recorded), (value) => Agent.run(agent, asked<Input>(value)))
+  Effect.flatMap(askedOf(declared(agent), recorded), (value) => Agent.run(agent, asked<Input>(value)))

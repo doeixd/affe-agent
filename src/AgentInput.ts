@@ -1,5 +1,6 @@
-import { Context, Effect, Option, Schema } from "effect"
-import type { Prompt } from "effect/unstable/ai"
+import { Context, Effect, Option, Schema, SchemaGetter } from "effect"
+import { Prompt } from "effect/unstable/ai"
+import * as PromptWire from "./PromptWire.js"
 
 /**
  * A typed value a submission is asked with — the mirror of `AgentOutput`.
@@ -73,9 +74,48 @@ export const make = <A, I, E = never, R = never>(
   render: (input: A) => Prompt.RawInput | Effect.Effect<Prompt.RawInput, E, R>
 ): AgentInput<A, I, E, R> => ({ schema, render })
 
+/** A `Prompt.RawInput`: a string, an iterable of messages, or a `Prompt`. */
+const RawInput = Schema.declare(
+  (u: unknown): u is Prompt.RawInput => typeof u === "string" || (typeof u === "object" && u !== null)
+)
+
+/**
+ * The default input: a prompt, in the shape the system already speaks.
+ *
+ * Every agent has an input (`plan-input-default.md`). One that declares
+ * none is asked with `Prompt.RawInput`, and this is that declaration made
+ * explicit: the schema is the prompt wire codec every boundary already
+ * uses, so the encoded form of a prompt is today's prompt wire byte for
+ * byte, and the rendering is the identity. `Agent.make` fills it in when
+ * `input` is absent, which is what lets `Input` default to
+ * `Prompt.RawInput` instead of `never` -- the `never` was what no generic
+ * signature could unify with, and every awkwardness in typed input traced
+ * back to it.
+ *
+ * One value, compared by identity (`isPrompt`), so a boundary that still
+ * carries two wire shapes can tell "the default" from "a declared input"
+ * without a flag on the definition.
+ */
+export const prompt: AgentInput<Prompt.RawInput, unknown, never, never> = {
+  schema: PromptWire.Prompt.pipe(
+    Schema.decodeTo(RawInput, {
+      decode: SchemaGetter.transform((decoded: Prompt.Prompt): Prompt.RawInput => decoded),
+      encode: SchemaGetter.transform((raw: Prompt.RawInput): Prompt.Prompt => Prompt.make(raw))
+    })
+  ),
+  render: (raw) => raw
+}
+
+/** Whether an agent's input is the default prompt rather than a declared shape. */
+export const isPrompt = (input: AgentInput<any, any, any, any>): boolean => input === prompt
+
 /**
  * The encoded input of the submission running on this fibre, or `None`
- * outside one — or inside one whose agent declares no input.
+ * outside one.
+ *
+ * Always set inside a submission: for an agent with the default input it is
+ * the encoded prompt, so `None` means exactly "not inside a submission" and
+ * nothing else.
  *
  * A `Context.Reference`, as `Principal.CurrentPrincipal` is: set by the
  * session around the submission it admits, so a tool handler, a
@@ -93,10 +133,11 @@ export const Current = Context.Reference<Option.Option<unknown>>(
 /**
  * The current submission's input, as `input`'s schema decodes it.
  *
- * `None` outside a submission or under an agent without an input. Fails
- * with the schema's own error if the fibre holds an input of another
- * shape -- a tool wired into the wrong agent -- rather than returning it
- * mistyped.
+ * `None` outside a submission. Fails with the schema's own error if the
+ * fibre holds an input of another shape -- a tool wired into the wrong
+ * agent, or one asking for a ticket under an agent asked with a prompt --
+ * rather than returning it mistyped. That is the honest answer in both
+ * cases, and the same one.
  */
 export const current = <A, I>(
   input: AgentInput<A, I, any, any>

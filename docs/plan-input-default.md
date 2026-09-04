@@ -1,8 +1,17 @@
 # Plan: every agent has an input, and the prompt is the default
 
-**Status: specified 2026-09-02, not started.** Sequenced after the session and
-process management work (`remaining-work.md` 26l, 26n, 26p) lands, because it
-touches the same signatures those tracks are extending. Tracked as item 46.
+**Status: steps 1 and 2 landed 2026-09-04; 3–6 open.** The type-level core is
+in: `AgentInput.prompt`, `Input = Prompt.RawInput`, no `PromptInput`, no
+`Option` on `definition.input`, `Current` set on every submission. The wire
+and the journals still carry two shapes behind `InputBoundary.declared`, which
+is the one place that tells the default from a declared input and goes with
+step 3. Two things the sequence did not say: `AgentSession.prompt` and
+`submit` are `Effect.fn`-wrapped generics, and with `NoInfer` on the value the
+inference of `Input` from the session does not survive the wrapper -- the
+handle passes explicit type arguments; and every helper that spelled a session
+as `AgentSession<any, any, any>` needed a fourth `any`, because the old
+default `never` was accepting a generic `Input` by contravariance and
+`Prompt.RawInput` does not. Tracked as item 46.
 
 Written from the review that closed typed input phase 2 and issue #81, which
 found that every awkwardness the work hit had one cause, and from the design

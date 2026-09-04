@@ -127,11 +127,11 @@ export interface EvalContext<
   /** The agent's `AgentOutput` value, so `send`'s result carries it typed. */
   Value = never,
   /** The agent's `AgentInput` type, so `send` takes it rather than `Prompt.RawInput`. */
-  Input = never
+  Input = Prompt.RawInput
 > {
   /** Prompt the agent, recording nothing; returns the run's `Result`. */
   readonly send: (
-    input: AgentSession.PromptInput<Input>,
+    input: Input,
     options?: AgentSession.PromptOptions
   ) => Effect.Effect<AgentSession.Result<Tools, Value>, AgentSession.PromptError<Tools, E>>
   /** The last send completed rather than being interrupted. */
@@ -170,7 +170,7 @@ export const parseVerdict = (text: string): boolean =>
 // Defining and running
 // ---------------------------------------------------------------------------
 
-export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = never> {
+export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = Prompt.RawInput> {
   readonly name: string
   readonly agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>
   /**
@@ -183,7 +183,7 @@ export interface Eval<Tools extends Record<string, Tool.Any>, E, R, TE, TR, Valu
 }
 
 /** Define an eval. Identity at runtime; it exists so `t` infers the agent's tools, output and input. */
-export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TE = never, TR = never, Value = never, Input = never>(
+export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TE = never, TR = never, Value = never, Input = Prompt.RawInput>(
   options: Eval<Tools, E, R, TE, TR, Value, Input>
 ): Eval<Tools, E, R, TE, TR, Value, Input> => options
 
@@ -191,7 +191,7 @@ export const defineEval = <Tools extends Record<string, Tool.Any>, E, R, TE = ne
  * Run one eval to an `EvalResult`. Never fails: a send that errors, or a defect
  * in the test, is recorded as a failed check so the report is always complete.
  */
-export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = never>(
+export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = Prompt.RawInput>(
   evaluation: Eval<Tools, E, R, TE, TR, Value, Input>
 ): Effect.Effect<EvalResult, never, LanguageModel.LanguageModel | R | TR> =>
   Effect.scoped(
@@ -281,7 +281,7 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value 
   )
 
 /** Run many evals, optionally concurrently. Each result is independent. */
-export const runAll = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = never>(
+export const runAll = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value = never, Input = Prompt.RawInput>(
   evaluations: ReadonlyArray<Eval<Tools, E, R, TE, TR, Value, Input>>,
   options?: { readonly concurrency?: number | "unbounded" | undefined }
 ): Effect.Effect<ReadonlyArray<EvalResult>, never, LanguageModel.LanguageModel | R | TR> =>

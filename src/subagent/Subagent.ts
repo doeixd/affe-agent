@@ -244,7 +244,7 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
   params: unknown
 ) => {
   const input = InputBoundary.asked<Input>(
-    Option.isSome(agent.input) ? params : (params as SubagentParams).prompt
+    Option.isSome(InputBoundary.declared(agent)) ? params : (params as SubagentParams).prompt
   )
   return Effect.scoped(
     Effect.flatMap(
@@ -419,7 +419,7 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   refuseUnapprovable(name, agent, options.inherit)
   const definition = Tool.make(name, {
     description: options.description,
-    parameters: parametersOf(agent.input),
+    parameters: parametersOf(InputBoundary.declared(agent)),
     success: successOf<Value>(agent),
     failure: Schema.String
   })
@@ -487,7 +487,7 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
   }).pipe(Effect.map((services) => {
     const definition = Tool.make(name, {
       description: options.description,
-      parameters: parametersOf(agent.input),
+      parameters: parametersOf(InputBoundary.declared(agent)),
       success: successOf<Value>(agent),
       failure: Schema.String
     })

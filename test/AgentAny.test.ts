@@ -81,15 +81,17 @@ describe("Agent.Any", () => {
     assert.strictEqual(back.label, "budgeted")
   })
 
-  it("as a parameter type, it cannot be run -- which is the point, and beats a result typed `any`", () => {
-    // Pinned so the alias's doc stays true. `Any` is a structural interface,
-    // not an `AgentDefinition`, so a helper that accepts one and then runs
-    // it does not compile; a helper that runs stays generic over the six
-    // parameters. (`AgentDefinition<any, ...>` would compile here and ask
-    // the environment for nothing checkable.)
-    const runAny = (agent: Agent.Any) =>
-      // @ts-expect-error -- `Any` is not an AgentDefinition
-      Agent.run(agent, "go")
-    assert.isFunction(runAny)
+  it("as a parameter type, running it erases what the agent needs -- which is why the doc says not to", () => {
+    // Since `plan-input-default.md` step 2 the default input is the prompt,
+    // so `Any` structurally satisfies `Agent.run`'s parameter and this
+    // compiles -- with `Tools`, `E` and `R` all inferred as `any`, so the
+    // result asks the environment for nothing checkable. Pinned as the
+    // limitation the alias's doc states; a helper that runs stays generic.
+    // (Before step 2 this line was a compile error, which was stricter and
+    // is gone for the right reason.)
+    const runAny = (agent: Agent.Any) => Agent.run(agent, "go")
+    type Needs<T> = T extends Effect.Effect<any, any, infer R> ? R : never
+    const erased: Equal<Needs<ReturnType<typeof runAny>>, any> = true
+    assert.isTrue(erased)
   })
 })

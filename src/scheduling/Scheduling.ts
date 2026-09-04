@@ -236,7 +236,7 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R, Value, Inpu
 export const recurring = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, SO, SE, SR>(
   agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   /** The agent's declared input, or `Prompt.RawInput` for an agent without one. */
-  input: NoInfer<AgentSession.PromptInput<Input>>,
+  input: NoInfer<Input>,
   schedule: Schedule.Schedule<SO, unknown, SE, SR>
 ): Effect.Effect<SO, SE, LanguageModel.LanguageModel | R | SR> =>
   Agent.run(agent, input).pipe(

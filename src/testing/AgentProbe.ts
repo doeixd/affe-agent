@@ -53,7 +53,7 @@ export interface AgentProbe {
 export const make = (
   // All three slots, so a session whose agent declares an `AgentOutput` --
   // and therefore a `Value` -- can be probed like any other.
-  session: AgentSession.AgentSession<any, any, any>
+  session: AgentSession.AgentSession<any, any, any, any>
 ): Effect.Effect<AgentProbe, never, Scope.Scope> =>
   Effect.gen(function* () {
     // Deliberately unbounded: a probe is test instrumentation whose contract is

@@ -41,11 +41,6 @@ export type { SessionState as State }
 export type Result<Tools extends Record<string, Tool.Any> = {}, Value = never> =
   AgentSubmission.Result<Tools, Value>
 
-/**
- * What `prompt` and `submit` take: the agent's declared input type, or
- * `Prompt.RawInput` for an agent that declares none (`Input = never`).
- */
-export type PromptInput<Input> = [Input] extends [never] ? Prompt.RawInput : Input
 export type SubmissionReceipt = AgentSubmission.Receipt
 
 
@@ -91,7 +86,7 @@ export interface AgentSession<
    */
   Value = never,
   /** The typed input this session's submissions are asked with; see `AgentInput`. */
-  Input = never
+  Input = Prompt.RawInput
 > {
   readonly [SessionTypeId]: Session<any, any, any>
 
@@ -111,11 +106,11 @@ export interface AgentSession<
    * a boundary holds `unknown` and decodes, and naming `Input` here would
    * make a handle invariant in a parameter every internal helper widens.
    */
-  readonly input: Option.Option<AgentInput.AgentInput<any, any, any, any>>
+  readonly input: AgentInput.AgentInput<any, any, any, any>
 
   /** Begin a submission. Resolves at quiescence. */
   readonly prompt: (
-    input: PromptInput<Input>,
+    input: Input,
     options?: PromptOptions
   ) => Effect.Effect<Result<Tools, Value>, PromptError<Tools, E>>
 
@@ -128,7 +123,7 @@ export interface AgentSession<
    * client boundary; this process-local primitive admits each call once.
    */
   readonly submit: (
-    input: PromptInput<Input>,
+    input: Input,
     options?: PromptOptions
   ) => Effect.Effect<SubmissionReceipt, SubmitError | E>
 
@@ -186,7 +181,7 @@ export interface AgentSession<
 }
 
 const unwrap = <Tools extends Record<string, Tool.Any>, E>(
-  session: AgentSession<Tools, E, any>
+  session: AgentSession<Tools, E, any, any>
 ): Session<Tools, E, never> =>
   session[SessionTypeId] as Session<Tools, E, never>
 
@@ -285,7 +280,7 @@ export const make = <
   R,
   Model = LanguageModel.LanguageModel,
   Value = never,
-  Input = never
+  Input = Prompt.RawInput
 >(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   options?: MakeOptions
@@ -305,7 +300,7 @@ export const makeEngine = <
   R,
   Model = LanguageModel.LanguageModel,
   Value = never,
-  Input = never
+  Input = Prompt.RawInput
 >(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   options?: MakeOptions & EngineOptions
@@ -452,8 +447,11 @@ export const makeEngine = <
       [SessionTypeId]: session,
       id,
       input: agent.input,
-      prompt: (input, options) => prompt(handle, input, options),
-      submit: (input, options) => submit(handle, input, options),
+      // Explicit type arguments: `Input` is `NoInfer` on the value so it is
+      // inferred from the session, and through `Effect.fn`'s wrapper that
+      // inference does not reach a generic `Input` -- it falls to the default.
+      prompt: (input, options) => prompt<Tools, E, Value, Input>(handle, input, options),
+      submit: (input, options) => submit<Tools, E, Input>(handle, input, options),
       awaitSubmission: (submissionId) => awaitSubmission(handle, submissionId),
       steer: (input) => steer(handle, input),
       followUp: (input) => followUp(handle, input),
@@ -614,9 +612,8 @@ const release = (self: Session<any>): Effect.Effect<void> =>
 const startSubmission = Effect.fn("AgentSession.startSubmission")(
   function* <Tools extends Record<string, Tool.Any>, E>(
     self: Session<Tools, E, never>,
-    // `PromptInput<Input>` at every public signature; here the agent's own
-    // declaration decides which it is, so the parameter is the union the
-    // two branches below narrow.
+    // `Input` at every public signature; the agent's own declaration is
+    // what the value is encoded and rendered with, so it is `unknown` here.
     input: unknown,
     options: PromptOptions
   ) {
@@ -627,18 +624,21 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
     // the renderer's `R` joined the agent's; its failure is the agent's `E`,
     // which `PromptError` and `submit` carry. Encoding a value the signature
     // typed cannot fail except by a schema bug, which is a defect.
-    const declaredInput = self.agent.input
-    const resolved: { readonly prompt: Prompt.Prompt; readonly encoded: Option.Option<unknown> } =
-      Option.isSome(declaredInput)
-        ? yield* Effect.gen(function* () {
-          const declared = declaredInput.value
-          const encoded = yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
-          const raw = yield* AgentInput.rendered(declared, input).pipe(Effect.provide(self.env))
-          return { prompt: Prompt.make(raw), encoded: Option.some(encoded) }
-        })
-        // An agent without an input is asked with `Prompt.RawInput`, by
-        // the public signatures; the widening above is undone here.
-        : { prompt: Prompt.make(input as Prompt.RawInput), encoded: Option.none() }
+    //
+    // Every agent has an input, so there is one path: for the default it
+    // encodes the prompt to the prompt wire and renders it as itself.
+    const declared = self.agent.input
+    const encoded = yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
+    const raw = yield* AgentInput.rendered(declared, input).pipe(Effect.provide(self.env))
+    const resolved = {
+      prompt: Prompt.make(raw),
+      // On the fibre for every submission, so `AgentInput.Current` is `None`
+      // exactly outside one. On the *record* -- the event, a journal -- only
+      // for a declared input, until `plan-input-default.md` step 3 makes the
+      // wire carry one shape; a prompt's record stays the prompt it always was.
+      current: Option.some(encoded),
+      encoded: AgentInput.isPrompt(declared) ? Option.none<unknown>() : Option.some(encoded)
+    }
 
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
@@ -674,7 +674,7 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
           ),
           // The input on the fibre that acts: every tool handler, permission
           // decision and transform under this submission reads it.
-          Effect.provideService(AgentInput.Current, resolved.encoded),
+          Effect.provideService(AgentInput.Current, resolved.current),
           // The captured environment satisfies the model and any tool-handler
           // services; providing it leaves the submission with no requirements.
           Effect.provide(self.env)
@@ -721,10 +721,10 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
 export const submit = Effect.fn("AgentSession.submit")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
-  Input = never
+  Input = Prompt.RawInput
 >(
   session: AgentSession<Tools, E, any, Input>,
-  input: NoInfer<PromptInput<Input>>,
+  input: NoInfer<Input>,
   options: PromptOptions = {}
 ) {
     const self = unwrap(session)
@@ -750,10 +750,10 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
   Value = never,
-  Input = never
+  Input = Prompt.RawInput
 >(
   session: AgentSession<Tools, E, Value, Input>,
-  input: NoInfer<PromptInput<Input>>,
+  input: NoInfer<Input>,
   options: PromptOptions = {}
 ) {
     const self = unwrap(session)
@@ -828,7 +828,7 @@ export const awaitSubmission = Effect.fn("AgentSession.awaitSubmission")(functio
   E,
   Value = never
 >(
-  session: AgentSession<Tools, E, Value>,
+  session: AgentSession<Tools, E, Value, any>,
   submissionId: Ids.SubmissionId
 ) {
     const self = unwrap(session)
@@ -903,7 +903,7 @@ const stillActive = (
  * way. For immediate intervention, `interrupt` then `prompt`.
  */
 export const steer = Effect.fn("AgentSession.steer")(function* (
-  session: AgentSession<any, any, any>,
+  session: AgentSession<any, any, any, any>,
   input: Prompt.RawInput
 ) {
     const self = unwrap(session)
@@ -938,7 +938,7 @@ export const steer = Effect.fn("AgentSession.steer")(function* (
 
 /** Queue work to run after the active run reaches its stopping condition. */
 export const followUp = Effect.fn("AgentSession.followUp")(function* (
-  session: AgentSession<any, any, any>,
+  session: AgentSession<any, any, any, any>,
   input: Prompt.RawInput
 ) {
     const self = unwrap(session)
@@ -986,7 +986,7 @@ export const followUp = Effect.fn("AgentSession.followUp")(function* (
 
 /** Interrupt the active submission. */
 export const interrupt = Effect.fn("AgentSession.interrupt")(function* (
-  session: AgentSession<any, any, any>
+  session: AgentSession<any, any, any, any>
 ) {
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
@@ -1047,7 +1047,7 @@ const stateOf = (self: Session<any, any, any>): StateView => ({
  * outside, "approved" and "approved too late" look identical otherwise.
  */
 export const respond = Effect.fn("AgentSession.respond")(function* (
-  session: AgentSession<any, any, any>,
+  session: AgentSession<any, any, any, any>,
   response: Elicitation.Response
 ) {
     const self = unwrap(session)
@@ -1058,16 +1058,16 @@ export const respond = Effect.fn("AgentSession.respond")(function* (
 
 /** What the run is currently waiting to be told. */
 export const pending = (
-  session: AgentSession<any, any, any>
+  session: AgentSession<any, any, any, any>
 ): Effect.Effect<ReadonlyArray<Elicitation.Request>> =>
   unwrap(session).elicitation.pending
 
 /** Canonical conversation history. */
 export const history = (
-  session: AgentSession<any, any, any>
+  session: AgentSession<any, any, any, any>
 ): Effect.Effect<Prompt.Prompt> => historyOf(unwrap(session))
 
-export const status = (session: AgentSession<any, any, any>): Effect.Effect<Status> =>
+export const status = (session: AgentSession<any, any, any, any>): Effect.Effect<Status> =>
   statusOf(unwrap(session))
 
 /**
@@ -1098,7 +1098,7 @@ export type Snapshot = typeof Snapshot.Type
  * out they have not.
  */
 export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
-  session: AgentSession<any, any, any>
+  session: AgentSession<any, any, any, any>
 ) {
     const self = unwrap(session)
     yield* Telemetry.annotateSession(self.id)
@@ -1181,7 +1181,7 @@ export interface StateView {
   readonly changes: Stream.Stream<SessionState>
 }
 
-export const state = (session: AgentSession<any, any, any>): StateView =>
+export const state = (session: AgentSession<any, any, any, any>): StateView =>
   stateOf(unwrap(session))
 
 /**
@@ -1191,7 +1191,7 @@ export const state = (session: AgentSession<any, any, any>): StateView =>
  * cannot tolerate loss belongs to a future store observing commits.
  */
 export const events = (
-  session: AgentSession<any, any, any>
+  session: AgentSession<any, any, any, any>
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
 
 /**
@@ -1233,7 +1233,7 @@ export const events = (
  * deliberately a different seam with the opposite coupling.
  */
 export const observe = (
-  session: AgentSession<any, any, any>,
+  session: AgentSession<any, any, any, any>,
   observer: (envelope: AgentEventEnvelope) => Effect.Effect<void>
 ): Effect.Effect<void, never, Scope.Scope> =>
   EventBus.observe(unwrap(session).bus, observer)
@@ -1253,6 +1253,6 @@ export const observe = (
  * session already in flight.
  */
 export const subscribe = (
-  session: AgentSession<any, any, any>
+  session: AgentSession<any, any, any, any>
 ): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>
   PubSub.subscribe(unwrap(session).bus.pubsub)

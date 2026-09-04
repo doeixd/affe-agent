@@ -1,5 +1,5 @@
 import { Layer } from "effect"
-import type { Tool } from "effect/unstable/ai"
+import type { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as AgentLoop from "../AgentLoop.js"
 import * as ContextTransform from "../ContextTransform.js"
@@ -128,7 +128,7 @@ export const coding = <
   Bound extends ReadonlyArray<Agent.BoundTool<Tool.Any>> = [],
   PR = never,
   Value = never,
-  Input = never,
+  Input = Prompt.RawInput,
   IE = never,
   IR = never
 >(

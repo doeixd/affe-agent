@@ -6,6 +6,7 @@ import type { Tool } from "effect/unstable/ai"
 import { Activity, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import * as AgentEvent from "../AgentEvent.js"
 import type { AgentDefinition } from "../Agent.js"
+import * as AgentInput from "../AgentInput.js"
 import * as AgentSession from "../AgentSession.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
@@ -195,10 +196,16 @@ export const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure
  * every other durable failure does. An interruption is not a failure: a
  * suspension that lands mid-render must stay one.
  */
-export const durableInput = (declared: InputBoundary.Declared, prefix: string): InputBoundary.Declared =>
-  Option.map(declared, (input) => ({
+export const durableInput = (
+  input: AgentInput.AgentInput<any, any, any, any>,
+  prefix: string
+): AgentInput.AgentInput<any, any, any, any> =>
+  // The default input is returned as itself, not wrapped: its render is
+  // pure, and `AgentInput.isPrompt` is an identity test that every boundary
+  // relies on to tell the default from a declared input.
+  AgentInput.isPrompt(input) ? input : ({
     schema: input.schema,
-    render: (value) => {
+    render: (value: unknown) => {
       const rendering = input.render(value)
       return Effect.isEffect(rendering)
         ? Activity.make({
@@ -215,7 +222,7 @@ export const durableInput = (declared: InputBoundary.Declared, prefix: string): 
         })
         : rendering
     }
-  }))
+  })
 
 export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
@@ -393,7 +400,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
             Effect.forkIn(scope)
           )
 
-          const asked = yield* InputBoundary.askedOf(agent.input, payload)
+          const asked = yield* InputBoundary.askedOf(InputBoundary.declared(agent), payload)
           const result = yield* AgentSession.prompt(session, asked, {
             stream: options.stream === true
           })
@@ -482,7 +489,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
   /** The boundary decode for this agent; what `submit` and the cluster entity admit with. */
   const admit = (operation: "prompt" | "submit", input: InputBoundary.RemoteInput) =>
-    InputBoundary.admit(agent.input, operation, input)
+    InputBoundary.admit(InputBoundary.declared(agent), operation, input)
 
   return { definition, layer, admit } as const
 }
