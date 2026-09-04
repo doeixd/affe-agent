@@ -50,7 +50,8 @@ ordinary tool" is elegant, and is exactly why nobody ever had to choose.
    audit found one caller rather than many, and §3.3 records the correction.
 4. ~~**D. A combination matrix**~~ — **shipped**; §3.4 records what it found,
    and items 56–57 are the backlog it generated.
-5. **E. `Agent.Any`, extracted from item 46** — cheap, and users hit it.
+5. ~~**E. `Agent.Any`, extracted from item 46**~~ — **shipped**; §3.5 records
+   why the obvious spelling was impossible.
 6. **F. Make `remaining-work.md` unable to lie** — it misdirected twice today.
 
 ## 3. The items
@@ -286,6 +287,33 @@ agents either.
 Item 46 removes the cause and is the right fix. `Agent.Any` — an alias with
 variance that actually admits the agents people have — is the part that can
 land first and independently.
+
+**Shipped 2026-09-04, and not as an alias.** The obvious spelling,
+`AgentDefinition<any, any, any, any, any, any>`, admits *no* untyped agent:
+`Value` and `Input` are declared invariant, and `any` in an invariant slot is
+checked in both directions, and `any` is assignable to everything except
+`never`. So the spelling the codebase already used in three internal places
+rejected every agent that declares no input or output -- which is most of
+them -- and had only compiled because each of those places is reached
+through a cast or a generic. That is item 46's cause stated as one line of
+type theory.
+
+`Agent.Any` is therefore a **structural interface** over the same fields,
+with its `input` slot written as the union of the `never` and `any`
+instantiations of `AgentInput`, because `AgentInput` is invariant in its
+value through `render`'s parameter. It is also the field list `definition`
+assembles, so "an agent, whatever its parameters" is spelled once. It admits
+every agent, it works as a constraint (`<A extends Agent.Any>` keeps `A`
+exactly), and the extractors `ToolsOfAgent`, `ErrorOf`, `RequirementsOf`,
+`ModelOf` join `InputOf` and `ValueOf`, all pinned exact in
+`test/AgentAny.test.ts` and confirmed enforced by breaking one.
+
+What it deliberately does not do: run. `Any` is not an `AgentDefinition`, so
+`Agent.run(agent, ...)` on one is a compile error, pinned with
+`@ts-expect-error` -- which beats the alternative, a result typed `any` that
+asks nothing of the environment. A helper that runs an agent stays generic
+over the six parameters, and asking such an agent with a literal prompt is
+still item 46's `PromptInput<Input>` conditional; that part did not move.
 
 ### 3.6 (F) Make `remaining-work.md` unable to lie
 

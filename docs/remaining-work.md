@@ -1036,6 +1036,14 @@ sizes; the items are repeated here so this list stays the one tracker.
     which get shorter; sequenced after 26l/26n/26p land so it does not
     cross their edits. Acceptance and the six steps are in the plan.
 
+    **Front extracted 2026-09-04 (`plan-seams.md` E):** `Agent.Any` and the
+    extractors `ToolsOfAgent`, `ErrorOf`, `RequirementsOf`, `ModelOf`. Doing
+    it found the cause stated exactly: `AgentDefinition<any, ...>` admits no
+    untyped agent, because `any` in an invariant slot does not admit `never`.
+    So `Any` is a structural interface, not an alias, and it cannot be run --
+    the `PromptInput<Input>` conditional that a helper hits when it *asks* a
+    generic agent is what this item still owes.
+
 47. **What to take from their Workflow RFC** (`plan-rfc-286-durable.md`,
     2026-09-02). A read of `danieljvdm/effect-agent#286` against `/durable`.
     Their headline goal — any `WorkflowEngine` as a `Layer` — is where

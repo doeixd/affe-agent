@@ -302,19 +302,9 @@ export const toolkit = <const Tools extends ReadonlyArray<Tool.Any>>(
  * parameters even when the value is exactly right. A spread of a definition
  * keeps `pipe` as an own property, so derived values pipe too.
  */
-const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel, Value = never, Input = never>(fields: {
-  readonly instructions: Option.Option<string>
-  readonly toolkit: ToolkitInput<any, any, any>
-  readonly loop: AgentLoop.AgentLoop<any, any, any>
-  readonly contextTransform: ContextTransform.ContextTransform<any, any>
-  readonly toolExecution: ToolExecution.Strategy
-  readonly toolFailurePolicy: ToolExecution.FailurePolicy
-  readonly permission: Permission.Policy<any>
-  readonly toolDenialPolicy: ToolExecution.FailurePolicy
-  readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
-  readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
-  readonly input: Option.Option<AgentInput.AgentInput<any, any, any, any>>
-}): AgentDefinition<Tools, E, R, Model, Value, Input> =>
+const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = LanguageModel.LanguageModel, Value = never, Input = never>(
+  fields: Omit<Any, "pipe">
+): AgentDefinition<Tools, E, R, Model, Value, Input> =>
   ({
     instructions: fields.instructions,
     toolkit: fields.toolkit,
@@ -490,6 +480,72 @@ export type InputOf<A> = A extends AgentDefinition<any, any, any, infer _Model, 
 
 /** The typed output an agent declares (`AgentOutput`), or `never`. See `InputOf` for why it is spelled this way. */
 export type ValueOf<A> = A extends AgentDefinition<any, any, any, infer _Model, infer Value, infer _Input> ? Value : never
+
+/** The tool record an agent carries. See `InputOf` for why it is spelled this way. */
+export type ToolsOfAgent<A> = A extends AgentDefinition<infer Tools, any, any, infer _Model, infer _Value, infer _Input> ? Tools : never
+
+/** The typed failures an agent's toolkit, loop and transform can raise. See `InputOf` for why it is spelled this way. */
+export type ErrorOf<A> = A extends AgentDefinition<any, infer E, any, infer _Model, infer _Value, infer _Input> ? E : never
+
+/** What an agent's session must be given, the model aside. See `InputOf` for why it is spelled this way. */
+export type RequirementsOf<A> = A extends AgentDefinition<any, any, infer R, infer _Model, infer _Value, infer _Input> ? R : never
+
+/** What an agent's session must be given to resolve a model: `LanguageModel`, or `never` for a planned agent. */
+export type ModelOf<A> = A extends AgentDefinition<any, any, any, infer Model, infer _Value, infer _Input> ? Model : never
+
+/**
+ * Any agent at all, for a signature that has to admit every one.
+ *
+ * Not `AgentDefinition<any, any, any, any, any, any>`, and the reason is the
+ * whole of item 46 in one line: `Value` and `Input` are declared invariant,
+ * and `any` in an invariant slot does not admit `never` -- so that spelling
+ * rejects every agent that declares *no* input or output, which is most of
+ * them. A structural interface over the same fields has no such annotation
+ * to honour, and its `input` slot is written to admit both the agent that
+ * renders nothing (`never`) and the one that renders a value (`any`).
+ *
+ * What it is for: **accepting** an agent, **passing it through**, and
+ * **inspecting** it -- `agent.instructions`, `agent.output`,
+ * `InternalToolkit.declaredTools(agent.toolkit)`. A registry, a conformance
+ * harness's `Options.agent`, a function that decorates an agent and returns
+ * it, a test helper that builds a parent around whatever child it is given.
+ * It is also the field list `definition` assembles, so there is one spelling
+ * of "an agent, whatever its parameters".
+ *
+ * What it is not for: a *parameter type* in a helper that then runs the
+ * agent. `Any` is not an `AgentDefinition`, deliberately, so
+ * `Agent.run(agent, ...)` on one does not compile -- which beats the
+ * alternative, a result typed `any` that asks nothing of the environment.
+ * That helper stays generic over the six parameters, as `Subagent.tool` is;
+ * use `Any` as the *constraint* (`<A extends Agent.Any>`) and
+ * `ToolsOfAgent<A>`, `ErrorOf<A>`, `RequirementsOf<A>`, `InputOf<A>`,
+ * `ValueOf<A>` to say what comes out. What that construction still cannot
+ * express is asking a generic agent with a literal prompt, because
+ * `PromptInput<Input>` is conditional on `Input`; that is item 46, and this
+ * is the part of it that could land first.
+ */
+export interface Any extends Pipeable {
+  readonly instructions: Option.Option<string>
+  readonly toolkit: ToolkitInput<any, any, any>
+  readonly loop: AgentLoop.AgentLoop<any, any, any>
+  readonly contextTransform: ContextTransform.ContextTransform<any, any>
+  readonly toolExecution: ToolExecution.Strategy
+  readonly toolFailurePolicy: ToolExecution.FailurePolicy
+  readonly permission: Permission.Policy<any>
+  readonly toolDenialPolicy: ToolExecution.FailurePolicy
+  readonly executionPlan: Option.Option<ExecutionPlan.ExecutionPlan<any>>
+  readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
+  /**
+   * Both spellings, because `AgentInput` is invariant in its value through
+   * `render`'s parameter: an untyped agent's `AgentInput<never, ...>` is not
+   * assignable to `AgentInput<any, ...>` (`any` is assignable to everything
+   * but `never`), and a typed agent's is not assignable to
+   * `AgentInput<never, ...>`. The union admits each.
+   */
+  readonly input: Option.Option<
+    AgentInput.AgentInput<any, any, any, any> | AgentInput.AgentInput<never, any, any, any>
+  >
+}
 
 export type ToolsOf<Bound extends ReadonlyArray<BoundTool<Tool.Any>>> = {
   readonly [B in Bound[number] as Tool.Name<B["tool"]>]: B["tool"]

@@ -3,6 +3,7 @@ import type { Context } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { WorkflowEngine } from "effect/unstable/workflow"
+import type * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentPrincipal } from "../Principal.js"
@@ -55,9 +56,7 @@ import type { StorageError } from "../Errors.js"
  */
 
 /** Derive the initial canonical history for a fresh durable session. */
-const initialHistory = (
-  agent: AgentDefinition<any, any, any, any, any, any>
-): Prompt.Prompt =>
+const initialHistory = (agent: Agent.Any): Prompt.Prompt =>
   Option.match(agent.instructions, {
     onNone: () => Prompt.empty,
     onSome: History.systemMessage
