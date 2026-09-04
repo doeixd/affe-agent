@@ -86,6 +86,72 @@ const awaitStatus = (client: RelayClient.Service, tag: Relay.ConnectionStatus["_
     Stream.filter(SubscriptionRef.changes(client.status), (state) => state._tag === tag)
   ).pipe(Effect.timeout(Duration.seconds(15)), Effect.ignore)
 
+/**
+ * A relay that answers `listen` for a short while and then stops answering
+ * `heartbeat`, counting how many `listen` streams are open at once.
+ *
+ * It exists for one question: does a *failed* attempt take its `listen` stream
+ * with it? An attempt forks the stream and only then proves registration with
+ * a heartbeat, so an attempt whose heartbeat does not come back must still
+ * clean up -- otherwise every retry leaves a live connection behind, and at a
+ * real relay each one supersedes the last.
+ */
+const countingRelay = (options: {
+  readonly listenFor: Duration.Duration
+  readonly heartbeatsBeforeFailing: number
+}) =>
+  Effect.gen(function* () {
+    const active = yield* Ref.make(0)
+    const peak = yield* Ref.make(0)
+    const beats = yield* Ref.make(0)
+
+    const handlers = RelayProtocol.Protocol.toLayer({
+      listen: () =>
+        // No envelopes, just a lifetime: open on the first pull, closed when
+        // the stream ends *or is interrupted*, which is the distinction the
+        // whole test turns on. `ensuring` is what makes an interrupted stream
+        // decrement rather than silently stay counted.
+        Stream.fromEffect(
+          Effect.flatMap(
+            Ref.updateAndGet(active, (n) => n + 1),
+            (now) => Ref.update(peak, (highest) => Math.max(highest, now))
+          )
+        ).pipe(
+          Stream.drain,
+          // Ends on its own, which sends the node round the loop again, and is
+          // long enough that a leaked stream is still open when the next
+          // attempt starts.
+          Stream.concat(Stream.drain(Stream.fromEffect(Effect.sleep(options.listenFor)))),
+          Stream.ensuring(Ref.update(active, (n) => n - 1))
+        ),
+      heartbeat: () =>
+        Effect.flatMap(
+          Ref.updateAndGet(beats, (n) => n + 1),
+          (n) =>
+            n > options.heartbeatsBeforeFailing
+              ? Effect.fail(new Relay.RelayPeerOfflineError({ peer: TARGET }))
+              : Effect.succeed({ serverTime: 0 })
+        ),
+      send: () => Effect.void,
+      peers: () => Effect.succeed([])
+    })
+
+    const routes = RpcServer.layerHttp({
+      group: RelayProtocol.Protocol,
+      path: "/relay",
+      protocol: "websocket"
+    }).pipe(Layer.provide(handlers), Layer.provide(RpcSerialization.layerNdjson))
+    const server = HttpRouter.serve(routes, { disableLogger: true, disableListenLog: true }).pipe(
+      Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0 }))
+    )
+    const services = yield* Layer.build(server)
+    const { address } = Context.get(services, HttpServer.HttpServer)
+    return {
+      url: `${HttpServer.formatAddress(address).replace(/^http/, "ws")}/relay`,
+      peak: Ref.get(peak)
+    }
+  })
+
 describe("relay reconnection", () => {
   it.live("a node dropped for going quiet comes back", () =>
     Effect.gen(function* () {
@@ -202,6 +268,37 @@ describe("relay reconnection", () => {
       yield* Effect.sleep("500 millis")
       assert.strictEqual((yield* SubscriptionRef.get(older.status))._tag, "offline", "the loser came back and started a flap")
       assert.strictEqual((yield* SubscriptionRef.get(newer.status))._tag, "online", "the winner was superseded by the node it displaced")
+    }),
+    30_000
+  )
+
+  it.live("a failed attempt takes its listen stream with it", () =>
+    Effect.gen(function* () {
+      // The first heartbeat succeeds, so the layer builds; every one after it
+      // fails, so each retry gets as far as forking `listen` and no further.
+      const fake = yield* countingRelay({
+        listenFor: Duration.millis(400),
+        heartbeatsBeforeFailing: 1
+      })
+      yield* Layer.build(
+        RelayClient.layer({
+          peer: TARGET,
+          headers: { authorization: "Bearer irrelevant" },
+          // Shorter than `listenFor`, so a leaked stream from one attempt is
+          // certainly still open when the next one starts.
+          reconnect: Duration.millis(40),
+          heartbeatInterval: Duration.seconds(30)
+        }).pipe(Layer.provide(nodeProtocol(fake.url)))
+      )
+
+      // Long enough for several attempts to have come and gone.
+      yield* Effect.sleep("1200 millis")
+
+      assert.strictEqual(
+        yield* fake.peak,
+        1,
+        "more than one listen stream was open at once: a failed attempt left its connection behind, and at a real relay each one would supersede the last"
+      )
     }),
     30_000
   )

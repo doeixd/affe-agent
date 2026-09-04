@@ -131,15 +131,19 @@ export const layer = (
        * gets and the state the relay holds cannot disagree: whoever asks is
        * the one who collects.
        */
-      const live = (peer: Relay.PeerId, entry: Entry, now: number) =>
+      const live = (
+        peer: Relay.PeerId,
+        entry: Entry,
+        now: number
+      ): Effect.Effect<Option.Option<Connection>> =>
         Effect.gen(function* () {
-          if (Option.isNone(entry.connection)) return false
-          if (now - entry.lastSeenAt <= lease) return true
+          if (Option.isNone(entry.connection)) return Option.none()
+          if (now - entry.lastSeenAt <= lease) return entry.connection
           peers.set(peer, { connection: Option.none(), lastSeenAt: entry.lastSeenAt })
           // Ending the stream is how the node finds out, if it is still there
           // to find out: `RelayClient` moves to `offline` with the reason.
           yield* Queue.fail(entry.connection.value.queue, new Relay.RelayLeaseExpiredError({ peer }))
-          return false
+          return Option.none()
         })
 
       const touch = (peer: Relay.PeerId, now: number) => {
@@ -182,7 +186,12 @@ export const layer = (
         touch(from, yield* Clock.currentTimeMillis)
         const now = yield* Clock.currentTimeMillis
         const target = peers.get(outbound.to)
-        if (target === undefined || !(yield* live(outbound.to, target, now))) {
+        // The reachable connection, not a boolean and a second lookup: asking
+        // twice invites the two answers to drift.
+        const reachable = target === undefined
+          ? Option.none<Connection>()
+          : yield* live(outbound.to, target, now)
+        if (Option.isNone(reachable)) {
           return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
         }
         const envelope: Relay.Envelope = {
@@ -192,8 +201,7 @@ export const layer = (
           channel: outbound.channel,
           frame: outbound.frame
         }
-        const connection = Option.getOrThrow(target.connection)
-        const accepted = yield* Queue.offer(connection.queue, envelope)
+        const accepted = yield* Queue.offer(reachable.value.queue, envelope)
         if (!accepted) {
           return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
         }
@@ -215,14 +223,11 @@ export const layer = (
         // skipping peers.
         for (const [id, entry] of [...peers]) {
           const reachable = yield* live(id, entry, now)
-          const current = peers.get(id) ?? entry
           all.push({
             id,
-            status: reachable ? "online" : "offline",
-            connectedAt: reachable
-              ? Option.map(current.connection, (connection) => connection.connectedAt)
-              : Option.none(),
-            lastSeenAt: current.lastSeenAt
+            status: Option.isSome(reachable) ? "online" : "offline",
+            connectedAt: Option.map(reachable, (connection) => connection.connectedAt),
+            lastSeenAt: (peers.get(id) ?? entry).lastSeenAt
           })
         }
         return all
