@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Deferred, Duration, Effect, Layer, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
@@ -37,18 +37,23 @@ import * as Contract from "./AgentClientContract.js"
 
 const TARGET = Relay.PeerId.make("target")
 const CALLER = Relay.PeerId.make("caller")
-const tokens = { "target-secret": TARGET, "caller-secret": CALLER }
+const tokens = {
+  "target-secret": TARGET,
+  "caller-secret": CALLER,
+  "prober-secret": Relay.PeerId.make("prober")
+}
 
 const AgentEndpoint = RelayRpc.endpoint("effect-agent/agent", AgentRpc.Protocol)
 
 /** The relay itself, on an ephemeral port; yields its `ws://` address. */
-const startRelay = Effect.gen(function* () {
+const startRelay = (lease?: Duration.Duration) =>
+  Effect.gen(function* () {
   const routes = RpcServer.layerHttp({
     group: RelayProtocol.Protocol,
     path: "/relay",
     protocol: "websocket"
   }).pipe(
-    Layer.provide(RelayServer.layer()),
+    Layer.provide(RelayServer.layer(lease === undefined ? {} : { lease })),
     Layer.provide(RelayServer.bearerTokens(tokens)),
     Layer.provide(RpcSerialization.layerNdjson)
   )
@@ -89,7 +94,7 @@ const harness: Contract.Harness = {
        */
       Layer.orDie(Layer.unwrap(
         Effect.gen(function* () {
-          const url = yield* startRelay
+          const url = yield* startRelay()
           const { layer: model } = yield* TestLanguageModel.script(turns)
 
           const Host = AgentSessionHost.Tag<string>(
@@ -170,7 +175,7 @@ describe("relay teardown", () => {
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>()
       const held = yield* Deferred.make<void>()
-      const url = yield* startRelay
+      const url = yield* startRelay()
       const { layer: model } = yield* TestLanguageModel.script([
         // Never released: the request is still outstanding when the caller
         // goes away, which is the whole scenario.
@@ -235,6 +240,113 @@ describe("relay teardown", () => {
         closed,
         "closing the caller hung with a request in flight: a transport being torn down cannot promise a remote acknowledgement, so it must not make its own shutdown wait for one"
       )
+    }),
+    30_000
+  )
+})
+
+/**
+ * A request in flight when the connection drops must be told, not left waiting.
+ *
+ * This is the rule 48c states in general, in its second concrete home, and it
+ * is forced rather than chosen: when the relay drops a node it marks it
+ * offline, so the target's next send is refused, its server protocol treats
+ * that as a disconnect and releases the RPC client holding the request. The
+ * answer is genuinely gone, and reconnecting cannot recover it without a
+ * mailbox -- which is withdrawn, for reasons in the plan.
+ *
+ * So the honest outcome is a transport failure. What this guards is that the
+ * caller gets *an* outcome: without the settling, the prompt waits on an
+ * acknowledgement that no longer has anywhere to land, which is the same
+ * uninterruptible hang the relay shipped with once already.
+ *
+ * The lease is how the drop is made to happen on a clock rather than by
+ * killing a socket and hoping.
+ */
+describe("relay drop", () => {
+  it.live("a request in flight when the connection drops fails rather than hanging", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const held = yield* Deferred.make<void>()
+      const url = yield* startRelay(Duration.millis(300))
+
+      const { layer: model } = yield* TestLanguageModel.script([
+        // Never released: the prompt is still in flight when the caller is
+        // dropped, which is the whole scenario.
+        { text: "done", started: entered, during: Deferred.await(held) }
+      ])
+      const Host = AgentSessionHost.Tag<string>(
+        `test/RelayContract/drop/${globalThis.crypto.randomUUID()}`
+      )
+      const host = AgentSessionHost.layer(Host, {
+        principal: { resolve: () => Effect.succeed("relay-drop") },
+        authorization: AgentSessionHost.allowAll(),
+        maxSessions: 8,
+        maxRequestsPerSession: 32
+      }).pipe(
+        Layer.provide(
+          AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) })).pipe(Layer.provide(model))
+        )
+      )
+
+      // The target keeps its lease; only the caller is allowed to lapse.
+      yield* Layer.build(
+        RelayRpc.serve(AgentEndpoint).pipe(
+          Layer.provide(AgentRpc.serverLayer({ host: Host }).pipe(Layer.provide(host))),
+          Layer.provideMerge(node(url, TARGET, "target-secret"))
+        )
+      )
+
+      const callerNode = RelayClient.layer({
+        peer: CALLER,
+        headers: { authorization: "Bearer caller-secret" },
+        // Longer than the lease: this node cannot help but be dropped.
+        heartbeatInterval: Duration.seconds(30)
+      }).pipe(Layer.provide(nodeProtocol(url)))
+
+      const built = yield* Layer.build(
+        AgentRpc.agentClientLayer().pipe(
+          Layer.provide(
+            AgentRpc.clientLayer.pipe(
+              Layer.provide(RelayRpc.clientProtocol({ peer: TARGET, endpoint: AgentEndpoint })),
+              Layer.provideMerge(callerNode)
+            )
+          )
+        )
+      )
+      const client = Context.get(built, AgentClient.AgentClient)
+
+      const outcome = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* client.createSession()
+          const running = yield* Effect.forkChild(Effect.exit(session.prompt("go")))
+          // The model has been entered, so the request is genuinely in flight.
+          yield* Deferred.await(entered)
+
+          // Someone has to ask before a lapse is collected -- the relay has no
+          // reaper -- and the target asking is what a real caller's peer does.
+          yield* Effect.sleep("600 millis")
+          const targetClient = Context.get(
+            yield* Layer.build(node(url, Relay.PeerId.make("prober"), "prober-secret")),
+            RelayClient.RelayClient
+          )
+          yield* Effect.ignore(targetClient.peers)
+
+          return yield* Fiber.join(running).pipe(
+            Effect.map(Option.some),
+            Effect.timeout(Duration.seconds(10)),
+            Effect.catchTag("TimeoutError", () => Effect.succeedNone)
+          )
+        })
+      )
+
+      assert.isTrue(
+        Option.isSome(outcome),
+        "the request never settled after its connection dropped: a transport that cannot deliver an answer must say so rather than leave the caller waiting"
+      )
+      if (Option.isSome(outcome)) {
+        assert.strictEqual(outcome.value._tag, "Failure", "a dropped request reported success")
+      }
     }),
     30_000
   )

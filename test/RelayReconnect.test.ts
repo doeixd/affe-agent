@@ -97,6 +97,16 @@ const awaitStatus = (client: RelayClient.Service, tag: Relay.ConnectionStatus["_
  * real relay each one supersedes the last.
  */
 const countingRelay = (options: {
+  /**
+   * How long the first `listen` stays open, and how long every later one does.
+   *
+   * They differ on purpose. The first must *end* -- that is what sends the
+   * node round the loop at all -- while the ones after it should outlive
+   * several attempts, so that a leak accumulates instead of quietly expiring.
+   * With both set the same, a leak overlaps only about `listenFor / reconnect`
+   * times and the margin between "leaking" and "not" is a single stream.
+   */
+  readonly firstListenFor: Duration.Duration
   readonly listenFor: Duration.Duration
   readonly heartbeatsBeforeFailing: number
 }) =>
@@ -104,6 +114,7 @@ const countingRelay = (options: {
     const active = yield* Ref.make(0)
     const peak = yield* Ref.make(0)
     const beats = yield* Ref.make(0)
+    const listens = yield* Ref.make(0)
 
     const handlers = RelayProtocol.Protocol.toLayer({
       listen: () =>
@@ -118,10 +129,16 @@ const countingRelay = (options: {
           )
         ).pipe(
           Stream.drain,
-          // Ends on its own, which sends the node round the loop again, and is
-          // long enough that a leaked stream is still open when the next
-          // attempt starts.
-          Stream.concat(Stream.drain(Stream.fromEffect(Effect.sleep(options.listenFor)))),
+          Stream.concat(
+            Stream.drain(
+              Stream.fromEffect(
+                Effect.flatMap(
+                  Ref.updateAndGet(listens, (n) => n + 1),
+                  (nth) => Effect.sleep(nth === 1 ? options.firstListenFor : options.listenFor)
+                )
+              )
+            )
+          ),
           Stream.ensuring(Ref.update(active, (n) => n - 1))
         ),
       heartbeat: () =>
@@ -277,7 +294,10 @@ describe("relay reconnection", () => {
       // The first heartbeat succeeds, so the layer builds; every one after it
       // fails, so each retry gets as far as forking `listen` and no further.
       const fake = yield* countingRelay({
-        listenFor: Duration.millis(400),
+        // Short enough that the first attempt ends and the loop starts; the
+        // rest outlive the whole test, so a leak piles up rather than expiring.
+        firstListenFor: Duration.millis(100),
+        listenFor: Duration.seconds(30),
         heartbeatsBeforeFailing: 1
       })
       yield* Layer.build(
@@ -286,18 +306,34 @@ describe("relay reconnection", () => {
           headers: { authorization: "Bearer irrelevant" },
           // Shorter than `listenFor`, so a leaked stream from one attempt is
           // certainly still open when the next one starts.
-          reconnect: Duration.millis(40),
+          reconnect: Duration.millis(150),
           heartbeatInterval: Duration.seconds(30)
         }).pipe(Layer.provide(nodeProtocol(fake.url)))
       )
 
       // Long enough for several attempts to have come and gone.
-      yield* Effect.sleep("1200 millis")
+      yield* Effect.sleep("2 seconds")
 
-      assert.strictEqual(
-        yield* fake.peak,
-        1,
-        "more than one listen stream was open at once: a failed attempt left its connection behind, and at a real relay each one would supersede the last"
+      /**
+       * Two, not one, and the reason is worth stating rather than tightening.
+       *
+       * The count lives on the *server*, and the client cancelling its request
+       * has to reach it: the finalizer that decrements runs a round trip after
+       * the attempt has already moved on. Insisting on one would make this
+       * assert that the cancel wins a race against the backoff, which is a
+       * claim about the machine -- the same thing that made `DurableStreams`'
+       * complexity test flaky until this morning.
+       *
+       * The bound still discriminates by a wide margin, because the later
+       * streams outlive the test: every failed attempt adds one and none of
+       * them leaves, so the leak this exists to catch reaches double figures
+       * in the same two seconds where the fix stays at one.
+       */
+      const peak = yield* fake.peak
+      assert.isAtMost(
+        peak,
+        2,
+        `${peak} listen streams were open at once: a failed attempt left its connection behind, and at a real relay each one would supersede the last`
       )
     }),
     30_000
