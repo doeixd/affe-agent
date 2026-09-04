@@ -125,7 +125,8 @@ check cannot see -- the server's `requiresApproval` annotation becomes
 `needsApproval` only when the server is listed -- and forwarding is the answer
 for that child too.
 
-Budget crosses by default (`inherit.budget`, see `Budget.charge`); principal
+Budget crosses by default (`inherit.budget`: the engine records every turn
+against the `Budget` in context, see `Budget.record`); principal
 crosses because a fibre reference does. The table in
 [conformance-matrix.md](./conformance-matrix.md) has every concern against
 every context.

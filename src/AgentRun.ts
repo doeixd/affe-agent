@@ -3,6 +3,7 @@ import type { LanguageModel, Tool } from "effect/unstable/ai"
 import type { Correlation } from "./AgentEvent.js"
 import type * as AgentLoop from "./AgentLoop.js"
 import * as AgentTurn from "./AgentTurn.js"
+import * as Budget from "./budget/Budget.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Ids from "./internal/ids.js"
 import type { RunId, SubmissionId } from "./internal/ids.js"
@@ -107,6 +108,13 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         // the same reason: this is the record of what has landed.
         value: Option.isSome(result.value) ? result.value : p.value
       }))
+
+      // Every turn is recorded against the ambient `Budget`, if any, before
+      // the loop is asked and whether or not it will be -- the final turn's
+      // tokens count too. The one battery the engine knows about, and only
+      // as an optional service; see `Budget.record` for why it is here and
+      // not in a loop combinator.
+      yield* Budget.record({ runId, turnIndex: turn, response: result.response })
 
       // The final turn was the loop's own last word: it is not asked again,
       // and the reason is the one its `Final` carried.

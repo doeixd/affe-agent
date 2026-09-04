@@ -3,7 +3,6 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
-import * as AgentLoop from "../AgentLoop.js"
 import type * as AgentOutput from "../AgentOutput.js"
 import * as AgentSession from "../AgentSession.js"
 import type * as AgentSubmission from "../AgentSubmission.js"
@@ -102,11 +101,13 @@ export interface Inherit {
    * **Default `true`: money is the parent's, whoever spends it.** A parent
    * capped at N tokens is usually capped *because* it delegates, and a child
    * charged to nobody lets it spend without limit through the door next to
-   * the wall. With a `Budget` in the parent's context, the child's loop is
-   * wrapped with `Budget.charge`, so its turns land on the same counter and
-   * the parent's ceiling sees them when the delegating turn ends. Without one, nothing
-   * changes. The child is *counted*, not capped, within one delegation; a
-   * child that should stop on its own caps its own loop with
+   * the wall. With a `Budget` in the parent's context, the child runs under
+   * it, and the engine records every turn against the `Budget` in context
+   * (`Budget.record`), so the child's turns land on the same counter and
+   * the parent's ceiling sees them when the delegating turn ends. Without
+   * one, nothing changes. `false` gives the child a budget of its own that
+   * nobody reads. The child is *counted*, not capped, within one delegation;
+   * a child that should stop on its own caps its own loop with
    * `Budget.within`, which shares the counter.
    */
   readonly budget?: boolean | undefined
@@ -166,29 +167,28 @@ const stamped = (request: Elicitation.Request, via: string): Elicitation.Request
 }
 
 /**
- * The child's loop under `inherit.budget`: charged to the ambient `Budget`,
- * or left alone. One function with the wider type either way, so the child
- * definition has one shape whichever was chosen; the requirement it adds is
- * discharged by `budgetFor` below.
+ * The `Budget` the child runs under, which is the whole of `inherit.budget`:
+ * the engine records every turn against whatever `Budget` is in context, so
+ * the parent's counter when inheriting -- that is the point -- and a fresh
+ * throwaway otherwise, so nothing is charged to anyone, which was the old
+ * behaviour. A fresh one is also what a parent with no budget gives its
+ * child, so a child capping its own loop with `Budget.within` always has a
+ * counter to read.
  */
-const charging = (inherit: Inherit | undefined) =>
-  <E, R, Tools extends Record<string, Tool.Any>>(
-    inner: AgentLoop.AgentLoop<E, R, Tools>
-  ): AgentLoop.AgentLoop<E, R | Budget.Budget, Tools> =>
-    inherit?.budget === false ? inner : Budget.charge(inner)
-
-/**
- * The `Budget` the child runs under: the parent's when there is one, which is
- * the point, and a fresh throwaway otherwise, so `charge` has a counter to
- * write to and nothing is charged to anyone -- exactly the old behaviour.
- */
-const budgetFor: Effect.Effect<Layer.Layer<Budget.Budget>> = Effect.map(
-  Effect.serviceOption(Budget.Budget),
-  Option.match({
-    onNone: () => Budget.layer,
-    onSome: (ambient) => Layer.succeed(Budget.Budget, ambient)
-  })
-)
+const budgetFor = (inherit: Inherit | undefined): Effect.Effect<Layer.Layer<Budget.Budget>> =>
+  // `fresh()`, not `layer`: the parent may have provided `layer` further up,
+  // and providing the same layer value again would hand the child the
+  // parent's memoised counter -- which is what the `budget: false` row
+  // caught. A fresh layer value is a fresh memo key.
+  inherit?.budget === false
+    ? Effect.succeed(Budget.fresh())
+    : Effect.map(
+      Effect.serviceOption(Budget.Budget),
+      Option.match({
+        onNone: () => Budget.fresh(),
+        onSome: (ambient) => Layer.succeed(Budget.Budget, ambient)
+      })
+    )
 
 /**
  * What the parent model receives from a delegation.
@@ -243,13 +243,12 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
   inherit: Inherit | undefined,
   params: unknown
 ) => {
-  const child = agent.pipe(Agent.updateLoop(charging(inherit)))
   const input = InputBoundary.asked<Input>(
     Option.isSome(agent.input) ? params : (params as SubagentParams).prompt
   )
   return Effect.scoped(
     Effect.flatMap(
-      AgentSession.make(child, {
+      AgentSession.make(agent, {
         elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined
       }),
       (session) =>
@@ -426,7 +425,7 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   })
 
   const run = (params: unknown) =>
-    Effect.flatMap(budgetFor, (budget) =>
+    Effect.flatMap(budgetFor(options.inherit), (budget) =>
       askChild(name, agent, options.inherit, params).pipe(
         // The child's `LanguageModel | R` is discharged here and only here, so
         // the tool carries no requirement of its own and parent and child never
@@ -494,7 +493,7 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     })
 
     const run = (params: unknown) =>
-      Effect.flatMap(budgetFor, (budget) =>
+      Effect.flatMap(budgetFor(options.inherit), (budget) =>
         askChild(name, agent, options.inherit, params).pipe(
           // The already-built services, not the layer: this is the whole
           // difference from `tool`. The child's `LanguageModel | R` is still

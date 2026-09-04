@@ -45,6 +45,27 @@ describe("Budget.within", () => {
     })
   )
 
+  it.effect("a session under a budget is counted with no combinator asking", () =>
+    Effect.gen(function* () {
+      /**
+       * `plan-after-seams.md` 2.4: the engine records, the loop decides. A
+       * budget in context is charged by every turn of every session under it
+       * -- a plain `untilIdle` loop included -- which is what lets a
+       * delegated child's turns reach its parent's counter without either
+       * loop knowing about the other.
+       */
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "done", usage: { input: 30, output: 20 } }
+      ])
+      const agent = Agent.make({ loop: AgentLoop.untilIdle() })
+      const total = yield* Effect.gen(function* () {
+        yield* Effect.scoped(Effect.flatMap(AgentSession.make(agent), (s) => AgentSession.prompt(s, "go")))
+        return yield* spent
+      }).pipe(Effect.provide(Layer.merge(model, Budget.layer)))
+      assert.strictEqual(total, 50, "a turn under a budget was not recorded because no loop asked for it")
+    })
+  )
+
   it.effect("two sessions sharing one budget are both charged, not deduplicated as replays", () =>
     Effect.gen(function* () {
       /**

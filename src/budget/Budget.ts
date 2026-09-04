@@ -37,8 +37,8 @@ const tokenStop = AgentLoop.stop("token budget")
 const costStop = AgentLoop.stop("cost budget")
 
 /** Total tokens in one model response, both directions. */
-const tokensOf = <Tools extends Record<string, Tool.Any>>(
-  response: LanguageModel.GenerateTextResponse<Tools, true>
+const tokensOf = (
+  response: LanguageModel.GenerateTextResponse<any, true>
 ): number => (response.usage.inputTokens.total ?? 0) + (response.usage.outputTokens.total ?? 0)
 
 /**
@@ -117,9 +117,23 @@ export class Budget extends Context.Service<Budget, {
  * conversation, and the occurrence keys are what stop a replayed turn being
  * charged against it twice.
  */
-export const layer: Layer.Layer<Budget> = Layer.effect(
-  Budget,
-  Effect.gen(function* () {
+export const layer: Layer.Layer<Budget> = Layer.effect(Budget, Effect.suspend(() => make))
+
+/**
+ * A budget layer that is built anew every time it is provided.
+ *
+ * `layer` is one value, and `Effect.provide` builds a layer in the fibre's
+ * inherited memo map -- so providing `layer` inside a scope that already
+ * provided it further up hands back the *same* counter. That is right for
+ * an application sharing one budget, and wrong for the one caller that
+ * wants a counter nobody else reads: a delegated child under
+ * `inherit.budget: false`, which `Subagent` found charging its parent
+ * through exactly this sharing. A fresh layer object per call is a fresh
+ * memo key.
+ */
+export const fresh = (): Layer.Layer<Budget> => Layer.effect(Budget, Effect.suspend(() => make))
+
+const make: Effect.Effect<Budget["Service"]> = Effect.gen(function* () {
     const counted = yield* Ref.make({
       total: 0,
       money: 0,
@@ -161,7 +175,6 @@ export const layer: Layer.Layer<Budget> = Layer.effect(
       costSpent: Effect.map(Ref.get(counted), (state) => state.money)
     }
   })
-)
 
 /**
  * Wrap `inner` with a token ceiling: record each turn's usage against the
@@ -183,55 +196,65 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
   inner: AgentLoop.AgentLoop<E, R, Tools>
 ): AgentLoop.AgentLoop<E, R | Budget, Tools> =>
   AgentLoop.make((state) =>
+    // A pure decision over the running total: the turn that just ended has
+    // already been recorded by the engine (`record`), so `spent` includes it
+    // and the ceiling is checked after every turn is counted.
     Effect.flatMap(Budget, (budget) =>
-      Effect.flatMap(budget.spend(tokensOf(state.response), occurrence(state)), (total) =>
-        total >= limit ? Effect.succeed(tokenStop) : inner.decide(state)
+      Effect.map(budget.spent, (total) => (total >= limit ? tokenStop : undefined)).pipe(
+        Effect.flatMap((stop) => (stop === undefined ? inner.decide(state) : Effect.succeed(stop)))
       )
     )
   )
 
 /**
- * Record `inner`'s turns against the ambient `Budget` and never stop them.
+ * Record one turn against the ambient `Budget`, if there is one.
  *
- * The counting half of `within` and `cost`, without a ceiling. It exists for
- * a loop whose ceiling is somebody else's: a delegated child's turns are
- * spent through a model like anyone's, and `Subagent.tool` wraps the child's
- * loop with this so they land on the parent's counter, where the parent's
- * `within` or `cost` sees them when the delegating turn ends. The child is not capped by
- * this -- a ceiling it should observe *inside one delegation* is the child's
- * own `within`, which shares the counter.
+ * **Called by the engine after every turn, before the loop is asked.** Not
+ * by a loop combinator, and the reason is what `plan-after-seams.md` 2.4
+ * found: a loop is per session, so a combinator that both recorded and
+ * decided charged only the turns of the session it wrapped, and a delegated
+ * child -- a session of its own, running under the parent's context -- was
+ * charged to nobody. With the engine recording, a session under a `Budget`
+ * is counted whether or not anything reads the count, a child charges the
+ * parent's counter because it runs under the parent's context and for no
+ * other reason, and `within` and `cost` are what the docs already said a
+ * loop combinator is: a pure function of state.
+ *
+ * Idempotent per turn through the occurrence key, so a replayed turn costs
+ * what it cost the first time. Nothing is recorded without a `Budget` in
+ * context, and a session that never provides one pays one context read per
+ * turn.
  *
  * Tokens are always recorded. Cost is recorded when a `ModelCapabilities` in
- * context prices the child's model, and **not otherwise** -- which is the
- * opposite of `cost`'s rule, deliberately. `cost` fails an unpriced model
- * because its caller declared a money ceiling and silently counting zero
- * would void it. `charge` has no ceiling of its own and cannot know whether
- * money is being watched at all: a table may be in context for the
- * context-window check, and failing every delegated child under it, on a
- * fake or unlisted model, would be a worse silence than the one it avoids.
- * The residue is stated: a parent capped with `cost` whose child runs on a
- * model the table cannot price is not charged for that child's money, and
- * should give the child a priced model or its own `cost` cap.
+ * context prices the model, and **not otherwise** -- the opposite of
+ * `cost`'s rule, deliberately. `cost` fails an unpriced model because its
+ * caller declared a money ceiling and silently counting zero would void it.
+ * Recording has no ceiling of its own and cannot know whether money is being
+ * watched: a table may be in context for the context-window check, and
+ * failing every turn under it on an unlisted model would be a worse silence
+ * than the one it avoids. So the failure stays with the ceiling: `cost`
+ * prices the turn itself, and fails if it cannot.
  */
-export const charge = <E, R, Tools extends Record<string, Tool.Any>>(
-  inner: AgentLoop.AgentLoop<E, R, Tools>
-): AgentLoop.AgentLoop<E, R | Budget, Tools> =>
-  AgentLoop.make((state) =>
-    Effect.gen(function*() {
-      const budget = yield* Budget
-      const key = occurrence(state)
-      yield* budget.spend(tokensOf(state.response), key)
+export const record = (state: {
+  readonly runId: string
+  readonly turnIndex: number
+  readonly response: LanguageModel.GenerateTextResponse<any, true>
+}): Effect.Effect<void> =>
+  Effect.flatMap(Effect.serviceOption(Budget), (budget) => {
+    if (Option.isNone(budget)) return Effect.void
+    const key = occurrence(state)
+    return Effect.gen(function*() {
+      yield* budget.value.spend(tokensOf(state.response), key)
       const capabilities = yield* Effect.serviceOption(ModelCapabilities.ModelCapabilities)
       if (Option.isSome(capabilities)) {
         const price = yield* ModelCapabilities.priceOfCurrent(state.response.usage).pipe(
           Effect.provideService(ModelCapabilities.ModelCapabilities, capabilities.value),
           Effect.option
         )
-        if (Option.isSome(price)) yield* budget.spendCost(price.value, key)
+        if (Option.isSome(price)) yield* budget.value.spendCost(price.value, key)
       }
-      return yield* inner.decide(state)
     })
-  )
+  })
 
 /**
  * Wrap `inner` with a **money** ceiling: price each turn from the model's own
@@ -277,12 +300,14 @@ export const cost = <E, R, Tools extends Record<string, Tool.Any>>(
 > =>
   AgentLoop.make((state) =>
     Effect.gen(function*() {
-      const price = yield* ModelCapabilities.priceOfCurrent(state.response.usage)
+      // The failure rule is the ceiling's: a model this table cannot price,
+      // under a money ceiling, fails the run rather than counting as free.
+      // The engine's `record` skipped it for exactly that reason, so this is
+      // where an unpriced model is caught.
+      yield* ModelCapabilities.priceOfCurrent(state.response.usage)
       const budget = yield* Budget
-      // Recorded before the ceiling is checked and before `inner` runs, so
-      // every turn counts regardless of what `inner` decides -- the same
-      // ordering `within` relies on, and for the same reason.
-      const total = yield* budget.spendCost(price, occurrence(state))
+      // Already recorded by the engine for this turn; a pure decision.
+      const total = yield* budget.costSpent
       return total >= limit ? costStop : yield* inner.decide(state)
     })
   )

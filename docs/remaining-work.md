@@ -1385,10 +1385,13 @@ and should not until it is committed. Item 30 is untouched.
     question it raises is whether a delegation should be able to opt out.
 
     **Closed 2026-09-04 (`plan-seams.md` B).** `Subagent.Options.inherit.budget`
-    defaults to `true`: the child's loop is wrapped with the new
-    `Budget.charge` -- the counting half of `within` without a ceiling -- so
-    its turns land on the parent's counter and the parent's ceiling sees them
-    when the delegating turn ends. `false` is the old behaviour, chosen. The
+    defaults to `true`: the child runs under the parent's `Budget`, and --
+    since `plan-after-seams.md` 2.4, the same evening -- the *engine*
+    records every turn against the `Budget` in context (`Budget.record`),
+    so its turns land on the parent's counter and the parent's ceiling sees
+    them when the delegating turn ends. (For a day this was a charge-only
+    loop combinator, `Budget.charge`, wrapped around the child; it is gone,
+    and `within` and `cost` are pure decisions.) `false` is the old behaviour, chosen. The
     child is counted rather than capped within one delegation; a child that
     should stop on its own caps its own loop with `Budget.within`, which now
     reads the shared counter, and `Subagent.tool` admits `Budget` in the
@@ -1406,17 +1409,17 @@ and should not until it is committed. Item 30 is untouched.
     fix lives where ids are made. `test/Budget.test.ts` pins two sessions on
     one budget summing rather than deduplicating.
 
-    One residue, stated in `Budget.charge`'s doc: it records cost only when a
+    One residue, stated in `Budget.record`'s doc: it records cost only when a
     table in context prices the child's model, and records nothing for cost
     otherwise -- the opposite of `cost`'s fail-on-unpriced rule, because
-    `charge` has no ceiling and cannot know whether money is watched, and a
+    recording has no ceiling and cannot know whether money is watched, and a
     table is often in context for the context-window check. So a parent
     capped with `cost` whose child runs on an unpriced model is not charged
     for that child's money. Give the child a priced model, or its own `cost`
     cap.
 
     ```text
-    verify: grep "Budget.charge(inner)" src/subagent/Subagent.ts
+    verify: grep "Budget.record({ runId, turnIndex: turn, response: result.response })" src/AgentRun.ts
     verify: grep "${sessionId}:run-${n}" src/internal/ids.ts
     ```
 

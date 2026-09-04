@@ -11,7 +11,7 @@ evidence is named, and where it is a test it is in the tree.*
 | 1 | **Ids carry their session** | two bugs in one day from ids unique only within a session | small |
 | 2 | ~~**Refuse at construction, at the top level too**~~ | **withdrawn**: the premise was wrong, see §2.2 | -- |
 | 3 | **Item 46: every agent has an input** | E showed the exact shape of the cost; three inlined helpers, one un-runnable alias | large |
-| 4 | **The engine records usage; the loop only decides** | `Budget.charge` is a patch for the loop being per session | medium |
+| 4 | ~~**The engine records usage; the loop only decides**~~ | **shipped**; `Budget.charge` is gone | medium |
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
 | 7 | ~~A typed child returns its value~~ | **shipped**; the matrix's "text only" cell is a test | small |
@@ -126,6 +126,34 @@ the part to decide, and item 56's test is what decides it.
 **Rejected:** keeping the loop as the seam and threading the parent's loop
 into the child. It makes the child's loop a function of the parent's, which
 is the coupling `Subagent` being an ordinary tool avoids.
+
+**Shipped 2026-09-04.** `Budget.record` is called by `AgentRun` after every
+turn, before the loop is asked and whether or not it will be; `within` and
+`cost` read `spent` and `costSpent` and decide; `Budget.charge` and the
+wrapper in `Subagent` are deleted, and `inherit.budget` is now only the
+choice of which `Budget` the child runs under. The failure rule stayed with
+the ceiling: `record` skips a model the table cannot price, and `cost`
+prices the turn itself so an unpriced model under a money ceiling still
+fails. `Budget.test` pins the new fact directly -- a session under a budget
+with a plain `untilIdle` loop is counted -- and every existing budget row
+passes unchanged, which is the point: the observable behaviour did not
+move, only where it lives.
+
+One row did not pass unchanged, and it was the right one. `inherit: {
+budget: false }` gives the child a budget of its own, and the first version
+handed it `Budget.layer` -- which `Effect.provide` builds in the fibre's
+*inherited memo map*, so a child inside a scope that had provided `layer`
+further up got the parent's counter back and charged it. `Budget.fresh()`
+is a new layer value per call, which is a new memo key. Worth knowing
+generally: a module-level layer constant is shared by every `provide` under
+the same memo map, and "a fresh instance of this service" needs a fresh
+layer *value*, not a second `provide`.
+
+Limits across a delegation (item 56) were not folded in. `maxTurns` and
+`maxToolCalls` read `AgentLoop.State`, which is per run by design, and
+making them cross a delegation means deciding whether a child's turns are
+the parent's turns -- a question with a less obvious answer than money's,
+and one item 56's test should ask before anything is built.
 
 ### 2.5 Name what a tool can see of its session
 

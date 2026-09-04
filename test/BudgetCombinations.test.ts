@@ -39,8 +39,9 @@ describe("a budget and a delegation", () => {
    * capped at N tokens could spend without limit by delegating -- exactly
    * the shape of an agent that is capped *because* it delegates.
    *
-   * `Subagent.tool` now wraps the child's loop with `Budget.charge` by
-   * default, so the child's turns land on the parent's counter. The child is
+   * The engine records every turn against the `Budget` in context
+   * (`Budget.record`) and a child runs under its parent's by default, so
+   * the child's turns land on the parent's counter. The child is
    * counted, not capped: the parent's ceiling sees the spend when the
    * delegating turn ends, which is why the parent below stops right there.
    */
