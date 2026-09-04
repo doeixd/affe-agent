@@ -57,6 +57,11 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 | `effect` | `>=4.0.0-rc.111 <5.0.0` | required; this repository builds against `rc.112` |
 | `@modelcontextprotocol/sdk` | `>=1.10.0 <2.0.0` | optional; only for `/mcp/v1` |
 | `callscript` | `>=0.1.0 <0.2.0` | optional; only for `/code/callscript` |
+| `@modelcontextprotocol/client` | `>=2.0.0 <3.0.0` | optional; only for `/mcp/v2` |
+| `@a2a-js/sdk` | `>=1.0.1 <2.0.0` | optional; only for `/a2a` |
+| `acorn` | `>=8.18.0 <9.0.0` | optional; only for `/code` |
+| `effect-cf` | `>=0.39.0 <0.40.0` | optional; only for `/cloudflare` |
+| `@durable-streams/client` | `>=0.2.6 <0.3.0` | optional; only for `/durable-streams` |
 
 ```jsonc
 // package.json — exact, not caret ranges, until Effect 4 is GA
