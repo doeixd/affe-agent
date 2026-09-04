@@ -1106,8 +1106,13 @@ sizes; the items are repeated here so this list stays the one tracker.
       the other half of that commit -- taking the `events` subscription
       before the prompt rather than after -- is what removed the hang.
     - **48e. The relay's deferred half** -- lease expiry (`a2288f2`) and
-      reconnection (`1663fd9`) **SHIPPED 2026-09-03**; the durable mailbox and
-      enrollment remain.
+      reconnection (`1663fd9`) **SHIPPED 2026-09-03**; enrollment remains, and the
+      durable mailbox is **withdrawn** -- see the plan's §3.5, which walks
+      through why queueing a request for an offline peer delivers work to a
+      caller that was told an hour earlier it had failed. The relay also
+      cannot classify frames without parsing them, which is the property that
+      keeps it a transport. What survives of the idea is notification-only
+      delivery, opted into by the sender, and nothing currently needs it.
 
       Reconnection was small because of two upstream facts worth not
       re-deriving: `makeProtocolSocket` already retries its socket and clears

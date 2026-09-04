@@ -220,10 +220,46 @@ Landed 2026-09-03 in `2d65ccf` and `778d8af`; four things were deliberately
 left out and each is now the reason the relay is a demo rather than a
 deployment.
 
-* **Durable mailbox.** A peer that is offline gets `RelayPeerOfflineError`,
-  which is honest and useless for a laptop that closed its lid. `PersistedQueue`
-  per peer, drained on connect. The decision worth writing down first: which
-  frames are worth queueing. A `Request` is; an `Ack` is not.
+* **Durable mailbox — do not build this as specified.** *(2026-09-03, after
+  reconnection landed.)* The scope above said "`PersistedQueue` per peer,
+  drained on connect; a `Request` is worth queueing, an `Ack` is not". Both
+  halves are wrong, and the second is wrong in a way that would have been
+  discovered late.
+
+  **The relay cannot make that decision, and should not learn how.** Deciding
+  that a `Request` is worth queueing means parsing the frame, and the frame
+  being opaque is the property that keeps the relay a transport rather than a
+  participant. If frames are to be classified, the *sender* must do it — it is
+  the layer that knows what its own bytes mean — which is a field on
+  `Outbound`, not a parser in `RelayServer`.
+
+  **But for request/response there is nothing worth queueing.** Walk it
+  through. The relay drops an offline peer, so the target's `send` back is
+  refused, so its server protocol releases the RPC client holding the request
+  (`RelayRpc.ts`'s `catchTag` on `RelayPeerOfflineError`), and the caller has
+  already had its in-flight requests settled as a transport failure. Now
+  deliver the queued `Request` an hour later: `clientFor` mints a *fresh*
+  client for that (peer, channel), the handler runs, and the agent does the
+  work — for a caller that was told an hour ago that it failed and is no longer
+  there. That is not delivery, it is a duplicated side effect with no consumer,
+  and it is strictly worse than the honest error we return today.
+
+  **What a mailbox is actually for is one-way traffic** — a notification, an
+  event pushed at a device — where redelivery has a meaning. Effect RPC already
+  names those: `isNotification`. That is a real and much narrower feature than
+  "queue the requests", and it is the only shape worth building.
+
+  **And the request/response case is already solved a layer up.** "Reach this
+  session again later, exactly once" is what `idempotencyKey`, the
+  `DurableSessionStore` and the `DeliveryLog` are; a caller who needs a
+  submission to survive a disconnect wants the durable client, not a queue
+  inside the transport. Putting durability here would duplicate that at the one
+  layer that cannot make it mean anything, because the transport does not know
+  what a retry *is*.
+
+  So: if this is picked up, it is `isNotification`-only, opted into by the
+  sender on `Outbound`, and it needs a reason a notification matters more than
+  the reconnection that now exists. None of the current callers has one.
 * **Reconnection.** `RelayClient.status` goes `offline` for good and says why.
   A reconnect must re-subscribe every handler and decide what happens to the
   requests that were in flight — and per 48c the answer is that they fail, not
