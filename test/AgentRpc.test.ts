@@ -29,6 +29,7 @@ import {
 import { createServer } from "node:http"
 import * as AgentEvent from "../src/AgentEvent.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 import { AgentRpc } from "../src/rpc/index.js"
 import * as Contract from "./AgentClientContract.js"
 import { promptOf } from "./helpers.js"
@@ -724,6 +725,46 @@ describe("AgentRpc", () => {
     })
   )
 })
+
+/**
+ * RPC as an `AgentClient` -- `docs/plan-failure-paths.md` 48f.
+ *
+ * Until this existed, RPC was the one advertised transport whose client side
+ * no suite could see: this file ran only the protocol-error contract below,
+ * and `AgentClientConformance` covered the in-process, HTTP and durable
+ * clients. The adapter is thin, so what is really under test here is that the
+ * seam's twenty rows hold over a real request/response protocol -- and, in
+ * `test/RelayContract.test.ts`, over that protocol carried by the relay.
+ */
+const contractHarness: Contract.Harness = {
+  name: "rpc",
+  layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
+    Effect.gen(function* () {
+      const { layer: model } = yield* TestLanguageModel.script(turns)
+      const Host = AgentSessionHost.Tag<string>(
+        `test/AgentRpc/contract/${globalThis.crypto.randomUUID()}`
+      )
+      const host = AgentSessionHost.layer(Host, {
+        principal: { resolve: () => Effect.succeed("rpc-contract") },
+        authorization: AgentSessionHost.allowAll(),
+        maxSessions: 32,
+        maxRequestsPerSession: 256
+      }).pipe(
+        Layer.provide(
+          AgentClient.layer(agent, {
+            ...(elicitation ? { elicitation } : {}),
+            ...(maxRetainedSubmissions === undefined ? {} : { maxRetainedSubmissions })
+          }).pipe(Layer.provide(model))
+        )
+      )
+      const client = Layer.effect(AgentRpc.Client, RpcTest.makeClient(AgentRpc.Protocol)).pipe(
+        Layer.provide(AgentRpc.serverLayer({ host: Host }).pipe(Layer.provide(host)))
+      )
+      return AgentRpc.agentClientLayer().pipe(Layer.provide(client))
+    })
+}
+
+Contract.run(contractHarness)
 
 /**
  * Issue #73: the same protocol-error contract the HTTP client is held to.

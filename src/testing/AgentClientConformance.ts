@@ -57,13 +57,6 @@ export interface Options {
     readonly maxRetainedSubmissions?: number | undefined
   }) => Effect.Effect<Layer.Layer<AgentClient.AgentClient>>
   /**
-   * `false` when this transport cannot deliver `MessageDelta` to an observer
-   * that subscribed one `yieldNow` before `prompt` -- HTTP SSE needs the GET
-   * to finish connecting, which that latch does not wait for. The rest of
-   * the suite still runs.
-   */
-  readonly observesStreamDeltas?: boolean | undefined
-  /**
    * Where settled outcomes live. `bounded` is the in-process table with the
    * eviction rule; `journal` is the durable engine, which keeps every
    * outcome. The eviction case runs only against `bounded`.
@@ -127,7 +120,7 @@ const gated = Effect.map(Deferred.make<void>(), (gate) => ({
 const deltasFor = (
   options: Options,
   stream: boolean
-): Effect.Effect<Array<string>, AgentClient.RemoteError> =>
+): Effect.Effect<ReadonlyArray<string>, AgentClient.RemoteError> =>
   withClient(
     options,
     {
@@ -138,18 +131,32 @@ const deltasFor = (
       Effect.scoped(
         Effect.gen(function* () {
           const session = yield* client.createSession()
-          const seen = yield* Ref.make<Array<string>>([])
-          const watcher = yield* Effect.forkChild(
-            Stream.runForEach(session.events(), (entry) =>
-              AgentEvent.is("MessageDelta")(entry)
-                ? Ref.update(seen, (all) => [...all, entry.event.delta])
-                : Effect.void
+          // Collect until the submission's own terminal event, rather than
+          // stopping when `prompt` returns.
+          //
+          // Stopping on the return is an in-process assumption: locally the
+          // deltas are published on the same bus before the prompt's effect
+          // completes, so they are already in hand. Over a wire they travel on
+          // a *separate* response, and the prompt returning says nothing about
+          // whether they have arrived -- so interrupting there raced them and
+          // read an empty list, which looks exactly like a transport that
+          // cannot stream. Per-session order is guaranteed, so
+          // `SubmissionCompleted` is the marker that every delta which was
+          // going to arrive already has.
+          const collected = yield* Effect.forkChild(
+            Stream.runFold(
+              Stream.takeUntil(
+                session.events(),
+                (entry) => entry.event._tag === "SubmissionCompleted"
+              ),
+              (): ReadonlyArray<string> => [],
+              (all, entry) =>
+                AgentEvent.is("MessageDelta")(entry) ? [...all, entry.event.delta] : all
             )
           )
           yield* Effect.yieldNow
           yield* session.prompt("go", stream ? { stream: true } : {})
-          yield* Fiber.interrupt(watcher)
-          return yield* Ref.get(seen)
+          return yield* Fiber.join(collected)
         })
       )
   )
@@ -615,22 +622,20 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
         )
     )),
 
-    ...(options.observesStreamDeltas === false ? [] : [
-      make("streams deltas when asked, and not otherwise",
-        Effect.gen(function* () {
-          const name = "streams deltas when asked, and not otherwise"
-          const streamed = yield* deltasFor(options, true)
-          const batched = yield* deltasFor(options, false)
-          // Deltas are asserted joined, not chunk-by-chunk: how finely a
-          // provider's stream is cut is a property of the provider
-          // connection, and the durable interpreter legitimately delivers
-          // them whole. What the contract owes every caller is that
-          // streamed generation reaches `events` intact.
-          yield* equal(name)(streamed.join(""), "streamed", "streamed text")
-          yield* that(name)(streamed.length > 0, "no deltas were observed")
-          yield* equal(name)(batched, [], "deltas without stream: true")
-        }))
-    ]),
+    make("streams deltas when asked, and not otherwise",
+      Effect.gen(function* () {
+        const name = "streams deltas when asked, and not otherwise"
+        const streamed = yield* deltasFor(options, true)
+        const batched = yield* deltasFor(options, false)
+        // Deltas are asserted joined, not chunk-by-chunk: how finely a
+        // provider's stream is cut is a property of the provider
+        // connection, and the durable interpreter legitimately delivers
+        // them whole. What the contract owes every caller is that
+        // streamed generation reaches `events` intact.
+        yield* equal(name)(streamed.join(""), "streamed", "streamed text")
+        yield* that(name)(streamed.length > 0, "no deltas were observed")
+        yield* equal(name)(batched, [], "deltas without stream: true")
+      })),
 
     /**
      * Interruption must reach the caller, and why it is a row here rather

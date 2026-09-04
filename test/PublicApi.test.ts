@@ -537,6 +537,8 @@ describe("durable and cluster surfaces", () => {
       "Client",
       "Protocol",
       "acquireSession",
+      "agentClientFrom",
+      "agentClientLayer",
       "clientLayer",
       "serverLayer"
     ])

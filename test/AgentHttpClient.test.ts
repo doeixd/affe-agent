@@ -20,9 +20,6 @@ import * as Contract from "./AgentClientContract.js"
 
 const harness: Contract.Harness = {
   name: "http",
-  // SSE connects asynchronously; the contract's one `yieldNow` before
-  // `prompt` is not a connection latch. Lifecycle events still run.
-  observesStreamDeltas: false,
   layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
     Effect.gen(function* () {
       const { layer: model } = yield* TestLanguageModel.script(turns)
