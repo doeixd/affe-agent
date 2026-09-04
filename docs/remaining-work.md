@@ -1105,9 +1105,25 @@ sizes; the items are repeated here so this list stays the one tracker.
       not the fix `2d65ccf` claimed it was. The likelier explanation is that
       the other half of that commit -- taking the `events` subscription
       before the prompt rather than after -- is what removed the hang.
-    - **48e. The relay's deferred half** -- lease expiry **SHIPPED
-      2026-09-03** (`a2288f2`); reconnection, the durable mailbox and
-      enrollment remain, in that order.
+    - **48e. The relay's deferred half** -- lease expiry (`a2288f2`) and
+      reconnection (`1663fd9`) **SHIPPED 2026-09-03**; the durable mailbox and
+      enrollment remain.
+
+      Reconnection was small because of two upstream facts worth not
+      re-deriving: `makeProtocolSocket` already retries its socket and clears
+      its error on open, so the RPC client heals; and it never replays
+      requests, so the long-lived `listen` stream stays dead and re-issuing it
+      is nearly the whole job. The relay holds no per-endpoint subscription
+      state, so handlers need no re-registration.
+
+      The rule that matters: **the reason for an ending decides whether to
+      retry.** A superseded connection must not come back, or two nodes
+      sharing an identity flap forever, each superseding the other; an
+      unauthorized one must not either. The initial connection is still not
+      retried, because a layer that hangs on a typo is worse than one that
+      fails. In-flight requests are settled on a drop, which is 48c's rule in
+      its second home and is forced rather than chosen -- the far end releases
+      its client when its send is refused, so the response is genuinely gone.
 
       The lease is renewed by any traffic, not only `heartbeat`, and is
       evaluated when the relay is already doing something rather than by a

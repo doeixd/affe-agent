@@ -107,8 +107,10 @@ same rows. `/relay` carries any of them between two nodes that cannot dial
 each other: a route table keyed by peer, an opaque frame, and a caller
 identity the relay stamps and a caller cannot forge. Liveness is a lease,
 renewed by any traffic and collected when someone asks, so the directory does
-not claim a half-open peer is reachable. It has no durable mailbox and no
-reconnection yet, so an offline peer is a typed error rather than a queue.
+not claim a half-open peer is reachable. A node that loses its connection re-establishes it, unless the reason was
+supersession or a refused credential, where coming back would flap or hide a
+misconfiguration. It has no durable mailbox yet, so an offline peer is a typed
+error rather than a queue.
 
 **Durability and scale.** `/durable` runs the same agent inside a Workflow
 with journaled events, typed `StorageError`s at every store, a delivery log
