@@ -28,6 +28,7 @@ import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
 import { isStorageError, StorageError } from "../Errors.js"
+import * as AgentOutput from "../AgentOutput.js"
 
 /**
  * One submission of a durable logical session, as a workflow.
@@ -110,6 +111,17 @@ export const Outcome = Schema.Union([
     text: Schema.String,
     /** Optional so a journal written before it existed still decodes. */
     content: Schema.optional(Schema.Array(PromptWire.Part)),
+    /**
+     * The agent's declared output, encoded, when it declares one and reached
+     * it. Optional for the same reason `content` is: a journal written before
+     * this field existed still decodes, and reports no value, which is what it
+     * recorded.
+     *
+     * Opaque here, as it is on `AgentClient.RemoteResult`. This schema is
+     * shared by every agent and cannot name any particular one's `Value`; the
+     * caller names what it expects and decodes at the edge.
+     */
+    value: Schema.optional(Schema.Unknown),
     /** Same rule; `AgentSubmission.Result.stopReason` when the loop gave one. */
     stopReason: Schema.optional(Schema.String)
   }),
@@ -527,20 +539,31 @@ const infrastructureOutcome = (
 /** Map a prompt result onto the wire-safe outcome. */
 const succeededOutcome = (
   submissionId: string,
-  result: AgentSession.Result<any>
-): Outcome => ({
-  _tag: "Succeeded",
-  submissionId,
-  status: result.status === "interrupted" ? "interrupted" : "completed",
-  runs: result.runs,
-  turns: result.turns,
-  text: result.text,
-  content: Option.match(result.response, {
-    onNone: () => [],
-    onSome: (response) => History.assistantContent(response.content)
-  }),
-  ...(Option.isSome(result.stopReason) ? { stopReason: result.stopReason.value } : {})
-})
+  result: AgentSession.Result<any>,
+  output: Option.Option<AgentOutput.AgentOutput<any, any>>
+): Effect.Effect<Outcome> =>
+  Effect.map(
+    // Two different facts, one absence: an agent that declares no output, and
+    // a run that ended without reaching one.
+    Option.match(Option.zipWith(output, result.value, (declared, value) => ({ declared, value })), {
+      onNone: () => Effect.succeedNone,
+      onSome: ({ declared, value }) => Effect.asSome(AgentOutput.encode(declared, value))
+    }),
+    (encoded): Outcome => ({
+      _tag: "Succeeded",
+      submissionId,
+      status: result.status === "interrupted" ? "interrupted" : "completed",
+      runs: result.runs,
+      turns: result.turns,
+      text: result.text,
+      content: Option.match(result.response, {
+        onNone: () => [],
+        onSome: (response) => History.assistantContent(response.content)
+      }),
+      ...(Option.isSome(result.stopReason) ? { stopReason: result.stopReason.value } : {}),
+      ...(Option.isSome(encoded) ? { value: encoded.value } : {})
+    })
+  )
 
 /** Map an agent failure onto the wire-safe outcome. */
 const failedOutcome = (
@@ -601,7 +624,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // share an activity namespace.
       const scopePrefix = `${payload.submissionId}:`
       const modelLayer = yield* DurableModel.wrap(durableTools, {
-        prefix: scopePrefix
+        prefix: scopePrefix,
+        alsoDescribing: Option.match(agent.output, {
+          onNone: () => [],
+          onSome: (output) => [output.tool]
+        })
       })
       const channels = yield* DurableChannels.factory(options.store, {
         prefix: scopePrefix
@@ -796,11 +823,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
         // execution that is still running. The flag is consulted first.
         Effect.flatMap((result) =>
           instance.suspended
-            ? Effect.succeed(succeededOutcome(payload.submissionId, result))
+            ? succeededOutcome(payload.submissionId, result, agent.output)
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
                 finishProjection(options.sessionStore, options.store, payload, history).pipe(
                   Effect.andThen(flushTerminal),
-                  Effect.as(succeededOutcome(payload.submissionId, result))
+                  Effect.andThen(succeededOutcome(payload.submissionId, result, agent.output))
                 )
               )
         ),

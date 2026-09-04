@@ -5,6 +5,13 @@ import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentOutput from "../src/AgentOutput.js"
 import { AgentClient } from "../src/client/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
+import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
+import * as DeliveryLog from "../src/durable/DeliveryLog.js"
+import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
+import * as DurableChannels from "../src/durable/DurableChannels.js"
+import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+
+const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 
 /**
  * A typed output across the remote boundary (`remaining-work.md` item 35).
@@ -118,5 +125,45 @@ describe("a typed output across the remote boundary", () => {
         )
       }).pipe(Effect.provide(AgentClient.layer(agent).pipe(Layer.provide(model))))
     })
+  )
+})
+
+describe("a typed output across the durable boundary", () => {
+  it.live("the declared value survives the journal and decodes at the caller", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      const { layer: model } = yield* answering("high")
+
+      const runtime = DurableAgentClient.layer("TypedOutputAgent", agent, {
+        store,
+        sessionStore,
+        delivery
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+
+      yield* Effect.gen(function* () {
+        // The same `typed` wrapper as the in-process case: the durable client
+        // is an `AgentClient`, so the edge that decodes does not know or care
+        // which one it is holding. That is the whole point of the seam.
+        const client = yield* AgentClient.typed(agent)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "typed-durable" })
+            const result = yield* session.prompt("the disk filled up")
+
+            assert.isTrue(
+              Option.isSome(result.value),
+              "the value did not survive the workflow journal"
+            )
+            if (Option.isSome(result.value)) {
+              assert.strictEqual(result.value.value.severity, "high")
+              assert.strictEqual(result.value.value.summary, "disk is full")
+            }
+          })
+        )
+      }).pipe(Effect.provide(runtime))
+    }),
+    30_000
   )
 })

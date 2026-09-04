@@ -68,7 +68,25 @@ const streamPartsFor = (
 
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
-  options?: { readonly prefix?: string | undefined }
+  options?: {
+    readonly prefix?: string | undefined
+    /**
+     * Tools the journal must be able to *describe* but never executes.
+     *
+     * An agent that declares an `AgentOutput` has its output tool injected per
+     * turn by `AgentTurn`; it is the harness's own and deliberately never
+     * enters the agent's tool record. The journal still sees it, because the
+     * model calls it -- and a part schema built from the agent's toolkit alone
+     * has no member for that call, so encoding the response fails and the
+     * submission dies with a `SchemaError` naming a union the reader has no
+     * way to connect to a missing output tool.
+     *
+     * Only the schemas are affected. Handlers are not touched here, which is
+     * right: the injected tool's handler closes over one session's staged
+     * value and is not an activity to replay.
+     */
+    readonly alsoDescribing?: ReadonlyArray<Tool.Any> | undefined
+  }
 ): Effect.Effect<
   Layer.Layer<LanguageModel.LanguageModel>,
   never,
@@ -100,10 +118,18 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     // transformation such as URLFromString: the journal sees the model's URL
     // string where the schema expects a URL object. Give only the journalling
     // codec encoded parameter schemas; result schemas remain unchanged.
+    // Everything a response can mention: the agent's own tools, plus whatever
+    // the harness injects per turn and the agent's record therefore omits.
+    const described = [
+      ...Object.values(toolkit.tools),
+      ...(options?.alsoDescribing ?? [])
+    ]
+    // Left over the agent's own toolkit on purpose: this one is used only for
+    // its *type* parameters, which the cast below restates, and widening it to
+    // `Tool.Any` erases `Tools` and takes the stream's element type with it.
     const livePartSchema = Response.Part(toolkit)
     const encodedToolkit = Toolkit.make(
-      ...Object.values(toolkit.tools).map((tool) =>
-        tool.setParameters(Schema.toEncoded(tool.parametersSchema)))
+      ...described.map((tool) => tool.setParameters(Schema.toEncoded(tool.parametersSchema)))
     )
     const encodedPartSchema = Response.Part(encodedToolkit) as Schema.Codec<
       Response.Part<Tools, true>,
