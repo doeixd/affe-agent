@@ -152,6 +152,36 @@ declaring `needsApproval` is refused unless a caller opts in to being asked. And
 because it is a seam, a durable interpreter can back it with `DurableDeferred`,
 so a submission waiting on a human survives the process it started in.
 
+## What a tool can see of its session
+
+A tool handler runs on the fibre of the submission that called it, and the
+session sets a few things on that fibre before it does. Each is a
+`Context.Reference` with a `None` default, so no signature mentions it, a
+handler run outside any session reads `None`, and nothing has to be
+threaded through a toolkit to reach a tool. They are listed here because
+each was added when a tool needed it, and a reader meeting one should know
+it is one of a set and what the rule is.
+
+| reference | what it holds | `None` when |
+| --- | --- | --- |
+| `Principal.CurrentPrincipal` | the subject the submission acts for, as a string | outside a host, or the host set none |
+| `AgentInput.Current` (read via `AgentInput.current(schema)`) | the submission's encoded input | outside a submission, or the agent declares no input |
+| `Elicitation.Current` | the session's elicitor, for a delegation to forward a child's approval through | outside a session's tool execution |
+
+The rule, in three parts. A reference is set by the harness around the
+handler and never carried by a protocol: a principal arriving *in* a request
+would be a caller asserting its own identity, which is why the serving host
+establishes it from its own authentication and sets it. Each is independent
+of the others rather than fields of one context object, because a tool that
+reads the principal has no business with the elicitor. And each crosses a
+delegation the same way it crosses anything else on the fibre, which is why
+a child's tool reads the parent's principal without `Subagent` doing
+anything (`test/SubagentPrincipal.test.ts`); what a delegation forwards
+*deliberately* is in `Subagent.Inherit`.
+
+There is a fourth, `internal/failpoint.ts`, which is not part of the surface:
+a test hook for making a durable pass die at a named boundary.
+
 ## Tool progress
 
 A tool handler may report intermediate results while it is still running, via

@@ -3,6 +3,8 @@ import { Cause, Data, Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from
 import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentInput from "../src/AgentInput.js"
+import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentOutput from "../src/AgentOutput.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as Permission from "../src/Permission.js"
 import { Subagent } from "../src/subagent/index.js"
@@ -77,6 +79,82 @@ describe("Subagent.tool with a typed child", () => {
       assert.include(JSON.stringify(childPrompts[1]), "customer c-42")
       // The parent was offered the tool, and filled in the child's schema.
       assert.deepStrictEqual((yield* parent.recorder.tools)[0], ["support"])
+    })
+  )
+})
+
+describe("Subagent.tool with a typed-output child", () => {
+  type Equal<A, B> =
+    (<T>() => T extends A ? 1 : 2) extends
+      (<T>() => T extends B ? 1 : 2)
+      ? (<T>() => T extends B ? 1 : 2) extends
+          (<T>() => T extends A ? 1 : 2)
+        ? true
+        : false
+      : false
+
+  const Quality = Schema.Struct({ clarity: Schema.Number })
+  const Output = AgentOutput.make(Quality, { name: "report" })
+  const Reviewer = Agent.make({ instructions: "Review.", output: Output })
+
+  it.effect("the child's declared value is the tool's result, typed by the child's schema", () =>
+    Effect.gen(function* () {
+      /**
+       * `plan-after-seams.md` 2.7, closing the matrix's "text only" cell. A
+       * child that declares an `AgentOutput` hands its parent the *value*:
+       * the parent model sees JSON it can read a field out of rather than
+       * prose it has to parse, and the parent's tool record is typed by the
+       * child's schema.
+       */
+      const child = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCall("report", { clarity: 3 }, { id: "o1" })
+      ])
+      const parent = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "d1", name: "review", params: { prompt: "rate it" } }] },
+        TestLanguageModel.text("parent: done")
+      ])
+      const review = Subagent.tool("review", Reviewer, {
+        description: "Have the draft reviewed.",
+        provide: child.layer
+      })
+      // Typed by the child's schema, not `string`.
+      const typed: Equal<Tool.Success<typeof review.tool>, { readonly clarity: number }> = true
+      assert.isTrue(typed)
+
+      const Lead = Agent.make({ instructions: "You delegate.", tools: [review] })
+      const result = yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(Lead), (s) => s.prompt("go"))
+      ).pipe(Effect.provide(parent.layer))
+      assert.strictEqual(result.text, "parent: done")
+
+      // What the parent model was shown as the tool's result: the value.
+      const second = (yield* parent.recorder.prompts)[1]!
+      assert.include(JSON.stringify(second), '"clarity":3')
+    })
+  )
+
+  it.effect("a typed child that ends without reporting is a child failure, not an empty answer", () =>
+    Effect.gen(function* () {
+      // The loop stops before the output tool is called, so there is no
+      // value. Handing the parent `""` would be the silent kind of wrong;
+      // this is the loud kind, on the tool's failure channel.
+      const child = yield* TestLanguageModel.script([TestLanguageModel.text("I would rate it well")])
+      const parent = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "d1", name: "review", params: { prompt: "rate it" } }] },
+        TestLanguageModel.text("parent: done")
+      ])
+      const review = Subagent.tool("review", Reviewer.pipe(Agent.withLoop(AgentLoop.bounded(1))), {
+        description: "Have the draft reviewed.",
+        provide: child.layer
+      })
+      const Lead = Agent.make({ instructions: "You delegate.", tools: [review] })
+      yield* Effect.scoped(
+        Effect.flatMap(AgentSession.make(Lead), (s) => s.prompt("go"))
+      ).pipe(Effect.provide(parent.layer))
+
+      const second = (yield* parent.recorder.prompts)[1]!
+      assert.include(JSON.stringify(second), "without reporting its declared output")
+      assert.notInclude(JSON.stringify(second), "I would rate it well")
     })
   )
 })

@@ -9,12 +9,12 @@ evidence is named, and where it is a test it is in the tree.*
 | # | item | why it is here | size |
 | --- | --- | --- | --- |
 | 1 | **Ids carry their session** | two bugs in one day from ids unique only within a session | small |
-| 2 | **Refuse at construction, at the top level too** | `AgentSession.make` defaults to `denied`, so item 53's silent disable exists for every agent | small |
+| 2 | ~~**Refuse at construction, at the top level too**~~ | **withdrawn**: the premise was wrong, see §2.2 | -- |
 | 3 | **Item 46: every agent has an input** | E showed the exact shape of the cost; three inlined helpers, one un-runnable alias | large |
 | 4 | **The engine records usage; the loop only decides** | `Budget.charge` is a patch for the loop being per session | medium |
-| 5 | **Name what a tool can see of its session** | four ad-hoc references, no list | small |
+| 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
-| 7 | A typed child returns its value | the matrix's "text only" cell | small |
+| 7 | ~~A typed child returns its value~~ | **shipped**; the matrix's "text only" cell is a test | small |
 | 8 | `remaining-work.md` is 1600 lines | the checker keeps it honest, not readable | small |
 
 Order of work: 1, 2, 3, 4, then the rest. 1 and 2 are cheap and each closes
@@ -81,6 +81,18 @@ toolkits, duplicate tool names, an unapprovable child). Give it a name: one
 internal `wiring.ts` that every construction path calls, so the fourth check
 is a line rather than a pattern rediscovered.
 
+**Withdrawn 2026-09-04, before any code.** The premise does not hold. The
+`denied` default is documented as fail-closed, and it is *loud*: the run
+fails with `ToolApprovalRequiredError` naming the tool, and
+`test/Elicitation.test.ts` ("the default refuses, so nothing starts
+hanging") pins exactly that. The delegation case was silent for one reason
+only -- `Subagent` mapped the child's failure to a string for the parent
+model -- and that is what B fixed. Refusing at `AgentSession.make` would
+have broken every deliberately fail-closed session to fix a problem the
+top level does not have. The `wiring.ts` idea goes with it: a module for
+one function is noise. Recorded at length because a plan that overstates a
+risk misdirects exactly as one that understates it does.
+
 ### 2.3 Item 46, now
 
 **Evidence.** `plan-seams.md` E, in full. `PromptInput<Input>` is conditional
@@ -129,6 +141,12 @@ harness around the handler, never carried by a protocol). Not a
 `ToolCallContext` service: it would couple four independent concerns into
 one object for the sake of a shorter list.
 
+**Shipped 2026-09-04** as a section of `guide-sessions.md`, with the table
+and the three-part rule: set by the harness, never carried by a protocol;
+independent, not fields of one object; crossing a delegation as anything on
+the fibre does, with `Subagent.Inherit` as the place deliberate forwarding
+lives.
+
 ### 2.6 The static toolkit is the common case
 
 **Evidence.** `Agent.toolkit`, `tools: [...]`, `withTools` and every preset
@@ -149,6 +167,13 @@ requirements are discharged and the split has to follow it.
 to its text. A child that declares an `AgentOutput` should hand its parent
 the value, typed by the child's schema: `success` becomes the child's output
 schema when it has one, and the matrix's "text only" cell becomes a test.
+
+**Shipped 2026-09-04.** `Subagent.Answer<Value>` is the type; the parent
+model is shown the value as JSON; `Tool.Success` of the delegation is the
+child's schema, pinned with a type-level `Equal`; and a typed child that
+ends without reporting is a child failure on the tool's failure channel
+rather than an empty string, which would have been the silent kind of
+wrong. Two rows in `test/Subagent.helper.test.ts`.
 
 ### 2.8 `remaining-work.md` is a ledger, not a list
 

@@ -96,7 +96,7 @@ the empty cells are its output, not its incompleteness.
 | tool approval | `Permission` | `DurablePermission` | contract row | `PermissionSubagent` ⁶ |
 | elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | `PermissionSubagent` ⁶ |
 | principal | `Principal` | `Principal` | **not tested** ⁷ | `SubagentPrincipal` ⁸ |
-| declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | text only ⁹ |
+| declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | `Subagent.helper` ⁹ |
 | typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
 | cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | **not tested** ¹⁰ | `Subagent.helper`, `ToolCleanup` |
 | tool retry safety | n/a ¹¹ | `DurableToolRetry` | n/a ¹¹ | `SubagentDurable` ¹² |
@@ -160,9 +160,13 @@ written to stop trusting. Item 58.
 delegation because a `Context.Reference` on the fibre crosses; that was read
 from the mechanism, and is now read from a test.
 
-⁹ Not a bug: `Subagent.tool` declares `success: Schema.String` and maps the
-child's result to its text. A child's declared `Value` therefore does not reach
-the parent as a value. Worth knowing before designing a typed child.
+⁹ **Was "text only"; crosses now.** `Subagent.tool` declared
+`success: Schema.String` and mapped the child's result to its text, so a
+child's declared `Value` reached its parent as prose. The tool's `success`
+is now the child's output schema when it declares one, the parent model is
+shown the value as JSON, the parent's tool record is typed by it, and a
+typed child that ends without reporting is a child failure rather than an
+empty answer (`plan-after-seams.md` 2.7).
 
 ¹⁰ A tool holding a process or a lock when the *connection* dies, rather than
 when the run is interrupted, is a different question from the one `ToolCleanup`

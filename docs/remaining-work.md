@@ -1603,11 +1603,14 @@ for: the gap is recorded as a gap rather than assumed either way.*
     seams pass tripped over, ranked: ids carry their session (**done**, the
     same evening: `session-N:submission-M`, `session-N:run-M`, and the two
     local prefixes deleted); the construction-time refusal at
-    `AgentSession.make`, which defaults to `denied` and so has item 53's
-    silent disable for every agent; item 46; the engine recording usage so
-    the loop only decides; naming what a tool can see of its session; the
-    static toolkit as the common case in the type; a typed child returning
-    its value; and this file becoming a list again.
+    `AgentSession.make` (**withdrawn** the same evening: the `denied`
+    default is fail-closed *and loud* -- the run fails with
+    `ToolApprovalRequiredError` -- and only the delegation was silent);
+    item 46; the engine recording usage so the loop only decides; naming
+    what a tool can see of its session; the static toolkit as the common
+    case in the type; a typed child returning its value (**done**:
+    `Subagent.Answer`, the matrix's "text only" cell is a test); and this
+    file becoming a list again.
 
     ```text
     verify: grep "Ids.makeIdSource(id)" src/AgentSession.ts

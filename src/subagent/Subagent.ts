@@ -4,7 +4,9 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentLoop from "../AgentLoop.js"
+import type * as AgentOutput from "../AgentOutput.js"
 import * as AgentSession from "../AgentSession.js"
+import type * as AgentSubmission from "../AgentSubmission.js"
 import * as Budget from "../budget/Budget.js"
 import * as Elicitation from "../Elicitation.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
@@ -48,7 +50,7 @@ import * as InternalToolkit from "../internal/toolkit.js"
  * reference, and the behaviour a caller wants); a budget crosses by default
  * (money is the parent's); an approval crosses only when asked to, because
  * forwarding it puts a real question to a person. A child's declared output
- * does not cross -- this tool returns the child's text.
+ * crosses as the tool's result: see `Answer`.
  *
  * A child *defect* is still a defect, under either setting, and it kills the
  * parent run. That is deliberate rather than an omission. `onError` is about
@@ -189,6 +191,45 @@ const budgetFor: Effect.Effect<Layer.Layer<Budget.Budget>> = Effect.map(
 )
 
 /**
+ * What the parent model receives from a delegation.
+ *
+ * The child's declared `Value` when it declares an `AgentOutput`, so a
+ * typed child hands its parent a value the parent's tools can read and the
+ * parent model sees as JSON rather than prose; the child's text otherwise.
+ * The tool's `success` schema is the child's output schema in the first
+ * case, so the parent's tool record is typed by it.
+ */
+export type Answer<Value> = [Value] extends [never] ? string : Value
+
+/** The `success` schema a delegation declares: the child's output schema, or a string. */
+const successOf = <Value>(agent: {
+  readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
+}): Schema.Codec<Answer<Value>, unknown> =>
+  // The child's `Value` is a phantom on its definition (`output` is typed
+  // `AgentOutput<any, any>`), so the schema's own type has to be restated
+  // from the parameter: the two are the same by construction of `Agent.make`.
+  Option.match(agent.output, {
+    onNone: (): Schema.Codec<any, unknown> => Schema.String,
+    onSome: (output): Schema.Codec<any, unknown> => output.schema
+  })
+
+/**
+ * The child's result as the tool's answer. A typed child that ended without
+ * reporting -- its loop stopped first, say -- has no value to hand over, and
+ * that is a child failure like any other rather than a silent `""`.
+ */
+const answerOf = <Tools extends Record<string, Tool.Any>, Value>(
+  agent: { readonly output: Option.Option<AgentOutput.AgentOutput<any, any>> },
+  result: AgentSubmission.Result<Tools, Value>
+): Effect.Effect<Answer<Value>, string> =>
+  Option.isNone(agent.output)
+    ? Effect.succeed(result.text as Answer<Value>)
+    : Option.match(result.value, {
+        onNone: () => Effect.fail("the child finished without reporting its declared output"),
+        onSome: (value) => Effect.succeed(value as Answer<Value>)
+      })
+
+/**
  * The child, asked with what the tool decoded: the value itself for a
  * typed child, the `prompt` field otherwise -- the two shapes
  * `parametersOf` declares, so the reads here are exact.
@@ -211,7 +252,8 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
       AgentSession.make(child, {
         elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined
       }),
-      (session) => Effect.map(AgentSession.prompt(session, input), (result) => result.text)
+      (session) =>
+        Effect.flatMap(AgentSession.prompt(session, input), (result) => answerOf<Tools, Value>(agent, result))
     )
   )
 }
@@ -332,6 +374,9 @@ const refuseUnapprovable = (
  * })
  * ```
  *
+ * The tool answers with the child's declared value when the child declares
+ * an `AgentOutput`, and with its text otherwise -- see `Answer`.
+ *
  * The result is an `Agent.BoundTool` with no residual requirements: the child
  * agent's `LanguageModel | R` is discharged by `options.provide` inside the
  * handler, so nothing leaks up to the parent's wiring. Add it to any agent's
@@ -376,7 +421,7 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   const definition = Tool.make(name, {
     description: options.description,
     parameters: parametersOf(agent.input),
-    success: Schema.String,
+    success: successOf<Value>(agent),
     failure: Schema.String
   })
 
@@ -444,7 +489,7 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     const definition = Tool.make(name, {
       description: options.description,
       parameters: parametersOf(agent.input),
-      success: Schema.String,
+      success: successOf<Value>(agent),
       failure: Schema.String
     })
 
