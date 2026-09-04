@@ -103,7 +103,11 @@ A2A v1 (REST and JSON-RPC, official client, tasks, cancel, push configs, a
 remote peer as a tool), MCP (nine tools, history / pending / sessions /
 event-log resources, both official client generations, stdio elicitation).
 The [cross-adapter matrix](./docs/conformance-matrix.md) holds all five to the
-same rows.
+same rows. `/relay` carries any of them between two nodes that cannot dial
+each other: a route table keyed by peer, an opaque frame, and a caller
+identity the relay stamps and a caller cannot forge. It has no durable
+mailbox, no reconnection and no lease expiry yet, so an offline peer is a
+typed error rather than a queue.
 
 **Durability and scale.** `/durable` runs the same agent inside a Workflow
 with journaled events, typed `StorageError`s at every store, a delivery log
@@ -308,6 +312,6 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
   wrangler login is on their machine.
 
 The larger parked work -- the reference gateway, code mode, filetypes
-phase 5, the relay and bridge packages, compaction's overflow-recovery
+phase 5, the bridge packages, compaction's overflow-recovery
 phase 15 -- is listed with its preconditions in
 [remaining-work.md](./docs/remaining-work.md#larger-correctly-parked).

@@ -37,6 +37,30 @@ only the unfinished call. `SingleRunner` cannot perform peer failover and does
 not make that claim. Canonical history is not stored: it is rebuilt from
 replayed activity results.
 
+**A tool interrupted mid-call is not reissued unless it says it may be.**
+Upstream's `Activity` retries an interrupted effect up to ten times, which for
+a tool means the refund goes out ten times rather than twice. So a handler is
+reissued only when its tool is annotated `Tool.Idempotent` -- upstream's own
+annotation, the one emitted as the MCP `idempotentHint`, which defaults to
+`false`. A tool nobody has thought about is assumed to have side effects.
+
+When a non-idempotent handler is interrupted, its outcome is genuinely
+unknown, and the run ends with `DurableToolUnresolvedError` rather than an
+invented answer. It ends as a *defect* on purpose: a typed tool failure would
+be shown to the model under the default `ReturnToModel` policy, and the
+model's reasonable next move on "charge failed" is to charge again. Annotate
+the tools that can safely be repeated:
+
+```ts
+const readBalance = Tool.make("read_balance", { /* ... */ })
+  .annotate(Tool.Idempotent, true)
+```
+
+The window this does not close: if the process dies before the engine persists
+the journal entry recording the unknown outcome, the call is unjournalled and
+a replay runs it. Only the engine's write can close that, so the guarantee is
+at-most-once for interruption, not for power loss.
+
 `result` yields an `Exit`, because a failed submission is still a *completed*
 workflow. Its failure crosses as a typed `DurableAgentFailure` carrying the
 originating error's tag, not an opaque defect.

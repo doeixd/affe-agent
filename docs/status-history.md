@@ -5650,3 +5650,77 @@ Broken once by dropping the idempotency key from `offer`: the duplicate is
 queued and arrives instead of the next completion. Four tests, `tsc`, `lint`
 and `lint:portability` clean.
 
+
+---
+
+# 2026-09-03 — the relay, and making failure paths provable
+
+**The relay shipped** (`2d65ccf`, `778d8af`). `/relay` is a transport, not a
+protocol: a route table keyed by `PeerId`, one bounded queue per online peer, a
+directory, and a frame it never reads. `AgentRpc` runs across it unchanged. The
+relay never trusts a caller's `from`, and `serve` strips any caller-supplied
+`PEER_HEADER` before stamping its own, so reaching a target through the relay
+cannot bypass that target's authorization — the test forges the header and
+asserts the host saw the relay's caller instead.
+
+Both bugs the previous two passes had named are closed, and only one was a
+transport fault. The dropped `Exit` was ours: a caller interrupting a streaming
+request waited on an acknowledgement its own teardown had made undeliverable,
+so the finalizer now fails outstanding requests as interrupted before sending
+`Eof`. The missing `Chunk` was the test — `events` without `after` is a live
+tail, so subscribing after the prompt completed waited for events that had gone
+by, correctly and forever.
+
+Deferred, and now the reason the relay is a demo rather than a deployment: the
+durable mailbox, reconnection, lease expiry, enrollment beyond a fixed token
+map.
+
+**A read of `danieljvdm/effect-agent`'s source**, rather than its README or its
+RFC as the two earlier plans did, found that their durable tests can crash a
+pass at a named point and ours could not. That reframed the gap as missing
+*evidence* rather than a missing feature, and became
+[plan-failure-paths.md](./plan-failure-paths.md), item 48. Their durability
+also turns out to be the opposite bet from ours — canonical records and no
+Activities, where we rebuild history from replayed activity results — which is
+recorded there as deliberately not taken, because our `DeliveryLog`
+deduplicates by semantic key precisely *because* we replay.
+
+**48a: an interrupted tool is no longer charged ten times** (`8c46e3a`,
+corrected in `9fc844c`). `Activity.make` retries an interrupted execute while
+the cause has interrupts, up to ten attempts, so an interrupted tool handler
+was reissued nine more times. Retry safety is read from `Tool.Idempotent`,
+which already means exactly that and defaults to `false`. A deliberate
+behaviour change for every existing agent.
+
+The first version was half a fix, and the review caught it: the unresolved
+outcome was a *typed* failure, which `ToolExecution` under the default
+`ReturnToModel` policy shows to the model — whose reasonable next move on
+"charge failed" is to charge again. The eleventh retry had simply moved from
+the schedule to the model. It is now a defect, which never reaches the model
+and settles as a terminal `Failed` rather than the retryable `Infrastructure`.
+Pinned by asserting the property rather than the mechanism: two turns are
+scripted and the model is asked exactly once.
+
+**48b: failpoints** (`de132b4`). A no-op `Context.Reference` called at named
+durable boundaries, with a closed location tuple per subsystem, and
+`src/testing/Failpoints.ts` as the half a test provides. `DeliveryLog.append`
+is the first call site in both implementations. The test that matters crashes
+the SQL log after the commit: the row is there once, the retry is a
+`Duplicate`, and the next event is 2 rather than 3, because a crash must not
+burn an offset. Removing the boundary makes it fail.
+
+**48d: cancellation is a contract row** (`351b1e4`), with two corrections to
+its own plan. It is about interruption, not teardown — closing a client's scope
+tests the harness, since every harness builds its server or engine into the
+same layer. And it covers three implementations, not the five the plan claimed:
+RPC and the relay do not run the contract, because nothing adapts an Effect RPC
+client to `AgentClient`, so **the row does not guard the relay, the
+implementation that had the bug**. Its evidence is a falsification in
+`ShippedConformance` instead, checked in both directions.
+
+Left open, ranked in that plan: 48c (never acknowledge on the engine's word),
+48e (the relay's deferred half, lease expiry first), and 48f (an `AgentClient`
+over Effect RPC, which is what would put RPC and the relay under every row the
+seam owns).
+
+`tsc`, `lint`, `lint:portability` clean; 2014 tests across 185 files.
