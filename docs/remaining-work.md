@@ -23,10 +23,15 @@ Two things that number hides, both worth knowing before trusting a red run:
   `vitest.config.ts` caps `maxWorkers` at 8: about 29% slower solo, and two
   concurrent suites drop to one failure each. Eleven files spawn real processes
   (~247 tests), not the four previously named. Two residual load-sensitive
-  tests are **not** fixed by this and want their own entries:
-  `ClusterMultiNode` (races a real ~15s clock; H7 would move it to
-  `TestClock`) and `DurableStreams`' "linear, not quadratic", which asserts an
-  asymptotic bound by measuring wall time and spawns no processes at all.
+  tests were **not** fixed by this and wanted their own entries.
+  `DurableStreams`' "linear, not quadratic" is **fixed 2026-09-03**
+  (`ffd8b69`): it folded one log and asserted a wall-clock threshold, which is
+  a claim about the machine rather than the algorithm, and it now folds n and
+  2n and compares them, because load is exactly what a ratio cancels. The
+  bound and the size are both measured -- at half the size the same regression
+  hides inside a fold dominated by parsing, which an earlier draft discovered
+  by passing with the bug restored. `ClusterMultiNode` remains: it races a
+  real ~15s clock, and H7 would move it to `TestClock`.
 - ~~The count includes work that is not committed.~~ No longer true as of
   2026-09-01: item 27's working-tree changes were committed as `be75b83`.
 
