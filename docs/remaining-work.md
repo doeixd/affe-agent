@@ -1277,10 +1277,27 @@ and should not until it is committed. Item 30 is untouched.
     Schema, for a human or a model to read -- but it is not a substitute for
     the caller naming what it expects.
 
-    What remains is the implementation: an opaque encoded field on
-    `RemoteResult` and `Outcome`, and a decode at the edge, shaped after
-    `AgentA2A.typed`. Still ranked here rather than done, because it changes
-    two public wire schemas and no caller has asked for it yet.
+    **SHIPPED 2026-09-04** (`89d04ac`, `da4fba6`), exactly as described: an
+    opaque encoded field on `RemoteResult` and on `Outcome`'s `Succeeded`, and
+    a decode at the edge through `typedSession`, which already encoded the
+    typed *input* the same way. `TypedSession` now carries `Value` beside
+    `Input`. Additive on both wires -- the durable field is optional for the
+    same reason `content` is, so an older journal decodes and reports no
+    value.
+
+    `AgentOutput.encode` dies and `decode` fails, deliberately: a value that
+    will not encode came from this agent's own run against its own schema, and
+    one that will not decode means the far end is not the agent this caller
+    thinks it is.
+
+    **It also uncovered a bug with no connection to item 35: a durable agent
+    with a declared output could not run at all.** `DurableModel` built the
+    journal's response-part schema from the agent's toolkit, and the output
+    tool is injected per turn by `AgentTurn` rather than living there, so the
+    model's call to it could not be encoded and the submission died with a
+    `SchemaError` naming a union that omits it. Nothing combined the two
+    features, so nothing caught it. `DurableModel.wrap` now takes
+    `alsoDescribing` for tools the journal must describe but never executes.
 
 ### Known, deliberately left
 
