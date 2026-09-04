@@ -65,6 +65,7 @@ workerd through miniflare). Each file carries its own status line, and
 
 | document | what it is |
 | --- | --- |
+| [plan-failure-paths.md](./plan-failure-paths.md) | Making the failure paths provable: a read of `danieljvdm/effect-agent`'s source, which crashes durable passes at named points where we could not. Failpoints, tool retry safety, cancellation and resumption as contract rows, the relay's deferred half. 48a/48b/48d/48e/48f landed; the durable mailbox is withdrawn, with the walk-through. |
 | [plan-agent-product-control-plane.md](./plan-agent-product-control-plane.md) | Persistent named-agent product/control-plane architecture: `AgentSpec -> AgentDefinition`, organizations, projects/tasks, SessionDirectory + Needs You, browser/computer, connections/OAuth, automations, artifacts, knowledge, frontend, and an ordered build sequence over the existing kernel. |
 | [plan-workbench.md](./plan-workbench.md) | A fully open-source Open WebUI/bb-class workbench with Effect-native product/runtime/UI seams: `AgentClient` stays the execution contract, `AgentEvent` drives a UI-neutral projection, and React/assistant-ui/AG-UI are replaceable edge adapters. |
 | [plan-model-capabilities.md](./plan-model-capabilities.md) | The metadata upstream's `Model` omits — vision, window, cost — and what it unblocks in compaction and `/budget`; why cross-provider option normalization is a non-goal, and where prompt caching sits. M0 and M3 (prompt caching) done, M1 written but not exported, M2/M4/M5/M6 open — **and none of it is committed yet**. |
