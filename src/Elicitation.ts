@@ -1,4 +1,4 @@
-import { Deferred, Effect, Option, Ref, Schema } from "effect"
+import { Context, Deferred, Effect, Option, Ref, Schema } from "effect"
 
 /**
  * Execution that needs an answer from outside before it can continue.
@@ -111,6 +111,29 @@ export interface Elicitor {
   /** What is currently waiting, for a UI that has to render it. */
   readonly pending: Effect.Effect<ReadonlyArray<Request>>
 }
+
+/**
+ * The elicitor of the session a tool call is running in, visible to the tool.
+ *
+ * A session's elicitor is otherwise internal: the session asks through it and
+ * a host answers through `AgentSession.respond`, and a tool has no business
+ * asking questions on the session's behalf. One tool does -- a delegation.
+ * `Subagent.tool` under `inherit.approval: "parent"` opens a child session
+ * whose approvals are forwarded to *this* elicitor, so the parent's user is
+ * asked, on the parent's event stream, about a tool the child wants to run.
+ * That is the only reader, and it is why this is a `Reference` with a `None`
+ * default rather than a service: a tool run outside any session (a test
+ * calling a handler directly) reads `None` and forwards to nobody.
+ *
+ * Provided by the harness around each handler, wrapped so that a request
+ * forwarded through it is also announced on the providing session's bus --
+ * the child's announcement reaches the child's bus, which the parent's
+ * consumers are not watching.
+ */
+export const Current = Context.Reference<Option.Option<Elicitor>>(
+  "affe-agent/Elicitation/Current",
+  { defaultValue: () => Option.none() }
+)
 
 /**
  * Builds the elicitor a session uses.

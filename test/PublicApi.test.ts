@@ -783,6 +783,10 @@ describe("durable and cluster surfaces", () => {
   it("exports the elicitation vocabulary and nothing beyond it", async () => {
     const elicitation = await import("../src/Elicitation.js")
     assert.deepStrictEqual(Object.keys(elicitation).sort(), [
+      // The elicitor of the session a tool call runs in. A seam, added for
+      // one reader (`Subagent`, forwarding a child's approval to its parent)
+      // and public because the module doc says what it is for.
+      "Current",
       "Request",
       "Response",
       "denied",

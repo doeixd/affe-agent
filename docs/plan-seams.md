@@ -44,8 +44,8 @@ ordinary tool" is elegant, and is exactly why nobody ever had to choose.
 
 1. **A. The budget is wrong under replay** — a live bug, and the only one here
    that silently terminates correct work.
-2. **B. Decide the delegation boundary** — the structural item; A, item 52 and
-   item 53 are all instances of it.
+2. ~~**B. Decide the delegation boundary**~~ — **shipped** in two commits;
+   §3.2 records what the second found.
 3. ~~**C. One accessor for an agent's effective tools**~~ — **shipped**; the
    audit found one caller rather than many, and §3.3 records the correction.
 4. ~~**D. A combination matrix**~~ — **shipped**; §3.4 records what it found,
@@ -165,7 +165,29 @@ the layer. What is not: a toolkit resolved per turn from runtime state, which
 keeps the runtime refusal and is pinned in the direction that fails when
 someone closes it.
 
-The second half, `inherit`, is next.
+**Second half shipped 2026-09-04: `inherit`.** As designed, with two things
+the design did not predict.
+
+* **Closing item 52 found a bug in A's fix.** The occurrence key was
+  `runId:turnIndex`, and run ids are minted per session -- so any two
+  sessions sharing one `Budget` (a scope `layer` documents) collided on their
+  first turns and the second's charges were dropped as replays. A delegated
+  child is a session, and the first run of the new test showed the *parent's*
+  turns vanishing. The key now carries the session id, and `Budget.test`
+  pins two sessions on one budget. A combination test finding a bug in the
+  fix for a combination bug is the argument for D in one sentence.
+* **Forwarding an approval needs a seam that did not exist.** A session's
+  elicitor was internal; a tool had no way to reach it, and the child's
+  announcement goes to the child's bus, which nobody on the parent's side is
+  watching. `Elicitation.Current` is the seam: a `Reference` the harness
+  provides around each handler, holding the session's elicitor wrapped so a
+  forwarded request is also announced on the providing session's stream.
+  `ApprovalDetail.via` carries the path of delegating tool names.
+
+`Budget.charge` is the counting half of `within`, and `Subagent.tool` admits
+`Budget` in the child's requirement without asking `provide` for it, since it
+always supplies one. Items 52 and 53 are closed by tests that assert the
+decided behaviour, and the "recorded rather than asserted" comments are gone.
 
 ### 3.3 (C) One accessor for an agent's effective tools
 
@@ -315,9 +337,9 @@ committing per `CLAUDE.md`.
 
 ## 6. Acceptance
 
-* `test/BudgetCombinations.test.ts` asserts `2_000`, and items 51–53 are closed
+* ~~`test/BudgetCombinations.test.ts` asserts `2_000`, and items 51–53 are closed
   by tests that assert the decided behaviour rather than describe the current
-  one.
+  one.~~ Done.
 * `grep -rn "alsoDescribing" src/` finds nothing outside `Agent.effectiveTools`'
   callers.
 * The matrix has no blank cell without either a test name or a reason.

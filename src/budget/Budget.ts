@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, Layer, Option, Ref } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
 import * as AgentLoop from "../AgentLoop.js"
 import * as ModelCapabilities from "../model/ModelCapabilities.js"
@@ -65,11 +65,23 @@ const tokensOf = <Tools extends Record<string, Tool.Any>>(
  */
 export type Occurrence = string
 
-/** The coordinate for a turn: the run it belongs to, and its place in that run. */
+/**
+ * The coordinate for a turn: the session, the run within it, and the turn's
+ * place in that run.
+ *
+ * The session is part of the key because run ids are minted per session
+ * (`run-1`, `run-2`, ...), and a `Budget` is explicitly allowed to span
+ * sessions -- "once for the whole application" is one of the two scopes
+ * `layer` documents. Keyed on the run alone, two sessions sharing a budget
+ * collide on their first turns and the second session's charges are dropped
+ * as replays. Found when a delegated child, which is a session of its own,
+ * charged its parent's counter and silently erased the parent's own turns.
+ */
 export const occurrence = (state: {
+  readonly sessionId: string
   readonly runId: string
   readonly turnIndex: number
-}): Occurrence => `${state.runId}:${state.turnIndex}`
+}): Occurrence => `${state.sessionId}:${state.runId}:${state.turnIndex}`
 
 export class Budget extends Context.Service<Budget, {
   /**
@@ -178,6 +190,48 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
         total >= limit ? Effect.succeed(tokenStop) : inner.decide(state)
       )
     )
+  )
+
+/**
+ * Record `inner`'s turns against the ambient `Budget` and never stop them.
+ *
+ * The counting half of `within` and `cost`, without a ceiling. It exists for
+ * a loop whose ceiling is somebody else's: a delegated child's turns are
+ * spent through a model like anyone's, and `Subagent.tool` wraps the child's
+ * loop with this so they land on the parent's counter, where the parent's
+ * `within` or `cost` sees them when the delegating turn ends. The child is not capped by
+ * this -- a ceiling it should observe *inside one delegation* is the child's
+ * own `within`, which shares the counter.
+ *
+ * Tokens are always recorded. Cost is recorded when a `ModelCapabilities` is
+ * in context, and follows `cost`'s rule there: a model the table has no price
+ * for fails the turn rather than being counted as free. Without a table,
+ * cost is not recorded, so a parent capped with `cost` must give the child a
+ * table too -- the same requirement `cost` itself has.
+ */
+export const charge = <E, R, Tools extends Record<string, Tool.Any>>(
+  inner: AgentLoop.AgentLoop<E, R, Tools>
+): AgentLoop.AgentLoop<
+  E | ModelCapabilities.UnknownModelError
+    | ModelCapabilities.UnknownCurrentModelError
+    | ModelCapabilities.UnpricedModelError,
+  R | Budget,
+  Tools
+> =>
+  AgentLoop.make((state) =>
+    Effect.gen(function*() {
+      const budget = yield* Budget
+      const key = occurrence(state)
+      yield* budget.spend(tokensOf(state.response), key)
+      const capabilities = yield* Effect.serviceOption(ModelCapabilities.ModelCapabilities)
+      if (Option.isSome(capabilities)) {
+        const price = yield* ModelCapabilities.priceOfCurrent(state.response.usage).pipe(
+          Effect.provideService(ModelCapabilities.ModelCapabilities, capabilities.value)
+        )
+        yield* budget.spendCost(price, key)
+      }
+      return yield* inner.decide(state)
+    })
   )
 
 /**

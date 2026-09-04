@@ -91,10 +91,10 @@ the empty cells are its output, not its incompleteness.
 
 | concern | in-process | durable (replay) | behind a wire | delegated (subagent) |
 | --- | --- | --- | --- | --- |
-| token / cost ceiling | `Budget` | `BudgetCombinations` ¹ | n/a ² | **item 52** ³ |
+| token / cost ceiling | `Budget` | `BudgetCombinations` ¹ | n/a ² | `BudgetCombinations` ³ |
 | run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | **not tested** ⁵ |
-| tool approval | `Permission` | `DurablePermission` | contract row | refused at construction ⁶ |
-| elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | refused at construction ⁶ |
+| tool approval | `Permission` | `DurablePermission` | contract row | `PermissionSubagent` ⁶ |
+| elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | `PermissionSubagent` ⁶ |
 | principal | `Principal` | `Principal` | **not tested** ⁷ | `SubagentPrincipal` ⁸ |
 | declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | text only ⁹ |
 | typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
@@ -113,10 +113,14 @@ while recording a bug it could not yet fix.
 ² A ceiling is a property of the loop, not of the transport. No wire carries or
 enforces one, and a host that wanted to would be imposing its own.
 
-³ `Budget.within` is a loop combinator and a child agent has its own loop, so
-an unbudgeted child spends through a model and is charged to nobody. A parent
-capped at N can spend without limit by delegating -- which is the shape of an
-agent capped *because* it delegates.
+³ **Was item 52; crosses by default now.** `Budget.within` is a loop
+combinator and a child agent has its own loop, so an unbudgeted child spent
+through a model and was charged to nobody -- a parent capped at N could spend
+without limit by delegating. `Subagent.tool` now wraps the child's loop with
+`Budget.charge` unless `inherit.budget` is `false`, and the parent's ceiling
+sees the spend when the delegating turn ends. Closing it exposed a second
+bug: the occurrence key omitted the session, so *any* two sessions sharing a
+budget dropped the second's charges as replays. Fixed and pinned in `Budget`.
 
 ⁴ The rule the budget broke, verified positively here: `maxTurns` and
 `maxToolCalls` read derived state and are replay-safe, and `maxDuration` does
@@ -127,17 +131,18 @@ approval, or on a human who went home.
 ⁵ Expected to be the same gap as ³, for the same reason -- a child has its own
 loop -- but untested. A blank cell rather than an assumption.
 
-⁶ **Was item 53; now loud rather than silent, and still not crossing.** A tool
-marked `needsApproval` asks for an approval, and a session answers that from
-its elicitation seam. `Subagent.tool` opens the child with `Agent.run`, which
-has no elicitor, so the request was refused and the tool never ran; the
-child's *policy* did not decide it, and marking a tool as needing approval
-disabled it rather than protecting it. `Subagent.tool` and `toolScoped` now
-refuse such a child at construction (`PermissionSubagent`), so the fault is
-found before the agent starts. Whether an approval *should* cross -- the
-parent's user asked about an agent they cannot see -- is B's open half. A
-child whose toolkit is resolved per turn declares nothing up front and keeps
-the runtime refusal; that row is pinned too.
+⁶ **Was item 53; crosses when asked to, and is loud when not.** A tool
+marked `needsApproval` asks through the session's elicitation seam, and a
+delegated child had no elicitor, so the request was refused and the tool never
+ran -- marking a tool as needing approval disabled it, silently. Two answers
+now, both tested here. Default: `Subagent.tool` refuses such a child at
+construction, so the fault is found before the agent starts. Opt-in,
+`inherit: { approval: "parent" }`: the child's approval is forwarded to the
+parent's elicitor, announced on the parent's event stream, answered with
+`AgentSession.respond` on the parent, and `detail.via` names the delegating
+tool so the person is told who is asking. A child whose toolkit is resolved
+per turn (an MCP-bound child, typically) declares nothing up front, so the
+construction check cannot see it; forwarding is the answer for that child too.
 
 ⁷ **Caught reviewing this table, which is the table working.** This cell first
 read "`Principal`, relay stamp" -- and neither backs it. `Principal.test.ts`

@@ -30,60 +30,118 @@ const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 const usage = (tokens: number) => ({ input: tokens, output: 0 })
 
 describe("a budget and a delegation", () => {
-  it.live("a child's tokens are not counted against the parent's ceiling", () =>
+  /**
+   * Item 52, decided: a child's turns are charged to the parent's budget.
+   *
+   * `Budget.within` is a *loop* combinator: it charges the turns of the loop
+   * it wraps. A child agent has its own loop, so until `plan-seams.md` B its
+   * turns were spent through a model and charged to nobody, and a parent
+   * capped at N tokens could spend without limit by delegating -- exactly
+   * the shape of an agent that is capped *because* it delegates.
+   *
+   * `Subagent.tool` now wraps the child's loop with `Budget.charge` by
+   * default, so the child's turns land on the parent's counter. The child is
+   * counted, not capped: the parent's ceiling sees the spend when the
+   * delegating turn ends, which is why the parent below stops right there.
+   */
+  const delegating = (inherit: Subagent.Inherit | undefined) =>
     Effect.gen(function* () {
-      /**
-       * Recorded rather than asserted as correct, because it is a real gap
-       * and the fix is a design decision.
-       *
-       * `Budget.within` is a *loop* combinator: it charges the turns of the
-       * loop it wraps. A child agent has its own loop, so unless that loop is
-       * also budgeted, its turns are spent through a model and charged to
-       * nobody. A parent capped at N tokens can therefore spend without limit
-       * by delegating -- which is exactly the shape of an agent that is
-       * capped *because* it delegates.
-       *
-       * The `Budget` service itself is shared: the child inherits the
-       * parent's context, so a budgeted child would charge the same counter.
-       * That is what makes this a footgun rather than an impossibility --
-       * everything is in place except anything that makes it happen.
-       */
       const childModel = yield* FakeModel.layer([
         { text: "the child's expensive findings", usage: usage(10_000) }
       ])
       const child = Agent.make({ instructions: "child", loop: AgentLoop.bounded(2) })
       const research = Subagent.tool("research", child, {
         description: "Delegate research.",
-        provide: childModel.layer
+        provide: childModel.layer,
+        inherit
       })
-
       const parent = Agent.make({
         instructions: "Delegate.",
         tools: [research],
-        loop: Budget.within(50_000, AgentLoop.bounded(4))
+        // A ceiling the child's spend alone crosses, so whether the parent
+        // stops after the delegation is the observable.
+        loop: Budget.within(5_000, AgentLoop.bounded(4))
       })
-      const { layer: parentModel } = yield* FakeModel.script([
+      const { layer: parentModel, recorder } = yield* FakeModel.script([
         {
           toolCalls: [{ id: "r1", name: "research", params: { prompt: "q" } }],
           usage: usage(100)
         },
-        { text: "done", usage: usage(100) }
+        { text: "done", usage: usage(100) },
+        { text: "never reached under the default", usage: usage(100) }
       ])
 
-      const spent = yield* Effect.gen(function* () {
-        yield* Agent.run(parent, "go")
-        return yield* Effect.flatMap(Budget.Budget, (budget) => budget.spent)
+      return yield* Effect.gen(function* () {
+        const result = yield* Agent.run(parent, "go")
+        const spent = yield* Effect.flatMap(Budget.Budget, (budget) => budget.spent)
+        return { spent, text: result.text, parentCalls: (yield* recorder.prompts).length }
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(Budget.layer, parentModel))
       )
+    })
 
-      // Two parent turns at 100 each. The child's ten thousand are invisible.
-      assert.strictEqual(
-        spent,
-        200,
-        "a child's tokens now reach the parent's budget: good, and this test should become an assertion that they do"
-      )
+  it.live("a child's tokens are charged to the parent's budget, and the parent's ceiling sees them", () =>
+    Effect.gen(function* () {
+      const { parentCalls, spent } = yield* delegating(undefined)
+      // The parent's first turn at 100 and the child's ten thousand. The loop
+      // decides after the turn's tools have run, so the parent's ceiling sees
+      // the child's spend at the end of the very turn that delegated, and
+      // there is no second parent call.
+      assert.strictEqual(spent, 10_100, "the child's tokens are charged to nobody again")
+      assert.strictEqual(parentCalls, 1, "the parent's ceiling did not see the child's spend")
+    }),
+    30_000
+  )
+
+  it.live("`inherit: { budget: false }` is the old behaviour, chosen rather than fallen into", () =>
+    Effect.gen(function* () {
+      const { parentCalls, spent } = yield* delegating({ budget: false })
+      assert.strictEqual(spent, 200)
+      assert.strictEqual(parentCalls, 2)
+    }),
+    30_000
+  )
+
+  it.live("a child capped by its own `within` shares the counter, so the cap is on the whole", () =>
+    Effect.gen(function* () {
+      /**
+       * The corollary the `Inherit.budget` doc promises: the child is counted
+       * rather than capped by the parent, and a child that should stop on its
+       * own uses `Budget.within` -- which now reads the parent's counter. So
+       * the child's ceiling is against everything spent so far, not its own
+       * spend from zero.
+       */
+      const childModel = yield* FakeModel.layer([
+        { text: "first", usage: usage(1_000) },
+        { text: "never reached", usage: usage(1_000) }
+      ])
+      const child = Agent.make({
+        instructions: "child",
+        // Would allow two child turns from zero; the parent has already
+        // spent 2_500 on the same counter, so the first child turn crosses.
+        loop: Budget.within(3_000, AgentLoop.bounded(3))
+      })
+      const research = Subagent.tool("research", child, {
+        description: "Delegate research.",
+        provide: childModel.layer
+      })
+      const parent = Agent.make({
+        instructions: "Delegate.",
+        tools: [research],
+        loop: Budget.within(100_000, AgentLoop.bounded(4))
+      })
+      const { layer: parentModel } = yield* FakeModel.script([
+        { toolCalls: [{ id: "r1", name: "research", params: { prompt: "q" } }], usage: usage(2_500) },
+        { text: "done", usage: usage(100) }
+      ])
+      const spent = yield* Effect.gen(function* () {
+        yield* Agent.run(parent, "go")
+        return yield* Effect.flatMap(Budget.Budget, (budget) => budget.spent)
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(Budget.layer, parentModel)))
+
+      // 2_500 + one child turn of 1_000 (which crossed 3_000) + 100.
+      assert.strictEqual(spent, 3_600, "the child's ceiling counted from zero: it does not share the parent's counter")
     }),
     30_000
   )

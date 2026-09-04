@@ -5,7 +5,7 @@ import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import type { SubmissionId } from "./internal/ids.js"
 import { ToolApprovalRequiredError, ToolPermissionDeniedError } from "./Errors.js"
-import type * as Elicitation from "./Elicitation.js"
+import * as Elicitation from "./Elicitation.js"
 import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Telemetry from "./internal/telemetry.js"
@@ -587,10 +587,44 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     // `context.preliminary`. The final result is the last non-preliminary one;
     // if a handler emits nothing but preliminary results, the last of them is
     // still committed rather than the call being treated as producing nothing.
+    // What a delegation forwards a child's approval through. Announced here
+    // as well as by the asker: the child announces on its own bus, and the
+    // parent's consumers -- the ones who can answer -- watch this one.
+    const forwardable: Elicitation.Elicitor = {
+      elicit: (request, announce) =>
+        session.elicitation
+          .elicit(
+            request,
+            announce.pipe(
+              Effect.andThen(
+                EventBus.emit(session.bus, correlation, {
+                  _tag: "ElicitationRequested",
+                  id: request.id,
+                  kind: request.kind,
+                  detail: request.detail
+                })
+              )
+            )
+          )
+          .pipe(
+            Effect.tap((answer) =>
+              EventBus.emit(session.bus, correlation, {
+                _tag: "ElicitationResolved",
+                id: request.id,
+                kind: request.kind,
+                granted: answer.granted
+              })
+            )
+          ),
+      respond: (response) => session.elicitation.respond(response),
+      pending: session.elicitation.pending
+    }
+
     const exit = yield* Effect.exit(
       handler
         .handle(call.name, call.params, call.id)
         .pipe(
+          Effect.provideService(Elicitation.Current, Option.some(forwardable)),
           Effect.flatMap((stream) =>
             Stream.runFoldEffect(
               stream,

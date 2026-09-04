@@ -45,6 +45,31 @@ describe("Budget.within", () => {
     })
   )
 
+  it.effect("two sessions sharing one budget are both charged, not deduplicated as replays", () =>
+    Effect.gen(function* () {
+      /**
+       * `layer` documents "once for the whole application" as a supported
+       * scope, and the occurrence key has to survive it. Run ids are minted
+       * per session, so a key of `runId:turnIndex` alone made the second
+       * session's first turn look like a replay of the first session's and
+       * dropped it. Two sessions, one turn each, one budget: the total is the
+       * sum, or the key is wrong.
+       */
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "one", usage: { input: 30, output: 20 } },
+        { text: "two", usage: { input: 30, output: 20 } }
+      ])
+      const agent = Agent.make({ loop: Budget.within(1000, AgentLoop.untilIdle()) })
+      const total = yield* Effect.gen(function* () {
+        yield* Effect.scoped(Effect.flatMap(AgentSession.make(agent), (s) => AgentSession.prompt(s, "go")))
+        yield* Effect.scoped(Effect.flatMap(AgentSession.make(agent), (s) => AgentSession.prompt(s, "go")))
+        return yield* spent
+      }).pipe(Effect.provide(Layer.merge(model, Budget.layer)))
+
+      assert.strictEqual(total, 100, "the second session's turn was dropped as a replay of the first's")
+    })
+  )
+
   it.effect("does not stop a run that stays under the ceiling", () =>
     Effect.gen(function* () {
       // Turn 1 calls a tool (untilIdle continues), turn 2 answers (untilIdle

@@ -1351,6 +1351,26 @@ and should not until it is committed. Item 30 is untouched.
     child's loop when the parent's context carries a `Budget`, and the
     question it raises is whether a delegation should be able to opt out.
 
+    **Closed 2026-09-04 (`plan-seams.md` B).** `Subagent.Options.inherit.budget`
+    defaults to `true`: the child's loop is wrapped with the new
+    `Budget.charge` -- the counting half of `within` without a ceiling -- so
+    its turns land on the parent's counter and the parent's ceiling sees them
+    when the delegating turn ends. `false` is the old behaviour, chosen. The
+    child is counted rather than capped within one delegation; a child that
+    should stop on its own caps its own loop with `Budget.within`, which now
+    reads the shared counter, and `Subagent.tool` admits `Budget` in the
+    child's requirement without asking `provide` for it. All three rows in
+    `test/BudgetCombinations.test.ts`.
+
+    Closing it found a second bug in item A's fix: the occurrence key was
+    `runId:turnIndex`, run ids are minted **per session**, and `Budget.layer`
+    documents "once for the whole application" as a supported scope -- so any
+    two sessions sharing a budget collided on their first turns and the
+    second's charges were dropped as replays. A delegated child is a session,
+    which is how it surfaced: the parent's own turns vanished. The key now
+    includes the session id, and `test/Budget.test.ts` pins two sessions on
+    one budget summing rather than deduplicating.
+
 53. **A child agent's approval-requiring tool cannot be approved by anyone**
     (found 2026-09-04 by `test/PermissionSubagent.test.ts`). A tool marked
     `needsApproval` asks for an approval, and a session answers that from its
@@ -1392,9 +1412,24 @@ and should not until it is committed. Item 30 is untouched.
     `needsApproval` only then, so a child whose approval-requiring tools are
     remote is exactly the child the check cannot see. Not a reason to
     inspect the static list `bind` is given -- it would under-report -- but
-    the reason the second half is not optional. The second half -- an `inherit.approval` option that
-    forwards the parent's elicitor with the child's name attached -- is B's
-    remaining commit.
+    the reason the second half is not optional.
+
+    **Second half closed 2026-09-04.** `inherit: { approval: "parent" }`
+    forwards the child's approvals to the parent session's elicitor. The
+    harness provides `Elicitation.Current` around every handler -- the
+    session's elicitor, wrapped so a forwarded request is also announced on
+    the *parent's* event stream, which is the one the parent's consumers
+    watch -- and a child opened under `"parent"` gets a factory that reads
+    it. The request's `detail.via` names the delegating tool (outermost first
+    through nested delegations), so the person asked is told who is asking;
+    `Permission.ApprovalDetail` gained that optional field. Answered with
+    `AgentSession.respond` on the parent, as any approval is. Opt-in, and the
+    default stays the construction-time refusal, because forwarding puts a
+    real question to a person about an agent they cannot see. Outside any
+    session `Current` is `None` and the child refuses as it always did. Three
+    rows in `test/PermissionSubagent.test.ts`: granted, refused, and no
+    session. This is also the answer for the MCP-bound child above, which the
+    static check cannot see: forward, and the person decides.
 
     Two things that *are* right and are pinned in the same file: a child's
     tools are governed by the child's own policy (a denying child blocks its

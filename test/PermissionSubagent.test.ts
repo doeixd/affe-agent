@@ -1,10 +1,14 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Layer, Ref, Schema } from "effect"
+import { Cause, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentSession from "../src/AgentSession.js"
+import * as Elicitation from "../src/Elicitation.js"
 import * as Permission from "../src/Permission.js"
 import { Subagent } from "../src/subagent/index.js"
+import { AgentProbe } from "../src/testing/index.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -284,6 +288,125 @@ describe("approval across a delegation", () => {
         0,
         "the tool ran: someone is answering approvals for a delegated child now, and the construction-time refusal should go"
       )
+    }),
+    30_000
+  )
+
+  /**
+   * B's second half: `inherit: { approval: "parent" }`.
+   *
+   * The child's approval is forwarded to the parent session's elicitor,
+   * announced on the *parent's* event stream, and answered with
+   * `AgentSession.respond` on the parent, exactly as the parent's own
+   * approvals are. The request's `detail.via` names the delegating tool, so
+   * the person asked is told who is asking. Opt-in, because it puts a real
+   * question to a person about an agent they cannot see.
+   */
+  const forwardedRun = (answer: (detail: Permission.ApprovalDetail) => boolean) =>
+    Effect.gen(function* () {
+      const wiped = yield* Ref.make(0)
+      const child = Agent.make({
+        instructions: "child",
+        tools: [Agent.tool(Wipe, () => Effect.as(Ref.update(wiped, (n) => n + 1), "wiped"))],
+        loop: AgentLoop.bounded(3)
+      })
+      const childModel = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "wipe", params: {} }] },
+        { text: "the child finished" }
+      ])
+      // Accepted at construction now: somebody can answer.
+      const research = Subagent.tool("research", child, {
+        description: "Delegate research.",
+        provide: childModel.layer,
+        inherit: { approval: "parent" }
+      })
+      const parent = Agent.make({
+        instructions: "Delegate.",
+        tools: [research],
+        loop: AgentLoop.bounded(4)
+      })
+      const { layer: parentModel } = yield* FakeModel.script([
+        { toolCalls: [{ id: "r1", name: "research", params: { prompt: "go" } }] },
+        { text: "the parent answered" }
+      ])
+
+      const outcome = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(parent, { elicitation: Elicitation.memory })
+          const probe = yield* AgentProbe.make(session)
+          const running = yield* Effect.forkChild(session.prompt("go"))
+
+          // On the parent's stream, which is the whole point: the parent's
+          // consumers are the ones who can answer.
+          const asked = yield* probe.awaitEvent("ElicitationRequested")
+          const request = AgentEvent.is("ElicitationRequested")(asked) ? asked.event : undefined
+          assert.isDefined(request)
+          assert.strictEqual(request!.kind, "tool-approval")
+          const detail = Schema.decodeUnknownSync(Permission.ApprovalDetail)(request!.detail)
+
+          // Answerable on the parent, as any approval is.
+          const answered = yield* AgentSession.respond(session, { id: request!.id, granted: answer(detail) })
+          assert.isTrue(answered, "the parent's elicitor was not the one waiting")
+
+          const result = yield* Fiber.join(running)
+          const resolved = (yield* probe.events).filter(AgentEvent.is("ElicitationResolved"))
+          return { detail, text: result.text, resolved: resolved.length }
+        })
+      ).pipe(Effect.provide(parentModel))
+
+      return { ...outcome, wiped: yield* Ref.get(wiped) }
+    })
+
+  it.live("`approval: \"parent\"`: the child's approval is asked on the parent, told who is asking, and granted", () =>
+    Effect.gen(function* () {
+      const { detail, resolved, text, wiped } = yield* forwardedRun(() => true)
+      assert.strictEqual(detail.toolName, "wipe")
+      assert.deepStrictEqual(detail.via, ["research"], "the person asked was not told which delegation is asking")
+      assert.strictEqual(wiped, 1, "granted on the parent, and the child's tool still did not run")
+      assert.strictEqual(text, "the parent answered")
+      assert.strictEqual(resolved, 1, "the answer was not announced on the parent's stream")
+    }),
+    30_000
+  )
+
+  it.live("`approval: \"parent\"`, refused: the child's tool does not run, and the parent is told", () =>
+    Effect.gen(function* () {
+      const { text, wiped } = yield* forwardedRun(() => false)
+      assert.strictEqual(wiped, 0)
+      // The child's denial policy is `FailRun`, so the child's run fails and
+      // `onError: "return"` hands the parent model a string it can route
+      // around -- which is a decision the parent model then made.
+      assert.strictEqual(text, "the parent answered")
+    }),
+    30_000
+  )
+
+  it.live("a forwarded approval outside any session forwards to nobody, and refuses", () =>
+    Effect.gen(function* () {
+      /**
+       * `Elicitation.Current` is `None` when the handler is not running under
+       * a session's tool execution -- here, the tool's handler called
+       * directly. The child must refuse rather than hang on an elicitor that
+       * is not there.
+       */
+      const wiped = yield* Ref.make(0)
+      const child = Agent.make({
+        instructions: "child",
+        tools: [Agent.tool(Wipe, () => Effect.as(Ref.update(wiped, (n) => n + 1), "wiped"))],
+        loop: AgentLoop.bounded(3)
+      })
+      const childModel = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "wipe", params: {} }] },
+        { text: "the child finished" }
+      ])
+      const research = Subagent.tool("research", child, {
+        description: "Delegate research.",
+        provide: childModel.layer,
+        inherit: { approval: "parent" }
+      })
+      const exit = yield* Effect.exit(research.handler({ prompt: "go" }, { preliminary: () => Effect.void }))
+      assert.isTrue(exit._tag === "Failure", "the child ran an approval-requiring tool with nobody asked")
+      assert.strictEqual(yield* Ref.get(wiped), 0)
     }),
     30_000
   )

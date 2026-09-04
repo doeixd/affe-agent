@@ -3,8 +3,13 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
+import * as AgentLoop from "../AgentLoop.js"
+import * as AgentSession from "../AgentSession.js"
+import * as Budget from "../budget/Budget.js"
+import * as Elicitation from "../Elicitation.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
+import type * as ModelCapabilities from "../model/ModelCapabilities.js"
 
 /**
  * Subagents (issue #4 item 4): ergonomics for the pattern the library already
@@ -38,6 +43,13 @@ import * as InternalToolkit from "../internal/toolkit.js"
  * parent can read and route around, the same choice the coding toolkit makes.
  * Pass `onError: "die"` when a child failure should instead fail the parent
  * run.
+ *
+ * What else crosses the boundary is a decision, not an accident of which
+ * mechanism each concern uses: see `Inherit`. A principal crosses (a fibre
+ * reference, and the behaviour a caller wants); a budget crosses by default
+ * (money is the parent's); an approval crosses only when asked to, because
+ * forwarding it puts a real question to a person. A child's declared output
+ * does not cross -- this tool returns the child's text.
  *
  * A child *defect* is still a defect, under either setting, and it kills the
  * parent run. That is deliberate rather than an omission. `onError` is about
@@ -74,20 +86,135 @@ const parametersOf = (declared: InputBoundary.Declared): Schema.Codec<unknown, u
   })
 
 /**
+ * What crosses a delegation, decided rather than inherited from mechanism.
+ *
+ * Each cross-cutting concern reaches the child by a different route --
+ * a principal is a fibre reference and crosses on its own; a budget is a
+ * loop combinator and does not; an approval is a session option and does
+ * not -- and `plan-seams.md` found that nobody had chosen any of those
+ * answers. These are the choices, with their defaults argued for.
+ */
+export interface Inherit {
+  /**
+   * Whether the child's turns are charged to the parent's `Budget`.
+   *
+   * **Default `true`: money is the parent's, whoever spends it.** A parent
+   * capped at N tokens is usually capped *because* it delegates, and a child
+   * charged to nobody lets it spend without limit through the door next to
+   * the wall. With a `Budget` in the parent's context, the child's loop is
+   * wrapped with `Budget.charge`, so its turns land on the same counter and
+   * the parent's ceiling sees them when the delegating turn ends. Without one, nothing
+   * changes. The child is *counted*, not capped, within one delegation; a
+   * child that should stop on its own caps its own loop with
+   * `Budget.within`, which shares the counter.
+   */
+  readonly budget?: boolean | undefined
+  /**
+   * Who answers when a child's tool needs approval.
+   *
+   * **Default `"refuse"`**: nobody can, so a child holding such a tool is
+   * refused at construction rather than silently at runtime -- see `tool`.
+   *
+   * `"parent"` forwards the child's approvals to the parent session's
+   * elicitor. The parent's user is asked, on the parent's event stream, and
+   * answers with `AgentSession.respond` as for any approval; the request's
+   * `detail.via` names this tool so they are told who is asking. That is a
+   * real question to put to a person -- approve a tool call from an agent
+   * they cannot see, named by a tool they did not choose -- which is why it
+   * is opt-in and why the default is the loud refusal rather than this.
+   */
+  readonly approval?: "parent" | "refuse" | undefined
+}
+
+/**
+ * The parent's elicitor, as a child's `Elicitation.Factory`.
+ *
+ * Reads `Elicitation.Current` when the child session is made, which is
+ * inside the parent's handler, so it is the parent's. The forwarded
+ * request is stamped with this tool's name (`detail.via`, outermost first,
+ * so a delegation of a delegation reads as the path it took). Outside any
+ * session `Current` is `None` and the child refuses, as it always did.
+ */
+const forwarded = (via: string): Elicitation.Factory => ({
+  make: (sessionId) =>
+    Effect.flatMap(Elicitation.Current, (current) =>
+      Option.match(current, {
+        onNone: () => Elicitation.denied.make(sessionId),
+        onSome: (parent) =>
+          Effect.succeed<Elicitation.Elicitor>({
+            elicit: (request, announce) => parent.elicit(stamped(request, via), announce),
+            respond: parent.respond,
+            pending: parent.pending
+          })
+      }))
+})
+
+const stamped = (request: Elicitation.Request, via: string): Elicitation.Request => {
+  if (request.kind !== "tool-approval" || typeof request.detail !== "object" || request.detail === null) {
+    return request
+  }
+  const detail = request.detail as { readonly via?: unknown }
+  const inner = Array.isArray(detail.via) ? detail.via : []
+  return { ...request, detail: { ...detail, via: [via, ...inner] } }
+}
+
+/**
+ * The child's loop under `inherit.budget`: charged to the ambient `Budget`,
+ * or left alone. One function with the wider type either way, so the child
+ * definition has one shape whichever was chosen; the requirement it adds is
+ * discharged by `budgetFor` below.
+ */
+const charging = (inherit: Inherit | undefined) =>
+  <E, R, Tools extends Record<string, Tool.Any>>(
+    inner: AgentLoop.AgentLoop<E, R, Tools>
+  ): AgentLoop.AgentLoop<
+    E | ModelCapabilities.UnknownModelError
+      | ModelCapabilities.UnknownCurrentModelError
+      | ModelCapabilities.UnpricedModelError,
+    R | Budget.Budget,
+    Tools
+  > => inherit?.budget === false ? inner : Budget.charge(inner)
+
+/**
+ * The `Budget` the child runs under: the parent's when there is one, which is
+ * the point, and a fresh throwaway otherwise, so `charge` has a counter to
+ * write to and nothing is charged to anyone -- exactly the old behaviour.
+ */
+const budgetFor: Effect.Effect<Layer.Layer<Budget.Budget>> = Effect.map(
+  Effect.serviceOption(Budget.Budget),
+  Option.match({
+    onNone: () => Budget.layer,
+    onSome: (ambient) => Layer.succeed(Budget.Budget, ambient)
+  })
+)
+
+/**
  * The child, asked with what the tool decoded: the value itself for a
  * typed child, the `prompt` field otherwise -- the two shapes
  * `parametersOf` declares, so the reads here are exact.
+ *
+ * Opened as a session rather than through `Agent.run`, because a session is
+ * where an elicitor is given -- and `inherit.approval: "parent"` is that.
  */
 const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
-  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  name: string,
+  agent: AgentDefinition<Tools, E, R | Budget.Budget, LanguageModel.LanguageModel, Value, Input>,
+  inherit: Inherit | undefined,
   params: unknown
-) =>
-  Agent.run(
-    agent,
-    InputBoundary.asked<Input>(
-      Option.isSome(agent.input) ? params : (params as SubagentParams).prompt
+) => {
+  const child = agent.pipe(Agent.updateLoop(charging(inherit)))
+  const input = InputBoundary.asked<Input>(
+    Option.isSome(agent.input) ? params : (params as SubagentParams).prompt
+  )
+  return Effect.scoped(
+    Effect.flatMap(
+      AgentSession.make(child, {
+        elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined
+      }),
+      (session) => Effect.map(AgentSession.prompt(session, input), (result) => result.text)
     )
   )
+}
 
 /** How a child failure reaches the parent. Defects are not covered: see the module doc. */
 export type OnError =
@@ -117,6 +244,8 @@ export interface Options<R, LE = never> {
   readonly provide: Layer.Layer<LanguageModel.LanguageModel | R, LE>
   /** What a child failure does. Defaults to `"return"`. */
   readonly onError?: OnError | undefined
+  /** What crosses the delegation. See `Inherit` for each default and why. */
+  readonly inherit?: Inherit | undefined
 }
 
 const describeError = (error: unknown): string => {
@@ -169,14 +298,21 @@ const unapprovable = (agent: { readonly toolkit: Agent.ToolkitInput<any, any, an
         .map((tool) => tool.name)
   })
 
-const refuseUnapprovable = (name: string, agent: { readonly toolkit: Agent.ToolkitInput<any, any, any> }): void => {
+const refuseUnapprovable = (
+  name: string,
+  agent: { readonly toolkit: Agent.ToolkitInput<any, any, any> },
+  inherit: Inherit | undefined
+): void => {
+  // Under `"parent"` somebody *can* answer, so there is nothing to refuse.
+  if (inherit?.approval === "parent") return
   const names = unapprovable(agent)
   if (names.length > 0) {
     throw new Error(
       `Subagent "${name}": the child holds ${names.length === 1 ? "a tool" : "tools"} marked needsApproval ` +
         `(${names.map((n) => `"${n}"`).join(", ")}) and nobody can answer for a delegated agent, ` +
         `so ${names.length === 1 ? "it" : "they"} would be refused on every call. ` +
-        `Drop the annotation on the child's tool, or wrap it in a tool of the parent's that asks instead.`
+        `Drop the annotation on the child's tool, forward approvals with \`inherit: { approval: "parent" }\`, ` +
+        `or wrap it in a tool of the parent's that asks instead.`
     )
   }
 }
@@ -229,10 +365,14 @@ const refuseUnapprovable = (name: string, agent: { readonly toolkit: Agent.Toolk
  */
 export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, LE = never>(
   name: string,
-  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  // `Budget` is admitted in the child's requirement without being asked of
+  // `provide`: the delegation always supplies one (the parent's, or a
+  // throwaway), so a child capping its own loop with `Budget.within` needs
+  // nothing from the caller for it.
+  agent: AgentDefinition<Tools, E, R | Budget.Budget, LanguageModel.LanguageModel, Value, Input>,
   options: Options<R, LE>
 ) => {
-  refuseUnapprovable(name, agent)
+  refuseUnapprovable(name, agent, options.inherit)
   const definition = Tool.make(name, {
     description: options.description,
     parameters: parametersOf(agent.input),
@@ -241,13 +381,14 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   })
 
   const run = (params: unknown) =>
-    askChild(agent, params).pipe(
-      Effect.map((result) => result.text),
-      // The child's `LanguageModel | R` is discharged here and only here, so
-      // the tool carries no requirement of its own and parent and child never
-      // share a context.
-      Effect.provide(options.provide)
-    )
+    Effect.flatMap(budgetFor, (budget) =>
+      askChild(name, agent, options.inherit, params).pipe(
+        // The child's `LanguageModel | R` is discharged here and only here, so
+        // the tool carries no requirement of its own and parent and child never
+        // share a context. The budget is the one exception, by decision: see
+        // `Inherit.budget`.
+        Effect.provide(Layer.merge(options.provide, budget))
+      ))
 
   const handler: Agent.Handler<typeof definition> = (params) =>
     options.onError === "die"
@@ -291,13 +432,13 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
  */
 export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, LE = never>(
   name: string,
-  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  agent: AgentDefinition<Tools, E, R | Budget.Budget, LanguageModel.LanguageModel, Value, Input>,
   options: Options<R, LE>
 ) =>
   // The same refusal as `tool`, and before the layer is built: a wiring
   // fault should not cost a connection pool to discover.
   Effect.suspend(() => {
-    refuseUnapprovable(name, agent)
+    refuseUnapprovable(name, agent, options.inherit)
     return Layer.build(options.provide)
   }).pipe(Effect.map((services) => {
     const definition = Tool.make(name, {
@@ -308,13 +449,14 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     })
 
     const run = (params: unknown) =>
-      askChild(agent, params).pipe(
-        Effect.map((result) => result.text),
-        // The already-built services, not the layer: this is the whole
-        // difference from `tool`. The child's `LanguageModel | R` is still
-        // discharged here and only here, so parent and child share no context.
-        Effect.provideContext(services)
-      )
+      Effect.flatMap(budgetFor, (budget) =>
+        askChild(name, agent, options.inherit, params).pipe(
+          // The already-built services, not the layer: this is the whole
+          // difference from `tool`. The child's `LanguageModel | R` is still
+          // discharged here and only here, so parent and child share no
+          // context -- the budget excepted, by decision (`Inherit.budget`).
+          Effect.provide(Layer.merge(Layer.succeedContext(services), budget))
+        ))
 
     const handler: Agent.Handler<typeof definition> = (params) =>
       options.onError === "die"

@@ -89,3 +89,43 @@ What belongs elsewhere: who may *control* the agent (answer this question,
 read that session) is transport authorization, on the client and adapters;
 what an approved call can physically touch is the sandbox.
 
+## Across a delegation
+
+A subagent is a tool that opens a child session (`Subagent.tool`), and the
+child has its own policy: a denying child blocks its own tool, and the parent
+is asked only about the delegation. Approving `research` is not approving what
+`research` then does.
+
+A child's tool marked `needsApproval` is the case to decide, because nobody
+can answer it: the child has no elicitor. The default is to refuse such a
+child **at construction** -- `Subagent.tool` throws, the way `Agent.make`
+refuses two toolkits -- so the fault is found before the agent starts rather
+than as a string in the parent model's context three delegations in.
+
+To let someone answer, forward:
+
+```ts
+const research = Subagent.tool("research", Researcher, {
+  description: "Research a question and return findings.",
+  provide: ResearcherModel,
+  inherit: { approval: "parent" }
+})
+```
+
+The child's approval is then asked of the parent session's elicitor, announced
+on the parent's event stream, and answered with `AgentSession.respond` on the
+parent exactly as the parent's own approvals are. The request's `detail.via`
+names the delegating tool (`["research"]`, or the path through nested
+delegations), so the person asked is told who is asking. It is opt-in because
+that is a real question to put to a person: approve a tool call from an agent
+they cannot see, named by a tool they did not choose.
+
+A child whose tools come from an MCP server is the one the construction-time
+check cannot see -- the server's `requiresApproval` annotation becomes
+`needsApproval` only when the server is listed -- and forwarding is the answer
+for that child too.
+
+Budget crosses by default (`inherit.budget`, see `Budget.charge`); principal
+crosses because a fibre reference does. The table in
+[conformance-matrix.md](./conformance-matrix.md) has every concern against
+every context.

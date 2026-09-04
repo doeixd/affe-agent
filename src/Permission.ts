@@ -434,6 +434,17 @@ export const ApprovalDetail = Schema.Struct({
    * for why the two are not the same string.
    */
   subject: Schema.optional(Schema.String),
-  reason: Schema.optional(Schema.String)
+  reason: Schema.optional(Schema.String),
+  /**
+   * The delegations this request came through, outermost first, when it did
+   * not come from the session being asked.
+   *
+   * A child agent's approval forwarded to its parent (`Subagent.tool`,
+   * `inherit.approval: "parent"`) names the delegating tool here -- so a
+   * person asked to approve `wipe` is at least told it is `research` asking,
+   * on behalf of an agent they cannot see. Absent for the session's own
+   * tools, which is every request that existed before delegation could ask.
+   */
+  via: Schema.optional(Schema.Array(Schema.String))
 })
 export type ApprovalDetail = typeof ApprovalDetail.Type
