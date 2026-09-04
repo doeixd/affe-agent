@@ -109,8 +109,11 @@ identity the relay stamps and a caller cannot forge. Liveness is a lease,
 renewed by any traffic and collected when someone asks, so the directory does
 not claim a half-open peer is reachable. A node that loses its connection re-establishes it, unless the reason was
 supersession or a refused credential, where coming back would flap or hide a
-misconfiguration. It has no durable mailbox yet, so an offline peer is a typed
-error rather than a queue.
+misconfiguration. Credentials live in a store -- memory or SQL, tokens kept as
+digests -- so enrolling and revoking a node are writes rather than restarts. It
+has no durable mailbox, and will not: queueing a request for an offline peer
+would deliver work to a caller that was told long ago it had failed, so an
+offline peer is a typed error rather than a queue.
 
 **Durability and scale.** `/durable` runs the same agent inside a Workflow
 with journaled events, typed `StorageError`s at every store, a delivery log

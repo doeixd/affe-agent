@@ -1123,9 +1123,15 @@ sizes; the items are repeated here so this list stays the one tracker.
       not the fix `2d65ccf` claimed it was. The likelier explanation is that
       the other half of that commit -- taking the `events` subscription
       before the prompt rather than after -- is what removed the hang.
-    - **48e. The relay's deferred half** -- lease expiry (`a2288f2`) and
-      reconnection (`1663fd9`) **SHIPPED 2026-09-03**; enrollment remains, and the
-      durable mailbox is **withdrawn** -- see the plan's §3.5, which walks
+    - **48e. The relay's deferred half** -- **COMPLETE 2026-09-03**: lease
+      expiry (`a2288f2`), reconnection (`1663fd9`) and enrollment (`3b92ead`),
+      which puts a store behind the same `RelayAuthenticator` seam and keeps
+      only a SHA-256 of each token, so a reader of the table cannot become the
+      node. It forced a widening worth knowing about: `AuthenticatorService`
+      now carries `StorageError` beside `RelayUnauthorizedError`, because
+      unauthorized is *terminal* on the client, and reporting a database blip
+      as a bad credential would take a whole fleet offline over a transient.
+      The durable mailbox is **withdrawn** -- see the plan's §3.5, which walks
       through why queueing a request for an offline peer delivers work to a
       caller that was told an hour earlier it had failed. The relay also
       cannot classify frames without parsing them, which is the property that
