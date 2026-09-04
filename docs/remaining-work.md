@@ -1069,11 +1069,28 @@ sizes; the items are repeated here so this list stays the one tracker.
       and the relay do not run the contract, so **the row does not guard the
       relay, the implementation that had the bug**. Its evidence is instead a
       falsification in `ShippedConformance`, checked in both directions.
-    - **48f. An `AgentClient` over Effect RPC** -- new, from 48d. Nothing
-      adapts an RPC client to the client seam, which is why RPC and the relay
-      sit outside the contract; `AgentHttp.agentClientFromServer` is the
-      shape to follow. It would put two more implementations under every row
-      the seam owns, including 48d's.
+    - **48f. An `AgentClient` over Effect RPC** -- ~~open~~ **SHIPPED
+      2026-09-03** (`3010a13`). `AgentRpc.agentClientFrom` /
+      `agentClientLayer`. RPC and the relay now run the contract, so it
+      covers five implementations rather than three, the relay's twenty rows
+      crossing two nodes and a real WebSocket.
+
+      Two findings on the way. The delta row stopped collecting when `prompt`
+      returned -- an in-process assumption, since over a wire the deltas
+      travel on a separate response -- so it now collects until
+      `SubmissionCompleted`. With that fixed HTTP passes the row it had opted
+      out of, so `observesStreamDeltas` is retired: its stated reason (SSE
+      connect latency) was wrong, and streaming deltas over HTTP had simply
+      never been tested.
+
+      **And a correction.** Reverting `RelayRpc.clientProtocol`'s in-flight
+      settling finalizer leaves all twenty rows green, and also leaves a
+      targeted teardown test green -- checked with a unary prompt and with a
+      streamed response open, which is the shape 26p's trace describes. That
+      finalizer is therefore defensive code whose necessity is **unproven**,
+      not the fix `2d65ccf` claimed it was. The likelier explanation is that
+      the other half of that commit -- taking the `events` subscription
+      before the prompt rather than after -- is what removed the hang.
     - **48e. The relay's deferred half** -- lease expiry, reconnection,
       durable mailbox, enrollment, in that order.
 
