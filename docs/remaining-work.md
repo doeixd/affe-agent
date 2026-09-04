@@ -1318,6 +1318,39 @@ and should not until it is committed. Item 30 is untouched.
     alters what a parent model sees on a path nobody has complained about, and
     the honest answer may be that a partial answer is better than none.
 
+51. **A replayed turn is charged to the budget twice** (found 2026-09-04 by
+    `test/BudgetCombinations.test.ts`, pinned at the wrong number so the suite
+    stays honest). Measured: a two-turn script that suspends once makes
+    **two** model calls and records **three** turns of spend. The journal is
+    fine -- the pre-suspension call is replayed, not re-issued -- but the loop
+    runs again on replay and `Budget.within` charges whatever response it is
+    handed, including a replayed one.
+
+    The direction is the problem. This is not a ceiling that fails to bite; it
+    bites too early, and the more a run suspends the earlier, so a long durable
+    conversation can be stopped for exceeding a budget it never spent. The
+    number is also wrong as a ledger, which `Budget.cost` already warns about
+    for a different reason.
+
+    The fix is a decision, not a line: `Budget.spend` has no notion of turn
+    identity, so making it idempotent means either keying spend by turn (a
+    public signature change) or journalling the spend as an activity so replay
+    returns the recorded total. The second is the durable-shaped answer and the
+    larger change.
+
+52. **A child's tokens are not counted against the parent's ceiling** (same
+    file). `Budget.within` is a *loop* combinator and a child agent has its own
+    loop, so an unbudgeted child spends through a model and is charged to
+    nobody. A parent capped at N can spend without limit by delegating --
+    which is the shape of an agent that is capped *because* it delegates.
+
+    The `Budget` service is shared: a child inherits the parent's context, so a
+    budgeted child charges the same counter. Everything is in place except
+    anything that makes it happen, which is what makes it a footgun rather than
+    a missing feature. The candidate fix is for `Subagent.tool` to wrap the
+    child's loop when the parent's context carries a `Budget`, and the
+    question it raises is whether a delegation should be able to opt out.
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
