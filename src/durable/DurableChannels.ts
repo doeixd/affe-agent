@@ -6,6 +6,7 @@ import type * as InputChannel from "../InputChannel.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import { detailOf } from "../internal/detail.js"
+import { escapeIdentifier } from "../internal/sqlIdentifier.js"
 
 /**
  * Steering and follow-up input, persisted per drain.
@@ -370,15 +371,6 @@ export const factory = (
  */
 export const sqlStoreTable = "effect_agent_channel_input"
 
-const escapeIdentifier = (name: string): string => {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    // Table names reach `sql.literal`, which does not parameterise. Anything
-    // that is not a plain identifier is refused rather than quoted: a store
-    // whose table name came from somewhere untrusted is a bug worth failing on.
-    throw new Error(`Invalid table name: ${name}`)
-  }
-  return name
-}
 
 /**
  * Build a SQL-backed store over an existing table.

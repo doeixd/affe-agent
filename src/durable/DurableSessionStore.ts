@@ -5,6 +5,7 @@ import * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
+import { escapeIdentifier } from "../internal/sqlIdentifier.js"
 
 /**
  * The durable logical session, as distinct from any one workflow execution.
@@ -589,13 +590,6 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
 export const sqlSessionTable = "effect_agent_session"
 export const sqlElicitationTable = "effect_agent_elicitation"
 
-const escapeIdentifier = (name: string): string => {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    // Table names reach `sql.literal`, which does not parameterise.
-    throw new Error(`Invalid table name: ${name}`)
-  }
-  return name
-}
 
 interface SessionRow {
   readonly session_id: string

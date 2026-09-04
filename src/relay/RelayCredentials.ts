@@ -4,6 +4,7 @@ import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 import * as Relay from "./Relay.js"
 import { RelayAuthenticator } from "./RelayServer.js"
+import { escapeIdentifier } from "../internal/sqlIdentifier.js"
 
 /**
  * Enrollment: which credentials exist, and who they speak for.
@@ -116,13 +117,6 @@ export const memory: Effect.Effect<Service> = Effect.sync(() => {
   }
 })
 
-const escapeIdentifier = (name: string): string => {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    // Table names reach `sql.literal`, which does not parameterise.
-    throw new Error(`Invalid table name: ${name}`)
-  }
-  return name
-}
 
 export const sqlTable = "relay_credentials"
 

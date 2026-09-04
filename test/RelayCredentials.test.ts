@@ -6,7 +6,8 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import { StorageError } from "../src/Errors.js"
-import { Relay, RelayCredentials, RelayServer } from "../src/relay/index.js"
+import { RpcTest } from "effect/unstable/rpc"
+import { Relay, RelayCredentials, RelayProtocol, RelayServer } from "../src/relay/index.js"
 
 /**
  * Enrollment (`docs/plan-failure-paths.md` 48e, the last of the relay's
@@ -166,6 +167,65 @@ describe("relay credentials: a store that cannot answer", () => {
         "StorageError",
         "a store that could not answer was reported as a bad credential, which the client treats as terminal"
       )
+    })
+  )
+})
+
+describe("relay credentials, against the relay itself", () => {
+  const NODE_B = Relay.PeerId.make("node-2")
+
+  /** The relay's real handlers, authenticating out of a credential store. */
+  const relayWith = (credentials: RelayCredentials.Service) =>
+    RelayServer.layer().pipe(
+      Layer.provide(
+        RelayCredentials.authenticator.pipe(
+          Layer.provide(Layer.succeed(RelayCredentials.RelayCredentials, credentials))
+        )
+      )
+    )
+
+  it.effect("an issued credential is accepted, and revoking it bites on the very next call", () =>
+    Effect.gen(function* () {
+      const credentials = yield* RelayCredentials.memory
+      const token = yield* credentials.issue(NODE)
+      const other = yield* credentials.issue(NODE_B)
+
+      yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(RelayProtocol.Protocol)
+
+        // Enrolled: the relay answers, which is the whole point of putting a
+        // store behind the seam rather than a map fixed at startup.
+        yield* client.heartbeat({}, { headers: bearer(token) })
+
+        yield* credentials.revoke(token)
+
+        /**
+         * The claim this exists to hold, which the commit message asserted and
+         * nothing checked: revocation needs no machinery of its own to take
+         * effect, because *every* relay call authenticates. There is no
+         * session to invalidate and no cache to clear -- the next call simply
+         * does not find a credential.
+         */
+        const beat = yield* Effect.flip(client.heartbeat({}, { headers: bearer(token) }))
+        assert.strictEqual(beat._tag, "@doeixd/effect-agent/relay/RelayUnauthorizedError")
+
+        const sent = yield* Effect.flip(
+          client.send({
+            to: NODE_B,
+            endpoint: Relay.EndpointId.make("test/endpoint"),
+            channel: Relay.ChannelId.make("c1"),
+            frame: { _tag: "Ping" }
+          }, { headers: bearer(token) })
+        )
+        assert.strictEqual(
+          sent._tag,
+          "@doeixd/effect-agent/relay/RelayUnauthorizedError",
+          "a revoked credential could still route traffic"
+        )
+
+        // And revocation is not a blanket outage: the other node is unaffected.
+        yield* client.heartbeat({}, { headers: bearer(other) })
+      }).pipe(Effect.provide(relayWith(credentials)), Effect.scoped)
     })
   )
 })

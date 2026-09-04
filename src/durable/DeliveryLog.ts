@@ -5,6 +5,7 @@ import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 import * as DurablePolling from "./DurablePolling.js"
 import * as Failpoint from "../internal/failpoint.js"
+import { escapeIdentifier } from "../internal/sqlIdentifier.js"
 
 /**
  * Client-facing event delivery, kept apart from the Workflow journal.
@@ -333,13 +334,6 @@ export interface SqlLogConfigOptions extends Omit<SqlLogOptions, "pollInterval">
   readonly pollInterval?: Config.Config<Duration.Duration> | undefined
 }
 
-const escapeIdentifier = (name: string): string => {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    // Table names reach `sql.literal`, which does not parameterise.
-    throw new Error(`Invalid table name: ${name}`)
-  }
-  return name
-}
 
 /**
  * A delivery log backed by SQL.
