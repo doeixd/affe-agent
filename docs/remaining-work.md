@@ -1318,7 +1318,7 @@ and should not until it is committed. Item 30 is untouched.
     alters what a parent model sees on a path nobody has complained about, and
     the honest answer may be that a partial answer is better than none.
 
-51. **A replayed turn is charged to the budget twice** (found 2026-09-04 by
+51. ~~**A replayed turn is charged to the budget twice**~~ — **FIXED 2026-09-04.** `Budget.spend`/`spendCost` now take an `Occurrence` — `(runId, turnIndex)` — and drop a charge for a turn already counted, so a replayed turn costs what it cost the first time. `test/BudgetCombinations.test.ts` asserted the wrong number until the fix landed and now asserts 2,000; disabling the dedupe returns it to 3,000. The number is also evidence that a run keeps its identity across a suspension, since a fresh `runId` on replay would have made the key differ. *(Original entry follows.)* (found 2026-09-04 by
     `test/BudgetCombinations.test.ts`, pinned at the wrong number so the suite
     stays honest). Measured: a two-turn script that suspends once makes
     **two** model calls and records **three** turns of spend. The journal is

@@ -46,9 +46,40 @@ const tokensOf = <Tools extends Record<string, Tool.Any>>(
  * it decides the scope: per session (an independent cap per conversation) or
  * once for the whole application (a shared pool).
  */
+/**
+ * What a charge is *for*: one turn of one run, named so it can be recognised.
+ *
+ * A durable submission replays its loop. The model is not asked again -- the
+ * journal answers -- but the *policy* decides again, on a response it has
+ * already been paid for. So a charge has to be idempotent, and the only way to
+ * know two charges are the same one is to name what they are for.
+ *
+ * `AgentLoop.State` already states the rule this obeys. `toolCallsTotal` is
+ * accumulated by the engine "so a ceiling on it is a pure function of the state
+ * -- and holds under a durable replay, where the loop runs again from the
+ * journal and a `Ref` a policy kept would start from zero". This service is
+ * that `Ref`. Keying the charge is how it stops being the exception.
+ *
+ * A semantic coordinate rather than a counter, for the reason `DeliveryLog`'s
+ * key is one: a counter is not stable under replay.
+ */
+export type Occurrence = string
+
+/** The coordinate for a turn: the run it belongs to, and its place in that run. */
+export const occurrence = (state: {
+  readonly runId: string
+  readonly turnIndex: number
+}): Occurrence => `${state.runId}:${state.turnIndex}`
+
 export class Budget extends Context.Service<Budget, {
-  /** Add a turn's tokens to the running total and return the new total. */
-  readonly spend: (tokens: number) => Effect.Effect<number>
+  /**
+   * Add a turn's tokens to the running total and return the new total.
+   *
+   * `occurrence` names the turn being charged. A second charge for a turn
+   * already counted is dropped and the unchanged total returned, so a replayed
+   * turn costs what it cost the first time.
+   */
+  readonly spend: (tokens: number, occurrence: Occurrence) => Effect.Effect<number>
   /** The tokens spent so far. */
   readonly spent: Effect.Effect<number>
   /**
@@ -58,24 +89,66 @@ export class Budget extends Context.Service<Budget, {
    * ceiling are two readings of the same session's spend, and one `Budget`
    * layer is what makes "provide it per session or per application" mean the
    * same thing for both. `within` and `cost` may be used together on one
-   * agent, each capping its own axis.
+   * agent, each capping its own axis -- and each remembers its own
+   * occurrences, so an agent using both charges one turn once on each.
    */
-  readonly spendCost: (amount: number) => Effect.Effect<number>
+  readonly spendCost: (amount: number, occurrence: Occurrence) => Effect.Effect<number>
   /** The cost spent so far, in the caller's own unit. */
   readonly costSpent: Effect.Effect<number>
 }>()("affe-agent/budget/Budget") {}
 
-/** A fresh, zeroed budget. Provide per session for a per-conversation cap. */
+/**
+ * A fresh, zeroed budget. Provide per session for a per-conversation cap.
+ *
+ * **Under `/durable`, provide it outside the workflow.** Built inside, it is
+ * rebuilt on every replay and starts from zero, so a submission that suspends
+ * often enough never reaches any ceiling -- which is the failure
+ * `AgentLoop.State` warns about. Built outside, one counter spans the
+ * conversation, and the occurrence keys are what stop a replayed turn being
+ * charged against it twice.
+ */
 export const layer: Layer.Layer<Budget> = Layer.effect(
   Budget,
   Effect.gen(function* () {
-    const total = yield* Ref.make(0)
-    const money = yield* Ref.make(0)
+    const counted = yield* Ref.make({
+      total: 0,
+      money: 0,
+      tokenTurns: new Set<Occurrence>(),
+      costTurns: new Set<Occurrence>()
+    })
+
+    /**
+     * Charge once per turn, per axis.
+     *
+     * One `Ref.modify` rather than a read and then a write: two turns settling
+     * concurrently would otherwise both find the occurrence absent and both
+     * charge, which is the same bug this exists to fix arriving by a different
+     * road.
+     */
+    const charge = (
+      amount: number,
+      key: Occurrence,
+      axis: "tokens" | "cost"
+    ): Effect.Effect<number> =>
+      Ref.modify(counted, (state) => {
+        const seen = axis === "tokens" ? state.tokenTurns : state.costTurns
+        const running = axis === "tokens" ? state.total : state.money
+        if (seen.has(key)) return [running, state]
+        const next = running + amount
+        const marked = new Set(seen).add(key)
+        return [
+          next,
+          axis === "tokens"
+            ? { ...state, total: next, tokenTurns: marked }
+            : { ...state, money: next, costTurns: marked }
+        ]
+      })
+
     return {
-      spend: (tokens) => Ref.updateAndGet(total, (n) => n + tokens),
-      spent: Ref.get(total),
-      spendCost: (amount) => Ref.updateAndGet(money, (n) => n + amount),
-      costSpent: Ref.get(money)
+      spend: (tokens, key) => charge(tokens, key, "tokens"),
+      spent: Effect.map(Ref.get(counted), (state) => state.total),
+      spendCost: (amount, key) => charge(amount, key, "cost"),
+      costSpent: Effect.map(Ref.get(counted), (state) => state.money)
     }
   })
 )
@@ -101,7 +174,7 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
 ): AgentLoop.AgentLoop<E, R | Budget, Tools> =>
   AgentLoop.make((state) =>
     Effect.flatMap(Budget, (budget) =>
-      Effect.flatMap(budget.spend(tokensOf(state.response)), (total) =>
+      Effect.flatMap(budget.spend(tokensOf(state.response), occurrence(state)), (total) =>
         total >= limit ? Effect.succeed(tokenStop) : inner.decide(state)
       )
     )
@@ -156,7 +229,7 @@ export const cost = <E, R, Tools extends Record<string, Tool.Any>>(
       // Recorded before the ceiling is checked and before `inner` runs, so
       // every turn counts regardless of what `inner` decides -- the same
       // ordering `within` relies on, and for the same reason.
-      const total = yield* budget.spendCost(price)
+      const total = yield* budget.spendCost(price, occurrence(state))
       return total >= limit ? costStop : yield* inner.decide(state)
     })
   )

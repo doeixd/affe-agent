@@ -90,7 +90,7 @@ describe("a budget and a delegation", () => {
 })
 
 describe("a budget and a resume", () => {
-  it.live("a replayed turn is charged to the budget a second time", () =>
+  it.live("a replayed turn is charged once, not twice", () =>
     Effect.gen(function* () {
       /**
        * The question a ceiling has to answer under durability: what happens
@@ -174,26 +174,20 @@ describe("a budget and a resume", () => {
 
       // The turn before the suspension is still on the counter afterwards. A
       /**
-       * **This asserts a bug, deliberately.** Two model calls, three turns'
-       * worth of spend.
+       * Two model calls, two turns of spend -- item 51, closed.
        *
-       * The journal did its job: the model was asked exactly twice for a
-       * two-turn script, so the pre-suspension call was replayed rather than
-       * re-issued. But the *loop* runs again on replay, and `Budget.within`
-       * charges whatever response it is handed -- including a replayed one.
-       * The turn before the suspension is therefore paid for twice.
+       * This asserted `3_000` until the fix landed, deliberately, so the suite
+       * stayed green while recording a bug it could not yet fix. The journal
+       * was always right: the model is asked exactly twice for a two-turn
+       * script, which is asserted separately because the model being re-asked
+       * would be a different and much worse bug. What charged twice was the
+       * *loop*, which runs again on replay and handed `Budget.within` a
+       * response already paid for.
        *
-       * The direction is what makes it matter. This is not a ceiling that
-       * fails to bite; it is one that bites too early, and the more a run
-       * suspends the earlier. A long durable conversation can be stopped for
-       * exceeding a budget it never spent, and the number it reports is not
-       * the money spent either -- wrong as a ledger and wrong as a limit, in
-       * the direction that terminates legitimate work.
-       *
-       * Pinned at the wrong number rather than left failing, so the suite
-       * stays honest and this fails loudly the moment someone fixes it.
-       * Recorded as item 51: the fix is a decision about where a budget lives
-       * under durability, not a line to change here.
+       * The fix keys each charge by `(runId, turnIndex)`, and this number is
+       * also the evidence that a run keeps its identity across a suspension --
+       * had the replay minted a new `runId`, the key would differ and the
+       * charge would land again.
        */
       assert.strictEqual(
         yield* Ref.get(modelCalls),
@@ -202,8 +196,8 @@ describe("a budget and a resume", () => {
       )
       assert.strictEqual(
         spent,
-        3_000,
-        "the replayed turn is no longer double-charged: change this to 2,000 and close item 51"
+        2_000,
+        "a replayed turn is being charged again: the occurrence key is not recognising it"
       )
     }),
     30_000
