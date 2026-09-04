@@ -105,9 +105,10 @@ event-log resources, both official client generations, stdio elicitation).
 The [cross-adapter matrix](./docs/conformance-matrix.md) holds all five to the
 same rows. `/relay` carries any of them between two nodes that cannot dial
 each other: a route table keyed by peer, an opaque frame, and a caller
-identity the relay stamps and a caller cannot forge. It has no durable
-mailbox, no reconnection and no lease expiry yet, so an offline peer is a
-typed error rather than a queue.
+identity the relay stamps and a caller cannot forge. Liveness is a lease,
+renewed by any traffic and collected when someone asks, so the directory does
+not claim a half-open peer is reachable. It has no durable mailbox and no
+reconnection yet, so an offline peer is a typed error rather than a queue.
 
 **Durability and scale.** `/durable` runs the same agent inside a Workflow
 with journaled events, typed `StorageError`s at every store, a delivery log
