@@ -11,7 +11,10 @@ inference of `Input` from the session does not survive the wrapper -- the
 handle passes explicit type arguments; and every helper that spelled a session
 as `AgentSession<any, any, any>` needed a fourth `any`, because the old
 default `never` was accepting a generic `Input` by contravariance and
-`Prompt.RawInput` does not. Tracked as item 46.
+`Prompt.RawInput` does not. One cost to know about: the default's encode runs
+per submission so `Current` can hold the prompt in wire form, and a prompt
+carrying binary file parts is base64-encoded once on the way in -- the same
+work every boundary already did, now done in-process too. Tracked as item 46.
 
 Written from the review that closed typed input phase 2 and issue #81, which
 found that every awkwardness the work hit had one cause, and from the design
