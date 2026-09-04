@@ -1386,7 +1386,13 @@ and should not until it is committed. Item 30 is untouched.
     whose toolkit is resolved per turn from runtime state, which declares
     nothing until it runs; that child keeps the runtime refusal, and
     `test/PermissionSubagent.test.ts` pins it in the direction that fails when
-    someone closes it. The second half -- an `inherit.approval` option that
+    someone closes it. **The review found that this is the common case for
+    the tools that matter:** `McpToolkit.bind` and `ToolSource.bind` list the
+    server, and the server's `requiresApproval` annotation becomes
+    `needsApproval` only then, so a child whose approval-requiring tools are
+    remote is exactly the child the check cannot see. Not a reason to
+    inspect the static list `bind` is given -- it would under-report -- but
+    the reason the second half is not optional. The second half -- an `inherit.approval` option that
     forwards the parent's elicitor with the child's name attached -- is B's
     remaining commit.
 

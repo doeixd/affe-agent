@@ -219,7 +219,13 @@ const refuseUnapprovable = (name: string, agent: { readonly toolkit: Agent.Toolk
  * report would be a string in the parent model's context. Better a wiring
  * fault before the agent starts. The one child this cannot inspect is one
  * whose toolkit is resolved per turn from runtime state and so declares no
- * tools up front; that child keeps the runtime refusal.
+ * tools up front; that child keeps the runtime refusal. **That includes a
+ * child whose tools come from an MCP server** (`McpToolkit.bind`,
+ * `ToolSource.bind`): the listing is remote, and the server's
+ * `requiresApproval` annotation becomes `needsApproval` only at bind time,
+ * so there is nothing to read here and the annotation is where approval
+ * requirements most often come from. Such a child's annotated tools are
+ * still dead until B's second half forwards an elicitor.
  */
 export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input, LE = never>(
   name: string,
