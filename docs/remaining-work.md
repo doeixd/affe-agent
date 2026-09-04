@@ -1058,10 +1058,22 @@ sizes; the items are repeated here so this list stays the one tracker.
     - **48c. Never acknowledge on the engine's word** -- reconcile the
       engine's answer against canonical state before completing a waiter,
       and retain the intent on disagreement.
-    - **48d. The teardown contract belongs in `AgentClientConformance`** --
-      a torn-down transport must settle its in-flight requests locally. True
-      of every transport, tested for none; one case covers five
-      implementations.
+    - **48d. Cancellation belongs in `AgentClientConformance`** -- ~~open~~
+      **SHIPPED 2026-09-03** (`351b1e4`), with two corrections to this plan.
+      The row is about *interruption*, not teardown: an earlier draft closed
+      the client's scope, which tests the harness rather than the client,
+      because every harness builds its server or workflow engine into the
+      same layer -- and for durable that hangs uninterruptibly on an in-flight
+      activity, which is the engine behaving correctly. And it covers
+      **three** implementations, not five: in-process, HTTP and durable. RPC
+      and the relay do not run the contract, so **the row does not guard the
+      relay, the implementation that had the bug**. Its evidence is instead a
+      falsification in `ShippedConformance`, checked in both directions.
+    - **48f. An `AgentClient` over Effect RPC** -- new, from 48d. Nothing
+      adapts an RPC client to the client seam, which is why RPC and the relay
+      sit outside the contract; `AgentHttp.agentClientFromServer` is the
+      shape to follow. It would put two more implementations under every row
+      the seam owns, including 48d's.
     - **48e. The relay's deferred half** -- lease expiry, reconnection,
       durable mailbox, enrollment, in that order.
 
