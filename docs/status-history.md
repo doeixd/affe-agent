@@ -2183,8 +2183,7 @@ condition, which is how a Bun, Deno or edge runtime resolves the same
 dependencies.
 
 The package-level probe found what the source scan could not: the MCP
-entries imported the SDK's stdio transport eagerly, so `import "@doeixd/
-affe-agent/mcp"` required `node:process` and `node:stream` even for a
+entries imported the SDK's stdio transport eagerly, so `import "affe-agent/mcp"` required `node:process` and `node:stream` even for a
 consumer connecting over HTTP. The stdio transport now loads inside
 `stdio(...)`. It also showed that dropping the `node` condition is
 necessary for the probe to mean anything: `uuid` (through the A2A SDK) and

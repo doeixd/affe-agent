@@ -60,7 +60,7 @@ Where they differ, measured against what ships here (`STATUS.md`,
 | sandbox | a trusted-process runner with request markers, explicitly unisolated | typed file operations plus `exec` / `execStream`, `MemorySandbox`, the local provider, tier-0/1 derivation, a conformance suite | ours ahead |
 | browser | page capture, bounded same-host crawl, screenshots, an interactive browser with action/size/time caps | Brave search and guarded HTTP fetch | **gap** (§3.6) |
 | testing | `ScriptedModel`, adapter certification, seeded chaos plans, store failpoints, fixtures | `TestLanguageModel`, `AgentProbe`, `verify:durability`, `Export`/`Replay`; the store contracts (`AgentClientContract`, `DeliveryLogContract`, `NodeStoreContract`) live in `test/` and do not ship | **gap**: our certification suites are internal (§3.2) |
-| packaging | ~15 packages under `@affe-agent/*` plus an umbrella | one package, ~50 subpaths, boundaries enforced by `lint:portability` | refused (§4) |
+| packaging | ~15 packages under `@effect-agent/*` plus an umbrella | one package, ~50 subpaths, boundaries enforced by `lint:portability` | refused (§4) |
 | onboarding | a docs site; getting-started runs a bug classifier in one screen | a 2,300-line README that is mostly design rationale, and `docs/` plans that read as internal records | **gap**, cheapest to close (§3.0) |
 | naming | owns `effect-agent.com` and the bare `effect-agent` npm name | `affe-agent` | a positioning problem, not a code one (§3.0) |
 
