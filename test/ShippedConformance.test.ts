@@ -131,7 +131,7 @@ describe("AgentClientConformance", () => {
     Effect.gen(function* () {
       const report = yield* AgentClientConformance.run(wiring((real) => real))
       assert.deepStrictEqual(report.failed, [])
-      assert.strictEqual(report.passed.length, 21)
+      assert.strictEqual(report.passed.length, 22)
     })
   )
 

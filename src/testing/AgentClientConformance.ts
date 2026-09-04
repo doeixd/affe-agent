@@ -1,11 +1,12 @@
 import { Deferred, Duration, Effect, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
 import type { Layer } from "effect"
-import { Tool } from "effect/unstable/ai"
+import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentEvent from "../AgentEvent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentLoop from "../AgentLoop.js"
+import * as AgentOutput from "../AgentOutput.js"
 import * as AgentClient from "../client/AgentClient.js"
 import * as Elicitation from "../Elicitation.js"
 import * as ToolExecution from "../ToolExecution.js"
@@ -50,7 +51,13 @@ export interface Options {
    * state -- because every case calls it afresh.
    */
   readonly layer: (options: {
-    readonly agent: AgentDefinition<any, any, never>
+    /**
+     * `Value` and `Input` are left open, not pinned to `never`: a row that
+     * declares an output is still an agent this harness has to build, and
+     * pinning them here would make the suite unable to ask about the one
+     * thing a shared wire schema most easily loses.
+     */
+    readonly agent: AgentDefinition<any, any, never, LanguageModel.LanguageModel, any, any>
     readonly turns: ReadonlyArray<TestLanguageModel.Turn>
     /** Where a paused run waits for an answer. Default: refuse everything. */
     readonly elicitation?: Elicitation.Factory | undefined
@@ -109,6 +116,20 @@ const Boom = Tool.make("boom", {
   success: Schema.String,
   failure: Schema.String
 })
+
+/**
+ * A declared output, for the row below.
+ *
+ * The encoded form of this struct is the struct, which is what lets the row
+ * assert an exact value without decoding: decoding is the *caller's* business
+ * and deliberately not the transport's.
+ */
+const Triage = Schema.Struct({
+  severity: Schema.Literals(["low", "high"]),
+  summary: Schema.String
+})
+
+const triageOutput = AgentOutput.make(Triage, { name: "triage" })
 
 const Dangerous = Tool.make("wipe", {
   parameters: Schema.Struct({}),
@@ -815,6 +836,52 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           "interrupting an in-flight request never returned; a transport must not make cancellation wait on a remote acknowledgement it may never receive"
         )
       })),
+
+    /**
+     * A declared output has to reach the caller, whatever is in between.
+     *
+     * `RemoteResult` is one schema shared by every implementation, so a
+     * transport carries this field the moment it exists -- which is exactly
+     * the kind of "works by construction" that this suite exists to stop
+     * anyone from asserting. It was added against the in-process and durable
+     * clients; this is what holds the ones with a wire in the middle to it.
+     *
+     * The *encoded* value is asserted, not a decoded one. Decoding belongs to
+     * the caller, which names the schema it expects (`AgentClient.typed`); a
+     * transport owes only that what the agent produced arrives intact.
+     */
+    make("carries a declared output through to the caller", withClient(
+      options,
+      {
+        agent: Agent.make({ output: triageOutput, loop: AgentLoop.bounded(2) }),
+        turns: [TestLanguageModel.toolCall("triage", { severity: "high", summary: "disk is full" })]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "carries a declared output through to the caller"
+            const session = yield* client.createSession()
+            const result = yield* session.prompt("triage this")
+
+            yield* that(name)(
+              result.value !== undefined,
+              "the agent declared an output and produced one, and it did not reach the caller"
+            )
+            yield* equal(name)(
+              result.value,
+              { severity: "high", summary: "disk is full" },
+              "the encoded output"
+            )
+            // Read a second time, it is the same answer: the value is part of
+            // the retained outcome rather than a property of the first read.
+            yield* equal(name)(
+              (yield* session.awaitSubmission(result.submissionId)).value,
+              result.value,
+              "the output on a second read"
+            )
+          })
+        )
+    )),
 
     make("emits lifecycle events in order", withClient(
       options,
