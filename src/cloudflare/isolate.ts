@@ -57,7 +57,7 @@ export class CodeBroker extends Context.Service<CodeBroker, {
   ) => Effect.Effect<{ readonly token: string; readonly release: Effect.Effect<void> }>
   /** The `/code/invoke` route. A bad token is a 403 and says nothing else. */
   readonly handle: (request: Request) => Effect.Effect<Response>
-}>()("@doeixd/effect-agent/cloudflare/CodeBroker") {}
+}>()("affe-agent/cloudflare/CodeBroker") {}
 
 export const brokerLayer: Layer.Layer<CodeBroker> = Layer.effect(
   CodeBroker,

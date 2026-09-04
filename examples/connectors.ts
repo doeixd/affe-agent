@@ -36,7 +36,7 @@ const SlackEnvelope = Schema.Struct({
 })
 
 // Signature verification uses platform crypto, so it is the one host-flagged
-// entry (`@doeixd/effect-agent/connectors/slack`); the rest of this file stays
+// entry (`affe-agent/connectors/slack`); the rest of this file stays
 // portable.
 const verify = (signingSecret: Redacted.Redacted<string>) => Slack.verifier({ signingSecret })
 

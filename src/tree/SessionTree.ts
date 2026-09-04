@@ -97,7 +97,7 @@ const treePrefix = (): string => {
  * and which a walk cannot recover from by continuing.
  */
 export class TreeCorrupt extends Schema.TaggedError<TreeCorrupt>()(
-  "@doeixd/effect-agent/tree/TreeCorrupt",
+  "affe-agent/tree/TreeCorrupt",
   { id: Schema.String, detail: Schema.String }
 ) {
   override get message() {
@@ -107,7 +107,7 @@ export class TreeCorrupt extends Schema.TaggedError<TreeCorrupt>()(
 
 /** The node is not in this tree. */
 export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
-  "@doeixd/effect-agent/tree/NodeMissing",
+  "affe-agent/tree/NodeMissing",
   { id: Schema.String }
 ) {
   override get message() {
@@ -124,7 +124,7 @@ export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
  * that never existed -- and every branch from it would start from one.
  */
 export class SessionBusy extends Schema.TaggedError<SessionBusy>()(
-  "@doeixd/effect-agent/tree/SessionBusy",
+  "affe-agent/tree/SessionBusy",
   { sessionId: Schema.String }
 ) {
   override get message() {
@@ -141,7 +141,7 @@ export class SessionBusy extends Schema.TaggedError<SessionBusy>()(
  * come back.
  */
 export class SessionClosed extends Schema.TaggedError<SessionClosed>()(
-  "@doeixd/effect-agent/tree/SessionClosed",
+  "affe-agent/tree/SessionClosed",
   { sessionId: Schema.String }
 ) {
   override get message() {

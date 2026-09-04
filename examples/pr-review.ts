@@ -12,13 +12,13 @@
  */
 import { Console, Effect, Layer, Option, Schema } from "effect"
 import type { Scope } from "effect"
-import { Agent, AgentLoop, AgentOutput, Permission } from "@doeixd/effect-agent"
-import { Budget } from "@doeixd/effect-agent/budget"
-import { CodingToolkit } from "@doeixd/effect-agent/coding"
-import { Evals } from "@doeixd/effect-agent/evals"
-import { Presets } from "@doeixd/effect-agent/presets"
-import { MemorySandbox } from "@doeixd/effect-agent/sandbox"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop, AgentOutput, Permission } from "affe-agent"
+import { Budget } from "affe-agent/budget"
+import { CodingToolkit } from "affe-agent/coding"
+import { Evals } from "affe-agent/evals"
+import { Presets } from "affe-agent/presets"
+import { MemorySandbox } from "affe-agent/sandbox"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // ---------------------------------------------------------------------------
 // The review, as a shape. The model reports it through a tool; the value

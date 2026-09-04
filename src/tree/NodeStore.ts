@@ -32,7 +32,7 @@ import * as PromptWire from "../PromptWire.js"
  * two definitions drifting.
  */
 export const NodeId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/tree/NodeId")
+  Schema.brand("affe-agent/tree/NodeId")
 )
 export type NodeId = typeof NodeId.Type
 
@@ -80,7 +80,7 @@ export interface Held {
  * them would have a disk failure read as an empty tree.
  */
 export class StoreError extends Schema.TaggedError<StoreError>()(
-  "@doeixd/effect-agent/tree/StoreError",
+  "affe-agent/tree/StoreError",
   {
     /** What was being attempted, e.g. `read`, `write index`. */
     operation: Schema.String,

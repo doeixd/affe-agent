@@ -1,4 +1,4 @@
-# @doeixd/effect-agent
+# affe-agent
 
 An Effect-native agent execution kernel.
 
@@ -16,7 +16,7 @@ That layer is all this library is.
 └───────────────────────┬──────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────┐
-│ @doeixd/effect-agent                          │
+│ affe-agent                          │
 │   sessions · runs · turns · events            │
 │   steering · follow-ups · context transforms  │
 └───────────────────────┬──────────────────────┘
@@ -41,7 +41,7 @@ That layer is all this library is.
 ## Install
 
 ```bash
-npm install @doeixd/effect-agent effect
+npm install affe-agent effect
 ```
 
 `effect` is a peer dependency. Provider packages (`@effect/ai-anthropic`,
@@ -61,7 +61,7 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 ```jsonc
 // package.json — exact, not caret ranges, until Effect 4 is GA
 "dependencies": {
-  "@doeixd/effect-agent": "0.0.1",
+  "affe-agent": "0.0.1",
   "effect": "4.0.0-rc.112",
   "@effect/ai-anthropic": "4.0.0-rc.112"
 }
@@ -75,7 +75,7 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 ```ts
 import { Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
-import { Agent, AgentLoop, AgentSession } from "@doeixd/effect-agent"
+import { Agent, AgentLoop, AgentSession } from "affe-agent"
 
 const Search = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
@@ -163,7 +163,7 @@ Core is the default import; everything else is an explicit subpath. The
 per-module reference, with what each composes with, is
 [docs/MODULES.md](./docs/MODULES.md).
 
-**Core** — `@doeixd/effect-agent`
+**Core** — `affe-agent`
 : `Agent`, `AgentSession`, `AgentLoop`, `AgentEvent`, `AgentOutput`,
 `ContextTransform`, `Permission`, `Elicitation`, `Principal`, `PromptWire`,
 `ToolExecution`, `Snapshot`.
@@ -217,7 +217,7 @@ says what a change there means for you, not how good the code is.
 Engine-facing seams are on none of these namespaces. What a durable
 interpreter or this repository's tests need (`AgentSession.makeEngine` with
 `EngineOptions`, `ToolExecution.execute`) is reachable by module path and
-deliberately absent from `@doeixd/effect-agent`; `test/PublicApi.test.ts` pins
+deliberately absent from `affe-agent`; `test/PublicApi.test.ts` pins
 both.
 
 ## Design commitments
@@ -266,7 +266,7 @@ control:
   explicitly unstable upstream. Expect API churn coming *from Effect* until
   Effect 4 reaches GA, independent of this library's own versioning.
 
-Practical guidance: pin `@doeixd/effect-agent`, `effect`, and your
+Practical guidance: pin `affe-agent`, `effect`, and your
 `@effect/ai-*` provider to exact versions and upgrade them together, and treat
 the subpaths marked experimental above as the fastest-moving surface.
 

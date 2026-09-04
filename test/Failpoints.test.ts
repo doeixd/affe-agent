@@ -27,7 +27,7 @@ import { DeliveryLogConformance, Failpoints } from "../src/testing/index.js"
 
 const tempDatabase = Effect.acquireRelease(
   Effect.sync(() =>
-    NodePath.join(NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "effect-agent-fp-")), "log.db")
+    NodePath.join(NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "affe-agent-fp-")), "log.db")
   ),
   (file) =>
     Effect.sync(() => {

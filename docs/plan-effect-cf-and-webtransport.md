@@ -2,7 +2,7 @@
 
 **Status: §3 revised and implemented 2026-09-01.** The owner's decision
 reversed item 3 below for one place: `effect-cf` is adopted *at the host
-boundary* -- `@doeixd/effect-agent/cloudflare`, `src/cloudflare/index.ts`,
+boundary* -- `affe-agent/cloudflare`, `src/cloudflare/index.ts`,
 an optional peer -- and nowhere else. See §3a. Written 2026-09-01 from a
 research pass over [danieljvdm/effect-cf](https://github.com/danieljvdm/effect-cf)
 and its `packages/effect-webtransport`, prompted by the question "should we
@@ -89,7 +89,7 @@ Cloudflare's primitives Effect services is what it should be built on rather
 than re-derived. Item 3 is therefore reversed for `src/cloudflare/` and for
 nothing else:
 
-- `@doeixd/effect-agent/cloudflare` is built on `DurableObject.make`,
+- `affe-agent/cloudflare` is built on `DurableObject.make`,
   `DurableObjectSqlite`, `DurableObjectAlarm`, `DurableObjectNamespace` and
   `Worker.make`. `effect-cf` is an **optional peer** (`>=0.39.0 <1.0.0`):
   a consumer who never imports the entry never installs it.

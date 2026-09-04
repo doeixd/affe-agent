@@ -82,8 +82,8 @@ const readBody = (response: HttpClientResponse.HttpClientResponse) =>
   })
 
 const retryable = (error: WebSearch.WebSearchError): boolean =>
-  error._tag === "@doeixd/effect-agent/web/WebSearchTransportError" ||
-  error._tag === "@doeixd/effect-agent/web/WebSearchRateLimitedError"
+  error._tag === "affe-agent/web/WebSearchTransportError" ||
+  error._tag === "affe-agent/web/WebSearchRateLimitedError"
 
 /**
  * How long to wait before the single retry.
@@ -101,7 +101,7 @@ const retryable = (error: WebSearch.WebSearchError): boolean =>
 const retryDelay = (
   error: WebSearch.WebSearchError
 ): Effect.Effect<Duration.Duration> => {
-  if (error._tag !== "@doeixd/effect-agent/web/WebSearchRateLimitedError") {
+  if (error._tag !== "affe-agent/web/WebSearchRateLimitedError") {
     return Effect.succeed(Duration.millis(100))
   }
   return Option.match(error.retryAfter, {

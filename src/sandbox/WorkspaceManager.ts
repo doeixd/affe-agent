@@ -110,7 +110,7 @@ export interface Service {
 export class WorkspaceManager extends Context.Service<
   WorkspaceManager,
   Service
->()("@doeixd/effect-agent/sandbox/WorkspaceManager") {}
+>()("affe-agent/sandbox/WorkspaceManager") {}
 
 export const make = (
   options?: Options

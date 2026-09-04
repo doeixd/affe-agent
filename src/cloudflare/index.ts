@@ -99,7 +99,7 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
 const PromptJson = Schema.toCodecJson(PromptWire.Prompt)
 
 /** The dispatched job as a logical alarm's payload: the prompt, encoded. */
-const DISPATCH_TAG = "effect-agent/dispatch"
+const DISPATCH_TAG = "affe-agent/dispatch"
 
 /**
  * The Durable Object's client: in-process sessions whose history persists
@@ -113,7 +113,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const delivery = yield* DeliveryLog.sqlLogWithTable()
-    yield* sql`CREATE TABLE IF NOT EXISTS effect_agent_history (
+    yield* sql`CREATE TABLE IF NOT EXISTS affe_history (
       session_id TEXT PRIMARY KEY,
       history TEXT NOT NULL
     )`.pipe(Effect.orDie)
@@ -121,7 +121,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
     const open = new Map<string, AgentClient.RemoteSession>()
 
     const storedHistory = (sessionId: string) =>
-      sql`SELECT history FROM effect_agent_history WHERE session_id = ${sessionId}`.pipe(
+      sql`SELECT history FROM affe_history WHERE session_id = ${sessionId}`.pipe(
         Effect.orDie,
         Effect.flatMap((rows) => {
           const raw = rows[0]?.history
@@ -135,7 +135,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         Effect.flatMap((history) => Schema.encodeEffect(PromptJson)(history)),
         Effect.flatMap((encoded) => {
           const text = JSON.stringify(encoded)
-          return sql`INSERT INTO effect_agent_history (session_id, history) VALUES (${sessionId}, ${text})
+          return sql`INSERT INTO affe_history (session_id, history) VALUES (${sessionId}, ${text})
             ON CONFLICT(session_id) DO UPDATE SET history = ${text}`
         }),
         Effect.catchCause((cause) => Effect.logError("cloudflare: history persist failed", { sessionId, cause }))
@@ -240,7 +240,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
 
 /** The HTTP surface, built once per instance over the client. */
 class Surface extends Context.Service<Surface, { readonly handle: (request: Request) => Promise<Response> }>()(
-  "@doeixd/effect-agent/cloudflare/Surface"
+  "affe-agent/cloudflare/Surface"
 ) {}
 
 /** The session this object is: named by the Worker's `idFromName`. */
@@ -290,7 +290,7 @@ export interface Host {
  */
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Options<Tools, E, R>): Host => {
   const namespace = options.namespace ?? "SESSIONS"
-  const Host = AgentSessionHost.Tag<string>("@doeixd/effect-agent/cloudflare/host")
+  const Host = AgentSessionHost.Tag<string>("affe-agent/cloudflare/host")
 
   const clientLayer = Layer.effect(
     AgentClient.AgentClient,
@@ -446,7 +446,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
   class Sessions extends Context.Service<
     Sessions,
     DurableObjectNamespace.DurableObjectNamespaceEffectClient<object, undefined>
-  >()("@doeixd/effect-agent/cloudflare/Sessions") {}
+  >()("affe-agent/cloudflare/Sessions") {}
 
   const sessionIdOf = (request: Request) =>
     Effect.gen(function* () {

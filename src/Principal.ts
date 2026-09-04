@@ -26,6 +26,6 @@ import { Context, Option } from "effect"
  * approver's.
  */
 export const CurrentPrincipal = Context.Reference<Option.Option<string>>(
-  "@doeixd/effect-agent/CurrentPrincipal",
+  "affe-agent/CurrentPrincipal",
   { defaultValue: () => Option.none() }
 )

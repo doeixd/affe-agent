@@ -4,7 +4,7 @@ import * as path from "node:path"
 import * as BlobStore from "./BlobStore.js"
 
 /**
- * A filesystem-backed blob store, at `@doeixd/effect-agent/blob/fs` so the
+ * A filesystem-backed blob store, at `affe-agent/blob/fs` so the
  * portable `/blob` entry never pulls in `node:*` -- the same split as
  * `/sandbox` and `/sandbox/local`.
  *

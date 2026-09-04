@@ -44,15 +44,15 @@ const bundleWorker = Effect.fn("WorkerDurableObject.bundle")(function* () {
       // effect-cf reaches for (`node:async_hooks`) under `nodejs_compat`.
       external: ["cloudflare:*", "node:*"],
       alias: {
-        "@doeixd/effect-agent": path.join(process.cwd(), "src", "index.ts"),
-        "@doeixd/effect-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts"),
-        "@doeixd/effect-agent/code": path.join(process.cwd(), "src", "code", "index.ts"),
-        "@doeixd/effect-agent/AgentSession": path.join(process.cwd(), "src", "AgentSession.ts"),
-        "@doeixd/effect-agent/client": path.join(process.cwd(), "src", "client", "index.ts"),
-        "@doeixd/effect-agent/durable": path.join(process.cwd(), "src", "durable", "index.ts"),
-        "@doeixd/effect-agent/http": path.join(process.cwd(), "src", "http", "index.ts"),
-        "@doeixd/effect-agent/scheduling": path.join(process.cwd(), "src", "scheduling", "index.ts"),
-        "@doeixd/effect-agent/testing": path.join(process.cwd(), "src", "testing", "index.ts")
+        "affe-agent": path.join(process.cwd(), "src", "index.ts"),
+        "affe-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts"),
+        "affe-agent/code": path.join(process.cwd(), "src", "code", "index.ts"),
+        "affe-agent/AgentSession": path.join(process.cwd(), "src", "AgentSession.ts"),
+        "affe-agent/client": path.join(process.cwd(), "src", "client", "index.ts"),
+        "affe-agent/durable": path.join(process.cwd(), "src", "durable", "index.ts"),
+        "affe-agent/http": path.join(process.cwd(), "src", "http", "index.ts"),
+        "affe-agent/scheduling": path.join(process.cwd(), "src", "scheduling", "index.ts"),
+        "affe-agent/testing": path.join(process.cwd(), "src", "testing", "index.ts")
       }
     })
   )

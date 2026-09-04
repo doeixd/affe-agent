@@ -16,8 +16,8 @@ import { join } from "node:path"
 const root = join(import.meta.dirname, "..")
 
 const imports: ReadonlyArray<readonly [example: string, published: string]> = [
-  ['"../src/index.js"', '"@doeixd/effect-agent"'],
-  ['"../src/testing/index.js"', '"@doeixd/effect-agent/testing"']
+  ['"../src/index.js"', '"affe-agent"'],
+  ['"../src/testing/index.js"', '"affe-agent/testing"']
 ]
 
 /** The example's code, from its first import to just before the assertions. */

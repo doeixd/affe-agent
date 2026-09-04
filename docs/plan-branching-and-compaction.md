@@ -599,7 +599,7 @@ It should produce roughly:
 
 But **do not put coding-specific file sections in the generic template by default**.
 
-effect-agent isn't exclusively a coding agent.
+affe-agent isn't exclusively a coding agent.
 
 ---
 

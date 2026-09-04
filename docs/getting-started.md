@@ -8,7 +8,7 @@ package imports in place of the repository's relative ones;
 ## Install
 
 ```sh
-npm install @doeixd/effect-agent effect
+npm install affe-agent effect
 ```
 
 `effect` is a peer dependency. Pin it, this library and any `@effect/ai-*`
@@ -22,8 +22,8 @@ shape it must answer in. It names no model.
 
 ```ts
 import { Effect, Layer, Option, Schema } from "effect"
-import { Agent, AgentLoop, AgentOutput } from "@doeixd/effect-agent"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop, AgentOutput } from "affe-agent"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // What the agent must answer with. The schema is the contract: the model is
 // handed it as a tool, and the value comes back decoded, not re-parsed.

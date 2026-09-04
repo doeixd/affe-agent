@@ -257,7 +257,7 @@ Rules that make them worth the maintenance:
    printing them. Findings in `STATUS.md`; the headline is that nothing
    was missing -- it composes from the public surface with no cast -- and
    the surprise is that a write is refused *twice*, independently.
-4. ~~**Presets**~~ — landed 2026-08-31 as `@doeixd/effect-agent/presets`,
+4. ~~**Presets**~~ — landed 2026-08-31 as `affe-agent/presets`,
    derived from what steps 1 and 3 had written by hand. `Presets.coding`
    and `Presets.gateway`; both references were rewritten on top of them,
    which is the acceptance test. A chat preset is deliberately absent:

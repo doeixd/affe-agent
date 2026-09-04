@@ -654,7 +654,7 @@ describe("compaction", () => {
 
       assert.deepStrictEqual(yield* Ref.get(ranges), [3, 4])
       const stored = yield* KeyValueStore.toSchemaStore(
-        KeyValueStore.prefix(kv, "effect-agent:compaction:"),
+        KeyValueStore.prefix(kv, "affe-agent:compaction:"),
         Compaction.Checkpoint
       ).get("persistent")
       assert.isTrue(Option.isSome(stored))

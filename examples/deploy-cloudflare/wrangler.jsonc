@@ -5,11 +5,11 @@
 //
 //   npx wrangler deploy
 //
-// `tsconfig` is what resolves `@doeixd/effect-agent/*` to this repository's
+// `tsconfig` is what resolves `affe-agent/*` to this repository's
 // sources (esbuild honours its `paths`), as the miniflare test's aliases do.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "effect-agent",
+  "name": "affe-agent",
   "main": "../../apps/worker/src/index.ts",
   "tsconfig": "../../apps/worker/tsconfig.json",
   "compatibility_date": "2026-08-25",

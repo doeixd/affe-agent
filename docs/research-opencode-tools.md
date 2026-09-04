@@ -1,7 +1,7 @@
 # Research: opencode v2 built-in tools (edit / search / bash / etc.)
 
 Research notes on how opencode ("opencode2" — the ground-up 2026 rewrite) implements
-its built-in agent tools, to take heavy inspiration for effect-agent's tools.
+its built-in agent tools, to take heavy inspiration for affe-agent's tools.
 
 - **Repo:** `github.com/sst/opencode`, branch `dev` (~201k stars). V2 installs as
   `opencode2` alongside v1; docs at opencode.ai/v2/docs.
@@ -10,7 +10,7 @@ its built-in agent tools, to take heavy inspiration for effect-agent's tools.
   `import DESCRIPTION from "./edit.txt"`).
 - **Stack:** Effect-TS throughout — `Tool.define(id, Effect.gen(...))`, Effect
   `Schema` for parameters with `.annotate({description})` per field. Directly
-  relevant to effect-agent: their tool layer is an Effect codebase.
+  relevant to affe-agent: their tool layer is an Effect codebase.
 
 Files: `edit.ts/.txt`, `read.ts/.txt`, `write.ts/.txt`, `grep.ts/.txt`,
 `glob.ts/.txt`, `shell.ts` + `shell/{prompt.ts,shell.txt,id.ts}`,
@@ -337,7 +337,7 @@ edit/write (post-edit diagnostics) and read (background warm-up).
 
 ---
 
-## Design lessons worth copying into effect-agent
+## Design lessons worth copying into affe-agent
 
 1. **Generator-based replacer chain with a uniqueness driver.** Fuzzy strategies
    *select spans*, never synthesize text; the driver splices verbatim file

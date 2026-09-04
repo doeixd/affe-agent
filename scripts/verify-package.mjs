@@ -26,7 +26,7 @@ const subpaths = Object.keys(manifest.exports).filter(
   (name) => name !== "./package.json"
 )
 
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "effect-agent-pack-"))
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "affe-agent-pack-"))
 let failures = 0
 
 try {

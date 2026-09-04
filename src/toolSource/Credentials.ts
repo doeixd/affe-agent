@@ -172,7 +172,7 @@ export interface ProviderService {
 }
 
 export class Provider extends Context.Service<Provider, ProviderService>()(
-  "@doeixd/effect-agent/tool-source/Credentials/Provider"
+  "affe-agent/tool-source/Credentials/Provider"
 ) {}
 
 /** In memory, from pasted values. Writable. */
@@ -292,7 +292,7 @@ export interface BindingsService {
 }
 
 export class Bindings extends Context.Service<Bindings, BindingsService>()(
-  "@doeixd/effect-agent/tool-source/Credentials/Bindings"
+  "affe-agent/tool-source/Credentials/Bindings"
 ) {}
 
 /**

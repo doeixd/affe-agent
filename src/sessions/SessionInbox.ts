@@ -134,7 +134,7 @@ export type Outcome =
 export interface Options {
   /**
    * The queue's name, and so its identity in the store. Default
-   * `effect-agent/session-inbox`.
+   * `affe-agent/session-inbox`.
    */
   readonly name?: string | undefined
   /**
@@ -187,7 +187,7 @@ export interface Service {
 export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) {
   const client = yield* AgentClient.AgentClient
   const queue = yield* PersistedQueue.make({
-    name: options?.name ?? "effect-agent/session-inbox",
+    name: options?.name ?? "affe-agent/session-inbox",
     schema: Item
   })
   const maxAttempts = options?.maxAttempts ?? 10

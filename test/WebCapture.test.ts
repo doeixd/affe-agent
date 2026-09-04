@@ -79,10 +79,10 @@ describe("Cloudflare web capture provider", () => {
       const client = HttpClient.make((request) =>
         Ref.update(requests, (n) => n + 1).pipe(Effect.as(response(request, envelope("x")))))
       for (const [url, tag] of [
-        ["http://localhost/admin", "@doeixd/effect-agent/web/WebCaptureDeniedTargetError"],
-        ["http://169.254.169.254/latest", "@doeixd/effect-agent/web/WebCaptureDeniedTargetError"],
-        ["ftp://example.com/x", "@doeixd/effect-agent/web/WebCaptureInvalidUrlError"],
-        ["https://user:pw@example.com/x", "@doeixd/effect-agent/web/WebCaptureInvalidUrlError"]
+        ["http://localhost/admin", "affe-agent/web/WebCaptureDeniedTargetError"],
+        ["http://169.254.169.254/latest", "affe-agent/web/WebCaptureDeniedTargetError"],
+        ["ftp://example.com/x", "affe-agent/web/WebCaptureInvalidUrlError"],
+        ["https://user:pw@example.com/x", "affe-agent/web/WebCaptureInvalidUrlError"]
       ] as const) {
         const error = yield* Effect.flip(captureWith(client, url))
         assert.strictEqual(error._tag, tag, url)
@@ -100,15 +100,15 @@ describe("Cloudflare web capture provider", () => {
         HttpClient.make((request) => Effect.succeed(response(request, "", { status: code })))
       assert.strictEqual(
         (yield* Effect.flip(captureWith(status(401), "https://example.com/")))._tag,
-        "@doeixd/effect-agent/web/WebCaptureAuthenticationError"
+        "affe-agent/web/WebCaptureAuthenticationError"
       )
       assert.strictEqual(
         (yield* Effect.flip(captureWith(status(429), "https://example.com/")))._tag,
-        "@doeixd/effect-agent/web/WebCaptureRateLimitedError"
+        "affe-agent/web/WebCaptureRateLimitedError"
       )
       const other = yield* Effect.flip(captureWith(status(502), "https://example.com/"))
-      assert.strictEqual(other._tag, "@doeixd/effect-agent/web/WebCaptureResponseError")
-      if (other._tag === "@doeixd/effect-agent/web/WebCaptureResponseError") {
+      assert.strictEqual(other._tag, "affe-agent/web/WebCaptureResponseError")
+      if (other._tag === "affe-agent/web/WebCaptureResponseError") {
         assert.strictEqual(other.status, 502)
       }
     })
@@ -119,8 +119,8 @@ describe("Cloudflare web capture provider", () => {
       const client = HttpClient.make((request) =>
         Effect.succeed(response(request, JSON.stringify({ success: false, errors: [{ message: "render failed: navigation timeout" }] }), { status: 200 })))
       const error = yield* Effect.flip(captureWith(client, "https://example.com/"))
-      assert.strictEqual(error._tag, "@doeixd/effect-agent/web/WebCaptureResponseError")
-      if (error._tag === "@doeixd/effect-agent/web/WebCaptureResponseError") {
+      assert.strictEqual(error._tag, "affe-agent/web/WebCaptureResponseError")
+      if (error._tag === "affe-agent/web/WebCaptureResponseError") {
         assert.include(error.detail, "navigation timeout")
       }
     })
@@ -132,18 +132,18 @@ describe("Cloudflare web capture provider", () => {
         Effect.succeed(response(request, "{}", { headers: { "content-length": String(CloudflareWebCapture.MAX_RESPONSE_BYTES + 1) } })))
       assert.strictEqual(
         (yield* Effect.flip(captureWith(advertised, "https://example.com/")))._tag,
-        "@doeixd/effect-agent/web/WebCaptureResponseTooLargeError"
+        "affe-agent/web/WebCaptureResponseTooLargeError"
       )
       const actual = HttpClient.make((request) =>
         Effect.succeed(response(request, "x".repeat(CloudflareWebCapture.MAX_RESPONSE_BYTES + 1))))
       assert.strictEqual(
         (yield* Effect.flip(captureWith(actual, "https://example.com/")))._tag,
-        "@doeixd/effect-agent/web/WebCaptureResponseTooLargeError"
+        "affe-agent/web/WebCaptureResponseTooLargeError"
       )
       const secret = "not-json secret page content"
       const malformed = HttpClient.make((request) => Effect.succeed(response(request, secret, { status: 200 })))
       const error = yield* Effect.flip(captureWith(malformed, "https://example.com/"))
-      assert.strictEqual(error._tag, "@doeixd/effect-agent/web/WebCaptureDecodeError")
+      assert.strictEqual(error._tag, "affe-agent/web/WebCaptureDecodeError")
       assert.notInclude(error.message, secret)
     })
   )
@@ -155,7 +155,7 @@ describe("Cloudflare web capture provider", () => {
       const attempt = yield* Effect.forkChild(Effect.flip(captureWith(hanging, "https://example.com/")))
       yield* TestClock.adjust(Duration.millis(CloudflareWebCapture.TIMEOUT_MILLIS + 1))
       const error = yield* Fiber.join(attempt)
-      assert.strictEqual(error._tag, "@doeixd/effect-agent/web/WebCaptureTimeoutError")
+      assert.strictEqual(error._tag, "affe-agent/web/WebCaptureTimeoutError")
     })
   )
 

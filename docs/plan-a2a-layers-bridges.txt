@@ -7,7 +7,7 @@ Yes. And I think there are **two distinct features worth supporting**, because t
 
 2. Claude Code / OpenCode AS AN AGENT
    their loop + their tools + their session machinery
-   effect-agent delegates a task to them
+   affe-agent delegates a task to them
 ```
 
 The second one is where **A2A fits extremely well**.
@@ -124,7 +124,7 @@ LanguageModel
 while also letting it use its own tools, we'd accidentally get:
 
 ```text
-effect-agent AgentLoop
+affe-agent AgentLoop
         ↓
 Claude Code AgentLoop
         ↓
@@ -155,7 +155,7 @@ It can still be offered as a best-effort adapter.
 This feels architecturally right.
 
 ```text
-effect-agent
+affe-agent
      │
      │ A2A
      ▼
@@ -171,7 +171,7 @@ effect-agent
 And:
 
 ```text
-effect-agent
+affe-agent
      │
      │ A2A
      ▼
@@ -217,7 +217,7 @@ for raw event output, and can attach to an already-running server. ([OpenCode][3
 So:
 
 ```text
-                effect-agent
+                affe-agent
 
                     A2A
                      │
@@ -390,7 +390,7 @@ const Manager = Agent.make().pipe(
 )
 ```
 
-Now your effect-agent agent can decide:
+Now your affe-agent agent can decide:
 
 ```text
 "I'll ask Claude Code to implement this."
@@ -399,7 +399,7 @@ Now your effect-agent agent can decide:
 and:
 
 ```text
-effect-agent parent
+affe-agent parent
        │
        │ tool invocation
        ▼
@@ -466,7 +466,7 @@ Imagine:
           │          │          │
        Desktop     Laptop      VPS
           │          │          │
-     Claude Code  OpenCode  effect-agent
+     Claude Code  OpenCode  affe-agent
 ```
 
 Your VPS agent could say:
@@ -508,7 +508,7 @@ If we invoke:
 claude --dangerously-skip-permissions
 ```
 
-against your actual filesystem, we've bypassed all the carefully designed permission semantics in effect-agent.
+against your actual filesystem, we've bypassed all the carefully designed permission semantics in affe-agent.
 
 Don't do that by default.
 
@@ -576,7 +576,7 @@ Claude Code
  permission needed
     │
     ▼
-effect-agent MCP permission tool
+affe-agent MCP permission tool
     │
     ▼
 Permission.evaluate(...)
@@ -609,7 +609,7 @@ POST permission reply
 So `OpenCodeA2A` could monitor OpenCode permission requests and translate them directly into:
 
 ```text
-effect-agent Permission / Elicitation
+affe-agent Permission / Elicitation
 ```
 
 Then answer OpenCode once our policy/human responds.
@@ -642,7 +642,7 @@ Absolutely.
 Something like:
 
 ```ts
-import { ClaudeCode } from "@doeixd/effect-agent/claude-code"
+import { ClaudeCode } from "affe-agent/claude-code"
 
 const Claude = ClaudeCode.languageModel({
   model: "sonnet"
@@ -702,7 +702,7 @@ interface Capabilities {
 }
 ```
 
-However, before adding a new effect-agent `ModelCapabilities` abstraction, check whether Effect AI already has enough provider capability vocabulary.
+However, before adding a new affe-agent `ModelCapabilities` abstraction, check whether Effect AI already has enough provider capability vocabulary.
 
 Same rule as always.
 
@@ -923,11 +923,11 @@ That keeps the number of concepts down.
 I think the clean target might be:
 
 ```text
-@doeixd/effect-agent/claude-code
+affe-agent/claude-code
     languageModel(...)
     a2a(...)
 
-@doeixd/effect-agent/opencode
+affe-agent/opencode
     languageModel(...)      // perhaps later
     a2a(...)
 ```
@@ -1010,7 +1010,7 @@ and the manager doesn't know Claude is running on another physical machine.
 
 3. **OpenCode A2A bridge using `opencode serve`.** Don't parse terminal text. Use its native HTTP/session/event/permission APIs. ([OpenCode][2])
 
-4. **Create `A2A.tool(...)` if we don't already have an equivalent.** An A2A agent becomes a normal Effect AI tool, so any effect-agent Agent can delegate to it.
+4. **Create `A2A.tool(...)` if we don't already have an equivalent.** An A2A agent becomes a normal Effect AI tool, so any affe-agent Agent can delegate to it.
 
 5. **Make both bridges work over Relay.** At that point local vs remote becomes transport selection.
 
@@ -1020,7 +1020,7 @@ and the manager doesn't know Claude is running on another physical machine.
 
 So: **yes, absolutely possible.** But your A2A instinct points toward the stronger architecture.
 
-A CLI-based coding system should normally enter effect-agent as:
+A CLI-based coding system should normally enter affe-agent as:
 
 ```text
                   A2A Agent
@@ -1037,7 +1037,7 @@ rather than pretending:
 Claude Code == LanguageModel
 ```
 
-And then, where useful, we can additionally offer the latter as a convenience adapter. That would let the project orchestrate not only agents built with effect-agent, but essentially **any existing agent runtime we can bridge to A2A**.
+And then, where useful, we can additionally offer the latter as a convenience adapter. That would let the project orchestrate not only agents built with affe-agent, but essentially **any existing agent runtime we can bridge to A2A**.
 
 [1]: https://docs.anthropic.com/en/docs/claude-code/cli-usage?utm_source=chatgpt.com "CLI reference - Anthropic"
 [2]: https://dev.opencode.ai/docs/server/?utm_source=chatgpt.com "Server | OpenCode"

@@ -163,7 +163,7 @@ resolved, which is by definition idle. It now forks the submission, waits for
 `running`, steers, and joins. Examples are copied verbatim, so this mattered.
 
 **Namespaces normalised (P3)** from `@effect-harness/*` to
-`@doeixd/effect-agent/*` before anyone persists a branded id.
+`affe-agent/*` before anyone persists a branded id.
 
 **Durable `steer`/`followUp` bypassed admission.** They wrote straight to the
 store, so input for a finished submission was accepted and never drained. They
@@ -286,7 +286,7 @@ is the session, which is what makes retrying safe).
 
 ## Durable and distributed execution
 
-Implemented as subpath exports: `@doeixd/effect-agent/durable` and `/cluster`.
+Implemented as subpath exports: `affe-agent/durable` and `/cluster`.
 Core does not depend on either.
 
 The central claim of `plan-workflow-cluster.md` is verified: **the same agent
@@ -786,7 +786,7 @@ second one would quietly change what the model sees on every subsequent turn.
 
 ## The transport seam (roadmap #1 item 6)
 
-`@doeixd/effect-agent/client` gives adapters — RPC, HTTP/SSE, AG-UI, A2A — one
+`affe-agent/client` gives adapters — RPC, HTTP/SSE, AG-UI, A2A — one
 notion of what a session is, instead of each inventing its own.
 
 The design work was deciding what *cannot* cross. `AgentSession` carries the
@@ -836,7 +836,7 @@ not `Context.Tag`, and a key is yielded with `Effect.service(Key)`.
 
 ## Effect RPC transport (issue #1)
 
-`@doeixd/effect-agent/rpc` is the first real rendering of `AgentProtocol`.
+`affe-agent/rpc` is the first real rendering of `AgentProtocol`.
 `AgentRpc.Protocol` defines all twelve procedures directly from the canonical
 request, response and error Schemas; `events` is an Effect RPC stream, so event
 envelopes retain their per-session sequence order without a second wire model.
@@ -865,7 +865,7 @@ from a passing request.
 
 ## HTTP and SSE transport (issue #1)
 
-`@doeixd/effect-agent/http` exposes the same twelve operations as ordinary
+`affe-agent/http` exposes the same twelve operations as ordinary
 JSON routes plus `GET /sessions/:id/events` as server-sent events. The path id
 is projected into the canonical request before the shared host sees it; bodies,
 responses and tagged failures use `AgentProtocol` rather than HTTP-specific
@@ -921,7 +921,7 @@ path.
 
 ## AG-UI adapter (issue #1)
 
-`@doeixd/effect-agent/ag-ui` is a projection over the same internal session
+`affe-agent/ag-ui` is a projection over the same internal session
 host, served as `POST /ag-ui`; it is not another execution runtime. The
 production adapter is SDK-independent and Schema-defined. Conformance is pinned
 to `@ag-ui/client` and `@ag-ui/core` 0.0.58 in development, so using the adapter
@@ -1136,7 +1136,7 @@ declared infallible is named as the mismatch it is rather than papered over.
 
 ## A2A v1 adapter (roadmap #1 item 7, complete)
 
-`@doeixd/effect-agent/a2a` serves a native A2A v1 Agent Card plus JSON-RPC and
+`affe-agent/a2a` serves a native A2A v1 Agent Card plus JSON-RPC and
 HTTP+JSON endpoints using the official `@a2a-js/sdk` 1.0.1 types, codecs and
 request handler. This is a protocol adapter over `AgentClient` and the same
 internal session host used by RPC, HTTP and AG-UI; it is not another agent
@@ -2176,7 +2176,7 @@ needed it. The constraint is gone; what replaced it is enforcement.
 `scripts/verify-portability.mjs` rejects `node:*` imports, concrete platform
 packages, `require`, `process.*` and `Buffer` in every portable module, with
 `sandbox/local.ts` the one declared host module — and it now has its own
-entry, `@doeixd/effect-agent/sandbox/local`, so `./sandbox` is portable.
+entry, `affe-agent/sandbox/local`, so `./sandbox` is portable.
 `verify:package` imports every entry of the packed artifact under a
 resolution hook that refuses Node built-ins and drops the `node` export
 condition, which is how a Bun, Deno or edge runtime resolves the same
@@ -2184,7 +2184,7 @@ dependencies.
 
 The package-level probe found what the source scan could not: the MCP
 entries imported the SDK's stdio transport eagerly, so `import "@doeixd/
-effect-agent/mcp"` required `node:process` and `node:stream` even for a
+affe-agent/mcp"` required `node:process` and `node:stream` even for a
 consumer connecting over HTTP. The stdio transport now loads inside
 `stdio(...)`. It also showed that dropping the `node` condition is
 necessary for the probe to mean anything: `uuid` (through the A2A SDK) and
@@ -2280,7 +2280,7 @@ observed as usual (`test/DurableHttpConcurrency.test.ts`).
 
 ## OpenAI-compatible chat completions (issue #8)
 
-`@doeixd/effect-agent/openai`: `OpenAiAgent.serverLayer({ model })` registers
+`affe-agent/openai`: `OpenAiAgent.serverLayer({ model })` registers
 `POST /v1/chat/completions` on the Effect router over any `AgentClient`.
 The adapter depends on the client interface only; `test/OpenAiDurable.test.ts`
 runs the identical layer over the durable client from two HTTP nodes.
@@ -2355,7 +2355,7 @@ application supplies.
 
 ## Durable Streams (issue #10)
 
-`@doeixd/effect-agent/durable-streams`, a portable entry (the official
+`affe-agent/durable-streams`, a portable entry (the official
 client is `fetch`-only; `fetch` and `headers` are injectable). Verified
 against the official `@durable-streams/server` test server, in process.
 
@@ -2533,7 +2533,7 @@ original battery:
   and 50 KB and end with the exact `offset` to pass next; search caps at 100
   matches grouped by file and says when it truncated; command output keeps the
   *tail* within 2000 lines and 50 KB, repaired to a UTF-8 character boundary,
-  with the whole of it saved under `.effect-agent/tool-output/` for `search` and
+  with the whole of it saved under `.affe-agent/tool-output/` for `search` and
   `read_file` to work on.
 - **`edit_file` reports what changed as a record** -- `{ path, replacements,
   added, removed, strategy }` -- rather than a sentence, so a caller does not
@@ -3247,7 +3247,7 @@ the wrapped client sees `AgentTransportError` naming it.
 ## SandboxConformance (2026-08-30)
 
 Item 9 of the remaining-work ranking; `docs/plan-integrations.md` §6.1 and
-the first two success conditions of §10. `@doeixd/effect-agent/testing`
+the first two success conditions of §10. `affe-agent/testing`
 exports `SandboxConformance`: `cases(options)` is the list of named Effects
 over `SandboxProvider` -- files (bytes round-trip, replace and nested
 parents, `list` as sorted one-level workspace *paths* with types, `stat`
@@ -3337,7 +3337,7 @@ sat on the public namespace with one caller, `AgentTurn`. They now live on
 namespaces are built from explicit re-export lists
 (`src/AgentSessionPublic.ts`, `src/ToolExecutionPublic.ts`), so the engine
 entry points stay reachable by module path to `/durable` and to this
-repository's tests and absent from `@doeixd/effect-agent`.
+repository's tests and absent from `affe-agent`.
 `test/PublicApi.test.ts` pins both lists and asserts `makeEngine` is not
 there.
 
@@ -3366,7 +3366,7 @@ whatever prints it.
 ## ChannelConformance (2026-08-30)
 
 Item 16 of the remaining-work ranking. The Slack verifier's cases were the
-right list and lived in one test file; `@doeixd/effect-agent/testing` now
+right list and lived in one test file; `affe-agent/testing` now
 exports them as `ChannelConformance` over a small `Channel` driver (`sign`,
 `verify`, the tolerance, the two header names): a correct signature is
 accepted; a tampered body, the wrong secret, a request outside the replay
@@ -3959,7 +3959,7 @@ only prints is a demo.
 
 The exercise's real output is the findings, and there are three. The
 headline: **nothing was missing.** Every piece composed from
-`@doeixd/effect-agent/*` with no cast and no private import, which is
+`affe-agent/*` with no cast and no private import, which is
 what this reference existed to test. The surprise: **a write is refused
 twice, independently** -- the operator's policy denies it, and the
 source's own non-GET annotation is floored by `bind` into
@@ -4323,7 +4323,7 @@ the parser's own limit.
 
 ## 2026-09-01 — CallScript behind the seam (executors plan, step 4)
 
-`@doeixd/effect-agent/code/callscript` mounts Vercel Labs' CallScript as a
+`affe-agent/code/callscript` mounts Vercel Labs' CallScript as a
 `CodeExecutor`. `callscript` is an **optional peer** (its own `ai` and `eve`
 peers are optional too, so its core pulls only `acorn` and `zod`, both
 already here), the pattern `/blob/fs` and `/sandbox/local` establish.
@@ -5220,7 +5220,7 @@ The owner decided: utilise `effect-cf` where appropriate. Under
 `plan-effect-cf-and-webtransport.md` §3's own reasoning that has one
 answer, and §3a records it: the Cloudflare host entry, and nowhere else.
 
-`@doeixd/effect-agent/cloudflare` (`src/cloudflare/index.ts`):
+`affe-agent/cloudflare` (`src/cloudflare/index.ts`):
 `CloudflareHost.make({ agent, layer, ... })` returns the Durable Object
 class and the Worker class a deployment exports. Inside it is what
 `apps/worker` used to hand-roll, on `effect-cf`'s services instead:
@@ -5351,7 +5351,7 @@ from a `wrangler login`:
   free; the upload of `apps/worker` fails with error 10195 on the
   `worker_loaders` binding and nothing else. SQLite-backed Durable Objects
   are on free. So `worker-without-code-mode.ts` -- `apps/worker` minus the
-  code tool, the same host -- deployed as `effect-agent-free`.
+  code tool, the same host -- deployed as `affe-agent-free`.
 - **The smoke over HTTPS matched the miniflare test.** Two `POST /sessions`
   made two objects; each prompt ran a two-turn scripted submission whose
   `echo` call returned the object's own name (`hello from smoke-a`,

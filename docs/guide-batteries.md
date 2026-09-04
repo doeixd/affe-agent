@@ -8,11 +8,11 @@ one uses is in the [README's seam table](../README.md#the-mental-model-one-kerne
 ## Subagents
 
 A subagent is a tool that opens a child session — no first-class concept, just
-the pieces composing. `@doeixd/effect-agent/subagent` packages that pattern so
+the pieces composing. `affe-agent/subagent` packages that pattern so
 you write it once instead of by hand:
 
 ```ts
-import { Subagent } from "@doeixd/effect-agent/subagent"
+import { Subagent } from "affe-agent/subagent"
 
 const research = Subagent.tool("research", Researcher, {
   description: "Research a question and return a short findings summary.",
@@ -44,7 +44,7 @@ can route around — while a defect still propagates as a bug. Pass
 
 ## Scheduling & self-dispatch
 
-`@doeixd/effect-agent/scheduling` adds two thin things over Effect's own
+`affe-agent/scheduling` adds two thin things over Effect's own
 scheduling — it is not a scheduler runtime. **`AgentDispatcher`** is the
 "enqueue future work" seam: a tool calls `Scheduling.dispatch({ input, delay })`
 to schedule a follow-up run without touching timers or infrastructure, and a
@@ -53,7 +53,7 @@ layer decides where it goes. **`Scheduling.recurring`** runs an agent on a
 and the cadence continues.
 
 ```ts
-import { Scheduling } from "@doeixd/effect-agent/scheduling"
+import { Scheduling } from "affe-agent/scheduling"
 
 // A tool self-dispatches a follow-up (depends on the dispatcher seam):
 Agent.tool(ScheduleFollowUp, ({ prompt, afterMinutes }) =>
@@ -70,7 +70,7 @@ durable, cluster-wide cron there's already `ScheduledAgent` over `ClusterCron`.
 
 ## Lifecycle hooks
 
-`@doeixd/effect-agent/hooks` runs typed side effects at points in a run — a tool
+`affe-agent/hooks` runs typed side effects at points in a run — a tool
 starting, a run completing — without touching the run. There's no new mechanism
 and, deliberately, no new PubSub: a session already publishes its lifecycle as
 `AgentEvent`s over an internal PubSub, and `AgentSession.events(session)` is a
@@ -78,7 +78,7 @@ subscription to it, so hooks fan out off the one bus alongside observability, a
 UI and a delivery log.
 
 ```ts
-import { Hooks } from "@doeixd/effect-agent/hooks"
+import { Hooks } from "affe-agent/hooks"
 
 // Fork it beside the run; it runs until the stream ends.
 yield* Effect.forkScoped(Hooks.on(AgentSession.events(session), {
@@ -96,7 +96,7 @@ behaviour is changed through the run's own seams (`Permission`,
 
 ## Connectors
 
-`@doeixd/effect-agent/connectors` puts an agent in front of an external platform —
+`affe-agent/connectors` puts an agent in front of an external platform —
 Slack, a webhook, a queue — over the same `AgentSessionHost` seam the HTTP, RPC,
 AG-UI and A2A adapters use. A connector is a thin adapter, not a second Agent API;
 it owns at most four things, and everything else is the host's: verify (the
@@ -104,7 +104,7 @@ host authenticates the principal from the delivery's headers), map the external
 conversation to a session, prompt, and reply.
 
 ```ts
-import { Connectors } from "@doeixd/effect-agent/connectors"
+import { Connectors } from "affe-agent/connectors"
 
 const connector = yield* Connectors.make({
   host: Host,                                   // the shared AgentSessionHost tag
@@ -126,7 +126,7 @@ stays portable.
 
 Signature verification is the one platform bit that needs real crypto, so it
 ships as a **host-flagged** sub-entry rather than in the portable core:
-`@doeixd/effect-agent/connectors/slack` provides `Slack.verifier`, which checks
+`affe-agent/connectors/slack` provides `Slack.verifier`, which checks
 Slack's `v0=` HMAC-SHA256 over `v0:{timestamp}:{body}`, rejects stale timestamps
 (the replay window), and compares in constant time — drop it into a `decode`
 instead of re-implementing it. See [`examples/connectors.ts`](../examples/connectors.ts).
@@ -134,12 +134,12 @@ instead of re-implementing it. See [`examples/connectors.ts`](../examples/connec
 ## Structured data
 
 An agent often has typed output beyond its reply — an order it created, a row
-for a table, a chart's data. `@doeixd/effect-agent/data` gives that a home: a
+for a table, a chart's data. `affe-agent/data` gives that a home: a
 Schema-first named channel a tool writes to, and a stream a UI or transport
 reads, typed on both ends rather than `unknown` at the wire.
 
 ```ts
-import { AgentData } from "@doeixd/effect-agent/data"
+import { AgentData } from "affe-agent/data"
 
 const Orders = AgentData.channel("orders", OrderSchema)
 
@@ -158,7 +158,7 @@ reader; `AgentData.layer` is an in-process PubSub, and a transport can bridge
 
 ## Observability
 
-`@doeixd/effect-agent/observability` standardises the *names and attributes* an
+`affe-agent/observability` standardises the *names and attributes* an
 agent emits, rather than wrapping Effect's tracing. It observes the public event
 stream and maps each event to the span tree the runtime already nests —
 `agent.session → submission → run → turn → {ai.model, ai.tool}` — under stable
@@ -166,7 +166,7 @@ stream and maps each event to the span tree the runtime already nests —
 services.
 
 ```ts
-import { Observability } from "@doeixd/effect-agent/observability"
+import { Observability } from "affe-agent/observability"
 
 // Fork an observer; metadata only by default (ids, event and tool names).
 yield* Effect.forkScoped(Observability.trace(AgentSession.events(session)))
@@ -188,13 +188,13 @@ alongside turn depth, tool outcomes and duration, and pending input.
 
 A test asks whether the code works; an eval asks whether the *agent behaves* —
 did it call the right tool, stay under a turn budget, answer with the right
-shape. `@doeixd/effect-agent/evals` is that, kept separate from `/testing`, and
+shape. `affe-agent/evals` is that, kept separate from `/testing`, and
 it runs entirely through the public session interface, so one eval runs
 unchanged against a scripted model (exact, CI-friendly) or a real provider —
 swap the `LanguageModel` layer, nothing else.
 
 ```ts
-import { Evals } from "@doeixd/effect-agent/evals"
+import { Evals } from "affe-agent/evals"
 
 const eval = Evals.defineEval({
   name: "reports the weather",
@@ -223,7 +223,7 @@ reproducible.
 ## Memory
 
 Long-term, cross-session memory — what a session should still know next week,
-not the conversation transcript. `@doeixd/effect-agent/memory` is a service plus
+not the conversation transcript. `affe-agent/memory` is a service plus
 a transform: the contract is the minimal `recall(scope, query)` /
 `remember(scope, entry)`, and everything is written against the `Memory`
 **service**, never a particular store. The in-memory keyword matcher shipped
@@ -231,7 +231,7 @@ here is one implementation; a real backend — embeddings, Redis, a hosted
 system — is a layer you provide, and the agent above it does not change.
 
 ```ts
-import { Memory } from "@doeixd/effect-agent/memory"
+import { Memory } from "affe-agent/memory"
 
 const assistant = Agent.make({
   tools: [Memory.rememberTool(userId)],       // the model saves durable facts
@@ -257,7 +257,7 @@ gating applies too: `remember` carries a `memory` permission projection.
 ## Skills
 
 A skill is an on-demand capability — workflow guidance, reference material —
-that the model loads only when it needs it. `@doeixd/effect-agent/skills` is the
+that the model loads only when it needs it. `affe-agent/skills` is the
 [OpenCode loading strategy](https://opencode.ai/v2/docs/skills) over the seams
 the library already has: a registry service, one context transform that
 advertises metadata, and one tool that loads a body. Core stays ignorant of it.
@@ -268,7 +268,7 @@ documents — the model reads the catalogue, decides what it needs, and pulls th
 one body (its resources staying lazy until asked for by name).
 
 ```ts
-import { Skills } from "@doeixd/effect-agent/skills"
+import { Skills } from "affe-agent/skills"
 
 const registry = Skills.layer([
   Skills.skill({
@@ -296,14 +296,14 @@ load — the Skills package owns no authorization of its own.
 
 The harness keeps no application-state slot on a session on purpose — "state
 belongs in ordinary Effect services, so the harness never becomes a competing
-state-management system." `@doeixd/effect-agent/state` is the ergonomic form of
+state-management system." `affe-agent/state` is the ergonomic form of
 exactly that: a typed value a tool reads and writes, optionally shown to the
 model and optionally persisted, adding nothing to the engine. It is neither
 conversation history (canonical, owned by the run engine) nor semantic memory —
 it is structured state a session works on: a plan, a running total, a form.
 
 ```ts
-import { AgentState } from "@doeixd/effect-agent/state"
+import { AgentState } from "affe-agent/state"
 
 interface Plan { readonly steps: ReadonlyArray<string> }
 const Plan = AgentState.Tag<Plan>("app/Plan")
@@ -341,11 +341,11 @@ for a real backend, or five lines of your own over Redis or a KV table.
 ## Compaction
 
 A long conversation has to fit a context window without being lost.
-`@doeixd/effect-agent/compaction` is a `ContextTransform` — it adds nothing to
+`affe-agent/compaction` is a `ContextTransform` — it adds nothing to
 the kernel, which is the point:
 
 ```ts
-import { Compaction } from "@doeixd/effect-agent/compaction"
+import { Compaction } from "affe-agent/compaction"
 
 const agent = Agent.make({
   contextTransform: yield* Compaction.make({
@@ -441,7 +441,7 @@ remains the transform-only convenience over the same controller.
 
 ## Agent Plugins
 
-[`@doeixd/effect-agent/plugins`](https://agent-plugins.org) loads a portable
+[`affe-agent/plugins`](https://agent-plugins.org) loads a portable
 plugin directory — a `plugin.json` manifest, `skills/<name>/SKILL.md` skills, and
 an `mcp.json` of MCP servers — into an agent. The standard is a vendor-neutral
 composition of two things this library already models (Agent Skills → `/skills`,

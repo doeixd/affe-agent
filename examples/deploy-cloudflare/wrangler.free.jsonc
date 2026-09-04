@@ -3,7 +3,7 @@
 // paid plan. `npx wrangler deploy --config wrangler.free.jsonc`.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "effect-agent-free",
+  "name": "affe-agent-free",
   "main": "worker-without-code-mode.ts",
   "tsconfig": "../../apps/worker/tsconfig.json",
   "compatibility_date": "2026-08-25",

@@ -307,7 +307,7 @@ await until(() => entries.length === 0, "the unknown-command notice to settle")
 
 // Export writes a real file through the sandbox seam.
 handle.command("export")
-await awaitOutput(".effect-agent/export-", "the export notice")
+await awaitOutput(".affe-agent/export-", "the export notice")
 await until(() => entries.length === 0, "the export notice to settle")
 
 /**
@@ -1528,7 +1528,7 @@ checks.push(
     item.detail.includes("message"))],
   ["switching returns the footer to the prompt", footerAtEnd === "prompt"],
   ["an unknown command is reported", transcript.includes("no such command")],
-  ["export writes a file and names it", /wrote \.effect-agent\/export-.*\.json/.test(transcript)],
+  ["export writes a file and names it", /wrote \.affe-agent\/export-.*\.json/.test(transcript)],
   ["and says it was not redacted", transcript.includes("unredacted")],
   ["the agent still works after a command", transcript.includes("still there?")],
 
@@ -1805,7 +1805,7 @@ checks.push(
   /**
    * R134 -- the transcript is not written where the agent can reach it.
    *
-   * It used to go to `<workspace>/.effect-agent/session`: complete unredacted
+   * It used to go to `<workspace>/.affe-agent/session`: complete unredacted
    * conversation -- prompts, file contents, shell output, tool arguments and
    * results -- inside the directory the agent can list, search, edit, commit
    * and delete. Workspace authority became authority over the persistence

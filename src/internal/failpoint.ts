@@ -31,7 +31,7 @@ export interface Service {
 }
 
 export const Failpoint = Context.Reference<Service>(
-  "@doeixd/effect-agent/internal/Failpoint",
+  "affe-agent/internal/Failpoint",
   { defaultValue: (): Service => ({ hit: () => Effect.void }) }
 )
 

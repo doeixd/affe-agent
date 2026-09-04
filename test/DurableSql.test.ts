@@ -87,7 +87,7 @@ const engineFor = (file: string, lockSeconds = 35) =>
 const tempDatabase = Effect.acquireRelease(
   Effect.sync(() =>
     NodePath.join(
-      NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "effect-agent-")),
+      NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "affe-agent-")),
       "workflow.db"
     )
   ),

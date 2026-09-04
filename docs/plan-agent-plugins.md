@@ -61,7 +61,7 @@ reads the filesystem through the existing `Sandbox` seam so it stays **portable*
 ## 2. Public API (design)
 
 Mirror the battery conventions (`src/plugins/`, `index.ts` `export * as Plugins`,
-a `./plugins` package export, service ids `@doeixd/effect-agent/plugins/...`).
+a `./plugins` package export, service ids `affe-agent/plugins/...`).
 
 ```ts
 // A parsed, validated plugin. Skills carry lazy bodies (Sandbox-backed).
@@ -323,7 +323,7 @@ type-level assertion falsified once.
 
 | # | Deliverable | Depends on | Acceptance |
 |---|-------------|-----------|------------|
-| **PL0** | Spike: confirm `Tool.dynamic` shape + whether a `MemorySandbox` and a fake `McpToolkit.Connection` exist for tests. Decide the effect-agent extension namespace string. | — | a throwaway test binds one dynamic MCP tool and calls it; test harness confirmed |
+| **PL0** | Spike: confirm `Tool.dynamic` shape + whether a `MemorySandbox` and a fake `McpToolkit.Connection` exist for tests. Decide the affe-agent extension namespace string. | — | a throwaway test binds one dynamic MCP tool and calls it; test harness confirmed |
 | **PL1** | Frontmatter parser (`parseFrontmatter`) + its exhaustive test matrix (invariant 10, partial) | — | parser total, every frontmatter test green, falsified on the "no fence → skipped" case |
 | **PL2** | Manifest schema + validation (fatal vs non-fatal, unknown-field warnings) | — | invariants 1–6 |
 | **PL3** | Skills discovery + SKILL.md → `Skills.skill` mapping, lazy bodies, resources | PL1, Sandbox | invariants 7–12 |
@@ -342,10 +342,10 @@ each layer is tested before the next builds on it.
 
 ## 8. Decisions (settled)
 
-1. **Extension namespace — reserve `dev.doeixd.effect-agent`, but v1 ignores all
+1. **Extension namespace — reserve `dev.doeixd.affe-agent`, but v1 ignores all
    namespaces.** Spec-compliant clients ignore namespaces they don't implement;
    v1 does exactly that (report + continue, never inspect contents). The name is
-   reserved in the docs so a later version can read effect-agent-specific config
+   reserved in the docs so a later version can read affe-agent-specific config
    (a default permission policy, a loop bound) without a breaking change. No v1
    code reads any namespace.
 2. **stdio — include, gated by `allowStdio` (default `true`).** stdio servers are

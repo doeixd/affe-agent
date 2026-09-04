@@ -261,7 +261,7 @@ export const api = <const Name extends string>(options: {
 export type Service = HttpApiClient.Client<typeof Sessions>
 
 export class Client extends Context.Service<Client, Service>()(
-  "@doeixd/effect-agent/http/Client"
+  "affe-agent/http/Client"
 ) {}
 
 /** Build the schema-generated client on the application's Effect HTTP client. */

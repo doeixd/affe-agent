@@ -18,10 +18,10 @@
 import { Console, Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 
-import { Agent, AgentLoop, AgentSession, Permission, ToolExecution } from "@doeixd/effect-agent"
-import { Hooks } from "@doeixd/effect-agent/hooks"
-import { AgentState } from "@doeixd/effect-agent/state"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop, AgentSession, Permission, ToolExecution } from "affe-agent"
+import { Hooks } from "affe-agent/hooks"
+import { AgentState } from "affe-agent/state"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // ---------------------------------------------------------------------------
 // 1. State, declared once: its shape, its initial value, how it is rendered

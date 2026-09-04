@@ -163,7 +163,7 @@ describe("Sandbox.fromExec", () => {
       const { layer } = Sandbox.fromExec(exec)
       const sandbox = yield* Effect.provide(Sandbox.acquire(Sandbox.workspace("classify")), layer)
       const missing = yield* Effect.flip(sandbox.read(yield* Effect.orDie(Sandbox.path("not/there.txt"))))
-      assert.strictEqual(missing._tag, "@doeixd/effect-agent/sandbox/FileMissingError")
+      assert.strictEqual(missing._tag, "affe-agent/sandbox/FileMissingError")
 
       const custom = Sandbox.fromExec(exec, {
         classify: ({ result }) =>
@@ -173,7 +173,7 @@ describe("Sandbox.fromExec", () => {
       })
       const overridden = yield* Effect.provide(Sandbox.acquire(Sandbox.workspace("classify-2")), custom.layer)
       const refused = yield* Effect.flip(overridden.read(yield* Effect.orDie(Sandbox.path("still/not/there.txt"))))
-      assert.strictEqual(refused._tag, "@doeixd/effect-agent/sandbox/PermissionDeniedError")
+      assert.strictEqual(refused._tag, "affe-agent/sandbox/PermissionDeniedError")
       void promise
     }).pipe(Effect.scoped),
     60_000

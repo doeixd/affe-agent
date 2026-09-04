@@ -1,16 +1,16 @@
 import { Effect, Layer, Option, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { DurableObjectState } from "effect-cf"
-import { Agent, AgentLoop } from "@doeixd/effect-agent"
-import * as CloudflareHost from "@doeixd/effect-agent/cloudflare"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop } from "affe-agent"
+import * as CloudflareHost from "affe-agent/cloudflare"
+import { TestLanguageModel } from "affe-agent/testing"
 
 /**
  * `apps/worker` minus the code tool: the entry a Workers *free* plan can
  * run. Dynamic Workers (the `LOADER` binding the isolate executor loads
  * programs through) is the one part of the host that needs a paid plan
  * (Cloudflare error 10195 at deploy); SQLite-backed Durable Objects,
- * alarms and everything else in `@doeixd/effect-agent/cloudflare` are
+ * alarms and everything else in `affe-agent/cloudflare` are
  * available on free. This is what proved the host on real Cloudflare on
  * 2026-09-02 (`docs/status-history.md`), and what a deployment on the free
  * plan copies. Everything else is `apps/worker` verbatim; the model is

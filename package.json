@@ -1,5 +1,5 @@
 {
-  "name": "@doeixd/effect-agent",
+  "name": "affe-agent",
   "version": "0.0.1",
   "description": "An Effect-native agent execution kernel: sessions, runs, turns, steering, follow-ups and typed lifecycle events on top of Effect AI.",
   "keywords": [
@@ -18,12 +18,12 @@
   "author": "doeixd",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/doeixd/effect-agent.git"
+    "url": "git+https://github.com/doeixd/affe-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/doeixd/effect-agent/issues"
+    "url": "https://github.com/doeixd/affe-agent/issues"
   },
-  "homepage": "https://github.com/doeixd/effect-agent#readme",
+  "homepage": "https://github.com/doeixd/affe-agent#readme",
   "type": "module",
   "sideEffects": false,
   "exports": {

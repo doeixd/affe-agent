@@ -369,7 +369,7 @@ export const factory = (
  * deployment that manages its own schema can create the table itself and use
  * `sqlStore` directly.
  */
-export const sqlStoreTable = "effect_agent_channel_input"
+export const sqlStoreTable = "affe_channel_input"
 
 /**
  * Build a SQL-backed store over an existing table.

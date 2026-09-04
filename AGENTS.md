@@ -243,7 +243,7 @@ checked invariant, not a convention.
   ```
 
   A genuine host implementation gets its own package entry
-  (`@doeixd/effect-agent/sandbox/local`) and a line in `HOST_MODULES` in
+  (`affe-agent/sandbox/local`) and a line in `HOST_MODULES` in
   `scripts/verify-portability.mjs`, so importing a portable entry never loads
   it. A transport that merely *can* use a host facility (MCP over stdio)
   loads that facility on demand, inside the operation that needs it.

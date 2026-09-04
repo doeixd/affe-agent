@@ -1,5 +1,5 @@
 {
-  "name": "@doeixd/effect-agent-tui",
+  "name": "affe-agent-tui",
   "private": true,
   "type": "module",
   "scripts": {

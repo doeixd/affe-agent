@@ -41,7 +41,7 @@ subpath is exported from the root entry.
 
 ## 1. Kernel
 
-The root entry, `@doeixd/effect-agent`. This is the part that executes.
+The root entry, `affe-agent`. This is the part that executes.
 
 | module | what | why |
 | --- | --- | --- |

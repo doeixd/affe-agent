@@ -51,8 +51,8 @@ const openrouter = OpenAiClient.layerConfig({
    */
   transformClient: HttpClient.mapRequest(
     HttpClientRequest.setHeaders({
-      "HTTP-Referer": "https://github.com/doeixd/effect-agent",
-      "X-Title": "effect-agent"
+      "HTTP-Referer": "https://github.com/doeixd/affe-agent",
+      "X-Title": "affe-agent"
     })
   )
 }).pipe(Layer.provide(FetchHttpClient.layer))

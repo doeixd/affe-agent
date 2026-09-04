@@ -207,7 +207,7 @@ export interface Options<R = never> {
  */
 let nextPrompt = 0
 
-const DEFAULT_SERVER = "effect_agent_permissions"
+const DEFAULT_SERVER = "affe_permissions"
 const DEFAULT_TOOL = "approve"
 
 /**

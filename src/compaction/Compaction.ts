@@ -861,7 +861,7 @@ interface MakeOptions<PE, PR, SE, SR> {
 export function controller<PE = never, PR = never, SE = never, SR = never>(
   options: MakeOptions<PE, PR, SE, SR> & {
     readonly checkpointStore: KeyValueStore.KeyValueStore
-    /** Prefix applied verbatim. Defaults to `effect-agent:compaction:`. */
+    /** Prefix applied verbatim. Defaults to `affe-agent:compaction:`. */
     readonly checkpointPrefix?: string | undefined
     readonly maxSessions?: undefined
   }
@@ -964,7 +964,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
       : KeyValueStore.toSchemaStore(
           KeyValueStore.prefix(
             options.checkpointStore,
-            options.checkpointPrefix ?? "effect-agent:compaction:"
+            options.checkpointPrefix ?? "affe-agent:compaction:"
           ),
           Checkpoint
         )
@@ -1249,7 +1249,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
 export function make<PE = never, PR = never, SE = never, SR = never>(
   options: MakeOptions<PE, PR, SE, SR> & {
     readonly checkpointStore: KeyValueStore.KeyValueStore
-    /** Prefix applied verbatim. Defaults to `effect-agent:compaction:`. */
+    /** Prefix applied verbatim. Defaults to `affe-agent:compaction:`. */
     readonly checkpointPrefix?: string | undefined
     readonly maxSessions?: undefined
   }

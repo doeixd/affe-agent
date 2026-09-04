@@ -1,8 +1,8 @@
 # Roadmap
 
-Where `@doeixd/effect-agent` stands against the two roadmap issues (#4 Flue-2
+Where `affe-agent` stands against the two roadmap issues (#4 Flue-2
 parity, #1 streaming + ecosystem), and what is worth doing next. The guiding
-rule stays [#4's](https://github.com/doeixd/effect-agent/issues/4): a package
+rule stays [#4's](https://github.com/doeixd/affe-agent/issues/4): a package
 adds a capability, policy, interpreter, or adapter — never a parallel execution
 model; reach for an ordinary `Effect` / `Service` / `Layer` / `Stream` /
 `Schema` / `Tool` / `ContextTransform` / `AgentLoop` first.

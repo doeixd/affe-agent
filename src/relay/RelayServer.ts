@@ -34,7 +34,7 @@ export interface AuthenticatorService {
 }
 
 export class RelayAuthenticator extends Context.Service<RelayAuthenticator, AuthenticatorService>()(
-  "@doeixd/effect-agent/relay/RelayAuthenticator"
+  "affe-agent/relay/RelayAuthenticator"
 ) {}
 
 /**

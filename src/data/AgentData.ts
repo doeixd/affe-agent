@@ -59,7 +59,7 @@ export interface DataChannelsShape {
  * it -- an in-process PubSub here -- is wiring.
  */
 export class DataChannels extends Context.Service<DataChannels, DataChannelsShape>()(
-  "@doeixd/effect-agent/data/DataChannels"
+  "affe-agent/data/DataChannels"
 ) {}
 
 /** An in-process implementation over a PubSub, with a monotonic sequence. */

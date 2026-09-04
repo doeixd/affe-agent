@@ -444,7 +444,7 @@ difference.
 - Output through `internal/truncate.ts`: tail-bounded by lines and bytes,
   UTF-8-safe (I7); when cut, prefix `...output truncated...` and (if the
   sandbox is writable) save the full output to a workspace-relative
-  `.effect-agent/tool-output/<id>` file named in the message — the paper
+  `.affe-agent/tool-output/<id>` file named in the message — the paper
   trail of I6, adapted from their truncation dir. Retention/cleanup is the
   application's business; we document the dir, we don't schedule jobs.
 - Timeout surfaces opencode's prose: "…terminated after ${ms} ms. If this
@@ -475,7 +475,7 @@ and keeps the banner.
 
 Divergences:
 
-- **The paper trail lives in the workspace** (`.effect-agent/tool-output/`),
+- **The paper trail lives in the workspace** (`.affe-agent/tool-output/`),
   because the sandbox is the only place we can write -- and the useful place,
   since `search` and `read_file` can be pointed at the saved file. Upstream
   writes to a global directory outside the project with a 7-day cleanup job; we
@@ -714,7 +714,7 @@ unused. `noUnusedLocals` is not enabled and the language service did not flag
 it, so nothing caught it but reading.
 
 Also checked and found sound: the local sandbox's `write` creates parent
-directories, so M4's `.effect-agent/tool-output/` paper trail works on a real
+directories, so M4's `.affe-agent/tool-output/` paper trail works on a real
 filesystem, not only against the in-memory provider; no casts or non-null
 assertions anywhere in `src/coding/` or its tests; all 31 package entry points
 still import from the packed artifact, with `internal/` correctly unexported;

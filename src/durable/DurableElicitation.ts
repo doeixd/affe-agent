@@ -40,7 +40,7 @@ import * as Elicitation from "../Elicitation.js"
  * two spellings of that name would strand every answer in flight.
  */
 export const deferredFor = (id: string) =>
-  DurableDeferred.make(`effect-agent/elicitation/${id}`, {
+  DurableDeferred.make(`affe-agent/elicitation/${id}`, {
     success: Elicitation.Response
   })
 

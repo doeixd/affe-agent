@@ -21,7 +21,7 @@ export interface Service {
 }
 
 export class Shell extends Context.Service<Shell, Service>()(
-  "@doeixd/effect-agent/shell/Shell"
+  "affe-agent/shell/Shell"
 ) {}
 
 /**

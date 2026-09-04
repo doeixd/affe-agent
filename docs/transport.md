@@ -20,7 +20,7 @@ delivery            live (the session's bus)  or  durable (DeliveryLog: memory /
 ```
 
 Every transport speaks the same vocabulary, defined once in
-`@doeixd/effect-agent/client` as `Schema`s. No transport invents its own
+`affe-agent/client` as `Schema`s. No transport invents its own
 notion of a session, a result, an error, or an event. What differs between
 transports is only *how far* the vocabulary is carried and *in what
 framing*.
@@ -30,7 +30,7 @@ framing*.
 ## 1. The seam: `AgentClient`
 
 ```ts
-import { AgentClient } from "@doeixd/effect-agent/client"
+import { AgentClient } from "affe-agent/client"
 
 interface Service {
   createSession(options?: { sessionId?: string }): Effect<RemoteSession, RemoteError, Scope>
@@ -140,10 +140,10 @@ subscription.
 
 ## 3. Effect RPC: the full-fidelity transport
 
-`@doeixd/effect-agent/rpc` exposes the protocol as an `RpcGroup`:
+`affe-agent/rpc` exposes the protocol as an `RpcGroup`:
 
 ```ts
-import { AgentRpc } from "@doeixd/effect-agent/rpc"
+import { AgentRpc } from "affe-agent/rpc"
 
 AgentRpc.Protocol     // RpcGroup: createSession, closeSession, getSession, prompt,
                       //           steer, followUp, interrupt, respond, pending,
@@ -181,7 +181,7 @@ loss.
 
 ## 4. HTTP + SSE: the portable transport
 
-`@doeixd/effect-agent/http` is the same protocol as plain HTTP, for clients
+`affe-agent/http` is the same protocol as plain HTTP, for clients
 that are not Effect (or not TypeScript):
 
 ```text
@@ -415,14 +415,14 @@ protocol's own tail, with no polling.
 
 ## 8. Durable Streams
 
-`@doeixd/effect-agent/durable-streams` wraps the official protocol client.
+`affe-agent/durable-streams` wraps the official protocol client.
 The protocol is a URL-addressable, append-only, ordered byte log with
 opaque offsets, catch-up reads, live tailing (SSE or long-poll, the client
 chooses), durable close, and fenced idempotent producers. The wrapper adds
 only the Effect boundary.
 
 ```ts
-import { DurableStreams } from "@doeixd/effect-agent/durable-streams"
+import { DurableStreams } from "affe-agent/durable-streams"
 
 const events = DurableStreams.make({ url, schema: AgentEvent.AgentEventEnvelope })
 yield* events.ensure

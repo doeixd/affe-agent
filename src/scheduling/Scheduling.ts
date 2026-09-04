@@ -53,7 +53,7 @@ export interface Dispatched {
  */
 export class AgentDispatcher extends Context.Service<AgentDispatcher, {
   readonly dispatch: (job: Dispatched) => Effect.Effect<void>
-}>()("@doeixd/effect-agent/scheduling/AgentDispatcher") {}
+}>()("affe-agent/scheduling/AgentDispatcher") {}
 
 /**
  * An in-process dispatcher: each job runs the agent, after its delay, in a

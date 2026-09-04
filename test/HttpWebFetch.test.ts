@@ -186,9 +186,9 @@ describe("guarded HTTP web fetch provider", () => {
       )
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError"
+        "affe-agent/web/WebFetchCrossOriginRedirectError"
       )
-      if (error._tag === "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError") {
+      if (error._tag === "affe-agent/web/WebFetchCrossOriginRedirectError") {
         // The origin, not the path. Origin is the granularity the permission
         // decision is made at, so it is what a caller needs to ask again for
         // -- and a redirect path is server-controlled text that can carry a
@@ -216,7 +216,7 @@ describe("guarded HTTP web fetch provider", () => {
       )
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebFetchRedirectLimitError"
+        "affe-agent/web/WebFetchRedirectLimitError"
       )
       assert.strictEqual(yield* Ref.get(calls), HttpWebFetch.MAX_REDIRECTS + 1)
 
@@ -230,7 +230,7 @@ describe("guarded HTTP web fetch provider", () => {
       )
       assert.strictEqual(
         unavailableError._tag,
-        "@doeixd/effect-agent/web/WebFetchHttpResponseError"
+        "affe-agent/web/WebFetchHttpResponseError"
       )
       assert.strictEqual(yield* Ref.get(failedCalls), 1)
     })
@@ -245,7 +245,7 @@ describe("guarded HTTP web fetch provider", () => {
       const binaryError = yield* Effect.flip(fetchWith(binary, "https://example.com/a.pdf"))
       assert.strictEqual(
         binaryError._tag,
-        "@doeixd/effect-agent/web/WebFetchUnsupportedContentTypeError"
+        "affe-agent/web/WebFetchUnsupportedContentTypeError"
       )
 
       const advertised = HttpClient.make((request) =>
@@ -260,7 +260,7 @@ describe("guarded HTTP web fetch provider", () => {
       )
       assert.strictEqual(
         advertisedError._tag,
-        "@doeixd/effect-agent/web/WebFetchResponseTooLargeError"
+        "affe-agent/web/WebFetchResponseTooLargeError"
       )
 
       const streamed = HttpClient.make((request) =>
@@ -274,7 +274,7 @@ describe("guarded HTTP web fetch provider", () => {
       )
       assert.strictEqual(
         streamedError._tag,
-        "@doeixd/effect-agent/web/WebFetchResponseTooLargeError"
+        "affe-agent/web/WebFetchResponseTooLargeError"
       )
 
       const malformed = HttpClient.make((request) =>
@@ -286,7 +286,7 @@ describe("guarded HTTP web fetch provider", () => {
       )
       assert.strictEqual(
         malformedError._tag,
-        "@doeixd/effect-agent/web/WebFetchDecodeError"
+        "affe-agent/web/WebFetchDecodeError"
       )
     })
   )
@@ -309,7 +309,7 @@ describe("guarded HTTP web fetch provider", () => {
       const error = yield* Effect.flip(Fiber.join(fiber))
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebFetchTimeoutError"
+        "affe-agent/web/WebFetchTimeoutError"
       )
       assert.isTrue((yield* Deferred.await(signal)).aborted)
 

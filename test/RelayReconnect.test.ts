@@ -240,7 +240,7 @@ describe("relay reconnection", () => {
       // that follows lands.
       yield* Effect.sleep("400 millis")
       const refused = yield* Effect.flip(caller.send(envelope))
-      assert.strictEqual(refused._tag, "@doeixd/effect-agent/relay/RelayPeerOfflineError")
+      assert.strictEqual(refused._tag, "affe-agent/relay/RelayPeerOfflineError")
 
       yield* awaitStatus(target, "connecting")
       yield* awaitStatus(target, "online")

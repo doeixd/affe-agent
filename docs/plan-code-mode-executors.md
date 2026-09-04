@@ -74,7 +74,7 @@ in our own surface, and lands a second executor as the proof the seam is one.
    silently: the program would work.
 
 7. **The adapter is a sub-entry with an optional peer dependency**
-   (`@doeixd/effect-agent/code/callscript`, `callscript` in
+   (`affe-agent/code/callscript`, `callscript` in
    `peerDependenciesMeta` as optional), the pattern `/blob/fs`,
    `/sandbox/local` and `/web/brave` already establish and the treatment
    `@modelcontextprotocol/sdk` already gets. `src/code` keeps its single
@@ -329,7 +329,7 @@ never-called `invoke` assertion fail.
 
 ### Entry point
 
-`src/code/callscript.ts` → `@doeixd/effect-agent/code/callscript`, exporting:
+`src/code/callscript.ts` → `affe-agent/code/callscript`, exporting:
 
 ```ts
 export const executor: (options?: {

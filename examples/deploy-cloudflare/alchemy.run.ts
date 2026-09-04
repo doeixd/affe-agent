@@ -17,7 +17,7 @@ import { Effect } from "effect"
  * What the worker itself does — one DO per session id, history persisted to
  * DO SQLite at every committed turn, events journaled to the delivery log,
  * `events?after=N` gapless across hibernation and process death, dispatched
- * work as logical alarms — is `@doeixd/effect-agent/cloudflare`'s, built on
+ * work as logical alarms — is `affe-agent/cloudflare`'s, built on
  * `effect-cf`, and tested at `test/WorkerDurableObject.test.ts`. The model
  * inside the checked-in entry is the scripted test model; a real deployment
  * copies `apps/worker` and swaps `scriptedModel` for a provider layer (for
@@ -27,7 +27,7 @@ import { Effect } from "effect"
  * the library's.
  */
 export default class AgentStack extends Alchemy.Stack<AgentStack>()(
-  "effect-agent",
+  "affe-agent",
   {
     providers: Cloudflare.providers(),
     state: Cloudflare.state()

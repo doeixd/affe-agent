@@ -122,7 +122,7 @@ describe("AgentServer", () => {
       // `instanceOf` narrows, so the fields are read without a cast.
       assert.instanceOf(error, AgentServer.DuplicateMountError)
       const failure = error
-      assert.strictEqual(failure._tag, "@doeixd/effect-agent/http/DuplicateMountError")
+      assert.strictEqual(failure._tag, "affe-agent/http/DuplicateMountError")
       assert.strictEqual(failure.kind, "name")
       assert.strictEqual(failure.value, "support")
       assert.include(failure.message, "support")

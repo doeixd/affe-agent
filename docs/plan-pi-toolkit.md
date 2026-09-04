@@ -51,7 +51,7 @@ an adapter with different success conditions (fidelity to Pi's schema) than a
 battery (quality of behaviour).
 
 **P0 settled (2026-08-26): ship a second toolkit.** The owner wants Pi's
-contracts as `@doeixd/effect-agent/pi`, not absorbed into `/coding`.
+contracts as `affe-agent/pi`, not absorbed into `/coding`.
 `/coding` stays the OpenCode-shaped battery (structured `list_files`, one
 edit per call, `bash -lc`). `/pi` is contract fidelity: batch `edits[]`,
 rendered listings, injectable shell. Same sandbox seam, same permission

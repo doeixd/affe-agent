@@ -52,7 +52,7 @@ describe("WebCrawl", () => {
       const result = yield* crawlWith(site, "https://example.com/")
       assert.deepStrictEqual(urls(result), ["0:https://example.com/", "1:https://example.com/ok"])
       assert.deepStrictEqual(result.failed, [
-        { url: "https://example.com/gone", error: "@doeixd/effect-agent/web/WebCaptureResponseError" }
+        { url: "https://example.com/gone", error: "affe-agent/web/WebCaptureResponseError" }
       ])
     })
   )
@@ -60,7 +60,7 @@ describe("WebCrawl", () => {
   it.effect("the start page's failure is the crawl's failure", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(crawlWith(siteOf(), "https://example.com/"))
-      assert.strictEqual(error._tag, "@doeixd/effect-agent/web/WebCrawlStartError")
+      assert.strictEqual(error._tag, "affe-agent/web/WebCrawlStartError")
     })
   )
 

@@ -4,7 +4,7 @@
  * The acceptance test for the integration axis (§7 step 3): if the
  * sources, the three credential layers, principals and per-tool policy
  * compose for a real caller, it looks like this. Built **only** from the
- * public surface (`@doeixd/effect-agent/*`), no casts, miniature not a
+ * public surface (`affe-agent/*`), no casts, miniature not a
  * fork, and it runs — deterministically, on a fake fetch and a scripted
  * model, so CI can execute it rather than merely compile it.
  *
@@ -29,12 +29,12 @@ import { McpProtocol, McpServer } from "effect/unstable/ai"
 // Public surface only — the same import paths a user gets. If this file
 // needs a private import, that is a missing primitive and belongs in
 // STATUS.md (plan-primitives.md §4 rule 4).
-import { Agent, AgentLoop, Permission, Principal, ToolExecution } from "@doeixd/effect-agent"
-import { AgentProtocol, AgentSessionHost } from "@doeixd/effect-agent/client"
-import { Presets } from "@doeixd/effect-agent/presets"
-import { AgentMcp } from "@doeixd/effect-agent/mcp"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
-import { Credentials, OpenApi, ToolSource } from "@doeixd/effect-agent/tool-source"
+import { Agent, AgentLoop, Permission, Principal, ToolExecution } from "affe-agent"
+import { AgentProtocol, AgentSessionHost } from "affe-agent/client"
+import { Presets } from "affe-agent/presets"
+import { AgentMcp } from "affe-agent/mcp"
+import { TestLanguageModel } from "affe-agent/testing"
+import { Credentials, OpenApi, ToolSource } from "affe-agent/tool-source"
 import { Prompt, Tool } from "effect/unstable/ai"
 
 // ---------------------------------------------------------------------------

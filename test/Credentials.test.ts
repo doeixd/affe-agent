@@ -16,7 +16,7 @@ describe("Credentials", () => {
       placements: [
         { carrier: "header", name: "DD-API-KEY", variable: "apiKey" },
         { carrier: "header", name: "DD-APPLICATION-KEY", variable: "appKey" },
-        { carrier: "header", name: "X-Client", literal: "effect-agent" },
+        { carrier: "header", name: "X-Client", literal: "affe-agent" },
         { carrier: "query", name: "site", variable: "site" }
       ]
     }
@@ -28,7 +28,7 @@ describe("Credentials", () => {
       // `site` deliberately absent
     })
     assert.deepStrictEqual(rendered, {
-      headers: { "DD-API-KEY": "a-1", "DD-APPLICATION-KEY": "b-2", "X-Client": "effect-agent" },
+      headers: { "DD-API-KEY": "a-1", "DD-APPLICATION-KEY": "b-2", "X-Client": "affe-agent" },
       query: {}
     })
     assert.deepStrictEqual(Credentials.render(Credentials.none, {}), { headers: {}, query: {} })

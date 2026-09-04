@@ -86,7 +86,7 @@ export const make = <A, I, E = never, R = never>(
  * the fibre is the shape the caller expects.
  */
 export const Current = Context.Reference<Option.Option<unknown>>(
-  "@doeixd/effect-agent/AgentInput/Current",
+  "affe-agent/AgentInput/Current",
   { defaultValue: () => Option.none() }
 )
 

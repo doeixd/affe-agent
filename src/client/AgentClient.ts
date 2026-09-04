@@ -422,7 +422,7 @@ export interface Service {
 }
 
 export class AgentClient extends Context.Service<AgentClient, Service>()(
-  "@doeixd/effect-agent/AgentClient"
+  "affe-agent/AgentClient"
 ) {}
 
 /**

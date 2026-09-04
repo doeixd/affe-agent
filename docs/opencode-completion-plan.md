@@ -43,7 +43,7 @@ WorkspaceManager
 host-wide events
 ```
 
-The main new effect-agent semantics are only:
+The main new affe-agent semantics are only:
 
 ```text
 SessionInbox

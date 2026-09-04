@@ -75,7 +75,7 @@ export interface MemoryShape {
  * the in-memory `layer` here, or an embeddings/Redis adapter of its own.
  */
 export class Memory extends Context.Service<Memory, MemoryShape>()(
-  "@doeixd/effect-agent/memory/Memory"
+  "affe-agent/memory/Memory"
 ) {}
 
 // ---------------------------------------------------------------------------

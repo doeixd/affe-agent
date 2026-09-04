@@ -1,7 +1,7 @@
 /**
  * The portable sandbox surface: the capability, its errors and the in-memory
  * provider. The Node-backed provider is a host implementation and lives at
- * `@doeixd/effect-agent/sandbox/local`, so importing this entry never pulls
+ * `affe-agent/sandbox/local`, so importing this entry never pulls
  * in `node:*`.
  */
 export * as Sandbox from "./Sandbox.js"

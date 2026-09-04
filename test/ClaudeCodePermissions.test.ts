@@ -279,7 +279,7 @@ describe("ClaudeCodePermissions.layer: the wire, as the CLI reads it", () => {
     HttpRouter.serve(
       ClaudeCodePermissions.layer({ policy }).pipe(
         Layer.provide(McpServer.layerHttp({
-          name: "effect-agent-permissions",
+          name: "affe-agent-permissions",
           version: "1.0.0",
           path: "/permission",
           protocols: [McpProtocol.v2025_11_25]
@@ -410,7 +410,7 @@ describe("ClaudeCodePermissions.args", () => {
     const config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1] ?? "{}")
     assert.deepStrictEqual(config, {
       mcpServers: {
-        effect_agent_permissions: { type: "http", url: "http://127.0.0.1:4599/permission" }
+        affe_permissions: { type: "http", url: "http://127.0.0.1:4599/permission" }
       }
     })
     // Without this the CLI also loads whatever the host has configured, so a
@@ -429,7 +429,7 @@ describe("ClaudeCodePermissions.args", () => {
     })
     const config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1] ?? "{}")
     assert.deepStrictEqual(
-      config.mcpServers.effect_agent_permissions.headers,
+      config.mcpServers.affe_permissions.headers,
       { Authorization: "Bearer run-token" }
     )
   })

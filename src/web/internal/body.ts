@@ -10,7 +10,7 @@ import type { HttpClientResponse } from "effect/unstable/http"
  */
 
 /** The one value this module fails with when a body outgrows its cap. */
-const overflow = Symbol.for("@doeixd/effect-agent/web/bodyOverflow")
+const overflow = Symbol.for("affe-agent/web/bodyOverflow")
 
 /** How the caller names "too large" in its own failure vocabulary. */
 export interface Bounds<E> {

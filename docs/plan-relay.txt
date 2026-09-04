@@ -269,11 +269,11 @@ Introduce a small domain:
 
 ```ts
 const PeerId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/relay/PeerId")
+  Schema.brand("affe-agent/relay/PeerId")
 )
 
 const EndpointId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/relay/EndpointId")
+  Schema.brand("affe-agent/relay/EndpointId")
 )
 ```
 
@@ -319,7 +319,7 @@ Something like:
 ```ts
 const AgentEndpoint =
   RelayRpc.endpoint(
-    "effect-agent/agent",
+    "affe-agent/agent",
     AgentRpc.Protocol
   )
 ```
@@ -348,13 +348,13 @@ Likewise:
 ```ts
 const ControlEndpoint =
   RelayRpc.endpoint(
-    "effect-agent/control",
+    "affe-agent/control",
     ControlProtocol
   )
 
 const A2AEndpoint =
   RelayRpc.endpoint(
-    "effect-agent/a2a",
+    "affe-agent/a2a",
     A2A.Protocol
   )
 ```
@@ -518,7 +518,7 @@ For V1:
 1. relay generates one-time enrollment token
 
 2. new machine runs:
-   effect-agent relay enroll ...
+   affe-agent relay enroll ...
 
 3. machine receives/generates:
    PeerId
@@ -1391,7 +1391,7 @@ Machine hosting an agent:
 ```ts
 const AgentEndpoint =
   RelayRpc.endpoint(
-    "effect-agent",
+    "affe-agent",
     AgentRpc.Protocol
   )
 

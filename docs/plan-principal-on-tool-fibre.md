@@ -57,7 +57,7 @@ definition. The question: how does "who asked" reach "the tool that acts"?
 ```ts
 // src/Principal.ts (new file, not a new kernel noun -- see below)
 export class CurrentPrincipal extends Context.Reference<Option.Option<string>>(
-  "@doeixd/effect-agent/CurrentPrincipal",
+  "affe-agent/CurrentPrincipal",
   { defaultValue: () => Option.none() }
 ) {}
 ```

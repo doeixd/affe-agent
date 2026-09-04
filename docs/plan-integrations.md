@@ -168,7 +168,7 @@ The load-bearing piece, and the one Flue has no counterpart to. `/testing`
 exports a suite any `SandboxProvider` must pass:
 
 ```ts
-import { SandboxConformance } from "@doeixd/effect-agent/testing"
+import { SandboxConformance } from "affe-agent/testing"
 
 SandboxConformance.suite("daytona", DaytonaProviderLayer)
 ```

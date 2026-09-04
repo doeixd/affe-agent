@@ -1,14 +1,14 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { DurableObjectState } from "effect-cf"
-import { Agent, AgentLoop, Permission } from "@doeixd/effect-agent"
-import * as CloudflareHost from "@doeixd/effect-agent/cloudflare"
-import { CodeTool } from "@doeixd/effect-agent/code"
-import type { CodeMode } from "@doeixd/effect-agent/code"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop, Permission } from "affe-agent"
+import * as CloudflareHost from "affe-agent/cloudflare"
+import { CodeTool } from "affe-agent/code"
+import type { CodeMode } from "affe-agent/code"
+import { TestLanguageModel } from "affe-agent/testing"
 
 /**
- * The reference Worker: `@doeixd/effect-agent/cloudflare` with the scripted
+ * The reference Worker: `affe-agent/cloudflare` with the scripted
  * model, so it runs on plain workerd in CI with no provider key
  * (`test/WorkerDurableObject.test.ts`, through miniflare). A real
  * deployment swaps `scriptedModel` for a provider layer -- for Anthropic,

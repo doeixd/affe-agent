@@ -44,7 +44,7 @@ export interface Service {
 }
 
 export class RelayCredentials extends Context.Service<RelayCredentials, Service>()(
-  "@doeixd/effect-agent/relay/RelayCredentials"
+  "affe-agent/relay/RelayCredentials"
 ) {}
 
 const encoder = new TextEncoder()

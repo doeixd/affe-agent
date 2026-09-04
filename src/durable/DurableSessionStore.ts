@@ -587,8 +587,8 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
 
 // -- SQL implementation --------------------------------------------------------------
 
-export const sqlSessionTable = "effect_agent_session"
-export const sqlElicitationTable = "effect_agent_elicitation"
+export const sqlSessionTable = "affe_session"
+export const sqlElicitationTable = "affe_elicitation"
 
 interface SessionRow {
   readonly session_id: string

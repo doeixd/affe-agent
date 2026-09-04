@@ -85,7 +85,7 @@ headers today and query placements are the next slice (§7).
 
 ## 4. What ships now
 
-`@doeixd/effect-agent/tool-source` exports `Credentials`:
+`affe-agent/tool-source` exports `Credentials`:
 
 - `Placement`, `Method` (`apikey` with placements, or `none`), `bearer()`,
   `header(name, options?)`, `query(name)`: the method vocabulary.

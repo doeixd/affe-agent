@@ -134,7 +134,7 @@ export type Export = typeof Export.Type
  * is the failure mode a version exists to prevent.
  */
 export class ExportError extends Schema.TaggedError<ExportError>()(
-  "@doeixd/effect-agent/export/ExportError",
+  "affe-agent/export/ExportError",
   {
     reason: Schema.Literals(["unsupported-version", "malformed"]),
     detail: Schema.String,

@@ -15,7 +15,7 @@ import { AgentMcp } from "../src/mcp/index.js"
  * other adapter shares, so capacity and authorization are decided once. The
  * agent runs behind an ordinary `AgentClient` backend. Compose it with
  * whichever MCP transport you want -- here stdio, the shape an editor launches. (The reverse direction, consuming an MCP server's tools from
- * an agent, is `@doeixd/effect-agent/mcp`'s `McpClient` / `McpToolkit`.)
+ * an agent, is `affe-agent/mcp`'s `McpClient` / `McpToolkit`.)
  */
 
 const Assistant = Agent.make({ instructions: "You are a helpful assistant." })

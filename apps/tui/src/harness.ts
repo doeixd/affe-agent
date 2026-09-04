@@ -804,8 +804,8 @@ export const start = (
               : {})
           })
           const path = redact
-            ? `.effect-agent/export-${node.value.id}.redacted.json`
-            : `.effect-agent/export-${node.value.id}.json`
+            ? `.affe-agent/export-${node.value.id}.redacted.json`
+            : `.affe-agent/export-${node.value.id}.json`
           yield* sandbox.write(yield* Sandbox.path(path), text)
           yield* notice(
             redact

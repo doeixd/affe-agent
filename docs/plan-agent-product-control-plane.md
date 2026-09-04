@@ -4,7 +4,7 @@ Written 2026-09-03.
 
 **Status: specified, not implemented.**
 
-This plan turns `@doeixd/effect-agent` into the execution substrate of a
+This plan turns `affe-agent` into the execution substrate of a
 persistent AI-worker product in the product class of Grok Bot, Squad,
 Perplexity Computer and similar systems.
 
@@ -17,7 +17,7 @@ work, computers, connections, automations, artifacts and inbox state**.
 The central conclusion is simple:
 
 > **Do not build another agent runtime. Build a control plane that compiles
-> persistent product records into the `effect-agent` runtime that already
+> persistent product records into the `affe-agent` runtime that already
 > exists.**
 
 The execution kernel is already unusually complete. The missing work is
@@ -31,7 +31,7 @@ capabilities, and the web experience around them.
 The starting point matters. This plan assumes the current repository, not a
 generic chat SDK.
 
-`effect-agent` already owns:
+`affe-agent` already owns:
 
 - `AgentDefinition` as executable behaviour;
 - sessions, submissions, runs and atomic turns;
@@ -120,7 +120,7 @@ persistent product data
  AgentDefinition
         |
         v
- effect-agent execution
+ affe-agent execution
 ```
 
 This compile/resolve boundary is the most important new architectural seam.
@@ -165,7 +165,7 @@ those references into executable values at runtime.
                     resolve / dispatch / observe
                                 |
 +-------------------------------v-------------------------------------+
-|                  @doeixd/effect-agent                              |
+|                  affe-agent                              |
 |                                                                     |
 | AgentDefinition | AgentSession | AgentClient | AgentEvent           |
 | Permission | Elicitation | Scheduling | Memory | Skills             |
@@ -222,14 +222,14 @@ product-protocol / product-runtime
    |
 product-domain / product-store
    |
-effect-agent public APIs
+affe-agent public APIs
 ```
 
-The product may depend on `effect-agent`. The kernel must not depend on the
+The product may depend on `affe-agent`. The kernel must not depend on the
 product.
 
 Some future pieces such as a portable `Browser` capability may prove generally
-useful enough to publish from `effect-agent`; they should earn that promotion
+useful enough to publish from `affe-agent`; they should earn that promotion
 by having at least two independent consumers, per `AGENTS.md`.
 
 ---
@@ -1678,7 +1678,7 @@ ProductSearch
 UsageMeter
 ```
 
-Each must say which existing `effect-agent` seam it composes.
+Each must say which existing `affe-agent` seam it composes.
 
 ---
 
@@ -1784,7 +1784,7 @@ Build:
 5. one capability reference;
 6. one skill reference;
 7. one permission policy reference;
-8. reference example using public `effect-agent` APIs only.
+8. reference example using public `affe-agent` APIs only.
 
 Acceptance:
 
@@ -1953,7 +1953,7 @@ Build:
 
 ---
 
-# Part XI — what should go into effect-agent itself?
+# Part XI — what should go into affe-agent itself?
 
 ## 56. Likely kernel/library additions
 
@@ -2053,7 +2053,7 @@ primitives.
 ## 58. Add a product reference slice before building everything
 
 Create a miniature reference application that uses only published
-`effect-agent` imports plus the new product packages.
+`affe-agent` imports plus the new product packages.
 
 Suggested scenario:
 
@@ -2194,7 +2194,7 @@ The product is architecturally complete when a user can:
 11. search project knowledge separately from learned memory;
 12. inspect exact runs, costs, failures and sources;
 13. edit the agent into a new revision without changing old/running work;
-14. use the same underlying `effect-agent` execution contracts from web, CLI,
+14. use the same underlying `affe-agent` execution contracts from web, CLI,
     TUI, A2A or another client.
 
 At that point the repository has not become a second Grok-specific runtime. It

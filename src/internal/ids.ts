@@ -9,13 +9,13 @@ import { Effect, Ref, Schema } from "effect"
  * serialises a session — a store, an RPC boundary — decodes ids through these
  * instead of restating the shape.
  */
-export const SessionId = Schema.String.pipe(Schema.brand("@doeixd/effect-agent/SessionId"))
+export const SessionId = Schema.String.pipe(Schema.brand("affe-agent/SessionId"))
 export type SessionId = typeof SessionId.Type
 
-export const SubmissionId = Schema.String.pipe(Schema.brand("@doeixd/effect-agent/SubmissionId"))
+export const SubmissionId = Schema.String.pipe(Schema.brand("affe-agent/SubmissionId"))
 export type SubmissionId = typeof SubmissionId.Type
 
-export const RunId = Schema.String.pipe(Schema.brand("@doeixd/effect-agent/RunId"))
+export const RunId = Schema.String.pipe(Schema.brand("affe-agent/RunId"))
 export type RunId = typeof RunId.Type
 
 export const sessionId = (value: string): SessionId => value as SessionId

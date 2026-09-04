@@ -31,7 +31,7 @@ import { CodeDiagnostic } from "./diagnostics.js"
 
 /** The program threw; the value is the program's own. */
 export class ProgramThrow extends Schema.TaggedError<ProgramThrow>()(
-  "@doeixd/effect-agent/code/ProgramThrow",
+  "affe-agent/code/ProgramThrow",
   { value: Schema.Unknown }
 ) {
   override get message() {

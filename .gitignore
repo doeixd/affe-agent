@@ -2,7 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
-doeixd-effect-agent-*.tgz
+affe-agent-*.tgz
 
 # Internal research notes -- not published.
 # Remove this line to include it in the repo.

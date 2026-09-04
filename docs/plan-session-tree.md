@@ -210,7 +210,7 @@ a later store can hold whole snapshots, walk deltas, or read a database without
 any caller noticing.
 
 **Deliberately not exported -- at the time.** (Since T5 the module ships as
-`@doeixd/effect-agent/tree`; this paragraph is history.) `src/tree/` was absent from `src/index.ts` and
+`affe-agent/tree`; this paragraph is history.) `src/tree/` was absent from `src/index.ts` and
 from `package.json`. The scope rule that held M6 applies here too -- a new
 exported concept wants a second consumer or a recorded decision in `PLAN.md` --
 so the module is built and tested while the *export* stays an open decision.
@@ -539,7 +539,7 @@ T5, take its answer rather than re-deriving one — the conformance suite above 
 worth writing once, not three times.
 
 **T5: landed (2026-08-24).** `NodeStore` with two implementations, one
-conformance suite, and the tree exported at `@doeixd/effect-agent/tree`.
+conformance suite, and the tree exported at `affe-agent/tree`.
 21 tree tests, 19 store tests, 928 in total.
 
 **The `effect/unstable/persistence` question, settled.** `KeyValueStore` is

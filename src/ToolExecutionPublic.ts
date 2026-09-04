@@ -5,7 +5,7 @@
  * `ToolExecution.ts` also exports `execute`, the engine's own entry point for
  * running one model response's tool calls; `AgentTurn` is its only caller
  * and an application has no use for it. Listed here rather than `export *`
- * so it stays off `@doeixd/effect-agent` (design-assessment rec 2).
+ * so it stays off `affe-agent` (design-assessment rec 2).
  */
 export {
   FailRun,

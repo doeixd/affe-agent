@@ -145,7 +145,7 @@ describe("SessionTree", () => {
 
       assert.strictEqual(outcome._tag, "Failure")
       if (outcome._tag === "Failure") {
-        assert.strictEqual(outcome.failure._tag, "@doeixd/effect-agent/tree/SessionBusy")
+        assert.strictEqual(outcome.failure._tag, "affe-agent/tree/SessionBusy")
       }
     })
   )
@@ -983,7 +983,7 @@ describe("SessionTree", () => {
 
       // The store's own error, not a `NodeMissing` and not a `SessionBusy`:
       // storage being unavailable is a different answer from an empty tree.
-      assert.strictEqual(out._tag, "@doeixd/effect-agent/tree/StoreError")
+      assert.strictEqual(out._tag, "affe-agent/tree/StoreError")
     })
   )
 
@@ -1049,11 +1049,11 @@ describe("SessionTree", () => {
       for (const id of ["self", "a", "b"]) {
         const found = Option.getOrThrow(yield* store.get(id as SessionTree.NodeId))
         const outcome = yield* Effect.flip(tree.path(found.node))
-        assert.strictEqual(outcome._tag, "@doeixd/effect-agent/tree/TreeCorrupt")
+        assert.strictEqual(outcome._tag, "affe-agent/tree/TreeCorrupt")
         // And everything built on the walk answers the same way rather than
         // inheriting the hang.
         const summarised = yield* Effect.flip(tree.summary(found.node))
-        assert.strictEqual(summarised._tag, "@doeixd/effect-agent/tree/TreeCorrupt")
+        assert.strictEqual(summarised._tag, "affe-agent/tree/TreeCorrupt")
       }
     }).pipe(Effect.scoped))
 

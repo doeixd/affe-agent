@@ -99,7 +99,7 @@ export type Service = RpcClient.FromGroup<
 >
 
 export class Client extends Context.Service<Client, Service>()(
-  "@doeixd/effect-agent/rpc/Client"
+  "affe-agent/rpc/Client"
 ) {}
 
 /**

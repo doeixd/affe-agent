@@ -223,7 +223,7 @@ describe("BranchSummary", () => {
         }))
       }).pipe(Effect.provide(layer), Effect.scoped)
 
-      assert.strictEqual(error._tag, "@doeixd/effect-agent/tree/NothingToCarry")
+      assert.strictEqual(error._tag, "affe-agent/tree/NothingToCarry")
     })
   )
 })

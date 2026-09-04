@@ -4,7 +4,7 @@ The execution substrate (`/sandbox`, `/sandbox/local`, `/shell`), the two
 coding tool batteries (`/coding`, `/pi`), and the A2A bridges that put
 Claude Code and OpenCode behind the same permission policy.
 
-`@doeixd/effect-agent/sandbox` is a scoped filesystem-and-process capability
+`affe-agent/sandbox` is a scoped filesystem-and-process capability
 that user-defined tools demand through the ordinary requirement channel. It
 exists to prove the composition the whole design bets on — nothing here
 changes the agent core. A ready-made battery ships on top of it (see [Coding
@@ -40,7 +40,7 @@ Layer.provideMerge(
   Sandbox.currentLayer(Sandbox.workspace("coding-agent")),
   MemorySandbox.layer({ seed: { "src/add.test.ts": "..." } })
 )
-// or, from the Node-only entry `@doeixd/effect-agent/sandbox/local`:
+// or, from the Node-only entry `affe-agent/sandbox/local`:
 LocalSandbox.layer()
 ```
 
@@ -81,7 +81,7 @@ timer.
 
 ### Coding toolkit
 
-`@doeixd/effect-agent/coding` is a ready-made battery of the tools a coding
+`affe-agent/coding` is a ready-made battery of the tools a coding
 agent needs — `read_file` (with line numbers and a range), `write_file`,
 `edit_file` (an exact string replace that refuses an ambiguous match),
 `list_files`, `search` (an in-process tree walk, so it works against any
@@ -90,7 +90,7 @@ provider) and `shell`. It is *not* a core capability: every tool is an ordinary
 a serious toolkit needs no change to the agent core is the whole point.
 
 ```ts
-import { CodingToolkit } from "@doeixd/effect-agent/coding"
+import { CodingToolkit } from "affe-agent/coding"
 
 const Coder = Agent.make({
   instructions: "You edit code in the workspace.",
@@ -109,12 +109,12 @@ anything about these tools' parameter shapes.
 
 The command tool is named `shell`, and its description tells the model which
 dialect it is writing for. The dialect is chosen when the toolkit is built,
-from `@doeixd/effect-agent/shell`: a built-in `Kind` or a `Service` of your
+from `affe-agent/shell`: a built-in `Kind` or a `Service` of your
 own. Default: Bash, executed as `bash -c <script>`.
 
 ```ts
-import { Shell } from "@doeixd/effect-agent/shell"
-import { Sandbox } from "@doeixd/effect-agent/sandbox"
+import { Shell } from "affe-agent/shell"
+import { Sandbox } from "affe-agent/sandbox"
 
 CodingToolkit.toolkit()                       // "…using Bash."       bash -c
 CodingToolkit.toolkit({ shell: "pwsh" })      // "…using PowerShell 7 (pwsh)."  pwsh -NoProfile -Command
@@ -158,12 +158,12 @@ historical `bash` rows; nothing executes under that name.
 
 ### Claude Code as an A2A agent
 
-`@doeixd/effect-agent/a2a` also bridges an *external* agent runtime in.
+`affe-agent/a2a` also bridges an *external* agent runtime in.
 `ClaudeCodeA2A.remote(sandbox)` runs Anthropic's Claude Code CLI inside a
 sandbox workspace and presents it as an ordinary `RemoteAgent`:
 
 ```ts
-import { AgentA2A, ClaudeCodeA2A } from "@doeixd/effect-agent/a2a"
+import { AgentA2A, ClaudeCodeA2A } from "affe-agent/a2a"
 
 const claude = yield* ClaudeCodeA2A.remote(sandbox, { allowedTools: ["Read", "Edit"] })
 
@@ -213,7 +213,7 @@ tool is this application's [`Permission`](./guide-permissions.md) policy plus it
 `Elicitation`.
 
 ```ts
-import { ClaudeCodePermissions } from "@doeixd/effect-agent/a2a"
+import { ClaudeCodePermissions } from "affe-agent/a2a"
 
 // 1. Serve the decision — one tool, on your own (loopback) router.
 const Permissions = ClaudeCodePermissions.layer({ policy, elicitor })

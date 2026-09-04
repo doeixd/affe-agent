@@ -2,7 +2,7 @@
  * Elicitation via the published export map.
  *
  * This is the one example that imports the way a user does — through
- * `@doeixd/effect-agent` and its subpaths, not a deep `../src/*.js` path.
+ * `affe-agent` and its subpaths, not a deep `../src/*.js` path.
  * It exists so `exports` is exercised by code, not only by `verify:package`.
  *
  * Run: `npx tsx examples/elicitation.ts`
@@ -10,9 +10,9 @@
 import { Console, Effect, Fiber, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 // Published surface — root and subpath both resolve to the same Elicitation
-import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "@doeixd/effect-agent"
-import * as ElicitationViaSubpath from "@doeixd/effect-agent/elicitation"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "affe-agent"
+import * as ElicitationViaSubpath from "affe-agent/elicitation"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // Prove the two import paths agree — a subpath that drifted from the root
 // would be a breaking change the type system should catch.

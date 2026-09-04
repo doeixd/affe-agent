@@ -369,7 +369,7 @@ const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Lay
             if (client === undefined) return Effect.void
             return relay.send({ to: client.from, endpoint: target.id, channel: client.channel, frame: response }).pipe(
               // A caller that vanished mid-response is a disconnect, not a server fault.
-              Effect.catchTag("@doeixd/effect-agent/relay/RelayPeerOfflineError", () => release(client)),
+              Effect.catchTag("affe-agent/relay/RelayPeerOfflineError", () => release(client)),
               Effect.orDie
             )
           },

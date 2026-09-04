@@ -50,7 +50,7 @@ export type SubmissionReceipt = AgentSubmission.Receipt
 
 
 
-const SessionTypeId: unique symbol = Symbol.for("@doeixd/effect-agent/AgentSession")
+const SessionTypeId: unique symbol = Symbol.for("affe-agent/AgentSession")
 
 /**
  * The long-lived stateful instance of an agent, and the boundary through which
@@ -294,7 +294,7 @@ export const make = <
  * `make` for an engine: the same session, with `EngineOptions` accepted.
  *
  * Not on the public `AgentSession` namespace (`src/AgentSessionPublic.ts`
- * is what `@doeixd/effect-agent` re-exports); reachable to `/durable` and to
+ * is what `affe-agent` re-exports); reachable to `/durable` and to
  * this repository's tests by module path.
  */
 export const makeEngine = <

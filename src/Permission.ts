@@ -152,7 +152,7 @@ export interface Projection<Params = unknown> {
 
 /** The annotation key. */
 export class ProjectionKey extends Context.Service<ProjectionKey, Projection<any>>()(
-  "@doeixd/effect-agent/Permission/Projection"
+  "affe-agent/Permission/Projection"
 ) {}
 
 /** Attach a projection to a tool, typed against the tool's own parameters. */

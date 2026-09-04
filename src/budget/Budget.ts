@@ -63,7 +63,7 @@ export class Budget extends Context.Service<Budget, {
   readonly spendCost: (amount: number) => Effect.Effect<number>
   /** The cost spent so far, in the caller's own unit. */
   readonly costSpent: Effect.Effect<number>
-}>()("@doeixd/effect-agent/budget/Budget") {}
+}>()("affe-agent/budget/Budget") {}
 
 /** A fresh, zeroed budget. Provide per session for a per-conversation cap. */
 export const layer: Layer.Layer<Budget> = Layer.effect(

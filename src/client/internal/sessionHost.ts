@@ -241,7 +241,7 @@ interface RequestEntry {
 }
 
 const HostBucket: unique symbol = Symbol.for(
-  "@doeixd/effect-agent/AgentSessionHost/requests"
+  "affe-agent/AgentSessionHost/requests"
 )
 type RequestBucket = AgentProtocol.SessionId | typeof HostBucket
 type RequestEntries = ReadonlyMap<AgentProtocol.RequestId, RequestEntry>

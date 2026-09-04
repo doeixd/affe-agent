@@ -3,7 +3,7 @@
 Where an agent built on this library runs, and what survives what on each.
 One row per host; the words are the ones the code uses.
 
-The portable core (`@doeixd/effect-agent` and every subpath not named below
+The portable core (`affe-agent` and every subpath not named below
 as a host entry) has no engine requirement: no `node:*`, no `@cloudflare/*`,
 enforced by `npm run lint:portability`. What binds to a host is behind its
 own entry point, so importing `/sandbox` never pulls in `/sandbox/local`.

@@ -13,7 +13,7 @@ Deny    refuse it
 ```
 
 ```ts
-import { Agent, Permission, ToolExecution } from "@doeixd/effect-agent"
+import { Agent, Permission, ToolExecution } from "affe-agent"
 
 // The tool says what it *is*, for policy purposes; the policy never parses
 // a parameter schema. Without an annotation the action is "tool" and the

@@ -10,7 +10,7 @@ The same `Agent` value, interpreted durably — no redefinition, no separate
 framework:
 
 ```ts
-import { DurableAgent, DurableChannels } from "@doeixd/effect-agent/durable"
+import { DurableAgent, DurableChannels } from "affe-agent/durable"
 
 // Where out-of-band input waits. `sqlStore` is the one to use in a real
 // deployment; `memoryStore` is a map in one process.
@@ -98,13 +98,13 @@ recorded live. A streamed submission commits exactly the history a batched
 one does, first run or replay.
 
 ```ts
-import { AgentClient } from "@doeixd/effect-agent/client"
+import { AgentClient } from "affe-agent/client"
 import {
   DeliveryLog,
   DurableAgentClient,
   DurableChannels,
   DurableSessionStore
-} from "@doeixd/effect-agent/durable"
+} from "affe-agent/durable"
 
 // The program speaks only `AgentClient`.
 const program = Effect.gen(function* () {
@@ -185,11 +185,11 @@ also tested with two real HTTP runners: closing the owner during a model
 activity makes the peer finish the submission without repeating completed work
 (`test/ClusterMultiNode.test.ts`).
 
-`@doeixd/effect-agent/cluster` addresses a session as a cluster `Entity`, so the
+`affe-agent/cluster` addresses a session as a cluster `Entity`, so the
 session id is the routing key and out-of-band input reaches the owning node.
 
 ```ts
-import { EntityClient } from "@doeixd/effect-agent/cluster"
+import { EntityClient } from "affe-agent/cluster"
 
 const client = EntityClient.wrap(yield* makeRawClient("session-1"))
 
@@ -205,7 +205,7 @@ channel — so the only error left is the one a caller can act on.
 
 ## Durable Streams
 
-`@doeixd/effect-agent/durable-streams` integrates the official
+`affe-agent/durable-streams` integrates the official
 [Durable Streams](https://github.com/durable-streams/durable-streams)
 protocol through its official client, as two things:
 
@@ -231,8 +231,8 @@ protocol through its official client, as two things:
   cannot offer across processes.
 
 ```ts
-import { DurableAgentClient } from "@doeixd/effect-agent/durable"
-import { DurableStreamsDeliveryLog } from "@doeixd/effect-agent/durable-streams"
+import { DurableAgentClient } from "affe-agent/durable"
+import { DurableStreamsDeliveryLog } from "affe-agent/durable-streams"
 
 const delivery = yield* DurableStreamsDeliveryLog.make({ baseUrl: "https://streams.example/sessions" })
 const Client = DurableAgentClient.layer("agent", agent, { store, sessionStore, delivery })

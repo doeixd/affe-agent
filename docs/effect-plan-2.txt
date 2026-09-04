@@ -183,7 +183,7 @@ The central correction is:
 
 > We should not build a general background-task runtime, process runtime, worker runtime, queue runtime, or scheduler runtime. Effect v4 already has almost all of those computational semantics.
 
-What effect-agent actually needs to add is the **agent-specific glue between those primitives**:
+What affe-agent actually needs to add is the **agent-specific glue between those primitives**:
 
 * stable managed identities for things an agent starts,
 * workspace ownership,
@@ -200,7 +200,7 @@ The resulting architecture is cleaner than the previous plan.
 
 There are several fundamentally different kinds of “background work,” and we should **not pretend they are one executor**:
 
-| Need                            | Effect primitive                       | effect-agent abstraction              |
+| Need                            | Effect primitive                       | affe-agent abstraction              |
 | ------------------------------- | -------------------------------------- | ------------------------------------- |
 | Local background Effect         | `Fiber` / `FiberMap`                   | usually none                          |
 | Trusted isolated JS computation | `Worker` / `WorkerRunner`              | usually none                          |
@@ -321,7 +321,7 @@ And current `AgentDispatcher` starts independent future `Agent.run(...)` work; i
 So add:
 
 ```text
-@doeixd/effect-agent/sessions
+affe-agent/sessions
     SessionDirectory
     SessionProjection
     SessionInbox
@@ -422,7 +422,7 @@ So:
 
 ```ts
 const inbox = yield* PersistedQueue.make({
-  name: "effect-agent/session-inbox",
+  name: "affe-agent/session-inbox",
   schema: SessionInbox.Item
 })
 ```
@@ -858,7 +858,7 @@ unref
 Therefore `ProcessManager` earns its existence only for semantics Effect can't provide:
 
 ```text
-stable effect-agent ProcessId
+stable affe-agent ProcessId
 persistent metadata
 listing
 reacquisition
@@ -1021,7 +1021,7 @@ stable to live.
 
 # 11. One spike before replacing the existing sandbox process implementation
 
-There is one place where effect-agent currently does something more specific than generic Effect process management.
+There is one place where affe-agent currently does something more specific than generic Effect process management.
 
 `sandbox/local` manually handles:
 
@@ -1074,7 +1074,7 @@ A wrapper around ChildProcess that keeps the Node adapter beside it fails
 audit A1.
 
 Name collision: Effect's `ChildProcessSpawner.ProcessId` is the OS pid
-(branded number). The `ProcessId` this brief wants is a stable effect-agent
+(branded number). The `ProcessId` this brief wants is a stable affe-agent
 identity. Do not reuse the Effect name.
 
 ---
@@ -1480,7 +1480,7 @@ SessionInbox  done
 persist new state
 ```
 
-Effect Cluster already has `ClusterCron`, and effect-agent already wraps cluster scheduling concepts. Effect Cluster also has scheduled-delivery support through `DeliverAt`.
+Effect Cluster already has `ClusterCron`, and affe-agent already wraps cluster scheduling concepts. Effect Cluster also has scheduled-delivery support through `DeliverAt`.
 
 STATUS (2026-08-26): `cluster/ScheduledAgent` is that wrap. It submits a
 **fresh session per firing** (id derived from the fire time) through
@@ -2655,7 +2655,7 @@ The previous process/session tests still apply. Add these:
 
 I think the best way to explain the improved design to the other agent is:
 
-> **Background work is not an execution model in effect-agent. It is composition among Effect's execution models.**
+> **Background work is not an execution model in affe-agent. It is composition among Effect's execution models.**
 
 Effect already gives us:
 
@@ -2677,7 +2677,7 @@ Stream
 SQL
 ```
 
-effect-agent should add the semantics Effect cannot possibly know:
+affe-agent should add the semantics Effect cannot possibly know:
 
 ```text
 Which logical agent session should this result return to?
@@ -2756,7 +2756,7 @@ WorkspaceManager
 host-wide events
 ```
 
-The main new effect-agent semantics are only:
+The main new affe-agent semantics are only:
 
 ```text
 SessionInbox

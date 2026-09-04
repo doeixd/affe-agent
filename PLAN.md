@@ -3038,7 +3038,7 @@ Read/write/edit/shell tools built outside core.
 
 ### Decision and justification
 
-Add a portable `@doeixd/effect-agent/web` battery after the coding toolkit. It
+Add a portable `affe-agent/web` battery after the coding toolkit. It
 is composed with `/coding`; it is not part of `CodingToolkit` and does not
 change the agent core.
 

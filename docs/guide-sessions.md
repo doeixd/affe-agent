@@ -1,6 +1,6 @@
 # Sessions: what the kernel gives you
 
-The session semantics of `@doeixd/effect-agent`, in detail. The
+The session semantics of `affe-agent`, in detail. The
 [README](../README.md) has the quickstart and the seam map; this is the
 long form of everything a local `AgentSession` does. For a session across a
 process boundary see [guide-transports.md](./guide-transports.md); for one
@@ -39,7 +39,7 @@ namespace rather than Effect AI's in-memory schema directly. Its `Prompt` and
 whether each file part contains a string, `Uint8Array`, or `URL`:
 
 ```ts
-import { PromptWire } from "@doeixd/effect-agent"
+import { PromptWire } from "affe-agent"
 import { Schema } from "effect"
 
 const json = yield* Schema.encodeEffect(PromptWire.Prompt)(prompt)
@@ -436,10 +436,10 @@ between those would record a conversation that never existed.
 ## Testing
 
 The deterministic model and lifecycle probe the library tests itself with ship
-as `@doeixd/effect-agent/testing`:
+as `affe-agent/testing`:
 
 ```ts
-import { AgentProbe, TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { AgentProbe, TestLanguageModel } from "affe-agent/testing"
 
 const { layer, recorder } = yield* TestLanguageModel.script([
   TestLanguageModel.toolCall("search", { query: "effect" }),

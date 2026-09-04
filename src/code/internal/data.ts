@@ -39,7 +39,7 @@ const renderPath = (path: ReadonlyArray<string | number>): string =>
  * diagnostic names the fix).
  */
 export class DataViolation extends Schema.TaggedError<DataViolation>()(
-  "@doeixd/effect-agent/code/DataViolation",
+  "affe-agent/code/DataViolation",
   {
     reason: Schema.Literals(["promise", "function", "unsupported", "cycle", "too-deep"]),
     path: Schema.String,

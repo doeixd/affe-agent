@@ -11,10 +11,10 @@
     "noEmit": true,
     "baseUrl": "../..",
     "paths": {
-      "@doeixd/effect-agent": ["./src/index.ts"],
-      "@doeixd/effect-agent/elicitation": ["./src/Elicitation.ts"],
-      "@doeixd/effect-agent/tool-source": ["./src/toolSource/index.ts"],
-      "@doeixd/effect-agent/*": ["./src/*", "./src/*/index.ts", "./src/*.ts"]
+      "affe-agent": ["./src/index.ts"],
+      "affe-agent/elicitation": ["./src/Elicitation.ts"],
+      "affe-agent/tool-source": ["./src/toolSource/index.ts"],
+      "affe-agent/*": ["./src/*", "./src/*/index.ts", "./src/*.ts"]
     },
     "types": ["@cloudflare/workers-types"],
     "plugins": [{ "name": "@effect/language-service" }]

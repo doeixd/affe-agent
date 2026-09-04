@@ -8,7 +8,7 @@ import * as MemorySandbox from "../src/sandbox/memory.js"
 import * as Sandbox from "../src/sandbox/Sandbox.js"
 
 /**
- * A coding agent built from the shipped battery, `@doeixd/effect-agent/coding`.
+ * A coding agent built from the shipped battery, `affe-agent/coding`.
  *
  * The point of this example is how little there is. Unlike `sandbox.ts`, which
  * hand-writes the tools to show the seam, here the tools arrive whole from

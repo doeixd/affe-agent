@@ -139,7 +139,7 @@ export const mcpToolkit = (
   options?: { readonly clientInfo?: McpClient.ClientInfo | undefined }
 ) =>
   Effect.gen(function* () {
-    const clientInfo = options?.clientInfo ?? { name: "@doeixd/effect-agent/plugins", version: "0.0.1" }
+    const clientInfo = options?.clientInfo ?? { name: "affe-agent/plugins", version: "0.0.1" }
     const connections: Array<McpToolkit.Connection> = []
     for (const server of loaded.mcpServers) {
       const connection = yield* Effect.option(connect(server, clientInfo))

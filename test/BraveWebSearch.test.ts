@@ -148,11 +148,11 @@ describe("Brave web search provider", () => {
       const advertisedError = yield* Effect.flip(searchWith(advertised, "large"))
       assert.strictEqual(
         advertisedError._tag,
-        "@doeixd/effect-agent/web/WebSearchResponseTooLargeError"
+        "affe-agent/web/WebSearchResponseTooLargeError"
       )
       if (
         advertisedError._tag ===
-          "@doeixd/effect-agent/web/WebSearchResponseTooLargeError"
+          "affe-agent/web/WebSearchResponseTooLargeError"
       ) {
         assert.strictEqual(
           advertisedError.observedBytes,
@@ -167,7 +167,7 @@ describe("Brave web search provider", () => {
       const actualError = yield* Effect.flip(searchWith(actual, "large"))
       assert.strictEqual(
         actualError._tag,
-        "@doeixd/effect-agent/web/WebSearchResponseTooLargeError"
+        "affe-agent/web/WebSearchResponseTooLargeError"
       )
     })
   )
@@ -181,7 +181,7 @@ describe("Brave web search provider", () => {
       const error = yield* Effect.flip(searchWith(client, "malformed"))
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebSearchDecodeError"
+        "affe-agent/web/WebSearchDecodeError"
       )
       assert.notInclude(error.message, sensitiveMalformedBody)
     })
@@ -212,7 +212,7 @@ describe("Brave web search provider", () => {
       const authError = yield* Effect.flip(searchWith(unauthorized, "auth"))
       assert.strictEqual(
         authError._tag,
-        "@doeixd/effect-agent/web/WebSearchAuthenticationError"
+        "affe-agent/web/WebSearchAuthenticationError"
       )
       assert.strictEqual(yield* Ref.get(authCalls), 1)
     })
@@ -235,7 +235,7 @@ describe("Brave web search provider", () => {
 
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebSearchTimeoutError"
+        "affe-agent/web/WebSearchTimeoutError"
       )
       assert.isTrue((yield* Deferred.await(signal)).aborted)
     })
@@ -331,7 +331,7 @@ describe("Brave web search provider", () => {
       const error = yield* Effect.flip(searchWith(client, "Effect"))
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebSearchResponseError"
+        "affe-agent/web/WebSearchResponseError"
       )
 
       /**
@@ -462,7 +462,7 @@ describe("Brave web search provider", () => {
       const error = yield* Effect.flip(searchWith(retrying, "Effect"))
       assert.strictEqual(
         error._tag,
-        "@doeixd/effect-agent/web/WebSearchResponseError"
+        "affe-agent/web/WebSearchResponseError"
       )
       // Two logical attempts from the wrapper. The physical count is the
       // client's business, and it is larger.

@@ -43,7 +43,7 @@ const tokens = {
   "prober-secret": Relay.PeerId.make("prober")
 }
 
-const AgentEndpoint = RelayRpc.endpoint("effect-agent/agent", AgentRpc.Protocol)
+const AgentEndpoint = RelayRpc.endpoint("affe-agent/agent", AgentRpc.Protocol)
 
 /** The relay itself, on an ephemeral port; yields its `ws://` address. */
 const startRelay = (lease?: Duration.Duration) =>

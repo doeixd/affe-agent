@@ -170,7 +170,7 @@ describe("TreeExport", () => {
         return yield* Effect.flip(TreeExport.path(tree, elsewhere, provenance))
       }).pipe(Effect.provide(layer), Effect.scoped)
 
-      assert.strictEqual(failure._tag, "@doeixd/effect-agent/tree/NodeMissing")
+      assert.strictEqual(failure._tag, "affe-agent/tree/NodeMissing")
     }))
 
   /**
@@ -244,6 +244,6 @@ describe("TreeExport", () => {
           )
         )
       }).pipe(Effect.provide(layer), Effect.scoped)
-      assert.strictEqual(outcome._tag, "@doeixd/effect-agent/tree/NodeMissing")
+      assert.strictEqual(outcome._tag, "affe-agent/tree/NodeMissing")
     }))
 })

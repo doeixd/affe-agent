@@ -191,7 +191,7 @@ describe("ProcessManager", () => {
 
           assert.deepStrictEqual((yield* process.info).status, { _tag: "Terminated" })
           const waited = yield* Effect.flip(process.wait)
-          assert.strictEqual(waited._tag, "@doeixd/effect-agent/process/ProcessTerminatedError")
+          assert.strictEqual(waited._tag, "affe-agent/process/ProcessTerminatedError")
           assert.deepStrictEqual((yield* Fiber.join(reader)).map(decode), ["up"])
           assert.deepStrictEqual((yield* Fiber.join(events)).map((e) => e._tag), [
             "Started",
@@ -210,7 +210,7 @@ describe("ProcessManager", () => {
         Effect.gen(function* () {
           const process = yield* manager.start(request())
           const waited = yield* Effect.flip(process.wait)
-          assert.strictEqual(waited._tag, "@doeixd/effect-agent/process/ProcessFailedError")
+          assert.strictEqual(waited._tag, "affe-agent/process/ProcessFailedError")
           assert.include(waited.message, "exceeded 5ms")
           const info = yield* process.info
           assert.strictEqual(info.status._tag, "Failed")
@@ -242,7 +242,7 @@ describe("ProcessManager", () => {
     withManager(scripted(() => Stream.make(exit(0))), (manager) =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(manager.get(Schema.decodeSync(ProcessManager.ProcessId)("process-99")))
-        assert.strictEqual(error._tag, "@doeixd/effect-agent/process/ProcessNotFoundError")
+        assert.strictEqual(error._tag, "affe-agent/process/ProcessNotFoundError")
         assert.strictEqual(error.message, "No process process-99")
       })))
 

@@ -24,7 +24,7 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text)
 const reasonOf = (
   error: BlobStore.BlobStoreError | BlobStore.BlobRejectedError
 ): string | undefined =>
-  error._tag === "@doeixd/effect-agent/blob/BlobRejectedError" ? error.reason : undefined
+  error._tag === "affe-agent/blob/BlobRejectedError" ? error.reason : undefined
 
 const put = (
   store: BlobStore.BlobStoreService,
@@ -72,7 +72,7 @@ const contract = (
 
       yield* store.remove(abc)
       const missing = yield* Effect.flip(BlobStore.getBytes(store, abc))
-      assert.strictEqual(missing._tag, "@doeixd/effect-agent/blob/BlobMissingError")
+      assert.strictEqual(missing._tag, "affe-agent/blob/BlobMissingError")
     }).pipe(Effect.scoped)
   )
 }
@@ -118,7 +118,7 @@ describe("BlobStore", () => {
       })
 
       const large = yield* Effect.flip(put(store, bytesOf("12345"), "text/plain"))
-      assert.strictEqual(large._tag, "@doeixd/effect-agent/blob/BlobRejectedError")
+      assert.strictEqual(large._tag, "affe-agent/blob/BlobRejectedError")
       assert.strictEqual(reasonOf(large), "too-large")
 
       const family = yield* put(store, bytesOf("png"), "image/png")
@@ -137,7 +137,7 @@ describe("BlobStore", () => {
           ...(yield* BlobStore.describe(Stream.make(bytesOf("12345")), { mediaType: "text/plain" })).ref
         })
       )
-      assert.strictEqual(refused._tag, "@doeixd/effect-agent/blob/BlobMissingError")
+      assert.strictEqual(refused._tag, "affe-agent/blob/BlobMissingError")
     })
   )
 })
@@ -205,7 +205,7 @@ describe("BlobWire", () => {
       const encoded = yield* encodePrompt(filePrompt(bytesOf("s"), new Uint8Array(64).fill(1)))
       const externalized = yield* BlobWire.externalize(encoded, { store, maxInlineBytes: 8 })
       const missing = yield* Effect.flip(BlobWire.resolve(externalized, elsewhere))
-      assert.strictEqual(missing._tag, "@doeixd/effect-agent/blob/BlobMissingError")
+      assert.strictEqual(missing._tag, "affe-agent/blob/BlobMissingError")
     })
   )
 

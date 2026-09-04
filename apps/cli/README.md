@@ -1,4 +1,4 @@
-# effect-agent CLI
+# affe-agent CLI
 
 A conventional command-line client for an `AgentHttp` server. It speaks only
 the transport-neutral `AgentClient` surface, so the mounted agent may run

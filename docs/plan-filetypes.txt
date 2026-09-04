@@ -1,4 +1,4 @@
-Not completely. The **core is already multimodal in the right way**, but I would not call effect-agent end-to-end multimodal yet.
+Not completely. The **core is already multimodal in the right way**, but I would not call affe-agent end-to-end multimodal yet.
 
 The good news is we do **not** need a new image system. Effect AI already gives us the correct typed primitive: `Prompt.FilePart`. It represents images, PDFs, and other files with `mediaType`, optional `fileName`, and data as a string, `Uint8Array`, or `URL`.  Effect's response model likewise has a first-class `FilePart`, including in streaming responses.
 
@@ -278,7 +278,7 @@ So we need a second phase.
 
 The design principle should be:
 
-> **Effect `Prompt.FilePart` remains the semantic media primitive. effect-agent adds only transport/storage semantics that Effect AI cannot know.**
+> **Effect `Prompt.FilePart` remains the semantic media primitive. affe-agent adds only transport/storage semantics that Effect AI cannot know.**
 
 Do not create:
 
@@ -555,7 +555,7 @@ Do not treat every A2A message as one text string.
 This immediately makes the Claude/OpenCode A2A bridge idea more powerful too:
 
 ```text
-effect-agent
+affe-agent
     ↓ image + instruction
 A2A
     ↓

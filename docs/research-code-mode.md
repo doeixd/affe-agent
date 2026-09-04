@@ -294,7 +294,7 @@ tree-walking interpreter for arbitrary code, but it is also a much bigger
 operational dependency, and it does not by itself restrict *authority* — both
 projects still end up saying the tool tree is the only authority that exists.
 
-## 5. How this would fit effect-agent
+## 5. How this would fit affe-agent
 
 Code mode is about the **outbound** half of `/mcp` — `McpToolkit.bind` /
 `bindDiscovered` handing an agent many tools — and is orthogonal to
@@ -338,7 +338,7 @@ never pulls it.
 
 ### 5.2 Shape
 
-A new `/code` module, exported as `@doeixd/effect-agent/code`, with the engine
+A new `/code` module, exported as `affe-agent/code`, with the engine
 split from the agent-facing tool:
 
 ```text

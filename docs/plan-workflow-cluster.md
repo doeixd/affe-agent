@@ -308,7 +308,7 @@ simply submits a durable agent submission.
 # 5.4 Implementation status
 
 Shipped as subpath exports rather than separate npm packages —
-`@doeixd/effect-agent/durable` and `/cluster`. The architectural requirement is
+`affe-agent/durable` and `/cluster`. The architectural requirement is
 that core never depends on them, which subpaths satisfy; splitting the repo into
 a monorepo buys nothing until they version independently.
 

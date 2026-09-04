@@ -25,7 +25,7 @@ const peer = (id: string) => Relay.PeerId.make(id)
 const requestId = (value: string) => AgentProtocol.RequestId.make(value)
 const sessionId = (value: string) => AgentProtocol.SessionId.make(value)
 
-const AgentEndpoint = RelayRpc.endpoint("effect-agent/agent", AgentRpc.Protocol)
+const AgentEndpoint = RelayRpc.endpoint("affe-agent/agent", AgentRpc.Protocol)
 
 const TARGET = peer("desktop")
 const CALLER = peer("vps")
@@ -275,7 +275,7 @@ describe("Relay", () => {
     Effect.gen(function* () {
       const url = yield* relay()
       const failure = yield* Effect.flip(Layer.build(node(url, TARGET, "wrong")))
-      assert.strictEqual(failure._tag, "@doeixd/effect-agent/relay/RelayUnauthorizedError")
+      assert.strictEqual(failure._tag, "affe-agent/relay/RelayUnauthorizedError")
     }).pipe(Effect.scoped)
   )
 })

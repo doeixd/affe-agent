@@ -212,7 +212,7 @@ open, so the next pass does not have to re-derive it.
     stalls on workerd -- measured minimal repro in `status-history.md`).
     `examples/deploy-cloudflare/` holds the Alchemy stack and, since
     2026-09-02, a `wrangler.jsonc` that mirrors it. **Deployed for real
-    2026-09-02** (`worker-without-code-mode.ts` as `effect-agent-free`, from
+    2026-09-02** (`worker-without-code-mode.ts` as `affe-agent-free`, from
     a Workers free plan; the HTTPS smoke matched the miniflare test). Left:
     the code tool needs Dynamic Workers, which is paid-plan only (error
     10195), so `apps/worker` as checked in deploys once the account is
@@ -232,7 +232,7 @@ open, so the next pass does not have to re-derive it.
     integration axis' acceptance test, runs in CI, and found nothing
     missing (findings in `STATUS.md`). Step 2 completed the same day with
     the credentials plan, and step 6's code-mode battery is `/code`. Step 4 landed
-    2026-08-31: `@doeixd/effect-agent/presets` (`Presets.coding`,
+    2026-08-31: `affe-agent/presets` (`Presets.coding`,
     `Presets.gateway`), derived from what the two references had written
     by hand, and both references rewritten on top of them as the
     acceptance test. A chat preset waits for a caller. Step 5 landed the same day:
@@ -989,10 +989,10 @@ sizes; the items are repeated here so this list stays the one tracker.
     `/testing`, every bound in the README table. The interactive browser is
     parked behind item 43.
 43. ~~**A published Cloudflare host entry**~~ — landed 2026-09-01 as
-    `@doeixd/effect-agent/cloudflare` on `effect-cf` (decision:
+    `affe-agent/cloudflare` on `effect-cf` (decision:
     `plan-effect-cf-and-webtransport.md` §3a; see `status-history.md`).
     **The real deployment (§3.3d) still needs an account** and is item 19's
-    remaining half. As planned (plan §3.3 c–d) — after 39: `@doeixd/effect-agent/cloudflare` as a host module in
+    remaining half. As planned (plan §3.3 c–d) — after 39: `affe-agent/cloudflare` as a host module in
     `/sandbox/local`'s shape, with its own exemption in
     `verify-portability.mjs` and still no `effect-cf`. This is the category
     decision of `plan-effect-cf-and-webtransport.md` §3 applied to our own

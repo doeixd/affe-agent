@@ -1,5 +1,5 @@
 /**
- * The scripted model now ships as `@doeixd/effect-agent/testing`.
+ * The scripted model now ships as `affe-agent/testing`.
  *
  * Kept as a re-export so the suite exercises the *published* utilities rather
  * than a private copy: if the public testing API regresses, these tests are

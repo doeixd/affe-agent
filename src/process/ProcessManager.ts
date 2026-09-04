@@ -74,7 +74,7 @@ import { WorkspaceManager } from "../sandbox/WorkspaceManager.js"
  * is reused the moment the process is gone.
  */
 export const ProcessId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/process/ProcessId")
+  Schema.brand("affe-agent/process/ProcessId")
 )
 export type ProcessId = typeof ProcessId.Type
 
@@ -138,7 +138,7 @@ export type Event =
 // Errors
 
 export class ProcessNotFoundError extends Schema.TaggedError<ProcessNotFoundError>()(
-  "@doeixd/effect-agent/process/ProcessNotFoundError",
+  "affe-agent/process/ProcessNotFoundError",
   { id: ProcessId }
 ) {
   override get message() {
@@ -148,7 +148,7 @@ export class ProcessNotFoundError extends Schema.TaggedError<ProcessNotFoundErro
 
 /** `wait` on a process the provider failed to run or stopped. */
 export class ProcessFailedError extends Schema.TaggedError<ProcessFailedError>()(
-  "@doeixd/effect-agent/process/ProcessFailedError",
+  "affe-agent/process/ProcessFailedError",
   { id: ProcessId, executable: Schema.String, reason: Schema.String }
 ) {
   override get message() {
@@ -158,7 +158,7 @@ export class ProcessFailedError extends Schema.TaggedError<ProcessFailedError>()
 
 /** `wait` on a process that was terminated before it exited. */
 export class ProcessTerminatedError extends Schema.TaggedError<ProcessTerminatedError>()(
-  "@doeixd/effect-agent/process/ProcessTerminatedError",
+  "affe-agent/process/ProcessTerminatedError",
   { id: ProcessId, executable: Schema.String }
 ) {
   override get message() {
@@ -219,7 +219,7 @@ export interface Service {
 }
 
 export class ProcessManager extends Context.Service<ProcessManager, Service>()(
-  "@doeixd/effect-agent/process/ProcessManager"
+  "affe-agent/process/ProcessManager"
 ) {}
 
 // ---------------------------------------------------------------------------

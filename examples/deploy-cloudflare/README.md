@@ -1,7 +1,7 @@
 # Deploying the agent to Cloudflare
 
 `alchemy.run.ts` provisions what [`apps/worker`](../../apps/worker/src/index.ts)
-serves -- `@doeixd/effect-agent/cloudflare` with the scripted model: one
+serves -- `affe-agent/cloudflare` with the scripted model: one
 Worker, one SQLite-backed Durable Object namespace, one DO per session id,
 `nodejs_compat` on and the compatibility date at `effect-cf`'s floor. It is a single Effect program — resources are Effects, bindings
 are typed, and there is no YAML — per `docs/plan-deployment.md` §5.
@@ -27,7 +27,7 @@ wrangler refuses to choose one non-interactively.
 
 ## Proved on real Cloudflare, 2026-09-02
 
-`worker-without-code-mode.ts` deployed as `effect-agent-free` from a Workers
+`worker-without-code-mode.ts` deployed as `affe-agent-free` from a Workers
 **free** plan, and the smoke over HTTPS did what the miniflare test does:
 `POST /sessions` twice made two Durable Objects; each `prompt` ran a
 two-turn scripted submission whose tool call echoed the object's own name

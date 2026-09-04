@@ -4,7 +4,7 @@ Extracted from the README on 2026-09-02; the boundary list is pinned by
 `test/CodeModeThreatModel.test.ts`, which checks every cited test exists.
 
 
-`@doeixd/effect-agent/code` gives the model one `execute` tool whose
+`affe-agent/code` gives the model one `execute` tool whose
 description carries a budgeted catalog of the real tools, and the model
 answers with a *program* -- a small JavaScript function that loops, branches
 and combines results without a round trip per call. Every nested call is a
@@ -14,7 +14,7 @@ including an `Ask` that pauses the program on the host's elicitor.
 scripted model.
 
 ```ts
-import { CodeTool } from "@doeixd/effect-agent/code"
+import { CodeTool } from "affe-agent/code"
 
 const execute = yield* CodeTool.tool({
   tools: { github: githubToolkit },

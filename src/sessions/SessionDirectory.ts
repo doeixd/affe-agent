@@ -331,7 +331,7 @@ export const memory: Effect.Effect<SessionDirectory> = Effect.gen(function* () {
 
 // -- SQL -------------------------------------------------------------------------------
 
-export const sqlTable = "effect_agent_session_directory"
+export const sqlTable = "affe_session_directory"
 
 const escapeIdentifier = (name: string): string => {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {

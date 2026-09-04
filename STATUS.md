@@ -147,7 +147,7 @@ the fibre that acts -- a `Context.Reference` the host sets per request
 (`AgentSessionHost.Options.subject`), `None` outside any host, carried on
 the durable claim/payload so replays see what the claimer saw.
 
-**Cloudflare host.** `@doeixd/effect-agent/cloudflare` (since 2026-09-01):
+**Cloudflare host.** `affe-agent/cloudflare` (since 2026-09-01):
 `CloudflareHost.make({ agent, layer })` returns the Durable Object class and
 the Worker class a deployment exports. Built on `effect-cf`, an optional
 peer, by the owner's decision (`docs/plan-effect-cf-and-webtransport.md`
@@ -159,7 +159,7 @@ network but the object's broker route, every call still through the
 host's `invoke`; proven on miniflare with a program that reaches for
 `fetch` and gets nothing.
 
-**Presets.** `@doeixd/effect-agent/presets`: `Presets.coding` (toolkit, a
+**Presets.** `affe-agent/presets`: `Presets.coding` (toolkit, a
 policy that asks before anything changes, an acquired workspace) and
 `Presets.gateway` (source-bound tools behind one host, refusals returned
 to the model, the caller's `subject` required rather than optional).
@@ -188,7 +188,7 @@ the exercise:
 
 - **Nothing was missing.** Sources, the three credential layers,
   per-principal bindings, per-tool policy and the host all composed from
-  `@doeixd/effect-agent/*` with no cast and no private import. That is the
+  `affe-agent/*` with no cast and no private import. That is the
   integration axis' acceptance test passing.
 - **A write is refused twice, independently** -- and the second guard is
   the one nobody would notice losing. The operator's `Permission` policy

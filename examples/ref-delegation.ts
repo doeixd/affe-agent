@@ -30,15 +30,15 @@
 import { Console, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
-import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "@doeixd/effect-agent"
+import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "affe-agent"
 import {
   AgentA2A,
   ClaudeCodeA2A,
   ClaudeCodePermissions,
   OpenCodeA2A
-} from "@doeixd/effect-agent/a2a"
-import { MemorySandbox, Sandbox } from "@doeixd/effect-agent/sandbox"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+} from "affe-agent/a2a"
+import { MemorySandbox, Sandbox } from "affe-agent/sandbox"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // ---------------------------------------------------------------------------
 // 1. One policy, written once, in nobody's dialect

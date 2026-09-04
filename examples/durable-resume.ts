@@ -43,15 +43,15 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 
-import { Agent, AgentLoop } from "@doeixd/effect-agent"
-import { AgentClient } from "@doeixd/effect-agent/client"
+import { Agent, AgentLoop } from "affe-agent"
+import { AgentClient } from "affe-agent/client"
 import {
   DeliveryLog,
   DurableAgentClient,
   DurableChannels,
   DurableSessionStore
-} from "@doeixd/effect-agent/durable"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+} from "affe-agent/durable"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // ---------------------------------------------------------------------------
 // The shared state: one file, and nothing else

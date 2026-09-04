@@ -73,8 +73,8 @@ const input = Argument.string("input").pipe(
 
 /** Build the command tree around an injectable client acquisition. */
 export const make = <E, R>(connect: Connect<E, R>) => {
-  const root = Command.make("effect-agent").pipe(
-    Command.withDescription("Operate an effect-agent HTTP server"),
+  const root = Command.make("affe-agent").pipe(
+    Command.withDescription("Operate an affe-agent HTTP server"),
     Command.withSharedFlags({ url, token, json })
   )
 

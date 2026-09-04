@@ -76,10 +76,10 @@ const cases = (
       Effect.gen(function* () {
         const credentials = yield* store
         const unknown = yield* Effect.flip(authenticate(credentials, bearer("not-a-token")))
-        assert.strictEqual(unknown._tag, "@doeixd/effect-agent/relay/RelayUnauthorizedError")
+        assert.strictEqual(unknown._tag, "affe-agent/relay/RelayUnauthorizedError")
 
         const absent = yield* Effect.flip(authenticate(credentials, Headers.empty))
-        assert.strictEqual(absent._tag, "@doeixd/effect-agent/relay/RelayUnauthorizedError")
+        assert.strictEqual(absent._tag, "affe-agent/relay/RelayUnauthorizedError")
       }).pipe(Effect.scoped)
     )
 
@@ -91,7 +91,7 @@ const cases = (
 
         yield* credentials.revoke(token)
         const refused = yield* Effect.flip(authenticate(credentials, bearer(token)))
-        assert.strictEqual(refused._tag, "@doeixd/effect-agent/relay/RelayUnauthorizedError")
+        assert.strictEqual(refused._tag, "affe-agent/relay/RelayUnauthorizedError")
 
         // Rotation, which is the reason revocation exists: the other
         // credential for the same peer is untouched.
@@ -207,7 +207,7 @@ describe("relay credentials, against the relay itself", () => {
          * does not find a credential.
          */
         const beat = yield* Effect.flip(client.heartbeat({}, { headers: bearer(token) }))
-        assert.strictEqual(beat._tag, "@doeixd/effect-agent/relay/RelayUnauthorizedError")
+        assert.strictEqual(beat._tag, "affe-agent/relay/RelayUnauthorizedError")
 
         const sent = yield* Effect.flip(
           client.send({
@@ -219,7 +219,7 @@ describe("relay credentials, against the relay itself", () => {
         )
         assert.strictEqual(
           sent._tag,
-          "@doeixd/effect-agent/relay/RelayUnauthorizedError",
+          "affe-agent/relay/RelayUnauthorizedError",
           "a revoked credential could still route traffic"
         )
 

@@ -1,7 +1,7 @@
 /**
  * Reference coding agent — `plan-primitives.md` §4.
  *
- * Built **only** from the public surface (`@doeixd/effect-agent/*`) the
+ * Built **only** from the public surface (`affe-agent/*`) the
  * way a user would. No `../src/internal`, no casts, miniature not a fork.
  * Exercises: sessions, turns, CodingToolkit tools, Permission HITL,
  * Sandbox (memory), Compaction as ContextTransform, and an event-stream
@@ -18,12 +18,12 @@ import { Tool } from "effect/unstable/ai"
 
 // Public surface only — same import paths a user gets. If this file needs a
 // private import, that's a missing primitive and belongs in STATUS.md.
-import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "@doeixd/effect-agent"
-import { CodingToolkit } from "@doeixd/effect-agent/coding"
-import { Compaction } from "@doeixd/effect-agent/compaction"
-import { Presets } from "@doeixd/effect-agent/presets"
-import { MemorySandbox } from "@doeixd/effect-agent/sandbox"
-import { TestLanguageModel } from "@doeixd/effect-agent/testing"
+import { Agent, AgentLoop, AgentSession, Elicitation, Permission } from "affe-agent"
+import { CodingToolkit } from "affe-agent/coding"
+import { Compaction } from "affe-agent/compaction"
+import { Presets } from "affe-agent/presets"
+import { MemorySandbox } from "affe-agent/sandbox"
+import { TestLanguageModel } from "affe-agent/testing"
 
 // ---------------------------------------------------------------------------
 // Policy: reads/search run, writes/shell ask (HITL via Elicitation.memory)

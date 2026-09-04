@@ -13,7 +13,7 @@ constant it names.
 | Compaction | `maxSessions` | `1024` | `Compaction.make({ maxSessions })` | oldest checkpoint evicted; session re-summarises next turn |
 | MCP shared-host tickets | host `maxSessions` × `maxRequestsPerSession` | required by host | `AgentMcp.serverLayer({ host })` | evicts oldest settled ticket/bucket; refuses while every eligible slot is in flight |
 | Memory | `limit` | `5` | `Memory.layer({ limit })` | recall returns best 5 |
-| Truncation | `MAX_BYTES` / `MAX_LINES` | `50 KB` / `2000 lines` | `PiToolkit.MAX_BYTES`, `coding/internal/truncate.ts` | tail kept, banner names `50.0KB` or `2000 lines` limit and spills full output to `.effect-agent/tool-output/` |
+| Truncation | `MAX_BYTES` / `MAX_LINES` | `50 KB` / `2000 lines` | `PiToolkit.MAX_BYTES`, `coding/internal/truncate.ts` | tail kept, banner names `50.0KB` or `2000 lines` limit and spills full output to `.affe-agent/tool-output/` |
 | Read | window | `2000 lines`, `50 KB`, `2000 chars/line` | `coding/internal/readFormat.ts` — `DEFAULT_LIMIT`, `MAX_BYTES`, `MAX_LINE_LENGTH` | slice capped, footer with `offset=` to continue |
 | Search | `SEARCH_LIMIT` | `100` | `coding/internal/searchFormat.ts` | `Found N matches (more matches available)` |
 | Pi list | `LS_LIMIT` | `500` | `PiToolkit.LS_LIMIT` | truncated notice to narrow path or use search |

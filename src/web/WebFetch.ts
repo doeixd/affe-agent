@@ -46,7 +46,7 @@ export const diagnosticTarget = (url: URL): string => canonicalOrigin(url)
 
 export class WebFetchInvalidUrlError extends
   Schema.TaggedError<WebFetchInvalidUrlError>()(
-    "@doeixd/effect-agent/web/WebFetchInvalidUrlError",
+    "affe-agent/web/WebFetchInvalidUrlError",
     { url: Schema.String, reason: Schema.String }
   ) {
   override get message() {
@@ -56,7 +56,7 @@ export class WebFetchInvalidUrlError extends
 
 export class WebFetchDeniedTargetError extends
   Schema.TaggedError<WebFetchDeniedTargetError>()(
-    "@doeixd/effect-agent/web/WebFetchDeniedTargetError",
+    "affe-agent/web/WebFetchDeniedTargetError",
     { url: Schema.String, reason: Schema.String }
   ) {
   override get message() {
@@ -66,7 +66,7 @@ export class WebFetchDeniedTargetError extends
 
 export class WebFetchTransportError extends
   Schema.TaggedError<WebFetchTransportError>()(
-    "@doeixd/effect-agent/web/WebFetchTransportError",
+    "affe-agent/web/WebFetchTransportError",
     { url: Schema.String, detail: Schema.String }
   ) {
   override get message() {
@@ -76,7 +76,7 @@ export class WebFetchTransportError extends
 
 export class WebFetchHttpResponseError extends
   Schema.TaggedError<WebFetchHttpResponseError>()(
-    "@doeixd/effect-agent/web/WebFetchHttpResponseError",
+    "affe-agent/web/WebFetchHttpResponseError",
     { url: Schema.String, status: Schema.Number }
   ) {
   override get message() {
@@ -86,7 +86,7 @@ export class WebFetchHttpResponseError extends
 
 export class WebFetchCrossOriginRedirectError extends
   Schema.TaggedError<WebFetchCrossOriginRedirectError>()(
-    "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError",
+    "affe-agent/web/WebFetchCrossOriginRedirectError",
     { from: Schema.String, to: Schema.String }
   ) {
   override get message() {
@@ -96,7 +96,7 @@ export class WebFetchCrossOriginRedirectError extends
 
 export class WebFetchRedirectLimitError extends
   Schema.TaggedError<WebFetchRedirectLimitError>()(
-    "@doeixd/effect-agent/web/WebFetchRedirectLimitError",
+    "affe-agent/web/WebFetchRedirectLimitError",
     { url: Schema.String, maxRedirects: Schema.Number }
   ) {
   override get message() {
@@ -106,7 +106,7 @@ export class WebFetchRedirectLimitError extends
 
 export class WebFetchUnsupportedContentTypeError extends
   Schema.TaggedError<WebFetchUnsupportedContentTypeError>()(
-    "@doeixd/effect-agent/web/WebFetchUnsupportedContentTypeError",
+    "affe-agent/web/WebFetchUnsupportedContentTypeError",
     { url: Schema.String, contentType: Schema.Option(Schema.String) }
   ) {
   override get message() {
@@ -120,7 +120,7 @@ export class WebFetchUnsupportedContentTypeError extends
 
 export class WebFetchResponseTooLargeError extends
   Schema.TaggedError<WebFetchResponseTooLargeError>()(
-    "@doeixd/effect-agent/web/WebFetchResponseTooLargeError",
+    "affe-agent/web/WebFetchResponseTooLargeError",
     { url: Schema.String, maxBytes: Schema.Number, observedBytes: Schema.Number }
   ) {
   override get message() {
@@ -130,7 +130,7 @@ export class WebFetchResponseTooLargeError extends
 
 export class WebFetchDecodeError extends
   Schema.TaggedError<WebFetchDecodeError>()(
-    "@doeixd/effect-agent/web/WebFetchDecodeError",
+    "affe-agent/web/WebFetchDecodeError",
     { url: Schema.String, detail: Schema.String }
   ) {
   override get message() {
@@ -140,7 +140,7 @@ export class WebFetchDecodeError extends
 
 export class WebFetchTimeoutError extends
   Schema.TaggedError<WebFetchTimeoutError>()(
-    "@doeixd/effect-agent/web/WebFetchTimeoutError",
+    "affe-agent/web/WebFetchTimeoutError",
     { url: Schema.String, timeoutMillis: Schema.Number }
   ) {
   override get message() {
@@ -175,7 +175,7 @@ export interface Service {
  * address-aware runtime.
  */
 export class WebFetch extends Context.Service<WebFetch, Service>()(
-  "@doeixd/effect-agent/web/WebFetch"
+  "affe-agent/web/WebFetch"
 ) {}
 
 /** Provide an already-constructed fetch service. */

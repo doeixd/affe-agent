@@ -14,7 +14,7 @@ import { Cause, Context, Duration, Effect, Encoding, Layer, Option, Result, Sche
 
 /** Identifies a sandbox root. Providers decide what the label means. */
 export const Workspace = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/sandbox/Workspace")
+  Schema.brand("affe-agent/sandbox/Workspace")
 )
 export type Workspace = typeof Workspace.Type
 
@@ -68,11 +68,11 @@ export const SandboxPath = Schema.String.check(
       ? undefined
       : "not a workspace-relative path: no leading '/', no drive letter, no '..' segment, '/' separators"
   )
-).pipe(Schema.brand("@doeixd/effect-agent/sandbox/SandboxPath"))
+).pipe(Schema.brand("affe-agent/sandbox/SandboxPath"))
 export type SandboxPath = typeof SandboxPath.Type
 
 export class InvalidPathError extends Schema.TaggedError<InvalidPathError>()(
-  "@doeixd/effect-agent/sandbox/InvalidPathError",
+  "affe-agent/sandbox/InvalidPathError",
   { path: Schema.String, reason: Schema.String }
 ) {
   override get message() {
@@ -140,7 +140,7 @@ export const path = (
 
 /** The file or directory does not exist in the sandbox. */
 export class FileMissingError extends Schema.TaggedError<FileMissingError>()(
-  "@doeixd/effect-agent/sandbox/FileMissingError",
+  "affe-agent/sandbox/FileMissingError",
   { path: Schema.String }
 ) {
   override get message() {
@@ -151,7 +151,7 @@ export class FileMissingError extends Schema.TaggedError<FileMissingError>()(
 /** The provider refused the operation on its own authority. */
 export class PermissionDeniedError extends
   Schema.TaggedError<PermissionDeniedError>()(
-    "@doeixd/effect-agent/sandbox/PermissionDeniedError",
+    "affe-agent/sandbox/PermissionDeniedError",
     { path: Schema.String, operation: Schema.Literals(["read", "write", "list", "stat", "execute"]) }
   ) {
   override get message() {
@@ -161,7 +161,7 @@ export class PermissionDeniedError extends
 
 /** The process could not be started at all. */
 export class CommandLaunchError extends Schema.TaggedError<CommandLaunchError>()(
-  "@doeixd/effect-agent/sandbox/CommandLaunchError",
+  "affe-agent/sandbox/CommandLaunchError",
   { executable: Schema.String, detail: Schema.String }
 ) {
   override get message() {
@@ -171,7 +171,7 @@ export class CommandLaunchError extends Schema.TaggedError<CommandLaunchError>()
 
 /** The process ran but exited non-zero; only `execChecked` raises this. */
 export class ExitStatusError extends Schema.TaggedError<ExitStatusError>()(
-  "@doeixd/effect-agent/sandbox/ExitStatusError",
+  "affe-agent/sandbox/ExitStatusError",
   {
     executable: Schema.String,
     exitCode: Schema.Number,
@@ -186,7 +186,7 @@ export class ExitStatusError extends Schema.TaggedError<ExitStatusError>()(
 
 /** The process exceeded its time budget and was killed. */
 export class TimeoutError extends Schema.TaggedError<TimeoutError>()(
-  "@doeixd/effect-agent/sandbox/TimeoutError",
+  "affe-agent/sandbox/TimeoutError",
   { executable: Schema.String, timeoutMillis: Schema.Number }
 ) {
   override get message() {
@@ -196,7 +196,7 @@ export class TimeoutError extends Schema.TaggedError<TimeoutError>()(
 
 /** The process produced more output than allowed and was killed. */
 export class OutputLimitError extends Schema.TaggedError<OutputLimitError>()(
-  "@doeixd/effect-agent/sandbox/OutputLimitError",
+  "affe-agent/sandbox/OutputLimitError",
   { executable: Schema.String, maxOutputBytes: Schema.Number }
 ) {
   override get message() {
@@ -206,7 +206,7 @@ export class OutputLimitError extends Schema.TaggedError<OutputLimitError>()(
 
 /** The provider itself failed, in a way none of the above describe. */
 export class ProviderError extends Schema.TaggedError<ProviderError>()(
-  "@doeixd/effect-agent/sandbox/ProviderError",
+  "affe-agent/sandbox/ProviderError",
   { detail: Schema.String }
 ) {
   override get message() {
@@ -503,7 +503,7 @@ export type SandboxProviderService = {
 }
 
 export class SandboxProvider extends Context.Service<SandboxProvider, SandboxProviderService>()(
-  "@doeixd/effect-agent/sandbox/SandboxProvider"
+  "affe-agent/sandbox/SandboxProvider"
 ) {}
 
 /**
@@ -528,7 +528,7 @@ export const acquire = (
  * and the acquisition lives in that wiring rather than in every handler.
  */
 export class Current extends Context.Service<Current, Sandbox>()(
-  "@doeixd/effect-agent/sandbox/Current"
+  "affe-agent/sandbox/Current"
 ) {}
 
 export const currentLayer = (
@@ -618,7 +618,7 @@ export interface DeriveOptions {
   /**
    * The working directory a workspace maps to; every derived command runs
    * with this as `cwd` and file paths are relative to it. Defaults to
-   * `/tmp/effect-agent/<workspace>`, created at acquire. A provider whose
+   * `/tmp/affe-agent/<workspace>`, created at acquire. A provider whose
    * `exec` cannot start in a directory that does not exist yet should
    * pre-create it or supply one that does.
    */
@@ -678,7 +678,7 @@ export const fromOperations = (
   readonly layer: Layer.Layer<SandboxProvider>
   readonly derived: ReadonlyArray<DerivedOperation>
 } => {
-  const directoryOf = options?.directory ?? ((workspace: Workspace) => `/tmp/effect-agent/${workspace}`)
+  const directoryOf = options?.directory ?? ((workspace: Workspace) => `/tmp/affe-agent/${workspace}`)
   const derived = DERIVABLE.filter((operation) => {
     switch (operation) {
       case "read":

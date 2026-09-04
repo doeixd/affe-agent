@@ -162,7 +162,7 @@ describe("DurableSessionStore (interleaved writes)", () => {
       })
       arm(
         "SELECT * FROM",
-        sql`UPDATE effect_agent_session SET status = 'running', submission_count = 2, claim = ${successor} WHERE session_id = 's1'`
+        sql`UPDATE affe_session SET status = 'running', submission_count = 2, claim = ${successor} WHERE session_id = 's1'`
       )
 
       const finished = yield* store.finish("s1", submissionId, historyWith("done"))
@@ -194,7 +194,7 @@ describe("DurableSessionStore (interleaved writes)", () => {
       const rival = JSON.stringify({ id: "elicit-1", granted: false })
       arm(
         "SELECT id FROM",
-        sql`UPDATE effect_agent_elicitation SET state = 'answered', payload = ${rival} WHERE session_id = 's1' AND request_id = 'elicit-1'`
+        sql`UPDATE affe_elicitation SET state = 'answered', payload = ${rival} WHERE session_id = 's1' AND request_id = 'elicit-1'`
       )
 
       const accepted = yield* store.answerRequest("s1", {

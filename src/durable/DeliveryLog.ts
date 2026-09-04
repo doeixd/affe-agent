@@ -323,7 +323,7 @@ const storage =
 
 // -- SQL implementation --------------------------------------------------------------
 
-export const sqlLogTable = "effect_agent_delivery"
+export const sqlLogTable = "affe_delivery"
 
 export interface SqlLogOptions {
   readonly table?: string | undefined

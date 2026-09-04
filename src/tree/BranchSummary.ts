@@ -36,7 +36,7 @@ import type * as SessionTree from "./SessionTree.js"
  * confidently empty carryover, which is worse than refusing.
  */
 export class NothingToCarry extends Schema.TaggedError<NothingToCarry>()(
-  "@doeixd/effect-agent/tree/NothingToCarry",
+  "affe-agent/tree/NothingToCarry",
   { from: Schema.String, to: Schema.String }
 ) {
   override get message() {

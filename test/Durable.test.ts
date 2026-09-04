@@ -1268,7 +1268,7 @@ describe("compaction under durability", () => {
       // The replay asked the summariser again -- there was no checkpoint to
       // reuse, the suspension came first -- and the journal answered.
       const stored = yield* KeyValueStore.toSchemaStore(
-        KeyValueStore.prefix(kv, "effect-agent:compaction:"),
+        KeyValueStore.prefix(kv, "affe-agent:compaction:"),
         Compaction.Checkpoint
       ).get("compact-2")
       assert.isTrue(Option.isSome(stored), "the checkpoint was never persisted")

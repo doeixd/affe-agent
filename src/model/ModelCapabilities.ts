@@ -185,7 +185,7 @@ export class ModelCapabilities extends Context.Service<ModelCapabilities, {
     provider: string,
     model: string
   ) => Effect.Effect<Capabilities, UnknownModelError>
-}>()("@doeixd/effect-agent/ModelCapabilities") {}
+}>()("affe-agent/ModelCapabilities") {}
 
 /**
  * Capabilities from a table you supply.

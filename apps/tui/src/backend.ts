@@ -246,7 +246,7 @@ export const sessionDirectory = (workspaceRoot: string): string => {
   }
   const name = (hash >>> 0).toString(16).padStart(8, "0")
   const home = process.env["HOME"] ?? process.env["USERPROFILE"] ?? "."
-  return `${home}/.effect-agent/sessions/${name}`
+  return `${home}/.affe-agent/sessions/${name}`
 }
 
 export const live = (options: {
@@ -268,7 +268,7 @@ export const live = (options: {
   /**
    * Outside the workspace, and said out loud.
    *
-   * It used to live at `<workspace>/.effect-agent/session`, which put complete
+   * It used to live at `<workspace>/.affe-agent/session`, which put complete
    * unredacted transcripts -- prompts, file contents, shell output, tool
    * arguments and results, fetched text -- inside the directory the agent
    * itself can read, write, search and delete. That is three separate
@@ -343,7 +343,7 @@ export const fromArgv = (argv: ReadonlyArray<string>): Backend => {
         "not: it runs with this program's privileges and can reach anything on\n" +
         "the machine. Every shell call is asked about first.\n" +
         "\n" +
-        "The conversation is written unencrypted under ~/.effect-agent/sessions,\n" +
+        "The conversation is written unencrypted under ~/.affe-agent/sessions,\n" +
         "outside the workspace so the agent cannot read, search or delete its\n" +
         "own transcript. It contains whatever the conversation contained.\n" +
         "\n" +

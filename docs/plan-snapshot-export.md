@@ -159,7 +159,7 @@ paste anywhere.
 
 ### 7. A gap our own tools introduced
 
-`bash` now writes truncated output to `.effect-agent/tool-output/` and names the
+`bash` now writes truncated output to `.affe-agent/tool-output/` and names the
 path in the transcript. **An export carries the reference and not the file**, so
 a restored transcript points at something that does not exist. Options, in
 order of preference: leave it (the reference is honest, and the message says it
@@ -215,7 +215,7 @@ rule.
 
 ## Progress
 
-**E1 and E2: landed (2026-08-24).** `@doeixd/effect-agent/export`, 15 tests.
+**E1 and E2: landed (2026-08-24).** `affe-agent/export`, 15 tests.
 IE1, IE2 and IE4 hold; each was broken once to confirm its test bites.
 
 **The distinction this plan rests on survived contact.** `Export` embeds
@@ -255,7 +255,7 @@ frequently the bug being chased.
 provenance says what the agent *had*, this says what the transcript actually
 *used*, and when they disagree the second decides whether a replay can run.
 
-**E3 and E5: landed (2026-08-24).** `@doeixd/effect-agent/redaction` and
+**E3 and E5: landed (2026-08-24).** `affe-agent/redaction` and
 `TreeExport`. 16 further tests; every redaction invariant broken once.
 
 **Redaction belongs to neither package, so it lives apart from both.** The plan

@@ -188,7 +188,7 @@ export const head = (
 }
 
 /** Where a truncated command's full output is kept, relative to the workspace. */
-export const OUTPUT_DIR = ".effect-agent/tool-output"
+export const OUTPUT_DIR = ".affe-agent/tool-output"
 
 /**
  * A name for the next saved output.

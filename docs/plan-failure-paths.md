@@ -17,9 +17,9 @@ The faults are reachable and not observable, so they were reasoned rather than
 caught. That is the same sentence we will keep writing about `/durable` until
 something changes.
 
-> **Two projects share the name `effect-agent`.** Throughout this document
+> **Two projects share the name `affe-agent`.** Throughout this document
 > *theirs* is `github.com/danieljvdm/effect-agent`, scope `@effect-agent/*`;
-> *ours* is this repository, `@doeixd/effect-agent`. Their counterpart of our
+> *ours* is this repository, `affe-agent`. Their counterpart of our
 > `src/durable` is `packages/thread`, **not** `packages/workflow`, which is
 > only an adapter onto the engine.
 

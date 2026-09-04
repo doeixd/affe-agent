@@ -61,7 +61,7 @@ const Further = Schema.Struct({
  * `ProgramThrow`).
  */
 export class CodeDiagnostic extends Schema.TaggedError<CodeDiagnostic>()(
-  "@doeixd/effect-agent/code/CodeDiagnostic",
+  "affe-agent/code/CodeDiagnostic",
   {
     reason: Reason,
     /** 1-based line, when the AST or the parser could say. */

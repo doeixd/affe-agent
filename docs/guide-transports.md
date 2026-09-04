@@ -11,11 +11,11 @@ The wire-level reference — encoding, SSE framing, live vs. durable delivery
 
 ## The client seam
 
-`@doeixd/effect-agent/client` is the seam adapters implement — RPC, HTTP/SSE,
+`affe-agent/client` is the seam adapters implement — RPC, HTTP/SSE,
 AG-UI, A2A — so each does not invent its own notion of what a session is:
 
 ```ts
-import { AgentClient } from "@doeixd/effect-agent/client"
+import { AgentClient } from "affe-agent/client"
 
 const client = yield* AgentClient.AgentClient
 const session = yield* client.createSession({ sessionId: "researcher-1" })
@@ -146,12 +146,12 @@ referenced only by `id` is refused as `binary-input-by-id` -- there is no
 upload store behind this adapter -- and malformed base64 is an invalid
 input. Output stays AG-UI's text event vocabulary.
 
-`@doeixd/effect-agent/ag-ui` projects that same session contract onto the
+`affe-agent/ag-ui` projects that same session contract onto the
 official AG-UI HTTP/SSE protocol:
 
 ```ts
-import { AgentAgUi } from "@doeixd/effect-agent/ag-ui"
-import { AgentClient, AgentProtocol, AgentSessionHost } from "@doeixd/effect-agent/client"
+import { AgentAgUi } from "affe-agent/ag-ui"
+import { AgentClient, AgentProtocol, AgentSessionHost } from "affe-agent/client"
 
 // The host -- registry, capacity, authentication, authorization -- is one
 // service the adapters share. Make a tag for the principal type once:
@@ -223,7 +223,7 @@ image stays a URL typed `image/*`), `input_audio`, and `file` with inline
 (`unsupported_file_id`) rather than silently dropped. The assistant's reply
 is text, as the protocol defines it.
 
-`@doeixd/effect-agent/openai` serves `POST /v1/chat/completions` over any
+`affe-agent/openai` serves `POST /v1/chat/completions` over any
 `AgentClient`, so an OpenAI SDK -- or anything that speaks to one -- can talk
 to an agent without knowing the harness exists. It is an *inference* surface,
 not the full session protocol: prompt, response, streaming. Steering,
@@ -231,8 +231,8 @@ follow-ups, interrupts, elicitation answers, history and status stay on the
 native HTTP / RPC client, and several surfaces may front one session.
 
 ```ts
-import { OpenAiAgent } from "@doeixd/effect-agent/openai"
-import { AgentClient } from "@doeixd/effect-agent/client"
+import { OpenAiAgent } from "affe-agent/openai"
+import { AgentClient } from "affe-agent/client"
 
 const OpenAiLive = OpenAiAgent.serverLayer({ model: "research-agent" }).pipe(
   Layer.provide(AgentClient.layer(agent))
@@ -281,12 +281,12 @@ artifact with its media type and filename, and file parts in an incoming
 message reach the agent as `Prompt.FilePart`s. Structured `data` parts are
 refused by name.
 
-`@doeixd/effect-agent/a2a` exposes a Harness agent through the official A2A v1
+`affe-agent/a2a` exposes a Harness agent through the official A2A v1
 JSON-RPC and HTTP+JSON protocols:
 
 ```ts
-import { AgentA2A } from "@doeixd/effect-agent/a2a"
-import { AgentClient, AgentProtocol } from "@doeixd/effect-agent/client"
+import { AgentA2A } from "affe-agent/a2a"
+import { AgentClient, AgentProtocol } from "affe-agent/client"
 
 const A2ALive = AgentA2A.serverLayer({
   card: {
@@ -368,14 +368,14 @@ Conformance runs against a real official-SDK server in both directions.
 
 ## MCP
 
-`@doeixd/effect-agent/mcp` exposes an agent to MCP clients as a tool:
+`affe-agent/mcp` exposes an agent to MCP clients as a tool:
 
 For an application serving more than one frontend, use the shared host path so
 MCP, HTTP, RPC, AG-UI and A2A see one registry and one capacity policy:
 
 ```ts
-import { AgentSessionHost } from "@doeixd/effect-agent/client"
-import { AgentMcp } from "@doeixd/effect-agent/mcp"
+import { AgentSessionHost } from "affe-agent/client"
+import { AgentMcp } from "affe-agent/mcp"
 import { McpServer } from "effect/unstable/ai"
 
 const Host = AgentSessionHost.Tag<User>("app/AgentSessionHost")
@@ -474,7 +474,7 @@ generation. The default client uses the split v2 SDK and automatically
 negotiates modern discovery or falls back to the legacy initialize handshake:
 
 ```ts
-import { McpClient, McpToolkit } from "@doeixd/effect-agent/mcp"
+import { McpClient, McpToolkit } from "affe-agent/mcp"
 
 const connection = yield* McpClient.streamableHttp({
   url: new URL("http://localhost:3000/mcp"),
@@ -492,7 +492,7 @@ Applications whose public types still use the monolithic SDK import the
 isolated compatibility adapter instead:
 
 ```ts
-import { McpClientV1 } from "@doeixd/effect-agent/mcp/v1"
+import { McpClientV1 } from "affe-agent/mcp/v1"
 
 const connection = yield* McpClientV1.streamableHttp({
   url: new URL("http://localhost:3000/mcp"),

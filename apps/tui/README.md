@@ -1,4 +1,4 @@
-# effect-agent TUI
+# affe-agent TUI
 
 A small terminal harness on top of this library, in the shape of opencode's:
 OpenTUI over a Zig core, SolidJS for components, Bun as the runtime.

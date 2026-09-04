@@ -6,7 +6,7 @@ import * as AgentSession from "../src/AgentSession.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
 /**
- * Written the way a consumer of `@doeixd/effect-agent/testing` would write it:
+ * Written the way a consumer of `affe-agent/testing` would write it:
  * only the published surface, no reaching into the suite's own helpers. If the
  * testing package stops being usable on its own terms, this is what notices.
  */
@@ -15,7 +15,7 @@ const Search = Tool.make("search", {
   success: Schema.String
 })
 
-describe("@doeixd/effect-agent/testing", () => {
+describe("affe-agent/testing", () => {
   it.effect("scripts a model and observes the lifecycle", () =>
     Effect.gen(function* () {
       const { layer, recorder } = yield* TestLanguageModel.script([

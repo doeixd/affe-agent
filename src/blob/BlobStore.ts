@@ -22,7 +22,7 @@ import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
 
 /** A blob's identity: the lowercase hex SHA-256 of its content. */
 export const BlobId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/blob/BlobId")
+  Schema.brand("affe-agent/blob/BlobId")
 )
 export type BlobId = typeof BlobId.Type
 
@@ -47,7 +47,7 @@ export type BlobInfo = BlobRef
 
 /** The storage underneath failed at something that is not "not there". */
 export class BlobStoreError extends Schema.TaggedError<BlobStoreError>()(
-  "@doeixd/effect-agent/blob/BlobStoreError",
+  "affe-agent/blob/BlobStoreError",
   {
     operation: Schema.String,
     id: Schema.optional(Schema.String),
@@ -62,7 +62,7 @@ export class BlobStoreError extends Schema.TaggedError<BlobStoreError>()(
 
 /** The referenced content is not in this store. */
 export class BlobMissingError extends Schema.TaggedError<BlobMissingError>()(
-  "@doeixd/effect-agent/blob/BlobMissingError",
+  "affe-agent/blob/BlobMissingError",
   { id: Schema.String }
 ) {
   override get message() {
@@ -80,7 +80,7 @@ export class BlobMissingError extends Schema.TaggedError<BlobMissingError>()(
  * have accepted.
  */
 export class BlobRejectedError extends Schema.TaggedError<BlobRejectedError>()(
-  "@doeixd/effect-agent/blob/BlobRejectedError",
+  "affe-agent/blob/BlobRejectedError",
   {
     reason: Schema.Literals(["too-large", "media-type"]),
     detail: Schema.String
@@ -120,7 +120,7 @@ export interface BlobStoreService {
 }
 
 export class BlobStore extends Context.Service<BlobStore, BlobStoreService>()(
-  "@doeixd/effect-agent/blob/BlobStore"
+  "affe-agent/blob/BlobStore"
 ) {}
 
 /** `put` for bytes already in hand. */

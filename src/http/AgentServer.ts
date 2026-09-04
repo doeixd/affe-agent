@@ -29,7 +29,7 @@ import * as AgentHttp from "./AgentHttp.js"
  * route is the trap this module exists to close.
  */
 export class DuplicateMountError extends Schema.TaggedError<DuplicateMountError>()(
-  "@doeixd/effect-agent/http/DuplicateMountError",
+  "affe-agent/http/DuplicateMountError",
   {
     kind: Schema.Literals(["name", "path"]),
     value: Schema.String
@@ -43,7 +43,7 @@ export class DuplicateMountError extends Schema.TaggedError<DuplicateMountError>
 }
 
 export class InvalidMountNameError extends Schema.TaggedError<InvalidMountNameError>()(
-  "@doeixd/effect-agent/http/InvalidMountNameError",
+  "affe-agent/http/InvalidMountNameError",
   { name: Schema.String }
 ) {
   override get message() {

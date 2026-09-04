@@ -203,7 +203,7 @@ export const memoryStore: Effect.Effect<Store> = Effect.map(
   })
 )
 
-export const sqlStoreTable = "effect_agent_state"
+export const sqlStoreTable = "affe_state"
 
 const escapeIdentifier = (name: string): string => {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {

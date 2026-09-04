@@ -3,7 +3,7 @@
 **Status: in progress.** Items 1 (§3.0), 2 (§3.1), 3 (§3.2), 4 (§3.3 a–b),
 5 (§3.5, the documentation half), 6 (§3.4, phase 1: in-process), 7 (§3.6)
 and 10 (§3.7) landed 2026-09-01, and item 8's entry (§3.3c) the same day:
-`@doeixd/effect-agent/cloudflare`, on `effect-cf` by the owner's decision
+`affe-agent/cloudflare`, on `effect-cf` by the owner's decision
 (recorded in `plan-effect-cf-and-webtransport.md` §3a). Item 9 (§3.5, the
 isolate executor) landed the same day. 8's real deployment (§3.3d) happened
 2026-09-02: the host without the code tool, from a Workers free plan, smoke
@@ -33,7 +33,7 @@ Read 2026-09-01: the home page and the twelve pages in its navigation
 `effect-native`; `/platforms/`; `/reference/packages`). Its GitHub
 repository was not read — the docs are the contract it publishes, and the
 comparison is against that. Treat the version facts as dated: it is
-`effect-agent@beta`, on `effect@^4.0.0-rc.111`, the same substrate as ours.
+`affe-agent@beta`, on `effect@^4.0.0-rc.111`, the same substrate as ours.
 
 **The two designs converge more than either author would expect.** Its
 documented turn sequence — prepare context, stream and reduce the model
@@ -60,9 +60,9 @@ Where they differ, measured against what ships here (`STATUS.md`,
 | sandbox | a trusted-process runner with request markers, explicitly unisolated | typed file operations plus `exec` / `execStream`, `MemorySandbox`, the local provider, tier-0/1 derivation, a conformance suite | ours ahead |
 | browser | page capture, bounded same-host crawl, screenshots, an interactive browser with action/size/time caps | Brave search and guarded HTTP fetch | **gap** (§3.6) |
 | testing | `ScriptedModel`, adapter certification, seeded chaos plans, store failpoints, fixtures | `TestLanguageModel`, `AgentProbe`, `verify:durability`, `Export`/`Replay`; the store contracts (`AgentClientContract`, `DeliveryLogContract`, `NodeStoreContract`) live in `test/` and do not ship | **gap**: our certification suites are internal (§3.2) |
-| packaging | ~15 packages under `@effect-agent/*` plus an umbrella | one package, ~50 subpaths, boundaries enforced by `lint:portability` | refused (§4) |
+| packaging | ~15 packages under `@affe-agent/*` plus an umbrella | one package, ~50 subpaths, boundaries enforced by `lint:portability` | refused (§4) |
 | onboarding | a docs site; getting-started runs a bug classifier in one screen | a 2,300-line README that is mostly design rationale, and `docs/` plans that read as internal records | **gap**, cheapest to close (§3.0) |
-| naming | owns `effect-agent.com` and the bare `effect-agent` npm name | `@doeixd/effect-agent` | a positioning problem, not a code one (§3.0) |
+| naming | owns `effect-agent.com` and the bare `effect-agent` npm name | `affe-agent` | a positioning problem, not a code one (§3.0) |
 
 Two things the read confirmed rather than found. `effect-cf` stays out of
 `src/` (that plan's §3 decision holds; their package is the evidence of what
@@ -101,7 +101,7 @@ acceptance test can run.
 **Why.** Their getting-started page gets a typed agent running in one
 screen. Ours exists (README "Quickstart") but sits inside a document whose
 job is to be right, not to be first. And the name collision is real: two
-projects called effect-agent on the same substrate with the same turn model,
+projects called affe-agent on the same substrate with the same turn model,
 one of which owns the domain and the bare npm name.
 
 **What.**
@@ -306,7 +306,7 @@ which is exactly the machinery that lets one host module hold them. This
 is the same category decision `plan-effect-cf-and-webtransport.md` §3
 made ("never in `src/` — except at a named host boundary"), and it should
 be made in that document's terms, not silently here. **Recommendation:**
-yes, as `@doeixd/effect-agent/cloudflare`, after (a) and (b), and still
+yes, as `affe-agent/cloudflare`, after (a) and (b), and still
 without `effect-cf`.
 
 **d. A real deployment.** `examples/deploy-cloudflare/` is the Alchemy

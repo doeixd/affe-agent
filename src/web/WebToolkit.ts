@@ -156,19 +156,19 @@ const runSearch = (
 ): Effect.Effect<ReadonlyArray<WebSearch.SearchResult>, string> =>
   service.search(query, options).pipe(
     Effect.catchTags({
-      "@doeixd/effect-agent/web/WebSearchTransportError": () =>
+      "affe-agent/web/WebSearchTransportError": () =>
         Effect.fail("Web search could not reach its provider. Retry once later or continue without search."),
-      "@doeixd/effect-agent/web/WebSearchAuthenticationError": () =>
+      "affe-agent/web/WebSearchAuthenticationError": () =>
         Effect.fail("Web search is misconfigured or unauthorized. Do not retry this query."),
-      "@doeixd/effect-agent/web/WebSearchRateLimitedError": () =>
+      "affe-agent/web/WebSearchRateLimitedError": () =>
         Effect.fail("Web search quota is temporarily exhausted. Retry later or continue without search."),
-      "@doeixd/effect-agent/web/WebSearchResponseError": (error) =>
+      "affe-agent/web/WebSearchResponseError": (error) =>
         Effect.fail(`Web search provider returned HTTP ${error.status}. Retry later or continue without search.`),
-      "@doeixd/effect-agent/web/WebSearchDecodeError": () =>
+      "affe-agent/web/WebSearchDecodeError": () =>
         Effect.fail("Web search returned an unreadable response. Do not repeat the same query immediately."),
-      "@doeixd/effect-agent/web/WebSearchResponseTooLargeError": () =>
+      "affe-agent/web/WebSearchResponseTooLargeError": () =>
         Effect.fail("Web search returned too much data. Retry with a narrower query."),
-      "@doeixd/effect-agent/web/WebSearchTimeoutError": () =>
+      "affe-agent/web/WebSearchTimeoutError": () =>
         Effect.fail("Web search timed out. Retry with a narrower query or continue without search.")
     })
   )
@@ -189,25 +189,25 @@ const runFetch = (
   service.fetch(url).pipe(
     Effect.map(untrustedBody),
     Effect.catchTags({
-      "@doeixd/effect-agent/web/WebFetchInvalidUrlError": (error) =>
+      "affe-agent/web/WebFetchInvalidUrlError": (error) =>
         Effect.fail(`Web fetch rejected the URL: ${error.reason}. Use a public HTTP(S) URL without credentials.`),
-      "@doeixd/effect-agent/web/WebFetchDeniedTargetError": () =>
+      "affe-agent/web/WebFetchDeniedTargetError": () =>
         Effect.fail("Web fetch denied a local, private, or metadata target. Use a public web URL."),
-      "@doeixd/effect-agent/web/WebFetchTransportError": () =>
+      "affe-agent/web/WebFetchTransportError": () =>
         Effect.fail("Web fetch could not reach the target. Retry once later or continue without it."),
-      "@doeixd/effect-agent/web/WebFetchHttpResponseError": (error) =>
+      "affe-agent/web/WebFetchHttpResponseError": (error) =>
         Effect.fail(`Web fetch received HTTP ${error.status}. Use another source or continue without it.`),
-      "@doeixd/effect-agent/web/WebFetchCrossOriginRedirectError": (error) =>
+      "affe-agent/web/WebFetchCrossOriginRedirectError": (error) =>
         Effect.fail(`Web fetch refused a cross-origin redirect. Call ${error.to} explicitly for a fresh permission decision.`),
-      "@doeixd/effect-agent/web/WebFetchRedirectLimitError": () =>
+      "affe-agent/web/WebFetchRedirectLimitError": () =>
         Effect.fail("Web fetch encountered too many redirects. Use a more direct source URL."),
-      "@doeixd/effect-agent/web/WebFetchUnsupportedContentTypeError": () =>
+      "affe-agent/web/WebFetchUnsupportedContentTypeError": () =>
         Effect.fail("Web fetch only accepts textual HTML, Markdown, JSON, XML, or text responses."),
-      "@doeixd/effect-agent/web/WebFetchResponseTooLargeError": () =>
+      "affe-agent/web/WebFetchResponseTooLargeError": () =>
         Effect.fail("Web fetch response exceeded 1 MiB. Use a smaller or more specific resource."),
-      "@doeixd/effect-agent/web/WebFetchDecodeError": () =>
+      "affe-agent/web/WebFetchDecodeError": () =>
         Effect.fail("Web fetch returned malformed text for its declared charset. Use another source."),
-      "@doeixd/effect-agent/web/WebFetchTimeoutError": () =>
+      "affe-agent/web/WebFetchTimeoutError": () =>
         Effect.fail("Web fetch timed out. Retry once or use another source.")
     })
   )
@@ -223,23 +223,23 @@ const untrustedMarkdown = (result: WebCapture.CaptureResult): WebCapture.Capture
 
 const captureFailure = (error: WebCapture.WebCaptureError): string => {
   switch (error._tag) {
-    case "@doeixd/effect-agent/web/WebCaptureInvalidUrlError":
+    case "affe-agent/web/WebCaptureInvalidUrlError":
       return `Web capture rejected the URL: ${error.reason}. Use a public HTTP(S) URL without credentials.`
-    case "@doeixd/effect-agent/web/WebCaptureDeniedTargetError":
+    case "affe-agent/web/WebCaptureDeniedTargetError":
       return "Web capture denied a local, private, or metadata target. Use a public web URL."
-    case "@doeixd/effect-agent/web/WebCaptureTransportError":
+    case "affe-agent/web/WebCaptureTransportError":
       return "Web capture could not reach its provider. Retry once later or use web_fetch."
-    case "@doeixd/effect-agent/web/WebCaptureAuthenticationError":
+    case "affe-agent/web/WebCaptureAuthenticationError":
       return "Web capture is misconfigured or unauthorized. Do not retry; use web_fetch."
-    case "@doeixd/effect-agent/web/WebCaptureRateLimitedError":
+    case "affe-agent/web/WebCaptureRateLimitedError":
       return "Web capture quota is temporarily exhausted. Retry later or use web_fetch."
-    case "@doeixd/effect-agent/web/WebCaptureResponseError":
+    case "affe-agent/web/WebCaptureResponseError":
       return `Web capture failed with HTTP ${error.status}. Use another source or web_fetch.`
-    case "@doeixd/effect-agent/web/WebCaptureDecodeError":
+    case "affe-agent/web/WebCaptureDecodeError":
       return "Web capture returned an unreadable response. Use another source."
-    case "@doeixd/effect-agent/web/WebCaptureResponseTooLargeError":
+    case "affe-agent/web/WebCaptureResponseTooLargeError":
       return "Web capture response was too large. Use a smaller or more specific page."
-    case "@doeixd/effect-agent/web/WebCaptureTimeoutError":
+    case "affe-agent/web/WebCaptureTimeoutError":
       return "Web capture timed out. Retry once or use another source."
   }
 }
@@ -265,7 +265,7 @@ const runCrawl = (
       }))
     })),
     Effect.mapError((error) =>
-      error._tag === "@doeixd/effect-agent/web/WebCrawlStartError"
+      error._tag === "affe-agent/web/WebCrawlStartError"
         ? `Web crawl could not render its start page (${error.cause}). Use another start URL or web_fetch.`
         : captureFailure(error))
   )

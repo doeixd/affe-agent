@@ -106,7 +106,7 @@ export interface Options {
  * and it must not be confusable with a value a program could have
  * produced.
  */
-const REFUSED = { "@doeixd/effect-agent/code/callscript": "refused" }
+const REFUSED = { "affe-agent/code/callscript": "refused" }
 
 /** `namespace.name` back to the path `invoke` takes. */
 const pathOf = (tool: string): ReadonlyArray<string> => tool.split(".")

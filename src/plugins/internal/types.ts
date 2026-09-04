@@ -6,7 +6,7 @@ import { Schema } from "effect"
  * *not* fatal — they surface as `Warning`s and the rest of the plugin loads.
  */
 export class PluginError extends Schema.TaggedError<PluginError>()(
-  "@doeixd/effect-agent/plugins/PluginError",
+  "affe-agent/plugins/PluginError",
   { reason: Schema.String }
 ) {
   override get message() {

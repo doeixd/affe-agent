@@ -1349,7 +1349,7 @@ characters and provider-consistent failures.
 
 `Bash` is permissioned only as `shell` on the command. After execution,
 `bounded` automatically writes any truncated stdout and stderr in full under
-`.effect-agent/tool-output` (`CodingToolkit.ts:415-431, 625-644`). That write
+`.affe-agent/tool-output` (`CodingToolkit.ts:415-431, 625-644`). That write
 does not receive a separate `write` decision and is not visible in the
 approval resource. A policy can therefore allow a known read-only command and
 deny filesystem writes, yet the library itself still creates workspace files
@@ -2827,7 +2827,7 @@ and compare live-versus-restored semantic entry sequences.
 **State:** committed in `fccecb5`.
 
 Selecting `--live` now automatically writes complete, unredacted prompt
-snapshots under `<workspace>/.effect-agent/session`; there is no persistence
+snapshots under `<workspace>/.affe-agent/session`; there is no persistence
 flag, startup disclosure, retention control, or permission decision. Those
 snapshots can contain user prompts, source file contents, shell output, tool
 arguments/results, and fetched external text. The directory is neither in this

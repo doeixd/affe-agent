@@ -122,7 +122,7 @@ export interface SkillRegistryShape {
 }
 
 export class SkillRegistry extends Context.Service<SkillRegistry, SkillRegistryShape>()(
-  "@doeixd/effect-agent/skills/SkillRegistry"
+  "affe-agent/skills/SkillRegistry"
 ) {}
 
 /** Build a registry from a fixed set of skills. Duplicate ids are a configuration error. */

@@ -72,7 +72,7 @@ describe("relay leases", () => {
 
       // Routing is refused rather than queued into a connection nobody drains.
       const refused = yield* Effect.flip(client.send(envelopeFor(TARGET), as("caller-secret")))
-      assert.strictEqual(refused._tag, "@doeixd/effect-agent/relay/RelayPeerOfflineError")
+      assert.strictEqual(refused._tag, "affe-agent/relay/RelayPeerOfflineError")
 
       // And the target's own stream ends with the reason, so a node that is
       // still there learns it has been dropped rather than waiting forever.

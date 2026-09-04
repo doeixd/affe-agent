@@ -26,7 +26,7 @@ import { SessionId } from "../../internal/ids.js"
 
 /** Identifies one mutation so a retry cannot execute it twice. */
 export const RequestId = Schema.String.pipe(
-  Schema.brand("@doeixd/effect-agent/RequestId")
+  Schema.brand("affe-agent/RequestId")
 )
 export type RequestId = typeof RequestId.Type
 

@@ -5,12 +5,12 @@ Written 2026-09-01.
 **Status: specified, not implemented.**
 
 This plan defines a polished, fully open-source web application around
-`@doeixd/effect-agent`: a general-purpose agent workbench in the product class
-of Open WebUI and bb, but with `effect-agent` as the execution kernel rather
+`affe-agent`: a general-purpose agent workbench in the product class
+of Open WebUI and bb, but with `affe-agent` as the execution kernel rather
 than a second agent framework hidden behind the UI.
 
 The workbench is both a useful application and a reference implementation. It
-should prove that the public seams in `effect-agent` are sufficient to build a
+should prove that the public seams in `affe-agent` are sufficient to build a
 real multi-session agent product without importing engine internals.
 
 ---
@@ -77,7 +77,7 @@ Workbench product services     AgentClient
                     |
         AgentSessionHost / kernel
                     |
-        @doeixd/effect-agent
+        affe-agent
                     |
             Effect / Effect AI
 ```
@@ -105,7 +105,7 @@ agent without knowing anything about Effect.
 
 ### G2 — A reference implementation for the public API
 
-The workbench must consume `@doeixd/effect-agent` as an ordinary package. If
+The workbench must consume `affe-agent` as an ordinary package. If
 the application needs an internal module, that is evidence of a missing public
 seam and should be fixed in the library rather than bypassed.
 
@@ -113,7 +113,7 @@ seam and should be fixed in the library rather than bypassed.
 
 The workbench introduces no second notion of run, tool, permission, memory,
 session, or event. Product records may refer to kernel concepts, but execution
-authority stays in `effect-agent`.
+authority stays in `affe-agent`.
 
 ### G4 — General-purpose, not coding-only
 
@@ -172,7 +172,7 @@ branding or redistribution terms would constrain downstream forks.
 +----------------------------|--------------------------------------+
                              |
 +----------------------------v--------------------------------------+
-|                  @doeixd/effect-agent                             |
+|                  affe-agent                             |
 | sessions / runs / turns / events / tools / permissions            |
 | memory / skills / subagents / state / scheduling / compaction     |
 +---------------+----------------------+----------------------------+
@@ -195,7 +195,7 @@ module owns one authority and composes through `Effect`, `Layer`, `Schema`,
 
 There are three classes of seams:
 
-1. **existing `effect-agent` seams** — consume them unchanged;
+1. **existing `affe-agent` seams** — consume them unchanged;
 2. **workbench domain services** — new application-level Effect services;
 3. **UI projections/adapters** — pure or scoped modules that may be replaced
    without changing either execution or persistence.
@@ -204,9 +204,9 @@ There are three classes of seams:
 
 | need | exact module | role in the workbench |
 | --- | --- | --- |
-| Execute / reconnect to an agent session | `@doeixd/effect-agent/client` → `AgentClient`, `RemoteSession` | **Primary execution seam.** UI-independent prompt, submit/await, steer, follow-up, interrupt, respond, pending, history, status and event stream. Do not wrap these into a second agent API. |
-| Wire-safe session vocabulary | `@doeixd/effect-agent/client` → `AgentProtocol` | `Schema`-owned session ids, request ids, requests, responses and remote errors. Product transports reuse these types rather than defining "WorkbenchPromptRequest". |
-| Server-side session registry / auth | `@doeixd/effect-agent/client` → `AgentSessionHost` | Shared registry, capacity, principal resolution, authorization and idempotent request authority. |
+| Execute / reconnect to an agent session | `affe-agent/client` → `AgentClient`, `RemoteSession` | **Primary execution seam.** UI-independent prompt, submit/await, steer, follow-up, interrupt, respond, pending, history, status and event stream. Do not wrap these into a second agent API. |
+| Wire-safe session vocabulary | `affe-agent/client` → `AgentProtocol` | `Schema`-owned session ids, request ids, requests, responses and remote errors. Product transports reuse these types rather than defining "WorkbenchPromptRequest". |
+| Server-side session registry / auth | `affe-agent/client` → `AgentSessionHost` | Shared registry, capacity, principal resolution, authorization and idempotent request authority. |
 | Canonical observation | root → `AgentEvent` | The source event vocabulary. UI timelines, telemetry and protocol projections derive from this stream. |
 | Wire-safe prompt/history | root → `PromptWire` | Stable prompt/message encoding including files. Product persistence and custom transports use this, never UI-library message JSON. |
 | Human input / approvals | root → `Elicitation` | The typed request/response contract for paused execution. |
@@ -793,7 +793,7 @@ Examples:
   ConversationView + RemoteSession -> assistant-ui runtime/messages
 
 @workbench/ag-ui
-  optional interoperability path using existing effect-agent/ag-ui
+  optional interoperability path using existing affe-agent/ag-ui
 ```
 
 Deleting `@workbench/assistant-ui` must leave the domain, server, persistence,
@@ -1408,11 +1408,11 @@ React / assistant-ui
         +-----------> AgentClient <--------+
                           |
                           v
-                    effect-agent
+                    affe-agent
 
 server -> runtime -> store -> domain
    |        |          |
-   |        +------> effect-agent Sandbox / Blob / Credentials
+   |        +------> affe-agent Sandbox / Blob / Credentials
    +---------------> AgentSessionHost / AgentClient
 ```
 
@@ -1422,7 +1422,7 @@ Forbidden edges:
 - `domain -> assistant-ui`;
 - `store -> AG-UI`;
 - `runtime -> React`;
-- `effect-agent core -> workbench`;
+- `affe-agent core -> workbench`;
 - `ConversationStore -> canonical message history`;
 - `ConversationPresenter -> model/tool execution logic`.
 
@@ -1434,7 +1434,7 @@ entire UI stack without touching its agent or product semantics.
 ## Repository shape
 
 Keep the framework repository a framework repository. The preferred shape is a
-separate application repository, for example `doeixd/effect-agent-workbench`.
+separate application repository, for example `doeixd/affe-agent-workbench`.
 That forces the workbench to consume the same public package a third party
 would.
 
@@ -1442,7 +1442,7 @@ If development velocity initially requires a monorepo app, keep the package
 edges below identical and move it out once the first vertical slice is stable.
 
 ```text
-effect-agent-workbench/
+affe-agent-workbench/
   apps/
     web/
     server/
@@ -1462,7 +1462,7 @@ Only `react/` and `assistant-ui/` may depend on those UI libraries.
 `domain/`, `protocol/`, `client/`, and `ui-core/` must remain usable by
 another frontend.
 
-The workbench must never import `effect-agent` engine internals directly.
+The workbench must never import `affe-agent` engine internals directly.
 
 ---
 
@@ -1511,7 +1511,7 @@ No server module should know whether this package is installed.
 
 ### AG-UI is an interoperability adapter
 
-Keep `@doeixd/effect-agent/ag-ui` supported and contract-tested. It is useful
+Keep `affe-agent/ag-ui` supported and contract-tested. It is useful
 for external AG-UI clients and may be the fastest way to bootstrap an
 assistant-ui adapter.
 
@@ -1533,7 +1533,7 @@ components.
 The workbench already has typed state, an execution seam and AG-UI
 interoperability. Add CopilotKit only if a concrete later feature justifies an
 adapter. It must sit at the same edge as assistant-ui, not between the workbench
-and `effect-agent`.
+and `affe-agent`.
 
 ---
 
@@ -1979,7 +1979,7 @@ Credentials must flow through the existing credential/redaction model and
 should never be stored as plain values in conversation or agent records.
 
 The workbench should render tool catalogs and connection health but leave tool
-resolution/execution to `effect-agent`.
+resolution/execution to `affe-agent`.
 
 ---
 
@@ -2122,14 +2122,14 @@ Useful product views later:
 - sandbox/resource usage.
 
 The workbench may aggregate and display telemetry, but it should not force a
-specific exporter into `effect-agent`.
+specific exporter into `affe-agent`.
 
 ---
 
 ## Invariants
 
 **W1 — One execution model.** Every prompt, steer, follow-up, interrupt,
-approval and tool run goes through existing `effect-agent` semantics.
+approval and tool run goes through existing `affe-agent` semantics.
 
 **W2 — Public API only.** The workbench can be built as an external consumer of
 the package. An internal import is a bug in the framework boundary.
@@ -2442,7 +2442,7 @@ Borrow concepts:
 - reconnectable long-running work.
 
 Do not copy its provider-runtime abstraction over Claude Code/Codex; that role
-is already filled by `effect-agent`.
+is already filled by `affe-agent`.
 
 ### Open WebUI
 
@@ -2536,13 +2536,13 @@ The plan is successful when:
 
 - a third party can install the workbench and point it at supported model
   providers without modifying framework internals;
-- the web app uses `effect-agent` as its only agent execution kernel;
+- the web app uses `affe-agent` as its only agent execution kernel;
 - a conversation survives refresh/restart and resumes the same session;
 - streaming, tools, progress, interruption and elicitation all render correctly;
 - an optional workspace survives across turns and can be inspected from the UI;
 - the same frontend works against local and remote/durable agent backends;
 - the application itself becomes the strongest public example of how to build
-  on `@doeixd/effect-agent`;
+  on `affe-agent`;
 - replacing assistant-ui with plain React, Solid, or another presentation
   adapter requires changes only at the UI edge;
 - workbench product protocols never redefine `AgentProtocol` operations or
@@ -2558,7 +2558,7 @@ The plan is successful when:
 - typed generative UI is carried through `AgentData`/Schema and renderer
   registries, never model-generated executable component definitions.
 
-The intended result is not merely "chat for effect-agent." It is a permissively
+The intended result is not merely "chat for affe-agent." It is a permissively
 licensed, general-purpose **agent workbench** whose architecture demonstrates
 that the framework's session/event/capability seams are sufficient for an
 Open-WebUI/bb-class application without surrendering the execution model to
