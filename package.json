@@ -283,13 +283,29 @@
     "lint:cloudflare": "node scripts/effect-diagnostics.mjs tsconfig.cloudflare.json"
   },
   "peerDependencies": {
-    "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",
-    "callscript": ">=0.1.0 <0.2.0",
-    "effect": ">=4.0.0-rc.111 <5.0.0",
-    "effect-cf": ">=0.39.0 <1.0.0"
+    "effect": "^4.0.0-rc.112",
+    "@a2a-js/sdk": "^1.0.1",
+    "@durable-streams/client": "^0.2.6",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "acorn": "^8.18.0",
+    "callscript": "^0.1.0",
+    "effect-cf": "^0.39.0"
   },
   "peerDependenciesMeta": {
+    "@a2a-js/sdk": {
+      "optional": true
+    },
+    "@durable-streams/client": {
+      "optional": true
+    },
+    "@modelcontextprotocol/client": {
+      "optional": true
+    },
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "acorn": {
       "optional": true
     },
     "callscript": {
@@ -299,16 +315,12 @@
       "optional": true
     }
   },
-  "dependencies": {
-    "@a2a-js/sdk": "^1.0.1",
-    "@durable-streams/client": "^0.2.6",
-    "@modelcontextprotocol/client": "^2.0.0",
-    "acorn": "8.18.0"
-  },
   "devDependencies": {
+    "@a2a-js/sdk": "^1.0.1",
     "@ag-ui/client": "^0.0.58",
     "@ag-ui/core": "^0.0.58",
     "@cloudflare/workers-types": "^5.20260830.1",
+    "@durable-streams/client": "^0.2.6",
     "@durable-streams/server": "^0.3.8",
     "@effect/ai-anthropic": "^4.0.0-rc.112",
     "@effect/ai-openai": "^4.0.0-rc.112",
@@ -317,9 +329,11 @@
     "@effect/sql-sqlite-node": "^4.0.0-rc.112",
     "@effect/vitest": "^4.0.0-rc.112",
     "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "@types/node": "^20.19.43",
+    "acorn": "8.18.0",
     "alchemy": "^2.0.0-beta.75",
     "callscript": "^0.1.0",
     "effect": "^4.0.0-rc.112",
