@@ -1452,6 +1452,23 @@ for: the gap is recorded as a gap rather than assumed either way.*
     ends" — but that is a decision, and it is currently whatever the transport
     happens to do.
 
+58. **No test asserts that a principal reaches a tool over a wire.** Found
+    reviewing the matrix rather than by running anything: the cell read
+    "`Principal`, relay stamp" and neither backs it. `Principal.test.ts` covers
+    in-process and durable; the relay's `PEER_HEADER` stamps a peer, which is a
+    node's identity and not a user's.
+
+    The design intent is that the wire does **not** carry it — a principal
+    arriving in the protocol is a caller asserting its own identity, which is
+    the trust bug the seam exists to avoid, so a serving host establishes it
+    from its own authentication and provides it around the submission. That is
+    a sentence about how it is meant to work, which is the class of claim that
+    has been wrong twice this week. The test is small: an `AgentHttp` or
+    `AgentRpc` server whose host provides `CurrentPrincipal` from the request's
+    credentials, and a tool that reports what it saw — plus the negative, that
+    a principal a *client* tries to send does not become the one the tool
+    reads.
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:

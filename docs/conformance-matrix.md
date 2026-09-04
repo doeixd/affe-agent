@@ -95,13 +95,13 @@ the empty cells are its output, not its incompleteness.
 | run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | **not tested** ⁵ |
 | tool approval | `Permission` | `DurablePermission` | contract row | **item 53** ⁶ |
 | elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | **item 53** ⁶ |
-| principal | `Principal` | `Principal` | `Principal`, relay stamp | `SubagentPrincipal` ⁷ |
-| declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | text only ⁸ |
+| principal | `Principal` | `Principal` | **not tested** ⁷ | `SubagentPrincipal` ⁸ |
+| declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | text only ⁹ |
 | typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
-| cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | **not tested** ⁹ | `Subagent.helper`, `ToolCleanup` |
-| tool retry safety | n/a ¹⁰ | `DurableToolRetry` | n/a ¹⁰ | `SubagentDurable` ¹¹ |
-| events resumption | n/a ¹² | contract row | contract row | n/a ¹³ |
-| idempotent mutation | contract row | contract row | contract row | n/a ¹⁴ |
+| cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | **not tested** ¹⁰ | `Subagent.helper`, `ToolCleanup` |
+| tool retry safety | n/a ¹¹ | `DurableToolRetry` | n/a ¹¹ | `SubagentDurable` ¹² |
+| events resumption | n/a ¹³ | contract row | contract row | n/a ¹⁴ |
+| idempotent mutation | contract row | contract row | contract row | n/a ¹⁵ |
 
 ¹ **Found here, fixed here.** A two-turn script that suspended once made two
 model calls and recorded three turns of spend: the journal replayed the call
@@ -134,32 +134,44 @@ never runs. The child's *policy* does not decide it: `allowAll` changes
 nothing, which is what separates this from an ordinary denial. Marking a tool
 as needing approval disables it rather than protecting it.
 
-⁷ Verified rather than assumed. `plan-seams.md` claimed principal crosses a
+⁷ **Caught reviewing this table, which is the table working.** This cell first
+read "`Principal`, relay stamp" -- and neither backs it. `Principal.test.ts`
+covers in-process and durable, and the relay's `PEER_HEADER` stamps a *peer*,
+which is a node's identity rather than a user's. Nothing asserts that a
+principal established by a serving host reaches a tool over HTTP or RPC.
+
+It should stay uncarried: a principal arriving *in* the protocol would be a
+caller asserting its own identity, which is the trust bug, so the server's host
+must establish it from its own authentication. That is a claim about how it is
+meant to work, and it is exactly the kind of claim the footnote below was
+written to stop trusting. Item 58.
+
+⁸ Verified rather than assumed. `plan-seams.md` claimed principal crosses a
 delegation because a `Context.Reference` on the fibre crosses; that was read
 from the mechanism, and is now read from a test.
 
-⁸ Not a bug: `Subagent.tool` declares `success: Schema.String` and maps the
+⁹ Not a bug: `Subagent.tool` declares `success: Schema.String` and maps the
 child's result to its text. A child's declared `Value` therefore does not reach
 the parent as a value. Worth knowing before designing a typed child.
 
-⁹ A tool holding a process or a lock when the *connection* dies, rather than
+¹⁰ A tool holding a process or a lock when the *connection* dies, rather than
 when the run is interrupted, is a different question from the one `ToolCleanup`
 answers, and nobody has asked it.
 
-¹⁰ Reissue is a property of replay. Without a journal there is nothing to
+¹¹ Reissue is a property of replay. Without a journal there is nothing to
 replay and nothing to reissue.
 
-¹¹ Structurally insulated, and not by anyone's design: a child session absorbs
+¹² Structurally insulated, and not by anyone's design: a child session absorbs
 interruption, so an interrupted delegation returns partial text rather than
 raising, and nothing interrupt-shaped reaches `DurableToolkit`. The corollary
 is item 50 -- a parent cannot tell a cut-short delegation from a finished one.
 
-¹² The in-process client has no delivery log, so it **must refuse** a cursor
+¹³ The in-process client has no delivery log, so it **must refuse** a cursor
 rather than quietly returning a live stream. That refusal is itself a contract
 row, in both directions.
 
-¹³ A child has no event stream of its own that a caller can subscribe to; its
+¹⁴ A child has no event stream of its own that a caller can subscribe to; its
 events are the parent's tool call.
 
-¹⁴ A delegation is a tool call, and tool calls are made idempotent by the
+¹⁵ A delegation is a tool call, and tool calls are made idempotent by the
 journal rather than by a request id.
