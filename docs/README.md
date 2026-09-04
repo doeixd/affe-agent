@@ -65,6 +65,7 @@ workerd through miniflare). Each file carries its own status line, and
 
 | document | what it is |
 | --- | --- |
+| [plan-agent-product-control-plane.md](./plan-agent-product-control-plane.md) | Persistent named-agent product/control-plane architecture: `AgentSpec -> AgentDefinition`, organizations, projects/tasks, SessionDirectory + Needs You, browser/computer, connections/OAuth, automations, artifacts, knowledge, frontend, and an ordered build sequence over the existing kernel. |
 | [plan-workbench.md](./plan-workbench.md) | A fully open-source Open WebUI/bb-class workbench with Effect-native product/runtime/UI seams: `AgentClient` stays the execution contract, `AgentEvent` drives a UI-neutral projection, and React/assistant-ui/AG-UI are replaceable edge adapters. |
 | [plan-model-capabilities.md](./plan-model-capabilities.md) | The metadata upstream's `Model` omits — vision, window, cost — and what it unblocks in compaction and `/budget`; why cross-provider option normalization is a non-goal, and where prompt caching sits. M0 and M3 (prompt caching) done, M1 written but not exported, M2/M4/M5/M6 open — **and none of it is committed yet**. |
 | [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. **Phases 1–5 landed** (the `PromptWire` codec, `content` on results and events, media through A2A/OpenAI/AG-UI, and `/blob`); steps 6 (adapters externalizing automatically) and 7 (relay) remain. |
