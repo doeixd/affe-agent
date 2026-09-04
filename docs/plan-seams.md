@@ -52,7 +52,7 @@ ordinary tool" is elegant, and is exactly why nobody ever had to choose.
    and items 56–57 are the backlog it generated.
 5. ~~**E. `Agent.Any`, extracted from item 46**~~ — **shipped**; §3.5 records
    why the obvious spelling was impossible.
-6. **F. Make `remaining-work.md` unable to lie** — it misdirected twice today.
+6. ~~**F. Make `remaining-work.md` unable to lie**~~ — **shipped**; §3.6.
 
 ## 3. The items
 
@@ -334,6 +334,17 @@ An item whose claim has gone stale fails the build that is already run.
 
 **Size.** Small script; the work is writing the checks for the entries that
 have claims, which is a minority of them.
+
+**Shipped 2026-09-04**, with one change from the sketch: not shell. `npm run
+check` runs on Windows, and a check that only fires where `sh` is on the
+path fires nowhere it matters, so the line is a four-verb literal DSL --
+`grep`, `no-grep`, `exists`, `absent` -- over a quoted substring and a path.
+Zero lines found is a failure, not a pass, and a malformed line is too.
+Twelve claims carry checks at landing: the H7 correction (`ClusterMultiNode`
+is still `it.live`), item 25 as built, item 46's conditional still present
+and E's interface present, item 50 still recorded, items 52, 53 and 55 by the
+code they name, and item 58 by the *absence* it asserts -- which is the case
+the script is most for, since an absence is the claim nobody re-checks.
 
 ## 4. Deliberately not taken
 

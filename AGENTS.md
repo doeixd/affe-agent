@@ -271,10 +271,14 @@ checked invariant, not a convention.
 npm run typecheck          # src, test and examples, including the type assertions
 npm run lint               # Effect language service diagnostics
 npm run lint:portability   # no host coupling outside host modules
+npm run verify:remaining-work  # every `verify:` claim in docs/remaining-work.md still holds
 npm test
 ```
 
-All four must pass (`npm run check` runs them). `examples/anthropic.ts` is typechecked but never executed — it
+All five must pass (`npm run check` runs them). The fourth is how the live
+list stays live: an entry that makes a claim about the code carries a
+`verify:` line that falsifies it, and a stale claim fails the build rather
+than misdirecting the next reader. `examples/anthropic.ts` is typechecked but never executed — it
 would make live billed requests.
 
 ## Reviewing

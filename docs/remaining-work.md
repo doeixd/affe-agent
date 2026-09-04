@@ -6,6 +6,14 @@ plans, tools/toolkit plans, and the progress files themselves). This is the
 live list; `STATUS.md` is what is true now, `docs/status-history.md` the
 chronology, and `ROADMAP.md` the capability view.
 
+**An entry that makes a claim about the code carries the check that falsifies
+it** (`plan-seams.md` F, 2026-09-04), as a `verify:` line in a fenced block:
+`grep "literal" path`, `no-grep "literal" path`, `exists path`, `absent path`.
+`npm run verify:remaining-work` runs every one and `npm run check` includes
+it, so a claim that has gone stale -- open work that landed, done work that
+was undone -- fails the build until the text is fixed. This file misdirected
+twice in one day before that existed. Fix the text, not the check.
+
 State of play, re-measured 2026-09-03: every issue through #80 is closed, #4
 (the roadmap tracker) last, on 2026-08-30. `npm test` is green at **2071 tests
 in 189 files** (1820 in 168 on 2026-09-01; 1466 in 131 when this was written),
@@ -45,6 +53,10 @@ Two things that number hides, both worth knowing before trusting a red run:
   duration for headroom, or to accept that this one wants a quiet machine.
   Neither is `TestClock`, and nobody should spend a session discovering that
   again.
+
+  ```text
+  verify: grep "it.live" test/ClusterMultiNode.test.ts
+  ```
 - ~~The count includes work that is not committed.~~ No longer true as of
   2026-09-01: item 27's working-tree changes were committed as `be75b83`.
 
@@ -559,6 +571,10 @@ open, so the next pass does not have to re-derive it.
     the `dev` build 503s on tool-using runs. The v1 permission loop *is*
     verified live (26h), and the two share their decision.
 
+    ```text
+    verify: grep "resolveFor" src/toolSource/Credentials.ts
+    ```
+
 26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
     `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
     `ProcessManager`, and the bridge steps listed under 26c.
@@ -1044,6 +1060,11 @@ sizes; the items are repeated here so this list stays the one tracker.
     the `PromptInput<Input>` conditional that a helper hits when it *asks* a
     generic agent is what this item still owes.
 
+    ```text
+    verify: grep "export type PromptInput<Input> = [Input] extends [never]" src/AgentSession.ts
+    verify: grep "export interface Any extends Pipeable" src/Agent.ts
+    ```
+
 47. **What to take from their Workflow RFC** (`plan-rfc-286-durable.md`,
     2026-09-02). A read of `danieljvdm/effect-agent#286` against `/durable`.
     Their headline goal — any `WorkflowEngine` as a `Layer` — is where
@@ -1326,6 +1347,10 @@ and should not until it is committed. Item 30 is untouched.
     alters what a parent model sees on a path nobody has complained about, and
     the honest answer may be that a partial answer is better than none.
 
+    ```text
+    verify: grep "an interrupted child answers with what it had, and the parent is not told" test/SubagentDurable.test.ts
+    ```
+
 51. ~~**A replayed turn is charged to the budget twice**~~ — **FIXED 2026-09-04.** `Budget.spend`/`spendCost` now take an `Occurrence` — `(runId, turnIndex)` — and drop a charge for a turn already counted, so a replayed turn costs what it cost the first time. `test/BudgetCombinations.test.ts` asserted the wrong number until the fix landed and now asserts 2,000; disabling the dedupe returns it to 3,000. The number is also evidence that a run keeps its identity across a suspension, since a fresh `runId` on replay would have made the key differ. *(Original entry follows.)* (found 2026-09-04 by
     `test/BudgetCombinations.test.ts`, pinned at the wrong number so the suite
     stays honest). Measured: a two-turn script that suspends once makes
@@ -1387,6 +1412,11 @@ and should not until it is committed. Item 30 is untouched.
     capped with `cost` whose child runs on an unpriced model is not charged
     for that child's money. Give the child a priced model, or its own `cost`
     cap.
+
+    ```text
+    verify: grep "Budget.charge(inner)" src/subagent/Subagent.ts
+    verify: grep "${state.sessionId}:${state.runId}:${state.turnIndex}" src/budget/Budget.ts
+    ```
 
 53. **A child agent's approval-requiring tool cannot be approved by anyone**
     (found 2026-09-04 by `test/PermissionSubagent.test.ts`). A tool marked
@@ -1450,7 +1480,12 @@ and should not until it is committed. Item 30 is untouched.
     Elicitation ids are `submission-N:elicit-M` with both counters per
     session, so a child's first request had exactly the parent's first id and
     the elicitor kept one waiter; the forwarded id is now namespaced by the
-    child session, and the row hangs without it. This is also the answer for the MCP-bound child above, which the
+    child session, and the row hangs without it.
+
+    ```text
+    verify: grep "Effect.provideService(Elicitation.Current, Option.some(forwardable))" src/ToolExecution.ts
+    verify: grep "via: Schema.optional(Schema.Array(Schema.String))" src/Permission.ts
+    ``` This is also the answer for the MCP-bound child above, which the
     static check cannot see: forward, and the person decides.
 
     Two things that *are* right and are pinned in the same file: a child's
@@ -1507,6 +1542,10 @@ and should not until it is committed. Item 30 is untouched.
     migration is owed. Worth deciding once, though, whether a persisted key
     should ever derive from the package name.
 
+    ```text
+    verify: grep "terminalTags" src/relay/RelayClient.ts
+    ```
+
 ### Newly ranked — from the combination matrix (2026-09-04)
 
 *Both are blank cells in the second table of
@@ -1548,6 +1587,11 @@ for: the gap is recorded as a gap rather than assumed either way.*
     credentials, and a tool that reports what it saw — plus the negative, that
     a principal a *client* tries to send does not become the one the tool
     reads.
+
+    ```text
+    verify: no-grep "CurrentPrincipal" test/AgentHttp.test.ts
+    verify: no-grep "CurrentPrincipal" test/AgentRpc.test.ts
+    ```
 
 ### Known, deliberately left
 
