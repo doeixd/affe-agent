@@ -131,7 +131,7 @@ describe("AgentClientConformance", () => {
     Effect.gen(function* () {
       const report = yield* AgentClientConformance.run(wiring((real) => real))
       assert.deepStrictEqual(report.failed, [])
-      assert.strictEqual(report.passed.length, 19)
+      assert.strictEqual(report.passed.length, 20)
     })
   )
 
@@ -148,6 +148,45 @@ describe("AgentClientConformance", () => {
         ["opens a session and reaches it again by id"]
       )
     })
+  )
+
+  /**
+   * The falsification for 48d's interruption row, which needs one more than
+   * usual.
+   *
+   * Every implementation that runs the contract already passes that row, and
+   * the one that actually had the defect -- the relay -- is not in the
+   * contract, because nothing yet adapts an Effect RPC client to
+   * `AgentClient`. Without this, the row would have been added with no
+   * evidence it can fail: the same trap as a test that passes with its fix
+   * removed.
+   */
+  it.live(
+    "a client that is slow to unwind a cancelled request fails exactly the interruption case",
+    () =>
+      Effect.gen(function* () {
+        const report = yield* AgentClientConformance.run(
+          wiring((real) => ({
+            ...real,
+            createSession: (options) =>
+              Effect.map(real.createSession(options), (session) => ({
+                ...session,
+                // Longer than the row's own bound. This is the shape of the
+                // relay bug -- cancellation parked on something that has not
+                // arrived -- without needing a relay.
+                prompt: (input, promptOptions) =>
+                  session.prompt(input, promptOptions).pipe(
+                    Effect.onInterrupt(() => Effect.sleep("8 seconds"))
+                  )
+              }))
+          }))
+        )
+        assert.deepStrictEqual(
+          report.failed.map((failure) => failure.name),
+          ["interrupting a request in flight settles it rather than hanging"]
+        )
+      }),
+    30_000
   )
 
   it.live("the report names the client's own error when a case fails through it", () =>

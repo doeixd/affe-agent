@@ -40,7 +40,10 @@ export interface Harness extends AgentClientConformance.Options {
 export const run = (harness: Harness): void => {
   describe(`AgentClient contract (${harness.name})`, () => {
     for (const entry of AgentClientConformance.cases(harness)) {
-      it.live(entry.name, () => entry.run)
+      // Longer than any bound a case applies itself, so a case that is
+      // measuring "did this finish" reports its own failure -- which names
+      // what hung -- instead of being killed by the runner, which does not.
+      it.live(entry.name, () => entry.run, 30_000)
     }
   })
 }

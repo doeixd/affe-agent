@@ -622,6 +622,59 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
         }))
     ]),
 
+    /**
+     * Interruption must reach the caller, and why it is a row here rather
+     * than a note in one transport's own tests.
+     *
+     * The relay got this wrong in a way worth stating as a rule. Its caller
+     * waited for the far end to acknowledge an interrupted request; the
+     * acknowledgement arrived after the channel had been torn down, so it was
+     * dropped; and the request then waited forever for something that no
+     * longer had anywhere to land. The symptom was the worst kind: an
+     * *uninterruptible* hang, where an outer timeout fires, interrupts the
+     * request, and then waits on the same acknowledgement.
+     *
+     * So the rule is not about the run, which may well take a while to stop.
+     * It is that a transport must not make a caller's cancellation depend on
+     * a remote answer it might never receive. Every implementation owes it,
+     * and no implementation's own tests were asking.
+     */
+    make("interrupting a request in flight settles it rather than hanging",
+      Effect.gen(function* () {
+        const name = "interrupting a request in flight settles it rather than hanging"
+        const entered = yield* Deferred.make<void>()
+        const held = yield* Deferred.make<void>()
+        const layer = yield* options.layer({
+          agent: Agent.make({ loop: AgentLoop.bounded(1) }),
+          // Held open and never released, so the request is genuinely in
+          // flight when it is interrupted rather than merely sent.
+          turns: [{ text: "done", started: entered, during: Deferred.await(held) }]
+        })
+
+        const settled = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const client = yield* Effect.service(AgentClient.AgentClient)
+            const session = yield* client.createSession()
+            const running = yield* Effect.forkChild(session.prompt("go"))
+            // Not a yield or a sleep: the model has actually been entered.
+            yield* Deferred.await(entered)
+            // `Fiber.interrupt` waits for the fiber to finish unwinding, so a
+            // transport that parks its caller on an acknowledgement that will
+            // never come does not come back here.
+            return yield* Fiber.interrupt(running).pipe(
+              Effect.as(true),
+              Effect.timeout(Duration.seconds(5)),
+              Effect.catchTag("TimeoutError", () => Effect.succeed(false))
+            )
+          }).pipe(Effect.provide(layer))
+        )
+
+        yield* that(name)(
+          settled,
+          "interrupting an in-flight request never returned; a transport must not make cancellation wait on a remote acknowledgement it may never receive"
+        )
+      })),
+
     make("emits lifecycle events in order", withClient(
       options,
       { agent: Agent.make({ loop: AgentLoop.bounded(4) }), turns: [TestLanguageModel.text("done")] },
