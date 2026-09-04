@@ -75,18 +75,27 @@ const reachesForTheNetwork = `try {
 /**
  * The script is per object instance and chosen by the object's name -- the
  * one thing a per-instance layer can do that a module-level one cannot.
- * A `code-*` session gets two programs and an answer; every other session
- * answers in text first, then on its second prompt runs two tool turns and
- * hangs, which is how the test leaves a run mid-flight when it kills the
- * runtime.
+ * A `code-*` session gets two programs and an answer; a `backlog-*` session
+ * answers every prompt in one text turn, so a queue of dispatched jobs can
+ * actually drain; every other session answers in text first, then on its
+ * second prompt runs two tool turns and hangs, which is how the test leaves a
+ * run mid-flight when it kills the runtime.
  */
 const scriptedModel = Layer.unwrap(
   Effect.gen(function* () {
     const state = yield* DurableObjectState.DurableObjectState
     const name = Option.fromNullishOr(state.id.name)
     const code = Option.isSome(name) && name.value.startsWith("code-")
+    // A `backlog-` session answers every prompt in one text turn and never
+    // hangs. The default script deliberately hangs on its fourth model call,
+    // which is what leaves a run mid-flight for the hibernation test -- and
+    // which also means at most one dispatched job could ever *finish* under
+    // it. A test about draining a queue of jobs needs turns that end.
+    const backlog = Option.isSome(name) && name.value.startsWith("backlog-")
     const { layer } = yield* TestLanguageModel.script(
-      code
+      backlog
+        ? Array.from({ length: 20 }, (_, index) => TestLanguageModel.text(`ran-${index + 1}`))
+        : code
         ? [
           { toolCalls: [{ id: "p1", name: "execute", params: { program: callsATool } }] },
           { toolCalls: [{ id: "p2", name: "execute", params: { program: reachesForTheNetwork } }] },

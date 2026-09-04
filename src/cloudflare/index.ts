@@ -57,8 +57,10 @@ export * as IsolateExecutor from "./isolate.js"
  *   journal above the cursor, then live, gaplessly.
  * - **Future work** goes through `/scheduling`'s `AgentDispatcher`, here a
  *   logical alarm per job: `dispatch` schedules one, the object's alarm
- *   handler prompts the session with every due job, and the platform alarm
- *   is reconciled by `effect-cf` in the same transaction as the schedule.
+ *   handler prompts the session with the due jobs `maxRunsPerAlarm` allows
+ *   (one, by default, because a job here is a whole turn), and the platform
+ *   alarm is reconciled by `effect-cf` in the same transaction as the
+ *   schedule -- so a backlog drains across invocations rather than within one.
  *
  * The model and the agent's own services arrive as a `Layer` the caller
  * builds -- it may read bindings through `WorkerEnvironment` and the
@@ -93,6 +95,26 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
   readonly maxRetainedSubmissions?: number | undefined
   /** How long a failed dispatched run waits before the alarm retries it. Default 30 seconds. */
   readonly retryFailedAfter?: Duration.Input | undefined
+  /**
+   * How many dispatched runs one alarm invocation may start. Default 1.
+   *
+   * `processDue`'s own default is 100, which is the right order for the cheap
+   * jobs a logical alarm usually carries. This handler is not that: each job
+   * is a full agent turn -- model calls, tools, a commit -- so a hundred of
+   * them is far past what one alarm invocation can finish, and the platform
+   * kills the invocation rather than letting it run long. The backlog is not
+   * lost when that happens, because `processDue` acknowledges each job as it
+   * completes and the kill costs only the run in flight; but every kill costs
+   * one, so the bound wants to be in units of *runs*, not rows.
+   *
+   * One per invocation is the honest default: `processDue` re-arms the
+   * platform alarm from the earliest remaining job, and a job still due reads
+   * as a past `run_at`, so the next invocation follows immediately. A backlog
+   * drains at the same rate either way -- one run at a time is what a single
+   * session can do -- while no single invocation is holding more work than it
+   * can finish. Raise it only for handlers you know to be short.
+   */
+  readonly maxRunsPerAlarm?: number | undefined
 }
 
 /** A prompt as JSON text: stored history, and a dispatched job's payload. */
@@ -413,7 +435,10 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
               }))
           )
         }).pipe(Effect.scoped),
-      { retryFailedAfter: options.retryFailedAfter ?? "30 seconds" }
+      {
+        retryFailedAfter: options.retryFailedAfter ?? "30 seconds",
+        limit: options.maxRunsPerAlarm ?? 1
+      }
     )
   })
 

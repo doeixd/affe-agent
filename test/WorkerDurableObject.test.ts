@@ -332,6 +332,60 @@ describe("the Worker entry on workerd", () => {
   )
 
   /**
+   * A backlog drains across alarm invocations, not within one.
+   *
+   * The handler starts at most `maxRunsPerAlarm` runs -- one by default,
+   * because a dispatched job here is a whole turn and a hundred of them
+   * would outlive the invocation. That bound is only safe because
+   * `processDue` re-arms the platform alarm from the earliest job it did
+   * not reach, and a job already due re-arms to a past time, so the next
+   * invocation follows immediately. Three jobs due at once is the case that
+   * separates a working re-arm from one that strands the remaining two: if
+   * the bound were applied without it, exactly the first would ever run.
+   */
+  it.live("three jobs due at once all run, one alarm invocation at a time", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage-backlog")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const miniflare = yield* workerAt(outfile, persist)
+          json(yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create", sessionId: "backlog-1" })))
+          // All three due together, so they are one batch to `processDue`
+          // rather than three arrivals it would have handled anyway.
+          for (const input of ["first", "second", "third"]) {
+            const dispatched = yield* call(miniflare, "/sessions/backlog-1/dispatch", jsonRequest("POST", {
+              input,
+              delayMillis: 0
+            }))
+            assert.strictEqual(dispatched.status, 202, dispatched.body)
+          }
+          yield* Effect.retry(
+            Effect.flatMap(
+              call(miniflare, "/sessions/backlog-1/history", { headers: { authorization: "Bearer worker" } }),
+              (history) =>
+                history.body.includes("first") && history.body.includes("second") &&
+                  history.body.includes("third")
+                  ? Effect.void
+                  : Effect.fail("not yet" as const)
+            ),
+            { times: 600, schedule: Schedule.spaced("100 millis") }
+          )
+          const history = json(yield* call(miniflare, "/sessions/backlog-1/history", {
+            headers: { authorization: "Bearer worker" }
+          }))
+          const texts = JSON.stringify(history)
+          for (const input of ["first", "second", "third"]) {
+            assert.include(texts, input, `${input} never ran: the backlog stranded`)
+          }
+        })
+      )
+    }),
+    120_000
+  )
+
+  /**
    * Code mode in an isolate: the program runs in a Dynamic Worker with no
    * network, and reaches its tools only through the object's broker. Two
    * programs: one calls a tool and returns its answer; one reaches for
