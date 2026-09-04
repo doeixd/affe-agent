@@ -108,6 +108,27 @@ export class RelaySupersededError extends Schema.TaggedError<RelaySupersededErro
   }
 }
 
+/**
+ * The peer stopped proving it was there.
+ *
+ * A socket can be half-open for a long time -- a laptop that slept, a NAT that
+ * dropped the mapping -- and the relay cannot tell that from a quiet peer by
+ * looking at the socket. So liveness is a lease the peer renews, by any traffic
+ * or by `heartbeat`, and a connection that lets it lapse is ended rather than
+ * left in the directory claiming to be reachable.
+ */
+export class RelayLeaseExpiredError extends Schema.TaggedError<RelayLeaseExpiredError>()(
+  "@doeixd/effect-agent/relay/RelayLeaseExpiredError",
+  { peer: PeerId }
+) {
+  override get message() {
+    return `relay connection for ${this.peer} expired its lease`
+  }
+}
+
+/** Why the relay ended a connection's `listen` stream. */
+export type ConnectionEnded = RelaySupersededError | RelayLeaseExpiredError
+
 /** The relay's routing rule refused the send. */
 export class RelayForbiddenError extends Schema.TaggedError<RelayForbiddenError>()(
   "@doeixd/effect-agent/relay/RelayForbiddenError",
@@ -123,6 +144,7 @@ export const RelayError = Schema.Union([
   RelayUnauthorizedError,
   RelayPeerOfflineError,
   RelaySupersededError,
+  RelayLeaseExpiredError,
   RelayForbiddenError
 ])
 export type RelayError = typeof RelayError.Type

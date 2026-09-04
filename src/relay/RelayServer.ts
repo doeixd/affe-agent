@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Queue, Stream } from "effect"
+import { Clock, Context, Duration, Effect, Layer, Option, Queue, Stream } from "effect"
 import type { Headers } from "effect/unstable/http"
 import type { Rpc, RpcGroup } from "effect/unstable/rpc"
 import * as Relay from "./Relay.js"
@@ -64,6 +64,23 @@ export const allowAll: Authorization = { authorize: () => Effect.void }
 export interface Options {
   readonly authorization?: Authorization | undefined
   /**
+   * How long a peer stays reachable without proving it is there. Default 60
+   * seconds.
+   *
+   * Renewed by *any* traffic from the peer, not only `heartbeat`: a node that
+   * is answering calls has already demonstrated the thing a heartbeat is
+   * asking about. A connection that lets the lease lapse has its `listen`
+   * stream ended with `RelayLeaseExpiredError`, and stops being routable
+   * before that -- the directory saying "online" for a peer nothing can reach
+   * is worse than saying nothing.
+   *
+   * Evaluated when the relay is already doing something (a send, a listing),
+   * not by a reaper fibre: the relay has no background loop, and a peer whose
+   * lease has lapsed is by definition not talking, so there is nothing to be
+   * timely about.
+   */
+  readonly lease?: Duration.Duration | undefined
+  /**
    * Frames buffered per online peer before `send` suspends its caller.
    * Backpressure, not a drop: a slow reader slows its senders rather than
    * growing the relay's memory. Default 1024.
@@ -72,7 +89,7 @@ export interface Options {
 }
 
 interface Connection {
-  readonly queue: Queue.Queue<Relay.Envelope, Relay.RelaySupersededError>
+  readonly queue: Queue.Queue<Relay.Envelope, Relay.ConnectionEnded>
   readonly connectedAt: number
 }
 
@@ -94,7 +111,26 @@ export const layer = (
       const authenticator = yield* RelayAuthenticator
       const authorization = options?.authorization ?? allowAll
       const capacity = options?.inboundCapacity ?? 1024
+      const lease = Duration.toMillis(options?.lease ?? Duration.seconds(60))
       const peers = new Map<Relay.PeerId, Entry>()
+
+      /**
+       * Whether this peer is reachable *now*, expiring it if not.
+       *
+       * The expiry happens here rather than in a sweep, so the answer a caller
+       * gets and the state the relay holds cannot disagree: whoever asks is
+       * the one who collects.
+       */
+      const live = (peer: Relay.PeerId, entry: Entry, now: number) =>
+        Effect.gen(function* () {
+          if (Option.isNone(entry.connection)) return false
+          if (now - entry.lastSeenAt <= lease) return true
+          peers.set(peer, { connection: Option.none(), lastSeenAt: entry.lastSeenAt })
+          // Ending the stream is how the node finds out, if it is still there
+          // to find out: `RelayClient` moves to `offline` with the reason.
+          yield* Queue.fail(entry.connection.value.queue, new Relay.RelayLeaseExpiredError({ peer }))
+          return false
+        })
 
       const touch = (peer: Relay.PeerId, now: number) => {
         const entry = peers.get(peer)
@@ -105,7 +141,7 @@ export const layer = (
         const peer = yield* authenticator.authenticate(headers)
         yield* Effect.annotateCurrentSpan("relay.peer", peer)
         const now = yield* Clock.currentTimeMillis
-        const queue = yield* Queue.make<Relay.Envelope, Relay.RelaySupersededError>({ capacity, strategy: "suspend" })
+        const queue = yield* Queue.make<Relay.Envelope, Relay.ConnectionEnded>({ capacity, strategy: "suspend" })
         const previous = peers.get(peer)
         if (previous !== undefined && Option.isSome(previous.connection)) {
           // Newest authenticated connection wins; the old stream ends with the reason.
@@ -134,8 +170,9 @@ export const layer = (
         yield* Effect.annotateCurrentSpan("relay.endpoint", outbound.endpoint)
         yield* authorization.authorize({ from, to: outbound.to, endpoint: outbound.endpoint })
         touch(from, yield* Clock.currentTimeMillis)
+        const now = yield* Clock.currentTimeMillis
         const target = peers.get(outbound.to)
-        if (target === undefined || Option.isNone(target.connection)) {
+        if (target === undefined || !(yield* live(outbound.to, target, now))) {
           return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
         }
         const envelope: Relay.Envelope = {
@@ -145,7 +182,8 @@ export const layer = (
           channel: outbound.channel,
           frame: outbound.frame
         }
-        const accepted = yield* Queue.offer(target.connection.value.queue, envelope)
+        const connection = Option.getOrThrow(target.connection)
+        const accepted = yield* Queue.offer(connection.queue, envelope)
         if (!accepted) {
           return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
         }
@@ -160,13 +198,21 @@ export const layer = (
 
       const list = Effect.fn("RelayServer.peers")(function* (headers: Headers.Headers) {
         yield* authenticator.authenticate(headers)
+        const now = yield* Clock.currentTimeMillis
         const all: Array<Relay.PeerInfo> = []
-        for (const [id, entry] of peers) {
+        // Snapshotted first: `live` expires entries as it goes, and mutating
+        // the map underneath its own iteration is how a listing quietly starts
+        // skipping peers.
+        for (const [id, entry] of [...peers]) {
+          const reachable = yield* live(id, entry, now)
+          const current = peers.get(id) ?? entry
           all.push({
             id,
-            status: Option.isSome(entry.connection) ? "online" : "offline",
-            connectedAt: Option.map(entry.connection, (connection) => connection.connectedAt),
-            lastSeenAt: entry.lastSeenAt
+            status: reachable ? "online" : "offline",
+            connectedAt: reachable
+              ? Option.map(current.connection, (connection) => connection.connectedAt)
+              : Option.none(),
+            lastSeenAt: current.lastSeenAt
           })
         }
         return all
