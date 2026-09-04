@@ -1105,8 +1105,16 @@ sizes; the items are repeated here so this list stays the one tracker.
       not the fix `2d65ccf` claimed it was. The likelier explanation is that
       the other half of that commit -- taking the `events` subscription
       before the prompt rather than after -- is what removed the hang.
-    - **48e. The relay's deferred half** -- lease expiry, reconnection,
-      durable mailbox, enrollment, in that order.
+    - **48e. The relay's deferred half** -- lease expiry **SHIPPED
+      2026-09-03** (`a2288f2`); reconnection, the durable mailbox and
+      enrollment remain, in that order.
+
+      The lease is renewed by any traffic, not only `heartbeat`, and is
+      evaluated when the relay is already doing something rather than by a
+      reaper fibre -- whoever asks is the one who collects, so the answer a
+      caller gets and the state the relay holds cannot disagree. Both halves
+      had to land together: `RelayClient` heartbeated once at startup, so
+      expiry alone would have dropped every node that was merely quiet.
 
     Recorded there so it is not re-derived: our submission idempotency key is
     already identity-based rather than input-based, which is the property
