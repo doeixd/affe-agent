@@ -5782,3 +5782,36 @@ on `Agent.Any` as an interface, on `terminalTags` -- each time on text that
 had gone stale that hour. `tsc` (all five configs), `lint`, `lint:portability`,
 `verify:package` clean; 2165 tests across 204 files.
 
+## 2026-09-05 — the other project's rollover, read and taken
+
+`danieljvdm/effect-agent#335` was read for what it could teach
+(`docs/plan-context-lessons.md`), and the plan it produced shipped in a day,
+each slice its own commit and each reviewed after: the model can see its own
+window (60a, `context_remaining`); a declared failpoint nobody crashes at
+fails the build (60b, `Failpoints.covered`); a `Behavior-Change:` trailer
+is required of a commit that touches a fixture (60c) and is what the
+changelog publishes (60k); a fresh window is a compaction decision --
+`Rollover` beside `Summary`, asked for with `new_context` whose request is
+read back from canonical history so a crash or replay loses nothing, or
+taken as the fallback when a summary will not fit (60d); a `new_context`
+beside other calls is refused through a kernel annotation,
+`ToolExecution.Alone` (60d-ii); what a fold removed is still searchable and
+pageable evidence, bounded (60e); the engine records every turn's facts to a
+`RunLedger` any seam can read (60g); every loop and policy describes itself
+and `Agent.describe` derives the agent as data (60h); `Presets.policy` spells
+the bounds as one record and round-trips through that description (60i); and
+`AGENTS.md` says that guides state and plans argue (60j).
+
+Two things were found on the way. The summary projection had been dropping
+the session's instructions from the first compaction on -- the first
+canonical message is the instructions, the first fold covered it, and the
+projection began at the summary; every projection now keeps the leading
+system messages (60l). And `Presets.policy`'s first types tested for a key's
+*presence*, so a wide record with a `cost` at runtime was typed as needing
+nothing; they ask whether a ceiling is given now, with a type assertion that
+fails if that regresses.
+
+Not taken from the plan: the provider-overflow trigger, because Effect's AI
+layer has no provider-neutral classification to catch (60d-i, parked). The
+claims checker held sixty-seven claims across three files at the end; the
+suite stood at 2204 tests in 210 files.

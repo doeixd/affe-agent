@@ -470,14 +470,6 @@ and should not until it is committed. Item 30 is untouched.
     should ever derive from the package name.
 
 
-### Newly ranked — from the combination matrix (2026-09-04)
-
-*Both are blank cells in the second table of
-[conformance-matrix.md](./conformance-matrix.md), which is what that table is
-for: the gap is recorded as a gap rather than assumed either way.*
-
-### Newly ranked — after the seams pass (2026-09-04)
-
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
 60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons

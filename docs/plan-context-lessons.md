@@ -106,11 +106,13 @@ pin beside phase 14's; the matrix's durable column names it.
 
 ### 2.2 The harness interprets
 
-> **Partly shipped with 60d.** The rollover paths cannot split a tool pair
-> (a request cuts after the tool message that carries it; the fallback cuts
-> at a user message) and cannot regress coverage (`Math.max(covered, ...)`).
-> The two refusals for a *custom policy's* cut are still inside the strategy;
-> moving them into the transform is the remaining half.
+> **Closed with 60d.** The rollover paths cannot split a tool pair (a
+> request cuts after the tool message that carries it; the fallback cuts at
+> a user message) and cannot regress coverage (`Math.max(covered, ...)`).
+> The remaining half -- refusing a *custom policy's* bad cut -- has no
+> subject: `Compaction.Policy` is the closed union of `whenLongerThan` and
+> `tokens`, and both cut through `prepare`, which aligns off tool results.
+> A third policy kind would bring the refusals with it.
 
 **What they did.** The compactor returns decisions; the engine applies them,
 commits each before pulling the next, and refuses what breaks an invariant --

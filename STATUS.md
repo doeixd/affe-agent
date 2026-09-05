@@ -17,7 +17,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 2165 passing in 204 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
+| tests | `npm test` | 2204 passing in 210 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`, `lint:cloudflare`) | 0 errors, 1 warning (a chained `provide` in `test/ProcessManager.test.ts`, a colleague's file), 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`, `:cloudflare`) | clean, examples included |
 | doc claims | `npm run verify:remaining-work` | every `verify:` line in the live list, the ledger and this file holds; a stale claim fails the build. It fired three times in its first two days, each time on text that had gone stale that hour |
@@ -97,9 +97,14 @@ always `Some`, `Agent.Any` is a plain alias, and the wire carries one shape
 schema, `AgentClient.typed` for the caller; journalled by the durable client
 and rendered in the workflow); run policy on the loop seam -- `maxTurns`,
 `maxToolCalls`, `maxDuration`, `limits`, `withFinalTurn` -- with the stop's
-reason on `RunCompleted`, the result and every client; a `Budget` the engine
-records every turn against, so `within` and `cost` are pure decisions and a
-delegated child's spend reaches its parent's counter; and a decided
+reason on `RunCompleted`, the result and every client; a `RunLedger` the
+engine writes after every turn -- session, run, turn, tool calls, tokens,
+cost, elapsed, keyed so a replay is one entry -- and charges the `Budget`
+from, so `within` and `cost` are pure decisions and a delegated child's
+spend reaches its parent's counter under the child's own session id; every
+loop and permission policy carrying a description of itself, and
+`Agent.describe` deriving the whole agent as data from them; a tool able to
+insist on being the only call in its turn (`ToolExecution.Alone`); and a decided
 delegation boundary (`Subagent.Inherit`: budget crosses by default, approval
 only when asked to and then on the parent's event stream with the path of
 delegating tools, a typed child's value returned as the tool's result, and a
@@ -172,7 +177,9 @@ network but the object's broker route, every call still through the
 host's `invoke`; proven on miniflare with a program that reaches for
 `fetch` and gets nothing.
 
-**Presets.** `affe-agent/presets`: `Presets.coding` (toolkit, a
+**Presets.** `affe-agent/presets`: `Presets.policy` (a run's bounds and
+ceilings as one record, expanding to the loop and the `Budget` layer, with
+`readPolicy` as its inverse over a loop's description); `Presets.coding` (toolkit, a
 policy that asks before anything changes, an acquired workspace) and
 `Presets.gateway` (source-bound tools behind one host, refusals returned
 to the model, the caller's `subject` required rather than optional).
@@ -261,9 +268,14 @@ output, vision/tools/reasoning, per-million cost with `cacheRead` and
 `cacheWrite` priced apart -- with a built-in Anthropic table guarded by an
 exhaustiveness test, and `budget`, a compaction budget the model sizes
 itself); `/export` (JSON envelope + JSONL commit log); `/compaction`
-(+ branch carryover: `BranchSummary` over the tree's seed seam, and
-`CodingSummary`'s cumulative file details);
-(token policy, checkpoints, controller, events); `/redaction`; `/budget`;
+(token policy, checkpoints, controller, events; a `Rollover` checkpoint
+beside `Summary` -- the model asks with `new_context`, or a summary that will
+not fit falls back to one -- with the instructions kept ahead of every
+projection, and four tools the controller builds: `context_remaining`,
+`new_context`, `search_context` and `read_context`, the last two over the
+canonical history a fold removed from view; + branch carryover:
+`BranchSummary` over the tree's seed seam, and `CodingSummary`'s cumulative
+file details); `/redaction`; `/budget`;
 `/data`; `/hooks`; `/scheduling`; `/connectors` (+ Slack, with a channel
 conformance suite); `/plugins`; `/tree` (sessions as a tree: branch, lanes,
 divergence, activation); `/web` (+ Brave search, HTTP fetch, and since
