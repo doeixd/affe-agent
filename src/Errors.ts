@@ -80,6 +80,30 @@ export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRe
  * the tool's own projection -- said this action on this resource is not
  * permitted here. `reason` is the policy's word, when it gave one.
  */
+/**
+ * A tool annotated `ToolExecution.Alone` arrived in a turn with other calls.
+ *
+ * Not a permission answer and not the handler's failure: the model's own
+ * mistake, and a recoverable one, so it is always returned to the model as
+ * the call's result -- the siblings run, this one did not -- and never fails
+ * the run. `siblings` is how many other calls came with it.
+ */
+export class ToolNotAloneError extends Schema.TaggedError<ToolNotAloneError>()(
+  "ToolNotAloneError",
+  {
+    toolName: Schema.String,
+    toolCallId: Schema.String,
+    siblings: Schema.Number
+  }
+) {
+  override get message() {
+    return (
+      `Tool ${this.toolName} must be the only call in its turn; it was not run because ` +
+      `${this.siblings} other call${this.siblings === 1 ? "" : "s"} arrived with it. Call it again, alone.`
+    )
+  }
+}
+
 export class ToolPermissionDeniedError extends Schema.TaggedError<ToolPermissionDeniedError>()(
   "ToolPermissionDeniedError",
   {

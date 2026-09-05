@@ -48,6 +48,9 @@ describe("public API", () => {
       "StorageError",
       "ToolApprovalRequiredError",
       "ToolExecution",
+      // An `Alone` tool that arrived with siblings: the model's mistake,
+      // always returned to it, never a failed run.
+      "ToolNotAloneError",
       "ToolPermissionDeniedError",
       "isStorageError"
     ])
@@ -164,6 +167,8 @@ describe("public API", () => {
     // is reachable by module path and absent from the package's namespaces.
     assert.notProperty(Harness.AgentSession, "makeEngine")
     assert.deepStrictEqual(Object.keys(Harness.ToolExecution).sort(), [
+      // The annotation for a tool that must be the only call in its turn.
+      "Alone",
       "FailRun",
       "Parallel",
       "ReturnToModel",

@@ -5,6 +5,7 @@ import * as Agent from "../Agent.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as Budget from "../budget/Budget.js"
 import * as ContextTransform from "../ContextTransform.js"
+import * as ToolExecution from "../ToolExecution.js"
 import { CurrentSessionId } from "../internal/currentSession.js"
 import * as Failpoint from "../internal/failpoint.js"
 import { positiveInteger } from "../internal/positive.js"
@@ -128,6 +129,11 @@ export type RolloverRequest = typeof RolloverRequest.Type
  * -- finds it exactly where the first pass did. Once the rollover covers
  * that message it cannot be seen again, so a request from an earlier window
  * never fires twice. Idempotent by construction and annotated so.
+ *
+ * Annotated `ToolExecution.Alone`: a call that arrives with siblings is not
+ * run and gets a `ToolNotAloneError` as its result, because the siblings'
+ * results would otherwise be folded away with the window, silently. The
+ * siblings run; the model is told to call again, alone.
  */
 export const NewContext = Tool.make("new_context", {
   description:
@@ -135,7 +141,7 @@ export const NewContext = Tool.make("new_context", {
     "takes effect before your next turn. Optionally leave a short handoff note for the next window.",
   parameters: RolloverRequest,
   success: RolloverRequest
-}).annotate(Tool.Idempotent, true)
+}).annotate(Tool.Idempotent, true).annotate(ToolExecution.Alone, true)
 
 /**
  * The two durable boundaries around writing a checkpoint. A crash before the

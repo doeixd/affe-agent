@@ -1,10 +1,10 @@
-import { Cause, Effect, Exit, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Option, Schema, Semaphore, Stream } from "effect"
 import { Response } from "effect/unstable/ai"
 import type { Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import type { SubmissionId } from "./internal/ids.js"
-import { ToolApprovalRequiredError, ToolPermissionDeniedError } from "./Errors.js"
+import { ToolApprovalRequiredError, ToolNotAloneError, ToolPermissionDeniedError } from "./Errors.js"
 import * as Elicitation from "./Elicitation.js"
 import { CurrentSessionId } from "./internal/currentSession.js"
 import * as Permission from "./Permission.js"
@@ -826,6 +826,56 @@ const executePerTool = <
  * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
  * at all, so siblings always run to completion.
  */
+/**
+ * Annotation: this tool must be the only call in its turn.
+ *
+ * For a tool whose result is a decision about the *next* turn -- the
+ * compaction controller's `new_context` is the one in this repository --
+ * a sibling in the same batch would run and then have its result folded
+ * away with everything else, silently. So a call carrying this annotation
+ * that arrives with siblings is not run: it gets a `ToolNotAloneError` as
+ * its result, returned to the model whatever the failure policies say,
+ * because it is the model's own recoverable mistake; the siblings run as
+ * they would have. `false` by default. Set it with
+ * `Tool.make(...).annotate(ToolExecution.Alone, true)`.
+ */
+export const Alone = Context.Reference<boolean>("affe-agent/ToolExecution/Alone", {
+  defaultValue: () => false
+})
+
+const mustBeAlone = <Tools extends Record<string, Tool.Any>>(
+  handler: Toolkit.WithHandler<Tools>,
+  call: Response.ToolCallParts<Tools, true>
+): boolean => {
+  const tool = handler.tools[call.name as keyof Tools]
+  return tool !== undefined && Context.get(tool.annotations, Alone)
+}
+
+/** The refusal for an `Alone` tool with siblings: announced like any call, and always the model's to read. */
+const refuseNotAlone = <R>(
+  call: { readonly id: string; readonly name: string; readonly params: unknown },
+  siblings: number,
+  context: TurnContext<R>
+): Effect.Effect<Response.AnyPart> =>
+  Effect.gen(function* () {
+    const { correlation, session } = context
+    const error = new ToolNotAloneError({ toolName: call.name, toolCallId: call.id, siblings })
+    yield* EventBus.emit(session.bus, correlation, {
+      _tag: "ToolCallStarted",
+      id: call.id,
+      name: call.name,
+      params: call.params
+    })
+    yield* EventBus.emit(session.bus, correlation, {
+      _tag: "ToolCallFailed",
+      id: call.id,
+      name: call.name,
+      failure: AgentEvent.failureFromCause(Cause.fail(error)),
+      returnedToModel: true
+    })
+    return failureResultPart(call, error)
+  })
+
 export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
@@ -834,10 +884,36 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   ReadonlyArray<Response.AnyPart>,
   Tool.HandlerError<Tools[keyof Tools]> | RaisedError,
   Tool.HandlerServices<Tools[keyof Tools]> | R
-> =>
-  context.agent.strategy._tag === "PerTool"
-    ? executePerTool(handler, calls, context, context.agent.strategy)
-    : Effect.all(
-        calls.map((call) => executeOne(handler, call, context)),
-        concurrencyOption(context.agent.strategy)
-      )
+> => {
+  const dispatch = (
+    batch: ReadonlyArray<Response.ToolCallParts<Tools, true>>
+  ): Effect.Effect<
+    ReadonlyArray<Response.AnyPart>,
+    Tool.HandlerError<Tools[keyof Tools]> | RaisedError,
+    Tool.HandlerServices<Tools[keyof Tools]> | R
+  > =>
+    context.agent.strategy._tag === "PerTool"
+      ? executePerTool(handler, batch, context, context.agent.strategy)
+      : Effect.all(
+          batch.map((call) => executeOne(handler, call, context)),
+          concurrencyOption(context.agent.strategy)
+        )
+  if (calls.length < 2 || !calls.some((call) => mustBeAlone(handler, call))) return dispatch(calls)
+  // A call that must be alone, with company: refused without running, while
+  // the rest run as they would have. Results are reassembled in the calls'
+  // order, so the history reads as the model asked.
+  const refused = calls.filter((call) => mustBeAlone(handler, call))
+  const rest = calls.filter((call) => !mustBeAlone(handler, call))
+  return Effect.map(
+    Effect.all([
+      Effect.forEach(refused, (call) => refuseNotAlone(call, calls.length - 1, context)),
+      dispatch(rest)
+    ]),
+    ([refusals, results]) => {
+      const byId = new Map<string, Response.AnyPart>()
+      refused.forEach((call, index) => byId.set(call.id, refusals[index]!))
+      rest.forEach((call, index) => byId.set(call.id, results[index]!))
+      return calls.map((call) => byId.get(call.id)!)
+    }
+  )
+}

@@ -1517,3 +1517,24 @@ still resolves -- here, if not in the list. Nothing here is next;
     ```text
     verify: grep "Guides state; plans argue" AGENTS.md
     ```
+
+60d-ii. ~~**A `new_context` beside other calls is not refused.**~~ **DONE
+    2026-09-05.** A kernel annotation rather than a compaction special case:
+    `ToolExecution.Alone`, `false` by default, and honoured in `execute`,
+    the one place a turn's whole batch is in hand. A call carrying it that
+    arrives with siblings is not run; it is announced like any call and gets
+    a `ToolNotAloneError` as its result, returned to the model whatever the
+    failure policies say, because it is the model's own recoverable mistake.
+    The siblings run under the agent's strategy as they would have, and the
+    results are reassembled in the calls' order. `Compaction.NewContext`
+    carries the annotation. One row: a batch of the request and a ping, then
+    a lone request -- the ping's answer and the refusal both in the next
+    prompt, no rollover, then the window moves with the lone call's handoff.
+    Broken twice: the annotation removed (the sibling turn rolls over), the
+    siblings dropped from the dispatch (no ping result).
+
+    ```text
+    verify: grep "export const Alone" src/ToolExecution.ts
+    verify: grep "ToolNotAloneError" src/Errors.ts
+    verify: grep "annotate(ToolExecution.Alone, true)" src/compaction/Compaction.ts
+    ```

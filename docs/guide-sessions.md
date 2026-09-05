@@ -244,6 +244,13 @@ which reports the last projection the controller recorded for the calling
 session, so a model can see how much of its window is left. A limit the
 model cannot see is a limit it will hit.
 
+A tool whose result is a decision about the next turn can insist on being the
+only call in its turn: annotate it `ToolExecution.Alone`. A call carrying the
+annotation that arrives with siblings is not run and gets a `ToolNotAloneError`
+as its result, returned to the model whatever the failure policies say, while
+the siblings run under the agent's strategy. The compaction controller's
+`new_context` is the tool in this repository that does.
+
 ## Tool progress
 
 A tool handler may report intermediate results while it is still running, via

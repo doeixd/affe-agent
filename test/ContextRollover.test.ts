@@ -3,11 +3,12 @@ import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema, Stream } from
 import { Prompt, Tool } from "effect/unstable/ai"
 import { readFile } from "node:fs/promises"
 import * as Agent from "../src/Agent.js"
+import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import { Budget } from "../src/budget/index.js"
 import { Compaction } from "../src/compaction/index.js"
-import { Failpoints } from "../src/testing/index.js"
+import { AgentProbe, Failpoints } from "../src/testing/index.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -314,6 +315,59 @@ describe("a fresh window as a compaction decision", () => {
         assert.strictEqual(checkpoint.value.window, 1, "a second rollover was written where nothing moved")
         assert.strictEqual(checkpoint.value.coveredThrough, 2)
       } else assert.fail("the first fallback rollover should be the checkpoint on record")
+    })
+  )
+
+  it.effect("new_context beside another call is refused, the sibling runs, and the window does not move", () =>
+    Effect.gen(function* () {
+      // Item 60d-ii. A sibling's result would be folded away with the window,
+      // silently, so the request is not run when it has company: it gets a
+      // `ToolNotAloneError` as its result, the ping runs, and the next turn
+      // still sees everything. The turn after that calls it alone, and the
+      // window moves then. Read from events and from the prompts the model saw.
+      const compaction = yield* messageCounter()
+      const agent = Agent.make({
+        instructions: "Be terse.",
+        tools: [compaction.tools.newContext, ping],
+        contextTransform: compaction.transform,
+        loop: AgentLoop.bounded(4)
+      })
+      const { layer, recorder } = yield* FakeModel.script([
+        { toolCalls: [{ id: "n1", name: "new_context", params: { handoff: "too early" } }, { id: "p1", name: "ping", params: {} }] },
+        { toolCalls: [{ id: "n2", name: "new_context", params: { handoff: "alone now" } }] },
+        { text: "done" }
+      ])
+      const { events, checkpoint } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          const probe = yield* AgentProbe.make(session)
+          yield* session.prompt("go")
+          return { events: yield* probe.events, checkpoint: yield* compaction.checkpoint(session.id) }
+        })
+      ).pipe(Effect.provide(layer))
+
+      // The refused call was announced like any other and returned to the model.
+      const failed = events.flatMap((envelope) => AgentEvent.is("ToolCallFailed")(envelope) ? [envelope.event] : [])
+      assert.deepStrictEqual(failed.map((event) => [event.id, event.returnedToModel]), [["n1", true]])
+      assert.include(failed[0]!.failure.message, "must be the only call in its turn")
+      const succeeded = events.flatMap((envelope) => AgentEvent.is("ToolCallSucceeded")(envelope) ? [envelope.event.id] : [])
+      assert.deepStrictEqual(succeeded, ["p1", "n2"])
+
+      const prompts = yield* recorder.prompts
+      assert.strictEqual(prompts.length, 3)
+      // Turn two: no rollover happened; the ping's answer and the refusal are both in view.
+      assert.deepStrictEqual(toolResultNames(prompts[1]!).sort(), ["new_context", "ping"])
+      assert.deepStrictEqual(systemTexts(prompts[1]!), ["Be terse."])
+      // Turn three: the lone request took effect, with its own handoff.
+      assert.deepStrictEqual(toolResultNames(prompts[2]!), [])
+      assert.deepStrictEqual(systemTexts(prompts[2]!), [
+        "Be terse.",
+        "Context window 1: the conversation before this point was cleared. Handoff note from the previous window:\n\nalone now"
+      ])
+      if (Option.isSome(checkpoint) && Compaction.isRollover(checkpoint.value)) {
+        assert.deepStrictEqual(checkpoint.value.handoff, Option.some("alone now"))
+        assert.strictEqual(checkpoint.value.window, 1)
+      } else assert.fail("expected one rollover, from the lone call")
     })
   )
 

@@ -33,7 +33,8 @@ design; 4 waits on 1 because "earlier windows" is what it reads.
 > "rollover"` on the controller rather than `onPressure` on the token policy,
 > because the only place a summary is known not to fit is after it was tried.
 > The overflow trigger is not shipped (60d-i: no provider-neutral
-> classification exists to catch), nor is refusing a mixed batch (60d-ii).
+> classification exists to catch). Refusing a mixed batch shipped the same
+> day as 60d-ii, as a kernel annotation, `ToolExecution.Alone`.
 
 **What they did.** `ContextCompactor` emits one of three decisions --
 `clear-tool-results`, `summarize`, `rollover` -- and `rollover` starts a

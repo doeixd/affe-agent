@@ -501,20 +501,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     verify: no-grep "overflow" src/AgentTurn.ts
     ```
 
-60d-ii. **A `new_context` beside other calls is not refused.** Their harness
-    refuses a mixed batch before either call runs; ours lets every call run
-    and folds the siblings' results into the window with everything else.
-    The tool's description says "call it once, alone", and the projection is
-    correct either way -- but a sibling whose result mattered is lost with no
-    warning. Wanted: a `ToolCallFailed` for the request when it arrives with
-    siblings, from a small check in `ToolExecution` keyed on the tool's
-    annotation, with a test that the siblings still ran and the window did not
-    move. Small.
-
-    ```text
-    verify: no-grep "new_context" src/ToolExecution.ts
-    ```
-
 60e. **Retained history as evidence, bounded.** After 60d: two readonly tools
     over the session's own history -- search with at most three hits, a page
     of at most five thousand characters -- every description carrying

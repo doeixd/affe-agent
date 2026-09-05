@@ -464,8 +464,11 @@ const agent = Agent.make({
 result. That result is then in canonical history, and the transform reads it
 from there before the next model call — so a crash or a durable replay between
 the call and the new window loses nothing, and a request the window already
-covers can never fire twice. Tell the model to call it alone: siblings in the
-same batch run, and their results are folded away with everything else.
+covers can never fire twice. It must be called alone: the tool carries
+`ToolExecution.Alone`, so a request that arrives beside other calls is not run
+and comes back to the model as a `ToolNotAloneError`, while the other calls
+run as they would have. The model calls again, by itself, and the window moves
+then.
 
 Or a token policy can fall back to one when a summary will not fit:
 

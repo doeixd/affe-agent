@@ -8,6 +8,7 @@
  * so it stays off `affe-agent` (design-assessment rec 2).
  */
 export {
+  Alone,
   FailRun,
   Parallel,
   ReturnToModel,
