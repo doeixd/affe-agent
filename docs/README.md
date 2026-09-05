@@ -40,6 +40,7 @@ holds only the install, quickstart, seam map, package map and stability notes.
 | [platforms.md](./platforms.md) | Node and Cloudflare Workers, one table: what runs where and what survives what on each. Bun is untested and says so. |
 | [MODULES.md](./MODULES.md) | Every public module — what, why, and what it composes with. The answer to "which module do I need for X". |
 | [remaining-work.md](./remaining-work.md) | The ranking, easiest first, of what is actually left -- the live list, and only what is open. |
+| [plan-two-decisions.md](./plan-two-decisions.md) | Two questions for the owner, framed with options and a recommendation each: whether wire tags and persisted keys should derive from the package name (item 55), and whether a cut-short delegation should say so to its parent (item 50). |
 | [remaining-work-closed.md](./remaining-work-closed.md) | The ledger: every entry the live list has closed, verbatim, with its reasoning and its `verify:` lines still checked. Nothing in it is next. |
 | [transport.md](./transport.md) | Reference for how a session crosses a process boundary: the client seam and every transport over it. |
 

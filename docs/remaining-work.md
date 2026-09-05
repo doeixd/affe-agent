@@ -389,7 +389,8 @@ and should not until it is committed. Item 30 is untouched.
     - **M5, M6 not started** — the opt-in pre-flight transform, and the
       selection example.
 
-50. **A parent cannot tell a cut-short delegation from a finished one**
+50. **A parent cannot tell a cut-short delegation from a finished one** --
+    framed for a decision in [plan-two-decisions.md](./plan-two-decisions.md) §2.
     (found 2026-09-04 by `test/SubagentDurable.test.ts`, recorded rather than
     decided). A child session absorbs interruption by design, so an
     interrupted child does not fail its delegation: `Agent.run` returns with
@@ -447,6 +448,9 @@ and should not until it is committed. Item 30 is untouched.
     fix is a wire tag that does not derive from the package name. That is the
     "decide once" below, it applies to every `affe-agent/...` tag and every
     `affe_*` table default, and it is a decision to make, not a patch to land.
+    **The decision is framed in [plan-two-decisions.md](./plan-two-decisions.md)
+    §1**, with the census (109 tags, 7 tables, 1 prefix), three options and a
+    recommendation.
 
     ```text
     verify: no-grep "affe-agent/relay/RelaySupersededError\"," src/relay/RelayClient.ts
