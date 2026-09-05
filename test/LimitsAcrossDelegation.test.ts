@@ -81,25 +81,24 @@ describe("run limits across a delegation", () => {
         description: "Delegate research.",
         provide: childModel.layer
       })
-      // One tool call allowed before the parent stops. The delegation is
-      // that one call; the child's two are the child's.
+      // Two tool calls allowed. The delegation is one; the child's two are
+      // the child's. If they counted, the parent would be at three after its
+      // first turn and stop there without answering -- so a second prompt is
+      // the observable, and the bound is chosen to make it one.
       const parent = Agent.make({
         instructions: "Delegate.",
         tools: [research],
-        loop: AgentLoop.and(AgentLoop.maxToolCalls(1), AgentLoop.untilIdle())
+        loop: AgentLoop.and(AgentLoop.maxToolCalls(2), AgentLoop.untilIdle())
       })
       const { layer: parentModel, recorder } = yield* FakeModel.script([
         { toolCalls: [{ id: "r1", name: "research", params: { prompt: "go" } }] },
-        { text: "never reached: the limit stops the parent after the delegating turn" }
+        { text: "the parent answered" }
       ])
 
       const result = yield* Agent.run(parent, "go").pipe(Effect.scoped, Effect.provide(parentModel))
 
-      // Stopped by its own limit after the one delegating turn -- the same
-      // as it would with any single tool call -- not earlier because the
-      // child called two tools, and not later because it did.
-      assert.strictEqual((yield* recorder.prompts).length, 1)
-      assert.strictEqual(result.stopReason._tag === "Some" ? result.stopReason.value : "", "max tool calls")
+      assert.strictEqual((yield* recorder.prompts).length, 2, "the parent's call limit counted the child's calls")
+      assert.strictEqual(result.text, "the parent answered")
     }),
     30_000
   )
