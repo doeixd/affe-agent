@@ -217,6 +217,90 @@ Closed items move to `status-history.md` under their closing date, with the
 and their `verify:` lines that pin them as *open*. The checker runs over
 both files.
 
+## 2b. Added after item 46's first three steps (2026-09-04, evening)
+
+Six more, from what those steps rubbed against. Same rule as above: each
+names its evidence, and where it is a test it is in the tree. Order of
+work: 46 step 5 first, then the fixture convention, then the two AGENTS.md
+notes as one commit; the rest as they come up.
+
+| # | item | why it is here | size |
+| --- | --- | --- | --- |
+| 9 | **Sequence item 46 as 5, then 4, then 6** | 5 mirrors 2 and unlocks `Agent.Any`; 4 is store surgery; 6 written once against the finished shape | -- |
+| 10 | **A fixture convention for wire and journal changes** | one recorded fixture caught an ambiguity the same afternoon; nothing makes the next change record one | small |
+| 11 | **Two Effect notes in AGENTS.md** | an `Effect.fn` generic fell to its default silently, twice; a module-level layer was shared through the memo map, silently | small |
+| 12 | **One wire type for "JSON the receiver decodes"** | input, elicitation `detail` and output `value` are the same concept spelled three ways | medium |
+| 13 | **Say so when work in the tree is abandoned** | a colleague's edits sat unclaimed all day and every commit staged around them | -- |
+
+### 2b.1 Item 46: 5, then 4, then 6
+
+Step 5 -- `AgentOutput.text` as the default `Value`, `Result.value` always
+`Some` -- is the mirror of step 2 and mostly type-level, and it is what lets
+`Agent.Any` become the alias it was meant to be (`Value = never` is the last
+invariant slot `any` does not admit). Step 4 is durable-store surgery with a
+fixture obligation: a journal recorded before the change must still replay.
+Doing 5 before 4 means step 6's guide is written once, against the finished
+shape, and `Any`'s doc stops saying "step 5 is what would let it".
+
+### 2b.2 A fixture convention
+
+**Evidence.** `test/fixtures/prompt-request.json`, recorded from `4ee770d`
+before step 3 changed the protocol, is why an untyped client's bytes are
+known to be identical rather than believed to be. It cost ten minutes and
+caught, the same afternoon, that `Schema.toCodecJson` refuses a `Prompt`
+instance in an `Unknown` slot. Nothing makes the next wire or journal change
+record one; step 4 needs one for journals and will have to invent the
+convention if it does not exist.
+
+**Design.** `test/fixtures/README.md`: each file names the commit it was
+recorded from and the test that reads it, and the rule -- *a change to a
+fixture is a wire or journal change and is reviewed as one*. A `verify:
+exists` line per fixture in `remaining-work.md`, so a fixture that goes
+missing fails the build rather than the test that reads it going quiet.
+
+### 2b.3 Two Effect notes in AGENTS.md
+
+**`Effect.fn` and generic inference.** `AgentSession.prompt` and `submit`
+are `Effect.fn`-wrapped generics with `NoInfer` on the value; the inference
+of `Input` from the session did not survive the wrapper and fell to the
+default, silently, and the failure read as a variance error. The fix was
+explicit type arguments at the call site. Twice in one day, and the next
+agent loses an hour to it.
+
+**The layer memo map.** `Effect.provide` builds a layer in the fibre's
+inherited memo map, so a module-level layer constant provided twice under
+one scope is one instance. `Budget.layer` was handed to a child that way
+and charged the parent. The rule -- *a fresh instance needs a fresh layer
+value, not a second `provide`* -- belongs beside the other Effect usage
+rules, with a grep for other module-level `Layer.effect` constants that
+hold a `Ref`.
+
+### 2b.4 One wire type for deferred decoding
+
+**Evidence.** Three seams now carry a value the host decodes later with a
+schema the far end declares: a submission's input (`AgentProtocol.Input`),
+an elicitation's `detail` (`Schema.Unknown`, decoded against
+`ApprovalDetail` by whoever answers) and a declared output's `value`
+(`RemoteResult.value`, decoded by `AgentClient.typed`). Each is `unknown` on
+the wire for the same reason and decoded at the edge the same way, and each
+has its own doc saying so.
+
+**Design.** One named wire type -- "JSON the receiver decodes with its own
+schema" -- with one encode helper and one decode helper that maps a schema
+failure to the codec error the seam already uses. Step 5 of item 46 is where
+it appears naturally, because that is when `value` gets the same treatment
+`input` just did. Not a registry, not a schema name on the wire: the
+receiver already knows its schema, which is the whole point.
+
+### 2b.5 Abandoned work in the tree
+
+`src/model/ModelCapabilities.ts` and its test have been modified and
+unclaimed since this session began, and every commit staged around them per
+CLAUDE.md. That is the rule working. What is missing is the other half:
+`COLLABORATION.md` should say whether the work is mid-edit or abandoned, and
+an entry older than a day with no claim should be treated as the latter and
+said so.
+
 ## 3. Deliberately not taken
 
 * **Random ids.** They would end the collisions too, and they would end the

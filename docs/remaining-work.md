@@ -1638,6 +1638,15 @@ for: the gap is recorded as a gap rather than assumed either way.*
     test); and this file becoming a list again. Open: item 46, the static
     toolkit, and the split of this file.
 
+    **Added the same evening (§2b of the plan)**, after item 46's steps 1–3:
+    sequence 46 as 5, 4, 6; a fixture convention for wire and journal
+    changes (`test/fixtures/README.md`, a `verify: exists` per fixture);
+    two Effect notes for AGENTS.md (`Effect.fn` generics fall to their
+    default silently; a module-level layer is one instance under one memo
+    map); one wire type for "JSON the receiver decodes" across input,
+    elicitation detail and output value; and a `COLLABORATION.md` claim, or
+    an explicit "abandoned", for work that sits in the tree.
+
     ```text
     verify: grep "Ids.makeIdSource(id)" src/AgentSession.ts
     ```
