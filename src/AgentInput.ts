@@ -1,5 +1,6 @@
 import { Context, Effect, Option, Schema, SchemaGetter } from "effect"
 import { Prompt } from "effect/unstable/ai"
+import * as WireValue from "./internal/wireValue.js"
 import * as PromptWire from "./PromptWire.js"
 
 /**
@@ -184,4 +185,4 @@ export const isRaw = (input: unknown): input is Prompt.RawInput =>
  * which dies as one -- the same rule the session applies.
  */
 export const encode = <A, I>(input: AgentInput<A, I, any, any>, value: A): Effect.Effect<unknown> =>
-  Effect.orDie(Schema.encodeUnknownEffect(input.schema)(value))
+  WireValue.encode(input.schema, value)

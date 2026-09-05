@@ -229,7 +229,7 @@ notes as one commit; the rest as they come up.
 | 9 | ~~**Sequence item 46 as 5, then 4, then 6**~~ | done in that order; 4 turned out to be a two-line simplification plus a trade not worth making | -- |
 | 10 | ~~**A fixture convention for wire and journal changes**~~ | **shipped**: `test/fixtures/README.md`, two fixtures, `verify: exists` each | small |
 | 11 | ~~**Two Effect notes in AGENTS.md**~~ | **shipped**, in the Effect usage section | small |
-| 12 | **One wire type for "JSON the receiver decodes"** | input, elicitation `detail` and output `value` are the same concept spelled three ways | medium |
+| 12 | ~~**One wire type for "JSON the receiver decodes"**~~ | **shipped** as `internal/wireValue.ts`: the rule once, the seams' error mapping where it was | small, in the end |
 | 13 | ~~**Say so when work in the tree is abandoned**~~ | **said**, in `COLLABORATION.md`; the owner's move | -- |
 
 ### 2b.1 Item 46: 5, then 4, then 6

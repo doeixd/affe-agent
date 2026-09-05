@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
+import * as WireValue from "./internal/wireValue.js"
 
 /**
  * A typed value a submission is expected to end with.
@@ -116,7 +117,7 @@ export const make = <A, I>(
  * here rather than something a caller could act on.
  */
 export const encode = <A, I>(output: AgentOutput<A, I>, value: A): Effect.Effect<unknown> =>
-  Effect.orDie(Schema.encodeUnknownEffect(output.schema)(value))
+  WireValue.encode(output.schema, value)
 
 /**
  * The value, read back at the far end of a wire.
@@ -130,4 +131,4 @@ export const encode = <A, I>(output: AgentOutput<A, I>, value: A): Effect.Effect
 export const decode = <A, I>(
   output: AgentOutput<A, I>,
   encoded: unknown
-): Effect.Effect<A, Schema.SchemaError> => Schema.decodeUnknownEffect(output.schema)(encoded)
+): Effect.Effect<A, Schema.SchemaError> => WireValue.decode(output.schema, encoded)

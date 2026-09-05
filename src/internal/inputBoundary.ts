@@ -4,6 +4,7 @@ import type { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentInput from "../AgentInput.js"
+import * as WireValue from "./wireValue.js"
 import { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
 
 /**
@@ -88,7 +89,7 @@ export const admit = (
     const prompt = Prompt.make(input)
     return Effect.succeed({ prompt, asked: prompt })
   }
-  return Schema.decodeUnknownEffect(agent.input.schema)(input).pipe(
+  return WireValue.decode(agent.input.schema, input).pipe(
     Effect.map((asked): Admitted =>
       Option.isSome(shape)
         ? { prompt: Prompt.empty, input, asked }
@@ -129,7 +130,7 @@ export const askedOf = (
 ): Effect.Effect<unknown> =>
   recorded.input === undefined
     ? Effect.succeed(recorded.prompt)
-    : Effect.orDie(Schema.decodeUnknownEffect(agent.input.schema)(recorded.input))
+    : Effect.orDie(WireValue.decode(agent.input.schema, recorded.input))
 
 /**
  * The one widening: from what a boundary decoded to what the session's
