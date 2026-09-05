@@ -5,7 +5,9 @@
 This one is everything it had closed, verbatim, in the sections and order it
 sat in there, so that a closed entry's reasoning and its `verify:` lines --
 which pin the work as **done** -- are kept and still checked.
-`npm run verify:remaining-work` scans both files. Nothing here is next;
+`npm run verify:remaining-work` scans both files. Item numbers are stable
+across the two and never reused, so every plan that cites one by number
+still resolves -- here, if not in the list. Nothing here is next;
 `STATUS.md` is what is true now and `status-history.md` the chronology.*
 
 ## Already done — do not restart

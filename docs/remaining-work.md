@@ -63,7 +63,9 @@ Two things that number hides, both worth knowing before trusting a red run:
 **Closed entries live in [remaining-work-closed.md](./remaining-work-closed.md)**
 (2026-09-05, `plan-after-seams.md` 2.8), verbatim and still checked, so this
 file is the list of what is open and nothing else. A struck heading here
-means an entry closed since the split and not yet moved; move it.
+means an entry closed since the split and not yet moved; move it. Item
+numbers are stable across the two files and are never reused, so a plan
+that cites "item 41" and finds no 41 here will find it in the ledger.
 
 ## Ranked
 
