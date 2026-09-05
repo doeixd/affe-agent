@@ -320,7 +320,7 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
 verify: exists scripts/verify-remaining-work.mjs
 verify: exists test/fixtures/README.md
 verify: grep "export type Any = AgentDefinition<any, any, any, any, any, any>" src/Agent.ts
-verify: grep "Budget.record(" src/AgentRun.ts
+verify: grep "RunLedger.record(" src/AgentRun.ts
 verify: grep "export interface Inherit" src/subagent/Subagent.ts
 ```
 

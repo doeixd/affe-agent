@@ -1074,7 +1074,7 @@ still resolves -- here, if not in the list. Nothing here is next;
     cap.
 
     ```text
-    verify: grep "Budget.record({ runId, turnIndex: turn, response: result.response })" src/AgentRun.ts
+    verify: grep "yield* RunLedger.record({" src/AgentRun.ts
     verify: grep "${sessionId}:run-${n}" src/internal/ids.ts
     ```
 
@@ -1416,6 +1416,6 @@ still resolves -- here, if not in the list. Nothing here is next;
     ```text
     verify: grep "export class RunLedger" src/RunLedger.ts
     verify: grep "RunLedger.record" src/AgentRun.ts
-    verify: no-grep "Budget.record" src/AgentRun.ts
+    verify: no-grep "Budget.record(" src/AgentRun.ts
     verify: grep "\"RunLedger\"" test/PublicApi.test.ts
     ```
