@@ -193,7 +193,7 @@ session's events folded into current state, and a paginated directory over
 every session (memory or SQL) kept current from the host's events · `/export` — snapshot envelope
 and JSONL commit log · `/blob` (`/blob/fs`) — content-addressed blob storage ·
 `/plugins` — Agent Plugins packages over `/skills` + `/mcp` · `/presets` —
-`Presets.coding` and `Presets.gateway`, composition and defaults only.
+`Presets.coding` and `Presets.gateway`, composition and defaults only; `Presets.policy`, a run's bounds as one record that expands to the loop and layer.
 
 **Host and testing**
 : `/sandbox` (portable) + `/sandbox/local` (Node) · `/cloudflare` — one

@@ -1,7 +1,10 @@
-import { Layer } from "effect"
+import { Layer, Option } from "effect"
+import type { Duration } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as AgentLoop from "../AgentLoop.js"
+import * as Budget from "../budget/Budget.js"
+import type * as ModelCapabilities from "../model/ModelCapabilities.js"
 import * as ContextTransform from "../ContextTransform.js"
 import * as Permission from "../Permission.js"
 import * as ToolExecution from "../ToolExecutionPublic.js"
@@ -246,3 +249,147 @@ export const gateway = <
       }).pipe(Layer.provide(AgentClient.layer(agent)))
   }
 }
+
+// ---------------------------------------------------------------------------
+// Policy: the first-hour spelling
+// ---------------------------------------------------------------------------
+
+/**
+ * The bounds a run can have, as one record (item 60i, `plan-context-lessons.md`
+ * 5.3). Sugar: `policy` expands it to the loop and the layer the seams
+ * already are, adds no engine knob, and `readPolicy` reads the record back
+ * out of the loop's own description -- which is how it is tested.
+ *
+ * Compaction is deliberately not a field. A compaction transform owns
+ * state and is built with `yield*`; a record cannot hold one unbuilt, and a
+ * built one goes straight on `Agent.make`'s `contextTransform`.
+ */
+export interface PolicyOptions {
+  /** Stop after this many turns. */
+  readonly maxTurns?: number | undefined
+  /** Stop after this many tool calls, counted across the run. */
+  readonly maxToolCalls?: number | undefined
+  /** Stop once the run has been going this long. */
+  readonly maxDuration?: Duration.Input | undefined
+  /** When a bound cuts the run short, one more turn with tools withheld. */
+  readonly finalTurn?: boolean | undefined
+  /** A token ceiling over the ambient `Budget`; `layer` provides one. */
+  readonly tokens?: number | undefined
+  /** A money ceiling over the ambient `Budget`, in the capability table's unit; needs `ModelCapabilities`. */
+  readonly cost?: number | undefined
+}
+
+export interface Policy<E, R, L> {
+  /** The loop the record expands to. Put it on `Agent.make`. */
+  readonly loop: AgentLoop.AgentLoop<E, R, any>
+  /**
+   * A `Budget` when `tokens` or `cost` was given, else empty. Provide it where
+   * the ceiling should count -- per session, or once for the application --
+   * exactly as `Budget.layer` is provided by hand.
+   */
+  readonly layer: Layer.Layer<L>
+}
+
+/**
+ * The types the record expands to, from the record's own keys: a record with
+ * no `cost` does not require a capability table and cannot fail to price a
+ * model, and one with neither ceiling does not require a `Budget`. Inferred
+ * from what was written, so `policy({ maxTurns: 2 })` is as free of
+ * requirements as `AgentLoop.maxTurns(2)`; the test file asserts it.
+ */
+type Ceiling<O> = O extends { readonly tokens: number } | { readonly cost: number } ? Budget.Budget : never
+type Priced<O> = O extends { readonly cost: number } ? true : false
+export type PolicyError<O> = Priced<O> extends true
+  ? ModelCapabilities.UnknownModelError | ModelCapabilities.UnknownCurrentModelError | ModelCapabilities.UnpricedModelError
+  : never
+export type PolicyServices<O> = Ceiling<O> | (Priced<O> extends true ? ModelCapabilities.ModelCapabilities : never)
+
+/**
+ * Expand a `PolicyOptions` record to the seams it names.
+ *
+ * ```ts
+ * const bounds = Presets.policy({ maxTurns: 20, tokens: 100_000, finalTurn: true })
+ * const agent = Agent.make({ toolkit, loop: bounds.loop })
+ * // ...provide `bounds.layer` at the session.
+ * ```
+ *
+ * The expansion is `AgentLoop.limits` for the three bounds and the final
+ * turn, then `Budget.within`, then `Budget.cost`, outermost last. A record
+ * with no bound at all is `untilIdle`, so the loop is always a loop.
+ */
+export const policy = <const O extends PolicyOptions>(
+  options: O
+): Policy<PolicyError<O>, PolicyServices<O>, Ceiling<O>> => {
+  const bounded: AgentLoop.AgentLoop<never, never, any> =
+    options.maxTurns === undefined && options.maxToolCalls === undefined && options.maxDuration === undefined
+      ? options.finalTurn === true ? AgentLoop.withFinalTurn(AgentLoop.untilIdle()) : AgentLoop.untilIdle()
+      : AgentLoop.limits({
+        ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
+        ...(options.maxToolCalls === undefined ? {} : { maxToolCalls: options.maxToolCalls }),
+        ...(options.maxDuration === undefined ? {} : { maxDuration: options.maxDuration }),
+        ...(options.finalTurn === undefined ? {} : { finalTurn: options.finalTurn })
+      } as AgentLoop.Limits & { readonly maxTurns: number })
+  const withTokens = options.tokens === undefined ? bounded : Budget.within(options.tokens, bounded)
+  const loop = options.cost === undefined ? withTokens : Budget.cost(options.cost, withTokens)
+  // The value is exact; only the conditional types above are being restated,
+  // which the compiler cannot follow through the branches.
+  return {
+    loop,
+    layer: options.tokens === undefined && options.cost === undefined ? Layer.empty : Budget.layer
+  } as Policy<PolicyError<O>, PolicyServices<O>, Ceiling<O>>
+}
+
+/**
+ * Read a `PolicyOptions` record back out of a loop description, when the
+ * loop is exactly what `policy` produces. `None` for any other loop: a
+ * record that could not round-trip would be a description that lies.
+ *
+ * `maxDuration` comes back in milliseconds, which is one of the forms
+ * `Duration.Input` accepts, so `policy(readPolicy(d))` is `d` again.
+ */
+export const readPolicy = (description: AgentLoop.Description): Option.Option<PolicyOptions> => {
+  let cost: number | undefined
+  let tokens: number | undefined
+  let current = description
+  if (current._tag === "Custom" && current.name === "Budget.cost" && current.inner !== undefined) {
+    if (typeof current.details?.limit !== "number") return Option.none()
+    cost = current.details.limit
+    current = current.inner
+  }
+  if (current._tag === "Custom" && current.name === "Budget.within" && current.inner !== undefined) {
+    if (typeof current.details?.limit !== "number") return Option.none()
+    tokens = current.details.limit
+    current = current.inner
+  }
+  let finalTurn: boolean | undefined
+  if (current._tag === "FinalTurn") {
+    finalTurn = true
+    current = current.inner
+  }
+  const bounds: ReadonlyArray<AgentLoop.Description> =
+    current._tag === "UntilIdle"
+      ? []
+      : current._tag === "And" && current.loops[0]?._tag === "UntilIdle"
+      ? current.loops.slice(1)
+      : [current]
+  const record: {
+    maxTurns?: number
+    maxToolCalls?: number
+    maxDuration?: number
+    finalTurn?: boolean
+    tokens?: number
+    cost?: number
+  } = {}
+  for (const bound of bounds) {
+    if (bound._tag === "MaxTurns" && record.maxTurns === undefined) record.maxTurns = bound.max
+    else if (bound._tag === "MaxToolCalls" && record.maxToolCalls === undefined) record.maxToolCalls = bound.max
+    else if (bound._tag === "MaxDuration" && record.maxDuration === undefined) record.maxDuration = bound.millis
+    else return Option.none()
+  }
+  if (bounds.length === 0 && current._tag !== "UntilIdle") return Option.none()
+  if (finalTurn !== undefined) record.finalTurn = finalTurn
+  if (tokens !== undefined) record.tokens = tokens
+  if (cost !== undefined) record.cost = cost
+  return Option.some(record)
+}
+

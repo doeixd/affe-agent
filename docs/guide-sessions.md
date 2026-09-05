@@ -377,6 +377,12 @@ makes `maxDuration` different from `Effect.timeout` on the prompt, which
 interrupts the run where it stands. Tokens and money stay in `/budget`,
 because their scope is a `Layer`.
 
+The same bounds, with a token or money ceiling, can be written as one record
+through `Presets.policy({ maxTurns, maxToolCalls, maxDuration, finalTurn,
+tokens, cost })`, which returns the loop and the `Budget` layer the record
+expands to and nothing else; `Presets.readPolicy` reads the record back out
+of a loop's description. Sugar, documented as such in `/presets`.
+
 `finalTurn` is a third loop decision, `Final`: exactly one more turn with the
 agent's tools withheld -- or, for an agent with an `AgentOutput`, with only
 the output tool, so the last word is typed -- after which the loop is not

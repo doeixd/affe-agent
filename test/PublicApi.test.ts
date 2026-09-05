@@ -331,7 +331,11 @@ describe("durable and cluster surfaces", () => {
     assert.deepStrictEqual(Object.keys(presets.Presets).sort(), [
       "coding",
       "codingPolicy",
-      "gateway"
+      "gateway",
+      // The first-hour spelling of a run's bounds, and its inverse over a
+      // loop description (item 60i). Sugar over the seams, like the rest.
+      "policy",
+      "readPolicy"
     ])
   })
 

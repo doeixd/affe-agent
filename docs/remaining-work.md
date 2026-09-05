@@ -534,17 +534,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-60i. **`Agent.policy({...})` as sugar that expands to the seams.** A
-    first-hour spelling -- `maxTurns`, `maxToolCalls`, `maxDuration`,
-    `tokens`, `cost`, `compaction` -- returning the loop and layers it
-    expands to, documented as sugar like `Presets`, and tested by
-    `describe(policy(p))` round-tripping to `p`. No engine knob. Small;
-    60h shipped.
-
-    ```text
-    verify: no-grep "export const policy" src/Agent.ts
-    ```
-
 60j. **Guides state; plans argue.** A rule in `AGENTS.md` and one pass over
     the guides: a guide says what happens in declarative sentences and links
     the plan that holds the argument. Their guide reads that way; several of

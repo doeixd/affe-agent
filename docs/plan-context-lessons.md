@@ -310,6 +310,10 @@ hand-written. The pattern exists already for tools (`describedTools`).
 
 ### 5.3 A first-hour spelling that expands to the composed values
 
+> **Shipped 2026-09-05** (ledger 60i) as `Presets.policy` and `readPolicy`,
+> not `Agent.policy`: the kernel does not import `/budget` to spell sugar.
+> Compaction is not a field, because a transform is built with `yield*`.
+
 **Design.** `Agent.policy({ maxTurns, maxToolCalls, maxDuration, tokens,
 cost, compaction })` as *sugar* that returns the loop and the layers it
 expands to -- documented as exactly that, the way `Presets` is -- so the

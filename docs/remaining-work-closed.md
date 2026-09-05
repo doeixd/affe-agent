@@ -1450,3 +1450,28 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "readonly description?: Description | undefined" src/Permission.ts
     verify: grep "a described bound is the bound" test/AgentDescribe.test.ts
     ```
+
+60i. ~~**`Agent.policy({...})` as sugar that expands to the seams.**~~
+    **DONE 2026-09-05**, as `Presets.policy` rather than `Agent.policy`: a
+    preset is exactly "an assembly over the primitives that returns the
+    parts", and the kernel should not import `/budget` to spell one.
+    `policy({ maxTurns, maxToolCalls, maxDuration, finalTurn, tokens, cost })`
+    returns `{ loop, layer }`: `AgentLoop.limits` for the bounds and the
+    final turn, `Budget.within` and then `Budget.cost` around it, and a
+    `Budget` layer when either ceiling was named, `Layer.empty` otherwise.
+    The types follow the record's keys -- `policy({ maxTurns: 2 }).loop` is
+    `AgentLoop<never, never>`, and only a record with `cost` requires a
+    `ModelCapabilities` or can fail to price -- asserted at the type level
+    and broken once by widening the conditional. `readPolicy` is the
+    inverse over `AgentLoop.Description`: `Some(record)` for exactly the
+    shape `policy` produces, `None` for any other loop, so
+    `readPolicy(describe(policy(p)))` is `p` for every record tried, and a
+    row asserts it. Compaction is not a field, on purpose: a compaction
+    transform owns state and is built with `yield*`, so it goes straight on
+    `contextTransform`. Broken three ways once.
+
+    ```text
+    verify: grep "export const policy" src/presets/Presets.ts
+    verify: grep "export const readPolicy" src/presets/Presets.ts
+    verify: grep "describe(policy(p)) reads back as p" test/PresetsPolicy.test.ts
+    ```
