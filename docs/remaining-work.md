@@ -478,6 +478,22 @@ for: the gap is recorded as a gap rather than assumed either way.*
 
 ### Newly ranked — after the seams pass (2026-09-04)
 
+### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
+
+60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons
+    from the other `effect-agent`'s durable context-window rollover, each
+    mapped to a seam we have: rollover as a compaction decision (which is
+    phase 15 of `plan-branching-and-compaction.md`, parked until now), the
+    harness interpreting decisions and owning the invariants, a read-only tool
+    that lets the model see its own window, bounded retained-history tools
+    framed as evidence, a `Behavior-Change:` trailer the checker reads, and
+    failpoint locations that fail the build when untested. Order: the three
+    small ones, then rollover with its interpreter, then history.
+
+    ```text
+    verify: exists docs/plan-context-lessons.md
+    ```
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
