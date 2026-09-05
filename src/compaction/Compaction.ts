@@ -1538,11 +1538,20 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         // the caller, and is the default because a rollover discards.
         if (options.onCannotHelp !== "rollover") return yield* summarised
         return yield* summarised.pipe(
-          Effect.catchTag("CompactionCannotHelpError", () =>
-            rolledOver(
-              "automatic",
-              rollover(existing, messages, Math.max(covered, lastUserMessage(messages)), Option.none(), estimated)
-            )
+          Effect.catchTag("CompactionCannotHelpError", (error) =>
+            Effect.gen(function* () {
+              const cut = Math.max(covered, lastUserMessage(messages))
+              // A rollover that moves nothing -- the window is already a rollover
+              // and no user message has arrived since -- would write a new
+              // checkpoint every turn under pressure and change what the model
+              // sees not at all. The honest answer then is the error itself.
+              const progress = cut > covered || Option.match(existing, {
+                onNone: () => true,
+                onSome: (checkpoint) => !isRollover(checkpoint)
+              })
+              if (!progress) return yield* Effect.fail(error)
+              return yield* rolledOver("automatic", rollover(existing, messages, cut, Option.none(), estimated))
+            })
           )
         )
       }).pipe(

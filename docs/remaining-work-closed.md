@@ -1360,7 +1360,12 @@ still resolves -- here, if not in the list. Nothing here is next;
     checkpoint saving loses the request nowhere. Broken four ways once: no
     request detection (five rows fail), the fallback ignoring its option (one),
     the protected prefix dropped (three), a `hit` removed (`covered` dies
-    naming it). Not shipped, each now its own item: the overflow trigger
+    naming it). Review found the fallback could make no progress -- a
+    rollover already on record and no user message since puts the cut where
+    coverage already is -- and would have written a new window every turn
+    under pressure; it now takes the fallback only when the cut moves
+    coverage or replaces a summary, and otherwise fails with the original
+    error (row nine, broken once). Not shipped, each now its own item: the overflow trigger
     (60d-i), refusing a mixed batch (60d-ii); and a finding, the summary
     projection dropping the same instructions a rollover keeps (60l).
 

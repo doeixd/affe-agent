@@ -272,6 +272,51 @@ describe("a fresh window as a compaction decision", () => {
     })
   )
 
+  it.effect("the fallback that would move nothing fails instead of writing window after window", () =>
+    Effect.gen(function* () {
+      // Found in review. After a fallback rollover, a tool turn adds no user
+      // message, so the next cut lands exactly where coverage already is. A
+      // rollover there would change nothing the model sees and still write a
+      // new checkpoint, one per turn under pressure, forever. So the fallback
+      // is taken only when it moves coverage or replaces a summary; otherwise
+      // the original error is the answer, and the one window stays window 1.
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.tokens({
+          budget: { contextWindow: 6, reserveTokens: 1, keepRecentTokens: 2 },
+          estimate: (prompt) => Effect.succeed(prompt.content.length === 1 ? 1 : prompt.content.length * 3)
+        }),
+        summarise: () => Effect.succeed("a summary far too large for the budget"),
+        onCannotHelp: "rollover"
+      })
+      const { layer } = yield* FakeModel.script([
+        FakeModel.text("one"),
+        { toolCalls: [{ id: "p1", name: "ping", params: {} }] },
+        FakeModel.text("never reached")
+      ])
+      const { exit, checkpoint } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ tools: [ping], contextTransform: compaction.transform, loop: AgentLoop.bounded(2) })
+          )
+          yield* session.prompt("a")
+          // "a", "one", "b" is over the line: the fallback rolls over at "b".
+          // The ping turn then adds a call and a result and no user message,
+          // and the projection is over the line again with nowhere to cut.
+          const exit = yield* Effect.exit(session.prompt("b"))
+          return { exit, checkpoint: yield* compaction.checkpoint(session.id) }
+        })
+      ).pipe(Effect.provide(layer))
+      assert.isTrue(Exit.isFailure(exit), "the second turn should have failed rather than rolled over again")
+      if (Exit.isFailure(exit)) {
+        assert.instanceOf(Cause.squash(exit.cause), Compaction.CompactionCannotHelpError)
+      }
+      if (Option.isSome(checkpoint) && Compaction.isRollover(checkpoint.value)) {
+        assert.strictEqual(checkpoint.value.window, 1, "a second rollover was written where nothing moved")
+        assert.strictEqual(checkpoint.value.coveredThrough, 2)
+      } else assert.fail("the first fallback rollover should be the checkpoint on record")
+    })
+  )
+
   it("a summary checkpoint recorded before rollovers existed still decodes, as a summary", async () => {
     // `test/fixtures/compaction-checkpoint.json`: a persisted checkpoint
     // encoded at `d6e4a69`, before `Checkpoint` became a union. It has no
