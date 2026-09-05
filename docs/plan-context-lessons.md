@@ -207,6 +207,89 @@ the claims checker. Each item's acceptance is in its section; each landed
 item gets a `verify:` line in `remaining-work.md` and moves to the ledger
 when done.
 
+## 5. Design: their coherence without their centre
+
+*Added after comparing the two designs side by side. The judgement: theirs
+optimises for the first hour -- one `AgentPolicy` record, read by one engine,
+so every cross-cutting rule is a sentence in one place; ours for the
+hundredth -- policy on seams, composed from Effect's own vocabulary, so a new
+concern is a value rather than a knob. Their weakness is that the engine must
+be understood whole; ours is that a concern nobody put on a seam is silently
+absent, which is exactly what the seams pass found four times. The
+improvements below take the coherence and leave the centre.*
+
+### 5.1 The engine records facts; seams only decide
+
+**Already done for money** (`Budget.record`, item 4 of `plan-after-seams.md`):
+the engine records every turn's usage and `within`/`cost` are pure decisions.
+Generalise it. A `RunLedger` the engine writes after every turn -- turns, tool
+calls, tokens, cost, elapsed, window number -- that every seam *reads*: the
+loop combinators, the budget, compaction's pressure trigger, the
+context-remaining tool (60a). Then "a new window does not replenish the
+budget", "a child's turns are the child's", "elapsed does not count time
+parked" are each one sentence about what the engine records, not a property
+every combinator has to get right on its own. `AgentLoop.State` becomes a
+view over the ledger rather than a struct rebuilt per turn.
+
+**Not a central policy object.** The ledger holds *facts*; every *decision*
+stays where it is. That is the line: their record couples the two, and the
+coupling is what makes fourteen knobs necessary.
+
+### 5.2 Seams that can describe themselves
+
+**The gap.** A newcomer reads their `AgentPolicy` and knows what the runtime
+will do. Ours has to be inferred from how the loop was composed, which
+`Budget.within(..., AgentLoop.and(maxTurns(8), untilIdle()))` does not make
+obvious, and nothing can list "everything this agent is bounded by".
+
+**Design.** Every composed value carries a *description* of itself as data:
+`AgentLoop` values a `describe(): LoopDescription` (bounds, budget, stop
+rules) built up by the combinators that compose them; `Permission` policies
+their rules; compaction its policy; the input and output their schemas. Then
+`Agent.describe(agent)` returns one read-only `AgentDescription` -- the
+first-hour readability of their record, *derived* from the composed values,
+so it cannot disagree with them. Cheap to expose to the model
+(`describe_myself` beside 60a), to the CLI (`/policy`), to a host's admin
+surface, and to the matrix, which could then be generated rather than
+hand-written. The pattern exists already for tools (`describedTools`).
+
+### 5.3 A first-hour spelling that expands to the composed values
+
+**Design.** `Agent.policy({ maxTurns, maxToolCalls, maxDuration, tokens,
+cost, compaction })` as *sugar* that returns the loop and the layers it
+expands to -- documented as exactly that, the way `Presets` is -- so the
+newcomer writes the record and gets the seams. It adds no engine knob, and
+`Agent.describe` on the result shows the expansion, which is also how it is
+tested: describe(policy(p)) round-trips to p.
+
+### 5.4 The model as a participant
+
+Already 60a and 60d: let the model see its window and ask for a new one.
+The design principle to write down: **a limit the model cannot see is a
+limit it will hit**, and every bound the ledger records should be readable
+by a tool, not only enforced by a seam.
+
+### 5.5 Release the reasoning with the release
+
+60c gives us the trailer. The design step beyond it: a `CHANGELOG.md`
+generated from `Behavior-Change:` trailers at release time, one line each,
+with the fixture that measured it linked. Our plans hold more reasoning than
+their changesets ever will; what we lack is the one-line "here is what
+changed for you", and it can be derived.
+
+### 5.6 Docs that state rather than argue
+
+Their guide is short declarative sentences. Ours argue where they could
+state, because they were written while the decision was being made. Rule for
+`AGENTS.md`: a guide states what happens; the argument for it lives in the
+plan the guide links. One pass over the guides applying it, and the rule
+written where the next guide is written.
+
+### Order
+
+5.1 before 5.2 (a description of a seam is easier when the seam reads a
+ledger); 5.2 before 5.3 (the sugar is tested by describing it); 5.6 any time.
+
 ## Related
 
 * [plan-branching-and-compaction.md](./plan-branching-and-compaction.md),

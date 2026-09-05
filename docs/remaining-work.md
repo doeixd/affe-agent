@@ -561,6 +561,65 @@ for: the gap is recorded as a gap rather than assumed either way.*
     and budget compose without one), working notes over memory ports (no
     port asks for it yet), and a bot review with a cost ceiling.
 
+    **Design, from comparing the two** (the plan's §5): their coherence
+    without their centre.
+
+60g. **The engine records facts; seams only decide.** Generalise
+    `Budget.record` into a `RunLedger` the engine writes after every turn --
+    turns, tool calls, tokens, cost, elapsed, window -- and every seam reads:
+    loop combinators, budget, compaction's trigger, the context-remaining
+    tool. Cross-cutting rules become one sentence about what is recorded.
+    `AgentLoop.State` becomes a view over it. Facts in one place; decisions
+    stay on their seams. Medium.
+
+    ```text
+    verify: no-grep "RunLedger" src/AgentRun.ts
+    ```
+
+60h. **Seams that describe themselves.** Every composed value carries a
+    description of itself as data -- a loop its bounds and stop rules,
+    a policy its rules, compaction its policy, input and output their
+    schemas -- and `Agent.describe(agent)` returns one read-only
+    `AgentDescription` derived from them, so it cannot disagree with them.
+    The first-hour readability of a policy record, without the record;
+    exposable to the model, the CLI and a host. `describedTools` is the
+    existing instance of the pattern. Medium; after 60g.
+
+    ```text
+    verify: no-grep "export const describe" src/Agent.ts
+    ```
+
+60i. **`Agent.policy({...})` as sugar that expands to the seams.** A
+    first-hour spelling -- `maxTurns`, `maxToolCalls`, `maxDuration`,
+    `tokens`, `cost`, `compaction` -- returning the loop and layers it
+    expands to, documented as sugar like `Presets`, and tested by
+    `describe(policy(p))` round-tripping to `p`. No engine knob. Small;
+    after 60h.
+
+    ```text
+    verify: no-grep "export const policy" src/Agent.ts
+    ```
+
+60j. **Guides state; plans argue.** A rule in `AGENTS.md` and one pass over
+    the guides: a guide says what happens in declarative sentences and links
+    the plan that holds the argument. Their guide reads that way; several of
+    ours were written while the decision was being made. Small.
+
+    ```text
+    verify: no-grep "Guides state; plans argue" AGENTS.md
+    ```
+
+60k. **`CHANGELOG.md`'s behaviour-change lines derived from
+    `Behavior-Change:` trailers** (after 60c): the changelog exists and is
+    hand-written; a release step appends one line per trailer since the last
+    release, with the fixture that measured it linked, so "what changed for
+    you" cannot be forgotten. Small. (Its first pin said the file did not
+    exist; the checker said otherwise, which is the checker working.)
+
+    ```text
+    verify: no-grep "Behavior-Change" CHANGELOG.md
+    ```
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
