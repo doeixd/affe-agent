@@ -70,6 +70,8 @@ describe("public API", () => {
     // `updateX` combines, `tool` pairs a tool with its handler, and `run`
     // is the scoped one-shot prompt.
     assert.deepStrictEqual(Object.keys(Harness.Agent).sort(), [
+      // The agent as data, derived from its composed values (item 60h).
+      "describe",
       "make",
       "run",
       "tool",
@@ -117,6 +119,8 @@ describe("public API", () => {
       "defaultProjection",
       "deny",
       "denyAll",
+      // A policy as data; every constructor supplies one (item 60h).
+      "describe",
       "except",
       "grantKey",
       "make",

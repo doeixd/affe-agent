@@ -534,25 +534,12 @@ for: the gap is recorded as a gap rather than assumed either way.*
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-60h. **Seams that describe themselves.** Every composed value carries a
-    description of itself as data -- a loop its bounds and stop rules,
-    a policy its rules, compaction its policy, input and output their
-    schemas -- and `Agent.describe(agent)` returns one read-only
-    `AgentDescription` derived from them, so it cannot disagree with them.
-    The first-hour readability of a policy record, without the record;
-    exposable to the model, the CLI and a host. `describedTools` is the
-    existing instance of the pattern. Medium; 60g shipped.
-
-    ```text
-    verify: no-grep "export const describe" src/Agent.ts
-    ```
-
 60i. **`Agent.policy({...})` as sugar that expands to the seams.** A
     first-hour spelling -- `maxTurns`, `maxToolCalls`, `maxDuration`,
     `tokens`, `cost`, `compaction` -- returning the loop and layers it
     expands to, documented as sugar like `Presets`, and tested by
     `describe(policy(p))` round-tripping to `p`. No engine knob. Small;
-    after 60h.
+    60h shipped.
 
     ```text
     verify: no-grep "export const policy" src/Agent.ts

@@ -457,6 +457,23 @@ not.
 Composition is heterogeneous: composing transforms that fail differently, or
 need different services, gives the union of both.
 
+Composed values can also say what they are. Every loop carries a
+`description` built by the constructor that built it, and every permission
+policy from this module does too, so `Agent.describe(agent)` reads the whole
+agent back as data -- instructions, tools, the loop's bounds, the policy's
+rules, the execution policies, the input and output schemas -- derived from
+the values rather than declared beside them, so it cannot disagree with what
+the agent does:
+
+```ts
+Agent.describe(agent).loop
+// { _tag: "And", loops: [{ _tag: "UntilIdle" }, { _tag: "MaxTurns", max: 8 }] }
+```
+
+A loop or policy written by hand is `Custom`, named if `make` was given a
+name. Tools are `None` for a toolkit resolved per turn, because what it will
+hold is not known before a turn.
+
 ## Authoring an agent, two ways
 
 The object form and the pipeable form build the same `AgentDefinition`; pick

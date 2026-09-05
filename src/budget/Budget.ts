@@ -195,15 +195,17 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
   limit: number,
   inner: AgentLoop.AgentLoop<E, R, Tools>
 ): AgentLoop.AgentLoop<E, R | Budget, Tools> =>
-  AgentLoop.make((state) =>
-    // A pure decision over the running total: the turn that just ended has
-    // already been recorded by the engine (`record`), so `spent` includes it
-    // and the ceiling is checked after every turn is counted.
-    Effect.flatMap(Budget, (budget) =>
-      Effect.map(budget.spent, (total) => (total >= limit ? tokenStop : undefined)).pipe(
-        Effect.flatMap((stop) => (stop === undefined ? inner.decide(state) : Effect.succeed(stop)))
-      )
-    )
+  AgentLoop.make(
+    (state) =>
+      // A pure decision over the running total: the turn that just ended has
+      // already been recorded by the engine (`record`), so `spent` includes it
+      // and the ceiling is checked after every turn is counted.
+      Effect.flatMap(Budget, (budget) =>
+        Effect.map(budget.spent, (total) => (total >= limit ? tokenStop : undefined)).pipe(
+          Effect.flatMap((stop) => (stop === undefined ? inner.decide(state) : Effect.succeed(stop)))
+        )
+      ),
+    { _tag: "Custom", name: "Budget.within", details: { limit }, inner: inner.description }
   )
 
 /**
@@ -298,16 +300,18 @@ export const cost = <E, R, Tools extends Record<string, Tool.Any>>(
   R | Budget | ModelCapabilities.ModelCapabilities,
   Tools
 > =>
-  AgentLoop.make((state) =>
-    Effect.gen(function*() {
-      // The failure rule is the ceiling's: a model this table cannot price,
-      // under a money ceiling, fails the run rather than counting as free.
-      // The engine's `record` skipped it for exactly that reason, so this is
-      // where an unpriced model is caught.
-      yield* ModelCapabilities.priceOfCurrent(state.response.usage)
-      const budget = yield* Budget
-      // Already recorded by the engine for this turn; a pure decision.
-      const total = yield* budget.costSpent
-      return total >= limit ? costStop : yield* inner.decide(state)
-    })
+  AgentLoop.make(
+    (state) =>
+      Effect.gen(function*() {
+        // The failure rule is the ceiling's: a model this table cannot price,
+        // under a money ceiling, fails the run rather than counting as free.
+        // The engine's `record` skipped it for exactly that reason, so this is
+        // where an unpriced model is caught.
+        yield* ModelCapabilities.priceOfCurrent(state.response.usage)
+        const budget = yield* Budget
+        // Already recorded by the engine for this turn; a pure decision.
+        const total = yield* budget.costSpent
+        return total >= limit ? costStop : yield* inner.decide(state)
+      }),
+    { _tag: "Custom", name: "Budget.cost", details: { limit }, inner: inner.description }
   )

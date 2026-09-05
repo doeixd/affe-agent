@@ -134,16 +134,62 @@ export interface AgentLoop<
   Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 > extends Pipeable {
   readonly decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
+  /**
+   * What this loop is, as data. Built by the constructor that built the
+   * loop, so it cannot say something the loop does not do; `and`, `or` and
+   * `withFinalTurn` compose descriptions as they compose decisions.
+   * `Agent.describe` collects it. A loop made with `make` and no description
+   * is `Custom`, named "anonymous".
+   */
+  readonly description: Description
 }
+
+/**
+ * A loop described as data (`plan-context-lessons.md` 5.2, item 60h).
+ *
+ * The first-hour readability of a policy record, without the record: read
+ * this and know what the run is bounded by. `Custom` is the escape hatch for
+ * a loop written by hand or by a battery -- `Budget.within` describes itself
+ * as `Custom` named `Budget.within` with its `limit` in `details`, wrapping
+ * the description of the loop it wraps -- so a description is always
+ * complete, if not always deep.
+ */
+export type Description =
+  | { readonly _tag: "UntilIdle" }
+  | { readonly _tag: "MaxTurns"; readonly max: number }
+  | { readonly _tag: "MaxToolCalls"; readonly max: number }
+  | { readonly _tag: "MaxDuration"; readonly millis: number }
+  | { readonly _tag: "FinalTurn"; readonly inner: Description }
+  | { readonly _tag: "And"; readonly loops: ReadonlyArray<Description> }
+  | { readonly _tag: "Or"; readonly loops: ReadonlyArray<Description> }
+  | {
+    readonly _tag: "Custom"
+    readonly name: string
+    readonly details?: Readonly<Record<string, unknown>> | undefined
+    readonly inner?: Description | undefined
+  }
+
+const anonymous: Description = { _tag: "Custom", name: "anonymous" }
+
+/**
+ * `and(and(a, b), c)` decides as `and(a, b, c)` -- the fold keeps the most
+ * stopping decision and the first at that rank keeps its reason, in order --
+ * so it is described as one, and `limits` reads as one conjunction rather
+ * than a nest. The same for `or`.
+ */
+const flatten = (tag: "And" | "Or", loops: ReadonlyArray<Description>): ReadonlyArray<Description> =>
+  loops.flatMap((description) => (description._tag === tag ? description.loops : [description]))
 
 export const make = <
   E = never,
   R = never,
   Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 >(
-  decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>
+  decide: (state: State<Tools>) => Effect.Effect<Decision, E, R>,
+  description: Description = anonymous
 ): AgentLoop<E, R, Tools> => ({
   decide,
+  description,
   // Syntax only. `and` and `or` stay explicit function calls, because a policy
   // combined by position would leave a reader guessing which one it was --
   // and the difference between them is the difference between a run that stops
@@ -162,7 +208,7 @@ export const make = <
 export const untilIdle = <
   Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
 >(): AgentLoop<never, never, Tools> =>
-  make((state) => Effect.succeed(state.toolCalls.length > 0 ? Continue : Stop))
+  make((state) => Effect.succeed(state.toolCalls.length > 0 ? Continue : Stop), { _tag: "UntilIdle" })
 
 /** Stop once `max` turns have been executed, whatever the inner policy says. */
 export const maxTurns = <
@@ -172,7 +218,10 @@ export const maxTurns = <
 ): AgentLoop<never, never, Tools> => {
   const bound = positiveInteger("AgentLoop.maxTurns", max)
   const decision = stop("max turns")
-  return make((state) => Effect.succeed(state.turnIndex >= bound ? decision : Continue))
+  return make((state) => Effect.succeed(state.turnIndex >= bound ? decision : Continue), {
+    _tag: "MaxTurns",
+    max: bound
+  })
 }
 
 /**
@@ -191,7 +240,10 @@ export const maxToolCalls = <
 ): AgentLoop<never, never, Tools> => {
   const bound = positiveInteger("AgentLoop.maxToolCalls", max)
   const decision = stop("max tool calls")
-  return make((state) => Effect.succeed(state.toolCallsTotal >= bound ? decision : Continue))
+  return make((state) => Effect.succeed(state.toolCallsTotal >= bound ? decision : Continue), {
+    _tag: "MaxToolCalls",
+    max: bound
+  })
 }
 
 /**
@@ -221,8 +273,9 @@ export const maxDuration = <
     )
   }
   const decision = stop("max duration")
-  return make((state) =>
-    Effect.succeed(Duration.toMillis(state.elapsed) >= millis ? decision : Continue)
+  return make(
+    (state) => Effect.succeed(Duration.toMillis(state.elapsed) >= millis ? decision : Continue),
+    { _tag: "MaxDuration", millis }
   )
 }
 
@@ -243,12 +296,14 @@ export const withFinalTurn = <
 >(
   inner: AgentLoop<E, R, Tools>
 ): AgentLoop<E, R, Tools> =>
-  make((state) =>
-    Effect.map(inner.decide(state), (decision) =>
-      decision._tag === "Stop" && state.toolCalls.length > 0
-        ? final(decision.reason)
-        : decision
-    )
+  make(
+    (state) =>
+      Effect.map(inner.decide(state), (decision) =>
+        decision._tag === "Stop" && state.toolCalls.length > 0
+          ? final(decision.reason)
+          : decision
+      ),
+    { _tag: "FinalTurn", inner: inner.description }
   )
 
 /** The bounds `limits` accepts. At least one must be given; see `limits`. */
@@ -364,7 +419,8 @@ export const and = <const Loops extends Policies>(
           ? Effect.succeed(acc)
           : Effect.map(loop.decide(state), (next) => (rank(next) > rank(acc) ? next : acc))
       )
-    )
+    ),
+    { _tag: "And", loops: flatten("And", loops.map((loop) => loop.description)) }
   ) as AgentLoop<
     ErrorOf<Loops[number]>,
     ServicesOf<Loops[number]>,
@@ -407,7 +463,8 @@ export const or = <const Loops extends Policies>(
           ? Effect.succeed(acc)
           : Effect.map(loop.decide(state), (next) => (rank(next) < rank(acc) ? next : acc))
       )
-    )
+    ),
+    { _tag: "Or", loops: flatten("Or", loops.map((loop) => loop.description)) }
   ) as AgentLoop<
     ErrorOf<Loops[number]>,
     ServicesOf<Loops[number]>,

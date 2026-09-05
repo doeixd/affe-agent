@@ -287,6 +287,11 @@ coupling is what makes fourteen knobs necessary.
 
 ### 5.2 Seams that can describe themselves
 
+> **Shipped 2026-09-05** (ledger 60h): `AgentLoop.Description`,
+> `Permission.Description`, `Agent.describe`. Not yet: compaction describing
+> its policy, a Schema for the description (a wire form waits on a consumer
+> -- the CLI `/policy` or a host), and `describe_myself` as a tool beside 60a.
+
 **The gap.** A newcomer reads their `AgentPolicy` and knows what the runtime
 will do. Ours has to be inferred from how the loop was composed, which
 `Budget.within(..., AgentLoop.and(maxTurns(8), untilIdle()))` does not make

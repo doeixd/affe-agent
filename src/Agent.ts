@@ -1,4 +1,5 @@
 import { Effect, Option } from "effect"
+import type { Schema } from "effect"
 import type * as ExecutionPlan from "effect/ExecutionPlan"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
@@ -340,20 +341,69 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = Langua
  * Without this, `untilIdle` would see a turn that made a tool call, continue,
  * and spend one more model call on a closing remark nobody reads.
  */
+/**
+ * An agent described as data (`plan-context-lessons.md` 5.2, item 60h).
+ *
+ * Derived from the composed values, not declared beside them, so it cannot
+ * disagree with what the agent does: the loop's description is built by the
+ * combinators that built the loop, the permission policy's by its
+ * constructors, the tools' from the toolkit. Tools are `None` for a toolkit
+ * resolved per turn that does not declare its record (`internal/toolkit.ts`,
+ * `declaredTools`), because what it will resolve to is not known before a
+ * turn. The input and output carry their schemas as values.
+ *
+ * Read it to answer "what is this agent bounded by, allowed, and given"
+ * without reading how it was composed; expose it to a CLI or a host as is.
+ * The context transform is not described: a transform is a function of a
+ * turn's context and has no data form yet.
+ */
+export interface Description {
+  readonly instructions: Option.Option<string>
+  readonly tools: Option.Option<ReadonlyArray<{ readonly name: string; readonly description: Option.Option<string> }>>
+  readonly loop: AgentLoop.Description
+  readonly permission: Permission.Description
+  readonly toolExecution: ToolExecution.Strategy
+  readonly toolFailurePolicy: ToolExecution.FailurePolicy
+  readonly toolDenialPolicy: ToolExecution.FailurePolicy
+  readonly input: { readonly raw: boolean; readonly schema: Schema.Top }
+  readonly output: Option.Option<{ readonly toolName: string; readonly schema: Schema.Top }>
+}
+
+export const describe = (agent: Any): Description => ({
+  instructions: agent.instructions,
+  // The one place "can we know the tools yet?" is answered: a handled value
+  // and a `Declared` Effect say; a bare Effect does not until it has run.
+  tools: Option.map(InternalToolkit.declaredTools(agent.toolkit), (tools) =>
+    Object.values(tools as Record<string, Tool.Any>).map((tool) => ({
+      name: tool.name,
+      description: Option.fromUndefinedOr(tool.description)
+    }))
+  ),
+  loop: agent.loop.description,
+  permission: Permission.describe(agent.permission),
+  toolExecution: agent.toolExecution,
+  toolFailurePolicy: agent.toolFailurePolicy,
+  toolDenialPolicy: agent.toolDenialPolicy,
+  input: { raw: agent.input === AgentInput.prompt, schema: agent.input.schema },
+  output: Option.map(agent.output, (output) => ({ toolName: output.toolName, schema: output.schema }))
+})
+
 const withOutputStop = <E, R>(
   loop: AgentLoop.AgentLoop<E, R, any>,
   output: AgentOutput.AgentOutput<any, any> | undefined
 ): AgentLoop.AgentLoop<E, R, any> =>
   output === undefined
     ? loop
-    : AgentLoop.make((state) =>
-        Effect.map(loop.decide(state), (decision) =>
-          // The answer has been given: stop, whatever the inner policy said
-          // -- a `Final` turn after the output would only ask for it again.
-          state.toolCalls.some((call) => call.name === output.toolName)
-            ? AgentLoop.stop("output reported")
-            : decision
-        )
+    : AgentLoop.make(
+        (state) =>
+          Effect.map(loop.decide(state), (decision) =>
+            // The answer has been given: stop, whatever the inner policy said
+            // -- a `Final` turn after the output would only ask for it again.
+            state.toolCalls.some((call) => call.name === output.toolName)
+              ? AgentLoop.stop("output reported")
+              : decision
+          ),
+        { _tag: "Custom", name: "Agent.outputReported", details: { toolName: output.toolName }, inner: loop.description }
       )
 
 export const make = <

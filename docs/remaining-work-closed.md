@@ -1419,3 +1419,34 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: no-grep "Budget.record(" src/AgentRun.ts
     verify: grep "\"RunLedger\"" test/PublicApi.test.ts
     ```
+
+60h. ~~**Seams that describe themselves.**~~ **DONE 2026-09-05.** Every
+    `AgentLoop` carries a `Description` built by the constructor that built
+    it -- `UntilIdle`, `MaxTurns`, `MaxToolCalls`, `MaxDuration`,
+    `FinalTurn`, `And`, `Or`, and `Custom` with a name, details and an
+    inner description for a loop written by hand or by a battery
+    (`Budget.within` and `cost` describe themselves so; the output stop
+    `Agent.make` wraps around a loop does too). `and` and `or` flatten a
+    nested conjunction, so `limits` reads as one. Every `Permission` policy
+    constructor supplies a `Description` -- `AllowAll`, `AskAll`, `DenyAll`,
+    `Rules` with each rule's matchers as data (a function matcher as
+    `"function"`, a `RegExp` as its source), `All`, `Except`, `Remembered`
+    -- on an optional field, so a policy object written before descriptions
+    existed still works and reads as `Custom`. `Agent.describe(agent)`
+    returns one `Description`: instructions, tools when the toolkit declares
+    them (`declaredTools`; `None` for one resolved per turn), the loop, the
+    permission, the three execution policies, the input and output with
+    their schemas as values. The context transform is not described, and
+    the description is a TypeScript type rather than a Schema: a wire form
+    waits on a consumer. Derived, so it cannot disagree: a row runs each
+    bound past its ceiling and finds the run stopped at the described
+    number; a row reads a composed agent back as one literal. Broken twice:
+    `maxTurns` describing one more than its bound (two rows fail), `rules`
+    describing the wrong `otherwise` (two).
+
+    ```text
+    verify: grep "export const describe" src/Agent.ts
+    verify: grep "readonly description: Description" src/AgentLoop.ts
+    verify: grep "readonly description?: Description | undefined" src/Permission.ts
+    verify: grep "a described bound is the bound" test/AgentDescribe.test.ts
+    ```

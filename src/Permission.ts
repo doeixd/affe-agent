@@ -194,21 +194,56 @@ export const projectionOf = (tool: {
 export interface Policy<R = never> {
   readonly evaluate: (request: Request) => Effect.Effect<Decision, never, R>
   readonly remember?: ((request: Request) => Effect.Effect<void, never, R>) | undefined
+  /**
+   * What this policy is, as data; see `Description`. Optional so a policy
+   * written as a plain object keeps working -- `Agent.describe` reports one
+   * without it as `Custom`. Every constructor here supplies one.
+   */
+  readonly description?: Description | undefined
 }
 
-export const make = <R = never>(
-  evaluate: (request: Request) => Effect.Effect<Decision, never, R>
-): Policy<R> => ({ evaluate })
+/**
+ * A permission policy described as data (item 60h). A `Matcher` that is a
+ * function has no data form and is reported as `"function"`; a `RegExp` as
+ * its source, prefixed.
+ */
+export type Description =
+  | { readonly _tag: "AllowAll" }
+  | { readonly _tag: "AskAll" }
+  | { readonly _tag: "DenyAll" }
+  | { readonly _tag: "Rules"; readonly rules: ReadonlyArray<RuleDescription>; readonly otherwise: Decision }
+  | { readonly _tag: "All"; readonly policies: ReadonlyArray<Description> }
+  | { readonly _tag: "Except"; readonly base: Description; readonly exceptions: ReadonlyArray<RuleDescription> }
+  | { readonly _tag: "Remembered"; readonly inner: Description }
+  | { readonly _tag: "Custom"; readonly name: string }
 
-export const allowAll: Policy = make(() => Effect.succeed(allow))
-export const askAll: Policy = make(() => Effect.succeed(ask()))
-export const denyAll: Policy = make(() => Effect.succeed(deny()))
+export interface RuleDescription {
+  readonly action?: string | undefined
+  readonly resource?: string | undefined
+  readonly tool?: string | undefined
+  readonly decision: Decision
+}
+
+const customPolicy: Description = { _tag: "Custom", name: "anonymous" }
+
+/** The description a policy carries, or `Custom` for one that carries none. */
+export const describe = (policy: Policy<any>): Description => policy.description ?? customPolicy
+
+export const make = <R = never>(
+  evaluate: (request: Request) => Effect.Effect<Decision, never, R>,
+  description: Description = customPolicy
+): Policy<R> => ({ evaluate, description })
+
+export const allowAll: Policy = make(() => Effect.succeed(allow), { _tag: "AllowAll" })
+export const askAll: Policy = make(() => Effect.succeed(ask()), { _tag: "AskAll" })
+export const denyAll: Policy = make(() => Effect.succeed(deny()), { _tag: "DenyAll" })
 
 /**
  * Every policy consulted, their decisions merged conservatively. A `remember`
  * reaches all of them.
  */
 export const all = <R = never>(...policies: ReadonlyArray<Policy<R>>): Policy<R> => ({
+  description: { _tag: "All", policies: policies.map(describe) },
   evaluate: (request) =>
     Effect.map(
       Effect.forEach(policies, (policy) => policy.evaluate(request)),
@@ -281,6 +316,22 @@ export interface Rule {
  * mention is the classic permission bug; making the default explicit is
  * cheaper than debugging it.
  */
+const describeMatcher = (matcher: Matcher | undefined): string | undefined =>
+  matcher === undefined
+    ? undefined
+    : typeof matcher === "string"
+    ? matcher
+    : typeof matcher === "function"
+    ? "function"
+    : `regexp:${matcher.source}`
+
+const describeRule = (rule: Rule): RuleDescription => ({
+  ...(rule.action === undefined ? {} : { action: describeMatcher(rule.action) }),
+  ...(rule.resource === undefined ? {} : { resource: describeMatcher(rule.resource) }),
+  ...(rule.tool === undefined ? {} : { tool: describeMatcher(rule.tool) }),
+  decision: rule.decision
+})
+
 export const rules = (
   list: ReadonlyArray<Rule>,
   options: { readonly otherwise: Decision }
@@ -297,7 +348,7 @@ export const rules = (
       }
     }
     return Effect.succeed(decision ?? options.otherwise)
-  })
+  }, { _tag: "Rules", rules: list.map(describeRule), otherwise: options.otherwise })
 
 /**
  * A carve-out from a broad policy.
@@ -335,6 +386,7 @@ export const except = <R>(
   base: Policy<R>,
   exceptions: ReadonlyArray<Rule>
 ): Policy<R> => ({
+  description: { _tag: "Except", base: describe(base), exceptions: exceptions.map(describeRule) },
   evaluate: (request) => {
     let override: Decision | undefined
     for (const rule of exceptions) {
@@ -389,6 +441,7 @@ export const remembered = <R>(
   underlying: Policy<R>
 ): Effect.Effect<Policy<R>> =>
   Effect.map(Ref.make(new Set<string>()), (grants) => ({
+    description: { _tag: "Remembered", inner: describe(underlying) },
     evaluate: (request) =>
       Effect.flatMap(underlying.evaluate(request), (decision): Effect.Effect<Decision> =>
         decision._tag === "Ask"
