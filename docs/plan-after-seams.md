@@ -10,7 +10,7 @@ evidence is named, and where it is a test it is in the tree.*
 | --- | --- | --- | --- |
 | 1 | **Ids carry their session** | two bugs in one day from ids unique only within a session | small |
 | 2 | ~~**Refuse at construction, at the top level too**~~ | **withdrawn**: the premise was wrong, see §2.2 | -- |
-| 3 | **Item 46: every agent has an input** | steps 1–3 **shipped**; 4–6 open | large |
+| 3 | **Item 46: every agent has an input** | steps 1–3 and 5 **shipped**; 4 and 6 open | large |
 | 4 | ~~**The engine records usage; the loop only decides**~~ | **shipped**; `Budget.charge` is gone | medium |
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
@@ -227,7 +227,7 @@ notes as one commit; the rest as they come up.
 | # | item | why it is here | size |
 | --- | --- | --- | --- |
 | 9 | **Sequence item 46 as 5, then 4, then 6** | 5 mirrors 2 and unlocks `Agent.Any`; 4 is store surgery; 6 written once against the finished shape | -- |
-| 10 | **A fixture convention for wire and journal changes** | one recorded fixture caught an ambiguity the same afternoon; nothing makes the next change record one | small |
+| 10 | ~~**A fixture convention for wire and journal changes**~~ | **shipped**: `test/fixtures/README.md`, two fixtures, `verify: exists` each | small |
 | 11 | **Two Effect notes in AGENTS.md** | an `Effect.fn` generic fell to its default silently, twice; a module-level layer was shared through the memo map, silently | small |
 | 12 | **One wire type for "JSON the receiver decodes"** | input, elicitation `detail` and output `value` are the same concept spelled three ways | medium |
 | 13 | **Say so when work in the tree is abandoned** | a colleague's edits sat unclaimed all day and every commit staged around them | -- |

@@ -191,15 +191,17 @@ const budgetFor = (inherit: Inherit | undefined): Effect.Effect<Layer.Layer<Budg
     )
 
 /**
- * What the parent model receives from a delegation.
+ * What the parent model receives from a delegation: the child's `Value`.
  *
- * The child's declared `Value` when it declares an `AgentOutput`, so a
- * typed child hands its parent a value the parent's tools can read and the
- * parent model sees as JSON rather than prose; the child's text otherwise.
- * The tool's `success` schema is the child's output schema in the first
- * case, so the parent's tool record is typed by it.
+ * That is its declared `AgentOutput`'s type when it declares one, so a typed
+ * child hands its parent a value the parent's tools can read and the parent
+ * model sees as JSON rather than prose; and its final text otherwise, since
+ * `string` is every agent's default `Value`. The tool's `success` schema is
+ * the child's output schema in the first case, so the parent's tool record
+ * is typed by it. (An alias rather than a conditional since
+ * `plan-input-default.md` step 5; kept as a name because the docs point at it.)
  */
-export type Answer<Value> = [Value] extends [never] ? string : Value
+export type Answer<Value> = Value
 
 /** The `success` schema a delegation declares: the child's output schema, or a string. */
 const successOf = <Value>(agent: {
@@ -219,15 +221,14 @@ const successOf = <Value>(agent: {
  * that is a child failure like any other rather than a silent `""`.
  */
 const answerOf = <Tools extends Record<string, Tool.Any>, Value>(
-  agent: { readonly output: Option.Option<AgentOutput.AgentOutput<any, any>> },
   result: AgentSubmission.Result<Tools, Value>
 ): Effect.Effect<Answer<Value>, string> =>
-  Option.isNone(agent.output)
-    ? Effect.succeed(result.text as Answer<Value>)
-    : Option.match(result.value, {
-        onNone: () => Effect.fail("the child finished without reporting its declared output"),
-        onSome: (value) => Effect.succeed(value as Answer<Value>)
-      })
+  // `Result.value` is the text under the default output, so one branch: a
+  // `None` can only be a declared output the child never reported.
+  Option.match(result.value, {
+    onNone: () => Effect.fail("the child finished without reporting its declared output"),
+    onSome: (value) => Effect.succeed(value)
+  })
 
 /**
  * The child, asked with what the tool decoded: the value itself for a
@@ -252,7 +253,7 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
         elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined
       }),
       (session) =>
-        Effect.flatMap(AgentSession.prompt(session, input), (result) => answerOf<Tools, Value>(agent, result))
+        Effect.flatMap(AgentSession.prompt<Tools, E, Value, Input>(session, input), (result) => answerOf<Tools, Value>(result))
     )
   )
 }

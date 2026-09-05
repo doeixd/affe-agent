@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Cause, Deferred, Effect, Exit, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import type { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentOutput from "../src/AgentOutput.js"
@@ -40,7 +41,9 @@ const run = <Tools extends Record<string, Tool.Any>, Value>(
     return yield* Effect.scoped(
       Effect.gen(function*() {
         const session = yield* AgentSession.make(agent)
-        const result = yield* AgentSession.prompt(session, "go")
+        // Explicit: a generic `Value` is not inferred through `Effect.fn`'s
+        // wrapper and would fall to the default, `string`.
+        const result = yield* AgentSession.prompt<Tools, never, Value, Prompt.RawInput>(session, "go")
         return { result, calls: yield* recorder.calls, session }
       }).pipe(Effect.provide(layer))
     )
@@ -76,12 +79,15 @@ describe("AgentOutput", () => {
       assert.strictEqual(result.text, "")
     }))
 
-  it.effect("an agent that declares no output reports no value", () =>
+  it.effect("an agent that declares no output reports its text as the value", () =>
     Effect.gen(function*() {
+      // Every agent has a `Value`; the default is the final text, so a
+      // caller generic over agents reads one from every result
+      // (`plan-input-default.md` step 5). It was `None` before.
       const { result } = yield* run([FakeModel.text("done")], Agent.make({}))
 
       assert.strictEqual(result.status, "completed")
-      assert.isTrue(Option.isNone(result.value))
+      assert.deepStrictEqual(result.value, Option.some("done"))
     }))
 
   it.effect("a model that never calls the tool completes without a value", () =>
@@ -455,14 +461,28 @@ export type _ResultValueIsTyped = Assert<
 >
 
 /**
- * An agent with no output has `Option<never>`: the signature says the value
- * can never arrive, rather than a comment saying so.
+ * An agent with no output has `Option<string>`: its value is its text, so
+ * every agent has one and a caller generic over agents reads it uniformly
+ * (`plan-input-default.md` step 5). It was `Option<never>`.
  */
 const plainAgent = Agent.make({})
-type PlainValue = typeof plainAgent extends
-  Agent.AgentDefinition<any, any, any, any, infer V> ? V : never
-export type _NoOutputIsNever = Assert<
-  Equal<AgentSession.Result<{}, PlainValue>["value"], Option.Option<never>>
+type PlainValue = Agent.ValueOf<typeof plainAgent>
+export type _NoOutputIsString = Assert<
+  Equal<AgentSession.Result<{}, PlainValue>["value"], Option.Option<string>>
+>
+
+/**
+ * And a *direct* call on a concrete typed session infers its `Value`: the
+ * explicit type arguments in `run` above are for a `Value` that is itself a
+ * type parameter, which `Effect.fn`'s wrapper does not carry. If this ever
+ * fails, the signature has regressed, not the call site.
+ */
+const probeAgent = Agent.make({ output: Output })
+type DirectValue = Effect.Success<
+  ReturnType<typeof AgentSession.prompt<{}, never, Agent.ValueOf<typeof probeAgent>, Prompt.RawInput>>
+>["value"]
+export type _DirectCallKeepsValue = Assert<
+  Equal<DirectValue, Option.Option<{ readonly hasCallToAction: boolean; readonly clarity: number }>>
 >
 
 /** Piping an agent through a combinator does not lose the contract. */

@@ -1071,10 +1071,15 @@ sizes; the items are repeated here so this list stays the one tracker.
     entry was stale, which is the checker doing its job. **Step 3 landed the
     same evening**: one wire shape, `AgentInput.Typed` deleted, an untyped
     client's bytes recorded before the change and pinned equal after it
-    (`test/InputWire.test.ts`). What is still owed: step 4 (journals carry
-    `input`; `InputBoundary.declared` survives for the records until then),
-    step 5 (`Value`, the same way, which is also what lets `Agent.Any` become
-    an alias) and step 6 (the guide).
+    (`test/InputWire.test.ts`). **Step 5 followed**: `Value` defaults to
+    `string`, an untyped agent's `Result.value` is its text and is always
+    `Some`, the wire carries it uniformly (recorded before, pinned as "the
+    same plus `value`"), `Subagent.Answer` is an alias, and `Agent.Any` is
+    the alias `AgentDefinition<any, ...>` at last. One deviation, stated in
+    the plan: `agent.output` stays an `Option`, because the output's default
+    is the absence of a tool rather than a different codec. What is still
+    owed: step 4 (journals carry `input`; `InputBoundary.declared` survives
+    for the records until then) and step 6 (the guide).
 
     ```text
     verify: grep "export const prompt: AgentInput<Prompt.RawInput, unknown, never, never>" src/AgentInput.ts
@@ -1082,7 +1087,9 @@ sizes; the items are repeated here so this list stays the one tracker.
     verify: grep "export const declared = " src/internal/inputBoundary.ts
     verify: no-grep "TypedInput" src/AgentInput.ts
     verify: exists test/fixtures/prompt-request.json
-    verify: grep "export interface Any extends Pipeable" src/Agent.ts
+    verify: grep "export type Any = AgentDefinition<any, any, any, any, any, any>" src/Agent.ts
+    verify: exists test/fixtures/prompt-response.json
+    verify: exists test/fixtures/README.md
     ```
 
 47. **What to take from their Workflow RFC** (`plan-rfc-286-durable.md`,

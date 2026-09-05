@@ -56,6 +56,15 @@ describe("Agent.Any", () => {
     )
   })
 
+  it("is the alias, now that every default is a type `any` admits", () => {
+    // Before `plan-input-default.md` steps 2 and 5 this had to be a
+    // structural interface: `Value` and `Input` defaulted to `never`, which
+    // `any` does not admit in an invariant slot.
+    const alias: Equal<Agent.Any, Agent.AgentDefinition<any, any, any, any, any, any>> = true
+    const defaultValue: Equal<Agent.ValueOf<typeof plain>, string> = true
+    assert.isTrue(alias && defaultValue)
+  })
+
   it("the extractors are exact, not `any` and not vacuously `never`", () => {
     const requirements: Equal<Agent.RequirementsOf<typeof budgeted>, Budget.Budget> = true
     const noRequirements: Equal<Agent.RequirementsOf<typeof plain>, never> = true

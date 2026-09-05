@@ -81,8 +81,11 @@ export const RemoteResult = Schema.Struct({
    * site, and a published schema that drifts from its agent silently mistypes
    * every consumer.
    *
-   * Absent for an agent with no declared output, and absent when a run ended
-   * without producing one -- interrupted, or stopped before it answered.
+   * For an agent with no declared output it is the final text, so every
+   * completed result carries one. Absent when a declared output's run ended
+   * without producing one -- interrupted, or stopped before it answered --
+   * and absent from a host older than `plan-input-default.md` step 5, which
+   * is why the field stays optional on the schema.
    */
   value: Schema.optional(Schema.Unknown)
 })
@@ -489,12 +492,16 @@ export const fromSession = <Value, Input>(
     result: AgentSession.Result<any, any>
   ): Effect.Effect<RemoteResult> =>
     Effect.map(
-      // Both `None` cases mean the same thing on the wire -- no value -- but
-      // they are different facts: no declared output at all, versus a run that
+      // The default output's value is the text, already a wire value; a
+      // declared output's is encoded with its schema, or absent when the run
       // ended without reaching one.
-      Option.match(Option.zipWith(declaredOutput, result.value, (output, value) => ({ output, value })), {
-        onNone: () => Effect.succeedNone,
-        onSome: ({ output, value }) => Effect.asSome(AgentOutput.encode(output, value))
+      Option.match(declaredOutput, {
+        onNone: () => Effect.succeed(result.value as Option.Option<unknown>),
+        onSome: (output) =>
+          Option.match(result.value, {
+            onNone: () => Effect.succeedNone,
+            onSome: (value) => Effect.asSome(AgentOutput.encode(output, value))
+          })
       }),
       (encoded) => ({
         submissionId: result.submissionId,
@@ -766,7 +773,7 @@ export interface TypedResult<Value> extends RemoteResult {
   readonly value: Option.Option<Value>
 }
 
-export interface TypedSession<Input, Value = never>
+export interface TypedSession<Input, Value = string>
   extends Omit<RemoteSession, "prompt" | "submit" | "awaitSubmission">
 {
   readonly prompt: (
@@ -783,7 +790,7 @@ export interface TypedSession<Input, Value = never>
 }
 
 /** `Service`, with its sessions typed by the agent's input and output. */
-export interface TypedService<Input, Value = never> {
+export interface TypedService<Input, Value = string> {
   readonly createSession: (options?: {
     readonly sessionId?: string | undefined
   }) => Effect.Effect<TypedSession<Input, Value>, RemoteError, Scope.Scope>
@@ -814,7 +821,16 @@ export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model
    */
   const withValue = (result: RemoteResult): Effect.Effect<TypedResult<Value>, RemoteError> =>
     Option.match(Option.zipWith(agent.output, Option.fromNullishOr(result.value), (output, encoded) => ({ output, encoded })), {
-      onNone: () => Effect.succeed({ ...result, value: Option.none<Value>() }),
+      onNone: () =>
+        Effect.succeed({
+          ...result,
+          // The default output: the value is the text, read from the wire when
+          // the host sent it and from `text` when an older host did not. A
+          // declared output whose run produced nothing stays `None`.
+          value: Option.isNone(agent.output)
+            ? Option.some((result.value ?? result.text) as Value)
+            : Option.none<Value>()
+        }),
       onSome: ({ output, encoded }) =>
         AgentOutput.decode(output, encoded).pipe(
           Effect.map((value): TypedResult<Value> => ({ ...result, value: Option.some(value as Value) })),

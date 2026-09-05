@@ -1,8 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import * as fs from "node:fs"
+import * as Agent from "../src/Agent.js"
 import * as AgentInput from "../src/AgentInput.js"
 import * as AgentProtocol from "../src/client/AgentProtocol.js"
+import { AgentClient } from "../src/client/index.js"
+import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
  * The wire carries one shape (`plan-input-default.md` step 3), and the
@@ -21,6 +24,19 @@ import * as AgentProtocol from "../src/client/AgentProtocol.js"
 const fixture = JSON.parse(fs.readFileSync("test/fixtures/prompt-request.json", "utf8")) as {
   readonly text: unknown
   readonly messages: unknown
+}
+
+/**
+ * `fixtures/prompt-response.json` was recorded from `baf0897`, before
+ * `plan-input-default.md` step 5 gave every agent a `Value`: an untyped
+ * agent answering "the answer" through the in-process client, encoded as
+ * `AgentProtocol.PromptResponse`. The change to the wire is exactly one
+ * added field, `value`, carrying the text -- and that is what is asserted,
+ * so a second difference would be a second wire change and would show.
+ */
+const response = JSON.parse(fs.readFileSync("test/fixtures/prompt-response.json", "utf8")) as {
+  readonly requestId: string
+  readonly result: Record<string, unknown>
 }
 
 describe("the input wire", () => {
@@ -79,6 +95,31 @@ describe("the input wire", () => {
         input: wire
       })
       assert.isTrue(AgentInput.isRaw(decoded.input))
+    })
+  )
+})
+
+describe("the result wire", () => {
+  it.effect("an untyped agent's response is the recorded one plus `value`, and nothing else moved", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("the answer")])
+      const result = yield* Effect.gen(function* () {
+        const client = yield* AgentClient.AgentClient
+        const session = yield* client.createSession({ sessionId: "s-1" })
+        return yield* session.prompt("hello")
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(AgentClient.layer(Agent.make({ instructions: "x" }))),
+        Effect.provide(layer)
+      )
+      const encoded = yield* Schema.encodeEffect(Schema.toCodecJson(AgentProtocol.PromptResponse))({
+        requestId: AgentProtocol.RequestId.make("r-1"),
+        result
+      })
+      assert.deepStrictEqual(
+        JSON.parse(JSON.stringify(encoded)),
+        { ...response, result: { ...response.result, value: "the answer" } }
+      )
     })
   )
 })

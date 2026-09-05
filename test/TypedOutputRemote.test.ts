@@ -97,7 +97,8 @@ describe("a typed output across the remote boundary", () => {
             const session = yield* client.createSession()
             const result = yield* session.prompt("hello")
             assert.strictEqual(result.text, "done")
-            assert.isTrue(Option.isNone(result.value))
+            // The default output's value is the text, and it crosses the wire.
+            assert.deepStrictEqual(result.value, Option.some("done"))
           })
         )
       }).pipe(Effect.provide(AgentClient.layer(plain).pipe(Layer.provide(model))))

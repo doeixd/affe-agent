@@ -1,6 +1,21 @@
 # Plan: every agent has an input, and the prompt is the default
 
-**Status: steps 1–3 landed 2026-09-04; 4–6 open.** The type-level core is
+**Status: steps 1–3 and 5 landed 2026-09-04; 4 and 6 open.** Step 5 with
+one deviation from §2: `agent.output` stays an `Option`. The input's default
+is a *codec* (the prompt wire) and could be a value like any other; the
+output's default is the *absence of a tool* -- a default `AgentOutput.text`
+would have had to be special-cased at every site that injects the tool,
+describes it, or stops the loop on it, which is more surface than the
+`Option` it replaces. So `Value` defaults to `string`, `Result.value` is the
+text and always `Some` under the default, the wire carries it uniformly
+(`test/InputWire.test.ts`, "the result wire"), and the conditional went; the
+`Option` on the definition is now "declares a tool", which is what it always
+meant. What step 5 also found: a generic `Value` is not inferred through
+`Effect.fn`'s wrapper either -- it fell to `never` before and was invisible
+because `never` is assignable to everything, and it falls to `string` now and
+is not -- so `settle`, `Agent.run`, the eval's `send` and `Subagent` pass
+explicit type arguments, and `test/AgentOutput.test.ts` pins that a direct
+call on a concrete typed session still infers. The type-level core is
 in: `AgentInput.prompt`, `Input = Prompt.RawInput`, no `PromptInput`, no
 `Option` on `definition.input`, `Current` set on every submission. The wire
 carries one shape: `AgentInput.Typed` is gone, `AgentProtocol.Input` is the

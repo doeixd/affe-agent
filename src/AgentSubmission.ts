@@ -27,7 +27,7 @@ export interface Receipt {
  * finish reason and content parts that a caller would otherwise have to
  * reconstruct from the event stream.
  */
-export interface Result<Tools extends Record<string, Tool.Any>, Value = never> {
+export interface Result<Tools extends Record<string, Tool.Any>, Value = string> {
   readonly submissionId: SubmissionId
   readonly status: "completed" | "interrupted"
   readonly runs: number
@@ -43,14 +43,17 @@ export interface Result<Tools extends Record<string, Tool.Any>, Value = never> {
   /** The final model response, so usage and finish reason are not discarded. */
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
   /**
-   * The typed value the model reported, for an agent that declares an output.
+   * The submission's value: the final text for an agent with no declared
+   * output, or the typed value the model reported for one that declares an
+   * `AgentOutput`.
    *
-   * `Option`, not the value itself, and it stays an `Option` even for a
-   * completed submission. A model can stop without calling the tool, a run can
-   * be interrupted, and a loop bound can end the run first -- so a signature
-   * promising a value would be a promise the harness cannot keep. An agent
-   * that declares no output has `Value = never`, making this `Option<never>`:
-   * always `none`, and the compiler says so rather than the docs.
+   * `Option`, and for a declared output it stays one even for a completed
+   * submission: a model can stop without calling the tool, a run can be
+   * interrupted, and a loop bound can end the run first, so a signature
+   * promising a value would be a promise the harness cannot keep. For the
+   * default it is always `Some` -- the text so far, `""` for a run that
+   * never spoke -- so `Value` is `string` rather than `never`, and a caller
+   * generic over agents reads a value from every one.
    */
   readonly value: Option.Option<Value>
 }
@@ -228,7 +231,10 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     // Read at the end rather than tracked in a local: the value is written by
     // a tool handler deep inside a turn, and `progress` is the one place this
     // submission's landed work is already collected for exactly that reason.
-    const { value } = yield* Ref.get(session.progress)
+    const { value: reported } = yield* Ref.get(session.progress)
+    // The default output's value is the text; a declared output's is what
+    // the model reported through its tool, or nothing.
+    const value = Option.isSome(session.agent.output) ? reported : Option.some(text)
 
     return { submissionId, runs, turns, text, response, stopReason, value }
   })

@@ -1,0 +1,17 @@
+{
+  "requestId": "r-1",
+  "result": {
+    "submissionId": "s-1:submission-1",
+    "status": "completed",
+    "runs": 1,
+    "turns": 1,
+    "text": "the answer",
+    "content": [
+      {
+        "options": {},
+        "type": "text",
+        "text": "the answer"
+      }
+    ]
+  }
+}

@@ -38,7 +38,7 @@ export type Id = Ids.SessionId
 
 export type { Status }
 export type { SessionState as State }
-export type Result<Tools extends Record<string, Tool.Any> = {}, Value = never> =
+export type Result<Tools extends Record<string, Tool.Any> = {}, Value = string> =
   AgentSubmission.Result<Tools, Value>
 
 export type SubmissionReceipt = AgentSubmission.Receipt
@@ -84,7 +84,7 @@ export interface AgentSession<
    * agent declares no output. Comes straight from the `AgentDefinition`, so a
    * caller never states it.
    */
-  Value = never,
+  Value = string,
   /** The typed input this session's submissions are asked with; see `AgentInput`. */
   Input = Prompt.RawInput
 > {
@@ -279,7 +279,7 @@ export const make = <
   E,
   R,
   Model = LanguageModel.LanguageModel,
-  Value = never,
+  Value = string,
   Input = Prompt.RawInput
 >(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
@@ -299,7 +299,7 @@ export const makeEngine = <
   E,
   R,
   Model = LanguageModel.LanguageModel,
-  Value = never,
+  Value = string,
   Input = Prompt.RawInput
 >(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
@@ -749,7 +749,7 @@ export const submit = Effect.fn("AgentSession.submit")(function* <
 export const prompt = Effect.fn("AgentSession.prompt")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
-  Value = never,
+  Value = string,
   Input = Prompt.RawInput
 >(
   session: AgentSession<Tools, E, Value, Input>,
@@ -771,7 +771,9 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
       return yield* new AgentBusyError({ sessionId: self.id })
     }
     const { fiber, submissionId } = started
-    return yield* settle(self, submissionId, fiber, { interruptWithCaller: true })
+    // Explicit `Value`: `settle`'s default is `string`, and through the
+    // generator that default is what the return type would carry.
+    return yield* settle<Tools, E, Value>(self, submissionId, fiber, { interruptWithCaller: true })
   })
 
 /**
@@ -783,7 +785,7 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
  * run was detached by `submit`, and a waiter leaving is not the work being
  * cancelled.
  */
-const settle = <Tools extends Record<string, Tool.Any>, E, Value = never>(
+const settle = <Tools extends Record<string, Tool.Any>, E, Value = string>(
   self: Session<Tools, E, never>,
   submissionId: Ids.SubmissionId,
   fiber: Fiber.Fiber<any, any>,
@@ -813,8 +815,9 @@ const settle = <Tools extends Record<string, Tool.Any>, E, Value = never>(
           stopReason: Option.none(),
           // An interrupted submission still reports a value it already got.
           // The tool call that produced it committed atomically with its turn,
-          // so this is work that landed, not work in flight.
-          value: landed.value as Option.Option<Value>
+          // so this is work that landed, not work in flight. Under the
+          // default output the value is the text so far.
+          value: (Option.isSome(self.agent.output) ? landed.value : Option.some(landed.text)) as Option.Option<Value>
         } satisfies Result<Tools, Value>
       }
       return yield* Effect.failCause(exit.cause)
@@ -826,7 +829,7 @@ const settle = <Tools extends Record<string, Tool.Any>, E, Value = never>(
 export const awaitSubmission = Effect.fn("AgentSession.awaitSubmission")(function* <
   Tools extends Record<string, Tool.Any>,
   E,
-  Value = never
+  Value = string
 >(
   session: AgentSession<Tools, E, Value, any>,
   submissionId: Ids.SubmissionId
@@ -835,11 +838,11 @@ export const awaitSubmission = Effect.fn("AgentSession.awaitSubmission")(functio
     yield* Telemetry.annotateSession(self.id)
     const active = yield* Ref.get(self.activeFiber)
     if (Option.isSome(active) && active.value.submissionId === submissionId) {
-      return yield* settle(self, submissionId, active.value.fiber, { interruptWithCaller: false })
+      return yield* settle<Tools, E, Value>(self, submissionId, active.value.fiber, { interruptWithCaller: false })
     }
     const last = yield* Ref.get(self.settledFiber)
     if (Option.isSome(last) && last.value.submissionId === submissionId) {
-      return yield* settle(self, submissionId, last.value.fiber, {
+      return yield* settle<Tools, E, Value>(self, submissionId, last.value.fiber, {
         interruptWithCaller: false,
         progress: last.value.progress
       })
@@ -1156,7 +1159,7 @@ export const restore = <
   E,
   R,
   Model = LanguageModel.LanguageModel,
-  Value = never
+  Value = string
 >(
   agent: AgentDefinition<Tools, E, R, Model, Value>,
   snapshot: Snapshot,

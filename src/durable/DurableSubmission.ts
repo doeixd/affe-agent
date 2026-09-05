@@ -543,11 +543,15 @@ const succeededOutcome = (
   output: Option.Option<AgentOutput.AgentOutput<any, any>>
 ): Effect.Effect<Outcome> =>
   Effect.map(
-    // Two different facts, one absence: an agent that declares no output, and
-    // a run that ended without reaching one.
-    Option.match(Option.zipWith(output, result.value, (declared, value) => ({ declared, value })), {
-      onNone: () => Effect.succeedNone,
-      onSome: ({ declared, value }) => Effect.asSome(AgentOutput.encode(declared, value))
+    // The default output's value is the text, already a wire value; a
+    // declared output's is encoded, or absent when the run never reached it.
+    Option.match(output, {
+      onNone: () => Effect.succeed(result.value as Option.Option<unknown>),
+      onSome: (declared) =>
+        Option.match(result.value, {
+          onNone: () => Effect.succeedNone,
+          onSome: (value) => Effect.asSome(AgentOutput.encode(declared, value))
+        })
     }),
     (encoded): Outcome => ({
       _tag: "Succeeded",
