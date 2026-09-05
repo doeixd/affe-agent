@@ -95,7 +95,7 @@ the empty cells are its output, not its incompleteness.
 | run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | `LimitsAcrossDelegation` ⁵ |
 | tool approval | `Permission` | `DurablePermission` | contract row | `PermissionSubagent` ⁶ |
 | elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | `PermissionSubagent` ⁶ |
-| principal | `Principal` | `Principal` | **not tested** ⁷ | `SubagentPrincipal` ⁸ |
+| principal | `Principal` | `Principal` | `PrincipalOverWire` ⁷ | `SubagentPrincipal` ⁸ |
 | declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | `Subagent.helper` ⁹ |
 | typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
 | cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | **not tested** ¹⁰ | `Subagent.helper`, `ToolCleanup` |
@@ -150,17 +150,14 @@ tool so the person is told who is asking. A child whose toolkit is resolved
 per turn (an MCP-bound child, typically) declares nothing up front, so the
 construction check cannot see it; forwarding is the answer for that child too.
 
-⁷ **Caught reviewing this table, which is the table working.** This cell first
-read "`Principal`, relay stamp" -- and neither backs it. `Principal.test.ts`
-covers in-process and durable, and the relay's `PEER_HEADER` stamps a *peer*,
-which is a node's identity rather than a user's. Nothing asserts that a
-principal established by a serving host reaches a tool over HTTP or RPC.
-
-It should stay uncarried: a principal arriving *in* the protocol would be a
-caller asserting its own identity, which is the trust bug, so the server's host
-must establish it from its own authentication. That is a claim about how it is
-meant to work, and it is exactly the kind of claim the footnote below was
-written to stop trusting. Item 58.
+⁷ **Was "not tested", caught reviewing this table; now a test, in both
+directions.** A real agent behind a real HTTP server: the host's `subject`
+mapping of its own authentication reaches the tool as `CurrentPrincipal`, a
+header the client invents to assert an identity does not, and a host that
+maps no subject puts nothing on the fibre however the client authenticated.
+So the claim that a principal is never carried by the wire, only established
+by the serving host, is read from a test rather than from the design note.
+Item 58.
 
 ⁸ Verified rather than assumed. `plan-seams.md` claimed principal crosses a
 delegation because a `Context.Reference` on the fibre crosses; that was read
