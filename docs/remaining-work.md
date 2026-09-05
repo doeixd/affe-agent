@@ -434,8 +434,11 @@ and should not until it is committed. Item 30 is untouched.
     which is why this is ranked rather than urgent for a pre-release package.
 
     **Half done 2026-09-05.** `isTerminal` now decides by the relay's own
-    error schemas -- `Schema.is(Schema.Union([RelaySupersededError,
-    RelayUnauthorizedError]))` -- and the two literal strings are gone, so a
+    error schemas -- decoding the failure through
+    `Schema.Union([RelaySupersededError, RelayUnauthorizedError])`, which
+    accepts an instance and the encoded shape alike (the first version used
+    `Schema.is`, which is `instanceof`, and the review caught it against a
+    plain object) -- and the two literal strings are gone, so a
     rename moves the errors and the check together and cannot desync them
     within one version; `RelayReconnect`'s supersession-flap row is what fails
     if supersession ever becomes retryable. What is *not* done is the
@@ -447,7 +450,7 @@ and should not until it is committed. Item 30 is untouched.
 
     ```text
     verify: no-grep "affe-agent/relay/RelaySupersededError\"," src/relay/RelayClient.ts
-    verify: grep "Schema.is(Terminal)" src/relay/RelayClient.ts
+    verify: grep "Schema.decodeUnknownOption(Terminal)" src/relay/RelayClient.ts
     ```
 
     **The same root cause, wider:** identifiers that outlive a process were

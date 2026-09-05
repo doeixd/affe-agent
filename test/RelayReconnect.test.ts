@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Duration, Effect, Layer, Ref, Stream, SubscriptionRef } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Ref, Stream, SubscriptionRef } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
@@ -338,4 +338,24 @@ describe("relay reconnection", () => {
     }),
     30_000
   )
+})
+
+describe("what ends reconnection for good", () => {
+  it("is decided by the relay's error schemas, for an instance and for the encoded shape alike", () => {
+    // Item 55. The decision used to compare `_tag` against two package-prefixed
+    // literals; it follows the classes now. It must still accept the error as
+    // the wire delivers it -- a plain object -- because `Schema.is` on a class
+    // is `instanceof`, and the first version of the fix would have read a
+    // superseded connection as retryable the moment the error was not an
+    // instance of this module's class. That is the flap this exists to stop.
+    const peer = Relay.PeerId.make("p")
+    const superseded = new Relay.RelaySupersededError({ peer })
+    assert.isTrue(RelayClient.isTerminal(Cause.fail(superseded)))
+    assert.isTrue(RelayClient.isTerminal(Cause.fail({ _tag: "affe-agent/relay/RelaySupersededError", peer: "p" })))
+    assert.isTrue(RelayClient.isTerminal(Cause.fail(new Relay.RelayUnauthorizedError({ reason: "bad token" }))))
+    // An expired lease means "you went quiet", and coming back is the answer.
+    assert.isFalse(RelayClient.isTerminal(Cause.fail(new Relay.RelayLeaseExpiredError({ peer }))))
+    assert.isFalse(RelayClient.isTerminal(Cause.fail({ _tag: "affe-agent/relay/RelayLeaseExpiredError", peer: "p" })))
+    assert.isFalse(RelayClient.isTerminal(Cause.die(new Error("anything else"))))
+  })
 })
