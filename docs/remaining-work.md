@@ -493,6 +493,22 @@ and should not until it is committed. Item 30 is untouched.
     verify: no-grep "overflow" src/AgentTurn.ts
     ```
 
+60g-i. **The ledger and the budget remember every turn forever.** Found
+    reviewing 60g: `RunLedger` appends every entry to a list and keeps every
+    occurrence key, and `Budget` keeps its two occurrence sets the same way,
+    for the life of the layer -- fine per session, unbounded for an
+    application-scoped layer that outlives thousands of sessions. The
+    dedupe needs the keys of turns that could still be replayed, which is
+    not all of them; the totals need no entries at all. One decision for
+    both: what to keep (a bound on entries, per-session eviction when a
+    session closes, or totals-only after N), recorded here rather than
+    picked in passing because it changes what `entries` promises. Small
+    once decided.
+
+    ```text
+    verify: no-grep "maxEntries" src/RunLedger.ts
+    ```
+
 60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
     re-proposes them: their fourteen-knob `AgentPolicy` object (our limits
     and budget compose without one), working notes over memory ports (no

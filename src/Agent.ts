@@ -373,8 +373,8 @@ export const describe = (agent: Any): Description => ({
   instructions: agent.instructions,
   // The one place "can we know the tools yet?" is answered: a handled value
   // and a `Declared` Effect say; a bare Effect does not until it has run.
-  tools: Option.map(InternalToolkit.declaredTools(agent.toolkit), (tools) =>
-    Object.values(tools as Record<string, Tool.Any>).map((tool) => ({
+  tools: Option.map(InternalToolkit.declaredTools(agent.toolkit), (tools: Record<string, Tool.Any>) =>
+    Object.values(tools).map((tool) => ({
       name: tool.name,
       description: Option.fromUndefinedOr(tool.description)
     }))

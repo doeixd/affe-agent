@@ -325,15 +325,14 @@ export type PolicyServices<O> = Ceiling<O> | (Priced<O> extends true ? ModelCapa
 export const policy = <const O extends PolicyOptions>(
   options: O
 ): Policy<PolicyError<O>, PolicyServices<O>, Ceiling<O>> => {
-  const bounded: AgentLoop.AgentLoop<never, never, any> =
-    options.maxTurns === undefined && options.maxToolCalls === undefined && options.maxDuration === undefined
-      ? options.finalTurn === true ? AgentLoop.withFinalTurn(AgentLoop.untilIdle()) : AgentLoop.untilIdle()
-      : AgentLoop.limits({
-        ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
-        ...(options.maxToolCalls === undefined ? {} : { maxToolCalls: options.maxToolCalls }),
-        ...(options.maxDuration === undefined ? {} : { maxDuration: options.maxDuration }),
-        ...(options.finalTurn === undefined ? {} : { finalTurn: options.finalTurn })
-      } as AgentLoop.Limits & { readonly maxTurns: number })
+  // The same composition `AgentLoop.limits` performs, spelled out so no bound
+  // has to be asserted present: `and` flattens, so the description is one
+  // conjunction either way.
+  let bounded: AgentLoop.AgentLoop<never, never, any> = AgentLoop.untilIdle()
+  if (options.maxTurns !== undefined) bounded = AgentLoop.and(bounded, AgentLoop.maxTurns(options.maxTurns))
+  if (options.maxToolCalls !== undefined) bounded = AgentLoop.and(bounded, AgentLoop.maxToolCalls(options.maxToolCalls))
+  if (options.maxDuration !== undefined) bounded = AgentLoop.and(bounded, AgentLoop.maxDuration(options.maxDuration))
+  if (options.finalTurn === true) bounded = AgentLoop.withFinalTurn(bounded)
   const withTokens = options.tokens === undefined ? bounded : Budget.within(options.tokens, bounded)
   const loop = options.cost === undefined ? withTokens : Budget.cost(options.cost, withTokens)
   // The value is exact; only the conditional types above are being restated,
