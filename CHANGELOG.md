@@ -11,6 +11,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - a persisted compaction checkpoint may now be a rollover (`kind: "rollover"`) as well as a summary; summaries decode as before. (`c30de48`; measured by `test/fixtures/compaction-checkpoint.json`)
 - none for a caller -- every tag, table default and key prefix keeps its exact value; the fixture records them so a later change cannot pass unmeasured. (`fb22c34`; measured by `test/fixtures/namespace-manifest.json`)
+- a delegation whose child was interrupted now fails the parent's tool call with `SubagentInterruptedError` carrying the partial text, instead of succeeding with the partial text as the answer. (`dc2d6d6`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
