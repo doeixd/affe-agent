@@ -13,13 +13,18 @@ evidence is named, and where it is a test it is in the tree.*
 | 3 | ~~**Item 46: every agent has an input**~~ | **shipped**, 2026-09-05; step 4's doubling deliberately not done, see the plan | large |
 | 4 | ~~**The engine records usage; the loop only decides**~~ | **shipped**; `Budget.charge` is gone | medium |
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
-| 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
+| 6 | ~~**The static toolkit is the common case; say so in the type**~~ | **reconsidered and closed**, see §2.6 | -- |
 | 7 | ~~A typed child returns its value~~ | **shipped**; the matrix's "text only" cell is a test | small |
 | 8 | ~~`remaining-work.md` is 1600 lines~~ | **split** 2026-09-05: 21 open entries in the list, 59 closed in the ledger, the checker scans both | small |
 
 Order of work: 1, 2, 3, 4, then the rest. 1 and 2 are cheap and each closes
 a class of bug rather than an instance; 3 is the large one everything after
 it gets cheaper for; 4 is the redesign that 1 and 3 make clean.
+
+**All closed 2026-09-05.** Shipped: 1, 3, 4, 5, 7, 8, and §2b's 9–13.
+Withdrawn or reconsidered with the reasoning kept: 2 (its premise was
+wrong) and 6 (its property was already delivered another way). Each closed
+entry says what it did not predict.
 
 ## 2. The items
 
@@ -195,6 +200,22 @@ they do or when the caller asked for a per-turn toolkit. `ToolkitInput` stays
 a union, `declaredTools` stays the reader, and `Declared` goes when the
 static case no longer needs it. Medium because `toLayer` is where handler
 requirements are discharged and the split has to follow it.
+
+**Reconsidered 2026-09-05, and closed without building.** Everything else on
+this plan is done, and the property this item wanted -- that a toolkit built
+from a static list says what it holds before the agent runs -- is what
+`InternalToolkit.Declared` delivers: `Agent.toolkit`, `tools: [...]`,
+`withTools` and every preset declare, `declaredTools` answers "can we know
+yet?" in one place, and the one consumer that needs the answer (`Subagent`'s
+construction-time refusal) has it, with a test that pins the declaration
+equal to what the Effect resolves to. What is left is a distinction *in the
+type* between a declared Effect and a bare one, and the design above buys it
+by returning a value from `Agent.toolkit` when handlers need no services --
+which means running `toLayer` synchronously inside a constructor, a
+`runSync` in a pure function, for a type-level fact nothing but that one
+consumer reads. That is the wrong trade, the same shape as step 4's
+doubling, and the plan says so rather than doing it. If a second reader of
+the static tool set ever appears, this is where to start.
 
 ### 2.7 A typed child returns its value
 
