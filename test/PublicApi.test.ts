@@ -290,8 +290,11 @@ describe("durable and cluster surfaces", () => {
       "CompactionEvent",
       "CompactionFailed",
       "CompactionStarted",
+      // The tool that lets the model see its own window, and its result.
+      "ContextRemaining",
       "SummaryResult",
       "Trigger",
+      "WindowStatus",
       "continuationSummary",
       "controller",
       "estimate",

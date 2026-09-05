@@ -1,8 +1,11 @@
 import { Cause, Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
-import { AiError, LanguageModel, Prompt, Response } from "effect/unstable/ai"
+import { AiError, LanguageModel, Prompt, Response, Tool } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
+import * as Agent from "../Agent.js"
 import * as AgentEvent from "../AgentEvent.js"
+import * as Budget from "../budget/Budget.js"
 import * as ContextTransform from "../ContextTransform.js"
+import { CurrentSessionId } from "../internal/currentSession.js"
 import { positiveInteger } from "../internal/positive.js"
 import {
   alignOffToolResults,
@@ -663,14 +666,21 @@ const tokenPreparation = <E, R>(
   covered: number,
   projectedBefore: Prompt.Prompt,
   cache: WeakMap<Prompt.Message, number>
-): Effect.Effect<Option.Option<Preparation<Checkpoint>>, E | CompactionCannotHelpError, R> =>
+): Effect.Effect<
+  { readonly tokensBefore: number; readonly preparation: Option.Option<Preparation<Checkpoint>> },
+  E | CompactionCannotHelpError,
+  R
+> =>
   Effect.gen(function* () {
+    // Returned alongside the preparation, not only used to decide it: the
+    // projection's size is what `contextRemaining` reports to the model, and
+    // measuring it once here is cheaper than measuring it again for the tool.
     const tokensBefore = natural(
       "Compaction token estimator",
       yield* policy.estimate(projectedBefore)
     )
     if (tokensBefore <= budget.contextWindow - budget.reserveTokens) {
-      return Option.none()
+      return { tokensBefore, preparation: Option.none() }
     }
 
     // Canonical messages are stable objects carried through by identity — that
@@ -735,15 +745,57 @@ const tokenPreparation = <E, R>(
       "Compaction token estimator",
       yield* policy.estimate(Prompt.fromMessages(messages.slice(firstKept)))
     )
-    return prepare({
-      messages,
-      previous: existing,
-      previouslyCovered: covered,
-      rawBoundary: firstKept,
+    return {
       tokensBefore,
-      tokensRetained: exactRetained
-    })
+      preparation: prepare({
+        messages,
+        previous: existing,
+        previouslyCovered: covered,
+        rawBoundary: firstKept,
+        tokensBefore,
+        tokensRetained: exactRetained
+      })
+    }
   })
+
+/**
+ * What the model was last sent, as the model may ask to see it.
+ *
+ * A limit the model cannot see is a limit it will hit. The harness meters the
+ * projection every turn and stops the run on a budget the model never saw;
+ * this is the same measurement, made readable through a tool
+ * (`Controller.tools.contextRemaining`), so a model that is running out of
+ * room has a reason to act -- finish, summarise, or, once it exists, ask for
+ * a fresh window -- rather than being cut off. `null` where the policy sets
+ * no token limit (the message-count policy), the same way a host that set no
+ * limit reports none.
+ */
+export const WindowStatus = Schema.Struct({
+  /** The projection's estimated tokens on its last turn; `null` under a message-count policy. */
+  estimatedTokens: Schema.NullOr(Schema.Natural),
+  /** `contextWindow - reserveTokens`, the line compaction keeps the projection under; `null` if none. */
+  contextLimit: Schema.NullOr(Schema.Natural),
+  /** `contextLimit - estimatedTokens`, floored at zero; `null` if either is. */
+  remainingTokens: Schema.NullOr(Schema.Natural),
+  /** Canonical messages in the session's history, all of them. */
+  canonicalMessages: Schema.Natural,
+  /** How many of those the current checkpoint has folded away. */
+  compactedThrough: Schema.Natural,
+  /** Tokens the ambient `Budget` has recorded for the run, when one is in context. */
+  spentTokens: Schema.NullOr(Schema.Natural),
+  /** Cost the ambient `Budget` has recorded, in the capability table's unit, when one is in context and prices exist. */
+  spentCost: Schema.NullOr(Schema.Number)
+})
+export type WindowStatus = Omit<typeof WindowStatus.Type, "spentTokens" | "spentCost">
+
+export const ContextRemaining = Tool.make("context_remaining", {
+  description:
+    "Inspect your current context window: how many tokens the last request used, the limit compaction keeps it under, " +
+    "and how much room remains. Null means the host set no limit. Read-only; costs nothing.",
+  parameters: Schema.Struct({}),
+  success: WindowStatus,
+  failure: Schema.String
+}).annotate(Tool.Readonly, true)
 
 /** Why a compaction ran. */
 export const Trigger = Schema.Literals(["automatic", "manual"])
@@ -841,6 +893,15 @@ export interface Controller<TE, CE, SE, R> {
    * stalling compaction: a sliding buffer of 64 per controller.
    */
   readonly events: Stream.Stream<CompactionEvent>
+  /**
+   * Tools the model may be given, built by this controller because they read
+   * its state. `contextRemaining` reports the last projection this controller
+   * made for the calling session (`WindowStatus`), plus the ambient `Budget`'s
+   * totals when one is in context. Add it to an agent's `tools`.
+   */
+  readonly tools: {
+    readonly contextRemaining: Agent.BoundTool<typeof ContextRemaining>
+  }
 }
 
 /** Events a subscriber can fall behind by before the oldest are dropped. */
@@ -951,6 +1012,22 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
       )
     })
     const checkpoints = yield* Ref.make(new Map<string, Checkpoint>())
+    // The last projection made for each session, for `contextRemaining`.
+    // Transient by nature -- it describes the turn that just ran -- so it is
+    // in memory even when checkpoints are persisted, and bounded the same way.
+    const windows = yield* Ref.make(new Map<string, WindowStatus>())
+    const recordWindow = (sessionId: string, status: WindowStatus) =>
+      Ref.update(windows, (all) => {
+        const next = new Map(all)
+        next.delete(sessionId)
+        next.set(sessionId, status)
+        while (next.size > maxSessions) {
+          const oldest = next.keys().next().value
+          if (oldest === undefined) break
+          next.delete(oldest)
+        }
+        return next
+      })
     // Canonical messages are stable by identity, so a per-transform `WeakMap`
     // avoids re-tokenizing the same suffix every turn. The cache is per
     // `Compaction.make` instance (not per session) because the policy's
@@ -1148,12 +1225,13 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         const policy = options.policy
         let budget = Option.none<ContextBudget>()
         let preparation: Option.Option<Preparation<Checkpoint>>
+        let estimated = Option.none<number>()
         if (policy._tag === "Messages") {
           preparation = messagePreparation(policy, messages, existing, covered)
         } else {
           const resolved = yield* resolveBudget(policy.budget, context)
           budget = Option.some(resolved)
-          preparation = yield* tokenPreparation(
+          const measured = yield* tokenPreparation(
             policy,
             resolved,
             messages,
@@ -1162,9 +1240,29 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
             projectedBefore,
             singleMessageCache
           )
+          preparation = measured.preparation
+          estimated = Option.some(measured.tokensBefore)
         }
 
+        // What the model will be sent this turn, recorded so `contextRemaining`
+        // can answer for it. Recorded at every exit of this transform: the
+        // no-compaction path here, and the compacted projection below.
+        const window = (tokens: Option.Option<number>, coveredThrough: number): WindowStatus => ({
+          estimatedTokens: Option.getOrNull(tokens),
+          contextLimit: Option.match(budget, {
+            onNone: () => null,
+            onSome: (b) => b.contextWindow - b.reserveTokens
+          }),
+          remainingTokens: Option.match(Option.zipWith(budget, tokens, (b, t) => b.contextWindow - b.reserveTokens - t), {
+            onNone: () => null,
+            onSome: (n) => Math.max(0, n)
+          }),
+          canonicalMessages: messages.length,
+          compactedThrough: coveredThrough
+        })
+
         if (Option.isNone(preparation)) {
+          yield* recordWindow(context.sessionId, window(estimated, covered))
           return projectedBefore
         }
 
@@ -1215,6 +1313,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         }
 
         yield* completed(context.sessionId, "automatic", checkpoint)
+        yield* recordWindow(context.sessionId, window(tokensAfter, checkpoint.coveredThrough))
         return projected
       }).pipe(
         // The summariser's own failure was reported inside `summariseWith`;
@@ -1235,12 +1334,34 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
       )
     )
 
+    // The one tool that looks a session up by its identity: the last
+    // projection this controller recorded for it, plus what the ambient
+    // `Budget` has recorded, when one is in context.
+    const contextRemaining = Agent.tool(ContextRemaining, () =>
+      Effect.gen(function* () {
+        const sessionId = yield* CurrentSessionId
+        if (Option.isNone(sessionId)) {
+          return yield* Effect.fail("context_remaining was called outside a session's tool execution")
+        }
+        const status = (yield* Ref.get(windows)).get(sessionId.value)
+        if (status === undefined) {
+          return yield* Effect.fail(
+            "no projection has been recorded for this session yet: is this controller's transform on the agent?"
+          )
+        }
+        const budget = yield* Effect.serviceOption(Budget.Budget)
+        const spentTokens = Option.isSome(budget) ? yield* budget.value.spent : null
+        const spentCost = Option.isSome(budget) ? yield* budget.value.costSpent : null
+        return { ...status, spentTokens, spentCost }
+      }))
+
     return {
       transform,
       compact,
       checkpoint: (sessionId) => load(sessionId),
       clear: remove,
-      events: Stream.fromPubSub(bus)
+      events: Stream.fromPubSub(bus),
+      tools: { contextRemaining }
     }
   })
 }

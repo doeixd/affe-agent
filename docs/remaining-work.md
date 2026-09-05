@@ -487,17 +487,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     to work them, each pinned on its *open* state so the checker turns red
     the moment one lands and its text has to move to the ledger.
 
-60a. **The model can see its own window.** A read-only tool,
-    `Compaction.tools.contextRemaining`, over the projection's token estimate,
-    the policy's limit and the `Budget` totals when one is in context, with
-    `null` where the host set no limit. Today the loop stops on a budget the
-    model never saw, so it has no reason to ask for a fresh window. Small;
-    independent of everything else in the plan.
-
-    ```text
-    verify: no-grep "contextRemaining" src/compaction/Compaction.ts
-    ```
-
 60b. **A declared failpoint location with no test fails the build.**
     `Failpoints.covered(group)` in `/testing`, and a conformance row per
     subsystem asserting every location in the closed tuple is hit by at least

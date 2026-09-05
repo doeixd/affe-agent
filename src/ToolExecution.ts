@@ -6,6 +6,7 @@ import type { Correlation } from "./AgentEvent.js"
 import type { SubmissionId } from "./internal/ids.js"
 import { ToolApprovalRequiredError, ToolPermissionDeniedError } from "./Errors.js"
 import * as Elicitation from "./Elicitation.js"
+import { CurrentSessionId } from "./internal/currentSession.js"
 import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Telemetry from "./internal/telemetry.js"
@@ -652,6 +653,9 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
           // Around the fold as well as the handle: a streaming handler's body
           // runs when its stream is consumed, which is here, not above.
           Effect.provideService(Elicitation.Current, Option.some(forwardable)),
+          // And the session's identity, for the one tool that looks something
+          // up by it (the compaction controller's `contextRemaining`).
+          Effect.provideService(CurrentSessionId, Option.some(session.id)),
           // A finalizer, not an uninterruptible block: once the fiber is
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.

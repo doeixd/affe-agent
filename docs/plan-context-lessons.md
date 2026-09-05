@@ -129,6 +129,15 @@ from the controller, and the `Budget` totals when one is in context. A model
 that can see it has a reason to call `new_context` itself. Small, and
 independent of everything else here.
 
+**Shipped 2026-09-05** (item 60a). Two things the sketch did not say: the
+tool has to know *which* session it runs in, and tools saw only the
+principal, the input and the elicitor -- so the harness now also provides the
+session id around each handler, internal, read by this one tool; and the
+transform records the projection at both of its exits so the tool reports
+the number the harness measured rather than paying for a second estimate,
+which meant `tokenPreparation` returning its `tokensBefore` alongside the
+preparation. Broken once to confirm the rows read the recording.
+
 ### 2.4 Retained history as evidence
 
 **What they did.** `search_context_windows` (at most three hits) and

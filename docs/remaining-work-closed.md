@@ -1275,3 +1275,26 @@ still resolves -- here, if not in the list. Nothing here is next;
     ```text
     verify: exists test/CleanupOverWire.test.ts
     ```
+
+### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
+
+60a. ~~**The model can see its own window.**~~ **DONE 2026-09-05.** A
+    read-only tool, `Controller.tools.contextRemaining`, reporting the last
+    projection the controller recorded for the calling session -- estimated
+    tokens, the limit compaction keeps it under, what remains, how much
+    history is folded -- and the ambient `Budget`'s totals through the
+    previous turn, `null` where the policy sets no token limit. The
+    transform records the projection at both of its exits, so the number is
+    the one the harness measured rather than a second estimate; a tool given
+    to an agent without the transform fails by name rather than inventing
+    zeros. It needed one more thing a tool can see of its session, its id
+    (`internal/currentSession.ts`), provided by the harness beside the
+    elicitor. Broken once: with the recording removed, exactly the three
+    rows that read a projection fail and the three that test the failure
+    paths still pass.
+
+    ```text
+    verify: grep "contextRemaining" src/compaction/Compaction.ts
+    verify: grep "Effect.provideService(CurrentSessionId" src/ToolExecution.ts
+    verify: exists test/ContextRemaining.test.ts
+    ```

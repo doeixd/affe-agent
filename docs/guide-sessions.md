@@ -236,8 +236,13 @@ a child's tool reads the parent's principal without `Subagent` doing
 anything (`test/SubagentPrincipal.test.ts`); what a delegation forwards
 *deliberately* is in `Subagent.Inherit`.
 
-There is a fourth, `internal/failpoint.ts`, which is not part of the surface:
-a test hook for making a durable pass die at a named boundary.
+Two more are internal and not part of the surface: `internal/failpoint.ts`,
+a test hook for making a durable pass die at a named boundary; and
+`internal/currentSession.ts`, the session's *id*, read by the one tool that
+looks something up by it -- the compaction controller's `contextRemaining`,
+which reports the last projection the controller recorded for the calling
+session, so a model can see how much of its window is left. A limit the
+model cannot see is a limit it will hit.
 
 ## Tool progress
 
