@@ -117,7 +117,7 @@ enforces one, and a host that wanted to would be imposing its own.
 combinator and a child agent has its own loop, so an unbudgeted child spent
 through a model and was charged to nobody -- a parent capped at N could spend
 without limit by delegating. the engine now records every turn against the
-`Budget` in context (`Budget.record`), a child runs under its parent's unless
+`Budget` in context (`RunLedger.record`, which also writes the run ledger), a child runs under its parent's unless
 `inherit.budget` is `false`, and the parent's ceiling
 sees the spend when the delegating turn ends. Closing it exposed a second
 bug: the occurrence key omitted the session, so *any* two sessions sharing a

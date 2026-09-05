@@ -38,6 +38,10 @@ describe("public API", () => {
       // is public so custom JobStore and transport implementations do not
       // invent a subtly incompatible file-data representation.
       "PromptWire",
+      // The facts the engine records after every turn, for any seam to read.
+      // A kernel noun because the engine is what writes it; every decision
+      // over it lives on a seam or in a battery.
+      "RunLedger",
       // The vocabulary for a failing store, public because a caller has to be
       // able to catch it and to recognise one that crossed a journal.
       // `detailOf`, which fills in its `detail`, is deliberately internal.

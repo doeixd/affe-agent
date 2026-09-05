@@ -534,18 +534,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-60g. **The engine records facts; seams only decide.** Generalise
-    `Budget.record` into a `RunLedger` the engine writes after every turn --
-    turns, tool calls, tokens, cost, elapsed, window -- and every seam reads:
-    loop combinators, budget, compaction's trigger, the context-remaining
-    tool. Cross-cutting rules become one sentence about what is recorded.
-    `AgentLoop.State` becomes a view over it. Facts in one place; decisions
-    stay on their seams. Medium.
-
-    ```text
-    verify: no-grep "RunLedger" src/AgentRun.ts
-    ```
-
 60h. **Seams that describe themselves.** Every composed value carries a
     description of itself as data -- a loop its bounds and stop rules,
     a policy its rules, compaction its policy, input and output their
@@ -553,7 +541,7 @@ for: the gap is recorded as a gap rather than assumed either way.*
     `AgentDescription` derived from them, so it cannot disagree with them.
     The first-hour readability of a policy record, without the record;
     exposable to the model, the CLI and a host. `describedTools` is the
-    existing instance of the pattern. Medium; after 60g.
+    existing instance of the pattern. Medium; 60g shipped.
 
     ```text
     verify: no-grep "export const describe" src/Agent.ts

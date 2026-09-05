@@ -262,6 +262,14 @@ improvements below take the coherence and leave the centre.*
 
 ### 5.1 The engine records facts; seams only decide
 
+> **Shipped 2026-09-05** (ledger 60g) as `RunLedger`, with one delta:
+> `AgentLoop.State` is not a view *over* the ledger, because a session with
+> no ledger in context still needs a loop; the two are built from one read
+> and held equal by test instead. The window number is not on the entry --
+> compaction records its windows itself (60a) and a compaction writes
+> nothing to the run ledger, which is what "a new window does not replenish
+> the budget" reduces to.
+
 **Already done for money** (`Budget.record`, item 4 of `plan-after-seams.md`):
 the engine records every turn's usage and `within`/`cost` are pure decisions.
 Generalise it. A `RunLedger` the engine writes after every turn -- turns, tool

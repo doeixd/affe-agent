@@ -1393,3 +1393,29 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "const protectedPrefix" src/compaction/Compaction.ts
     verify: grep "the instructions survive a summary" test/Compaction.test.ts
     ```
+
+60g. ~~**The engine records facts; seams only decide.**~~ **DONE
+    2026-09-05.** `RunLedger`, a kernel module because the engine writes it:
+    after every turn `AgentRun` makes one recording call, `RunLedger.record`,
+    which writes an `Entry` -- session, submission, run, turn, tool calls,
+    input and output tokens, cost when a `ModelCapabilities` prices the
+    model, elapsed since the run started -- to the ambient ledger and charges
+    the ambient `Budget`, either or both optional. Entries are keyed by the
+    `Budget.Occurrence`, so a replayed turn is one entry; `run(runId)` and
+    `totals` add them up, `sum` is exported for a reader's own selection.
+    `AgentLoop.State` is not rebuilt over it -- a session with no ledger
+    still needs a loop -- but the two are held equal after every turn by a
+    row that reads the ledger from inside a loop, and `elapsed` is now read
+    once and shared, so they cannot drift. "A child's turns are the child's"
+    is a row: one ledger, two session ids, the parent's run view unmixed.
+    Broken twice: the engine's write skipped (four rows fail), the
+    occurrence dedupe removed (one). Not done, and not planned: making
+    `Budget` a view over the ledger, which would require both services
+    wherever one is provided today.
+
+    ```text
+    verify: grep "export class RunLedger" src/RunLedger.ts
+    verify: grep "RunLedger.record" src/AgentRun.ts
+    verify: no-grep "Budget.record" src/AgentRun.ts
+    verify: grep "\"RunLedger\"" test/PublicApi.test.ts
+    ```

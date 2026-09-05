@@ -395,6 +395,20 @@ One caveat, stated on `State.elapsed`: a duration bound is not replay-stable
 under `/durable`, because a resumed submission measures its own elapsed time.
 Turn and tool-call bounds are derived from journalled facts and are.
 
+The facts every bound decides over are also recorded, for anything to read
+back. Provide `RunLedger.layer` and the engine writes one entry per turn --
+session, run, turn, tool calls, tokens, cost when a capability table prices
+the model, elapsed -- keyed so a replayed turn is one entry; `run(runId)` and
+`totals` add them up. The same write charges a `Budget` in context, so the
+engine records once and every seam reads: a delegated child's turns land under
+the child's session id, and a compaction writes nothing here. The ledger holds
+facts and decides nothing; the loop state a bound is handed is the same facts,
+held equal by test.
+
+```ts
+const spent = yield* Effect.flatMap(RunLedger.RunLedger, (ledger) => ledger.totals)
+```
+
 ## Dynamic capabilities: a toolkit resolved per turn
 
 A `toolkit` may be a plain value **or an `Effect`**. In the Effect form the
