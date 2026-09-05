@@ -24,7 +24,7 @@ const rendering = "A customer writes:\n\nmy order is late"
 const Support = Agent.make({ input: Ticket, loop: AgentLoop.bounded(1) })
 
 /**
- * Typed input (issue #81): a dispatched job carries `AgentInput.typed(value)`,
+ * Typed input (issue #81): a dispatched job carries `value`,
  * whoever runs it decodes with the agent's schema, and the model sees the
  * rendering. A value the schema rejects fails that run, isolated like any
  * other failing run.
@@ -35,7 +35,7 @@ describe("Scheduling with a typed agent", () => {
       const started = yield* Deferred.make<void>()
       const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "done", started }])
       yield* Effect.gen(function* () {
-        yield* Scheduling.dispatch({ input: AgentInput.typed(ticket) })
+        yield* Scheduling.dispatch({ input: ticket })
         yield* Deferred.await(started)
       }).pipe(
         Effect.provide(Layer.merge(Scheduling.local(Support).pipe(Layer.provide(model)), TestClock.layer())),
@@ -52,7 +52,7 @@ describe("Scheduling with a typed agent", () => {
       const started = yield* Deferred.make<void>()
       const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "done", started }])
       const store = yield* Scheduling.memoryStore
-      yield* Scheduling.dispatch({ input: AgentInput.typed(ticket) }).pipe(Effect.provide(Scheduling.queued(store)))
+      yield* Scheduling.dispatch({ input: ticket }).pipe(Effect.provide(Scheduling.queued(store)))
       // The store holds the value, not a rendering: rendering is the worker's.
       const due = yield* store.claimDue(Number.MAX_SAFE_INTEGER)
       assert.deepStrictEqual(due.map((job) => job.input), [ticket])
@@ -71,9 +71,9 @@ describe("Scheduling with a typed agent", () => {
       const started = yield* Deferred.make<void>()
       const { layer: model, recorder } = yield* TestLanguageModel.script([{ text: "done", started }])
       yield* Effect.gen(function* () {
-        yield* Scheduling.dispatch({ input: AgentInput.typed({ customerId: 42 }) })
+        yield* Scheduling.dispatch({ input: { customerId: 42 } })
         yield* Scheduling.dispatch({ input: "a prompt" })
-        yield* Scheduling.dispatch({ input: AgentInput.typed(ticket) })
+        yield* Scheduling.dispatch({ input: ticket })
         yield* Deferred.await(started)
       }).pipe(
         Effect.provide(Layer.merge(Scheduling.local(Support).pipe(Layer.provide(model)), TestClock.layer())),

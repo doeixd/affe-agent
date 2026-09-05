@@ -362,14 +362,14 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
             const runAt = job.delay === undefined
               ? now
               : DateTime.addDuration(now, Duration.fromInputUnsafe(job.delay))
-            // A typed input (`AgentInput.Typed`) rides the alarm as it is and
-            // is decoded by the session's own boundary when it fires; a
-            // prompt is encoded through the wire codec as before.
-            const payload: Schema.Json = AgentInput.isTyped(job.input)
-              // The value is the schema's encoded form, JSON by construction;
-              // the wire type says `unknown` because no schema is named there.
-              ? { _tag: "TypedInput", value: job.input.value as Schema.Json }
-              : yield* Schema.encodeEffect(PromptJson)(Prompt.make(job.input)).pipe(Effect.orDie)
+            // The alarm carries the session's encoded input, one shape: a
+            // raw prompt is encoded through the wire codec, an encoded value
+            // rides as it is. The session's own boundary decodes it when the
+            // alarm fires. (The value is JSON by construction of its schema;
+            // the type says `unknown` because nothing here names one.)
+            const payload: Schema.Json = AgentInput.isRaw(job.input)
+              ? yield* Schema.encodeEffect(PromptJson)(Prompt.make(job.input)).pipe(Effect.orDie)
+              : job.input as Schema.Json
             yield* alarms.scheduleAlarm({
               tag: DISPATCH_TAG,
               id: crypto.randomUUID(),
@@ -412,20 +412,19 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
       (event) =>
         Effect.gen(function* () {
           if (event.tag !== DISPATCH_TAG) return
-          const decoded = AgentInput.isTyped(event.payload)
-            ? { _tag: "Success" as const, success: event.payload }
-            : yield* Effect.result(Schema.decodeUnknownEffect(PromptJson)(event.payload))
-          if (decoded._tag === "Failure") {
-            return yield* Effect.logError("cloudflare: a dispatched job's prompt does not decode; dropped", {
-              sessionId: sessionId.value,
-              alarm: event.id,
-              error: decoded.failure.message
-            })
-          }
           const session = yield* client.session(sessionId.value).pipe(
             Effect.catchTag("AgentSessionNotFoundError", () => client.createSession({ sessionId: sessionId.value }))
           )
-          yield* session.prompt(decoded.success).pipe(
+          // The payload is the encoded input and the session's boundary
+          // decodes it; one that no longer decodes will never decode, so it
+          // is logged and acknowledged rather than retried.
+          yield* session.prompt(event.payload).pipe(
+            Effect.catchTag("AgentInvalidRequestError", (error) =>
+              Effect.logError("cloudflare: a dispatched job's input does not decode; dropped", {
+                sessionId: sessionId.value,
+                alarm: event.id,
+                error: error.detail
+              })),
             Effect.catchTag("AgentExecutionError", (error) =>
               Effect.logError("cloudflare: a dispatched run failed; not retried", {
                 sessionId: sessionId.value,

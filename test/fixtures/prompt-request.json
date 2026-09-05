@@ -1,0 +1,46 @@
+{
+  "text": {
+    "requestId": "r-1",
+    "sessionId": "s-1",
+    "input": {
+      "content": [
+        {
+          "options": {},
+          "role": "user",
+          "content": "hello, world"
+        }
+      ]
+    }
+  },
+  "messages": {
+    "requestId": "r-2",
+    "sessionId": "s-1",
+    "input": {
+      "content": [
+        {
+          "options": {},
+          "role": "user",
+          "content": [
+            {
+              "options": {},
+              "type": "text",
+              "text": "look at this"
+            },
+            {
+              "options": {},
+              "type": "file",
+              "mediaType": "text/plain",
+              "data": {
+                "_tag": "Bytes",
+                "base64": "Ynl0ZXMh"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "options": {
+      "stream": true
+    }
+  }
+}

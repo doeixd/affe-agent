@@ -89,9 +89,12 @@ spelling: the same `createSession` / `session`, whose sessions' `prompt` and
 out and decoded with the same schema by the host that holds the session,
 which refuses a mismatch -- a prompt to a typed agent, a value to an untyped
 one, or a value the schema rejects -- as `AgentInvalidRequestError` (400)
-before anything runs. On the wire the value is `{ "_tag": "TypedInput",
-"value": ... }` in the `input` field of a prompt or submit; nothing names
-the schema, because the session already declares it. `steer` and `followUp`
+before anything runs. On the wire the `input` field of a prompt or submit
+carries one shape, the session's encoded input: the prompt wire for an agent
+with the default input, byte for byte what it always was, and the schema's
+encoded value, bare, for one that declares a shape. Nothing names the
+schema, because the session already declares it, and a typed input's schema
+must encode to an object so the host can tell it from a prompt. `steer` and `followUp`
 still take a prompt, as they do locally. The durable client journals the
 encoded value and renders it inside the workflow, where the renderer's
 services are; an Effect-valued renderer runs as an activity, so a replay

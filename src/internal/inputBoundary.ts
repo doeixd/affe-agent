@@ -11,9 +11,9 @@ import { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
  *
  * Every surface that receives an input from outside the process -- a
  * transport, the durable client, the cluster entity, a job queue -- takes
- * `RemoteInput` and asks here whether it fits the agent: a prompt for an
- * agent without an `AgentInput`, the encoded value for one that declares it,
- * decoded with the schema the agent holds. Either the other way is an
+ * `RemoteInput` and asks here whether it fits the agent: decoded with the
+ * schema the agent holds, which is the prompt wire for the default input
+ * and the declared schema otherwise. A value that does not fit is an
  * `AgentInvalidRequestError`, named rather than mis-rendered.
  *
  * `asked` is what the session's `prompt` takes, and it is typed `unknown`
@@ -22,14 +22,20 @@ import { AgentInvalidRequestError } from "../client/internal/protocolErrors.js"
  * the one widening and every boundary goes through it.
  *
  * `Declared` is `None` for the default input (`AgentInput.prompt`) and
- * `Some` for a declared one, because the wire still carries two shapes --
- * a prompt, or a tagged typed value -- until `plan-input-default.md` step
- * 3. Every boundary reads it through `declared` so the distinction lives in
- * one place and goes when the second shape does.
+ * `Some` for a declared one. The wire carries one shape now, but a *record*
+ * -- a journal, a claim, a job -- still holds a prompt plus an optional
+ * encoded value (`Recorded`), and `Subagent` still offers the parent model
+ * either `{ prompt }` or the child's schema; those are what read it.
  */
 
-/** A prompt, or a typed input's encoded value. */
-export type RemoteInput = Prompt.RawInput | AgentInput.Typed
+/**
+ * What a boundary receives: a raw prompt, or the session's encoded input.
+ *
+ * `unknown`, honestly. The wire names no schema -- the session the value is
+ * addressed to declares it -- so nothing narrower is true of a value before
+ * the host has decoded it. A caller who wants the type is `AgentClient.typed`.
+ */
+export type RemoteInput = Prompt.RawInput | unknown
 
 export type Declared = Option.Option<AgentInput.AgentInput<any, any, any, any>>
 
@@ -53,37 +59,54 @@ export interface Recorded {
   readonly input?: unknown
 }
 
+/**
+ * Admit an input across a boundary: decode it with the session's schema.
+ *
+ * One path, since every agent has an input. A raw prompt is admitted as
+ * itself for the default and refused, by name, for an agent that declares a
+ * shape -- the schema would refuse it too, but "send its value, not a
+ * prompt" is the message that helps. An encoded value is decoded with the
+ * agent's schema: the prompt wire for the default, the declared schema
+ * otherwise, and a value that does not fit is an invalid request carrying
+ * the schema's own message.
+ */
 export const admit = (
-  declared: Declared,
+  agent: { readonly input: AgentInput.AgentInput<any, any, any, any> },
   operation: "prompt" | "submit",
   input: RemoteInput
-): Effect.Effect<Admitted, AgentInvalidRequestError> =>
-  Option.match(declared, {
-    onNone: () =>
-      AgentInput.isTyped(input)
-        ? Effect.fail(
-          new AgentInvalidRequestError({
-            operation,
-            detail: "this session's agent is asked with a prompt, not a typed input"
-          })
-        )
-        : Effect.sync(() => {
-          const prompt = Prompt.make(input)
-          return { prompt, asked: prompt }
-        }),
-    onSome: (declaredInput) =>
-      AgentInput.isTyped(input)
-        ? Schema.decodeUnknownEffect(declaredInput.schema)(input.value).pipe(
-          Effect.map((asked): Admitted => ({ prompt: Prompt.empty, input: input.value, asked })),
-          Effect.mapError((error) => new AgentInvalidRequestError({ operation, detail: error.message }))
-        )
-        : Effect.fail(
-          new AgentInvalidRequestError({
-            operation,
-            detail: "this session's agent declares a typed input; send its value, not a prompt"
-          })
-        )
-  })
+): Effect.Effect<Admitted, AgentInvalidRequestError> => {
+  const shape = declared(agent)
+  if (AgentInput.isRaw(input)) {
+    if (Option.isSome(shape)) {
+      return Effect.fail(
+        new AgentInvalidRequestError({
+          operation,
+          detail: "this session's agent declares a typed input; send its value, not a prompt"
+        })
+      )
+    }
+    const prompt = Prompt.make(input)
+    return Effect.succeed({ prompt, asked: prompt })
+  }
+  return Schema.decodeUnknownEffect(agent.input.schema)(input).pipe(
+    Effect.map((asked): Admitted =>
+      Option.isSome(shape)
+        ? { prompt: Prompt.empty, input, asked }
+        // The default: what decoded is a `Prompt.RawInput`, and the record
+        // stays the prompt it always was.
+        : { prompt: Prompt.make(asked as Prompt.RawInput), asked: Prompt.make(asked as Prompt.RawInput) }
+    ),
+    Effect.mapError((error) =>
+      new AgentInvalidRequestError({
+        operation,
+        detail: Option.isSome(shape)
+          ? error.message
+          // Said in the caller's terms: the value sent was read as a prompt,
+          // because that is what this session's agent is asked with.
+          : `this session's agent is asked with a prompt, and the value sent is not one: ${error.message}`
+      }))
+  )
+}
 
 /**
  * What a recorded admission asks the session with, decoded again with the
@@ -112,7 +135,7 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, 
   operation: "prompt" | "submit",
   input: RemoteInput
 ) =>
-  Effect.flatMap(admit(declared(agent), operation, input), (admitted) =>
+  Effect.flatMap(admit(agent, operation, input), (admitted) =>
     Agent.run(agent, asked<Input>(admitted.asked)))
 
 /** Run the agent with a recorded admission. */

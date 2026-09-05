@@ -10,7 +10,7 @@ evidence is named, and where it is a test it is in the tree.*
 | --- | --- | --- | --- |
 | 1 | **Ids carry their session** | two bugs in one day from ids unique only within a session | small |
 | 2 | ~~**Refuse at construction, at the top level too**~~ | **withdrawn**: the premise was wrong, see §2.2 | -- |
-| 3 | **Item 46: every agent has an input** | steps 1–2 **shipped**; 3–6 open | large |
+| 3 | **Item 46: every agent has an input** | steps 1–3 **shipped**; 4–6 open | large |
 | 4 | ~~**The engine records usage; the loop only decides**~~ | **shipped**; `Budget.charge` is gone | medium |
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |

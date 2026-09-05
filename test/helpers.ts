@@ -15,8 +15,8 @@ import * as FakeModel from "./FakeModel.js"
  * a test wiring error, and dies as one rather than being rendered.
  */
 export const promptOf = (input: AgentClient.RemoteInput): Prompt.Prompt => {
-  if (AgentInput.isTyped(input)) {
-    throw new Error("this session double is asked with a prompt, not a typed input")
+  if (!AgentInput.isRaw(input)) {
+    throw new Error("this session double is asked with a prompt, not an encoded input")
   }
   return Prompt.make(input)
 }

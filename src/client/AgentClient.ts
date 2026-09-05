@@ -303,11 +303,11 @@ export const SubmissionReceipt = Schema.Struct({ submissionId: SubmissionId })
 export type SubmissionReceipt = typeof SubmissionReceipt.Type
 
 /**
- * What a remote session is asked with: a prompt, or a typed input's
- * encoded value (`AgentInput.Typed`) for an agent that declares one.
+ * What a remote session is asked with: a raw prompt, or the session's
+ * encoded input.
  *
- * The host decides which it must be, from the session's agent, and refuses
- * the other as `AgentInvalidRequestError`. `typed` below is the spelling
+ * The host decodes it with the session's agent's schema and refuses what
+ * does not fit as `AgentInvalidRequestError`. `typed` below is the spelling
  * that never lets a caller build the wire form by hand.
  */
 export type RemoteInput = InputBoundary.RemoteInput
@@ -539,19 +539,22 @@ export const fromSession = <Value, Input>(
   const byKey = new Map<string, { readonly fingerprint: string; readonly submissionId: string }>()
 
   const fingerprintOf = (input: RemoteInput, stream: boolean): Effect.Effect<string, RemoteError> =>
-    AgentInput.isTyped(input)
-      ? Effect.succeed(JSON.stringify({ typed: input.value, stream }))
-      : Schema.encodeEffect(PromptWire.Prompt)(Prompt.make(input)).pipe(
-        Effect.map((encoded) => JSON.stringify({ input: encoded, stream })),
+    // The wire form, whichever way it arrived: a raw prompt encodes to the
+    // prompt wire, an encoded value is already it.
+    (AgentInput.isRaw(input)
+      ? Schema.encodeUnknownEffect(AgentInput.prompt.schema)(input).pipe(
         Effect.mapError((error) =>
           new AgentInvalidRequestError({ operation: "submit", detail: error.message })
         )
+      )
+      : Effect.succeed(input)).pipe(
+        Effect.map((encoded) => JSON.stringify({ input: encoded, stream }))
       )
 
   // The boundary decode, in the one place every boundary shares; see
   // `internal/inputBoundary.ts` for why `asked` is the one widening.
   const admit = (operation: "prompt" | "submit", input: RemoteInput) =>
-    Effect.map(InputBoundary.admit(InputBoundary.declared(session), operation, input), (admitted) =>
+    Effect.map(InputBoundary.admit(session, operation, input), (admitted) =>
       InputBoundary.asked<Input>(admitted.asked))
 
   const remember = (
@@ -793,9 +796,9 @@ export interface TypedService<Input, Value = never> {
  * The value is encoded with the agent's schema here and decoded with the
  * same schema by whichever host holds the session, so a caller writes the
  * value and never the wire form. Nothing is added to the transport: the
- * wrapped session's `prompt` receives `AgentInput.Typed`, which every
- * adapter already carries. For an agent without an input this is the
- * session unchanged, so one spelling serves both.
+ * wrapped session's `prompt` receives the encoded value, which is the one
+ * shape every adapter carries. For an agent with the default input this is
+ * the session unchanged, so one spelling serves both.
  */
 export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
@@ -827,7 +830,7 @@ export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model
 
   const readingValue = {
     ...session,
-    prompt: (input: Prompt.RawInput | AgentInput.Typed, options?: RemotePromptOptions) =>
+    prompt: (input: RemoteInput, options?: RemotePromptOptions) =>
       Effect.flatMap(session.prompt(input, options), withValue),
     awaitSubmission: (submissionId: string) =>
       Effect.flatMap(session.awaitSubmission(submissionId), withValue)
@@ -843,10 +846,10 @@ export const typedSession = <Tools extends Record<string, Tool.Any>, E, R, Model
       prompt: (value, options) =>
         Effect.flatMap(
           AgentInput.encode(input, value as Input),
-          (typed) => readingValue.prompt(typed, options)
+          (encoded) => readingValue.prompt(encoded, options)
         ),
       submit: (value, options) =>
-        Effect.flatMap(AgentInput.encode(input, value as Input), (typed) => session.submit(typed, options))
+        Effect.flatMap(AgentInput.encode(input, value as Input), (encoded) => session.submit(encoded, options))
     })
   })
 }

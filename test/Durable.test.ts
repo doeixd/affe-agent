@@ -88,12 +88,12 @@ describe("durable submissions", () => {
       const layer = durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))
 
       const { refused, result } = yield* Effect.gen(function* () {
-        const refused = yield* Effect.flip(DurableAgent.submit(durable, store, "typed-bad", AgentInput.typed({ customerId: 1 })))
+        const refused = yield* Effect.flip(DurableAgent.submit(durable, store, "typed-bad", { customerId: 1 }))
         const executionId = yield* DurableAgent.submit(
           durable,
           store,
           "typed-1",
-          AgentInput.typed({ customerId: "c-42", body: "my order is late" })
+          { customerId: "c-42", body: "my order is late" }
         )
         return { refused, result: yield* DurableAgent.result(durable, executionId) }
       }).pipe(Effect.provide(layer))

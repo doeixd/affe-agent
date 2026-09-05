@@ -36,10 +36,10 @@ import * as InputBoundary from "../internal/inputBoundary.js"
 /** A unit of dispatched work: an input to run the dispatcher's agent with, later. */
 export interface Dispatched {
   /**
-   * A prompt, or `AgentInput.typed(value)` for an agent that declares an
-   * input. The dispatcher does not know the agent; whoever runs the job
-   * decodes the value with the agent's schema, and a value that does not
-   * fit fails that run like any other failure.
+   * A prompt, or the encoded value for an agent that declares an input. The
+   * dispatcher does not know the agent; whoever runs the job decodes the
+   * value with the agent's schema, and a value that does not fit fails that
+   * run like any other failure.
    */
   readonly input: RemoteInput
   /** How long to wait before running. Omit to run as soon as possible. */
@@ -167,9 +167,9 @@ export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
         const now = yield* Clock.currentTimeMillis
         const delayMillis = job.delay === undefined ? 0 : Duration.toMillis(job.delay)
         yield* store.enqueue({
-          ...(AgentInput.isTyped(job.input)
-            ? { prompt: Prompt.empty, input: job.input.value }
-            : { prompt: Prompt.make(job.input) }),
+          ...(AgentInput.isRaw(job.input)
+            ? { prompt: Prompt.make(job.input) }
+            : { prompt: Prompt.empty, input: job.input }),
           runAfterMillis: now + delayMillis
         })
       })

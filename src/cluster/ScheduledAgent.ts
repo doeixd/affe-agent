@@ -57,8 +57,8 @@ export const layer = <
   readonly sessionId?: Effect.Effect<string, E, R> | undefined
   /**
    * `RawInput`, so a scheduled submission can be multimodal like any other;
-   * or `AgentInput.typed(value)` for an agent that declares an input, decoded
-   * by the entity with the agent's schema on every firing.
+   * or the encoded value for an agent that declares an input, decoded by
+   * the entity with the agent's schema on every firing.
    */
   readonly input: RemoteInput
 }) =>

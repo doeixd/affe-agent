@@ -1068,16 +1068,20 @@ sizes; the items are repeated here so this list stays the one tracker.
     the default, so `None` means exactly "not inside a submission", and a
     tool asking for a ticket there gets the schema's own error). The
     `verify:` line that pinned the conditional as present is what said this
-    entry was stale, which is the checker doing its job. What is still owed:
-    step 3 (one wire shape; `AgentInput.Typed` and `InputBoundary.declared`
-    survive until it), step 4 (journals carry `input`), step 5 (`Value`, the
-    same way, which is also what lets `Agent.Any` become an alias) and step
-    6 (the guide).
+    entry was stale, which is the checker doing its job. **Step 3 landed the
+    same evening**: one wire shape, `AgentInput.Typed` deleted, an untyped
+    client's bytes recorded before the change and pinned equal after it
+    (`test/InputWire.test.ts`). What is still owed: step 4 (journals carry
+    `input`; `InputBoundary.declared` survives for the records until then),
+    step 5 (`Value`, the same way, which is also what lets `Agent.Any` become
+    an alias) and step 6 (the guide).
 
     ```text
     verify: grep "export const prompt: AgentInput<Prompt.RawInput, unknown, never, never>" src/AgentInput.ts
     verify: no-grep "export type PromptInput" src/AgentSession.ts
     verify: grep "export const declared = " src/internal/inputBoundary.ts
+    verify: no-grep "TypedInput" src/AgentInput.ts
+    verify: exists test/fixtures/prompt-request.json
     verify: grep "export interface Any extends Pipeable" src/Agent.ts
     ```
 

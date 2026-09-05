@@ -1,11 +1,22 @@
 # Plan: every agent has an input, and the prompt is the default
 
-**Status: steps 1 and 2 landed 2026-09-04; 3–6 open.** The type-level core is
+**Status: steps 1–3 landed 2026-09-04; 4–6 open.** The type-level core is
 in: `AgentInput.prompt`, `Input = Prompt.RawInput`, no `PromptInput`, no
 `Option` on `definition.input`, `Current` set on every submission. The wire
-and the journals still carry two shapes behind `InputBoundary.declared`, which
-is the one place that tells the default from a declared input and goes with
-step 3. Two things the sequence did not say: `AgentSession.prompt` and
+carries one shape: `AgentInput.Typed` is gone, `AgentProtocol.Input` is the
+prompt wire or the bare encoded value, the host decodes with the session's
+schema, and `test/InputWire.test.ts` holds an untyped client's request bytes
+recorded from before the change and asserts them equal. `InputBoundary
+.declared` survives for the *records* (a journal, a claim, a job still hold a
+prompt plus an optional value, which is step 4) and for `Subagent`'s
+parameters. One thing step 3 did not say: `AgentProtocol.Input` is a union
+of the prompt wire codec and `Unknown` rather than `Unknown` alone, because
+a caller building a request by hand -- the generated HTTP client, half the
+tests -- writes `Prompt.make(...)`, and `Schema.toCodecJson` refuses a class
+instance in an `Unknown` slot ("Expected JSON value"); the union encodes a
+`Prompt` as it always did and passes JSON through. The consequence is
+stated on the codec: a declared input's schema must not encode to something
+that decodes as a prompt wire. Two things the sequence did not say: `AgentSession.prompt` and
 `submit` are `Effect.fn`-wrapped generics, and with `NoInfer` on the value the
 inference of `Input` from the session does not survive the wrapper -- the
 handle passes explicit type arguments; and every helper that spelled a session

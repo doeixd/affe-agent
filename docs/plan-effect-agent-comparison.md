@@ -369,10 +369,12 @@ replay re-renders the journaled value and commits identical history.
 agent because the instructions and the schema are written together; the
 same argument holds here.
 
-**Phase 2 design (2026-09-02).** One wire shape, decoded once, at the
-host. The protocol's `input` becomes a union: the prompt it always was, or
-`AgentInput.Typed` -- `{ _tag: "TypedInput", value }`, the schema-encoded
-value as JSON. Nothing names the schema on the wire: the session the value
+**Phase 2 design (2026-09-02; the tag below was removed 2026-09-04 by
+`plan-input-default.md` step 3 -- the wire now carries the session's encoded
+input bare, and this paragraph is kept as the design it was).** One wire
+shape, decoded once, at the host. The protocol's `input` becomes a union:
+the prompt it always was, or `AgentInput.Typed` -- `{ _tag: "TypedInput",
+value }`, the schema-encoded value as JSON. Nothing names the schema on the wire: the session the value
 is addressed to already declares it, so the host decodes with
 `session.input` (the declaration, now exposed on the handle) and refuses a
 mismatch as `AgentInvalidRequestError` -- a prompt to a typed agent, a value

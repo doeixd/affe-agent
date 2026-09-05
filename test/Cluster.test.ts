@@ -309,7 +309,7 @@ describe("agent client", () => {
       assert.include(refused.detail, "AgentInvalidRequestError")
 
       const client = EntityClient.wrap(yield* makeRaw("typed-1"))
-      const executionId = yield* client.submit(AgentInput.typed({ customerId: "c-42", body: "my order is late" }))
+      const executionId = yield* client.submit({ customerId: "c-42", body: "my order is late" })
       assert.isString(executionId)
       yield* Effect.retry(
         Effect.flatMap(recorder.prompts, (seen) =>

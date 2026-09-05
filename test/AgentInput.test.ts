@@ -267,7 +267,7 @@ describe("AgentInput across a boundary", () => {
         const client = yield* AgentClient.AgentClient
         const session = yield* client.createSession()
         // The wire form by hand, as a foreign client would send it.
-        const failure = yield* Effect.flip(session.prompt(AgentInput.typed({ customerId: 42 })))
+        const failure = yield* Effect.flip(session.prompt({ customerId: 42 }))
         return { failure, status: yield* session.status }
       }).pipe(Effect.provide(AgentClient.layer(Support).pipe(Layer.provide(layer))), Effect.scoped)
 
@@ -294,7 +294,7 @@ describe("AgentInput across a boundary", () => {
       const promptToTyped = yield* remote(Support, "just text")
       assert.strictEqual(promptToTyped._tag, "AgentInvalidRequestError")
       assert.include(promptToTyped.message, "typed input")
-      const valueToPlain = yield* remote(Plain, AgentInput.typed(ticket))
+      const valueToPlain = yield* remote(Plain, ticket)
       assert.strictEqual(valueToPlain._tag, "AgentInvalidRequestError")
       assert.include(valueToPlain.message, "prompt")
     })
@@ -357,7 +357,8 @@ describe("AgentInput across a boundary", () => {
       assert.strictEqual(refused._tag, "AgentInvalidRequestError")
       assert.strictEqual(AgentHttp.errorStatus(refused), 400)
       // The wire request is the tagged value, and the protocol names it.
-      assert.deepStrictEqual(AgentProtocol.input(AgentInput.typed(ticket)), { _tag: "TypedInput", value: ticket })
+      // One wire shape: a declared input's value travels bare.
+      assert.deepStrictEqual(AgentProtocol.input(ticket), ticket)
     })
   )
 })

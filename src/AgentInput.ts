@@ -36,11 +36,13 @@ import * as PromptWire from "./PromptWire.js"
  * opened rather than opening one, and the value on the fibre stays the
  * submission's for its follow-up runs.
  *
- * **Across a boundary.** A remote caller sends the encoded value as
- * `Typed` -- `{ _tag: "TypedInput", value }` -- and the host decodes it with
- * the schema the session's agent declares, refusing a mismatch as an invalid
- * request rather than mis-rendering it. `AgentClient.typed(agent)` is the
- * spelling that writes the value and never the wire form. Under `/durable`
+ * **Across a boundary.** The wire carries one shape: the session's encoded
+ * input. For an agent with the default input that is the prompt wire, byte
+ * for byte what it always was; for a declared input it is the schema's
+ * encoded value, bare. The host decodes with the schema the session's agent
+ * declares, refusing a mismatch as an invalid request rather than
+ * mis-rendering it. `AgentClient.typed(agent)` is the spelling that writes
+ * the value and never the wire form. Under `/durable`
  * the encoded value is journalled and re-rendered on replay; an
  * Effect-valued `render` runs there as an activity, so a replay reads the
  * rendering back rather than rendering again. Every other entry point --
@@ -158,32 +160,22 @@ export const rendered = <A, I, E, R>(
 }
 
 /**
- * A typed input as it crosses a boundary: the schema-encoded value, tagged
- * so a transport can tell it from a prompt without a second endpoint.
+ * Whether a remote input is a raw prompt rather than an already-encoded value.
  *
- * Nothing on the wire names the schema. The session the value is addressed
- * to declares it, and the host decodes with that -- which is why the value
- * is `unknown` here and typed everywhere a caller writes it.
+ * The wire carries one shape -- the session's encoded input, which the host
+ * decodes with the session's own schema (`plan-input-default.md` step 3).
+ * A caller in-process may still hand a client a `Prompt.RawInput`, and this
+ * is how the client tells the two apart before encoding: a string, a
+ * `Prompt`, or an iterable of messages is raw; anything else is the encoded
+ * form and passes through as it is. That is also why a typed input's schema
+ * must encode to an *object* -- a value that encoded to a string or an
+ * array would be read as a prompt -- the same rule `AgentOutput` states for
+ * its schema, for the same reason.
  */
-export const Typed = Schema.TaggedStruct("TypedInput", {
-  value: Schema.Unknown
-})
-export type Typed = typeof Typed.Type
-
-/** Wrap an encoded value for the wire. */
-export const typed = (value: unknown): Typed => ({ _tag: "TypedInput", value })
-
-/**
- * Whether a remote input is a typed value rather than a prompt.
- *
- * A `Prompt.RawInput` is a string, an iterable of messages or a `Prompt`;
- * none carries this tag, so the test is exact rather than structural.
- */
-export const isTyped = (input: unknown): input is Typed =>
-  typeof input === "object" &&
-  input !== null &&
-  !Array.isArray(input) &&
-  (input as { readonly _tag?: unknown })._tag === "TypedInput"
+export const isRaw = (input: unknown): input is Prompt.RawInput =>
+  typeof input === "string" ||
+  Prompt.isPrompt(input) ||
+  (typeof input === "object" && input !== null && Symbol.iterator in input)
 
 /**
  * Encode a value for the wire with the agent's declared input.
@@ -191,5 +183,5 @@ export const isTyped = (input: unknown): input is Typed =>
  * Encoding a value the signature typed cannot fail except by a schema bug,
  * which dies as one -- the same rule the session applies.
  */
-export const encode = <A, I>(input: AgentInput<A, I, any, any>, value: A): Effect.Effect<Typed> =>
-  Effect.map(Effect.orDie(Schema.encodeUnknownEffect(input.schema)(value)), typed)
+export const encode = <A, I>(input: AgentInput<A, I, any, any>, value: A): Effect.Effect<unknown> =>
+  Effect.orDie(Schema.encodeUnknownEffect(input.schema)(value))

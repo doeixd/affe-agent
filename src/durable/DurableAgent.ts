@@ -489,7 +489,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
   /** The boundary decode for this agent; what `submit` and the cluster entity admit with. */
   const admit = (operation: "prompt" | "submit", input: InputBoundary.RemoteInput) =>
-    InputBoundary.admit(InputBoundary.declared(agent), operation, input)
+    InputBoundary.admit(agent, operation, input)
 
   return { definition, layer, admit } as const
 }

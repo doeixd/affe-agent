@@ -17,9 +17,10 @@ type Equal<A, B> =
     : false
 
 type PromptInputIsNotAny = Assert<Not<IsAny<AgentProtocol.PromptRequest["input"]>>>
-type PromptInputIsNotUnknown = Assert<
-  Not<IsUnknown<AgentProtocol.PromptRequest["input"]>>
->
+// `unknown` by decision, not by accident (`plan-input-default.md` step 3):
+// the wire carries the session's encoded input and names no schema, so
+// nothing narrower is true of the value before the host decodes it.
+type PromptInputIsUnknown = Assert<IsUnknown<AgentProtocol.PromptRequest["input"]>>
 type RemoteErrorsAreNotAny = Assert<Not<IsAny<AgentProtocol.RemoteError>>>
 type RemoteErrorsAreNotUnknown = Assert<Not<IsUnknown<AgentProtocol.RemoteError>>>
 type SubmissionIdStaysBranded = Assert<
@@ -28,7 +29,7 @@ type SubmissionIdStaysBranded = Assert<
 
 const inferenceProof: readonly [
   PromptInputIsNotAny,
-  PromptInputIsNotUnknown,
+  PromptInputIsUnknown,
   RemoteErrorsAreNotAny,
   RemoteErrorsAreNotUnknown,
   SubmissionIdStaysBranded

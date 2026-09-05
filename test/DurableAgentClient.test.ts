@@ -292,7 +292,7 @@ describe("DurableAgentClient (durability specifics)", () => {
       const { claim, prompted, refused, status } = yield* using(f.client, (client) =>
         Effect.gen(function* () {
           const session = yield* Effect.scoped(client.createSession({ sessionId: "refused" }))
-          const refused = yield* Effect.flip(session.prompt(AgentInput.typed({ customerId: 42 })))
+          const refused = yield* Effect.flip(session.prompt({ customerId: 42 }))
           const prompted = yield* Effect.flip(session.prompt("a prompt, to a typed agent"))
           const record = yield* f.sessionStore.get("refused")
           return {

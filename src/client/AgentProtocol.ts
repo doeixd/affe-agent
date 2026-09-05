@@ -184,17 +184,31 @@ export const GetSessionResponse = Session
 export type GetSessionResponse = typeof GetSessionResponse.Type
 
 /**
- * What a prompt or submit carries: the prompt it always did, or a typed
- * input's encoded value for an agent that declares one. The tag is tried
- * first, so an array of messages never reaches the typed branch and an
- * object never reaches the prompt codec.
+ * What a prompt or submit carries: the session's encoded input, one shape
+ * on the wire.
+ *
+ * On the wire it is JSON that names no schema; the host decodes it with the
+ * schema the session's agent declares (`inputBoundary`). For the default
+ * input that JSON is the prompt wire, so an untyped client's request is
+ * byte for byte what it was when this was a union of a tagged typed value
+ * and the prompt (`test/InputWire.test.ts` holds the recorded bytes); a
+ * declared input's value travels bare, where it used to be tagged.
+ *
+ * In memory it is a `Prompt` or the encoded value, which is what the union
+ * below is for: a caller building a request by hand -- the generated HTTP
+ * client, a test -- writes `Prompt.make(...)` and this codec encodes it, as
+ * it always did; anything else passes through as the JSON it already is.
+ * Decoding tries the prompt wire first, so a prompt arrives as a `Prompt`
+ * and anything else as itself. The one thing a declared input's schema must
+ * therefore not do is encode to something that decodes as a prompt wire
+ * (`{ content: [messages] }`); nothing does, and nothing should.
  */
-export const Input = Schema.Union([AgentInput.Typed, PromptWire.Prompt])
+export const Input = Schema.Union([PromptWire.Prompt, Schema.Unknown])
 export type Input = typeof Input.Type
 
-/** A `RemoteInput` as the wire carries it. */
+/** A `RemoteInput` as a request carries it: a raw prompt normalised, an encoded value as it is. */
 export const input = (raw: AgentClient.RemoteInput): Input =>
-  AgentInput.isTyped(raw) ? raw : Prompt.make(raw)
+  AgentInput.isRaw(raw) ? Prompt.make(raw) : raw
 
 export const PromptRequest = Schema.Struct({
   requestId: RequestId,
