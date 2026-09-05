@@ -1,13 +1,15 @@
 # Status — what is true now
 
-Last regenerated 2026-09-01. This is the short document: what ships, what
+Last regenerated 2026-09-05. This is the short document: what ships, what
 holds it there, and what is deliberately not done. The chronology -- every
 finding, every falsification, every "what the second subscriber found" --
 moved to [docs/status-history.md](./docs/status-history.md) and keeps growing
 there; new work appends a dated section *there*, and edits the line here it
 changes. [docs/remaining-work.md](./docs/remaining-work.md) is the ranked
-list of what is next; `ROADMAP.md` the capability view; `PLAN.md` the design
-authority.
+list of what is next and only that; what it has closed is in
+[docs/remaining-work-closed.md](./docs/remaining-work-closed.md). `ROADMAP.md`
+is the capability view; `PLAN.md` the design authority. Claims in this file
+and both of those carry `verify:` lines that `npm run check` runs.
 
 ## The gates
 
@@ -15,9 +17,10 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 1886 passing in 171 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
-| Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`) | 0 errors, 0 warnings, 0 messages |
-| types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`) | clean, examples included |
+| tests | `npm test` | 2165 passing in 204 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
+| Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`, `lint:cloudflare`) | 0 errors, 1 warning (a chained `provide` in `test/ProcessManager.test.ts`, a colleague's file), 0 messages |
+| types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`, `:cloudflare`) | clean, examples included |
+| doc claims | `npm run verify:remaining-work` | every `verify:` line in the live list, the ledger and this file holds; a stale claim fails the build. It fired three times in its first two days, each time on text that had gone stale that hour |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
 | portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. Widened 2026-09-01 to reject `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do` and the `bun:` / `deno` specifiers as well as Effect's own host bindings, each proved to fire; the check now covers what the claim says. |
 | package | `npm run verify:package` | every published entry point imports from the packed tarball |
@@ -78,7 +81,7 @@ Layer, a toolkit, a transform, an adapter.
 
 One line per surface; the maturity label is the README's
 ([Maturity map](./README.md#maturity-map)). The plan that specified each is in
-[remaining-work.md](./docs/remaining-work.md#already-done--do-not-restart).
+[the ledger](./docs/remaining-work-closed.md#already-done--do-not-restart).
 
 **Core.** Sessions with prompt / submit + awaitSubmission / steer / follow-up
 / interrupt / respond; bounded retention of settled outcomes with idempotency
@@ -86,13 +89,23 @@ keys; typed tool execution with strategies and failure policies; permission
 policy with projections, rules and remembered grants; elicitation with a
 terminal state; snapshots and restore; execution plans; the event ADT with
 the correlation envelope; `PromptWire` so files cross every boundary intact;
-typed input (`AgentInput`: value on the fibre, rendering in history; across
-every `RemoteSession` as `AgentInput.Typed`, decoded by the host with the
-session's schema, `AgentClient.typed` for the caller; journalled by the
-durable client and rendered in the workflow);
-run policy on the loop seam -- `maxTurns`, `maxToolCalls`, `maxDuration`,
-`limits`, `withFinalTurn` -- with the stop's reason on `RunCompleted`, the
-result and every client.
+typed input and output with defaults (every agent has an input and an
+output; the defaults are the prompt and the text, so `Input` is
+`Prompt.RawInput` and `Value` is `string` unless declared, `Result.value` is
+always `Some`, `Agent.Any` is a plain alias, and the wire carries one shape
+-- the session's encoded input, decoded by the host with the session's
+schema, `AgentClient.typed` for the caller; journalled by the durable client
+and rendered in the workflow); run policy on the loop seam -- `maxTurns`,
+`maxToolCalls`, `maxDuration`, `limits`, `withFinalTurn` -- with the stop's
+reason on `RunCompleted`, the result and every client; a `Budget` the engine
+records every turn against, so `within` and `cost` are pure decisions and a
+delegated child's spend reaches its parent's counter; and a decided
+delegation boundary (`Subagent.Inherit`: budget crosses by default, approval
+only when asked to and then on the parent's event stream with the path of
+delegating tools, a typed child's value returned as the tool's result, and a
+child holding an approval-requiring tool refused at construction). Every id
+the harness mints is qualified by its session, so anything shared across
+sessions is safe by construction.
 
 **Transports.** `/client` is the protocol-neutral seam (`AgentClient`,
 `AgentSessionHost` with capacity, per-session request buckets, authorization,
@@ -290,6 +303,26 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
 - Falsification: `scripts/falsify.mjs` re-runs the durability harness; the
   matrix rows and conformance suites each carry a deliberately wrong
   implementation.
+- A second matrix, cross-cutting concerns against execution contexts
+  (in-process, durable, behind a wire, delegated), in
+  [conformance-matrix.md](./docs/conformance-matrix.md): every cell is a test
+  or a declaration with a reason, and since 2026-09-05 none reads "not
+  tested". Every bug the combination pass found had been a blank cell.
+- Recorded fixtures for wire and journal changes (`test/fixtures/`): bytes
+  recorded from a named commit and asserted identical, or identical plus
+  exactly the intended difference, after. Two so far, and the convention is
+  written down there.
+- Doc claims carry the check that falsifies them
+  (`scripts/verify-remaining-work.mjs`), so this file, the live list and the
+  ledger cannot quietly disagree with the code.
+
+```text
+verify: exists scripts/verify-remaining-work.mjs
+verify: exists test/fixtures/README.md
+verify: grep "export type Any = AgentDefinition<any, any, any, any, any, any>" src/Agent.ts
+verify: grep "Budget.record(" src/AgentRun.ts
+verify: grep "export interface Inherit" src/subagent/Subagent.ts
+```
 
 ## Deliberately not done
 
@@ -302,10 +335,12 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
   cancel cannot interrupt the server.
 - **The Anthropic example** has never been run live with a key;
   **`ClusterMultiNode`** runs on real time (~15 s).
-- **Per-principal credential resolution.** The contract is
-  `docs/plan-tool-credentials.md` and its single-user slice ships
-  (`Credentials` in `/tool-source`); the multi-user half waits on one
-  kernel decision -- the principal reaching the tool fibre.
+- **Two decisions recorded, not made.** Whether a persisted key or a wire
+  tag should ever derive from the package name (every `affe-agent/...` tag
+  and `affe_*` table default does; item 55 says why it matters across two
+  versions). And whether an interrupted delegation should say so to its
+  parent rather than answer with what it had (item 50): a partial answer may
+  genuinely beat none, and nobody has complained.
 - **Threading and attachments** in channels wait on a decoder seam
   `/connectors` does not have.
 - **Effect Workflow inside a Durable Object** stalls at the first activity
@@ -320,4 +355,5 @@ run. `examples/deploy-cloudflare/` is the Alchemy stack.
 The larger parked work -- the reference gateway, code mode, filetypes
 phase 5, the bridge packages, compaction's overflow-recovery
 phase 15 -- is listed with its preconditions in
-[remaining-work.md](./docs/remaining-work.md#larger-correctly-parked).
+[remaining-work.md](./docs/remaining-work.md#larger-correctly-parked); what
+it has finished is in [the ledger](./docs/remaining-work-closed.md).

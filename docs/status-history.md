@@ -5723,3 +5723,62 @@ over Effect RPC, which is what would put RPC and the relay under every row the
 seam owns).
 
 `tsc`, `lint`, `lint:portability` clean; 2014 tests across 185 files.
+
+## 2026-09-04 → 05 — the seams, and what every agent has
+
+Two plans, both closed, and the shape of the work was the same each time:
+write tests that combine features rather than exercise them one at a time,
+read what an interface *says* it owes, and ask which of those sentences a
+suite would notice being broken.
+
+**`plan-seams.md`** (six items). The budget was wrong under replay (a replayed
+turn charged twice; fixed by keying the charge on a semantic coordinate); the
+delegation boundary was undecided (`Subagent.Inherit`: budget crosses by
+default, approval forwards only when asked and then on the parent's event
+stream with `detail.via` naming the path, a child with an unanswerable
+approval refused at construction, which needed toolkits built from a static
+list to *declare* their tools); one accessor for an agent's effective tools;
+a second conformance matrix, cross-cutting concerns against execution
+contexts, whose review caught its own unrun cell; `Agent.Any`, which could
+not be the alias because `Value` and `Input` defaulted to `never` and `any`
+does not admit `never` in an invariant slot; and a checker that runs every
+`verify:` line in `remaining-work.md` under `npm run check`. Two bugs found
+on the way and fixed: ids were unique only within a session (a shared budget
+dropped the second session's charges; a forwarded approval collided with the
+parent's own), and `Effect.provide` shares a module-level layer through the
+memo map (a child got its parent's counter back).
+
+**`plan-after-seams.md`** (thirteen items). Ids carry their session; the
+engine records usage and the loop only decides (`Budget.record`; `charge`
+deleted); a typed child returns its value; what a tool can see of its session
+is written down; **item 46 done**: every agent has an input and an output,
+the defaults are the prompt and the text, `PromptInput` and `AgentInput.Typed`
+gone, one wire shape with an untyped client's bytes recorded before and
+asserted identical after, `Value = string`, `Result.value` always `Some`,
+`Agent.Any` the alias at last -- with two deviations recorded (the output's
+`Option` stays because its default is the absence of a tool; step 4's
+doubling of every prompt in every record is not done). A fixtures convention,
+two Effect notes in AGENTS.md (`Effect.fn` generics fall to their default
+silently; a module-level layer is one instance under one memo map), one
+module for a value the receiver decodes with its own schema, and the live
+list split into a list and a ledger. Two items withdrawn with the reasoning
+kept: refusing at `AgentSession.make` (its `denied` default is fail-closed and
+loud; only the delegation was silent) and the static toolkit in the type (the
+property was already delivered by `Declared`).
+
+**The matrix's three blanks closed by tests** (items 56–58): run limits do
+not cross a delegation and that is the decision, a turn not being fungible
+the way a token is; a principal over a wire comes from the host and only the
+host; a tool holding a resource when the connection dies finishes and
+releases once, because a waiter leaving is not the work being cancelled.
+
+**The relay's** terminal-versus-retryable decision now follows its error
+schemas rather than package-prefixed tag strings (item 55, first half); the
+cross-version half is a decision about whether any tag should derive from
+the package name, recorded rather than made.
+
+The checker fired three times in its first two days -- on `PromptInput`,
+on `Agent.Any` as an interface, on `terminalTags` -- each time on text that
+had gone stale that hour. `tsc` (all five configs), `lint`, `lint:portability`,
+`verify:package` clean; 2165 tests across 204 files.
+
