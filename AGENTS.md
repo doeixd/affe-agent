@@ -284,6 +284,17 @@ checked invariant, not a convention.
 * If implementation reveals a contradiction in `PLAN.md`, document the exact
   conflict instead of working around it silently.
 
+## Writing docs
+
+**Guides state; plans argue.** A guide (`docs/guide-*.md`, the README) says
+what happens, in declarative sentences, and links the plan that holds the
+argument. A plan (`docs/plan-*.md`) weighs the options and records the
+decision and its reasons. The ledger (`docs/remaining-work-closed.md`) records
+what landed and what was found on the way. A sentence that argues in a guide
+belongs in a plan; a sentence that only states in a plan is probably a guide's.
+The test of a guide paragraph is that a reader who disagrees with the design
+still learns exactly what the code does.
+
 ## Verifying
 
 ```
@@ -291,13 +302,18 @@ npm run typecheck          # src, test and examples, including the type assertio
 npm run lint               # Effect language service diagnostics
 npm run lint:portability   # no host coupling outside host modules
 npm run verify:remaining-work  # every `verify:` claim in docs/remaining-work.md still holds
+npm run verify:behavior-change # a fixture change carries a `Behavior-Change:` trailer
+npm run verify:changelog       # CHANGELOG.md lists every such trailer since the last tag
 npm test
 ```
 
-All five must pass (`npm run check` runs them). The fourth is how the live
-list stays live: an entry that makes a claim about the code carries a
-`verify:` line that falsifies it, and a stale claim fails the build rather
-than misdirecting the next reader. `examples/anthropic.ts` is typechecked but never executed — it
+All of these must pass (`npm run check` runs them). `verify:remaining-work` is
+how the live list stays live: an entry that makes a claim about the code
+carries a `verify:` line that falsifies it, and a stale claim fails the build
+rather than misdirecting the next reader. The two after it are how a wire or
+journal change reaches the changelog: the trailer is required by the fixture
+it touched, and `npm run changelog:behavior-changes` regenerates the
+changelog's block from the trailers. `examples/anthropic.ts` is typechecked but never executed — it
 would make live billed requests.
 
 ## Reviewing

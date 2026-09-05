@@ -534,26 +534,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-60j. **Guides state; plans argue.** A rule in `AGENTS.md` and one pass over
-    the guides: a guide says what happens in declarative sentences and links
-    the plan that holds the argument. Their guide reads that way; several of
-    ours were written while the decision was being made. Small.
-
-    ```text
-    verify: no-grep "Guides state; plans argue" AGENTS.md
-    ```
-
-60k. **`CHANGELOG.md`'s behaviour-change lines derived from
-    `Behavior-Change:` trailers** (after 60c): the changelog exists and is
-    hand-written; a release step appends one line per trailer since the last
-    release, with the fixture that measured it linked, so "what changed for
-    you" cannot be forgotten. Small. (Its first pin said the file did not
-    exist; the checker said otherwise, which is the checker working.)
-
-    ```text
-    verify: no-grep "Behavior-Change" CHANGELOG.md
-    ```
-
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:

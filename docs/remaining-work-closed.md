@@ -1483,3 +1483,37 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "export const readPolicy" src/presets/Presets.ts
     verify: grep "describe(policy(p)) reads back as p" test/PresetsPolicy.test.ts
     ```
+
+60k. ~~**`CHANGELOG.md`'s behaviour-change lines derived from
+    `Behavior-Change:` trailers.**~~ **DONE 2026-09-05.**
+    `scripts/changelog-behavior-changes.mjs` reads every commit since the
+    last release tag that carries the trailer and regenerates one marked
+    block under `## [Unreleased]` -- the sentence, the commit, and the
+    fixture that measured it. `--write` rewrites the block
+    (`npm run changelog:behavior-changes`); `--check` fails when the block
+    is out of date and is in `npm run check` as `verify:changelog`, so a
+    behaviour change that was measured cannot be left out of the changelog.
+    The log reader moved to `scripts/lib/behavior-changes.mjs`, shared with
+    `verify-behavior-change.mjs`, so the enforcer and the publisher cannot
+    read the log differently. First run listed 60d's rollover; `--check`
+    failed before `--write` and passed after, which is its break-once.
+
+    ```text
+    verify: exists scripts/changelog-behavior-changes.mjs
+    verify: exists scripts/lib/behavior-changes.mjs
+    verify: grep "verify:changelog" package.json
+    verify: grep "behavior-changes:start" CHANGELOG.md
+    ```
+
+60j. ~~**Guides state; plans argue.**~~ **DONE 2026-09-05.** The rule is in
+    `AGENTS.md` under "Writing docs": a guide says what happens, in
+    declarative sentences, and links the plan that holds the argument; a
+    plan argues, weighs and decides; the ledger records. The pass over the
+    seven guides found them already in that voice where it was checked --
+    every "decide" is a noun in a declarative sentence -- so the durable
+    part of this item is the rule, and the guide sections written this week
+    (rollover, the ledger, describe, the policy record) were written to it.
+
+    ```text
+    verify: grep "Guides state; plans argue" AGENTS.md
+    ```

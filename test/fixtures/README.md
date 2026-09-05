@@ -36,3 +36,9 @@ that cannot see the baseline fails the check rather than passing it.
 ```
 Behavior-Change: an untyped agent's result now carries its text as `value`; the request bytes are unchanged.
 ```
+
+The trailers are also what `CHANGELOG.md` publishes: `npm run
+changelog:behavior-changes` regenerates the behaviour-changes block under
+`## [Unreleased]` from every trailer since the last release tag, naming the
+commit and the fixture that measured it, and `npm run verify:changelog` (in
+`check`) fails when that block is out of date.

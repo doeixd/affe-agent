@@ -20,50 +20,16 @@
  *
  * Part of `npm run check`. `plan-context-lessons.md` 2.5.
  */
-import { execFileSync } from "node:child_process"
+import { FIXTURES, isFixture, readBehaviorChanges, TRAILER } from "./lib/behavior-changes.mjs"
 
 const BASELINE = "1c6b2bd"
-const TRAILER = "Behavior-Change"
-const FIXTURES = "test/fixtures/"
 
 const range = process.env.BEHAVIOR_CHANGE_RANGE ?? `${BASELINE}..HEAD`
 
-const git = (args) => {
-  try {
-    return execFileSync("git", args, { encoding: "utf8" })
-  } catch (error) {
-    console.error(`verify-behavior-change: git failed for ${args.join(" ")}: ${String(error.stderr ?? error)}`)
-    console.error("A shallow clone that lacks the baseline cannot be checked; fetch the full history.")
-    process.exit(1)
-  }
-}
-
-// One record per commit: hash, the trailer's values, then the files it touched.
-// ASCII record and unit separators, written as escapes: the first version had
-// them as literal control bytes, which read as empty strings in the source.
-const RECORD = "\u001e"
-const FIELD = "\u001f"
-const log = git([
-  "log",
-  `--format=${RECORD}%h${FIELD}%(trailers:key=${TRAILER},valueonly)`,
-  "--name-only",
-  range
-])
-
-const commits = log
-  .split(RECORD)
-  .map((chunk) => chunk.trim())
-  .filter((chunk) => chunk.length > 0)
-  .map((chunk) => {
-    const [header, ...rest] = chunk.split("\n")
-    const [hash, trailerBlock] = header.split(FIELD)
-    const trailers = (trailerBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
-    const files = rest.map((line) => line.trim()).filter((line) => line.length > 0)
-    return { hash, trailers, files }
-  })
-
-// The README describes the convention; editing it changes no behaviour.
-const isFixture = (file) => file.startsWith(FIXTURES) && !file.endsWith("README.md")
+const commits = readBehaviorChanges(range, (message) => {
+  console.error(`verify-behavior-change: ${message}`)
+  console.error("A shallow clone that lacks the baseline cannot be checked; fetch the full history.")
+})
 
 const missing = commits.filter(
   (commit) => commit.files.some(isFixture) && commit.trailers.length === 0
