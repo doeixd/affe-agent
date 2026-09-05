@@ -30,6 +30,11 @@ type _FreeLayer = Assert<Equal<typeof free.layer, Layer.Layer<never>>>
 const metered = Presets.policy({ tokens: 10 })
 type _MeteredLoop = Assert<Equal<typeof metered.loop, AgentLoop.AgentLoop<never, Budget.Budget, any>>>
 type _MeteredLayer = Assert<Equal<typeof metered.layer, Layer.Layer<Budget.Budget>>>
+// A record typed wide may carry a cost at runtime, so it is typed as needing
+// everything it might: the sound direction. Break by testing for presence.
+const wide: Presets.PolicyOptions = { maxTurns: 2 }
+const fromWide = Presets.policy(wide)
+type _WideLayer = Assert<Equal<typeof fromWide.layer, Layer.Layer<Budget.Budget>>>
 const priced = Presets.policy({ cost: 1 })
 type _PricedLoop = Assert<
   Equal<
@@ -95,7 +100,10 @@ describe("Presets.policy", () => {
       AgentLoop.and(AgentLoop.maxTurns(3), AgentLoop.maxTurns(4)),
       AgentLoop.and(AgentLoop.untilIdle(), AgentLoop.maxTurns(3), AgentLoop.maxTurns(4)),
       AgentLoop.make(() => Effect.succeed(AgentLoop.Stop)),
-      AgentLoop.withFinalTurn(AgentLoop.withFinalTurn(AgentLoop.untilIdle()))
+      AgentLoop.withFinalTurn(AgentLoop.withFinalTurn(AgentLoop.untilIdle())),
+      // A bare bound is a loop `policy` never builds: it always stands on `untilIdle`.
+      AgentLoop.maxTurns(3),
+      AgentLoop.and(AgentLoop.maxTurns(3), AgentLoop.untilIdle())
     ]
     for (const loop of loops) {
       assert.deepStrictEqual(Presets.readPolicy(loop.description), Option.none(), JSON.stringify(loop.description))

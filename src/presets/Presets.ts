@@ -297,8 +297,13 @@ export interface Policy<E, R, L> {
  * from what was written, so `policy({ maxTurns: 2 })` is as free of
  * requirements as `AgentLoop.maxTurns(2)`; the test file asserts it.
  */
-type Ceiling<O> = O extends { readonly tokens: number } | { readonly cost: number } ? Budget.Budget : never
-type Priced<O> = O extends { readonly cost: number } ? true : false
+// Tested for the *absence* of a key, not the presence of one, so a record
+// typed as the wide `PolicyOptions` -- which may hold a `cost` at runtime --
+// is typed as needing everything it might. The unsound direction would be a
+// loop that requires a `Budget` and a type that says it does not.
+type Given<O, K extends keyof PolicyOptions> = K extends keyof O ? Exclude<O[K], undefined> : never
+type Ceiling<O> = [Given<O, "tokens"> | Given<O, "cost">] extends [never] ? never : Budget.Budget
+type Priced<O> = [Given<O, "cost">] extends [never] ? false : true
 export type PolicyError<O> = Priced<O> extends true
   ? ModelCapabilities.UnknownModelError | ModelCapabilities.UnknownCurrentModelError | ModelCapabilities.UnpricedModelError
   : never
@@ -366,12 +371,12 @@ export const readPolicy = (description: AgentLoop.Description): Option.Option<Po
     finalTurn = true
     current = current.inner
   }
-  const bounds: ReadonlyArray<AgentLoop.Description> =
-    current._tag === "UntilIdle"
-      ? []
-      : current._tag === "And" && current.loops[0]?._tag === "UntilIdle"
-      ? current.loops.slice(1)
-      : [current]
+  // `policy` always builds on `untilIdle`: alone, or first in the conjunction
+  // `limits` makes. A bare bound is a loop, not a record.
+  if (current._tag !== "UntilIdle" && !(current._tag === "And" && current.loops[0]?._tag === "UntilIdle")) {
+    return Option.none()
+  }
+  const bounds: ReadonlyArray<AgentLoop.Description> = current._tag === "UntilIdle" ? [] : current.loops.slice(1)
   const record: {
     maxTurns?: number
     maxToolCalls?: number
@@ -386,7 +391,6 @@ export const readPolicy = (description: AgentLoop.Description): Option.Option<Po
     else if (bound._tag === "MaxDuration" && record.maxDuration === undefined) record.maxDuration = bound.millis
     else return Option.none()
   }
-  if (bounds.length === 0 && current._tag !== "UntilIdle") return Option.none()
   if (finalTurn !== undefined) record.finalTurn = finalTurn
   if (tokens !== undefined) record.tokens = tokens
   if (cost !== undefined) record.cost = cost

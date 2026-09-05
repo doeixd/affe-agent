@@ -1468,7 +1468,15 @@ still resolves -- here, if not in the list. Nothing here is next;
     `readPolicy(describe(policy(p)))` is `p` for every record tried, and a
     row asserts it. Compaction is not a field, on purpose: a compaction
     transform owns state and is built with `yield*`, so it goes straight on
-    `contextTransform`. Broken three ways once.
+    `contextTransform`. Broken three ways once. Review found two defects:
+    `readPolicy` read a bare bound as a record, which `policy` never
+    builds, and the conditional types tested for a key's *presence*, so a
+    record typed as the wide `PolicyOptions` with a `cost` at runtime was
+    typed as needing nothing. Both fixed the same day: the inverse insists
+    on `untilIdle` underneath, and the types ask whether a ceiling is given
+    (`Given<O, K>`), so a wide record is typed as needing everything it
+    might -- the sound direction -- with a type assertion that fails if the
+    test is for presence again.
 
     ```text
     verify: grep "export const policy" src/presets/Presets.ts
