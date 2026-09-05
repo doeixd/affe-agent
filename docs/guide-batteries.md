@@ -438,6 +438,46 @@ compaction has no turn in flight to measure, so it cuts by message count —
 `tokens` — aligned off tool results like every other cut. `Compaction.make`
 remains the transform-only convenience over the same controller.
 
+### A fresh window instead of a summary
+
+A summary pays a model call and can invent. The other kind of checkpoint,
+`Compaction.Rollover`, pays nothing and keeps only what the model chose to
+carry: the next turn sees the instructions, one marker naming the window
+("Context window 2: the conversation before this point was cleared"), the
+model's handoff note if it left one, and whatever came after the decision.
+`Checkpoint` is the union of the two, told apart by `kind` — `isSummary` and
+`isRollover` narrow it — and a checkpoint stored before rollovers existed
+still decodes as a summary.
+
+Two things start one. The model can ask, with a tool the controller builds:
+
+```ts
+const agent = Agent.make({
+  tools: [compaction.tools.newContext, compaction.tools.contextRemaining],
+  contextTransform: compaction.transform
+})
+```
+
+`new_context({ handoff? })` does nothing but hand its request back as its
+result. That result is then in canonical history, and the transform reads it
+from there before the next model call — so a crash or a durable replay between
+the call and the new window loses nothing, and a request the window already
+covers can never fire twice. Tell the model to call it alone: siblings in the
+same batch run, and their results are folded away with everything else.
+
+Or a token policy can fall back to one when a summary will not fit:
+
+```ts
+Compaction.controller({ policy, summarise, onCannotHelp: "rollover" })
+```
+
+The default is `"fail"`, which leaves `CompactionCannotHelpError` to the
+caller as before; `"rollover"` cuts at the last user message, so the turn
+being answered survives, and records the window as an `automatic` compaction
+whose checkpoint is a `Rollover`. Either way the `Budget` is untouched: a new
+window is not a new run. `CompactionCompleted` carries the checkpoint, under
+the `requested` trigger when the model asked.
+
 
 ## Agent Plugins
 

@@ -353,7 +353,7 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   wrangler login is on their machine.
 
 The larger parked work -- the reference gateway, code mode, filetypes
-phase 5, the bridge packages, compaction's overflow-recovery
-phase 15 -- is listed with its preconditions in
+phase 5, the bridge packages, compaction's overflow *trigger* (the
+rollover itself shipped as item 60d) -- is listed with its preconditions in
 [remaining-work.md](./docs/remaining-work.md#larger-correctly-parked); what
 it has finished is in [the ledger](./docs/remaining-work-closed.md).

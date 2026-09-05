@@ -1338,3 +1338,37 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "verify:behavior-change" package.json
     verify: grep "## The trailer" test/fixtures/README.md
     ```
+
+60d. ~~**Rollover: a fresh window as a compaction decision, with the harness
+    as interpreter.**~~ **DONE 2026-09-05.** `Compaction.Checkpoint` is now
+    `Schema.Union([Summary, Rollover])`; a summary recorded before the union
+    has no `kind` and decodes as a `Summary`, measured by
+    `test/fixtures/compaction-checkpoint.json` (recorded at `d6e4a69`, asserted
+    to round-trip byte-for-byte). A `Rollover` projects the leading system
+    messages of the folded prefix, one window marker carrying the model's
+    handoff, and the retained tail; no summariser runs. Two triggers: the
+    model's `new_context` call (`Compaction.NewContext`, a tool whose handler
+    echoes the request so canonical history records it, read back by the
+    transform from the uncovered tail -- crash-safe and replay-safe with no
+    engine change), and a token policy's `CompactionCannotHelpError` when
+    `onCannotHelp: "rollover"` is chosen, cutting at the last user message
+    and never behind the existing checkpoint. `Trigger` gained `"requested"`;
+    `Compaction.failpoints` marks both sides of the checkpoint write and
+    `Failpoints.covered` drives both, the next pass ending in the same window
+    either way. The `Budget` is untouched, asserted. A durable replay pin sits
+    beside phase 14's: a suspension between the tool result committing and the
+    checkpoint saving loses the request nowhere. Broken four ways once: no
+    request detection (five rows fail), the fallback ignoring its option (one),
+    the protected prefix dropped (three), a `hit` removed (`covered` dies
+    naming it). Not shipped, each now its own item: the overflow trigger
+    (60d-i), refusing a mixed batch (60d-ii); and a finding, the summary
+    projection dropping the same instructions a rollover keeps (60l).
+
+    ```text
+    verify: grep "export const Rollover" src/compaction/Compaction.ts
+    verify: grep "export const NewContext" src/compaction/Compaction.ts
+    verify: grep "onCannotHelp" src/compaction/Compaction.ts
+    verify: exists test/fixtures/compaction-checkpoint.json
+    verify: grep "Failpoints.covered(Compaction.failpoints" test/ContextRollover.test.ts
+    verify: grep "survives a suspension, from the journalled tool result" test/Durable.test.ts
+    ```

@@ -6,6 +6,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import * as Budget from "../budget/Budget.js"
 import * as ContextTransform from "../ContextTransform.js"
 import { CurrentSessionId } from "../internal/currentSession.js"
+import * as Failpoint from "../internal/failpoint.js"
 import { positiveInteger } from "../internal/positive.js"
 import {
   alignOffToolResults,
@@ -54,7 +55,7 @@ import {
  * The new conversation then receives a summary of a conversation it never
  * had, which is worse than no summary at all: it is confidently wrong.
  */
-export const Checkpoint = Schema.Struct({
+export const Summary = Schema.Struct({
   coveredThrough: Schema.Natural,
   summary: Schema.String,
   prefix: Schema.String,
@@ -65,7 +66,84 @@ export const Checkpoint = Schema.Struct({
   /** Usage reported by the summarizer, when it used a model and exposed it. */
   usage: Schema.Option(AgentEvent.ModelUsage)
 })
+export type Summary = typeof Summary.Type
+
+/**
+ * A fresh window: everything before `coveredThrough` is folded away with no
+ * summary. What the model sees instead is the protected prefix (the
+ * instructions), a marker saying which window this is, the model's own
+ * handoff note if it left one, and the retained tail.
+ *
+ * The other kind of checkpoint (`plan-context-lessons.md` 2.1). A summary
+ * pays a model call and can invent; a rollover pays nothing and keeps only
+ * what the model chose to carry forward. It is what a model asks for with
+ * `new_context`, and what a token policy falls back to when a summary will
+ * not fit, if it was told to.
+ *
+ * `kind` is what tells the two apart on the way back from a store: a
+ * summary recorded before this kind existed has no `kind`, decodes as a
+ * `Summary`, and keeps working -- `test/fixtures/compaction-checkpoint.json`
+ * holds one recorded before the union.
+ */
+export const Rollover = Schema.Struct({
+  kind: Schema.Literal("rollover"),
+  coveredThrough: Schema.Natural,
+  prefix: Schema.String,
+  /** The model's note to its next window, when it gave one. */
+  handoff: Schema.Option(Schema.String),
+  /** Which window this starts: 1 for the first rollover of a session. */
+  window: Schema.Natural,
+  /** The projection's size when the decision was made; absent under a message-count policy or on request. */
+  tokensBefore: Schema.Option(Schema.Natural)
+})
+export type Rollover = typeof Rollover.Type
+
+export const Checkpoint = Schema.Union([Summary, Rollover])
 export type Checkpoint = typeof Checkpoint.Type
+
+/** Which kind a checkpoint is. `kind` is the discriminant; a `Summary` has none. */
+export const isRollover = (checkpoint: Checkpoint): checkpoint is Rollover => "kind" in checkpoint
+export const isSummary = (checkpoint: Checkpoint): checkpoint is Summary => !isRollover(checkpoint)
+
+/** The summary text a checkpoint carries, for a summariser asked to continue it; a rollover carries none. */
+const summaryOf = (checkpoint: Checkpoint): Option.Option<string> =>
+  isRollover(checkpoint) ? Option.none() : Option.some(checkpoint.summary)
+
+/** What the model sends to ask for a fresh window, and what the tool hands back so history records it. */
+export const RolloverRequest = Schema.Struct({
+  /** A short note to the next window: what to resume, where the notes are. */
+  handoff: Schema.optional(Schema.String)
+})
+export type RolloverRequest = typeof RolloverRequest.Type
+
+/**
+ * The tool a model calls to start a fresh window.
+ *
+ * Its handler does nothing but hand the request back as its result. That is
+ * the design, not a placeholder: the request is then *in canonical history*
+ * as a tool result, and the controller's transform reads it from there on
+ * the next turn. Nothing is staged in memory, so a crash between the tool
+ * result committing and the next turn loses nothing, and a durable replay
+ * -- which replays journalled tool results rather than re-running handlers
+ * -- finds it exactly where the first pass did. Once the rollover covers
+ * that message it cannot be seen again, so a request from an earlier window
+ * never fires twice. Idempotent by construction and annotated so.
+ */
+export const NewContext = Tool.make("new_context", {
+  description:
+    "Start a fresh context window. Save anything you must keep as notes first, then call this once, alone; it " +
+    "takes effect before your next turn. Optionally leave a short handoff note for the next window.",
+  parameters: RolloverRequest,
+  success: RolloverRequest
+}).annotate(Tool.Idempotent, true)
+
+/**
+ * The two durable boundaries around writing a checkpoint. A crash before the
+ * write leaves the request in history for the next pass to find; a crash
+ * after it leaves the window for the next pass to load. `test/ContextRollover.test.ts`
+ * crashes at both, through `Failpoints.covered`.
+ */
+export const failpoints = Failpoint.group("Compaction", ["before-checkpoint", "after-checkpoint"])
 
 /** Structured summary output without exposing a provider response. */
 export const SummaryResult = Schema.Struct({
@@ -337,6 +415,82 @@ const summaryMessage = (summary: string) =>
   Prompt.systemMessage({
     content: `Summary of the earlier conversation:\n\n${summary}`
   })
+
+/**
+ * What stands in for the folded prefix after a rollover: the protected
+ * prefix -- the system messages that led the folded history, which is where
+ * a session's instructions live -- then one marker naming the window,
+ * carrying the handoff note when there is one.
+ */
+const rolloverMessages = (
+  checkpoint: Rollover,
+  messages: ReadonlyArray<Prompt.Message>
+): ReadonlyArray<Prompt.Message> => {
+  const prefix: Array<Prompt.Message> = []
+  for (const message of messages.slice(0, checkpoint.coveredThrough)) {
+    if (message.role !== "system") break
+    prefix.push(message)
+  }
+  return [...prefix, rolloverMarker(checkpoint)]
+}
+
+const rolloverMarker = (checkpoint: Rollover) =>
+  Prompt.systemMessage({
+    content: Option.match(checkpoint.handoff, {
+      onNone: () =>
+        `Context window ${checkpoint.window}: the conversation before this point was cleared.`,
+      onSome: (handoff) =>
+        `Context window ${checkpoint.window}: the conversation before this point was cleared. ` +
+        `Handoff note from the previous window:\n\n${handoff}`
+    })
+  })
+
+/** The messages a checkpoint projects in place of `messages.slice(0, coveredThrough)`. */
+const checkpointMessages = (
+  checkpoint: Checkpoint,
+  messages: ReadonlyArray<Prompt.Message>
+): ReadonlyArray<Prompt.Message> =>
+  isRollover(checkpoint) ? rolloverMessages(checkpoint, messages) : [summaryMessage(checkpoint.summary)]
+
+/**
+ * The most recent `new_context` result in the uncovered tail of history,
+ * read from the tool message that recorded it. Only the tail is searched:
+ * a request the current checkpoint already covers has been acted on. The
+ * decision is `coveredThrough` = one past the tool message, so the call
+ * and its result fold with everything before them.
+ */
+const requestedRollover = (
+  messages: ReadonlyArray<Prompt.Message>,
+  covered: number
+): Option.Option<{ readonly coveredThrough: number; readonly handoff: Option.Option<string> }> => {
+  for (let index = messages.length - 1; index >= covered; index--) {
+    const message = messages[index]
+    if (message === undefined || message.role !== "tool") continue
+    for (const part of message.content) {
+      if (part.type !== "tool-result" || part.name !== NewContext.name || part.isFailure) continue
+      const request = Schema.decodeUnknownOption(RolloverRequest)(part.result)
+      if (Option.isSome(request)) {
+        return Option.some({
+          coveredThrough: index + 1,
+          handoff: Option.fromUndefinedOr(request.value.handoff)
+        })
+      }
+    }
+  }
+  return Option.none()
+}
+
+/**
+ * Where a rollover the model did not ask for cuts: at the start of the last
+ * user message, so the turn being answered survives. Everything is folded
+ * when there is no user message to keep.
+ */
+const lastUserMessage = (messages: ReadonlyArray<Prompt.Message>): number => {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === "user") return index
+  }
+  return messages.length
+}
 
 /**
  * Replace the conversation inside the derived prompt, keeping everything else.
@@ -800,8 +954,8 @@ export const ContextRemaining = Tool.make("context_remaining", {
   failure: Schema.String
 }).annotate(Tool.Readonly, true)
 
-/** Why a compaction ran. */
-export const Trigger = Schema.Literals(["automatic", "manual"])
+/** Why a compaction ran: the policy, the application, or the model's `new_context` call. */
+export const Trigger = Schema.Literals(["automatic", "manual", "requested"])
 export type Trigger = typeof Trigger.Type
 
 /** A summary is about to be requested for `messages` canonical messages. */
@@ -878,7 +1032,7 @@ export interface Controller<TE, CE, SE, R> {
     readonly history: Prompt.Prompt
     readonly instructions?: string | undefined
     readonly retain?: number | undefined
-  }) => Effect.Effect<Checkpoint, CE, R>
+  }) => Effect.Effect<Summary, CE, R>
   /**
    * The stored checkpoint, as stored.
    *
@@ -900,10 +1054,14 @@ export interface Controller<TE, CE, SE, R> {
    * Tools the model may be given, built by this controller because they read
    * its state. `contextRemaining` reports the last projection this controller
    * made for the calling session (`WindowStatus`), plus the ambient `Budget`'s
-   * totals when one is in context. Add it to an agent's `tools`.
+   * totals when one is in context. `newContext` lets the model ask for a
+   * fresh window (`NewContext`); the request is read back from history by
+   * this controller's transform before the next turn. Add either to an
+   * agent's `tools`.
    */
   readonly tools: {
     readonly contextRemaining: Agent.BoundTool<typeof ContextRemaining>
+    readonly newContext: Agent.BoundTool<typeof NewContext>
   }
 }
 
@@ -919,6 +1077,15 @@ interface MakeOptions<PE, PR, SE, SR> {
   readonly summarise: Summarise<SE, SR>
   /** Bound for the default in-memory LRU. Not used with a persistent store. */
   readonly maxSessions?: number | undefined
+  /**
+   * What a token policy does when a summary cannot get the projection under
+   * the line (`CompactionCannotHelpError`): fail the turn, the default, or
+   * roll over to a fresh window cut at the last user message, with no
+   * summary and no handoff. The rollover is a `Rollover` checkpoint under
+   * the `automatic` trigger, so it is told apart from a summary by its
+   * `kind`, never by the event that announced it.
+   */
+  readonly onCannotHelp?: "fail" | "rollover" | undefined
 }
 
 /** Persistent checkpoints over Effect's existing schema-aware key/value store. */
@@ -1145,7 +1312,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         Effect.andThen(
           options.summarise({
             messages: preparation.messagesToSummarise,
-            previous: Option.map(preparation.previous, (checkpoint) => checkpoint.summary),
+            previous: Option.flatMap(preparation.previous, summaryOf),
             instructions
           })
         ),
@@ -1154,10 +1321,30 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
       )
 
     const completed = (sessionId: string, trigger: Trigger, checkpoint: Checkpoint) =>
-      Effect.andThen(
-        save(sessionId, checkpoint),
-        emit({ _tag: "CompactionCompleted", sessionId, trigger, checkpoint })
+      failpoints.hit("before-checkpoint").pipe(
+        Effect.andThen(save(sessionId, checkpoint)),
+        Effect.andThen(failpoints.hit("after-checkpoint")),
+        Effect.andThen(emit({ _tag: "CompactionCompleted", sessionId, trigger, checkpoint }))
       )
+
+    /** The next window's number: one past the last rollover, or the first. */
+    const rollover = (
+      existing: Option.Option<Checkpoint>,
+      messages: ReadonlyArray<Prompt.Message>,
+      coveredThrough: number,
+      handoff: Option.Option<string>,
+      tokensBefore: Option.Option<number>
+    ): Rollover => ({
+      kind: "rollover",
+      coveredThrough,
+      prefix: fingerprint(messages.slice(0, coveredThrough)),
+      handoff,
+      window: Option.match(existing, {
+        onNone: () => 1,
+        onSome: (checkpoint) => isRollover(checkpoint) ? checkpoint.window + 1 : 1
+      }),
+      tokensBefore
+    })
 
     const manualRetain = options.policy._tag === "Messages"
       ? options.policy.retain
@@ -1191,7 +1378,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
           preparation.value,
           Option.fromUndefinedOr(instructions)
         )
-        const checkpoint: Checkpoint = {
+        const checkpoint: Summary = {
           coveredThrough: preparation.value.coveredThrough,
           summary: summary.text,
           prefix: fingerprint(messages.slice(0, preparation.value.coveredThrough)),
@@ -1211,45 +1398,20 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
           onNone: () => 0,
           onSome: (checkpoint) => checkpoint.coveredThrough
         })
-        const projectedBefore = Option.match(existing, {
-          onNone: () => context.prompt,
-          onSome: (checkpoint) =>
-            substitute(context.prompt, messages, [
-              summaryMessage(checkpoint.summary),
-              ...messages.slice(checkpoint.coveredThrough)
-            ])
-        })
-
+        const policy = options.policy
         // Resolved once per turn, not once per question asked of it. A
         // `ResolveBudget` is an ordinary Effect -- it may read configuration or
         // ask a provider -- so resolving it a second time after summarising
         // both paid twice and let the check at the end be made against a budget
         // that is not the one the cut was chosen against.
-        const policy = options.policy
-        let budget = Option.none<ContextBudget>()
-        let preparation: Option.Option<Preparation<Checkpoint>>
-        let estimated = Option.none<number>()
-        if (policy._tag === "Messages") {
-          preparation = messagePreparation(policy, messages, existing, covered)
-        } else {
-          const resolved = yield* resolveBudget(policy.budget, context)
-          budget = Option.some(resolved)
-          const measured = yield* tokenPreparation(
-            policy,
-            resolved,
-            messages,
-            existing,
-            covered,
-            projectedBefore,
-            singleMessageCache
-          )
-          preparation = measured.preparation
-          estimated = Option.some(measured.tokensBefore)
-        }
+        const plan = policy._tag === "Messages"
+          ? { _tag: "Messages" as const, policy }
+          : { _tag: "Tokens" as const, policy, budget: yield* resolveBudget(policy.budget, context) }
+        const budget = plan._tag === "Tokens" ? Option.some(plan.budget) : Option.none<ContextBudget>()
 
         // What the model will be sent this turn, recorded so `contextRemaining`
         // can answer for it. Recorded at every exit of this transform: the
-        // no-compaction path here, and the compacted projection below.
+        // no-compaction path, the summarised projection, and a rollover.
         const window = (tokens: Option.Option<number>, coveredThrough: number): RecordedWindow => ({
           estimatedTokens: Option.getOrNull(tokens),
           contextLimit: Option.match(budget, {
@@ -1264,60 +1426,125 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
           compactedThrough: coveredThrough
         })
 
-        if (Option.isNone(preparation)) {
-          yield* recordWindow(context.sessionId, window(estimated, covered))
-          return projectedBefore
+        const estimate = (projected: Prompt.Prompt) =>
+          plan._tag === "Tokens"
+            ? Effect.map(plan.policy.estimate(projected), (n) => Option.some(natural("Compaction token estimator", n)))
+            : Effect.succeed(Option.none<number>())
+
+        // A rollover pays no model call: write the checkpoint, project it,
+        // measure the result so `contextRemaining` is right for the new window.
+        const rolledOver = (trigger: Trigger, checkpoint: Rollover) =>
+          Effect.gen(function* () {
+            yield* completed(context.sessionId, trigger, checkpoint)
+            const projected = substitute(context.prompt, messages, [
+              ...rolloverMessages(checkpoint, messages),
+              ...messages.slice(checkpoint.coveredThrough)
+            ])
+            yield* recordWindow(context.sessionId, window(yield* estimate(projected), checkpoint.coveredThrough))
+            return projected
+          })
+
+        // The model's own decision comes before the policy's: a `new_context`
+        // result in the uncovered tail is acted on whatever the pressure.
+        const requested = requestedRollover(messages, covered)
+        if (Option.isSome(requested)) {
+          return yield* rolledOver(
+            "requested",
+            rollover(existing, messages, requested.value.coveredThrough, requested.value.handoff, Option.none())
+          )
         }
 
-        const summary = yield* summariseWith(
-          context.sessionId,
-          "automatic",
-          preparation.value,
-          Option.none()
-        )
-        const projected = substitute(context.prompt, messages, [
-          summaryMessage(summary.text),
-          ...preparation.value.retained.content
-        ])
-        const tokensAfter = policy._tag === "Tokens"
-          ? Option.some(
-              natural(
-                "Compaction token estimator",
-                yield* policy.estimate(projected)
-              )
+        const projectedBefore = Option.match(existing, {
+          onNone: () => context.prompt,
+          onSome: (checkpoint) =>
+            substitute(context.prompt, messages, [
+              ...checkpointMessages(checkpoint, messages),
+              ...messages.slice(checkpoint.coveredThrough)
+            ])
+        })
+
+        let estimated = Option.none<number>()
+        const summarised = Effect.gen(function* () {
+          let preparation: Option.Option<Preparation<Checkpoint>>
+          if (plan._tag === "Messages") {
+            preparation = messagePreparation(plan.policy, messages, existing, covered)
+          } else {
+            const measured = yield* tokenPreparation(
+              plan.policy,
+              plan.budget,
+              messages,
+              existing,
+              covered,
+              projectedBefore,
+              singleMessageCache
             )
-          : Option.none<number>()
-        // A summariser that returns something large can leave the next turn still
-        // over budget, so it would re-summarise and pay another model call every
-        // turn. `validateBudget` only checks that `keepRecentTokens` leaves room
-        // for *some* summary, not that this summary actually fit. Check the
-        // measured `tokensAfter` against the budget and surface when compaction
-        // did not get under the line, so the caller can observe that the summary
-        // was too large rather than silently paying forever.
-        if (Option.isSome(budget) && Option.isSome(tokensAfter)) {
-          const limit = budget.value.contextWindow - budget.value.reserveTokens
-          if (tokensAfter.value > limit) {
-            return yield* new CompactionCannotHelpError({
-              kind: "summary-too-large",
-              reason: `summary still over budget: tokensAfter ${tokensAfter.value} > ${limit}`
-            })
+            preparation = measured.preparation
+            estimated = Option.some(measured.tokensBefore)
           }
-        }
 
-        const checkpoint: Checkpoint = {
-          coveredThrough: preparation.value.coveredThrough,
-          summary: summary.text,
-          prefix: fingerprint(
-            messages.slice(0, preparation.value.coveredThrough)
-          ),
-          tokensBefore: preparation.value.tokensBefore,
-          tokensAfter,
-          usage: summary.usage
-        }
+          if (Option.isNone(preparation)) {
+            yield* recordWindow(context.sessionId, window(estimated, covered))
+            return projectedBefore
+          }
 
-        yield* completed(context.sessionId, "automatic", checkpoint)
-        yield* recordWindow(context.sessionId, window(tokensAfter, checkpoint.coveredThrough))
-        return projected
+          const summary = yield* summariseWith(
+            context.sessionId,
+            "automatic",
+            preparation.value,
+            Option.none()
+          )
+          const projected = substitute(context.prompt, messages, [
+            summaryMessage(summary.text),
+            ...preparation.value.retained.content
+          ])
+          const tokensAfter = yield* estimate(projected)
+          // A summariser that returns something large can leave the next turn still
+          // over budget, so it would re-summarise and pay another model call every
+          // turn. `validateBudget` only checks that `keepRecentTokens` leaves room
+          // for *some* summary, not that this summary actually fit. Check the
+          // measured `tokensAfter` against the budget and surface when compaction
+          // did not get under the line, so the caller can observe that the summary
+          // was too large rather than silently paying forever.
+          if (Option.isSome(budget) && Option.isSome(tokensAfter)) {
+            const limit = budget.value.contextWindow - budget.value.reserveTokens
+            if (tokensAfter.value > limit) {
+              return yield* new CompactionCannotHelpError({
+                kind: "summary-too-large",
+                reason: `summary still over budget: tokensAfter ${tokensAfter.value} > ${limit}`
+              })
+            }
+          }
+
+          const checkpoint: Summary = {
+            coveredThrough: preparation.value.coveredThrough,
+            summary: summary.text,
+            prefix: fingerprint(
+              messages.slice(0, preparation.value.coveredThrough)
+            ),
+            tokensBefore: preparation.value.tokensBefore,
+            tokensAfter,
+            usage: summary.usage
+          }
+
+          yield* completed(context.sessionId, "automatic", checkpoint)
+          yield* recordWindow(context.sessionId, window(tokensAfter, checkpoint.coveredThrough))
+          return projected
+        })
+
+        // When a summary cannot get under the line and the caller chose the
+        // fallback, the window rolls over instead: cut at the last user message
+        // (never behind the existing checkpoint, which would unfold history),
+        // no summary, no handoff. `onCannotHelp: "fail"` leaves the error to
+        // the caller, and is the default because a rollover discards.
+        if (options.onCannotHelp !== "rollover") return yield* summarised
+        return yield* summarised.pipe(
+          Effect.catchTag("CompactionCannotHelpError", () =>
+            rolledOver(
+              "automatic",
+              rollover(existing, messages, Math.max(covered, lastUserMessage(messages)), Option.none(), estimated)
+            )
+          )
+        )
       }).pipe(
         // The summariser's own failure was reported inside `summariseWith`;
         // what is left to report here is compaction giving up -- the token
@@ -1358,13 +1585,16 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         return { ...status, spentTokens, spentCost }
       }))
 
+    // Echoes its request so history records it; the transform does the rest.
+    const newContext = Agent.tool(NewContext, (request) => Effect.succeed(request))
+
     return {
       transform,
       compact,
       checkpoint: (sessionId) => load(sessionId),
       clear: remove,
       events: Stream.fromPubSub(bus),
-      tools: { contextRemaining }
+      tools: { contextRemaining, newContext }
     }
   })
 }

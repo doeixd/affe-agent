@@ -35,6 +35,7 @@ const Gate4 = DurableDeferred.make("DurableTestGate4", { success: Schema.String 
 const Gate5 = DurableDeferred.make("DurableTestGate5", { success: Schema.String })
 const StreamGate = DurableDeferred.make("StreamGate", { success: Schema.String })
 const Gate6 = DurableDeferred.make("DurableTestGate6", { success: Schema.String })
+const Gate7 = DurableDeferred.make("DurableTestGate7", { success: Schema.String })
 
 const Refund = Tool.make("refund", {
   parameters: Schema.Struct({ amount: Schema.String }),
@@ -1274,8 +1275,10 @@ describe("compaction under durability", () => {
         Compaction.Checkpoint
       ).get("compact-2")
       assert.isTrue(Option.isSome(stored), "the checkpoint was never persisted")
+      const persisted = Option.getOrThrow(stored)
+      assert.isTrue(Compaction.isSummary(persisted), "the persisted checkpoint should be a summary")
       assert.strictEqual(
-        Option.getOrThrow(stored).summary,
+        Compaction.isSummary(persisted) ? persisted.summary : undefined,
         "summary 1",
         "the persisted summary should be the journalled first execution"
       )
@@ -1284,6 +1287,100 @@ describe("compaction under durability", () => {
         1,
         "the summary was executed again on replay instead of replayed from the journal"
       )
+    })
+  )
+
+  it.live("a rollover the model asked for survives a suspension, from the journalled tool result", () =>
+    Effect.gen(function* () {
+      // Item 60d beside phase 14. The `new_context` request is nothing but a
+      // tool result in canonical history, and the controller's transform reads
+      // it from there on the next turn. So a suspension *between* that result
+      // committing and the checkpoint being written -- forced here by a
+      // transform ahead of compaction that waits on a durable gate, once --
+      // loses nothing: the replay rebuilds history from the journal, the
+      // transform finds the request where the first pass did, and the window
+      // it writes is the one the first pass would have written. No summariser
+      // runs at any point; `asked` says so.
+      const asked = yield* Ref.make(0)
+      const suspendOnce = yield* Ref.make(true)
+      const gateReady = yield* Deferred.make<DurableDeferred.Token>()
+      const kv = yield* KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+        Effect.provide(KeyValueStore.layerMemory)
+      )
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(50, { retain: 4 }),
+        checkpointStore: kv,
+        summarise: () => Ref.updateAndGet(asked, (n) => n + 1).pipe(Effect.map((n) => `summary ${n}`))
+      })
+      const suspendBeforeCompaction = ContextTransform.make((context) =>
+        Effect.gen(function* () {
+          // Only the turn that carries the request, and only its first pass.
+          if (context.canonicalPrompt.content.length >= 3 && (yield* Ref.getAndSet(suspendOnce, false))) {
+            const token = yield* DurableDeferred.token(Gate7)
+            yield* Deferred.succeed(gateReady, token)
+            yield* DurableDeferred.await(Gate7)
+          }
+          return context.prompt
+        })
+      )
+
+      const store = yield* DurableChannels.memoryStore
+      const { layer: model, recorder } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "n1", name: "new_context", params: { handoff: "keep going" } }] },
+        { text: "after the window" }
+      ])
+      const durable = DurableAgent.workflow(
+        "RolledOverReplay",
+        Agent.make({
+          instructions: "Be terse.",
+          tools: [compaction.tools.newContext],
+          contextTransform: ContextTransform.compose(suspendBeforeCompaction, compaction.transform),
+          loop: AgentLoop.bounded(3)
+        }),
+        { store }
+      )
+
+      yield* Effect.gen(function* () {
+        const id = yield* DurableAgent.submit(durable, store, "rollover-1", "go")
+        const token = yield* Deferred.await(gateReady)
+        yield* DurableDeferred.succeed(Gate7, { token, value: "resume" })
+        const exit = yield* DurableAgent.result(durable, id, { interval: Duration.millis(20) })
+        assert.isTrue(Exit.isSuccess(exit), `the resumed submission failed: ${JSON.stringify(exit)}`)
+      }).pipe(
+        Effect.provide(
+          durable.layer.pipe(
+            Layer.provideMerge(Engine),
+            Layer.provideMerge(model)
+          )
+        )
+      )
+
+      const stored = yield* KeyValueStore.toSchemaStore(
+        KeyValueStore.prefix(kv, "affe-agent:compaction:"),
+        Compaction.Checkpoint
+      ).get("rollover-1")
+      assert.isTrue(Option.isSome(stored), "the rollover was never persisted")
+      const persisted = Option.getOrThrow(stored)
+      if (Compaction.isRollover(persisted)) {
+        assert.strictEqual(persisted.window, 1)
+        assert.deepStrictEqual(persisted.handoff, Option.some("keep going"))
+        // Instructions, the prompt, the request's call and its result.
+        assert.strictEqual(persisted.coveredThrough, 4)
+      } else assert.fail("the persisted checkpoint should be a rollover")
+      assert.strictEqual(yield* Ref.get(asked), 0, "a rollover must not ask the summariser")
+      assert.isFalse(yield* Ref.get(suspendOnce), "the suspension this row is about never happened")
+      // The turn after the suspension was the first to run in the new window:
+      // the model saw the instructions and the marker, and not the request.
+      const prompts = yield* recorder.prompts
+      const last = prompts[prompts.length - 1]!
+      assert.deepStrictEqual(
+        last.content.flatMap((message) => (message.role === "system" ? [message.content] : [])),
+        [
+          "Be terse.",
+          "Context window 1: the conversation before this point was cleared. Handoff note from the previous window:\n\nkeep going"
+        ]
+      )
+      assert.deepStrictEqual(FakeModel.roles(last), ["system", "system"])
     })
   )
 

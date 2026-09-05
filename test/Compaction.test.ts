@@ -658,9 +658,9 @@ describe("compaction", () => {
         Compaction.Checkpoint
       ).get("persistent")
       assert.isTrue(Option.isSome(stored))
-      if (Option.isSome(stored)) {
+      if (Option.isSome(stored) && Compaction.isSummary(stored.value)) {
         assert.deepStrictEqual(stored.value.usage, Option.some(usage))
-      }
+      } else assert.fail("expected a persisted summary checkpoint")
 
       const compaction = yield* Compaction.make({
         policy: Compaction.whenLongerThan(2),
@@ -1181,7 +1181,7 @@ describe("compaction controller (phases 8-10)", () => {
         ["CompactionCompleted", "manual"]
       ])
       const completed = events[1]
-      if (completed?._tag === "CompactionCompleted") {
+      if (completed?._tag === "CompactionCompleted" && Compaction.isSummary(completed.checkpoint)) {
         assert.strictEqual(completed.checkpoint.coveredThrough, 3)
         assert.strictEqual(completed.checkpoint.summary, "folded 3")
         assert.deepStrictEqual(
@@ -1192,7 +1192,7 @@ describe("compaction controller (phases 8-10)", () => {
       const started = events[0]
       if (started?._tag === "CompactionStarted") assert.strictEqual(started.messages, 3)
       const manual = events[3]
-      if (manual?._tag === "CompactionCompleted") {
+      if (manual?._tag === "CompactionCompleted" && Compaction.isSummary(manual.checkpoint)) {
         assert.strictEqual(manual.checkpoint.coveredThrough, 4)
         assert.strictEqual(manual.checkpoint.summary, "folded 1")
       }
@@ -1343,7 +1343,7 @@ describe("compaction controller (phases 8-10)", () => {
       ).pipe(Effect.provide(layer))
 
       assert.isTrue(Option.isSome(checkpoint))
-      if (Option.isSome(checkpoint)) {
+      if (Option.isSome(checkpoint) && Compaction.isSummary(checkpoint.value)) {
         assert.strictEqual(checkpoint.value.summary, "CHEAP SUMMARY")
         assert.deepStrictEqual(checkpoint.value.usage, Option.some({ inputTokens: 10, outputTokens: 2, totalTokens: 12 }))
       }

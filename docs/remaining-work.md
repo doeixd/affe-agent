@@ -487,29 +487,48 @@ for: the gap is recorded as a gap rather than assumed either way.*
     to work them, each pinned on its *open* state so the checker turns red
     the moment one lands and its text has to move to the ledger.
 
-60d. **Rollover: a fresh window as a compaction decision, with the harness as
-    interpreter.** This *is* phase 15 of `plan-branching-and-compaction.md`,
-    parked since it was written. A second `Checkpoint` kind beside the
-    summary -- protected prefix, window marker, the model's own handoff,
-    retained tail, no summariser call -- triggered by pressure
-    (`Compaction.tokens`), by a provider overflow caught in `AgentTurn` and
-    retried once, or by a `new_context` control tool the harness honours
-    before the next model call and refuses beside other calls. A summary that
-    will not fit (`CompactionCannotHelpError`) falls back to a fresh window,
-    which closes phase 15 without a policy change. `Result.turns` and the
-    `Budget` are untouched: a new window is not a new run. With it, the two
-    invariants a policy can break -- a cut splitting a tool pair, coverage
-    regressing -- move into the transform that applies checkpoints, so they
-    hold for policies written outside this repository. Tests first: both
-    crash boundaries with a new `Failpoint.group("Compaction", ...)`, repeated
-    rollover keeping instructions and input, overflow with no summariser call,
-    steering after the request landing in the new window, the budget not
-    replenished, a mixed batch refused, an earlier run's request inert.
-    Medium.
+60d-i. **Overflow as a rollover trigger.** 60d shipped the requested and the
+    pressure triggers; the third, the provider refusing a request that is too
+    large, is not caught because Effect's AI layer classifies no such error
+    (`AiError.InvalidRequestError` is the nearest, and it is every 4xx).
+    Wanted: a provider-neutral predicate for "context too long", applied in
+    `AgentTurn` around the model call, retrying once with the controller's
+    fallback (`onCannotHelp: "rollover"`) projection. Until a predicate exists
+    that is not a regex over provider messages, this stays parked. Small once
+    the predicate exists; the projection and the checkpoint are done.
 
     ```text
-    verify: no-grep "Rollover" src/compaction/Compaction.ts
-    verify: no-grep "\"Compaction\"" src/compaction/Compaction.ts
+    verify: no-grep "overflow" src/AgentTurn.ts
+    ```
+
+60d-ii. **A `new_context` beside other calls is not refused.** Their harness
+    refuses a mixed batch before either call runs; ours lets every call run
+    and folds the siblings' results into the window with everything else.
+    The tool's description says "call it once, alone", and the projection is
+    correct either way -- but a sibling whose result mattered is lost with no
+    warning. Wanted: a `ToolCallFailed` for the request when it arrives with
+    siblings, from a small check in `ToolExecution` keyed on the tool's
+    annotation, with a test that the siblings still ran and the window did not
+    move. Small.
+
+    ```text
+    verify: no-grep "new_context" src/ToolExecution.ts
+    ```
+
+60l. **A summary projection drops the canonical instructions.** Found while
+    building 60d: a session's instructions are its first canonical message
+    (`AgentSession` seeds history with `History.systemMessage`), and a
+    `Summary` checkpoint's projection is the summary message plus the retained
+    tail -- the system message is inside `messages.slice(0, coveredThrough)`
+    and is gone unless the summariser restated it. A `Rollover` keeps the
+    leading system messages as its protected prefix (`rolloverMessages`); a
+    summary should keep the same prefix ahead of its summary message. One
+    edit at the projection site and a test that the instructions survive a
+    summary; the summariser's transcript can keep including them. Small, and
+    a behaviour change every summarising agent will see.
+
+    ```text
+    verify: no-grep "prefix, summaryMessage" src/compaction/Compaction.ts
     ```
 
 60e. **Retained history as evidence, bounded.** After 60d: two readonly tools

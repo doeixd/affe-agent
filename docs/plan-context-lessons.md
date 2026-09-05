@@ -25,6 +25,16 @@ design; 4 waits on 1 because "earlier windows" is what it reads.
 
 ### 2.1 Rollover
 
+> **Shipped 2026-09-05** (ledger 60d), with three deltas from the design
+> below. The request is not a control tool the harness recognises by
+> annotation: `new_context`'s handler echoes its request as its result, and
+> the transform reads that result back from canonical history, which made the
+> crash and replay properties free. The fallback is `onCannotHelp: "fail" |
+> "rollover"` on the controller rather than `onPressure` on the token policy,
+> because the only place a summary is known not to fit is after it was tried.
+> The overflow trigger is not shipped (60d-i: no provider-neutral
+> classification exists to catch), nor is refusing a mixed batch (60d-ii).
+
 **What they did.** `ContextCompactor` emits one of three decisions --
 `clear-tool-results`, `summarize`, `rollover` -- and `rollover` starts a
 fresh window keeping the protected prefix (instructions, original input), a
@@ -94,6 +104,12 @@ ticked with this plan cited; `test/Durable.test.ts` gains a rollover replay
 pin beside phase 14's; the matrix's durable column names it.
 
 ### 2.2 The harness interprets
+
+> **Partly shipped with 60d.** The rollover paths cannot split a tool pair
+> (a request cuts after the tool message that carries it; the fallback cuts
+> at a user message) and cannot regress coverage (`Math.max(covered, ...)`).
+> The two refusals for a *custom policy's* cut are still inside the strategy;
+> moving them into the transform is the remaining half.
 
 **What they did.** The compactor returns decisions; the engine applies them,
 commits each before pulling the next, and refuses what breaks an invariant --
@@ -224,7 +240,8 @@ fail, which was checked.
 3. **2.1 with 2.2**: tests first (both crash boundaries with the new failpoint
    group), then `Rollover`, the overflow retry in `AgentTurn`, the
    `new_context` control tool, and the interpreter's two refusals; phase 15
-   ticked.
+   ticked. *2.1 shipped 2026-09-05 without the overflow retry (60d-i) or the
+   batch refusal (60d-ii); 2.2's policy-side refusals remain.*
 4. **2.4**, over what 2.1 produced.
 
 Green throughout: the full suite, both lints, portability, `verify:package`,

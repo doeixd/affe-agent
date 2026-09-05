@@ -292,12 +292,21 @@ describe("durable and cluster surfaces", () => {
       "CompactionStarted",
       // The tool that lets the model see its own window, and its result.
       "ContextRemaining",
+      // The tool that lets it ask for a fresh one, its request, and the
+      // checkpoint kinds a rollover made necessary.
+      "NewContext",
+      "Rollover",
+      "RolloverRequest",
+      "Summary",
       "SummaryResult",
       "Trigger",
       "WindowStatus",
       "continuationSummary",
       "controller",
       "estimate",
+      "failpoints",
+      "isRollover",
+      "isSummary",
       "make",
       "model",
       "serialize",

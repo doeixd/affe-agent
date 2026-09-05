@@ -1,0 +1,21 @@
+{
+  "coveredThrough": 6,
+  "summary": "The user asked for a deployment plan; three services were inspected.",
+  "prefix": "a1b2c3d4",
+  "tokensBefore": {
+    "_tag": "Some",
+    "value": 4200
+  },
+  "tokensAfter": {
+    "_tag": "Some",
+    "value": 900
+  },
+  "usage": {
+    "_tag": "Some",
+    "value": {
+      "inputTokens": 4000,
+      "outputTokens": 120,
+      "totalTokens": 4120
+    }
+  }
+}
