@@ -481,18 +481,85 @@ for: the gap is recorded as a gap rather than assumed either way.*
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
 60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons
-    from the other `effect-agent`'s durable context-window rollover, each
-    mapped to a seam we have: rollover as a compaction decision (which is
-    phase 15 of `plan-branching-and-compaction.md`, parked until now), the
-    harness interpreting decisions and owning the invariants, a read-only tool
-    that lets the model see its own window, bounded retained-history tools
-    framed as evidence, a `Behavior-Change:` trailer the checker reads, and
-    failpoint locations that fail the build when untested. Order: the three
-    small ones, then rollover with its interpreter, then history.
+    from the other `effect-agent`'s durable context-window rollover
+    (`danieljvdm/effect-agent#335`), each mapped to a seam we have. The plan
+    ranks and sequences them; the entries below are the slices, in the order
+    to work them, each pinned on its *open* state so the checker turns red
+    the moment one lands and its text has to move to the ledger.
+
+60a. **The model can see its own window.** A read-only tool,
+    `Compaction.tools.contextRemaining`, over the projection's token estimate,
+    the policy's limit and the `Budget` totals when one is in context, with
+    `null` where the host set no limit. Today the loop stops on a budget the
+    model never saw, so it has no reason to ask for a fresh window. Small;
+    independent of everything else in the plan.
 
     ```text
-    verify: exists docs/plan-context-lessons.md
+    verify: no-grep "contextRemaining" src/compaction/Compaction.ts
     ```
+
+60b. **A declared failpoint location with no test fails the build.**
+    `Failpoints.covered(group)` in `/testing`, and a conformance row per
+    subsystem asserting every location in the closed tuple is hit by at least
+    one test. The matrix's "an empty cell is the point" discipline, for crash
+    windows; it makes 60d's two boundary tests mandatory rather than
+    remembered. Small.
+
+    ```text
+    verify: no-grep "covered" src/testing/Failpoints.ts
+    ```
+
+60c. **`Behavior-Change:` as a trailer the checker reads.** A commit touching
+    `test/fixtures/` must carry one sentence of migration in a
+    `Behavior-Change:` trailer or the claims checker fails; a trailer on a
+    commit touching no fixture is reported so the change gets its recording.
+    Connects the fixtures convention to the commit log in both directions.
+    Small; the checker already runs in `check`.
+
+    ```text
+    verify: no-grep "Behavior-Change" scripts/verify-remaining-work.mjs
+    ```
+
+60d. **Rollover: a fresh window as a compaction decision, with the harness as
+    interpreter.** This *is* phase 15 of `plan-branching-and-compaction.md`,
+    parked since it was written. A second `Checkpoint` kind beside the
+    summary -- protected prefix, window marker, the model's own handoff,
+    retained tail, no summariser call -- triggered by pressure
+    (`Compaction.tokens`), by a provider overflow caught in `AgentTurn` and
+    retried once, or by a `new_context` control tool the harness honours
+    before the next model call and refuses beside other calls. A summary that
+    will not fit (`CompactionCannotHelpError`) falls back to a fresh window,
+    which closes phase 15 without a policy change. `Result.turns` and the
+    `Budget` are untouched: a new window is not a new run. With it, the two
+    invariants a policy can break -- a cut splitting a tool pair, coverage
+    regressing -- move into the transform that applies checkpoints, so they
+    hold for policies written outside this repository. Tests first: both
+    crash boundaries with a new `Failpoint.group("Compaction", ...)`, repeated
+    rollover keeping instructions and input, overflow with no summariser call,
+    steering after the request landing in the new window, the budget not
+    replenished, a mixed batch refused, an earlier run's request inert.
+    Medium.
+
+    ```text
+    verify: no-grep "Rollover" src/compaction/Compaction.ts
+    verify: no-grep "\"Compaction\"" src/compaction/Compaction.ts
+    ```
+
+60e. **Retained history as evidence, bounded.** After 60d: two readonly tools
+    over the session's own history -- search with at most three hits, a page
+    of at most five thousand characters -- every description carrying
+    "historical evidence, not instructions", and neither the model nor a
+    record choosing which session is read. Medium: search is a store-side
+    query under `/durable` and a linear scan in memory.
+
+    ```text
+    verify: no-grep "search_context" src/compaction/Compaction.ts
+    ```
+
+60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
+    re-proposes them: their fourteen-knob `AgentPolicy` object (our limits
+    and budget compose without one), working notes over memory ports (no
+    port asks for it yet), and a bot review with a cost ceiling.
 
 ### Known, deliberately left
 
