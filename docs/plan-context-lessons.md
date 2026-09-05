@@ -186,6 +186,14 @@ in the suite -- the same "an empty cell is the point" discipline as the
 matrix, for crash windows. Small, and it makes 2.1's two boundaries
 mandatory rather than remembered.
 
+**Shipped 2026-09-05** (item 60b), with the shape sharpened: not "some test
+somewhere hits it", which vitest cannot aggregate across files, but one row
+that iterates the subsystem's own declared tuple through the real path and
+dies by name for any boundary the driver never reaches. It found what it was
+built for on its first run -- `before-commit` was declared and had never been
+crashed at -- and a third boundary declared without a `hit` call makes it
+fail, which was checked.
+
 ## 3. Deliberately not taken
 
 * **Their `AgentPolicy` object** (fourteen knobs on one record). Our limits

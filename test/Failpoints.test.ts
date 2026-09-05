@@ -140,6 +140,56 @@ describe("failpoints", () => {
     })
   )
 
+  it.effect("every boundary the log declares is reachable, and one retry puts each right", () =>
+    Effect.gen(function* () {
+      /**
+       * Item 60b: a declared crash window with no test that crashes at it is
+       * a finding, not a pass. The row iterates the subsystem's own closed
+       * tuple (`DeliveryLog.failpoints.all`), so a boundary added to the
+       * declaration is a boundary this drives -- `covered` dies by name if the
+       * driver never reaches one. Until this row, `before-commit` was declared
+       * and never stopped at; the rows above only ever armed `after-commit`.
+       *
+       * The property asserted after each crash is the one that holds for every
+       * boundary of an append: whatever was or was not committed, one retry
+       * leaves exactly one row, at sequence 1, and the next event is 2. A crash
+       * before the commit leaves nothing and the retry appends; a crash after
+       * it leaves the row and the retry is a duplicate -- the row does not care
+       * which, and `exit` says which happened for a reader who does.
+       */
+      const rows = yield* Failpoints.covered(DeliveryLog.failpoints, (location) =>
+        Effect.gen(function* () {
+          const file = yield* tempDatabase
+          return yield* Effect.gen(function* () {
+            const log = yield* DeliveryLog.sqlLogWithTable()
+            const crashed = yield* log.append("s1", "k1", event(1)).pipe(Effect.exit)
+            assert.isTrue(Exit.isFailure(crashed), `the pass did not stop at ${location}`)
+
+            // The next pass: no failpoint, one retry.
+            const retry = yield* log.append("s1", "k1", event(1))
+            const all = yield* log.read("s1")
+            assert.strictEqual(all.length, 1, `after a crash at ${location} and one retry, not exactly one row`)
+            assert.strictEqual(all[0]!.sequence, 1)
+            const next = yield* log.append("s1", "k2", event(2))
+            assert.strictEqual(next._tag, "Appended")
+            if (next._tag === "Appended") assert.strictEqual(next.sequence, 2)
+            return retry._tag
+          }).pipe(Effect.provide(SqliteClient.layer({ filename: file })))
+        }).pipe(Effect.scoped))
+
+      assert.deepStrictEqual(rows.map((row) => row.location), [beforeCommit, afterCommit])
+      // Reached at least once each -- `covered` would have died otherwise. Not
+      // pinned to a count: the driver appends three times, so the count is the
+      // driver's shape, not the property (the first draft pinned `[1, 1]` and
+      // learned that the duplicate path never reaches `after-commit`).
+      assert.isTrue(rows.every((row) => row.reached >= 1))
+      // The driver's own assertions held, so each exit is the retry's answer,
+      // which differs by boundary in exactly the way the boundaries differ.
+      const answers = rows.map((row) => Exit.isSuccess(row.exit) ? row.exit.value : "driver failed")
+      assert.deepStrictEqual(answers, ["Appended", "Duplicate"])
+    })
+  )
+
   it.effect("an unarmed location never stops anything, but is still recorded", () =>
     Effect.gen(function* () {
       const crash = yield* Failpoints.at("DeliveryLog:no-such-boundary")

@@ -1,4 +1,4 @@
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Exit, Layer, Ref } from "effect"
 import * as Failpoint from "../internal/failpoint.js"
 
 /**
@@ -83,6 +83,52 @@ export const at = (location: string, options?: Options): Effect.Effect<Crash> =>
       hits: Ref.get(seen),
       reached: Effect.map(Ref.get(seen), (all) => all.filter((entry) => entry === location).length)
     }
+  })
+
+/** One declared boundary, driven: whether the pass reached it, and how the pass ended. */
+export interface Coverage {
+  readonly location: string
+  readonly reached: number
+  readonly exit: Exit.Exit<unknown, unknown>
+}
+
+/**
+ * Crash at every boundary a subsystem declares, one pass each.
+ *
+ * The coverage question, asked of the declaration rather than of a list a
+ * test wrote: `group.all` is the closed tuple the subsystem's own code calls
+ * `hit` with, so a boundary added there is a boundary this drives -- and one
+ * the driver never reaches is reported by name and **dies**, because a
+ * declared crash window nothing can crash at is either dead code or a test
+ * that does not exercise the path, and both are findings, not passes. The
+ * matrix's rule for cells, applied to crash windows.
+ *
+ * `drive` runs the real path once with the crash armed; `covered` provides
+ * the crash and captures the exit. What the *next* pass must do about each
+ * crash is the caller's assertion over the returned rows, since that is the
+ * property under test and differs per boundary.
+ */
+export const covered = <A, E, R>(
+  group: { readonly all: ReadonlyArray<string> },
+  drive: (location: string) => Effect.Effect<A, E, R>
+): Effect.Effect<ReadonlyArray<Coverage>, never, R> =>
+  Effect.gen(function* () {
+    const rows: Array<Coverage> = []
+    for (const location of group.all) {
+      const crash = yield* at(location)
+      const exit = yield* drive(location).pipe(Effect.provide(crash.layer), Effect.exit)
+      rows.push({ location, reached: yield* crash.reached, exit })
+    }
+    const unreached = rows.filter((row) => row.reached === 0).map((row) => row.location)
+    if (unreached.length > 0) {
+      return yield* Effect.die(
+        new Error(
+          `failpoint coverage: declared boundaries never reached by the driver: ${unreached.join(", ")}. ` +
+            "Either the code no longer calls `hit` there, or the driver does not exercise that path."
+        )
+      )
+    }
+    return rows
   })
 
 /** What a `"die"` crash dies with, so a test can recognise its own. */

@@ -487,17 +487,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     to work them, each pinned on its *open* state so the checker turns red
     the moment one lands and its text has to move to the ledger.
 
-60b. **A declared failpoint location with no test fails the build.**
-    `Failpoints.covered(group)` in `/testing`, and a conformance row per
-    subsystem asserting every location in the closed tuple is hit by at least
-    one test. The matrix's "an empty cell is the point" discipline, for crash
-    windows; it makes 60d's two boundary tests mandatory rather than
-    remembered. Small.
-
-    ```text
-    verify: no-grep "covered" src/testing/Failpoints.ts
-    ```
-
 60c. **`Behavior-Change:` as a trailer the checker reads.** A commit touching
     `test/fixtures/` must carry one sentence of migration in a
     `Behavior-Change:` trailer or the claims checker fails; a trailer on a

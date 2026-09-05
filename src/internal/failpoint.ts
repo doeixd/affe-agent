@@ -56,6 +56,14 @@ export const group = <const Locations extends readonly [string, ...Array<string>
   return {
     /** The name a test arms, checked against the closed set above. */
     qualified,
+    /**
+     * Every boundary this subsystem declares, qualified, in declaration order.
+     *
+     * For `Failpoints.covered`: a coverage row iterates this rather than a
+     * list a test wrote, so a boundary added here is a boundary the row
+     * crashes at -- or fails to reach, which is the finding.
+     */
+    all: locations.map((location) => qualified(location)) as ReadonlyArray<string>,
     hit: (location: Locations[number]): Effect.Effect<void> =>
       Effect.flatMap(Failpoint, (failpoint) => failpoint.hit(qualified(location)))
   } as const

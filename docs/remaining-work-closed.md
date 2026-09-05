@@ -1298,3 +1298,25 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "Effect.provideService(CurrentSessionId" src/ToolExecution.ts
     verify: exists test/ContextRemaining.test.ts
     ```
+
+60b. ~~**A declared failpoint location with no test fails the build.**~~
+    **DONE 2026-09-05.** `Failpoint.group` exposes `all`, the subsystem's
+    declared boundaries qualified, and `Failpoints.covered(group, drive)` in
+    `/testing` crashes at every one of them through the real path and
+    **dies by name** for any the driver never reaches. The row in
+    `test/Failpoints.test.ts` iterates `DeliveryLog.failpoints.all` through
+    the SQL log, so a boundary added to the declaration is a boundary the row
+    crashes at. It found the gap it was built for: `before-commit` had been
+    declared and never stopped at; now both are, and the property that holds
+    for either -- one retry leaves exactly one row at sequence 1 and the next
+    event is 2 -- is asserted for each, with the retry's answer differing
+    (`Appended` before the commit, `Duplicate` after) as the boundaries
+    differ. Broken once: a third boundary declared with no `hit` makes the
+    row die naming it. The first draft pinned reach counts and learned the
+    duplicate path never reaches `after-commit`; counts are the driver's
+    shape and are not pinned.
+
+    ```text
+    verify: grep "export const covered" src/testing/Failpoints.ts
+    verify: grep "Failpoints.covered(DeliveryLog.failpoints" test/Failpoints.test.ts
+    ```
