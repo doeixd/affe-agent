@@ -55,6 +55,17 @@ export interface IdSource {
 }
 
 /** The id of a submission's n-th question, for a caller that must answer without having watched it asked. */
+/**
+ * The session a run id -- or anything that starts with one, such as a
+ * `Budget.Occurrence` -- was minted by: the prefix before `:run-`. A string
+ * with no such marker is its own session, so a key from outside this
+ * module's format is bucketed alone rather than misfiled.
+ */
+export const sessionOfRun = (runId: string): string => {
+  const at = runId.indexOf(":run-")
+  return at === -1 ? runId : runId.slice(0, at)
+}
+
 export const elicitationId = (submissionId: string, n: number): string =>
   `${submissionId}:elicit-${n}`
 

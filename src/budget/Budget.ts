@@ -1,6 +1,8 @@
 import { Context, Effect, Layer, Option, Ref } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
 import * as AgentLoop from "../AgentLoop.js"
+import * as Ids from "../internal/ids.js"
+import { positiveInteger } from "../internal/positive.js"
 import * as ModelCapabilities from "../model/ModelCapabilities.js"
 
 /**
@@ -117,7 +119,24 @@ export class Budget extends Context.Service<Budget, {
  * conversation, and the occurrence keys are what stop a replayed turn being
  * charged against it twice.
  */
-export const layer: Layer.Layer<Budget> = Layer.effect(Budget, Effect.suspend(() => make))
+export const layer: Layer.Layer<Budget> = Layer.effect(Budget, Effect.suspend(() => make(defaultMaxSessions)))
+
+/**
+ * How many sessions' occurrence keys a budget remembers. The totals are
+ * running sums and never forget; the keys exist to drop a replayed turn's
+ * second charge, and only a turn that could still be replayed needs one. A
+ * per-session layer never reaches the bound. An application-scoped layer
+ * that outlives thousands of sessions did, before this, keep every key it
+ * had ever seen (item 60g-i); now the oldest session's keys go first, so a
+ * replay of a session evicted long ago would be charged again -- the
+ * conservative direction for a ceiling.
+ */
+export interface Options {
+  /** Sessions whose occurrence keys are retained, least recently charged evicted first. Default 1024. */
+  readonly maxSessions?: number | undefined
+}
+
+export const defaultMaxSessions = 1024
 
 /**
  * A budget layer that is built anew every time it is provided.
@@ -131,14 +150,26 @@ export const layer: Layer.Layer<Budget> = Layer.effect(Budget, Effect.suspend(()
  * through exactly this sharing. A fresh layer object per call is a fresh
  * memo key.
  */
-export const fresh = (): Layer.Layer<Budget> => Layer.effect(Budget, Effect.suspend(() => make))
+export const fresh = (options?: Options): Layer.Layer<Budget> =>
+  Layer.effect(
+    Budget,
+    Effect.suspend(() => make(positiveInteger("Budget.fresh maxSessions", options?.maxSessions ?? defaultMaxSessions)))
+  )
 
-const make: Effect.Effect<Budget["Service"]> = Effect.gen(function* () {
+interface SessionKeys {
+  readonly tokenTurns: ReadonlySet<Occurrence>
+  readonly costTurns: ReadonlySet<Occurrence>
+}
+
+const make = (maxSessions: number): Effect.Effect<Budget["Service"]> =>
+  Effect.gen(function* () {
+    // Totals are running sums. The keys are kept per session, in a `Map`
+    // whose insertion order is the LRU: a charge moves its session to the
+    // end, and the front is evicted past `maxSessions`.
     const counted = yield* Ref.make({
       total: 0,
       money: 0,
-      tokenTurns: new Set<Occurrence>(),
-      costTurns: new Set<Occurrence>()
+      sessions: new Map<string, SessionKeys>()
     })
 
     /**
@@ -155,16 +186,27 @@ const make: Effect.Effect<Budget["Service"]> = Effect.gen(function* () {
       axis: "tokens" | "cost"
     ): Effect.Effect<number> =>
       Ref.modify(counted, (state) => {
-        const seen = axis === "tokens" ? state.tokenTurns : state.costTurns
+        const session = Ids.sessionOfRun(key)
+        const keys: SessionKeys = state.sessions.get(session) ?? { tokenTurns: new Set(), costTurns: new Set() }
+        const seen = axis === "tokens" ? keys.tokenTurns : keys.costTurns
         const running = axis === "tokens" ? state.total : state.money
         if (seen.has(key)) return [running, state]
         const next = running + amount
         const marked = new Set(seen).add(key)
+        const sessions = new Map(state.sessions)
+        sessions.delete(session)
+        sessions.set(
+          session,
+          axis === "tokens" ? { ...keys, tokenTurns: marked } : { ...keys, costTurns: marked }
+        )
+        while (sessions.size > maxSessions) {
+          const oldest = sessions.keys().next().value
+          if (oldest === undefined) break
+          sessions.delete(oldest)
+        }
         return [
           next,
-          axis === "tokens"
-            ? { ...state, total: next, tokenTurns: marked }
-            : { ...state, money: next, costTurns: marked }
+          axis === "tokens" ? { ...state, total: next, sessions } : { ...state, money: next, sessions }
         ]
       })
 

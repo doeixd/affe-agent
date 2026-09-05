@@ -416,7 +416,11 @@ the model, elapsed -- keyed so a replayed turn is one entry; `run(runId)` and
 engine records once and every seam reads: a delegated child's turns land under
 the child's session id, and a compaction writes nothing here. The ledger holds
 facts and decides nothing; the loop state a bound is handed is the same facts,
-held equal by test.
+held equal by test. Both the ledger and the budget are bounded by session:
+past `maxSessions` (1024 unless `fresh({ maxSessions })` says otherwise) the
+least recently written session is evicted -- the ledger's entries and keys
+together, so its totals are exact over what is retained; the budget's keys
+only, so its ceiling never loosens.
 
 ```ts
 const spent = yield* Effect.flatMap(RunLedger.RunLedger, (ledger) => ledger.totals)

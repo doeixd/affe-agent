@@ -91,6 +91,24 @@ describe("Budget.within", () => {
     })
   )
 
+  it.effect("occurrence keys are bounded by session; the totals are not", () =>
+    Effect.gen(function* () {
+      // Item 60g-i. The ceiling is a running sum and never forgets. The keys
+      // that drop a replayed turn's second charge are kept per session, least
+      // recently charged evicted first, so a replay of a session long evicted
+      // is charged again -- the conservative direction for a ceiling -- while
+      // a retained session's replay still costs nothing.
+      const budget = yield* Budget.Budget
+      yield* budget.spend(10, "s1:run-1:1")
+      yield* budget.spend(20, "s2:run-1:1")   // evicts s1's keys
+      assert.strictEqual(yield* budget.spent, 30)
+      yield* budget.spend(20, "s2:run-1:1")   // retained: a replay, not charged
+      assert.strictEqual(yield* budget.spent, 30)
+      yield* budget.spend(10, "s1:run-1:1")   // evicted: charged again
+      assert.strictEqual(yield* budget.spent, 40)
+    }).pipe(Effect.provide(Budget.fresh({ maxSessions: 1 })))
+  )
+
   it.effect("does not stop a run that stays under the ceiling", () =>
     Effect.gen(function* () {
       // Turn 1 calls a tool (untilIdle continues), turn 2 answers (untilIdle

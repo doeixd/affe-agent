@@ -1565,3 +1565,28 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "export const ReadContext" src/compaction/Compaction.ts
     verify: grep "searchContext, readContext" src/compaction/Compaction.ts
     ```
+
+60g-i. ~~**The ledger and the budget remember every turn forever.**~~
+    **DONE 2026-09-05**, the shape the owner chose: bounded by session the
+    way compaction bounds its caches. Both `RunLedger` and `Budget` keep
+    their per-turn state in a `Map` keyed by session whose insertion order
+    is the LRU -- a write moves its session to the back, the front is
+    evicted past `maxSessions` (default 1024, `fresh({ maxSessions })` to
+    choose; `layer` uses the default). The ledger evicts a session's entries
+    and occurrence keys together, so `entries`, `run` and `totals` are exact
+    over the retained sessions; `entries` still reads in the order recorded
+    across sessions, by a sequence number. The budget's totals are running
+    sums and never forget -- a ceiling must not loosen -- and only its keys
+    are evicted, so a replay of a long-evicted session is charged again, the
+    conservative direction. The session of a key is the prefix before
+    `:run-` (`Ids.sessionOfRun`); a key from outside that format is its own
+    session. A dropped replay is not a write and does not refresh recency,
+    which the ledger row pins because the first draft of the row assumed
+    otherwise. Broken once each: the eviction bound raised in either module
+    fails its row.
+
+    ```text
+    verify: grep "export const sessionOfRun" src/internal/ids.ts
+    verify: grep "maxSessions" src/RunLedger.ts
+    verify: grep "maxSessions" src/budget/Budget.ts
+    ```

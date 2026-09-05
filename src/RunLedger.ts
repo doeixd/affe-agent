@@ -1,6 +1,8 @@
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import * as Budget from "./budget/Budget.js"
+import * as Ids from "./internal/ids.js"
+import { positiveInteger } from "./internal/positive.js"
 import * as ModelCapabilities from "./model/ModelCapabilities.js"
 
 /**
@@ -35,6 +37,13 @@ import * as ModelCapabilities from "./model/ModelCapabilities.js"
  * `Budget` is charged by the same write (`record` is the one thing the
  * engine calls), so a session under a budget and a ledger records each turn
  * once to both.
+ *
+ * Bounded by session, like compaction's caches (item 60g-i): entries are
+ * kept per session and the least recently written session is evicted past
+ * `maxSessions`, its entries and its occurrence keys together. `entries`
+ * and `totals` are therefore exact over the *retained* sessions; a
+ * per-session layer never reaches the bound, and an application-scoped one
+ * no longer grows for the life of the process.
  *
  * `plan-context-lessons.md` 5.1, item 60g. Not a policy object: facts only.
  */
@@ -72,13 +81,20 @@ export interface Totals {
 export class RunLedger extends Context.Service<RunLedger, {
   /** Append one turn. A second entry for the same run and turn is dropped. */
   readonly record: (entry: Entry) => Effect.Effect<void>
-  /** Every entry recorded, in the order recorded. */
+  /** Every retained entry, in the order recorded. */
   readonly entries: Effect.Effect<ReadonlyArray<Entry>>
-  /** The entries of one run, added up. */
+  /** The retained entries of one run, added up. */
   readonly run: (runId: string) => Effect.Effect<Totals>
-  /** Every entry, added up. */
+  /** Every retained entry, added up. */
   readonly totals: Effect.Effect<Totals>
 }>()("affe-agent/RunLedger") {}
+
+export interface Options {
+  /** Sessions whose entries are retained, least recently written evicted first. Default 1024. */
+  readonly maxSessions?: number | undefined
+}
+
+export const defaultMaxSessions = 1024
 
 const empty: Totals = {
   turns: 0,
@@ -107,36 +123,72 @@ export const sum = (entries: Iterable<Entry>): Totals => {
   return totals
 }
 
-const make: Effect.Effect<RunLedger["Service"]> = Effect.gen(function* () {
-  const state = yield* Ref.make<{
-    readonly entries: ReadonlyArray<Entry>
-    readonly seen: ReadonlySet<Budget.Occurrence>
-  }>({ entries: [], seen: new Set() })
-  return {
-    // One `Ref.modify`, for the reason `Budget`'s charge is one: two turns
-    // settling concurrently must not both find the key absent.
-    record: (entry) =>
-      Ref.update(state, (current) => {
-        const key = Budget.occurrence(entry)
-        if (current.seen.has(key)) return current
-        return { entries: [...current.entries, entry], seen: new Set(current.seen).add(key) }
-      }),
-    entries: Effect.map(Ref.get(state), (current) => current.entries),
-    run: (runId) =>
-      Effect.map(Ref.get(state), (current) => sum(current.entries.filter((entry) => entry.runId === runId))),
-    totals: Effect.map(Ref.get(state), (current) => sum(current.entries))
-  }
-})
+interface Recorded {
+  readonly sequence: number
+  readonly entry: Entry
+}
+
+interface SessionEntries {
+  readonly entries: ReadonlyArray<Recorded>
+  readonly seen: ReadonlySet<Budget.Occurrence>
+}
+
+const make = (maxSessions: number): Effect.Effect<RunLedger["Service"]> =>
+  Effect.gen(function* () {
+    // Per session, in a `Map` whose insertion order is the LRU. `sequence`
+    // is the order across sessions, so `entries` reads as recorded whatever
+    // the buckets' order.
+    const state = yield* Ref.make<{ readonly sequence: number; readonly sessions: ReadonlyMap<string, SessionEntries> }>({
+      sequence: 0,
+      sessions: new Map()
+    })
+    const retained = Effect.map(Ref.get(state), (current) =>
+      [...current.sessions.values()]
+        .flatMap((session) => session.entries)
+        .sort((a, b) => a.sequence - b.sequence)
+        .map((recorded) => recorded.entry)
+    )
+    return {
+      // One `Ref.update`, for the reason `Budget`'s charge is one: two turns
+      // settling concurrently must not both find the key absent.
+      record: (entry) =>
+        Ref.update(state, (current) => {
+          const key = Budget.occurrence(entry)
+          const bucket: SessionEntries = current.sessions.get(entry.sessionId) ?? { entries: [], seen: new Set() }
+          if (bucket.seen.has(key)) return current
+          const sessions = new Map(current.sessions)
+          sessions.delete(entry.sessionId)
+          sessions.set(entry.sessionId, {
+            entries: [...bucket.entries, { sequence: current.sequence, entry }],
+            seen: new Set(bucket.seen).add(key)
+          })
+          while (sessions.size > maxSessions) {
+            const oldest = sessions.keys().next().value
+            if (oldest === undefined) break
+            sessions.delete(oldest)
+          }
+          return { sequence: current.sequence + 1, sessions }
+        }),
+      entries: retained,
+      run: (runId) =>
+        Effect.map(retained, (entries) => sum(entries.filter((entry) => entry.runId === runId))),
+      totals: Effect.map(retained, sum)
+    }
+  })
 
 /**
  * A fresh ledger. Where it is provided is its scope, exactly as for
  * `Budget.layer`: per session, per application, or -- under `/durable` --
  * outside the workflow, so a replay finds the entries it already wrote.
  */
-export const layer: Layer.Layer<RunLedger> = Layer.effect(RunLedger, Effect.suspend(() => make))
+export const layer: Layer.Layer<RunLedger> = Layer.effect(RunLedger, Effect.suspend(() => make(defaultMaxSessions)))
 
-/** A ledger built anew every time it is provided; see `Budget.fresh` for why one value is not that. */
-export const fresh = (): Layer.Layer<RunLedger> => Layer.effect(RunLedger, Effect.suspend(() => make))
+/** A ledger built anew every time it is provided, with its own bound; see `Budget.fresh` for why one value is not that. */
+export const fresh = (options?: Options): Layer.Layer<RunLedger> =>
+  Layer.effect(
+    RunLedger,
+    Effect.suspend(() => make(positiveInteger("RunLedger.fresh maxSessions", options?.maxSessions ?? defaultMaxSessions)))
+  )
 
 /**
  * What the engine calls after every turn, before the loop is asked: write

@@ -155,6 +155,35 @@ describe("the run ledger", () => {
     }).pipe(Effect.provide(RunLedger.layer))
   )
 
+  it.effect("bounded by session: past maxSessions the least recently written session goes, entries and keys together", () =>
+    Effect.gen(function* () {
+      // Item 60g-i. Three sessions into a ledger of two: the oldest is gone
+      // with its entries, and its occurrence key with them -- a re-record of
+      // that turn is a new entry, not a replay. Writing to a retained session
+      // moves it to the back, so recency is by write, not by first sight.
+      const l = yield* RunLedger.RunLedger
+      const turn = (session: string, turnIndex: number, tokens: number): RunLedger.Entry => ({
+        sessionId: session, submissionId: `${session}:submission-1`, runId: `${session}:run-1`, turnIndex,
+        toolCalls: 0, inputTokens: tokens, outputTokens: 0, cost: Option.none(), elapsedMillis: 0
+      })
+      yield* l.record(turn("s1", 1, 1))
+      yield* l.record(turn("s2", 1, 10))
+      yield* l.record(turn("s1", 2, 2))      // s1 is now the most recent
+      yield* l.record(turn("s3", 1, 100))    // evicts s2, the least recently written
+      assert.deepStrictEqual((yield* l.entries).map((e) => [e.sessionId, e.turnIndex]), [["s1", 1], ["s1", 2], ["s3", 1]])
+      assert.strictEqual((yield* l.totals).inputTokens, 103)
+      assert.strictEqual((yield* l.run("s2:run-1")).turns, 0)
+      // A replay of a retained turn is dropped, and a drop is not a write: it
+      // does not refresh s1's recency. So when evicted s2 returns, it is a new
+      // entry and it is s1, the least recently written, that goes.
+      yield* l.record(turn("s1", 1, 999))
+      assert.strictEqual((yield* l.totals).inputTokens, 103)
+      yield* l.record(turn("s2", 1, 10))
+      assert.deepStrictEqual((yield* l.entries).map((e) => e.sessionId), ["s3", "s2"])
+      assert.strictEqual((yield* l.totals).inputTokens, 110)
+    }).pipe(Effect.provide(RunLedger.fresh({ maxSessions: 2 })))
+  )
+
   it.effect("the same write charges the budget and prices the turn when a table can", () =>
     Effect.gen(function* () {
       // One engine call feeds both. $1 per million input tokens: a turn of a
