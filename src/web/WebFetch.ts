@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
+import * as Namespace from "../internal/namespace.js"
 
 /** The representation of a bounded textual response body. */
 export const BodyFormat = Schema.Literals(["text", "html", "markdown"])
@@ -46,7 +47,7 @@ export const diagnosticTarget = (url: URL): string => canonicalOrigin(url)
 
 export class WebFetchInvalidUrlError extends
   Schema.TaggedError<WebFetchInvalidUrlError>()(
-    "affe-agent/web/WebFetchInvalidUrlError",
+    Namespace.tag("web/WebFetchInvalidUrlError"),
     { url: Schema.String, reason: Schema.String }
   ) {
   override get message() {
@@ -56,7 +57,7 @@ export class WebFetchInvalidUrlError extends
 
 export class WebFetchDeniedTargetError extends
   Schema.TaggedError<WebFetchDeniedTargetError>()(
-    "affe-agent/web/WebFetchDeniedTargetError",
+    Namespace.tag("web/WebFetchDeniedTargetError"),
     { url: Schema.String, reason: Schema.String }
   ) {
   override get message() {
@@ -66,7 +67,7 @@ export class WebFetchDeniedTargetError extends
 
 export class WebFetchTransportError extends
   Schema.TaggedError<WebFetchTransportError>()(
-    "affe-agent/web/WebFetchTransportError",
+    Namespace.tag("web/WebFetchTransportError"),
     { url: Schema.String, detail: Schema.String }
   ) {
   override get message() {
@@ -76,7 +77,7 @@ export class WebFetchTransportError extends
 
 export class WebFetchHttpResponseError extends
   Schema.TaggedError<WebFetchHttpResponseError>()(
-    "affe-agent/web/WebFetchHttpResponseError",
+    Namespace.tag("web/WebFetchHttpResponseError"),
     { url: Schema.String, status: Schema.Number }
   ) {
   override get message() {
@@ -86,7 +87,7 @@ export class WebFetchHttpResponseError extends
 
 export class WebFetchCrossOriginRedirectError extends
   Schema.TaggedError<WebFetchCrossOriginRedirectError>()(
-    "affe-agent/web/WebFetchCrossOriginRedirectError",
+    Namespace.tag("web/WebFetchCrossOriginRedirectError"),
     { from: Schema.String, to: Schema.String }
   ) {
   override get message() {
@@ -96,7 +97,7 @@ export class WebFetchCrossOriginRedirectError extends
 
 export class WebFetchRedirectLimitError extends
   Schema.TaggedError<WebFetchRedirectLimitError>()(
-    "affe-agent/web/WebFetchRedirectLimitError",
+    Namespace.tag("web/WebFetchRedirectLimitError"),
     { url: Schema.String, maxRedirects: Schema.Number }
   ) {
   override get message() {
@@ -106,7 +107,7 @@ export class WebFetchRedirectLimitError extends
 
 export class WebFetchUnsupportedContentTypeError extends
   Schema.TaggedError<WebFetchUnsupportedContentTypeError>()(
-    "affe-agent/web/WebFetchUnsupportedContentTypeError",
+    Namespace.tag("web/WebFetchUnsupportedContentTypeError"),
     { url: Schema.String, contentType: Schema.Option(Schema.String) }
   ) {
   override get message() {
@@ -120,7 +121,7 @@ export class WebFetchUnsupportedContentTypeError extends
 
 export class WebFetchResponseTooLargeError extends
   Schema.TaggedError<WebFetchResponseTooLargeError>()(
-    "affe-agent/web/WebFetchResponseTooLargeError",
+    Namespace.tag("web/WebFetchResponseTooLargeError"),
     { url: Schema.String, maxBytes: Schema.Number, observedBytes: Schema.Number }
   ) {
   override get message() {
@@ -130,7 +131,7 @@ export class WebFetchResponseTooLargeError extends
 
 export class WebFetchDecodeError extends
   Schema.TaggedError<WebFetchDecodeError>()(
-    "affe-agent/web/WebFetchDecodeError",
+    Namespace.tag("web/WebFetchDecodeError"),
     { url: Schema.String, detail: Schema.String }
   ) {
   override get message() {
@@ -140,7 +141,7 @@ export class WebFetchDecodeError extends
 
 export class WebFetchTimeoutError extends
   Schema.TaggedError<WebFetchTimeoutError>()(
-    "affe-agent/web/WebFetchTimeoutError",
+    Namespace.tag("web/WebFetchTimeoutError"),
     { url: Schema.String, timeoutMillis: Schema.Number }
   ) {
   override get message() {
@@ -175,7 +176,7 @@ export interface Service {
  * address-aware runtime.
  */
 export class WebFetch extends Context.Service<WebFetch, Service>()(
-  "affe-agent/web/WebFetch"
+  Namespace.tag("web/WebFetch")
 ) {}
 
 /** Provide an already-constructed fetch service. */

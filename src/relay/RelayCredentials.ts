@@ -5,6 +5,7 @@ import { detailOf } from "../internal/detail.js"
 import * as Relay from "./Relay.js"
 import { RelayAuthenticator } from "./RelayServer.js"
 import { escapeIdentifier } from "../internal/sqlIdentifier.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Enrollment: which credentials exist, and who they speak for.
@@ -44,7 +45,7 @@ export interface Service {
 }
 
 export class RelayCredentials extends Context.Service<RelayCredentials, Service>()(
-  "affe-agent/relay/RelayCredentials"
+  Namespace.tag("relay/RelayCredentials")
 ) {}
 
 const encoder = new TextEncoder()

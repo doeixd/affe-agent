@@ -25,6 +25,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import * as SseBody from "./internal/sse.js"
+import * as Namespace from "../internal/namespace.js"
 
 /** Re-exported so an HTTP deployment reads its auth types from one place. */
 export type PrincipalContext = AgentSessionHost.PrincipalContext
@@ -261,7 +262,7 @@ export const api = <const Name extends string>(options: {
 export type Service = HttpApiClient.Client<typeof Sessions>
 
 export class Client extends Context.Service<Client, Service>()(
-  "affe-agent/http/Client"
+  Namespace.tag("http/Client")
 ) {}
 
 /** Build the schema-generated client on the application's Effect HTTP client. */

@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Metric, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Counts events a reader dropped because it could not decode them (a schema
@@ -59,7 +60,7 @@ export interface DataChannelsShape {
  * it -- an in-process PubSub here -- is wiring.
  */
 export class DataChannels extends Context.Service<DataChannels, DataChannelsShape>()(
-  "affe-agent/data/DataChannels"
+  Namespace.tag("data/DataChannels")
 ) {}
 
 /** An in-process implementation over a PubSub, with a monotonic sequence. */

@@ -3,6 +3,7 @@ import { SqlClient } from "effect/unstable/sql"
 import * as ContextTransform from "../ContextTransform.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Persistent, typed agent state (issue #4).
@@ -203,7 +204,7 @@ export const memoryStore: Effect.Effect<Store> = Effect.map(
   })
 )
 
-export const sqlStoreTable = "affe_state"
+export const sqlStoreTable = Namespace.table("state")
 
 const escapeIdentifier = (name: string): string => {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {

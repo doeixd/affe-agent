@@ -1,5 +1,6 @@
 import { Context, Option } from "effect"
 import type { SessionId } from "./ids.js"
+import * as Namespace from "./namespace.js"
 
 /**
  * The id of the session a tool call is running in, visible to the tool.
@@ -18,6 +19,6 @@ import type { SessionId } from "./ids.js"
  * default, set by the harness, never carried by a protocol.
  */
 export const CurrentSessionId = Context.Reference<Option.Option<SessionId>>(
-  "affe-agent/internal/CurrentSessionId",
+  Namespace.tag("internal/CurrentSessionId"),
   { defaultValue: () => Option.none() }
 )

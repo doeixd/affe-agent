@@ -3,6 +3,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as ContextTransform from "../ContextTransform.js"
 import * as Permission from "../Permission.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Skills (issue #4): an on-demand capability -- workflow guidance, reference
@@ -122,7 +123,7 @@ export interface SkillRegistryShape {
 }
 
 export class SkillRegistry extends Context.Service<SkillRegistry, SkillRegistryShape>()(
-  "affe-agent/skills/SkillRegistry"
+  Namespace.tag("skills/SkillRegistry")
 ) {}
 
 /** Build a registry from a fixed set of skills. Duplicate ids are a configuration error. */

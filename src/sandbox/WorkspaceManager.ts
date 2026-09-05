@@ -8,6 +8,7 @@ import {
   currentLayer,
   type Workspace
 } from "./Sandbox.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A workspace that outlives whoever asked for it first.
@@ -110,7 +111,7 @@ export interface Service {
 export class WorkspaceManager extends Context.Service<
   WorkspaceManager,
   Service
->()("affe-agent/sandbox/WorkspaceManager") {}
+>()(Namespace.tag("sandbox/WorkspaceManager")) {}
 
 export const make = (
   options?: Options

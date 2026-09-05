@@ -13,6 +13,7 @@ import type { McpServer } from "./internal/mcp.js"
 import { discoverSkills } from "./internal/skills.js"
 import { PluginError } from "./internal/types.js"
 import type { Warning } from "./internal/types.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Agent Plugins (agent-plugins.org) support.
@@ -139,7 +140,7 @@ export const mcpToolkit = (
   options?: { readonly clientInfo?: McpClient.ClientInfo | undefined }
 ) =>
   Effect.gen(function* () {
-    const clientInfo = options?.clientInfo ?? { name: "affe-agent/plugins", version: "0.0.1" }
+    const clientInfo = options?.clientInfo ?? { name: Namespace.tag("plugins"), version: "0.0.1" }
     const connections: Array<McpToolkit.Connection> = []
     for (const server of loaded.mcpServers) {
       const connection = yield* Effect.option(connect(server, clientInfo))

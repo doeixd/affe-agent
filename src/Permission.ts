@@ -1,5 +1,6 @@
 import { Context, Effect, Option, Ref, Schema } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
+import * as Namespace from "./internal/namespace.js"
 
 /**
  * Whether an agent may attempt an action.
@@ -152,7 +153,7 @@ export interface Projection<Params = unknown> {
 
 /** The annotation key. */
 export class ProjectionKey extends Context.Service<ProjectionKey, Projection<any>>()(
-  "affe-agent/Permission/Projection"
+  Namespace.tag("Permission/Projection")
 ) {}
 
 /** Attach a projection to a tool, typed against the tool's own parameters. */

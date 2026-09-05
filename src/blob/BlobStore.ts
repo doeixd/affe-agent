@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Content-addressed storage for large binary content
@@ -22,7 +23,7 @@ import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
 
 /** A blob's identity: the lowercase hex SHA-256 of its content. */
 export const BlobId = Schema.String.pipe(
-  Schema.brand("affe-agent/blob/BlobId")
+  Schema.brand(Namespace.tag("blob/BlobId"))
 )
 export type BlobId = typeof BlobId.Type
 
@@ -47,7 +48,7 @@ export type BlobInfo = BlobRef
 
 /** The storage underneath failed at something that is not "not there". */
 export class BlobStoreError extends Schema.TaggedError<BlobStoreError>()(
-  "affe-agent/blob/BlobStoreError",
+  Namespace.tag("blob/BlobStoreError"),
   {
     operation: Schema.String,
     id: Schema.optional(Schema.String),
@@ -62,7 +63,7 @@ export class BlobStoreError extends Schema.TaggedError<BlobStoreError>()(
 
 /** The referenced content is not in this store. */
 export class BlobMissingError extends Schema.TaggedError<BlobMissingError>()(
-  "affe-agent/blob/BlobMissingError",
+  Namespace.tag("blob/BlobMissingError"),
   { id: Schema.String }
 ) {
   override get message() {
@@ -80,7 +81,7 @@ export class BlobMissingError extends Schema.TaggedError<BlobMissingError>()(
  * have accepted.
  */
 export class BlobRejectedError extends Schema.TaggedError<BlobRejectedError>()(
-  "affe-agent/blob/BlobRejectedError",
+  Namespace.tag("blob/BlobRejectedError"),
   {
     reason: Schema.Literals(["too-large", "media-type"]),
     detail: Schema.String
@@ -120,7 +121,7 @@ export interface BlobStoreService {
 }
 
 export class BlobStore extends Context.Service<BlobStore, BlobStoreService>()(
-  "affe-agent/blob/BlobStore"
+  Namespace.tag("blob/BlobStore")
 ) {}
 
 /** `put` for bytes already in hand. */

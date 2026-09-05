@@ -4,6 +4,7 @@ import * as AgentSession from "../AgentSession.js"
 import type { AgentBusyError, AgentClosedError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Redaction from "../redaction/Redaction.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A transcript that leaves the process.
@@ -134,7 +135,7 @@ export type Export = typeof Export.Type
  * is the failure mode a version exists to prevent.
  */
 export class ExportError extends Schema.TaggedError<ExportError>()(
-  "affe-agent/export/ExportError",
+  Namespace.tag("export/ExportError"),
   {
     reason: Schema.Literals(["unsupported-version", "malformed"]),
     detail: Schema.String,

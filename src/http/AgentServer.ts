@@ -7,6 +7,7 @@ import {
 } from "effect/unstable/httpapi"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import * as AgentHttp from "./AgentHttp.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Composition over hosts, not a second authority.
@@ -29,7 +30,7 @@ import * as AgentHttp from "./AgentHttp.js"
  * route is the trap this module exists to close.
  */
 export class DuplicateMountError extends Schema.TaggedError<DuplicateMountError>()(
-  "affe-agent/http/DuplicateMountError",
+  Namespace.tag("http/DuplicateMountError"),
   {
     kind: Schema.Literals(["name", "path"]),
     value: Schema.String
@@ -43,7 +44,7 @@ export class DuplicateMountError extends Schema.TaggedError<DuplicateMountError>
 }
 
 export class InvalidMountNameError extends Schema.TaggedError<InvalidMountNameError>()(
-  "affe-agent/http/InvalidMountNameError",
+  Namespace.tag("http/InvalidMountNameError"),
   { name: Schema.String }
 ) {
   override get message() {

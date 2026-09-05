@@ -1,4 +1,5 @@
 import { Cause, Context, Duration, Effect, Encoding, Layer, Option, Result, Schema, Scope, Stream } from "effect"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A scoped filesystem-and-process capability, acquired through a provider.
@@ -14,7 +15,7 @@ import { Cause, Context, Duration, Effect, Encoding, Layer, Option, Result, Sche
 
 /** Identifies a sandbox root. Providers decide what the label means. */
 export const Workspace = Schema.String.pipe(
-  Schema.brand("affe-agent/sandbox/Workspace")
+  Schema.brand(Namespace.tag("sandbox/Workspace"))
 )
 export type Workspace = typeof Workspace.Type
 
@@ -68,11 +69,11 @@ export const SandboxPath = Schema.String.check(
       ? undefined
       : "not a workspace-relative path: no leading '/', no drive letter, no '..' segment, '/' separators"
   )
-).pipe(Schema.brand("affe-agent/sandbox/SandboxPath"))
+).pipe(Schema.brand(Namespace.tag("sandbox/SandboxPath")))
 export type SandboxPath = typeof SandboxPath.Type
 
 export class InvalidPathError extends Schema.TaggedError<InvalidPathError>()(
-  "affe-agent/sandbox/InvalidPathError",
+  Namespace.tag("sandbox/InvalidPathError"),
   { path: Schema.String, reason: Schema.String }
 ) {
   override get message() {
@@ -140,7 +141,7 @@ export const path = (
 
 /** The file or directory does not exist in the sandbox. */
 export class FileMissingError extends Schema.TaggedError<FileMissingError>()(
-  "affe-agent/sandbox/FileMissingError",
+  Namespace.tag("sandbox/FileMissingError"),
   { path: Schema.String }
 ) {
   override get message() {
@@ -151,7 +152,7 @@ export class FileMissingError extends Schema.TaggedError<FileMissingError>()(
 /** The provider refused the operation on its own authority. */
 export class PermissionDeniedError extends
   Schema.TaggedError<PermissionDeniedError>()(
-    "affe-agent/sandbox/PermissionDeniedError",
+    Namespace.tag("sandbox/PermissionDeniedError"),
     { path: Schema.String, operation: Schema.Literals(["read", "write", "list", "stat", "execute"]) }
   ) {
   override get message() {
@@ -161,7 +162,7 @@ export class PermissionDeniedError extends
 
 /** The process could not be started at all. */
 export class CommandLaunchError extends Schema.TaggedError<CommandLaunchError>()(
-  "affe-agent/sandbox/CommandLaunchError",
+  Namespace.tag("sandbox/CommandLaunchError"),
   { executable: Schema.String, detail: Schema.String }
 ) {
   override get message() {
@@ -171,7 +172,7 @@ export class CommandLaunchError extends Schema.TaggedError<CommandLaunchError>()
 
 /** The process ran but exited non-zero; only `execChecked` raises this. */
 export class ExitStatusError extends Schema.TaggedError<ExitStatusError>()(
-  "affe-agent/sandbox/ExitStatusError",
+  Namespace.tag("sandbox/ExitStatusError"),
   {
     executable: Schema.String,
     exitCode: Schema.Number,
@@ -186,7 +187,7 @@ export class ExitStatusError extends Schema.TaggedError<ExitStatusError>()(
 
 /** The process exceeded its time budget and was killed. */
 export class TimeoutError extends Schema.TaggedError<TimeoutError>()(
-  "affe-agent/sandbox/TimeoutError",
+  Namespace.tag("sandbox/TimeoutError"),
   { executable: Schema.String, timeoutMillis: Schema.Number }
 ) {
   override get message() {
@@ -196,7 +197,7 @@ export class TimeoutError extends Schema.TaggedError<TimeoutError>()(
 
 /** The process produced more output than allowed and was killed. */
 export class OutputLimitError extends Schema.TaggedError<OutputLimitError>()(
-  "affe-agent/sandbox/OutputLimitError",
+  Namespace.tag("sandbox/OutputLimitError"),
   { executable: Schema.String, maxOutputBytes: Schema.Number }
 ) {
   override get message() {
@@ -206,7 +207,7 @@ export class OutputLimitError extends Schema.TaggedError<OutputLimitError>()(
 
 /** The provider itself failed, in a way none of the above describe. */
 export class ProviderError extends Schema.TaggedError<ProviderError>()(
-  "affe-agent/sandbox/ProviderError",
+  Namespace.tag("sandbox/ProviderError"),
   { detail: Schema.String }
 ) {
   override get message() {
@@ -503,7 +504,7 @@ export type SandboxProviderService = {
 }
 
 export class SandboxProvider extends Context.Service<SandboxProvider, SandboxProviderService>()(
-  "affe-agent/sandbox/SandboxProvider"
+  Namespace.tag("sandbox/SandboxProvider")
 ) {}
 
 /**
@@ -528,7 +529,7 @@ export const acquire = (
  * and the acquisition lives in that wiring rather than in every handler.
  */
 export class Current extends Context.Service<Current, Sandbox>()(
-  "affe-agent/sandbox/Current"
+  Namespace.tag("sandbox/Current")
 ) {}
 
 export const currentLayer = (

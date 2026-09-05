@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import * as WebFetch from "./WebFetch.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A rendered page: what a browser would show, as text a model can read.
@@ -33,7 +34,7 @@ export const diagnosticTarget = WebFetch.diagnosticTarget
 
 export class WebCaptureInvalidUrlError extends
   Schema.TaggedError<WebCaptureInvalidUrlError>()(
-    "affe-agent/web/WebCaptureInvalidUrlError",
+    Namespace.tag("web/WebCaptureInvalidUrlError"),
     { url: Schema.String, reason: Schema.String }
   ) {
   override get message() {
@@ -43,7 +44,7 @@ export class WebCaptureInvalidUrlError extends
 
 export class WebCaptureDeniedTargetError extends
   Schema.TaggedError<WebCaptureDeniedTargetError>()(
-    "affe-agent/web/WebCaptureDeniedTargetError",
+    Namespace.tag("web/WebCaptureDeniedTargetError"),
     { url: Schema.String, reason: Schema.String }
   ) {
   override get message() {
@@ -54,7 +55,7 @@ export class WebCaptureDeniedTargetError extends
 /** The provider could not be reached or its response stream failed. */
 export class WebCaptureTransportError extends
   Schema.TaggedError<WebCaptureTransportError>()(
-    "affe-agent/web/WebCaptureTransportError",
+    Namespace.tag("web/WebCaptureTransportError"),
     { url: Schema.String, detail: Schema.String }
   ) {
   override get message() {
@@ -65,7 +66,7 @@ export class WebCaptureTransportError extends
 /** The provider credential was absent, invalid or unauthorized. */
 export class WebCaptureAuthenticationError extends
   Schema.TaggedError<WebCaptureAuthenticationError>()(
-    "affe-agent/web/WebCaptureAuthenticationError",
+    Namespace.tag("web/WebCaptureAuthenticationError"),
     { status: Schema.Number }
   ) {
   override get message() {
@@ -75,7 +76,7 @@ export class WebCaptureAuthenticationError extends
 
 export class WebCaptureRateLimitedError extends
   Schema.TaggedError<WebCaptureRateLimitedError>()(
-    "affe-agent/web/WebCaptureRateLimitedError",
+    Namespace.tag("web/WebCaptureRateLimitedError"),
     { url: Schema.String }
   ) {
   override get message() {
@@ -86,7 +87,7 @@ export class WebCaptureRateLimitedError extends
 /** The provider answered with a status that has no capture-domain meaning, or reported failure. */
 export class WebCaptureResponseError extends
   Schema.TaggedError<WebCaptureResponseError>()(
-    "affe-agent/web/WebCaptureResponseError",
+    Namespace.tag("web/WebCaptureResponseError"),
     { url: Schema.String, status: Schema.Number, detail: Schema.String }
   ) {
   override get message() {
@@ -96,7 +97,7 @@ export class WebCaptureResponseError extends
 
 export class WebCaptureDecodeError extends
   Schema.TaggedError<WebCaptureDecodeError>()(
-    "affe-agent/web/WebCaptureDecodeError",
+    Namespace.tag("web/WebCaptureDecodeError"),
     { url: Schema.String, detail: Schema.String }
   ) {
   override get message() {
@@ -106,7 +107,7 @@ export class WebCaptureDecodeError extends
 
 export class WebCaptureResponseTooLargeError extends
   Schema.TaggedError<WebCaptureResponseTooLargeError>()(
-    "affe-agent/web/WebCaptureResponseTooLargeError",
+    Namespace.tag("web/WebCaptureResponseTooLargeError"),
     { url: Schema.String, maxBytes: Schema.Number, observedBytes: Schema.Number }
   ) {
   override get message() {
@@ -116,7 +117,7 @@ export class WebCaptureResponseTooLargeError extends
 
 export class WebCaptureTimeoutError extends
   Schema.TaggedError<WebCaptureTimeoutError>()(
-    "affe-agent/web/WebCaptureTimeoutError",
+    Namespace.tag("web/WebCaptureTimeoutError"),
     { url: Schema.String, timeoutMillis: Schema.Number }
   ) {
   override get message() {
@@ -141,7 +142,7 @@ export interface Service {
 }
 
 export class WebCapture extends Context.Service<WebCapture, Service>()(
-  "affe-agent/web/WebCapture"
+  Namespace.tag("web/WebCapture")
 ) {}
 
 /** Provide an already-constructed capture service. */

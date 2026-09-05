@@ -10,6 +10,7 @@ import { CurrentSessionId } from "./internal/currentSession.js"
 import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Telemetry from "./internal/telemetry.js"
+import * as Namespace from "./internal/namespace.js"
 
 /**
  * The errors `ToolExecution` raises *itself*, rather than surfacing from a tool
@@ -839,7 +840,7 @@ const executePerTool = <
  * they would have. `false` by default. Set it with
  * `Tool.make(...).annotate(ToolExecution.Alone, true)`.
  */
-export const Alone = Context.Reference<boolean>("affe-agent/ToolExecution/Alone", {
+export const Alone = Context.Reference<boolean>(Namespace.tag("ToolExecution/Alone"), {
   defaultValue: () => false
 })
 

@@ -2,6 +2,7 @@ import { Context, Deferred, Effect, Exit, FiberMap, Layer, Option, PubSub, Ref, 
 import type { Duration } from "effect"
 import * as Sandbox from "../sandbox/Sandbox.js"
 import { WorkspaceManager } from "../sandbox/WorkspaceManager.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A process that outlives the call that started it.
@@ -74,7 +75,7 @@ import { WorkspaceManager } from "../sandbox/WorkspaceManager.js"
  * is reused the moment the process is gone.
  */
 export const ProcessId = Schema.String.pipe(
-  Schema.brand("affe-agent/process/ProcessId")
+  Schema.brand(Namespace.tag("process/ProcessId"))
 )
 export type ProcessId = typeof ProcessId.Type
 
@@ -138,7 +139,7 @@ export type Event =
 // Errors
 
 export class ProcessNotFoundError extends Schema.TaggedError<ProcessNotFoundError>()(
-  "affe-agent/process/ProcessNotFoundError",
+  Namespace.tag("process/ProcessNotFoundError"),
   { id: ProcessId }
 ) {
   override get message() {
@@ -148,7 +149,7 @@ export class ProcessNotFoundError extends Schema.TaggedError<ProcessNotFoundErro
 
 /** `wait` on a process the provider failed to run or stopped. */
 export class ProcessFailedError extends Schema.TaggedError<ProcessFailedError>()(
-  "affe-agent/process/ProcessFailedError",
+  Namespace.tag("process/ProcessFailedError"),
   { id: ProcessId, executable: Schema.String, reason: Schema.String }
 ) {
   override get message() {
@@ -158,7 +159,7 @@ export class ProcessFailedError extends Schema.TaggedError<ProcessFailedError>()
 
 /** `wait` on a process that was terminated before it exited. */
 export class ProcessTerminatedError extends Schema.TaggedError<ProcessTerminatedError>()(
-  "affe-agent/process/ProcessTerminatedError",
+  Namespace.tag("process/ProcessTerminatedError"),
   { id: ProcessId, executable: Schema.String }
 ) {
   override get message() {
@@ -219,7 +220,7 @@ export interface Service {
 }
 
 export class ProcessManager extends Context.Service<ProcessManager, Service>()(
-  "affe-agent/process/ProcessManager"
+  Namespace.tag("process/ProcessManager")
 ) {}
 
 // ---------------------------------------------------------------------------

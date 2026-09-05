@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Option } from "effect"
 import * as Sandbox from "../sandbox/Sandbox.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * How a one-line script becomes a sandbox `Command`.
@@ -21,7 +22,7 @@ export interface Service {
 }
 
 export class Shell extends Context.Service<Shell, Service>()(
-  "affe-agent/shell/Shell"
+  Namespace.tag("shell/Shell")
 ) {}
 
 /**

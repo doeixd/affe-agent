@@ -1,4 +1,5 @@
 import { Result, Schema } from "effect"
+import * as Namespace from "../../internal/namespace.js"
 
 /**
  * The plain-data boundary (`docs/plan-code-mode-engine.md` step 2).
@@ -39,7 +40,7 @@ const renderPath = (path: ReadonlyArray<string | number>): string =>
  * diagnostic names the fix).
  */
 export class DataViolation extends Schema.TaggedError<DataViolation>()(
-  "affe-agent/code/DataViolation",
+  Namespace.tag("code/DataViolation"),
   {
     reason: Schema.Literals(["promise", "function", "unsupported", "cycle", "too-deep"]),
     path: Schema.String,

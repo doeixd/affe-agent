@@ -3,6 +3,7 @@ import type { Rpc, RpcGroup, RpcMessage } from "effect/unstable/rpc"
 import { RpcClient, RpcClientError, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import * as Relay from "./Relay.js"
 import { RelayClient } from "./RelayClient.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Effect RPC over the relay: a client `Protocol` that addresses one endpoint
@@ -369,7 +370,7 @@ const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Lay
             if (client === undefined) return Effect.void
             return relay.send({ to: client.from, endpoint: target.id, channel: client.channel, frame: response }).pipe(
               // A caller that vanished mid-response is a disconnect, not a server fault.
-              Effect.catchTag("affe-agent/relay/RelayPeerOfflineError", () => release(client)),
+              Effect.catchTag(Namespace.tag("relay/RelayPeerOfflineError"), () => release(client)),
               Effect.orDie
             )
           },

@@ -6,6 +6,7 @@ import {
 } from "@durable-streams/client"
 import type { Offset as ClientOffset } from "@durable-streams/client"
 import { Cause, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The official Durable Streams protocol, as Effect values (issue #10).
@@ -29,7 +30,7 @@ import { Cause, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
  */
 
 /** An opaque position in a stream. Comparable only for equality. */
-export const Offset = Schema.String.pipe(Schema.brand("affe-agent/DurableStreams/Offset"))
+export const Offset = Schema.String.pipe(Schema.brand(Namespace.tag("DurableStreams/Offset")))
 export type Offset = typeof Offset.Type
 
 /** The position before any record. */

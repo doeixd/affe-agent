@@ -1590,3 +1590,39 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "maxSessions" src/RunLedger.ts
     verify: grep "maxSessions" src/budget/Budget.ts
     ```
+
+55. ~~**A terminal-vs-retryable decision keyed on a package-scoped
+    string.**~~ **DONE 2026-09-05**, both halves. The first half (the relay's
+    terminal check deciding by its error schemas) landed 2026-09-05 morning.
+    The second is decision 1 of `plan-two-decisions.md`, decided the same day
+    with a second reviewer and against the plan's own recommendation: the
+    package's wire-level and storage-level identifiers are **frozen at their
+    current spelling**, not renamed to a new root. `src/internal/namespace.ts`
+    holds the three roots (`affe-agent`, `affe_`, `affe-agent:<name>:`) and
+    `tag`, `table` and `keyPrefix` build every identifier from them with
+    literal return types, so a `Schema.TaggedError` keeps a literal `_tag`
+    and `catchTag` still narrows. 123 identifiers across 61 files moved to
+    the module; the sweep changed no byte anywhere -- the manifest recorded
+    *before* the sweep from the literals, `test/fixtures/namespace-manifest.json`,
+    is what the code is now compared against. Two checks, because they catch
+    different things: `test/Namespace.test.ts` builds every identifier the
+    code names and holds the set equal to the manifest, whose values are
+    written out and do not derive from the constants (editing the root fails
+    it though every call site still compiles); and the same test holds that
+    no literal remains in `src` outside the module (a tag cannot creep back
+    as a string the manifest never sees). Broken once each: the root changed
+    to `agent` fails two rows, a literal restored fails two. The one
+    exception, stated in the module: `Sandbox`'s default workspace directory
+    is a local path, not an identifier another party reads. A tolerance
+    window has no subject. The cross-version relay case closes with it:
+    renaming the package no longer moves any tag, so two versions decode
+    each other's errors.
+
+    ```text
+    verify: exists src/internal/namespace.ts
+    verify: exists test/fixtures/namespace-manifest.json
+    verify: grep "no identifier is spelled as a literal outside the one module" test/Namespace.test.ts
+    verify: no-grep "\"affe-agent/" src/relay/RelayClient.ts
+    verify: no-grep "\"affe-agent/" src/Errors.ts
+    verify: no-grep "\"affe_" src/durable/DurableSessionStore.ts
+    ```

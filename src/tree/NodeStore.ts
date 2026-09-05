@@ -2,6 +2,7 @@ import { Effect, Equal, Option, Ref, Schema, Semaphore } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
 import * as PromptWire from "../PromptWire.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Where a tree's nodes live.
@@ -32,7 +33,7 @@ import * as PromptWire from "../PromptWire.js"
  * two definitions drifting.
  */
 export const NodeId = Schema.String.pipe(
-  Schema.brand("affe-agent/tree/NodeId")
+  Schema.brand(Namespace.tag("tree/NodeId"))
 )
 export type NodeId = typeof NodeId.Type
 
@@ -80,7 +81,7 @@ export interface Held {
  * them would have a disk failure read as an empty tree.
  */
 export class StoreError extends Schema.TaggedError<StoreError>()(
-  "affe-agent/tree/StoreError",
+  Namespace.tag("tree/StoreError"),
   {
     /** What was being attempted, e.g. `read`, `write index`. */
     operation: Schema.String,

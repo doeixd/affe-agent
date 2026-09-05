@@ -1,4 +1,5 @@
 import { Context, Option } from "effect"
+import * as Namespace from "./internal/namespace.js"
 
 /**
  * Who asked, on the fibre that acts
@@ -26,6 +27,6 @@ import { Context, Option } from "effect"
  * approver's.
  */
 export const CurrentPrincipal = Context.Reference<Option.Option<string>>(
-  "affe-agent/CurrentPrincipal",
+  Namespace.tag("CurrentPrincipal"),
   { defaultValue: () => Option.none() }
 )

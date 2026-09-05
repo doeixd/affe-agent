@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { SessionId } from "../../internal/ids.js"
+import * as Namespace from "../../internal/namespace.js"
 
 /**
  * The protocol's own failures, in the one module both seams can import.
@@ -26,7 +27,7 @@ import { SessionId } from "../../internal/ids.js"
 
 /** Identifies one mutation so a retry cannot execute it twice. */
 export const RequestId = Schema.String.pipe(
-  Schema.brand("affe-agent/RequestId")
+  Schema.brand(Namespace.tag("RequestId"))
 )
 export type RequestId = typeof RequestId.Type
 

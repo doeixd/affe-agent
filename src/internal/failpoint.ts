@@ -1,4 +1,5 @@
 import { Context, Effect } from "effect"
+import * as Namespace from "./namespace.js"
 
 /**
  * A place a durable pass can be made to die, named.
@@ -31,7 +32,7 @@ export interface Service {
 }
 
 export const Failpoint = Context.Reference<Service>(
-  "affe-agent/internal/Failpoint",
+  Namespace.tag("internal/Failpoint"),
   { defaultValue: (): Service => ({ hit: () => Effect.void }) }
 )
 

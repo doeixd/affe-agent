@@ -31,6 +31,7 @@ import * as Ids from "./internal/ids.js"
 import type { SubmissionId } from "./internal/ids.js"
 import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
 import * as Telemetry from "./internal/telemetry.js"
+import * as Namespace from "./internal/namespace.js"
 
 /** Correlation id for a session. See `AgentEvent` for the envelope. */
 export const Id = Ids.SessionId
@@ -45,7 +46,7 @@ export type SubmissionReceipt = AgentSubmission.Receipt
 
 
 
-const SessionTypeId: unique symbol = Symbol.for("affe-agent/AgentSession")
+const SessionTypeId: unique symbol = Symbol.for(Namespace.tag("AgentSession"))
 
 /**
  * The long-lived stateful instance of an agent, and the boundary through which

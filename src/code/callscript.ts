@@ -13,6 +13,7 @@ import { Effect, FiberSet, Option } from "effect"
 import type * as CodeMode from "./CodeMode.js"
 import { CodeDiagnostic } from "./internal/diagnostics.js"
 import { ProgramThrow, type Invoke } from "./internal/interpret.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * CallScript as a `CodeExecutor`
@@ -106,7 +107,7 @@ export interface Options {
  * and it must not be confusable with a value a program could have
  * produced.
  */
-const REFUSED = { "affe-agent/code/callscript": "refused" }
+const REFUSED = { [Namespace.tag("code/callscript")]: "refused" }
 
 /** `namespace.name` back to the path `invoke` takes. */
 const pathOf = (tool: string): ReadonlyArray<string> => tool.split(".")

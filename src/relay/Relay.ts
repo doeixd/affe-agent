@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect"
 import { StorageError } from "../Errors.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The relay's vocabulary: who a node is, which endpoint on it a message is
@@ -10,11 +11,11 @@ import { StorageError } from "../Errors.js"
  */
 
 /** One authenticated running node. */
-export const PeerId = Schema.String.pipe(Schema.brand("affe-agent/relay/PeerId"))
+export const PeerId = Schema.String.pipe(Schema.brand(Namespace.tag("relay/PeerId")))
 export type PeerId = typeof PeerId.Type
 
 /** A named RPC surface a peer serves, e.g. `affe-agent/agent`. */
-export const EndpointId = Schema.String.pipe(Schema.brand("affe-agent/relay/EndpointId"))
+export const EndpointId = Schema.String.pipe(Schema.brand(Namespace.tag("relay/EndpointId")))
 export type EndpointId = typeof EndpointId.Type
 
 /**
@@ -23,7 +24,7 @@ export type EndpointId = typeof EndpointId.Type
  * clients by (caller, channel), so two callers on one peer never share
  * request-id space.
  */
-export const ChannelId = Schema.String.pipe(Schema.brand("affe-agent/relay/ChannelId"))
+export const ChannelId = Schema.String.pipe(Schema.brand(Namespace.tag("relay/ChannelId")))
 export type ChannelId = typeof ChannelId.Type
 
 /**
@@ -77,7 +78,7 @@ export type Heartbeat = typeof Heartbeat.Type
 
 /** The connection carried no credential the relay recognises. */
 export class RelayUnauthorizedError extends Schema.TaggedError<RelayUnauthorizedError>()(
-  "affe-agent/relay/RelayUnauthorizedError",
+  Namespace.tag("relay/RelayUnauthorizedError"),
   { reason: Schema.String }
 ) {
   override get message() {
@@ -87,7 +88,7 @@ export class RelayUnauthorizedError extends Schema.TaggedError<RelayUnauthorized
 
 /** The target peer has no live connection. Live traffic is never queued. */
 export class RelayPeerOfflineError extends Schema.TaggedError<RelayPeerOfflineError>()(
-  "affe-agent/relay/RelayPeerOfflineError",
+  Namespace.tag("relay/RelayPeerOfflineError"),
   { peer: PeerId }
 ) {
   override get message() {
@@ -101,7 +102,7 @@ export class RelayPeerOfflineError extends Schema.TaggedError<RelayPeerOfflineEr
  * receiving traffic).
  */
 export class RelaySupersededError extends Schema.TaggedError<RelaySupersededError>()(
-  "affe-agent/relay/RelaySupersededError",
+  Namespace.tag("relay/RelaySupersededError"),
   { peer: PeerId }
 ) {
   override get message() {
@@ -119,7 +120,7 @@ export class RelaySupersededError extends Schema.TaggedError<RelaySupersededErro
  * left in the directory claiming to be reachable.
  */
 export class RelayLeaseExpiredError extends Schema.TaggedError<RelayLeaseExpiredError>()(
-  "affe-agent/relay/RelayLeaseExpiredError",
+  Namespace.tag("relay/RelayLeaseExpiredError"),
   { peer: PeerId }
 ) {
   override get message() {
@@ -132,7 +133,7 @@ export type ConnectionEnded = RelaySupersededError | RelayLeaseExpiredError
 
 /** The relay's routing rule refused the send. */
 export class RelayForbiddenError extends Schema.TaggedError<RelayForbiddenError>()(
-  "affe-agent/relay/RelayForbiddenError",
+  Namespace.tag("relay/RelayForbiddenError"),
   { from: PeerId, to: PeerId, endpoint: EndpointId }
 ) {
   override get message() {

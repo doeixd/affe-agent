@@ -15,6 +15,7 @@ import { positiveInteger } from "../../internal/positive.js"
 import { CurrentPrincipal } from "../../Principal.js"
 import * as AgentClient from "../AgentClient.js"
 import * as AgentProtocol from "../AgentProtocol.js"
+import * as Namespace from "../../internal/namespace.js"
 
 /** Compatibility aliases for internal host tests and adapter implementations. */
 export type AuthorizationContext<Principal> =
@@ -241,7 +242,7 @@ interface RequestEntry {
 }
 
 const HostBucket: unique symbol = Symbol.for(
-  "affe-agent/AgentSessionHost/requests"
+  Namespace.tag("AgentSessionHost/requests")
 )
 type RequestBucket = AgentProtocol.SessionId | typeof HostBucket
 type RequestEntries = ReadonlyMap<AgentProtocol.RequestId, RequestEntry>

@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import * as Namespace from "../../internal/namespace.js"
 
 /**
  * Every reason a refusal can carry, in one place.
@@ -61,7 +62,7 @@ const Further = Schema.Struct({
  * `ProgramThrow`).
  */
 export class CodeDiagnostic extends Schema.TaggedError<CodeDiagnostic>()(
-  "affe-agent/code/CodeDiagnostic",
+  Namespace.tag("code/CodeDiagnostic"),
   {
     reason: Reason,
     /** 1-based line, when the AST or the parser could say. */

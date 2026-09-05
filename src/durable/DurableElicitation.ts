@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import type { Workflow } from "effect/unstable/workflow"
 import * as Elicitation from "../Elicitation.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A paused run that survives the process it paused in.
@@ -40,7 +41,7 @@ import * as Elicitation from "../Elicitation.js"
  * two spellings of that name would strand every answer in flight.
  */
 export const deferredFor = (id: string) =>
-  DurableDeferred.make(`affe-agent/elicitation/${id}`, {
+  DurableDeferred.make(Namespace.tag(`elicitation/${id}`), {
     success: Elicitation.Response
   })
 

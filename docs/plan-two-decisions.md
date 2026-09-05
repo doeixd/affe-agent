@@ -185,6 +185,8 @@ it says so.*
 
 ### 1. Freeze today's identifiers; do not rename them
 
+**Shipped 2026-09-05** (ledger 55): `src/internal/namespace.ts`, `test/Namespace.test.ts`, `test/fixtures/namespace-manifest.json`.
+
 **Decision: B, frozen to the existing values** -- not the plan's `"agent"`.
 One module, `internal/namespace.ts`, exports the three roots as they are
 spelled today (`"affe-agent"` for tags, service keys and brands, `"affe_"`

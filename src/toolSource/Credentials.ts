@@ -2,6 +2,7 @@ import { Config, Context, Effect, Layer, Option, Redacted, Schema } from "effect
 import * as Elicitation from "../Elicitation.js"
 import { CurrentPrincipal } from "../Principal.js"
 import { Headers } from "effect/unstable/http"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Credentials for tool sources: the method, the binding and the provider,
@@ -172,7 +173,7 @@ export interface ProviderService {
 }
 
 export class Provider extends Context.Service<Provider, ProviderService>()(
-  "affe-agent/tool-source/Credentials/Provider"
+  Namespace.tag("tool-source/Credentials/Provider")
 ) {}
 
 /** In memory, from pasted values. Writable. */
@@ -292,7 +293,7 @@ export interface BindingsService {
 }
 
 export class Bindings extends Context.Service<Bindings, BindingsService>()(
-  "affe-agent/tool-source/Credentials/Bindings"
+  Namespace.tag("tool-source/Credentials/Bindings")
 ) {}
 
 /**

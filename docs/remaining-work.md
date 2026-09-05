@@ -413,63 +413,6 @@ and should not until it is committed. Item 30 is untouched.
     verify: grep "an interrupted child answers with what it had, and the parent is not told" test/SubagentDurable.test.ts
     ```
 
-### Newly ranked — from the rename (2026-09-04)
-
-55. **A terminal-vs-retryable decision keyed on a package-scoped string.**
-    `RelayClient.ts:101` holds `terminalTags` as two package-prefixed literals
-    (`affe-agent/relay/RelaySupersededError`, `.../RelayUnauthorizedError`) and
-    `isTerminal` decides not to retry by testing a live error's `_tag` against
-    them. Within one version that is exact. Across two it is not: a node on the
-    old package name talking to a relay on the new one fails to recognise those
-    tags, treats supersession as a retryable drop, and produces precisely the
-    flap the check exists to prevent — two nodes superseding each other
-    forever. Found during the rename by the agent whose work it interrupted,
-    who left it rather than widening a mechanical sweep into a design change.
-
-    The rename is not the bug; it is what made an existing coupling observable.
-    A decision about whether to retry should not depend on a string that
-    changes when the package is renamed. The obvious repair is a structural
-    marker on the error — a field, or membership in a declared set the relay
-    owns — so the two sides agree on *what the error means* without agreeing on
-    what the package is called. Single-version deployments are unaffected,
-    which is why this is ranked rather than urgent for a pre-release package.
-
-    **Half done 2026-09-05.** `isTerminal` now decides by the relay's own
-    error schemas -- decoding the failure through
-    `Schema.Union([RelaySupersededError, RelayUnauthorizedError])`, which
-    accepts an instance and the encoded shape alike (the first version used
-    `Schema.is`, which is `instanceof`, and the review caught it against a
-    plain object) -- and the two literal strings are gone, so a
-    rename moves the errors and the check together and cannot desync them
-    within one version; `RelayReconnect`'s supersession-flap row is what fails
-    if supersession ever becomes retryable. What is *not* done is the
-    cross-version case, because it is not a relay question: two package names
-    talking disagree at the decode layer, before any check runs, and the only
-    fix is a wire tag that does not derive from the package name. That is the
-    "decide once" below, it applies to every `affe-agent/...` tag and every
-    `affe_*` table default, and it is a decision to make, not a patch to land.
-    **The decision is framed in [plan-two-decisions.md](./plan-two-decisions.md)
-    §1**, with the census (109 tags, 7 tables, 1 prefix), three options and a
-    recommendation.
-
-    ```text
-    verify: no-grep "affe-agent/relay/RelaySupersededError\"," src/relay/RelayClient.ts
-    verify: grep "Schema.decodeUnknownOption(Terminal)" src/relay/RelayClient.ts
-    ```
-
-    **The same root cause, wider:** identifiers that outlive a process were
-    renamed too, and each is orphaned rather than broken — a fresh empty table
-    beside the old one, a checkpoint that is not found. Seven SQL table
-    defaults (`affe_session`, `affe_elicitation`, `affe_delivery`,
-    `affe_channel_input`, `affe_state`, `affe_session_directory`, plus
-    `affe_history` in the Cloudflare store) and the compaction checkpoint
-    prefix `affe-agent:compaction:`. All are already overridable
-    (`sessionTable`, `elicitationTable`, `table`, `checkpointPrefix`), so
-    pointing a deployment at its old data is a construction argument and no
-    migration is owed. Worth deciding once, though, whether a persisted key
-    should ever derive from the package name.
-
-
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
 60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons

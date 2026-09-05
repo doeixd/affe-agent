@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect"
 import * as WebCapture from "./WebCapture.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A bounded, same-host crawl over `WebCapture`.
@@ -60,7 +61,7 @@ export type CrawlResult = typeof CrawlResult.Type
 /** The start page could not be captured; there was nothing to crawl from. */
 export class WebCrawlStartError extends
   Schema.TaggedError<WebCrawlStartError>()(
-    "affe-agent/web/WebCrawlStartError",
+    Namespace.tag("web/WebCrawlStartError"),
     { url: Schema.String, cause: Schema.String }
   ) {
   override get message() {
@@ -75,7 +76,7 @@ export interface Service {
 }
 
 export class WebCrawl extends Context.Service<WebCrawl, Service>()(
-  "affe-agent/web/WebCrawl"
+  Namespace.tag("web/WebCrawl")
 ) {}
 
 /** A requested bound, or its default, never above its ceiling; `floor` is the least a caller may ask for. */
@@ -121,8 +122,8 @@ export const make: Effect.Effect<Service, never, WebCapture.WebCapture> = Effect
       origin.hash = ""
       const first = yield* capture.capture(origin).pipe(
         Effect.catch((error): Effect.Effect<never, WebCrawlError> =>
-          error._tag === "affe-agent/web/WebCaptureInvalidUrlError" ||
-            error._tag === "affe-agent/web/WebCaptureDeniedTargetError"
+          error._tag === Namespace.tag("web/WebCaptureInvalidUrlError") ||
+            error._tag === Namespace.tag("web/WebCaptureDeniedTargetError")
             ? Effect.fail(error)
             : Effect.fail(new WebCrawlStartError({ url: WebCapture.diagnosticTarget(origin), cause: error._tag })))
       )

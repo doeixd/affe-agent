@@ -4,6 +4,7 @@ import * as Budget from "./budget/Budget.js"
 import * as Ids from "./internal/ids.js"
 import { positiveInteger } from "./internal/positive.js"
 import * as ModelCapabilities from "./model/ModelCapabilities.js"
+import * as Namespace from "./internal/namespace.js"
 
 /**
  * The engine records facts; seams only decide.
@@ -87,7 +88,7 @@ export class RunLedger extends Context.Service<RunLedger, {
   readonly run: (runId: string) => Effect.Effect<Totals>
   /** Every retained entry, added up. */
   readonly totals: Effect.Effect<Totals>
-}>()("affe-agent/RunLedger") {}
+}>()(Namespace.tag("RunLedger")) {}
 
 export interface Options {
   /** Sessions whose entries are retained, least recently written evicted first. Default 1024. */

@@ -4,6 +4,7 @@ import type { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { StorageError } from "../Errors.js"
 import * as Relay from "./Relay.js"
 import * as RelayProtocol from "./RelayProtocol.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The relay: an in-memory route table keyed by `PeerId`, one bounded inbound
@@ -34,7 +35,7 @@ export interface AuthenticatorService {
 }
 
 export class RelayAuthenticator extends Context.Service<RelayAuthenticator, AuthenticatorService>()(
-  "affe-agent/relay/RelayAuthenticator"
+  Namespace.tag("relay/RelayAuthenticator")
 ) {}
 
 /**

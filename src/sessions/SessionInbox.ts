@@ -2,6 +2,7 @@ import { Cause, Effect, Schema } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 import * as AgentClient from "../client/AgentClient.js"
 import * as PromptWire from "../PromptWire.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Where background work reaches a conversation.
@@ -187,7 +188,7 @@ export interface Service {
 export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) {
   const client = yield* AgentClient.AgentClient
   const queue = yield* PersistedQueue.make({
-    name: options?.name ?? "affe-agent/session-inbox",
+    name: options?.name ?? Namespace.tag("session-inbox"),
     schema: Item
   })
   const maxAttempts = options?.maxAttempts ?? 10

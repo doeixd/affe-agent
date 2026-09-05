@@ -6,6 +6,7 @@ import * as PromptWire from "../PromptWire.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 import { escapeIdentifier } from "../internal/sqlIdentifier.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The durable logical session, as distinct from any one workflow execution.
@@ -587,8 +588,8 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
 
 // -- SQL implementation --------------------------------------------------------------
 
-export const sqlSessionTable = "affe_session"
-export const sqlElicitationTable = "affe_elicitation"
+export const sqlSessionTable = Namespace.table("session")
+export const sqlElicitationTable = Namespace.table("elicitation")
 
 interface SessionRow {
   readonly session_id: string

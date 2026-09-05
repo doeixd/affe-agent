@@ -8,6 +8,7 @@ import * as AgentInput from "../AgentInput.js"
 import type * as AgentSession from "../AgentSession.js"
 import type { RemoteInput } from "../client/AgentClient.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Scheduling and self-dispatch (issue #4 §14).
@@ -53,7 +54,7 @@ export interface Dispatched {
  */
 export class AgentDispatcher extends Context.Service<AgentDispatcher, {
   readonly dispatch: (job: Dispatched) => Effect.Effect<void>
-}>()("affe-agent/scheduling/AgentDispatcher") {}
+}>()(Namespace.tag("scheduling/AgentDispatcher")) {}
 
 /**
  * An in-process dispatcher: each job runs the agent, after its delay, in a

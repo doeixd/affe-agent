@@ -6,6 +6,7 @@ import { detailOf } from "../internal/detail.js"
 import * as DurablePolling from "./DurablePolling.js"
 import * as Failpoint from "../internal/failpoint.js"
 import { escapeIdentifier } from "../internal/sqlIdentifier.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Client-facing event delivery, kept apart from the Workflow journal.
@@ -323,7 +324,7 @@ const storage =
 
 // -- SQL implementation --------------------------------------------------------------
 
-export const sqlLogTable = "affe_delivery"
+export const sqlLogTable = Namespace.table("delivery")
 
 export interface SqlLogOptions {
   readonly table?: string | undefined

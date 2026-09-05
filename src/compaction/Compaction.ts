@@ -14,6 +14,7 @@ import {
   prepare,
   type Preparation
 } from "./internal/prepare.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Keeping a long conversation inside a context window, without losing it.
@@ -1314,7 +1315,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
       : KeyValueStore.toSchemaStore(
           KeyValueStore.prefix(
             options.checkpointStore,
-            options.checkpointPrefix ?? "affe-agent:compaction:"
+            options.checkpointPrefix ?? Namespace.keyPrefix("compaction")
           ),
           Checkpoint
         )

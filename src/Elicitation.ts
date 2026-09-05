@@ -1,4 +1,5 @@
 import { Context, Deferred, Effect, Option, Ref, Schema } from "effect"
+import * as Namespace from "./internal/namespace.js"
 
 /**
  * Execution that needs an answer from outside before it can continue.
@@ -131,7 +132,7 @@ export interface Elicitor {
  * consumers are not watching.
  */
 export const Current = Context.Reference<Option.Option<Elicitor>>(
-  "affe-agent/Elicitation/Current",
+  Namespace.tag("Elicitation/Current"),
   { defaultValue: () => Option.none() }
 )
 

@@ -22,6 +22,7 @@ import * as AgentHttp from "../http/AgentHttp.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Scheduling from "../scheduling/Scheduling.js"
 import * as Isolate from "./isolate.js"
+import * as Namespace from "../internal/namespace.js"
 
 /** Code mode in a Dynamic Worker: the executor and the broker it calls back through. */
 export * as IsolateExecutor from "./isolate.js"
@@ -121,7 +122,7 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
 const PromptJson = Schema.toCodecJson(PromptWire.Prompt)
 
 /** The dispatched job as a logical alarm's payload: the prompt, encoded. */
-const DISPATCH_TAG = "affe-agent/dispatch"
+const DISPATCH_TAG = Namespace.tag("dispatch")
 
 /**
  * The Durable Object's client: in-process sessions whose history persists
@@ -262,7 +263,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
 
 /** The HTTP surface, built once per instance over the client. */
 class Surface extends Context.Service<Surface, { readonly handle: (request: Request) => Promise<Response> }>()(
-  "affe-agent/cloudflare/Surface"
+  Namespace.tag("cloudflare/Surface")
 ) {}
 
 /** The session this object is: named by the Worker's `idFromName`. */
@@ -312,7 +313,7 @@ export interface Host {
  */
 export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Options<Tools, E, R>): Host => {
   const namespace = options.namespace ?? "SESSIONS"
-  const Host = AgentSessionHost.Tag<string>("affe-agent/cloudflare/host")
+  const Host = AgentSessionHost.Tag<string>(Namespace.tag("cloudflare/host"))
 
   const clientLayer = Layer.effect(
     AgentClient.AgentClient,
@@ -470,7 +471,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
   class Sessions extends Context.Service<
     Sessions,
     DurableObjectNamespace.DurableObjectNamespaceEffectClient<object, undefined>
-  >()("affe-agent/cloudflare/Sessions") {}
+  >()(Namespace.tag("cloudflare/Sessions")) {}
 
   const sessionIdOf = (request: Request) =>
     Effect.gen(function* () {

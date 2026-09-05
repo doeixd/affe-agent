@@ -1,4 +1,5 @@
 import { Effect, Ref, Schema } from "effect"
+import * as Namespace from "./namespace.js"
 
 /**
  * Correlation identifiers.
@@ -9,13 +10,13 @@ import { Effect, Ref, Schema } from "effect"
  * serialises a session — a store, an RPC boundary — decodes ids through these
  * instead of restating the shape.
  */
-export const SessionId = Schema.String.pipe(Schema.brand("affe-agent/SessionId"))
+export const SessionId = Schema.String.pipe(Schema.brand(Namespace.tag("SessionId")))
 export type SessionId = typeof SessionId.Type
 
-export const SubmissionId = Schema.String.pipe(Schema.brand("affe-agent/SubmissionId"))
+export const SubmissionId = Schema.String.pipe(Schema.brand(Namespace.tag("SubmissionId")))
 export type SubmissionId = typeof SubmissionId.Type
 
-export const RunId = Schema.String.pipe(Schema.brand("affe-agent/RunId"))
+export const RunId = Schema.String.pipe(Schema.brand(Namespace.tag("RunId")))
 export type RunId = typeof RunId.Type
 
 export const sessionId = (value: string): SessionId => value as SessionId

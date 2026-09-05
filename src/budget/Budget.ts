@@ -4,6 +4,7 @@ import * as AgentLoop from "../AgentLoop.js"
 import * as Ids from "../internal/ids.js"
 import { positiveInteger } from "../internal/positive.js"
 import * as ModelCapabilities from "../model/ModelCapabilities.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Budget enforcement (design-review E1).
@@ -107,7 +108,7 @@ export class Budget extends Context.Service<Budget, {
   readonly spendCost: (amount: number, occurrence: Occurrence) => Effect.Effect<number>
   /** The cost spent so far, in the caller's own unit. */
   readonly costSpent: Effect.Effect<number>
-}>()("affe-agent/budget/Budget") {}
+}>()(Namespace.tag("budget/Budget")) {}
 
 /**
  * A fresh, zeroed budget. Provide per session for a per-conversation cap.

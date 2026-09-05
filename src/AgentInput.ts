@@ -2,6 +2,7 @@ import { Context, Effect, Option, Schema, SchemaGetter } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import * as WireValue from "./internal/wireValue.js"
 import * as PromptWire from "./PromptWire.js"
+import * as Namespace from "./internal/namespace.js"
 
 /**
  * A typed value a submission is asked with — the mirror of `AgentOutput`.
@@ -129,7 +130,7 @@ export const isPrompt = (input: AgentInput<any, any, any, any>): boolean => inpu
  * the fibre is the shape the caller expects.
  */
 export const Current = Context.Reference<Option.Option<unknown>>(
-  "affe-agent/AgentInput/Current",
+  Namespace.tag("AgentInput/Current"),
   { defaultValue: () => Option.none() }
 )
 

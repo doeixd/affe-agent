@@ -18,6 +18,7 @@ import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
 import * as NodeStore from "./NodeStore.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Branch and rewind a conversation.
@@ -97,7 +98,7 @@ const treePrefix = (): string => {
  * and which a walk cannot recover from by continuing.
  */
 export class TreeCorrupt extends Schema.TaggedError<TreeCorrupt>()(
-  "affe-agent/tree/TreeCorrupt",
+  Namespace.tag("tree/TreeCorrupt"),
   { id: Schema.String, detail: Schema.String }
 ) {
   override get message() {
@@ -107,7 +108,7 @@ export class TreeCorrupt extends Schema.TaggedError<TreeCorrupt>()(
 
 /** The node is not in this tree. */
 export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
-  "affe-agent/tree/NodeMissing",
+  Namespace.tag("tree/NodeMissing"),
   { id: Schema.String }
 ) {
   override get message() {
@@ -124,7 +125,7 @@ export class NodeMissing extends Schema.TaggedError<NodeMissing>()(
  * that never existed -- and every branch from it would start from one.
  */
 export class SessionBusy extends Schema.TaggedError<SessionBusy>()(
-  "affe-agent/tree/SessionBusy",
+  Namespace.tag("tree/SessionBusy"),
   { sessionId: Schema.String }
 ) {
   override get message() {
@@ -141,7 +142,7 @@ export class SessionBusy extends Schema.TaggedError<SessionBusy>()(
  * come back.
  */
 export class SessionClosed extends Schema.TaggedError<SessionClosed>()(
-  "affe-agent/tree/SessionClosed",
+  Namespace.tag("tree/SessionClosed"),
   { sessionId: Schema.String }
 ) {
   override get message() {

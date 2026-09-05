@@ -6,6 +6,7 @@ import * as WebCapture from "./WebCapture.js"
 import * as WebCrawl from "./WebCrawl.js"
 import * as WebFetch from "./WebFetch.js"
 import * as WebSearch from "./WebSearch.js"
+import * as Namespace from "../internal/namespace.js"
 
 const SEARCH_DESCRIPTION = `Search the public web for current sources.
 
@@ -156,19 +157,19 @@ const runSearch = (
 ): Effect.Effect<ReadonlyArray<WebSearch.SearchResult>, string> =>
   service.search(query, options).pipe(
     Effect.catchTags({
-      "affe-agent/web/WebSearchTransportError": () =>
+      [Namespace.tag("web/WebSearchTransportError")]: () =>
         Effect.fail("Web search could not reach its provider. Retry once later or continue without search."),
-      "affe-agent/web/WebSearchAuthenticationError": () =>
+      [Namespace.tag("web/WebSearchAuthenticationError")]: () =>
         Effect.fail("Web search is misconfigured or unauthorized. Do not retry this query."),
-      "affe-agent/web/WebSearchRateLimitedError": () =>
+      [Namespace.tag("web/WebSearchRateLimitedError")]: () =>
         Effect.fail("Web search quota is temporarily exhausted. Retry later or continue without search."),
-      "affe-agent/web/WebSearchResponseError": (error) =>
+      [Namespace.tag("web/WebSearchResponseError")]: (error) =>
         Effect.fail(`Web search provider returned HTTP ${error.status}. Retry later or continue without search.`),
-      "affe-agent/web/WebSearchDecodeError": () =>
+      [Namespace.tag("web/WebSearchDecodeError")]: () =>
         Effect.fail("Web search returned an unreadable response. Do not repeat the same query immediately."),
-      "affe-agent/web/WebSearchResponseTooLargeError": () =>
+      [Namespace.tag("web/WebSearchResponseTooLargeError")]: () =>
         Effect.fail("Web search returned too much data. Retry with a narrower query."),
-      "affe-agent/web/WebSearchTimeoutError": () =>
+      [Namespace.tag("web/WebSearchTimeoutError")]: () =>
         Effect.fail("Web search timed out. Retry with a narrower query or continue without search.")
     })
   )
@@ -189,25 +190,25 @@ const runFetch = (
   service.fetch(url).pipe(
     Effect.map(untrustedBody),
     Effect.catchTags({
-      "affe-agent/web/WebFetchInvalidUrlError": (error) =>
+      [Namespace.tag("web/WebFetchInvalidUrlError")]: (error) =>
         Effect.fail(`Web fetch rejected the URL: ${error.reason}. Use a public HTTP(S) URL without credentials.`),
-      "affe-agent/web/WebFetchDeniedTargetError": () =>
+      [Namespace.tag("web/WebFetchDeniedTargetError")]: () =>
         Effect.fail("Web fetch denied a local, private, or metadata target. Use a public web URL."),
-      "affe-agent/web/WebFetchTransportError": () =>
+      [Namespace.tag("web/WebFetchTransportError")]: () =>
         Effect.fail("Web fetch could not reach the target. Retry once later or continue without it."),
-      "affe-agent/web/WebFetchHttpResponseError": (error) =>
+      [Namespace.tag("web/WebFetchHttpResponseError")]: (error) =>
         Effect.fail(`Web fetch received HTTP ${error.status}. Use another source or continue without it.`),
-      "affe-agent/web/WebFetchCrossOriginRedirectError": (error) =>
+      [Namespace.tag("web/WebFetchCrossOriginRedirectError")]: (error) =>
         Effect.fail(`Web fetch refused a cross-origin redirect. Call ${error.to} explicitly for a fresh permission decision.`),
-      "affe-agent/web/WebFetchRedirectLimitError": () =>
+      [Namespace.tag("web/WebFetchRedirectLimitError")]: () =>
         Effect.fail("Web fetch encountered too many redirects. Use a more direct source URL."),
-      "affe-agent/web/WebFetchUnsupportedContentTypeError": () =>
+      [Namespace.tag("web/WebFetchUnsupportedContentTypeError")]: () =>
         Effect.fail("Web fetch only accepts textual HTML, Markdown, JSON, XML, or text responses."),
-      "affe-agent/web/WebFetchResponseTooLargeError": () =>
+      [Namespace.tag("web/WebFetchResponseTooLargeError")]: () =>
         Effect.fail("Web fetch response exceeded 1 MiB. Use a smaller or more specific resource."),
-      "affe-agent/web/WebFetchDecodeError": () =>
+      [Namespace.tag("web/WebFetchDecodeError")]: () =>
         Effect.fail("Web fetch returned malformed text for its declared charset. Use another source."),
-      "affe-agent/web/WebFetchTimeoutError": () =>
+      [Namespace.tag("web/WebFetchTimeoutError")]: () =>
         Effect.fail("Web fetch timed out. Retry once or use another source.")
     })
   )
@@ -223,23 +224,23 @@ const untrustedMarkdown = (result: WebCapture.CaptureResult): WebCapture.Capture
 
 const captureFailure = (error: WebCapture.WebCaptureError): string => {
   switch (error._tag) {
-    case "affe-agent/web/WebCaptureInvalidUrlError":
+    case Namespace.tag("web/WebCaptureInvalidUrlError"):
       return `Web capture rejected the URL: ${error.reason}. Use a public HTTP(S) URL without credentials.`
-    case "affe-agent/web/WebCaptureDeniedTargetError":
+    case Namespace.tag("web/WebCaptureDeniedTargetError"):
       return "Web capture denied a local, private, or metadata target. Use a public web URL."
-    case "affe-agent/web/WebCaptureTransportError":
+    case Namespace.tag("web/WebCaptureTransportError"):
       return "Web capture could not reach its provider. Retry once later or use web_fetch."
-    case "affe-agent/web/WebCaptureAuthenticationError":
+    case Namespace.tag("web/WebCaptureAuthenticationError"):
       return "Web capture is misconfigured or unauthorized. Do not retry; use web_fetch."
-    case "affe-agent/web/WebCaptureRateLimitedError":
+    case Namespace.tag("web/WebCaptureRateLimitedError"):
       return "Web capture quota is temporarily exhausted. Retry later or use web_fetch."
-    case "affe-agent/web/WebCaptureResponseError":
+    case Namespace.tag("web/WebCaptureResponseError"):
       return `Web capture failed with HTTP ${error.status}. Use another source or web_fetch.`
-    case "affe-agent/web/WebCaptureDecodeError":
+    case Namespace.tag("web/WebCaptureDecodeError"):
       return "Web capture returned an unreadable response. Use another source."
-    case "affe-agent/web/WebCaptureResponseTooLargeError":
+    case Namespace.tag("web/WebCaptureResponseTooLargeError"):
       return "Web capture response was too large. Use a smaller or more specific page."
-    case "affe-agent/web/WebCaptureTimeoutError":
+    case Namespace.tag("web/WebCaptureTimeoutError"):
       return "Web capture timed out. Retry once or use another source."
   }
 }
@@ -265,7 +266,7 @@ const runCrawl = (
       }))
     })),
     Effect.mapError((error) =>
-      error._tag === "affe-agent/web/WebCrawlStartError"
+      error._tag === Namespace.tag("web/WebCrawlStartError")
         ? `Web crawl could not render its start page (${error.cause}). Use another start URL or web_fetch.`
         : captureFailure(error))
   )

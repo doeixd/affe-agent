@@ -3,6 +3,7 @@ import { McpSchema, McpServer, Tool } from "effect/unstable/ai"
 import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
 import * as DelegatedPermission from "./internal/delegatedPermission.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The bridged CLI's permission prompts, answered by *this* application's
@@ -207,7 +208,7 @@ export interface Options<R = never> {
  */
 let nextPrompt = 0
 
-const DEFAULT_SERVER = "affe_permissions"
+const DEFAULT_SERVER = Namespace.table("permissions")
 const DEFAULT_TOOL = "approve"
 
 /**

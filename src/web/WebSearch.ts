@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
+import * as Namespace from "../internal/namespace.js"
 
 /** Freshness windows understood by the provider-neutral search contract. */
 export const Freshness = Schema.Literals(["day", "week", "month", "year"])
@@ -21,7 +22,7 @@ export type SearchResult = typeof SearchResult.Type
 /** The provider could not send a request or consume its response stream. */
 export class WebSearchTransportError extends
   Schema.TaggedError<WebSearchTransportError>()(
-    "affe-agent/web/WebSearchTransportError",
+    Namespace.tag("web/WebSearchTransportError"),
     { detail: Schema.String }
   ) {
   override get message() {
@@ -32,7 +33,7 @@ export class WebSearchTransportError extends
 /** The configured provider credential was absent, invalid or unauthorized. */
 export class WebSearchAuthenticationError extends
   Schema.TaggedError<WebSearchAuthenticationError>()(
-    "affe-agent/web/WebSearchAuthenticationError",
+    Namespace.tag("web/WebSearchAuthenticationError"),
     { status: Schema.Number }
   ) {
   override get message() {
@@ -43,7 +44,7 @@ export class WebSearchAuthenticationError extends
 /** The provider refused the call because its rate or quota was exhausted. */
 export class WebSearchRateLimitedError extends
   Schema.TaggedError<WebSearchRateLimitedError>()(
-    "affe-agent/web/WebSearchRateLimitedError",
+    Namespace.tag("web/WebSearchRateLimitedError"),
     { retryAfter: Schema.Option(Schema.String) }
   ) {
   override get message() {
@@ -57,7 +58,7 @@ export class WebSearchRateLimitedError extends
 /** The provider returned an HTTP response that has no search-domain meaning. */
 export class WebSearchResponseError extends
   Schema.TaggedError<WebSearchResponseError>()(
-    "affe-agent/web/WebSearchResponseError",
+    Namespace.tag("web/WebSearchResponseError"),
     { status: Schema.Number }
   ) {
   override get message() {
@@ -68,7 +69,7 @@ export class WebSearchResponseError extends
 /** The response was syntactically valid bytes but not the provider schema. */
 export class WebSearchDecodeError extends
   Schema.TaggedError<WebSearchDecodeError>()(
-    "affe-agent/web/WebSearchDecodeError",
+    Namespace.tag("web/WebSearchDecodeError"),
     { detail: Schema.String }
   ) {
   override get message() {
@@ -79,7 +80,7 @@ export class WebSearchDecodeError extends
 /** The provider response exceeded the advertised or actual byte budget. */
 export class WebSearchResponseTooLargeError extends
   Schema.TaggedError<WebSearchResponseTooLargeError>()(
-    "affe-agent/web/WebSearchResponseTooLargeError",
+    Namespace.tag("web/WebSearchResponseTooLargeError"),
     { maxBytes: Schema.Number, observedBytes: Schema.Number }
   ) {
   override get message() {
@@ -90,7 +91,7 @@ export class WebSearchResponseTooLargeError extends
 /** Request, retries and response consumption exceeded one total time budget. */
 export class WebSearchTimeoutError extends
   Schema.TaggedError<WebSearchTimeoutError>()(
-    "affe-agent/web/WebSearchTimeoutError",
+    Namespace.tag("web/WebSearchTimeoutError"),
     { timeoutMillis: Schema.Number }
   ) {
   override get message() {
@@ -122,7 +123,7 @@ export interface Service {
  * while this service determines which fixed provider endpoint can be reached.
  */
 export class WebSearch extends Context.Service<WebSearch, Service>()(
-  "affe-agent/web/WebSearch"
+  Namespace.tag("web/WebSearch")
 ) {}
 
 /** Provide an already-constructed search service. */

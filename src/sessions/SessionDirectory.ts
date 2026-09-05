@@ -6,6 +6,7 @@ import type * as AgentProtocol from "../client/AgentProtocol.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 import * as SessionProjection from "./SessionProjection.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The management/query model over sessions.
@@ -331,7 +332,7 @@ export const memory: Effect.Effect<SessionDirectory> = Effect.gen(function* () {
 
 // -- SQL -------------------------------------------------------------------------------
 
-export const sqlTable = "affe_session_directory"
+export const sqlTable = Namespace.table("session_directory")
 
 const escapeIdentifier = (name: string): string => {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {

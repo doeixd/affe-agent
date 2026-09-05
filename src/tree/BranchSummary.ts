@@ -7,6 +7,7 @@ import type * as AgentSession from "../AgentSession.js"
 import type * as Compaction from "../compaction/Compaction.js"
 import type * as NodeStore from "./NodeStore.js"
 import type * as SessionTree from "./SessionTree.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Carry work from an abandoned branch into another.
@@ -36,7 +37,7 @@ import type * as SessionTree from "./SessionTree.js"
  * confidently empty carryover, which is worse than refusing.
  */
 export class NothingToCarry extends Schema.TaggedError<NothingToCarry>()(
-  "affe-agent/tree/NothingToCarry",
+  Namespace.tag("tree/NothingToCarry"),
   { from: Schema.String, to: Schema.String }
 ) {
   override get message() {

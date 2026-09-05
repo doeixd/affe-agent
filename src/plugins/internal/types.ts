@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import * as Namespace from "../../internal/namespace.js"
 
 /**
  * A fatal problem loading a plugin: the manifest itself is invalid, so there is
@@ -6,7 +7,7 @@ import { Schema } from "effect"
  * *not* fatal — they surface as `Warning`s and the rest of the plugin loads.
  */
 export class PluginError extends Schema.TaggedError<PluginError>()(
-  "affe-agent/plugins/PluginError",
+  Namespace.tag("plugins/PluginError"),
   { reason: Schema.String }
 ) {
   override get message() {

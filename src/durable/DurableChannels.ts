@@ -7,6 +7,7 @@ import { isStorageError, StorageError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import { detailOf } from "../internal/detail.js"
 import { escapeIdentifier } from "../internal/sqlIdentifier.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Steering and follow-up input, persisted per drain.
@@ -369,7 +370,7 @@ export const factory = (
  * deployment that manages its own schema can create the table itself and use
  * `sqlStore` directly.
  */
-export const sqlStoreTable = "affe_channel_input"
+export const sqlStoreTable = Namespace.table("channel_input")
 
 /**
  * Build a SQL-backed store over an existing table.

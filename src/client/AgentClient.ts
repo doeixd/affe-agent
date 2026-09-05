@@ -30,6 +30,7 @@ import {
   AgentUnauthorizedError,
   RequestId
 } from "./internal/protocolErrors.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Talking to a session that may not be in this process.
@@ -425,7 +426,7 @@ export interface Service {
 }
 
 export class AgentClient extends Context.Service<AgentClient, Service>()(
-  "affe-agent/AgentClient"
+  Namespace.tag("AgentClient")
 ) {}
 
 /**

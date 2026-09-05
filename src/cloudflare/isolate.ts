@@ -3,6 +3,7 @@ import { Binding, DurableObjectState, WorkerEnvironment } from "effect-cf"
 import type * as CodeMode from "../code/CodeMode.js"
 import { CodeDiagnostic } from "../code/internal/diagnostics.js"
 import { type Invoke, ProgramThrow } from "../code/internal/interpret.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Code mode in an isolate: a `CodeExecutor` that runs the model's program
@@ -57,7 +58,7 @@ export class CodeBroker extends Context.Service<CodeBroker, {
   ) => Effect.Effect<{ readonly token: string; readonly release: Effect.Effect<void> }>
   /** The `/code/invoke` route. A bad token is a 403 and says nothing else. */
   readonly handle: (request: Request) => Effect.Effect<Response>
-}>()("affe-agent/cloudflare/CodeBroker") {}
+}>()(Namespace.tag("cloudflare/CodeBroker")) {}
 
 export const brokerLayer: Layer.Layer<CodeBroker> = Layer.effect(
   CodeBroker,

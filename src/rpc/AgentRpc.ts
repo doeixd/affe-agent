@@ -10,6 +10,7 @@ import { Prompt } from "effect/unstable/ai"
 import * as AgentClient from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * The Effect RPC rendering of the canonical remote-session protocol.
@@ -99,7 +100,7 @@ export type Service = RpcClient.FromGroup<
 >
 
 export class Client extends Context.Service<Client, Service>()(
-  "affe-agent/rpc/Client"
+  Namespace.tag("rpc/Client")
 ) {}
 
 /**

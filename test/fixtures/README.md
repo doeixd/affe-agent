@@ -12,6 +12,7 @@ going quiet.
 | --- | --- | --- | --- |
 | `prompt-request.json` | `4ee770d` | `test/InputWire.test.ts` | `AgentProtocol.PromptRequest` for a text prompt and a multimodal one, encoded as every adapter encodes it, before the input wire became one shape (`plan-input-default.md` step 3). Asserted byte-identical after. |
 | `compaction-checkpoint.json` | `d6e4a69` | `test/ContextRollover.test.ts` | A persisted `Compaction.Checkpoint` (a summary, with token measurements and usage) encoded by the store's own codec, before `Checkpoint` became a union of `Summary` and `Rollover` (item 60d). Asserted to decode as a `Summary` and to round-trip byte-identical. |
+| `namespace-manifest.json` | `2d28f96` | `test/Namespace.test.ts` | Every wire-level and storage-level identifier the package minted -- `_tag`s, service keys, brands, table defaults, the persisted key prefix -- recorded from the literals *before* they moved to `src/internal/namespace.ts` (decision 1 of `plan-two-decisions.md`). Asserted equal to the set the code builds now, both ways. A new entry is a new wire or storage name; a missing one is a rename. |
 | `prompt-response.json` | `baf0897` | `test/InputWire.test.ts` | `AgentProtocol.PromptResponse` for an untyped agent, before every agent had a `Value` (step 5). Asserted equal to the response after, plus exactly one field, `value`. |
 
 To record one: write a throwaway test that runs the real path (a client, an

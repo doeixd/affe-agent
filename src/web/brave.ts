@@ -18,6 +18,7 @@ import {
 } from "effect/unstable/http"
 import * as Body from "./internal/body.js"
 import * as WebSearch from "./WebSearch.js"
+import * as Namespace from "../internal/namespace.js"
 
 const ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 const AUTH_HEADER = "x-subscription-token"
@@ -82,8 +83,8 @@ const readBody = (response: HttpClientResponse.HttpClientResponse) =>
   })
 
 const retryable = (error: WebSearch.WebSearchError): boolean =>
-  error._tag === "affe-agent/web/WebSearchTransportError" ||
-  error._tag === "affe-agent/web/WebSearchRateLimitedError"
+  error._tag === Namespace.tag("web/WebSearchTransportError") ||
+  error._tag === Namespace.tag("web/WebSearchRateLimitedError")
 
 /**
  * How long to wait before the single retry.
@@ -101,7 +102,7 @@ const retryable = (error: WebSearch.WebSearchError): boolean =>
 const retryDelay = (
   error: WebSearch.WebSearchError
 ): Effect.Effect<Duration.Duration> => {
-  if (error._tag !== "affe-agent/web/WebSearchRateLimitedError") {
+  if (error._tag !== Namespace.tag("web/WebSearchRateLimitedError")) {
     return Effect.succeed(Duration.millis(100))
   }
   return Option.match(error.retryAfter, {

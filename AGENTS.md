@@ -275,6 +275,16 @@ checked invariant, not a convention.
   refuses Node built-ins and resolves without the `node` export condition —
   the way Bun, Deno and edge runtimes would see the package.
 
+## Identifiers that outlive a process
+
+Every `_tag`, service key, brand, table default and persisted key prefix is
+built from `src/internal/namespace.ts`, never spelled as a literal. The roots
+there are frozen wire and storage identifiers, not the package name, and they
+do not follow a rename (`docs/plan-two-decisions.md`, decision 1). A new
+identifier is a new entry in `test/fixtures/namespace-manifest.json`, added
+by hand; `test/Namespace.test.ts` fails on a literal outside the module and on
+any difference between the manifest and what the code builds.
+
 ## Scope discipline
 
 * No new exported concept until two independent features need it.

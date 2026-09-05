@@ -1,6 +1,7 @@
 import type * as acorn from "acorn"
 import { Effect, Option, Schema } from "effect"
 import { CodeDiagnostic } from "./diagnostics.js"
+import * as Namespace from "../../internal/namespace.js"
 
 /**
  * The owned tree-walking interpreter
@@ -31,7 +32,7 @@ import { CodeDiagnostic } from "./diagnostics.js"
 
 /** The program threw; the value is the program's own. */
 export class ProgramThrow extends Schema.TaggedError<ProgramThrow>()(
-  "affe-agent/code/ProgramThrow",
+  Namespace.tag("code/ProgramThrow"),
   { value: Schema.Unknown }
 ) {
   override get message() {

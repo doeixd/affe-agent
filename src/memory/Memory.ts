@@ -4,6 +4,7 @@ import * as Agent from "../Agent.js"
 import * as AgentLoop from "../AgentLoop.js"
 import * as ContextTransform from "../ContextTransform.js"
 import * as Permission from "../Permission.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Long-term, cross-session memory (issue #4 / ADDITIONAL §8).
@@ -75,7 +76,7 @@ export interface MemoryShape {
  * the in-memory `layer` here, or an embeddings/Redis adapter of its own.
  */
 export class Memory extends Context.Service<Memory, MemoryShape>()(
-  "affe-agent/memory/Memory"
+  Namespace.tag("memory/Memory")
 ) {}
 
 // ---------------------------------------------------------------------------
