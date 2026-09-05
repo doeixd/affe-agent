@@ -109,19 +109,27 @@ export const admit = (
 }
 
 /**
- * What a recorded admission asks the session with, decoded again with the
- * agent's schema. The value was validated when it was admitted, so a record
- * that no longer decodes -- or carries a value for an agent that declares
- * none -- is a bug in whoever recorded it, and dies as one.
+ * What a recorded admission asks the session with.
+ *
+ * A record holds the prompt, and the encoded value when the agent declared
+ * a shape at the time it was written. The prompt is what a default-input
+ * agent is asked with, as it is; a value is decoded again with the agent's
+ * schema. The value was validated when it was admitted, so a record that no
+ * longer decodes -- including one written for a declared input and replayed
+ * by an agent whose input is now the prompt -- is a bug in whoever changed
+ * the agent under its own journal, and dies as one.
+ *
+ * `plan-input-default.md` step 4 asked for `input` to be written for every
+ * record; it is not, deliberately, because for the default it would store
+ * every prompt twice forever to delete this one branch. See the plan.
  */
-export const askedOf = (declared: Declared, recorded: Recorded): Effect.Effect<unknown> =>
+export const askedOf = (
+  agent: { readonly input: AgentInput.AgentInput<any, any, any, any> },
+  recorded: Recorded
+): Effect.Effect<unknown> =>
   recorded.input === undefined
     ? Effect.succeed(recorded.prompt)
-    : Option.match(declared, {
-      onNone: () =>
-        Effect.die(new Error("a recorded submission carries a typed input, but the agent declares none")),
-      onSome: (declaredInput) => Effect.orDie(Schema.decodeUnknownEffect(declaredInput.schema)(recorded.input))
-    })
+    : Effect.orDie(Schema.decodeUnknownEffect(agent.input.schema)(recorded.input))
 
 /**
  * The one widening: from what a boundary decoded to what the session's
@@ -143,4 +151,4 @@ export const runRecorded = <Tools extends Record<string, Tool.Any>, E, R, Model,
   agent: AgentDefinition<Tools, E, R, Model, Value, Input>,
   recorded: Recorded
 ) =>
-  Effect.flatMap(askedOf(declared(agent), recorded), (value) => Agent.run(agent, asked<Input>(value)))
+  Effect.flatMap(askedOf(agent, recorded), (value) => Agent.run(agent, asked<Input>(value)))

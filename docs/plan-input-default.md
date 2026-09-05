@@ -1,6 +1,18 @@
 # Plan: every agent has an input, and the prompt is the default
 
-**Status: steps 1–3 and 5 landed 2026-09-04; 4 and 6 open.** Step 5 with
+**Status: done, 2026-09-05.** Steps 1–3 and 5 landed as written (with the
+two deviations below); step 6 is the "Typed input and output" section of
+`guide-sessions.md`; step 4 is closed *without* its "always carry `input`"
+half, deliberately. Records already hold the encoded value whenever the agent
+declared a shape, every store and every reader already handle both forms, and
+`askedOf` now decodes with the agent's own schema and needs no `Declared` --
+which was the simplification the step was after. Writing `input` for the
+default as well would store every prompt twice in every journal, claim and
+job, forever (the prompt has to stay so that every journal written so far
+decodes), to delete one two-line branch. That is the wrong trade and the plan
+says so rather than doing it. `InputBoundary.declared` survives for the one
+reader with a real use -- `Subagent`, which offers the parent model either
+`{ prompt }` or the child's schema -- and `AgentClient.typedSession`. Step 5 with
 one deviation from §2: `agent.output` stays an `Option`. The input's default
 is a *codec* (the prompt wire) and could be a value like any other; the
 output's default is the *absence of a tool* -- a default `AgentOutput.text`

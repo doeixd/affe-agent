@@ -1050,7 +1050,11 @@ sizes; the items are repeated here so this list stays the one tracker.
     them. Widening alone is mechanical; Scheduling and DurableAgent need the
     payload change to be useful rather than merely compile. About half a day.
 
-46. **Every agent has an input; the prompt is the default**
+46. ~~**Every agent has an input; the prompt is the default**~~ — **DONE
+    2026-09-05**, all six steps, two deviations recorded in the plan
+    (`agent.output` stays an `Option`; step 4's "always write `input`" is
+    deliberately not done). The guide is `guide-sessions.md`, "Typed input
+    and output". Was:
     (`plan-input-default.md`, 2026-09-02). Removes the `Input = never` /
     `PromptInput<Input>` conditional that caused every awkwardness in 41
     and 41b: `AgentInput.prompt` as the default, one wire shape (the
@@ -1088,12 +1092,17 @@ sizes; the items are repeated here so this list stays the one tracker.
     the plan: `agent.output` stays an `Option`, because the output's default
     is the absence of a tool rather than a different codec. What is still
     owed: step 4 (journals carry `input`; `InputBoundary.declared` survives
-    for the records until then) and step 6 (the guide).
+    for the records until then) and step 6 (the guide). **Both closed
+    2026-09-05**: `askedOf` decodes with the agent's own schema and needs no
+    `Declared`; the doubling of every prompt in every record that the rest of
+    step 4 asked for is not done, and the plan says why.
 
     ```text
     verify: grep "export const prompt: AgentInput<Prompt.RawInput, unknown, never, never>" src/AgentInput.ts
     verify: no-grep "export type PromptInput" src/AgentSession.ts
     verify: grep "export const declared = " src/internal/inputBoundary.ts
+    verify: no-grep "askedOf(InputBoundary.declared" src/durable/DurableAgent.ts
+    verify: grep "## Typed input and output" docs/guide-sessions.md
     verify: no-grep "TypedInput" src/AgentInput.ts
     verify: exists test/fixtures/prompt-request.json
     verify: grep "export type Any = AgentDefinition<any, any, any, any, any, any>" src/Agent.ts

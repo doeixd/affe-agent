@@ -693,7 +693,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       // The value the client validated at admission, decoded again here
       // with the agent's own schema; see `InputBoundary.askedOf`.
-      const asked = InputBoundary.askedOf(InputBoundary.declared(agent), payload)
+      const asked = InputBoundary.askedOf(agent, payload)
 
       // History as of the moment the prompt settled, whatever way it settled.
       // Captured inside the scope where the session lives, read outside it by

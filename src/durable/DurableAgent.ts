@@ -400,7 +400,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
             Effect.forkIn(scope)
           )
 
-          const asked = yield* InputBoundary.askedOf(InputBoundary.declared(agent), payload)
+          const asked = yield* InputBoundary.askedOf(agent, payload)
           const result = yield* AgentSession.prompt(session, asked, {
             stream: options.stream === true
           })

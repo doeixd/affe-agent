@@ -280,7 +280,7 @@ describe("agent client", () => {
 
   /**
    * Typed input (issue #81) through the entity: the value crosses the RPC
-   * as `AgentInput.Typed`, the entity admits it with the agent's schema, and
+   * as the encoded value, the entity admits it with the agent's schema, and
    * the outbox row carries it so a recovery renders the same value.
    */
   it.live("submits a typed input through the entity, and a recorded typed dispatch is carried forward", () =>

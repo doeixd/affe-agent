@@ -10,7 +10,7 @@ evidence is named, and where it is a test it is in the tree.*
 | --- | --- | --- | --- |
 | 1 | **Ids carry their session** | two bugs in one day from ids unique only within a session | small |
 | 2 | ~~**Refuse at construction, at the top level too**~~ | **withdrawn**: the premise was wrong, see §2.2 | -- |
-| 3 | **Item 46: every agent has an input** | steps 1–3 and 5 **shipped**; 4 and 6 open | large |
+| 3 | ~~**Item 46: every agent has an input**~~ | **shipped**, 2026-09-05; step 4's doubling deliberately not done, see the plan | large |
 | 4 | ~~**The engine records usage; the loop only decides**~~ | **shipped**; `Budget.charge` is gone | medium |
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
@@ -226,7 +226,7 @@ notes as one commit; the rest as they come up.
 
 | # | item | why it is here | size |
 | --- | --- | --- | --- |
-| 9 | **Sequence item 46 as 5, then 4, then 6** | 5 mirrors 2 and unlocks `Agent.Any`; 4 is store surgery; 6 written once against the finished shape | -- |
+| 9 | ~~**Sequence item 46 as 5, then 4, then 6**~~ | done in that order; 4 turned out to be a two-line simplification plus a trade not worth making | -- |
 | 10 | ~~**A fixture convention for wire and journal changes**~~ | **shipped**: `test/fixtures/README.md`, two fixtures, `verify: exists` each | small |
 | 11 | ~~**Two Effect notes in AGENTS.md**~~ | **shipped**, in the Effect usage section | small |
 | 12 | **One wire type for "JSON the receiver decodes"** | input, elicitation `detail` and output `value` are the same concept spelled three ways | medium |

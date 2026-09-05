@@ -152,6 +152,63 @@ declaring `needsApproval` is refused unless a caller opts in to being asked. And
 because it is a seam, a durable interpreter can back it with `DurableDeferred`,
 so a submission waiting on a human survives the process it started in.
 
+## Typed input and output
+
+Every agent has an input and an output, and the defaults are the prompt and
+the text. That sentence is the whole rule; the rest of this section is what
+follows from it.
+
+**Input.** `Agent.make({ input: AgentInput.make(schema, render) })` declares
+the shape a submission is asked in and how the model sees it: the *value*
+is validated by the schema, held on the fibre in its encoded form, and read
+by tools, permission policies and transforms through
+`AgentInput.current(schema)`; the *rendering* is what enters history. An
+agent that declares none has `AgentInput.prompt`: the schema is the prompt
+wire codec, the rendering is the identity, and `Input` is `Prompt.RawInput`.
+So `session.prompt`, `Agent.run`, `Subagent`, `Scheduling` and the client all
+take `Input`, with no conditional between the two cases, and a helper generic
+over agents is generic over `Input` like any other parameter.
+
+```ts
+const Ticket = AgentInput.make(
+  Schema.Struct({ customerId: Schema.String, body: Schema.String }),
+  ({ body }) => `A customer writes:\n\n${body}`
+)
+const Support = Agent.make({ instructions: "Support.", input: Ticket, tools: [lookup] })
+
+yield* Agent.run(Support, { customerId: "c-42", body: "my order is late" })
+// The model saw the rendering; `lookup` read the id with AgentInput.current(Ticket).
+```
+
+**Output.** `Agent.make({ output: AgentOutput.make(schema) })` declares the
+shape a submission must end in: the model is given a tool to report it
+through, the run stops when it does, and `Result.value` is `Option<Value>` --
+still an `Option`, because a model can stop without reporting and a run can
+be interrupted first. An agent that declares none has `Value = string`, and
+its `Result.value` is its final text, always `Some`. So a caller generic over
+agents reads a value from every one, and the wire and the journal carry it
+uniformly.
+
+**One wire shape.** Across any transport the `input` field carries the
+session's encoded input -- the prompt wire for the default, byte for byte
+what it always was, and the bare encoded value for a declared shape -- and
+the host decodes it with the schema the session's agent declares, refusing a
+mismatch as `AgentInvalidRequestError` before anything runs.
+`AgentClient.typed(agent)` writes the value and never the wire form. A
+declared input's schema must encode to an object, so the host can tell it
+from a prompt. `steer` and `followUp` take a prompt either way, because they
+add to a conversation the input already opened.
+
+**What is on the fibre.** `AgentInput.Current` is set for every submission,
+so `None` means exactly "not inside a submission". A tool that asks for a
+ticket under a prompt-taking agent gets the schema's own error, the same
+honest answer it gets when wired into the wrong typed agent.
+
+**Under `/durable`.** A journal holds the prompt, and the encoded value when
+the agent declared a shape; replay decodes the value again with the agent's
+schema and renders it inside the workflow, an Effect-valued renderer as an
+activity. A journal written before any of this still replays.
+
 ## What a tool can see of its session
 
 A tool handler runs on the fibre of the submission that called it, and the
@@ -165,7 +222,7 @@ it is one of a set and what the rule is.
 | reference | what it holds | `None` when |
 | --- | --- | --- |
 | `Principal.CurrentPrincipal` | the subject the submission acts for, as a string | outside a host, or the host set none |
-| `AgentInput.Current` (read via `AgentInput.current(schema)`) | the submission's encoded input | outside a submission, or the agent declares no input |
+| `AgentInput.Current` (read via `AgentInput.current(schema)`) | the submission's encoded input: the prompt in wire form under the default, the schema's encoded value under a declared input | outside a submission, and only then |
 | `Elicitation.Current` | the session's elicitor, for a delegation to forward a child's approval through | outside a session's tool execution |
 
 The rule, in three parts. A reference is set by the harness around the

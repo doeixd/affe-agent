@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import * as fs from "node:fs"
 import * as Agent from "../src/Agent.js"
 import * as AgentInput from "../src/AgentInput.js"
@@ -109,8 +109,7 @@ describe("the result wire", () => {
         return yield* session.prompt("hello")
       }).pipe(
         Effect.scoped,
-        Effect.provide(AgentClient.layer(Agent.make({ instructions: "x" }))),
-        Effect.provide(layer)
+        Effect.provide(Layer.provide(AgentClient.layer(Agent.make({ instructions: "x" })), layer))
       )
       const encoded = yield* Schema.encodeEffect(Schema.toCodecJson(AgentProtocol.PromptResponse))({
         requestId: AgentProtocol.RequestId.make("r-1"),
