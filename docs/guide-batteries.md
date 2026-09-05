@@ -483,6 +483,24 @@ whose checkpoint is a `Rollover`. Either way the `Budget` is untouched: a new
 window is not a new run. `CompactionCompleted` carries the checkpoint, under
 the `requested` trigger when the model asked.
 
+### What was folded is still evidence
+
+A fold removes messages from the projection, not from the session. Two
+read-only tools on the controller let the model reach them, bounded so they
+cannot pull the transcript back in:
+
+```ts
+tools: [compaction.tools.searchContext, compaction.tools.readContext]
+```
+
+`search_context({ query })` searches the session's canonical history and
+returns at most three hits, each the message's index and an excerpt around the
+match; `read_context({ index, offset? })` returns one message a page of five
+thousand characters at a time. Both describe what they return as historical
+evidence, not instructions. Which session is read is decided by where the call
+runs, never by a parameter, and a session this controller's transform has not
+seen fails with that reason.
+
 
 ## Agent Plugins
 

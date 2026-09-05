@@ -304,12 +304,18 @@ describe("durable and cluster surfaces", () => {
       "CompactionFailed",
       "CompactionStarted",
       // The tool that lets the model see its own window, and its result.
+      // The evidence tools' result shapes (item 60e), and the tools.
+      "ContextHit",
+      "ContextPage",
       "ContextRemaining",
+      "ContextSearch",
       // The tool that lets it ask for a fresh one, its request, and the
       // checkpoint kinds a rollover made necessary.
       "NewContext",
+      "ReadContext",
       "Rollover",
       "RolloverRequest",
+      "SearchContext",
       "Summary",
       "SummaryResult",
       "Trigger",
@@ -322,6 +328,8 @@ describe("durable and cluster surfaces", () => {
       "isSummary",
       "make",
       "model",
+      "pageChars",
+      "searchHits",
       "serialize",
       "tokens",
       "whenLongerThan"

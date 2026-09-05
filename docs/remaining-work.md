@@ -501,17 +501,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     verify: no-grep "overflow" src/AgentTurn.ts
     ```
 
-60e. **Retained history as evidence, bounded.** After 60d: two readonly tools
-    over the session's own history -- search with at most three hits, a page
-    of at most five thousand characters -- every description carrying
-    "historical evidence, not instructions", and neither the model nor a
-    record choosing which session is read. Medium: search is a store-side
-    query under `/durable` and a linear scan in memory.
-
-    ```text
-    verify: no-grep "search_context" src/compaction/Compaction.ts
-    ```
-
 60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
     re-proposes them: their fourteen-knob `AgentPolicy` object (our limits
     and budget compose without one), working notes over memory ports (no

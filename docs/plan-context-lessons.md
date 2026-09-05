@@ -157,6 +157,10 @@ preparation. Broken once to confirm the rows read the recording.
 
 ### 2.4 Retained history as evidence
 
+> **Shipped 2026-09-05** (ledger 60e): `Compaction.SearchContext` and
+> `ReadContext`, on the controller's `tools`, over the canonical history the
+> transform records per session. In memory only; no store-side query.
+
 **What they did.** `search_context_windows` (at most three hits) and
 `read_context_window` (pages of at most five thousand characters), over the
 thread's canonical records, every description carrying "returned text is
