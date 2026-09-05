@@ -98,7 +98,7 @@ the empty cells are its output, not its incompleteness.
 | principal | `Principal` | `Principal` | `PrincipalOverWire` ⁷ | `SubagentPrincipal` ⁸ |
 | declared output (`Value`) | `TypedOutputRemote` | `TypedOutputRemote` | contract row | `Subagent.helper` ⁹ |
 | typed input | `AgentInput` | `Durable` | contract row | `Subagent.helper` |
-| cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | **not tested** ¹⁰ | `Subagent.helper`, `ToolCleanup` |
+| cleanup on interrupt | `ToolCleanup` | `ToolCleanup` | `CleanupOverWire` ¹⁰ | `Subagent.helper`, `ToolCleanup` |
 | tool retry safety | n/a ¹¹ | `DurableToolRetry` | n/a ¹¹ | `SubagentDurable` ¹² |
 | events resumption | n/a ¹³ | contract row | contract row | n/a ¹⁴ |
 | idempotent mutation | contract row | contract row | contract row | n/a ¹⁵ |
@@ -171,9 +171,14 @@ shown the value as JSON, the parent's tool record is typed by it, and a
 typed child that ends without reporting is a child failure rather than an
 empty answer (`plan-after-seams.md` 2.7).
 
-¹⁰ A tool holding a process or a lock when the *connection* dies, rather than
-when the run is interrupted, is a different question from the one `ToolCleanup`
-answers, and nobody has asked it.
+¹⁰ **Was "not tested"; asked, and answered as the decision.** A tool holding a
+resource when the *connection* dies, rather than the run: the disconnect
+tears nothing down, the tool finishes on its own schedule, the resource is
+released exactly once, and the idempotent retry of the same request gets the
+answer. That is the consequence of a decision already made for HTTP -- a
+waiter leaving is not the work being cancelled -- pinned for a held
+resource; a client that wants the work stopped says so with `interrupt`.
+Item 57. With this the table has no "not tested" cell left.
 
 ¹¹ Reissue is a property of replay. Without a journal there is nothing to
 replay and nothing to reissue.

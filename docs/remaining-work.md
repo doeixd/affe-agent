@@ -412,22 +412,6 @@ and should not until it is committed. Item 30 is untouched.
     verify: grep "an interrupted child answers with what it had, and the parent is not told" test/SubagentDurable.test.ts
     ```
 
-54. **Deciding what happens at the seams** ([plan-seams.md](./plan-seams.md),
-    2026-09-04). The synthesis of items 50-53 and the fatal durable/output
-    defect: none of them is a bug *inside* a module, and each is silent. The
-    delegation boundary is the sharpest case, because the answers do not merely
-    fail to exist -- they disagree. Principal crosses (a fibre reference),
-    budget does not (a loop combinator), approval does not (a session option),
-    and none of that was chosen.
-
-    Ranked there: fix the budget under replay (a live bug that terminates
-    correct work); decide the delegation boundary, starting with making a
-    child's unapprovable tool fail at construction rather than silently at
-    runtime; give injected tools one accessor, since the fatal defect was one
-    caller of a set with no single definition; add a combination matrix so the
-    next gap is a blank cell; extract `Agent.Any` from item 46; and make this
-    file's claims verifiable, since it misdirected twice in one day.
-
 ### Newly ranked — from the rename (2026-09-04)
 
 55. **A terminal-vs-retryable decision keyed on a package-scoped string.**
@@ -471,44 +455,7 @@ and should not until it is committed. Item 30 is untouched.
 [conformance-matrix.md](./conformance-matrix.md), which is what that table is
 for: the gap is recorded as a gap rather than assumed either way.*
 
-57. **Nobody has asked what a tool holding a resource does when the
-    *connection* dies.** `ToolCleanup` covers interruption of a run, and covers
-    it in-process, under replay and under delegation. A client disconnecting
-    mid-tool is a different event reaching a different seam, and the answer
-    could reasonably be "the run continues and the resource is released when it
-    ends" — but that is a decision, and it is currently whatever the transport
-    happens to do.
-
 ### Newly ranked — after the seams pass (2026-09-04)
-
-59. **[plan-after-seams.md](./plan-after-seams.md)** -- eight items the
-    seams pass tripped over, ranked: ids carry their session (**done**, the
-    same evening: `session-N:submission-M`, `session-N:run-M`, and the two
-    local prefixes deleted); the construction-time refusal at
-    `AgentSession.make` (**withdrawn** the same evening: the `denied`
-    default is fail-closed *and loud* -- the run fails with
-    `ToolApprovalRequiredError` -- and only the delegation was silent);
-    item 46; the engine recording usage so the loop only decides (**done**:
-    `Budget.record` in `AgentRun`, `within` and `cost` pure, and a memo-map
-    sharing bug found by the `budget: false` row on the way); naming what a
-    tool can see of its session (**done**: `guide-sessions.md`); the static
-    toolkit as the common case in the type; a typed child returning its
-    value (**done**: `Subagent.Answer`, the matrix's "text only" cell is a
-    test); and this file becoming a list again. Open: item 46, the static
-    toolkit, and the split of this file.
-
-    **Added the same evening (§2b of the plan)**, after item 46's steps 1–3:
-    sequence 46 as 5, 4, 6; a fixture convention for wire and journal
-    changes (`test/fixtures/README.md`, a `verify: exists` per fixture);
-    two Effect notes for AGENTS.md (`Effect.fn` generics fall to their
-    default silently; a module-level layer is one instance under one memo
-    map); one wire type for "JSON the receiver decodes" across input,
-    elicitation detail and output value; and a `COLLABORATION.md` claim, or
-    an explicit "abandoned", for work that sits in the tree.
-
-    ```text
-    verify: grep "Ids.makeIdSource(id)" src/AgentSession.ts
-    ```
 
 ### Known, deliberately left
 

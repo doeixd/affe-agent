@@ -1210,3 +1210,68 @@ still resolves -- here, if not in the list. Nothing here is next;
     ```text
     verify: exists test/PrincipalOverWire.test.ts
     ```
+
+54. ~~**Deciding what happens at the seams**~~ **CLOSED 2026-09-04**: all six items of `plan-seams.md` shipped; the plan records what each did not predict. ([plan-seams.md](./plan-seams.md),
+    2026-09-04). The synthesis of items 50-53 and the fatal durable/output
+    defect: none of them is a bug *inside* a module, and each is silent. The
+    delegation boundary is the sharpest case, because the answers do not merely
+    fail to exist -- they disagree. Principal crosses (a fibre reference),
+    budget does not (a loop combinator), approval does not (a session option),
+    and none of that was chosen.
+
+    Ranked there: fix the budget under replay (a live bug that terminates
+    correct work); decide the delegation boundary, starting with making a
+    child's unapprovable tool fail at construction rather than silently at
+    runtime; give injected tools one accessor, since the fatal defect was one
+    caller of a set with no single definition; add a combination matrix so the
+    next gap is a blank cell; extract `Agent.Any` from item 46; and make this
+    file's claims verifiable, since it misdirected twice in one day.
+
+### Newly ranked — after the seams pass (2026-09-04)
+
+59. ~~**[plan-after-seams.md](./plan-after-seams.md)**~~ **CLOSED 2026-09-05**: all thirteen items of `plan-after-seams.md` shipped, withdrawn or reconsidered, each with its reasoning kept. -- eight items the
+    seams pass tripped over, ranked: ids carry their session (**done**, the
+    same evening: `session-N:submission-M`, `session-N:run-M`, and the two
+    local prefixes deleted); the construction-time refusal at
+    `AgentSession.make` (**withdrawn** the same evening: the `denied`
+    default is fail-closed *and loud* -- the run fails with
+    `ToolApprovalRequiredError` -- and only the delegation was silent);
+    item 46; the engine recording usage so the loop only decides (**done**:
+    `Budget.record` in `AgentRun`, `within` and `cost` pure, and a memo-map
+    sharing bug found by the `budget: false` row on the way); naming what a
+    tool can see of its session (**done**: `guide-sessions.md`); the static
+    toolkit as the common case in the type; a typed child returning its
+    value (**done**: `Subagent.Answer`, the matrix's "text only" cell is a
+    test); and this file becoming a list again. Open: item 46, the static
+    toolkit, and the split of this file.
+
+    **Added the same evening (§2b of the plan)**, after item 46's steps 1–3:
+    sequence 46 as 5, 4, 6; a fixture convention for wire and journal
+    changes (`test/fixtures/README.md`, a `verify: exists` per fixture);
+    two Effect notes for AGENTS.md (`Effect.fn` generics fall to their
+    default silently; a module-level layer is one instance under one memo
+    map); one wire type for "JSON the receiver decodes" across input,
+    elicitation detail and output value; and a `COLLABORATION.md` claim, or
+    an explicit "abandoned", for work that sits in the tree.
+
+    ```text
+    verify: grep "Ids.makeIdSource(id)" src/AgentSession.ts
+    ```
+
+57. ~~**Nobody has asked what a tool holding a resource does when the
+    *connection* dies.**~~ **CLOSED 2026-09-05.** `ToolCleanup` covers interruption of a run, and covers
+    it in-process, under replay and under delegation. A client disconnecting
+    mid-tool is a different event reaching a different seam, and the answer
+    could reasonably be "the run continues and the resource is released when it
+    ends" — but that is a decision, and it is currently whatever the transport
+    happens to do.
+
+    **Asked, by `test/CleanupOverWire.test.ts`**: the disconnect tears nothing
+    down, the tool finishes, the resource is released exactly once, and the
+    idempotent retry gets the answer. Pinned as the decision, since tearing a
+    tool down because a socket closed would make every flaky connection a
+    partial write. The matrix has no "not tested" cell left.
+
+    ```text
+    verify: exists test/CleanupOverWire.test.ts
+    ```
