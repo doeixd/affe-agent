@@ -92,7 +92,7 @@ the empty cells are its output, not its incompleteness.
 | concern | in-process | durable (replay) | behind a wire | delegated (subagent) |
 | --- | --- | --- | --- | --- |
 | token / cost ceiling | `Budget` | `BudgetCombinations` ¹ | n/a ² | `BudgetCombinations` ³ |
-| run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | **not tested** ⁵ |
+| run limits (turns, calls, duration) | `AgentLoop` | `LimitsUnderDurability` ⁴ | n/a ² | `LimitsAcrossDelegation` ⁵ |
 | tool approval | `Permission` | `DurablePermission` | contract row | `PermissionSubagent` ⁶ |
 | elicitation (a paused run answered) | `Elicitation` | `Durable` | contract row | `PermissionSubagent` ⁶ |
 | principal | `Principal` | `Principal` | **not tested** ⁷ | `SubagentPrincipal` ⁸ |
@@ -129,8 +129,13 @@ budget dropped the second's charges as replays. Fixed and pinned in `Budget`.
 killed would have been exactly the ones durability exists for -- parked on an
 approval, or on a human who went home.
 
-⁵ Expected to be the same gap as ³, for the same reason -- a child has its own
-loop -- but untested. A blank cell rather than an assumption.
+⁵ **Was "not tested"; measured, and decided the other way from money.** A
+parent's `maxTurns` counts the parent's turns and `maxToolCalls` counts the
+delegation as one call, however many turns or calls the child took; and a
+child's own bound holds under a delegation. That is the decision, not a gap:
+a turn is a fact about one run and is not fungible across agents the way a
+token is, so the bound that means "this child may take at most N turns" is
+on the child's loop, where it means the same thing whoever calls it. Item 56.
 
 ⁶ **Was item 53; crosses when asked to, and is loud when not.** A tool
 marked `needsApproval` asks through the session's elicitation seam, and a

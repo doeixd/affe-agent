@@ -471,17 +471,6 @@ and should not until it is committed. Item 30 is untouched.
 [conformance-matrix.md](./conformance-matrix.md), which is what that table is
 for: the gap is recorded as a gap rather than assumed either way.*
 
-56. **Run limits are probably not enforced across a delegation, and nobody has
-    checked.** `maxTurns`, `maxToolCalls` and `maxDuration` are loop
-    combinators, and a child agent has its own loop — the same shape as item 52
-    (a child's tokens are charged to nobody), for the same reason. If it holds,
-    an agent capped at N turns can exceed that cap by delegating, which is the
-    shape of an agent capped *because* it delegates. Unlike 52 this has not
-    been measured, so it is written as a suspicion with its reasoning rather
-    than as a finding. One test in the shape of `BudgetCombinations` settles
-    it; the fix, if needed, belongs with B's `inherit` decision rather than on
-    its own.
-
 57. **Nobody has asked what a tool holding a resource does when the
     *connection* dies.** `ToolCleanup` covers interruption of a run, and covers
     it in-process, under replay and under delegation. A client disconnecting

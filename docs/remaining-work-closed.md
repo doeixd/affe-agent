@@ -1154,3 +1154,29 @@ still resolves -- here, if not in the list. Nothing here is next;
     tools are governed by the child's own policy (a denying child blocks its
     own tool, and the parent is asked only about the delegation), and a parent
     approving a delegation is not approving what the child then does with it.
+
+### Newly ranked — from the combination matrix (2026-09-04)
+
+56. ~~**Run limits are probably not enforced across a delegation, and nobody has
+    checked.**~~ **CLOSED 2026-09-05, decided the other way from money.** `maxTurns`, `maxToolCalls` and `maxDuration` are loop
+    combinators, and a child agent has its own loop — the same shape as item 52
+    (a child's tokens are charged to nobody), for the same reason. If it holds,
+    an agent capped at N turns can exceed that cap by delegating, which is the
+    shape of an agent capped *because* it delegates. Unlike 52 this has not
+    been measured, so it is written as a suspicion with its reasoning rather
+    than as a finding. One test in the shape of `BudgetCombinations` settles
+    it; the fix, if needed, belongs with B's `inherit` decision rather than on
+    its own.
+
+    **Measured 2026-09-05** (`test/LimitsAcrossDelegation.test.ts`): a
+    parent's `maxTurns` counts the parent's turns, `maxToolCalls` counts the
+    delegation as one call, and a child's own bound holds under a delegation.
+    Decided as the right behaviour rather than fixed: a turn is a fact about
+    one run and is not fungible across agents the way a token is, so the
+    bound that means "this child may take at most N turns" is on the child's
+    loop, where it means the same thing whoever calls it. The matrix cell is
+    the test.
+
+    ```text
+    verify: exists test/LimitsAcrossDelegation.test.ts
+    ```
