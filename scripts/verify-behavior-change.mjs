@@ -39,8 +39,10 @@ const git = (args) => {
 }
 
 // One record per commit: hash, the trailer's values, then the files it touched.
-const RECORD = ""
-const FIELD = ""
+// ASCII record and unit separators, written as escapes: the first version had
+// them as literal control bytes, which read as empty strings in the source.
+const RECORD = "\\u001e"
+const FIELD = "\\u001f"
 const log = git([
   "log",
   `--format=${RECORD}%h${FIELD}%(trailers:key=${TRAILER},valueonly)`,
