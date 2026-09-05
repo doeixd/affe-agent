@@ -194,19 +194,36 @@ committing per `CLAUDE.md`.
 
 ## 5. Acceptance
 
-- `grep -rn 'PromptInput\|Input = never\|AgentInput.Typed' src test examples`
-  finds nothing.
-- The count of signatures carrying an explicit `Input` parameter falls; the
-  remaining ones are the ones genuinely generic over it.
-- `examples/typed-agent.ts` and `examples/getting-started.ts` keep their
+*Ticked 2026-09-05, with two lines that did not go as written.*
+
+- ~~`grep -rn 'PromptInput\|Input = never\|AgentInput.Typed' src test examples`
+  finds nothing.~~ Finds nothing.
+- ~~The count of signatures carrying an explicit `Input` parameter falls; the
+  remaining ones are the ones genuinely generic over it.~~ **It did not
+  fall**: 97 signatures carried `Value, Input` before, 101 do now. What
+  went was the *conditional* on them, not the parameters -- every one is
+  now an ordinary generic a caller can instantiate, which is what "genuinely
+  generic over it" meant, and the four new ones are `Subagent`'s and the
+  session handle's explicit type arguments. The prediction was wrong about
+  the number and right about the kind.
+- ~~`examples/typed-agent.ts` and `examples/getting-started.ts` keep their
   zero-cast, zero-annotation property, and the getting-started example's
-  text does not change at all -- an untyped agent must read exactly as it
-  did.
-- A recorded HTTP request body from an untyped client before the change is
-  byte-identical to one after.
-- A durable journal recorded before the change replays to identical history
-  after it.
-- The full suite, `lint`, `lint:portability`, `verify:package` green.
+  text does not change at all.~~ Getting-started is untouched; typed-agent
+  changed only its type-level assertion that the researcher's input is the
+  prompt rather than `never`.
+- ~~A recorded HTTP request body from an untyped client before the change is
+  byte-identical to one after.~~ `test/fixtures/prompt-request.json`, from
+  `4ee770d`, asserted identical; and `prompt-response.json`, from `baf0897`,
+  asserted identical plus the one added `value`.
+- ~~A durable journal recorded before the change replays to identical history
+  after it.~~ **Not recorded.** The path an old journal takes -- a prompt
+  with no `input` -- is the code that was there before and is exercised by
+  every durable test that does not declare an input, but no journal was
+  captured from before the change and replayed after it. The fixtures
+  convention now exists; the next durable change should record one first.
+- ~~The full suite, `lint`, `lint:portability`, `verify:package` green.~~
+  2159 tests, both lints, portability, and all 52 entry points from the
+  packed artifact.
 
 ## 6. Deliberately not this plan
 

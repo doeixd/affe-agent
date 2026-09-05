@@ -408,9 +408,9 @@ export const _inputShapesAreEnforced = () => ({
   })
 })
 
-type RemotePromptInput = Parameters<AgentClient.TypedSession<TypedInput>["prompt"]>[0]
-export type _RemotePromptNotNever = Assert<[RemotePromptInput] extends [never] ? false : true>
-export type _RemotePromptIsTheSchema = Assert<
-  RemotePromptInput extends { readonly customerId: string; readonly body: string } ? true : false
+type RemoteTypedInput = Parameters<AgentClient.TypedSession<TypedInput>["prompt"]>[0]
+export type _RemoteTypedNotNever = Assert<[RemoteTypedInput] extends [never] ? false : true>
+export type _RemoteTypedIsTheSchema = Assert<
+  RemoteTypedInput extends { readonly customerId: string; readonly body: string } ? true : false
 >
-export type _RemotePromptNotAny = Assert<IsAny<RemotePromptInput> extends false ? true : false>
+export type _RemoteTypedNotAny = Assert<IsAny<RemoteTypedInput> extends false ? true : false>
