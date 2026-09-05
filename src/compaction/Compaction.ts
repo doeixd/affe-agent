@@ -417,22 +417,29 @@ const summaryMessage = (summary: string) =>
   })
 
 /**
- * What stands in for the folded prefix after a rollover: the protected
- * prefix -- the system messages that led the folded history, which is where
- * a session's instructions live -- then one marker naming the window,
- * carrying the handoff note when there is one.
+ * The protected prefix of a fold: the system messages that lead the folded
+ * history, which is where a session's instructions live (`AgentSession`
+ * seeds history with them). Every projection keeps them ahead of whatever
+ * stands in for the rest, summary or marker; a fold that dropped them left
+ * the model without its instructions from the first compaction on (item 60l).
  */
-const rolloverMessages = (
-  checkpoint: Rollover,
-  messages: ReadonlyArray<Prompt.Message>
+const protectedPrefix = (
+  messages: ReadonlyArray<Prompt.Message>,
+  coveredThrough: number
 ): ReadonlyArray<Prompt.Message> => {
   const prefix: Array<Prompt.Message> = []
-  for (const message of messages.slice(0, checkpoint.coveredThrough)) {
+  for (const message of messages.slice(0, coveredThrough)) {
     if (message.role !== "system") break
     prefix.push(message)
   }
-  return [...prefix, rolloverMarker(checkpoint)]
+  return prefix
 }
+
+/** What stands in for the folded prefix after a rollover: the protected prefix, then one marker naming the window. */
+const rolloverMessages = (
+  checkpoint: Rollover,
+  messages: ReadonlyArray<Prompt.Message>
+): ReadonlyArray<Prompt.Message> => [...protectedPrefix(messages, checkpoint.coveredThrough), rolloverMarker(checkpoint)]
 
 const rolloverMarker = (checkpoint: Rollover) =>
   Prompt.systemMessage({
@@ -450,7 +457,9 @@ const checkpointMessages = (
   checkpoint: Checkpoint,
   messages: ReadonlyArray<Prompt.Message>
 ): ReadonlyArray<Prompt.Message> =>
-  isRollover(checkpoint) ? rolloverMessages(checkpoint, messages) : [summaryMessage(checkpoint.summary)]
+  isRollover(checkpoint)
+    ? rolloverMessages(checkpoint, messages)
+    : [...protectedPrefix(messages, checkpoint.coveredThrough), summaryMessage(checkpoint.summary)]
 
 /**
  * The most recent `new_context` result in the uncovered tail of history,
@@ -1494,6 +1503,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
             Option.none()
           )
           const projected = substitute(context.prompt, messages, [
+            ...protectedPrefix(messages, preparation.value.coveredThrough),
             summaryMessage(summary.text),
             ...preparation.value.retained.content
           ])

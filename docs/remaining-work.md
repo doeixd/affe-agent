@@ -515,22 +515,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     verify: no-grep "new_context" src/ToolExecution.ts
     ```
 
-60l. **A summary projection drops the canonical instructions.** Found while
-    building 60d: a session's instructions are its first canonical message
-    (`AgentSession` seeds history with `History.systemMessage`), and a
-    `Summary` checkpoint's projection is the summary message plus the retained
-    tail -- the system message is inside `messages.slice(0, coveredThrough)`
-    and is gone unless the summariser restated it. A `Rollover` keeps the
-    leading system messages as its protected prefix (`rolloverMessages`); a
-    summary should keep the same prefix ahead of its summary message. One
-    edit at the projection site and a test that the instructions survive a
-    summary; the summariser's transcript can keep including them. Small, and
-    a behaviour change every summarising agent will see.
-
-    ```text
-    verify: no-grep "prefix, summaryMessage" src/compaction/Compaction.ts
-    ```
-
 60e. **Retained history as evidence, bounded.** After 60d: two readonly tools
     over the session's own history -- search with at most three hits, a page
     of at most five thousand characters -- every description carrying

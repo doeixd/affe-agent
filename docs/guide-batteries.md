@@ -356,8 +356,10 @@ const agent = Agent.make({
 ```
 
 Canonical history is never rewritten, truncated, or summarised in place. What
-changes is the projection: a summary of the head, the retained tail, and
-everything since. The tail stays verbatim because it is what the model is still
+changes is the projection: the instructions, a summary of the head, the retained
+tail, and everything since. The system messages that lead history are a
+protected prefix every projection keeps, so a fold never costs the model its
+instructions. The tail stays verbatim because it is what the model is still
 reasoning over.
 
 Summaries are checkpointed, so a conversation past the threshold does not

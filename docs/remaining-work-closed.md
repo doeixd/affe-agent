@@ -1377,3 +1377,19 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "Failpoints.covered(Compaction.failpoints" test/ContextRollover.test.ts
     verify: grep "survives a suspension, from the journalled tool result" test/Durable.test.ts
     ```
+
+60l. ~~**A summary projection drops the canonical instructions.**~~ **DONE
+    2026-09-05.** A session's instructions are its first canonical message,
+    so the first fold covered them, and the projection began at the summary
+    message: from the first compaction on, the model ran without its
+    instructions unless the summariser had restated them. One helper,
+    `protectedPrefix`, returns the system messages that lead the folded
+    history, and every projection keeps them ahead of what stands in for the
+    rest -- a fresh summary, a stored summary, or a rollover marker (60d had
+    it for rollovers only). One row drives four prompts through a summary and
+    a stored checkpoint; breaking either projection site alone fails it.
+
+    ```text
+    verify: grep "const protectedPrefix" src/compaction/Compaction.ts
+    verify: grep "the instructions survive a summary" test/Compaction.test.ts
+    ```

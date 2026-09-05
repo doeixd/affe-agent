@@ -1103,6 +1103,47 @@ describe("compaction controller (phases 8-10)", () => {
     })
   )
 
+  it.effect("the instructions survive a summary: the protected prefix leads every projection", () =>
+    Effect.gen(function* () {
+      // Item 60l. A session's instructions are its first canonical message, so
+      // a fold that covers them covers the instructions. The projection keeps
+      // the leading system messages ahead of the summary -- both when a fresh
+      // summary is projected and when a stored one is -- so the model is never
+      // without them. Before this row, both projections began at the summary.
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(4, { retain: 2 }),
+        summarise: () => Effect.succeed("what happened")
+      })
+      const { layer, recorder } = yield* TestLanguageModel.script([
+        TestLanguageModel.text("one"),
+        TestLanguageModel.text("two"),
+        TestLanguageModel.text("three"),
+        TestLanguageModel.text("four"),
+        TestLanguageModel.text("five")
+      ])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(
+            Agent.make({ instructions: "Be terse.", contextTransform: compaction.transform, loop: AgentLoop.bounded(1) })
+          )
+          for (const input of ["a", "b", "c", "d", "e"]) yield* session.prompt(input)
+        })
+      ).pipe(Effect.provide(layer))
+      const prompts = yield* recorder.prompts
+      // Under the threshold (six messages, two retained, four to fold is not
+      // more than four): the instructions alone lead.
+      assert.deepStrictEqual(summaryOf(prompts[2]!), ["Be terse."])
+      // The turn that summarised ("d": eight messages), and the turn that
+      // projected the stored checkpoint ("e"): instructions first, then the
+      // summary, then the tail.
+      for (const prompt of [prompts[3]!, prompts[4]!]) {
+        assert.deepStrictEqual(summaryOf(prompt), ["Be terse.", "Summary of the earlier conversation:\n\nwhat happened"])
+        assert.strictEqual(prompt.content[0]?.role, "system")
+        assert.strictEqual(prompt.content[1]?.role, "system")
+      }
+    })
+  )
+
   it.effect("compact() with nothing to fold fails typed, leaves the checkpoint, and says so on the stream", () =>
     Effect.gen(function* () {
       const compaction = yield* Compaction.controller({
