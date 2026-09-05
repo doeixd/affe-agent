@@ -185,7 +185,11 @@ describe("failpoints", () => {
       assert.isTrue(rows.every((row) => row.reached >= 1))
       // The driver's own assertions held, so each exit is the retry's answer,
       // which differs by boundary in exactly the way the boundaries differ.
-      const answers = rows.map((row) => Exit.isSuccess(row.exit) ? row.exit.value : "driver failed")
+      // A driver assertion that failed is inside the row's exit; say which
+      // boundary and why, rather than comparing against an opaque marker.
+      const answers = rows.map((row) =>
+        Exit.isSuccess(row.exit) ? row.exit.value : `${row.location}: ${Cause.pretty(row.exit.cause)}`
+      )
       assert.deepStrictEqual(answers, ["Appended", "Duplicate"])
     })
   )

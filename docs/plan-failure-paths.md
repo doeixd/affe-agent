@@ -140,7 +140,11 @@ failing test instead of an argument.
   `RelayRpc`. Not one global enum, which would rot.
 * A testing helper — `src/testing/Failpoints.ts` — that fails, dies or
   interrupts at the *n*th hit of a named location, and records the hits it saw
-  so a test can assert the order.
+  so a test can assert the order. Since 2026-09-05 (`plan-context-lessons.md`
+  2.6) it also has `covered(group, drive)`: crash at every boundary the
+  subsystem declares, through the real path, and die by name for any the
+  driver never reaches -- so a declared crash window with no test that
+  crashes at it fails the build rather than sitting in the tuple unexercised.
 
 **Naming rule, learned from theirs.** A location names the *durable boundary*
 it sits beside (`before-persist`, `after-persist`), never a line of code.
