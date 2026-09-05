@@ -15,7 +15,7 @@ evidence is named, and where it is a test it is in the tree.*
 | 5 | ~~**Name what a tool can see of its session**~~ | **shipped**: `guide-sessions.md`, "What a tool can see of its session" | small |
 | 6 | **The static toolkit is the common case; say so in the type** | `Declared` reattaches what the lowering erased | medium |
 | 7 | ~~A typed child returns its value~~ | **shipped**; the matrix's "text only" cell is a test | small |
-| 8 | `remaining-work.md` is 1600 lines | the checker keeps it honest, not readable | small |
+| 8 | ~~`remaining-work.md` is 1600 lines~~ | **split** 2026-09-05: 21 open entries in the list, 59 closed in the ledger, the checker scans both | small |
 
 Order of work: 1, 2, 3, 4, then the rest. 1 and 2 are cheap and each closes
 a class of bug rather than an instance; 3 is the large one everything after
@@ -216,6 +216,17 @@ Closed items move to `status-history.md` under their closing date, with the
 `verify:` lines that pin them as *done*; the live list keeps the open ones
 and their `verify:` lines that pin them as *open*. The checker runs over
 both files.
+
+**Done 2026-09-05, with one change: a ledger file, not `status-history.md`.**
+That file is already 5,700 lines and is a chronology; sixty entries filed by
+closing date would have buried the reasoning each was written to keep.
+`remaining-work-closed.md` holds them verbatim, in the sections and order
+they had, so a closed entry reads exactly as it did and its `verify:` lines
+pin the work as done from there. The live list went from 1,692 lines to
+about 560, all of it open. The rule for the classification was the file's
+own convention -- a struck heading -- plus a first line reading "SHIPPED",
+"landed" or "proven live"; three partials (6, 19, 20, "mostly landed" and
+"the core landed") stayed open on purpose.
 
 ## 2b. Added after item 46's first three steps (2026-09-04, evening)
 

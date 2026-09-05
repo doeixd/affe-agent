@@ -39,7 +39,8 @@ holds only the install, quickstart, seam map, package map and stability notes.
 | [getting-started.md](./getting-started.md) | One typed agent, running against the scripted model with no key. The code is `examples/getting-started.ts`, pinned by a test. |
 | [platforms.md](./platforms.md) | Node and Cloudflare Workers, one table: what runs where and what survives what on each. Bun is untested and says so. |
 | [MODULES.md](./MODULES.md) | Every public module — what, why, and what it composes with. The answer to "which module do I need for X". |
-| [remaining-work.md](./remaining-work.md) | The ranking, easiest first, of what is actually left. |
+| [remaining-work.md](./remaining-work.md) | The ranking, easiest first, of what is actually left -- the live list, and only what is open. |
+| [remaining-work-closed.md](./remaining-work-closed.md) | The ledger: every entry the live list has closed, verbatim, with its reasoning and its `verify:` lines still checked. Nothing in it is next. |
 | [transport.md](./transport.md) | Reference for how a session crosses a process boundary: the client seam and every transport over it. |
 
 ## Current design threads (2026-08-27)

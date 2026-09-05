@@ -18,6 +18,11 @@
  * has been undone, and either way the text has to change before the build
  * goes green. That is the point -- the doc cannot quietly lie about the code.
  *
+ * Two files are scanned: the live list and its ledger,
+ * `remaining-work-closed.md`. A closed entry keeps its `verify:` lines when
+ * it moves, and there they pin the work as *done* -- an undone fix fails the
+ * build from the ledger exactly as unlanded work fails it from the list.
+ *
  * Deliberately a four-verb literal DSL rather than shell: `npm run check`
  * runs on Windows, and a check that only fires where `sh` is on the path is a
  * check that fires nowhere it matters. Literal substrings rather than
@@ -31,35 +36,41 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const doc = path.join(root, "docs", "remaining-work.md")
-
-const source = fs.readFileSync(doc, "utf8")
-const lines = source.split(/\r?\n/)
+const docs = ["docs/remaining-work.md", "docs/remaining-work-closed.md"]
 
 // `verify: <verb> ["literal"] <path>`. The literal is quoted so it may hold
 // spaces; the path is one token.
 const shape = /^\s*verify:\s+(grep|no-grep|exists|absent)\s+(?:"((?:[^"\\]|\\.)*)"\s+)?(\S+)\s*$/
 
-/** @type {Array<{ line: number, verb: string, literal: string | undefined, target: string }>} */
+/** @type {Array<{ doc: string, line: number, verb: string, literal: string | undefined, target: string }>} */
 const checks = []
 /** @type {Array<string>} */
 const malformed = []
 
-lines.forEach((text, index) => {
-  if (!/^\s*verify:/.test(text)) return
-  const match = shape.exec(text)
-  if (match === null) {
-    malformed.push(`${index + 1}: ${text.trim()}`)
-    return
+for (const doc of docs) {
+  const file = path.join(root, doc)
+  if (!fs.existsSync(file)) {
+    console.error(`verify-remaining-work: ${doc} is missing`)
+    process.exit(1)
   }
-  const [, verb, literal, target] = match
-  checks.push({
-    line: index + 1,
-    verb,
-    literal: literal === undefined ? undefined : literal.replace(/\\(.)/g, "$1"),
-    target
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/)
+  lines.forEach((text, index) => {
+    if (!/^\s*verify:/.test(text)) return
+    const match = shape.exec(text)
+    if (match === null) {
+      malformed.push(`${doc}:${index + 1}: ${text.trim()}`)
+      return
+    }
+    const [, verb, literal, target] = match
+    checks.push({
+      doc,
+      line: index + 1,
+      verb,
+      literal: literal === undefined ? undefined : literal.replace(/\\(.)/g, "$1"),
+      target
+    })
   })
-})
+}
 
 if (malformed.length > 0) {
   console.error("verify-remaining-work: lines that look like checks but do not parse:")
@@ -69,7 +80,7 @@ if (malformed.length > 0) {
 
 // Zero checks is a broken parser or a gutted document, not a clean bill.
 if (checks.length === 0) {
-  console.error("verify-remaining-work: no `verify:` lines found in docs/remaining-work.md")
+  console.error("verify-remaining-work: no `verify:` lines found in the live list or the ledger")
   process.exit(1)
 }
 
@@ -79,7 +90,7 @@ const failures = []
 for (const check of checks) {
   const target = path.join(root, check.target)
   const present = fs.existsSync(target)
-  const where = `docs/remaining-work.md:${check.line}`
+  const where = `${check.doc}:${check.line}`
 
   switch (check.verb) {
     case "exists":
@@ -118,4 +129,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log(`verify-remaining-work: ${checks.length} claims hold`)
+console.log(`verify-remaining-work: ${checks.length} claims hold across ${docs.length} files`)
