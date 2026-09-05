@@ -487,17 +487,6 @@ for: the gap is recorded as a gap rather than assumed either way.*
     to work them, each pinned on its *open* state so the checker turns red
     the moment one lands and its text has to move to the ledger.
 
-60c. **`Behavior-Change:` as a trailer the checker reads.** A commit touching
-    `test/fixtures/` must carry one sentence of migration in a
-    `Behavior-Change:` trailer or the claims checker fails; a trailer on a
-    commit touching no fixture is reported so the change gets its recording.
-    Connects the fixtures convention to the commit log in both directions.
-    Small; the checker already runs in `check`.
-
-    ```text
-    verify: no-grep "Behavior-Change" scripts/verify-remaining-work.mjs
-    ```
-
 60d. **Rollover: a fresh window as a compaction decision, with the harness as
     interpreter.** This *is* phase 15 of `plan-branching-and-compaction.md`,
     parked since it was written. A second `Checkpoint` kind beside the

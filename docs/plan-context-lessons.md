@@ -171,6 +171,14 @@ reverse: a `Behavior-Change:` trailer on a commit that touches no fixture is
 reported, so the change gets its recording. Small; the checker already runs
 in `check`.
 
+**Shipped 2026-09-05** (item 60c), as its own script rather than a branch of
+the claims checker: one reads the docs, the other reads the commit log, and
+a check that cannot see its input (a shallow clone) has to fail rather than
+pass, which is a different failure from a stale claim. The README in the
+fixtures directory is excused, since editing the convention changes no
+behaviour. Proved to fire against the two fixture commits that predate the
+rule.
+
 ### 2.6 Failpoints without a test fail the build
 
 **What they did.** Certification counts derive from the declared failpoint

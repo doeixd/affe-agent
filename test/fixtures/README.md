@@ -20,3 +20,18 @@ the JSON here, and delete the test. Then write the permanent test that reads
 the file, and say in its doc which commit and which change. A fixture that
 asserts identity is the strongest kind; one that asserts "identical plus this
 one difference" is the honest kind when the change was the point.
+
+## The trailer
+
+A commit that touches this directory must carry a `Behavior-Change:` trailer:
+one sentence saying what changed for a caller, in the caller's terms.
+`npm run verify:behavior-change` (in `check`) fails the build naming any
+fixture-touching commit since `1c6b2bd` without one, and reports any commit
+carrying the trailer that touched no fixture -- a behaviour change that
+measured nothing has not been recorded. The rule applies from the commit the
+convention landed in; earlier fixture commits predate it. A shallow clone
+that cannot see the baseline fails the check rather than passing it.
+
+```
+Behavior-Change: an untyped agent's result now carries its text as `value`; the request bytes are unchanged.
+```

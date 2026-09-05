@@ -1320,3 +1320,21 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "export const covered" src/testing/Failpoints.ts
     verify: grep "Failpoints.covered(DeliveryLog.failpoints" test/Failpoints.test.ts
     ```
+
+60c. ~~**`Behavior-Change:` as a trailer the checker reads.**~~ **DONE
+    2026-09-05.** Its own script rather than a branch of the claims checker,
+    because it reads the commit log, not the docs:
+    `scripts/verify-behavior-change.mjs`, in `check`, walks every commit
+    since the fixtures convention landed (`1c6b2bd`) and fails by name for a
+    commit that touched a fixture without a `Behavior-Change:` trailer, and
+    for one that carried the trailer and touched none. The README in that
+    directory is not a fixture and is excused. A shallow clone that cannot
+    see the baseline fails rather than passes. Broken once, against the
+    range `4ee770d..1c6b2bd`, where two commits changed fixtures before the
+    rule existed: both named.
+
+    ```text
+    verify: exists scripts/verify-behavior-change.mjs
+    verify: grep "verify:behavior-change" package.json
+    verify: grep "## The trailer" test/fixtures/README.md
+    ```
