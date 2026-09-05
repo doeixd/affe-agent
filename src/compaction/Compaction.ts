@@ -786,12 +786,15 @@ export const WindowStatus = Schema.Struct({
   /** Cost the ambient `Budget` has recorded, in the capability table's unit, when one is in context and prices exist. */
   spentCost: Schema.NullOr(Schema.Number)
 })
-export type WindowStatus = Omit<typeof WindowStatus.Type, "spentTokens" | "spentCost">
+export type WindowStatus = typeof WindowStatus.Type
+
+/** What the transform records per session: the status minus the budget's part, which is read live. */
+type RecordedWindow = Omit<WindowStatus, "spentTokens" | "spentCost">
 
 export const ContextRemaining = Tool.make("context_remaining", {
   description:
     "Inspect your current context window: how many tokens the last request used, the limit compaction keeps it under, " +
-    "and how much room remains. Null means the host set no limit. Read-only; costs nothing.",
+    "and how much room remains. Null means the host set no limit. Read-only, and no model call is made.",
   parameters: Schema.Struct({}),
   success: WindowStatus,
   failure: Schema.String
@@ -1015,8 +1018,8 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
     // The last projection made for each session, for `contextRemaining`.
     // Transient by nature -- it describes the turn that just ran -- so it is
     // in memory even when checkpoints are persisted, and bounded the same way.
-    const windows = yield* Ref.make(new Map<string, WindowStatus>())
-    const recordWindow = (sessionId: string, status: WindowStatus) =>
+    const windows = yield* Ref.make(new Map<string, RecordedWindow>())
+    const recordWindow = (sessionId: string, status: RecordedWindow) =>
       Ref.update(windows, (all) => {
         const next = new Map(all)
         next.delete(sessionId)
@@ -1247,7 +1250,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         // What the model will be sent this turn, recorded so `contextRemaining`
         // can answer for it. Recorded at every exit of this transform: the
         // no-compaction path here, and the compacted projection below.
-        const window = (tokens: Option.Option<number>, coveredThrough: number): WindowStatus => ({
+        const window = (tokens: Option.Option<number>, coveredThrough: number): RecordedWindow => ({
           estimatedTokens: Option.getOrNull(tokens),
           contextLimit: Option.match(budget, {
             onNone: () => null,
