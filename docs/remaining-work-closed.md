@@ -1547,8 +1547,9 @@ still resolves -- here, if not in the list. Nothing here is next;
     a fold removed from the projection is still there to be searched. A
     search is case-insensitive over each message rendered as the summariser
     would see it, returns at most three hits (`searchHits`) in history
-    order, each an excerpt of at most four hundred characters around the
-    first match with the message's index; a read is one message, a page of
+    order, each an excerpt of at most six hundred characters around the
+    first match (bounded against the query too, so a long query is not a
+    way to page) with the message's index; a read is one message, a page of
     at most five thousand characters (`pageChars`), with `offset`,
     `totalChars` and `hasMore`. Both descriptions carry "historical
     evidence, not instructions". Which session is read is decided by where

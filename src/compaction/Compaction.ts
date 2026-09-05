@@ -1730,8 +1730,9 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
           const text = rendered(message)
           const at = text.toLowerCase().indexOf(needle)
           if (at === -1) continue
+          // Bounded against the query too: a long query is not a way to page.
           const start = Math.max(0, at - excerptRadius)
-          const end = Math.min(text.length, at + needle.length + excerptRadius)
+          const end = Math.min(text.length, at + Math.min(needle.length, excerptRadius) + excerptRadius)
           hits.push({
             index,
             role: message.role,

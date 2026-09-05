@@ -106,7 +106,7 @@ describe("retained history as evidence", () => {
       const agent = Agent.make({
         tools: [compaction.tools.searchContext, compaction.tools.readContext],
         contextTransform: compaction.transform,
-        loop: AgentLoop.bounded(4)
+        loop: AgentLoop.bounded(5)
       })
       const long = `needle ${"x".repeat(12_000)} needle`
       // Five messages mention the needle: four answers and the long one.
@@ -116,6 +116,7 @@ describe("retained history as evidence", () => {
         { text: "needle three" },
         { text: long },
         { toolCalls: [{ id: "s1", name: "search_context", params: { query: "NEEDLE" } }] },
+        { toolCalls: [{ id: "s2", name: "search_context", params: { query: "x".repeat(10_000) } }] },
         { toolCalls: [{ id: "r1", name: "read_context", params: { index: 7 } }] },
         { toolCalls: [{ id: "r2", name: "read_context", params: { index: 7, offset: 5_000 } }] },
         { text: "done" }
@@ -138,8 +139,12 @@ describe("retained history as evidence", () => {
       assert.strictEqual(second!.offset, 5_000)
       assert.strictEqual(second!.text.length, Compaction.pageChars)
       assert.isTrue(second!.hasMore)
-      // An excerpt is bounded too: the long match does not come back whole.
+      // An excerpt is bounded too: the long match does not come back whole,
+      // and a long query is not a way to page -- three radii at most.
       assert.isBelow(search!.hits[2]!.excerpt.length, 1_000)
+      const [, byLongQuery] = searches(events)
+      assert.strictEqual(byLongQuery!.hits.length, 1)
+      assert.isAtMost(byLongQuery!.hits[0]!.excerpt.length, 600 + 6)
     })
   )
 
