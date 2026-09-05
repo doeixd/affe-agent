@@ -951,6 +951,15 @@ what ships here and found a convergent turn model, a much broader surface on
 our side, and six gaps worth closing. Its §2 carries the full ranking with
 sizes; the items are repeated here so this list stays the one tracker.
 
+    **Closed 2026-09-04 by `plan-input-default.md` step 5.** `RemoteResult`
+    and `Outcome` had gained an opaque encoded `value` decoded at the edge with
+    the agent's output schema (`AgentClient.typedSession`, 48f); step 5 made
+    it uniform. Every agent has a `Value` -- its text unless it declares an
+    `AgentOutput` -- so every completed result carries one on the wire and in
+    the journal, an untyped agent's is its text, and a caller generic over
+    agents reads a value from all of them. `test/InputWire.test.ts` pins the
+    wire change as exactly the added field.
+
 36. ~~**Getting-started page, lineage note, platforms table**~~ — landed
     2026-09-01 (`docs/getting-started.md`, `docs/platforms.md`, README
     section, `test/GettingStarted.test.ts`). As planned:

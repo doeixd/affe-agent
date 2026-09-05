@@ -193,6 +193,16 @@ they sit on, and the post-commit review checks the commit against both.
   capture and stack-trace information, and the language service flags the
   second. Never annotate the generator's return type to steer inference: it
   collapses the error and requirement channels to `unknown`.
+* A generic type parameter is **not inferred through `Effect.fn`'s wrapper
+  when it is itself a type parameter of the caller**; it falls to its
+  default, silently. `AgentSession.prompt(session, input)` inside a helper
+  generic over `Value` or `Input` returns `Result<Tools, string>`, not
+  `Result<Tools, Value>`, and the error reads as a variance problem three
+  calls away. Pass explicit type arguments at that call site
+  (`prompt<Tools, E, Value, Input>(...)`). A direct call on a concrete
+  session infers fine, and `test/AgentOutput.test.ts` pins that it does;
+  this bit twice in one day while the defaults were `never`, which is
+  assignable to everything and hid it.
 * Annotate spans with `Effect.annotateCurrentSpan` inside the function.
 * Errors are `Schema.TaggedError`. Define `message` as a **getter, never a
   schema field**: the error still reads well in logs and stack traces, but the
@@ -207,6 +217,15 @@ they sit on, and the post-commit review checks the commit against both.
   optional properties, because that is how Effect's own APIs express arguments.
   A serialization boundary may project `Option` to `null`; that is the wire
   format's business, not the domain's.
+* **A module-level layer constant is one instance under one memo map.**
+  `Effect.provide(layer)` builds a layer in the fibre's inherited memo map,
+  so providing the same `Layer` value again inside a scope that already
+  provided it hands back the *same* built services -- right for sharing a
+  pool, wrong for a counter that must be private. `Budget.layer` was handed
+  to a delegated child that way and charged the parent. A fresh instance
+  needs a fresh layer *value* (`Budget.fresh()` is the pattern: `Layer.effect`
+  called anew), not a second `provide`. Any `Layer.effect` constant that
+  closes over a `Ref` has this property.
 * Tracing export is application wiring, never a harness dependency. v4 ships an
   OTLP exporter at `effect/unstable/observability`; `@effect/opentelemetry` is
   only for interop with an existing OTel SDK. See `examples/tracing.ts`.

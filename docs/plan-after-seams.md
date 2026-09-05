@@ -228,9 +228,9 @@ notes as one commit; the rest as they come up.
 | --- | --- | --- | --- |
 | 9 | **Sequence item 46 as 5, then 4, then 6** | 5 mirrors 2 and unlocks `Agent.Any`; 4 is store surgery; 6 written once against the finished shape | -- |
 | 10 | ~~**A fixture convention for wire and journal changes**~~ | **shipped**: `test/fixtures/README.md`, two fixtures, `verify: exists` each | small |
-| 11 | **Two Effect notes in AGENTS.md** | an `Effect.fn` generic fell to its default silently, twice; a module-level layer was shared through the memo map, silently | small |
+| 11 | ~~**Two Effect notes in AGENTS.md**~~ | **shipped**, in the Effect usage section | small |
 | 12 | **One wire type for "JSON the receiver decodes"** | input, elicitation `detail` and output `value` are the same concept spelled three ways | medium |
-| 13 | **Say so when work in the tree is abandoned** | a colleague's edits sat unclaimed all day and every commit staged around them | -- |
+| 13 | ~~**Say so when work in the tree is abandoned**~~ | **said**, in `COLLABORATION.md`; the owner's move | -- |
 
 ### 2b.1 Item 46: 5, then 4, then 6
 
