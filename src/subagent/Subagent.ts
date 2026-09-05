@@ -10,6 +10,7 @@ import * as Budget from "../budget/Budget.js"
 import * as Elicitation from "../Elicitation.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Subagents (issue #4 item 4): ergonomics for the pattern the library already
@@ -50,6 +51,18 @@ import * as InternalToolkit from "../internal/toolkit.js"
  * (money is the parent's); an approval crosses only when asked to, because
  * forwarding it puts a real question to a person. A child's declared output
  * crosses as the tool's result: see `Answer`.
+ *
+ * A child that was **cut short** -- its run ended `interrupted`, by its own
+ * loop's timeout or a signal that reached only it -- is a child failure too
+ * (`SubagentInterruptedError`), decided in `plan-two-decisions.md` §2: the
+ * parent's model must be able to tell a finished answer from half of one.
+ * The failure carries what the child had said, because two lookups' worth of
+ * findings are still findings; it does not say that nothing happened, since
+ * the child's tool calls are committed. Under `"return"` the parent reads
+ * it; under `"die"` it fails the parent run like any child failure. When the
+ * *parent* is the one interrupted, its own run is ending and this is moot:
+ * interruption of the parent takes precedence over any `"die"`, which
+ * `test/Subagent.test.ts` holds.
  *
  * A child *defect* is still a defect, under either setting, and it kills the
  * parent run. That is deliberate rather than an omission. `onError` is about
@@ -203,6 +216,31 @@ const budgetFor = (inherit: Inherit | undefined): Effect.Effect<Layer.Layer<Budg
  */
 export type Answer<Value> = Value
 
+/**
+ * The child's run ended `interrupted` before it finished: a delegation timed
+ * out, or a signal reached the child alone. A failure, not a short success,
+ * so the parent can tell; `partial` is what the child had said by then.
+ */
+export class SubagentInterruptedError extends Schema.TaggedError<SubagentInterruptedError>()(
+  Namespace.tag("subagent/SubagentInterruptedError"),
+  {
+    toolName: Schema.String,
+    turns: Schema.Number,
+    partial: Schema.Option(Schema.String)
+  }
+) {
+  override get message() {
+    const said = Option.match(this.partial, {
+      onNone: () => "it had said nothing yet",
+      onSome: (text) => `it had said: ${text}`
+    })
+    return (
+      `The delegation ${this.toolName} was interrupted after ${this.turns} turn${this.turns === 1 ? "" : "s"} and did not ` +
+      `finish; ${said}. Its tool calls up to that point did run.`
+    )
+  }
+}
+
 /** The `success` schema a delegation declares: the child's output schema, or a string. */
 const successOf = <Value>(agent: {
   readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
@@ -253,7 +291,20 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
         elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined
       }),
       (session) =>
-        Effect.flatMap(AgentSession.prompt<Tools, E, Value, Input>(session, input), (result) => answerOf<Tools, Value>(result))
+        Effect.flatMap(AgentSession.prompt<Tools, E, Value, Input>(session, input), (result) =>
+          Effect.gen(function* () {
+            // Cut short is a failure carrying the partial text, not a short
+            // success: decision 2 of `plan-two-decisions.md`.
+            if (result.status === "interrupted") {
+              return yield* new SubagentInterruptedError({
+                toolName: name,
+                turns: result.turns,
+                partial: result.text.length === 0 ? Option.none() : Option.some(result.text)
+              })
+            }
+            return yield* answerOf<Tools, Value>(result)
+          })
+        )
     )
   )
 }

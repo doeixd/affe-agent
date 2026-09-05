@@ -134,7 +134,7 @@ describe("a subagent under durability", () => {
     30_000
   )
 
-  it.live("an interrupted child answers with what it had, and the parent is not told", () =>
+  it.live("an interrupted child is reported as cut short, and the parent carries on", () =>
     Effect.gen(function* () {
       /**
        * What this actually found, after two wrong guesses about it.
@@ -147,19 +147,18 @@ describe("a subagent under durability", () => {
        * not, and the reason is the interesting part.
        *
        * **A child session absorbs interruption by design.** So an interrupted
-       * child does not fail its delegation: `Agent.run` returns normally with
-       * whatever was committed before the cut, `Subagent.tool` maps that to
-       * `result.text`, and the parent's tool call *succeeds* with a partial
-       * answer. Nothing interrupt-shaped ever reaches `DurableToolkit`, which
-       * is why forcing the retry-safe branch changes nothing here.
-       *
-       * Two things follow, and both are worth having written down. Subagents
-       * are structurally insulated from the reissue hazard 48a exists to stop
-       * -- good, and not by anything anyone designed for that reason. And a
-       * parent cannot distinguish a delegation that finished from one that was
-       * cut short: the model reads a short answer as an answer. That is a
-       * design question rather than a defect, and it is recorded in
-       * `remaining-work.md` rather than decided here.
+       * child does not raise: `Agent.run` returns normally with whatever was
+       * committed before the cut, and nothing interrupt-shaped ever reaches
+       * `DurableToolkit`, which is why forcing the retry-safe branch changes
+       * nothing here. What the parent is handed was decided on 2026-09-05
+       * (`plan-two-decisions.md` §2, item 50): a `SubagentInterruptedError`
+       * on the tool's failure channel, carrying the partial text, rather than
+       * the partial text as a finished answer. It is an ordinary failure --
+       * not an interruption-shaped cause -- so it is journalled and replays
+       * as that failure, and a reissue is still not asked for. Matrix
+       * footnote 12 says the same, narrowed. `test/Subagent.test.ts` holds
+       * the failure's content and both `onError` modes; this row holds the
+       * durable half: one child run, and a parent that carried on.
        */
       const childCalls = yield* Ref.make(0)
       const childModel = Layer.effect(

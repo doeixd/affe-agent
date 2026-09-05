@@ -73,6 +73,7 @@
   "affe-agent/session-inbox",
   "affe-agent/shell/Shell",
   "affe-agent/skills/SkillRegistry",
+  "affe-agent/subagent/SubagentInterruptedError",
   "affe-agent/tool-source/Credentials/Bindings",
   "affe-agent/tool-source/Credentials/Provider",
   "affe-agent/tree/NodeId",

@@ -183,10 +183,12 @@ Item 57. With this the table has no "not tested" cell left.
 ¹¹ Reissue is a property of replay. Without a journal there is nothing to
 replay and nothing to reissue.
 
-¹² Structurally insulated, and not by anyone's design: a child session absorbs
-interruption, so an interrupted delegation returns partial text rather than
-raising, and nothing interrupt-shaped reaches `DurableToolkit`. The corollary
-is item 50 -- a parent cannot tell a cut-short delegation from a finished one.
+¹² A child session absorbs interruption, so nothing interrupt-shaped reaches
+`DurableToolkit`: a cut-short delegation is, since 2026-09-05 (item 50,
+`plan-two-decisions.md` §2), a `SubagentInterruptedError` on the tool's
+failure channel carrying the partial text -- an ordinary failure, journalled
+and replayed as one, never a reissue. The parent can tell; the retry question
+is not raised.
 
 ¹³ The in-process client has no delivery log, so it **must refuse** a cursor
 rather than quietly returning a live stream. That refusal is itself a contract

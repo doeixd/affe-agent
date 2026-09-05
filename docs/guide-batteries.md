@@ -40,7 +40,12 @@ Two properties come for free from the structured pieces underneath:
 A child failure returns to the parent model as a string on the tool's `failure`
 channel by default — "the researcher could not find it" is something the parent
 can route around — while a defect still propagates as a bug. Pass
-`onError: "die"` to fail the parent run instead.
+`onError: "die"` to fail the parent run instead. A child that was cut short
+-- its run ended `interrupted` -- is a child failure too, a
+`SubagentInterruptedError` whose message carries what the child had said and
+says that its tool calls did run, so the parent's model can tell a finished
+answer from half of one. The parent's own interruption takes precedence: an
+interrupted parent ends `interrupted`, whatever `onError` says.
 
 ## Scheduling & self-dispatch
 

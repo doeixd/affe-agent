@@ -389,30 +389,6 @@ and should not until it is committed. Item 30 is untouched.
     - **M5, M6 not started** — the opt-in pre-flight transform, and the
       selection example.
 
-50. **A parent cannot tell a cut-short delegation from a finished one** --
-    framed for a decision in [plan-two-decisions.md](./plan-two-decisions.md) §2.
-    (found 2026-09-04 by `test/SubagentDurable.test.ts`, recorded rather than
-    decided). A child session absorbs interruption by design, so an
-    interrupted child does not fail its delegation: `Agent.run` returns with
-    whatever was committed before the cut, `Subagent.tool` maps that to
-    `result.text`, and the parent's tool call *succeeds* with a partial
-    answer. The parent's model reads a short answer as an answer.
-
-    One good consequence falls out of it and is worth knowing: subagents are
-    structurally insulated from the reissue hazard 48a exists to stop, because
-    nothing interrupt-shaped ever reaches `DurableToolkit`. Not by anyone's
-    design, which is why it is written down.
-
-    The question is whether `Subagent.tool` should report a cut-short child as
-    a tool *failure* rather than a short success -- `onError` already exists
-    for child failures and this is arguably one. Not changed here because it
-    alters what a parent model sees on a path nobody has complained about, and
-    the honest answer may be that a partial answer is better than none.
-
-    ```text
-    verify: grep "an interrupted child answers with what it had, and the parent is not told" test/SubagentDurable.test.ts
-    ```
-
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
 60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons

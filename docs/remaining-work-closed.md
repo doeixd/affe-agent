@@ -1626,3 +1626,30 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: no-grep "\"affe-agent/" src/Errors.ts
     verify: no-grep "\"affe_" src/durable/DurableSessionStore.ts
     ```
+
+50. ~~**A parent cannot tell a cut-short delegation from a finished one.**~~
+    **DONE 2026-09-05**, decision 2 of `plan-two-decisions.md`, made with a
+    second reviewer. `Subagent.tool` and `toolScoped` check the child's
+    `status` before taking its value: `"interrupted"` is a
+    `SubagentInterruptedError` -- tool name, turns committed, the partial
+    text as an `Option` -- whose message says the delegation did not finish,
+    what it had said, and that its tool calls did run (so the parent is not
+    told that nothing happened). Under `onError: "return"` the parent's model
+    reads it on the failure channel; under `"die"` it is a defect of the
+    parent run, as any child failure. Same for text and typed children. The
+    parent's own interruption takes precedence over `"die"`: an interrupted
+    parent ends `interrupted`, not with a defect, held by a barrier-based
+    row. Two corrections the reviewer made to the plan's acceptance are kept:
+    a status turned into a failure is an ordinary failure, not an
+    interruption-shaped cause, so nothing about durable reissue changes and
+    footnote 12 is narrowed rather than rewritten; and `Tool.Idempotent` is
+    not claimed to gate anything here. Broken once: the status check disabled
+    fails both content rows. The behaviour change is measured by the
+    namespace manifest gaining the error's tag.
+
+    ```text
+    verify: grep "export class SubagentInterruptedError" src/subagent/Subagent.ts
+    verify: grep "an interrupted child is reported as cut short, and the parent carries on" test/SubagentDurable.test.ts
+    verify: grep "the parent's own interruption takes precedence over die" test/Subagent.test.ts
+    verify: grep "affe-agent/subagent/SubagentInterruptedError" test/fixtures/namespace-manifest.json
+    ```

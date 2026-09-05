@@ -215,6 +215,8 @@ byte-identical, shown by a fixture.
 
 ### 2. A cut-short child is a tool failure carrying what it had
 
+**Shipped 2026-09-05** (ledger 50): `Subagent.SubagentInterruptedError`, rows in `test/Subagent.test.ts`, footnote 12 narrowed.
+
 **Decision: B**, for text and typed children alike. `Subagent` checks
 `result.status === "interrupted"` before extracting the value; under
 `onError: "return"` the parent's model gets a failure that says the
