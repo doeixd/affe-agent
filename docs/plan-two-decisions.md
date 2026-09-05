@@ -1,7 +1,8 @@
 # Plan: two decisions that are the owner's
 
 *2026-09-05. Written because both questions came up twice this week and were
-deliberately not decided in passing. Each section states the question, what
+deliberately not decided in passing. **Decided the same day; see the last
+section.** Each section states the question, what
 turns on it, the options with their costs, and a recommendation. Nothing on
 the live list is blocked on either; both get worse the longer they wait,
 because more code is written against the current answer.*
@@ -173,6 +174,69 @@ instead, nothing needs to change; the recording is already honest.
 - Item 50 moves to the ledger.
 
 ---
+
+## Decided (2026-09-05)
+
+*Both questions were put to a second reviewer (gpt-6-astra, through the Codex
+CLI, with this plan and the relevant code inlined) with instructions to argue
+with the recommendations rather than defer to them. The conclusions below are
+the owner's, informed by that review; where the reviewer changed the answer,
+it says so.*
+
+### 1. Freeze today's identifiers; do not rename them
+
+**Decision: B, frozen to the existing values** -- not the plan's `"agent"`.
+One module, `internal/namespace.ts`, exports the three roots as they are
+spelled today (`"affe-agent"` for tags, service keys and brands, `"affe_"`
+for table defaults, `"affe-agent:compaction:"` for the persisted prefix), and
+every identifier is built from them. They are documented as wire-level and
+storage-level identifiers that will **not** follow a package rename. What
+changed the recommendation:
+
+- the goal is independence from *future* renames, and freezing achieves it
+  with no orphaning at all; the plan's one-last-break bought nothing but a
+  spelling;
+- `"agent"` is less distinctive precisely where the relay's tags meet other
+  packages' tags on a shared wire, which is the reason tags are namespaced;
+- the plan's count of 109 overstates the wire surface: a `Schema.brand` name
+  is type-level and never reaches a payload, so brands and service keys are
+  runtime-identity concerns, while `_tag`s and table names are the bytes.
+
+Two checks, because they catch different things: a `verify: no-grep` that no
+literal `"affe-agent/`, `"affe_` or `"affe-agent:` remains outside the one
+module (location), and a test comparing the emitted tags, table defaults and
+prefixes against a **frozen manifest** whose expected values are written out
+by hand and do not derive from the constants under test (value). A tolerance
+window (C) has no subject once nothing changes. Item 55's cross-version claim
+narrows to: renaming the package leaves the supported relay exchange
+byte-identical, shown by a fixture.
+
+### 2. A cut-short child is a tool failure carrying what it had
+
+**Decision: B**, for text and typed children alike. `Subagent` checks
+`result.status === "interrupted"` before extracting the value; under
+`onError: "return"` the parent's model gets a failure that says the
+delegation was interrupted and carries the committed partial text (or the
+committed typed value rendered), and under `"die"` the parent dies as for
+any child failure. The failure wording must not promise that nothing
+happened or that a retry is safe: the child's side effects are committed.
+
+Two corrections to the plan's acceptance, from the review:
+
+- turning a returned status into `Effect.fail` makes an **ordinary failure**,
+  not an interruption-shaped cause, so it does **not** make the delegation
+  reissue-eligible under durable replay. Footnote 12 is narrowed to say a
+  cut-short delegation is a recorded failure that replays as that failure --
+  not rewritten to say `Tool.Idempotent` now gates reissue, which nothing
+  shows;
+- parent cancellation must take precedence over a `"die"` defect, and the
+  race is a row: child self-interruption, a child-only timeout, and parent
+  interruption, under both `onError` modes, with barriers rather than
+  timing.
+
+The reviewer's closing point is the one to keep: **failure classification,
+retry eligibility and replay are three contracts**, and changing the first
+proves nothing about the other two.
 
 ## Related
 
