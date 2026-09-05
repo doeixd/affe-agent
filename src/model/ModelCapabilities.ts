@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Model } from "effect/unstable/ai"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * What a model can do (`docs/plan-model-capabilities.md` §4).
@@ -185,7 +186,7 @@ export class ModelCapabilities extends Context.Service<ModelCapabilities, {
     provider: string,
     model: string
   ) => Effect.Effect<Capabilities, UnknownModelError>
-}>()("affe-agent/ModelCapabilities") {}
+}>()(Namespace.tag("ModelCapabilities")) {}
 
 /**
  * Capabilities from a table you supply.
