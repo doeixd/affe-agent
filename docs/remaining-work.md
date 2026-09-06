@@ -72,28 +72,6 @@ that cites "item 41" and finds no 41 here will find it in the ledger.
 Ordered by user-visible value per unit of work. Each row says why it is still
 open, so the next pass does not have to re-derive it.
 
-### Functional gaps in shipped packages
-
-6. **Tool-source gaps** — mostly landed 2026-08-30: MCP hints ride on
-   `RemoteTool.annotations` through both real clients, and every bind path
-   (`McpToolkit.bind`/`bindDiscovered`, `ToolSource.bind`/`bindDiscovered`,
-   `fromMcpConnection`) turns a source's approval hint into the tool's own
-   `needsApproval` -- the thing `intrinsicApproval` actually reads; before,
-   `requiresApproval` was only a permission *projection*, and no approval was
-   ever asked. Declared tools are floored, never loosened. Dropped names and
-   `skipped` entries are logged. 2026-08-31: query placements applied by both sources (the `credentials`
-    hook), `methodFromOpenApi` deriving methods from `securitySchemes`,
-    per-subject `Bindings`/`resolveFor` over `CurrentPrincipal`, and
-    finally `fromRefreshing` + `withReauth` (the OAuth escape hatch and
-    reconnect-by-elicitation) -- **`plan-tool-credentials.md` is now
-    complete**. The credential design item has its contract
-   (`docs/plan-tool-credentials.md`, 2026-08-30) and its single-user slice:
-   `Credentials` in `/tool-source` -- method (placements), binding
-   (opaque handles, `owner` a role), provider service (`fromValues`,
-   `fromConfig`, `readOnly`), `Redacted` until `render`, typed
-   `CredentialError` with `reauthRequired`, `headers(binding)` into the
-   sources' hook (now typed to accept a failing effect). Multi-user is
-   blocked on the principal reaching the tool fibre; see the parked list.
 ### Larger, correctly parked
 
 19. **Real workerd / Durable Object host** — the core landed 2026-08-30:
@@ -110,7 +88,8 @@ open, so the next pass does not have to re-derive it.
     a Workers free plan; the HTTPS smoke matched the miniflare test). Left:
     the code tool needs Dynamic Workers, which is paid-plan only (error
     10195), so `apps/worker` as checked in deploys once the account is
-    upgraded; Rivet. **A real model landed 2026-09-06** as the first slice
+    upgraded. Rivet is closed as adopter-triggered (ledger, decision 4 of
+    `plan-two-decisions.md`). **A real model landed 2026-09-06** as the first slice
     of the deployment milestone (scoped with a second reviewer, decision
     record in `plan-two-decisions.md` §3): `worker-real-model.ts` with the
     key in a Worker secret, `wrangler.real.jsonc`, the README quickstart,
@@ -143,64 +122,13 @@ open, so the next pass does not have to re-derive it.
     data -- and records the boundary it found (a toolkit is fixed at
     construction; what follows live state is the policy, per call). What
     remains: **step 6's batteries** (LSP, truncation as a service,
-    rendered prompts), ranked by what step 1 found. **`plan-primitives.md`
-    steps 1–5 are complete.**
-24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
-    serialisation actually bites.
-26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
-    `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
-    `ProcessManager`, and the bridge steps listed under 26c.
-    `plan-deployment.md` §6.3 narrows when the relay is the right tool.
-
-    **Split out 2026-09-01.** This entry was one line covering six unbuilt
-    pieces, which is why the oldest unimplemented work in the repository
-    (`effect-plan-2.txt`, first committed 2026-08-25) was also the least
-    visible: nothing here said that half of it needs no relay and lands in a
-    sitting. The pieces are 26k–26p below. This line stays as the umbrella;
-    the ranking is in the children.
-
-### Newly ranked — from the effect-cf research (2026-09-01)
-
-Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).
-Split out because one of these is a defect and the rest are options.
-
-32. **Hibernatable WebSockets: read, then answer the question** (C2–C3). Our
-    worker serves HTTP+SSE, and `plan-deployment.md` §11 already says a dropped
-    connection on a hibernating DO is "the normal case, several times an hour".
-    We answer with resumption over the `DeliveryLog`, which is correct and
-    tested across the runtime's death — but Cloudflare's Hibernatable
-    WebSockets API is a way to need that recovery path *less often*, and
-    verified 2026-09-01 we use none of it (no hibernation handling anywhere in
-    `src/` or `apps/`). `effect-cf` has `DurableObject.WebSocket` /
-    `RpcWebSocket` as prior art. The question worth answering first is ours,
-    not theirs: **does a hibernatable socket carrying `AgentRpc` preserve the
-    resumption contract across eviction, or merely relocate the gap?** A
-    miniflare test importing nothing new can settle it, and "it relocates the
-    gap, the cursor is still the only honest thing" is a good result to record
-    rather than a failed milestone.
-
-33. **`AgentRpc` over WebTransport, as evidence** (W1–W2) — optional, ranked
-    last on purpose. `effect-webtransport`'s `WebTransportSocket` returns
-    Effect's own `Socket.Socket`, and our WebSocket RPC path is already
-    `Socket` → `RpcClient.makeProtocolSocket()` (`test/AgentRpc.test.ts:681`),
-    so the swap is one line and `src/` does not move. The value is *not*
-    WebTransport — resumption is transport-independent by design, so a new
-    socket type solves nothing we have. The value is that `transport.md` §3's
-    "transport-agnostic by Effect's design" has only ever been demonstrated
-    against transports we wired ourselves; a third-party `Socket` is the first
-    independent test of it. **Cloudflare cannot serve WebTransport**
-    ([workerd#6451](https://github.com/cloudflare/workerd/issues/6451): no
-    QUIC/HTTP-3 stack, not on the roadmap), so this never touches the CF path,
-    and the real cost is standing up a Node-side WebTransport server. Drop it
-    if that exceeds a day.
-
-34. **`effect-cf` as a source for `plan-deployment.md` §7 item 2** — it has
-    `D1`, `Kv`, `Storage` and `Sqlite` modules, which is the shopping list for
-    the store layers that plan asks for and item 19 records as never built.
-    This does **not** change the ranking: those layers still block nothing.
-    Recorded only so the next person to want them does not start from the
-    Cloudflare docs.
-
+    rendered prompts), each gated on a caller (decision 4 of
+    `plan-two-decisions.md`, 2026-09-06): LSP on a coding caller that needs
+    diagnostics, references or rename that existing tools cannot supply;
+    truncation on a shell, search or MCP result measured over a caller's
+    budget; rendered prompts on a caller that needs runtime workspace, model
+    or task values in its prompt. None is built speculatively.
+    **`plan-primitives.md` steps 1–5 are complete.**
 ### Newly ranked — from the effect-agent.com comparison (2026-09-01)
 
 [plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) read
@@ -370,7 +298,7 @@ Items 28 and 29 **landed while this section was being written** — `230745d`
 seam`). They are kept below, struck, rather than deleted, because the entry
 records what shipped and the next audit should not have to re-derive it.
 
-Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
+Items 27 and 30 are in the ledger.
 
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
@@ -380,20 +308,6 @@ Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
     ranks and sequences them; the entries below are the slices, in the order
     to work them, each pinned on its *open* state so the checker turns red
     the moment one lands and its text has to move to the ledger.
-
-60d-i. **Overflow as a rollover trigger.** 60d shipped the requested and the
-    pressure triggers; the third, the provider refusing a request that is too
-    large, is not caught because Effect's AI layer classifies no such error
-    (`AiError.InvalidRequestError` is the nearest, and it is every 4xx).
-    Wanted: a provider-neutral predicate for "context too long", applied in
-    `AgentTurn` around the model call, retrying once with the controller's
-    fallback (`onCannotHelp: "rollover"`) projection. Until a predicate exists
-    that is not a regex over provider messages, this stays parked. Small once
-    the predicate exists; the projection and the checkpoint are done.
-
-    ```text
-    verify: no-grep "overflow" src/AgentTurn.ts
-    ```
 
 60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
     re-proposes them: their fourteen-knob `AgentPolicy` object (our limits

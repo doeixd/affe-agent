@@ -1699,3 +1699,80 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "every error class carries either a frozen bare tag or a frozen namespaced one" test/Namespace.test.ts
     verify: grep "Error classes are tagged bare" AGENTS.md
     ```
+
+6. ~~**Tool-source gaps.**~~ **DONE**, closed 2026-09-06 on audit. Every
+    piece the entry listed landed by 2026-08-31, including the half it kept
+    calling blocked: per-subject `Bindings` / `resolveFor` over
+    `CurrentPrincipal` in `src/toolSource/Credentials.ts` is the multi-user
+    slice, and the principal has reached the tool fibre since
+    `plan-principal-on-tool-fibre.md` shipped. The entry's "blocked on the
+    principal" sentence outlived the fact by a week.
+
+    ```text
+    verify: grep "Per-principal bindings: the multi-user half, unblocked by CurrentPrincipal" src/toolSource/Credentials.ts
+    ```
+
+24. ~~**Session-tree delta storage + `Cache`.**~~ **Closed 2026-09-06**
+    (decision 4 of `plan-two-decisions.md`) until recorded snapshot costs
+    exceed the agreed budget or a platform limit: reopen when a
+    representative recorded workload shows snapshot encoding or persistence
+    taking more than a tenth of the non-model turn-latency budget, or
+    breaching a storage, CPU or memory limit. Attribute the cost first --
+    writes dominating points at deltas, repeated reads at a cache -- since
+    the two remedies answer different bottlenecks.
+
+26. ~~**`plan-relay.txt`, `effect-plan-2.txt`, and the rest.**~~ **Closed
+    2026-09-06**: the umbrella had no open children -- 26k through 26p all
+    landed between 2026-09-02 and 03 and are above in this ledger.
+
+32. ~~**Hibernatable WebSockets.**~~ **Closed 2026-09-06** (decision 4)
+    pending an idle-socket deployment requirement. Runtime-death recovery
+    is already covered by the `DeliveryLog` cursor over HTTP and SSE, and a
+    surviving socket proves nothing about a surviving RPC subscription,
+    since the object's memory is reset on hibernation. If reopened, the
+    one settling observable: after an independently confirmed object
+    reinitialisation, the client's cursor-deduplicated event sequence over
+    the surviving socket equals the canonical `DeliveryLog` suffix through a
+    recorded terminal cursor, including an event committed before
+    hibernation and not yet observed -- an open connection or a ping is not
+    evidence.
+
+33. ~~**`AgentRpc` over WebTransport, as evidence.**~~ **Closed
+    2026-09-06** (decision 4): independent transport evidence does not
+    justify a Node WebTransport server now; its one-day cap was a maximum,
+    not a reason. Reopen on a caller that needs WebTransport.
+
+34. ~~**`effect-cf` as a source for the deployment plan's store layers.**~~
+    **Closed 2026-09-06** (decision 4) as a reading reference only:
+    `plan-deployment.md` §7 item 2's stores block nothing (DO SQLite covers
+    history and the delivery log), and `effect-cf` is implementation reading
+    for whoever builds one, not a compatibility commitment.
+
+19-Rivet. ~~**A Rivet actor host.**~~ **Closed 2026-09-06** (decision 4) as
+    adopter-triggered. The deployment plan's §4 mapping is attractive, not
+    an exact durability match: `InputChannel` needs the consumed batch
+    recorded alongside its turn, and whether Rivet's queue supports atomic
+    batch-and-journal recording or a recoverable reservation with stable
+    identities is unproved. An adopter reopens it, and the first step is a
+    bounded `InputChannel.Factory` prototype crashed between batch
+    acquisition, journal commit and acknowledgement -- not a host.
+
+60d-i. ~~**Overflow as a rollover trigger.**~~ **DONE 2026-09-06**, by
+    measurement rather than recovery (decision 4): the compaction token
+    policy already measures the projection against the model's window before
+    every call, so a provider refusal for size is never the first signal. The
+    one gap was the fallback rollover's own window: it could still be over
+    the line when the retained input alone did not fit, and the turn went to
+    the provider to be refused. Now the fallback rollover is enforced --
+    `CompactionCannotHelpError` with kind `over-after-rollover` before the
+    call, the rollover on record as the last thing that could help. A
+    rollover the model asked for is not enforced, since it did not claim to
+    fit. A predicate over `InvalidRequestError` messages stays rejected:
+    behaviour keyed on provider prose. Reopens only if a structured overflow
+    code survives the provider adapter. One row; broken once by dropping the
+    enforcement.
+
+    ```text
+    verify: grep "over-after-rollover" src/compaction/Compaction.ts
+    verify: grep "an input that does not fit the window even alone fails before the call" test/ContextRollover.test.ts
+    ```

@@ -215,15 +215,16 @@ describe("a fresh window as a compaction decision", () => {
 
   it.effect("under pressure a summary that cannot fit rolls over instead, only when asked to", () =>
     Effect.gen(function* () {
-      // The shape of `Compaction.test.ts`'s giving-up row: per-message cost
-      // 1 alone, 3 each otherwise; the summary never fits. The default keeps
+      // Like `Compaction.test.ts`'s giving-up row: one or two messages cost
+      // their count, three or more cost 3 each; the summary never fits, and
+      // the fallback window (marker plus "b", cost 2) does. The default keeps
       // that failure. `onCannotHelp: "rollover"` turns it into a window cut at
       // the last user message, so the turn being answered is what survives.
       const build = (onCannotHelp: "fail" | "rollover") =>
         Compaction.controller({
           policy: Compaction.tokens({
             budget: { contextWindow: 6, reserveTokens: 1, keepRecentTokens: 2 },
-            estimate: (prompt) => Effect.succeed(prompt.content.length === 1 ? 1 : prompt.content.length * 3)
+            estimate: (prompt) => Effect.succeed(prompt.content.length <= 2 ? prompt.content.length : prompt.content.length * 3)
           }),
           summarise: () => Effect.succeed("a summary far too large for the budget"),
           onCannotHelp
@@ -284,7 +285,7 @@ describe("a fresh window as a compaction decision", () => {
       const compaction = yield* Compaction.controller({
         policy: Compaction.tokens({
           budget: { contextWindow: 6, reserveTokens: 1, keepRecentTokens: 2 },
-          estimate: (prompt) => Effect.succeed(prompt.content.length === 1 ? 1 : prompt.content.length * 3)
+          estimate: (prompt) => Effect.succeed(prompt.content.length <= 2 ? prompt.content.length : prompt.content.length * 3)
         }),
         summarise: () => Effect.succeed("a summary far too large for the budget"),
         onCannotHelp: "rollover"
@@ -368,6 +369,48 @@ describe("a fresh window as a compaction decision", () => {
         assert.deepStrictEqual(checkpoint.value.handoff, Option.some("alone now"))
         assert.strictEqual(checkpoint.value.window, 1)
       } else assert.fail("expected one rollover, from the lone call")
+    })
+  )
+
+  it.effect("an input that does not fit the window even alone fails before the call, not at the provider", () =>
+    Effect.gen(function* () {
+      // Item 60d-i, decided 2026-09-06: overflow is prevented by measurement,
+      // not recovered from a provider refusal. The fallback rollover keeps the
+      // last user message; when that message alone is over the line, the
+      // transform fails with `over-after-rollover` and the model is never
+      // called with a request the estimate says cannot fit. A prompt that
+      // mentions "huge" costs more than the whole window.
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.tokens({
+          budget: { contextWindow: 6, reserveTokens: 1, keepRecentTokens: 2 },
+          estimate: (prompt) =>
+            Effect.succeed(JSON.stringify(prompt.content).includes("huge") ? 50 : prompt.content.length <= 2 ? prompt.content.length : prompt.content.length * 3)
+        }),
+        summarise: () => Effect.succeed("a summary far too large for the budget"),
+        onCannotHelp: "rollover"
+      })
+      const { layer, recorder } = yield* FakeModel.script([FakeModel.text("one"), FakeModel.text("never reached")])
+      const { exit, checkpoint } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({ contextTransform: compaction.transform, loop: AgentLoop.bounded(1) }))
+          yield* session.prompt("a")
+          const exit = yield* Effect.exit(session.prompt("a huge attachment"))
+          return { exit, checkpoint: yield* compaction.checkpoint(session.id) }
+        })
+      ).pipe(Effect.provide(layer))
+      assert.isTrue(Exit.isFailure(exit))
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause)
+        assert.instanceOf(error, Compaction.CompactionCannotHelpError)
+        if (error instanceof Compaction.CompactionCannotHelpError) {
+          assert.strictEqual(error.kind, "over-after-rollover")
+          assert.include(error.reason, "does not fit")
+        }
+      }
+      // The rollover was recorded -- it was the last thing that could help --
+      // and the model was called once, for "a", never for the oversized turn.
+      assert.isTrue(Option.isSome(checkpoint) && Compaction.isRollover(checkpoint.value))
+      assert.strictEqual((yield* recorder.prompts).length, 1)
     })
   )
 

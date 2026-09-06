@@ -287,6 +287,41 @@ recreation and cursor replay, and an opt-in live smoke; explicitly not code
 execution, remote sandboxes, `/durable`, new stores, hibernation or
 WebTransport. Taken as the next slice.
 
+### 4. The parked list, decided (2026-09-06)
+
+**Consulted.** The seven decisions the live list was carrying as parked or
+blocked work were put to the second reviewer with each entry, the durable
+hardening items, the AI layer's error classes and the deployment plan's
+Rivet section inlined. Its answers were taken nearly whole; the one
+departure is noted.
+
+- **60d-i, overflow.** By measurement, in the compaction policy, not by
+  recovering from a provider refusal (which has no class) and not by a
+  predicate over `InvalidRequestError` prose. The token policy already
+  measures every projection against the model's window; the gap was that
+  the fallback rollover's window was not itself checked. Now it is, and an
+  input that does not fit alone fails typed before the call. *Reopens* on a
+  structured overflow code surviving the provider adapter.
+- **32, hibernation.** Closed until a deployment needs idle sockets; the
+  settling observable, if ever reopened, is written in the ledger.
+- **Rivet.** Closed as adopter-triggered; the unproved fact is the queue's
+  crash-consistent relationship with turn journaling.
+- **24, delta storage.** Closed with a measurable trigger.
+- **33 and 34.** 33 closed; 34 a reading reference only.
+- **47c and 48c.** Two reviewable changes implementing one protocol, 48c
+  (never acknowledge on the engine's word) first, then 47c (persisted
+  dispatch intents with bounded alarm repair); each with the failpoint rows
+  the reviewer named. These are the next slices.
+- **Step 6 batteries.** None built speculatively; each gated on a named
+  caller, written into item 20.
+- **Item 6.** The reviewer flagged the "blocked on the principal" wording
+  against the code; the audit found the multi-user slice had landed on
+  2026-08-31, and the item is closed.
+
+**Departure.** None of substance. The reviewer asked whether the token
+policy's pressure handling already covered overflow; it did, except for the
+fallback window, which is the fix above rather than a new mechanism.
+
 ## Related
 
 - `remaining-work.md` items 55 and 50 point here.

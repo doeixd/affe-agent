@@ -288,7 +288,7 @@ export class CompactionCannotHelpError extends Schema.TaggedError<CompactionCann
      * Named `kind` rather than `cause`, which on an `Error` already means the
      * wrapped failure.
      */
-    kind: Schema.Literals(["nothing-to-fold", "summary-too-large"]),
+    kind: Schema.Literals(["nothing-to-fold", "summary-too-large", "over-after-rollover"]),
     reason: Schema.String
   }
 ) {
@@ -1538,14 +1538,33 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
 
         // A rollover pays no model call: write the checkpoint, project it,
         // measure the result so `contextRemaining` is right for the new window.
-        const rolledOver = (trigger: Trigger, checkpoint: Rollover) =>
+        const rolledOver = (trigger: Trigger, checkpoint: Rollover, options?: { readonly enforce: boolean }) =>
           Effect.gen(function* () {
             yield* completed(context.sessionId, trigger, checkpoint)
             const projected = substitute(context.prompt, messages, [
               ...rolloverMessages(checkpoint, messages),
               ...messages.slice(checkpoint.coveredThrough)
             ])
-            yield* recordWindow(context.sessionId, window(yield* estimate(projected), checkpoint.coveredThrough))
+            const tokens = yield* estimate(projected)
+            yield* recordWindow(context.sessionId, window(tokens, checkpoint.coveredThrough))
+            // The pressure fallback is the last thing that can help: if the
+            // window it opened is still over the line -- one message larger
+            // than the budget -- the honest answer is a typed failure here,
+            // not a provider refusal after a paid round trip. That is the
+            // whole of "overflow recovery" this library offers (item 60d-i):
+            // the projection is measured against the model's window before
+            // every call, and nothing is sent that the measurement says will
+            // not fit. A rollover the model asked for is not enforced: it
+            // did not claim to fit.
+            if (options?.enforce === true && Option.isSome(budget) && Option.isSome(tokens)) {
+              const limit = budget.value.contextWindow - budget.value.reserveTokens
+              if (tokens.value > limit) {
+                return yield* new CompactionCannotHelpError({
+                  kind: "over-after-rollover",
+                  reason: `still over budget after a rollover: ${tokens.value} > ${limit}; the retained input alone does not fit the model's window`
+                })
+              }
+            }
             return projected
           })
 
@@ -1656,7 +1675,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
                 onSome: (checkpoint) => !isRollover(checkpoint)
               })
               if (!progress) return yield* Effect.fail(error)
-              return yield* rolledOver("automatic", rollover(existing, messages, cut, Option.none(), estimated))
+              return yield* rolledOver("automatic", rollover(existing, messages, cut, Option.none(), estimated), { enforce: true })
             })
           )
         )
