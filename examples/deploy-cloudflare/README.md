@@ -44,7 +44,7 @@ The smoke opens a session, prompts it, and reads the history back; it prints
 a sanitized result. `ANTHROPIC_MODEL` in `wrangler.real.jsonc` picks the
 model (`claude-haiku-4-5` by default); `ANTHROPIC_BASE_URL` may be added to
 `vars` for a proxy. Without the secret, opening a session fails rather than
-calling the provider unauthenticated; the Worker's log names the binding.
+calling the provider unauthenticated; the Worker's log names the missing key.
 
 The same file is proved on real workerd in CI with no key and no network:
 `test/WorkerRealModel.test.ts` bundles it as is and stands in for the

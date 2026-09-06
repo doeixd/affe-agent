@@ -1,8 +1,8 @@
-import { Effect, Layer, Option, Redacted, Schema } from "effect"
+import { Config, Effect, Layer, Option, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
-import { Binding, WorkerEnvironment } from "effect-cf"
+import { WorkerConfig } from "effect-cf"
 import { Agent, AgentLoop } from "affe-agent"
 import * as CloudflareHost from "affe-agent/cloudflare"
 
@@ -14,11 +14,12 @@ import * as CloudflareHost from "affe-agent/cloudflare"
  * The one thing that differs from the scripted entry is the model layer,
  * and it is built exactly as `apps/worker`'s header says: the provider's
  * client over `FetchHttpClient`, with the key read from a Worker secret
- * through `WorkerEnvironment`. Three bindings, read by name:
+ * through effect-cf's `WorkerConfig`. Three bindings, read as config:
  *
  * - `ANTHROPIC_API_KEY` -- **a secret** (`npx wrangler secret put`), never
- *   a `var`. Missing, the Durable Object fails to build its model and says
- *   which binding it wanted, rather than calling the provider unauthenticated.
+ *   a `var`. Missing, the Durable Object fails to build its model with a
+ *   `ConfigError` naming the key, rather than calling the provider
+ *   unauthenticated.
  * - `ANTHROPIC_MODEL` -- a `var`, defaulting to `claude-haiku-4-5`: cheap
  *   and enough to prove the deployment.
  * - `ANTHROPIC_BASE_URL` -- optional, for a proxy or a gateway. It is also
@@ -44,27 +45,27 @@ const agent = Agent.make({
   loop: AgentLoop.bounded(4)
 })
 
-/** A string binding, or the failure that names it. */
-const binding = (env: Record<string, unknown>, name: string) =>
-  Option.fromNullishOr(env[name]).pipe(
-    Option.filter((value): value is string => typeof value === "string" && value.length > 0)
-  )
-
+/**
+ * The bindings, read through Effect `Config` over the Worker's `env`:
+ * `WorkerConfig.provider` is the `ConfigProvider` effect-cf builds from the
+ * environment, so the secret and the vars are ordinary config, typed, with a
+ * missing secret failing as a `ConfigError` that names the key.
+ */
 const anthropic = Layer.unwrap(
   Effect.gen(function* () {
-    const env = (yield* WorkerEnvironment) as Record<string, unknown>
-    const apiKey = yield* Option.match(binding(env, "ANTHROPIC_API_KEY"), {
-      onNone: () =>
-        new Binding.BindingNotFoundError({
-          binding: "ANTHROPIC_API_KEY",
-          message: "ANTHROPIC_API_KEY is not set: `npx wrangler secret put ANTHROPIC_API_KEY --config wrangler.real.jsonc`"
-        }),
-      onSome: (key) => Effect.succeed(key)
+    const provider = yield* WorkerConfig.provider
+    const settings = Config.all({
+      apiKey: Config.redacted("ANTHROPIC_API_KEY"),
+      model: Config.string("ANTHROPIC_MODEL").pipe(Config.withDefault("claude-haiku-4-5")),
+      apiUrl: Config.option(Config.string("ANTHROPIC_BASE_URL"))
     })
-    const model = Option.getOrElse(binding(env, "ANTHROPIC_MODEL"), () => "claude-haiku-4-5")
-    const apiUrl = Option.getOrUndefined(binding(env, "ANTHROPIC_BASE_URL"))
+    const { apiKey, apiUrl, model } = yield* settings.parse(provider)
+    const client = Option.match(apiUrl, {
+      onNone: () => AnthropicClient.layer({ apiKey }),
+      onSome: (url) => AnthropicClient.layer({ apiKey, apiUrl: url })
+    })
     return AnthropicLanguageModel.layer({ model }).pipe(
-      Layer.provide(AnthropicClient.layer({ apiKey: Redacted.make(apiKey), ...(apiUrl === undefined ? {} : { apiUrl }) })),
+      Layer.provide(client),
       Layer.provide(FetchHttpClient.layer)
     )
   })
