@@ -43,6 +43,27 @@ const codeLines = (file: string): Array<string> =>
 const manifest: ReadonlyArray<string> = Schema.decodeUnknownSync(Schema.Array(Schema.String))(
   JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "namespace-manifest.json"), "utf8"))
 )
+const errorTags: ReadonlyArray<string> = Schema.decodeUnknownSync(Schema.Array(Schema.String))(
+  JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "error-tags-manifest.json"), "utf8"))
+)
+
+/**
+ * Every `Schema.TaggedError` definition in `src`, by its tag: bare, or built
+ * through `Namespace.tag`. Read from the source so the inventory is complete
+ * whether or not a class is exported or ever constructed.
+ */
+const errorDefinitions = (): { readonly bare: Set<string>; readonly namespaced: Set<string> } => {
+  const definition = /Schema\.TaggedError<[A-Za-z0-9_]+>\(\)\(\s*(?:"([A-Za-z0-9_]+)"|Namespace\.tag\("([^"]+)"\))/g
+  const bare = new Set<string>()
+  const namespaced = new Set<string>()
+  for (const file of sources(SRC)) {
+    for (const match of readFileSync(file, "utf8").matchAll(definition)) {
+      if (match[1] !== undefined) bare.add(match[1])
+      else namespaced.add(Namespace.tag(match[2]!))
+    }
+  }
+  return { bare, namespaced }
+}
 
 describe("the frozen namespace", () => {
   it("every identifier the code builds is in the manifest, and every manifest entry is built", () => {
@@ -78,6 +99,25 @@ describe("the frozen namespace", () => {
       })
     }
     assert.deepStrictEqual(offenders, [])
+  })
+
+  it("every error class carries either a frozen bare tag or a frozen namespaced one, and no tag is shared", () => {
+    // Item 61, decided 2026-09-06: error classes are tagged bare, as Effect's
+    // own are (`HttpClientError`, `ParseError`), and the bare set is frozen
+    // in its own manifest; the namespaced few stay as decision 1 froze them.
+    // A new error class is a new manifest entry, added by hand, so a tag
+    // cannot be renamed or introduced unmeasured on either side.
+    const { bare, namespaced } = errorDefinitions()
+    const expectedBare = new Set(errorTags)
+    assert.deepStrictEqual([...bare].filter((t) => !expectedBare.has(t)).sort(), [], "bare error tags not in the manifest: a new error, add it by hand")
+    assert.deepStrictEqual([...expectedBare].filter((t) => !bare.has(t)).sort(), [], "manifest tags no error defines: a rename or a removal, which is a wire change")
+    const expectedNamespaced = new Set(manifest)
+    assert.deepStrictEqual([...namespaced].filter((t) => !expectedNamespaced.has(t)).sort(), [], "namespaced error tags missing from the namespace manifest")
+    // The two sets together are the package's error vocabulary, and a tag names one class.
+    assert.isAbove(bare.size, 40)
+    assert.strictEqual(new Set([...bare, ...namespaced]).size, bare.size + namespaced.size)
+    // Every bare tag is a plain identifier: no slash, no package name.
+    assert.deepStrictEqual([...bare].filter((t) => !/^[A-Z][A-Za-z0-9]*$/.test(t)), [])
   })
 
   it("the roots are the frozen values, and a built identifier keeps its literal type", () => {

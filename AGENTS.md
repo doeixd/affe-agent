@@ -285,6 +285,17 @@ identifier is a new entry in `test/fixtures/namespace-manifest.json`, added
 by hand; `test/Namespace.test.ts` fails on a literal outside the module and on
 any difference between the manifest and what the code builds.
 
+**Error classes are tagged bare** (`"AgentBusyError"`), as Effect's own are
+(`HttpClientError`, `ParseError`, `SqlError`): the tag is what a caller
+catches by, and a plain identifier is what Effect's ecosystem expects there.
+Namespacing is for things named across parties -- service keys, brands,
+peers, tables. The bare set is frozen too, in
+`test/fixtures/error-tags-manifest.json`; a new error class is a new entry,
+added by hand, and the same test fails on a tag that is not in either
+manifest or is shared by two classes. The few namespaced error tags that
+predate this rule stay as decision 1 froze them (`docs/plan-two-decisions.md`,
+decision 3).
+
 ## Scope discipline
 
 * No new exported concept until two independent features need it.

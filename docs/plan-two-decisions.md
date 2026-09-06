@@ -242,6 +242,51 @@ The reviewer's closing point is the one to keep: **failure classification,
 retry eligibility and replay are three contracts**, and changing the first
 proves nothing about the other two.
 
+### 3. Error tags stay bare; the set is frozen (item 61, 2026-09-06)
+
+**The question.** Adopting item 27 found two conventions for an error's
+`_tag`: 59 classes bare (`"AgentBusyError"`, every client protocol error,
+the durable failures, most batteries) and a smaller set namespaced
+(`affe-agent/relay/...`, `affe-agent/blob/...`, `affe-agent/code/...`). Both
+cross wires. Decision 1 froze the namespaced set and did not touch the bare
+one.
+
+**Consulted.** The second reviewer (gpt-6-astra, with the census, the
+namespace module and the parked items inlined) argued for namespacing every
+error tag now as one measured break, on two grounds: the split has no
+principled boundary (namespaced `BlobStoreError` is an error class; bare
+`AgentBusyError` crosses the HTTP and RPC wires and sits in journals), and a
+pre-release with no external clients is the cheapest moment. It also named
+the risk of that path precisely -- partial migration between a producer and
+a decoder or a journal reader -- and the checks it would need.
+
+**Decision: bare, frozen.** The reviewer's boundary point is right and its
+conclusion is not taken, for a fact the brief did not give it: Effect's own
+library errors are bare tags across every package (`HttpClientError`,
+`ParseError`, `SqlError`, `AiError`), and the namespacing advice in Effect's
+practice is for service keys and brands, not error discriminants. Our bare
+tags follow the ecosystem; the namespaced few are the outliers, and they are
+frozen, so leaving them costs nothing. What is taken from the review: a
+second frozen manifest, `test/fixtures/error-tags-manifest.json`, generated
+once from the definitions and reviewed by hand, and a definition check in
+`test/Namespace.test.ts` that reads every `Schema.TaggedError` in `src` and
+holds the bare set equal to that manifest, the namespaced set inside the
+namespace manifest, every tag a plain identifier, and no tag shared by two
+classes. A new error is a new manifest entry; a rename is a wire change the
+build refuses until it is measured. What would reopen this: a real collision
+between one of our bare tags and another package's on a shared wire, which
+nobody has seen.
+
+**Also from the consultation, for the next item.** Ranking of the parked
+work for a deployment an outsider can run: 19, then 32, then 34, then 33.
+The first slice of 19: a reproducible, real-model Cloudflare quickstart on
+the entry point that needs no paid features, with a checked-in Wrangler
+configuration, a Miniflare test that substitutes a deterministic provider
+at the boundary and asserts completion, persisted history across a runtime
+recreation and cursor replay, and an opt-in live smoke; explicitly not code
+execution, remote sandboxes, `/durable`, new stores, hibernation or
+WebTransport. Taken as the next slice.
+
 ## Related
 
 - `remaining-work.md` items 55 and 50 point here.

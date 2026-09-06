@@ -1681,3 +1681,21 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "refuses an image against a text-only model, naming both" test/ModelCapabilities.test.ts
     verify: exists examples/model-selection.ts
     ```
+
+61. ~~**Two conventions for a wire tag.**~~ **DONE 2026-09-06**, as decision 3
+    of `plan-two-decisions.md`, made with a second reviewer who argued the
+    other way. Error classes stay tagged bare, as Effect's own are, and the
+    bare set is frozen in `test/fixtures/error-tags-manifest.json` (59 tags,
+    generated once from the definitions and reviewed); the namespaced few
+    stay as decision 1 froze them. `test/Namespace.test.ts` reads every
+    `Schema.TaggedError` in `src` and holds the bare set equal to the
+    manifest, the namespaced set inside the namespace manifest, every bare
+    tag a plain identifier, and no tag shared by two classes. No byte
+    changed. Broken once: one bare tag renamed fails the row. The rule is in
+    `AGENTS.md` beside the identifier rule.
+
+    ```text
+    verify: exists test/fixtures/error-tags-manifest.json
+    verify: grep "every error class carries either a frozen bare tag or a frozen namespaced one" test/Namespace.test.ts
+    verify: grep "Error classes are tagged bare" AGENTS.md
+    ```

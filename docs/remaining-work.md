@@ -395,27 +395,6 @@ Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-### Newly ranked — from adopting item 27 (2026-09-06)
-
-61. **Two conventions for a wire tag.** `Errors.ts`, the client's protocol
-    errors, the durable failures and most batteries tag their error classes
-    bare (`"AgentBusyError"`, `"CompactionCannotHelpError"`,
-    `"MissingCapabilityError"`); the relay, blob, code and a few others tag
-    theirs namespaced (`affe-agent/relay/RelaySupersededError`). Both meet
-    other packages' tags in unions on shared wires, which is the reason
-    Effect namespaces. Decision 1 of `plan-two-decisions.md` froze the
-    namespaced ones; it did not touch the bare ones, and a census while
-    adopting item 27 counted dozens. Renaming a bare tag is a wire change
-    for every client that switches on it, so this is a decision to make
-    once -- namespace them all (a measured break, with fixtures) or declare
-    bare the convention for kernel and battery errors and namespaced the
-    convention for identifiers that name a *thing* (peers, endpoints,
-    services) -- not a sweep to run in passing. Small once decided.
-
-    ```text
-    verify: grep "\"AgentBusyError\"" src/Errors.ts
-    ```
-
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
