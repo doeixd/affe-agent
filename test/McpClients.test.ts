@@ -114,6 +114,7 @@ describe("official MCP client adapters", () => {
             {
               name: "echo",
               description: "Echo a value",
+              annotations: { title: "Echo", readOnlyHint: true, destructiveHint: false },
               inputSchema: {
                 type: "object",
                 properties: { value: { type: "string" } },
@@ -154,10 +155,15 @@ describe("official MCP client adapters", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const connection = yield* adapted
+          const tools = yield* connection.listTools
           assert.deepStrictEqual(
-            (yield* connection.listTools).map((tool) => tool.name).sort(),
+            tools.map((tool) => tool.name).sort(),
             ["echo", "refuse"]
           )
+          assert.deepStrictEqual(tools.find((tool) => tool.name === "echo")?.annotations, {
+            title: "Echo", readOnlyHint: true, destructiveHint: false
+          })
+          assert.strictEqual(tools.find((tool) => tool.name === "refuse")?.annotations, undefined)
           assert.deepStrictEqual(
             yield* connection.callTool("echo", { value: "hello" }),
             "hello"

@@ -94,4 +94,36 @@ describe("verify-portability", () => {
     assert.isFalse(result.ok)
     assert.include(result.output, 'uses host global "process.platform"')
   })
+
+  it("rejects side-effect imports and deferred bracket access to globals", () => {
+    const result = scan({
+      "side-effect.ts": `import "node:fs"; export const x = 1`,
+      "host.ts": `import "@effect/platform-node"`,
+      "deferred.ts": `export const platform = () => process["platform"]`,
+      "type.ts": `export type S = import("node:fs").Stats`,
+      "reexport.ts": `export * from "node:path"`
+    })
+    assert.isFalse(result.ok)
+    for (const expected of [
+      'side-effect.ts: imports Node built-in "node:fs"',
+      'host.ts: imports host package "@effect/platform-node"',
+      'deferred.ts: uses host global "process["platform"]"',
+      'type.ts: imports Node built-in "node:fs"',
+      'reexport.ts: imports Node built-in "node:path"'
+    ]) assert.include(result.output, expected)
+  })
+
+  it("does not mistake strings, property names or local bindings for host globals", () => {
+    const result = scan({
+      "safe.ts": [
+        `export const text = 'process.env Buffer require("fs")'`,
+        `export const example = 'import "node:fs"'`,
+        `export const pattern = /process.platform/`,
+        `export const fields = { process: "safe", Buffer: "text" }`,
+        `export const value = fields.process`,
+        `export const local = (process: { platform: string }) => process["platform"]`
+      ].join("\n")
+    })
+    assert.isTrue(result.ok, result.output)
+  })
 })

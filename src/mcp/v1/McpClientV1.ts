@@ -11,10 +11,21 @@ import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/typ
 import type { Implementation } from "@modelcontextprotocol/sdk/types.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js"
-import { Effect, Option, PubSub, Ref, Stream } from "effect"
+import { Effect, Option, PubSub, Ref, Schema, Stream } from "effect"
 import * as McpToolkit from "../McpToolkit.js"
 import type * as ClientPort from "../internal/clientPort.js"
 import * as Connection from "../internal/connection.js"
+
+// SDK 1.10 exposes annotations only through an unknown extension field.
+// Decode that boundary so the supported floor and newer SDKs produce the
+// same typed hints, without asserting that an arbitrary extension is safe.
+const decodeAnnotations = Schema.decodeUnknownEffect(Schema.Struct({
+  title: Schema.optional(Schema.String),
+  readOnlyHint: Schema.optional(Schema.Boolean),
+  destructiveHint: Schema.optional(Schema.Boolean),
+  idempotentHint: Schema.optional(Schema.Boolean),
+  openWorldHint: Schema.optional(Schema.Boolean)
+}))
 
 const sdkEffect = <A>(
   operation: string,
@@ -77,15 +88,25 @@ export const fromSdkClient = Effect.fn("McpClientV1.fromSdkClient")(
           { signal }
         )
       )
-      return {
-        tools: result.tools.map((tool) => ({
+      const tools = yield* Effect.forEach(result.tools, (tool) => Effect.gen(function* () {
+        const annotations = tool.annotations === undefined
+          ? undefined
+          : yield* decodeAnnotations(tool.annotations).pipe(
+            Effect.mapError((cause) => new McpToolkit.McpTransportError({
+              detail: `v1 tools/list annotations for ${tool.name}: ${String(cause)}`
+            }))
+          )
+        return {
           name: tool.name,
           ...(tool.description === undefined
             ? {}
             : { description: tool.description }),
           inputSchema: tool.inputSchema,
-          ...(tool.annotations === undefined ? {} : { annotations: tool.annotations })
-        })),
+          ...(annotations === undefined ? {} : { annotations })
+        }
+      }))
+      return {
+        tools,
         nextCursor: Option.fromUndefinedOr(result.nextCursor)
       } satisfies ClientPort.ToolPage
     })
