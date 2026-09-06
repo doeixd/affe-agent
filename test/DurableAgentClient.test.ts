@@ -19,7 +19,7 @@ import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentInput from "../src/AgentInput.js"
-import { breakingClaim, detail, failure } from "./storageFaults.js"
+import { breakingClaim, detail, failure, losingFinish } from "./storageFaults.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -279,6 +279,49 @@ describe("DurableAgentClient (durability specifics)", () => {
       const record = yield* f.sessionStore.get("typed")
       assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim))
     }).pipe(Effect.scoped)
+  )
+
+  it.live("an outcome the session record does not back is not acknowledged, and the claim is retained", () =>
+    Effect.gen(function* () {
+      /**
+       * Item 48c, `plan-failure-paths.md` 3.3: never acknowledge on the
+       * engine's word. The store's `finish` here reports success and writes
+       * nothing, so the workflow completes with a `Succeeded` outcome while
+       * the canonical record still says `running` with this submission's
+       * claim. The caller must not be told the prompt completed: a transport
+       * failure, retryable, naming the disagreement -- and the claim stays,
+       * because it is the intent a repair reconciles against. Break by
+       * returning the outcome without reading the record: the caller is told
+       * "completed" and the row fails on the first assertion.
+       */
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(1) }), [{ text: "settled" }], undefined, losingFinish)
+      const { exit, record } = yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            Effect.scoped(Effect.flatMap(client.createSession({ sessionId: "unbacked" }), (s) => s.prompt("go")))
+          )
+          const record = yield* f.sessionStore.get("unbacked")
+          return { exit, record }
+        }))
+      assert.isTrue(Exit.isFailure(exit), "the caller was told the prompt completed on the engine's word alone")
+      if (Exit.isFailure(exit)) {
+        const error = Cause.findErrorOption(exit.cause)
+        assert.isTrue(Option.isSome(error))
+        if (Option.isSome(error)) {
+          if (error.value._tag === "AgentTransportError") {
+            assert.include(error.value.detail, "still holds its claim")
+          } else {
+            assert.fail(`expected a transport failure, got ${error.value._tag}`)
+          }
+        }
+      }
+      // The claim is the intent: retained, with the session still running.
+      assert.isTrue(Option.isSome(record))
+      if (Option.isSome(record)) {
+        assert.strictEqual(record.value.status, "running")
+        assert.isTrue(Option.isSome(record.value.claim))
+      }
+    })
   )
 
   it.live("a typed value the schema rejects is refused before the claim, and nothing is journalled", () =>

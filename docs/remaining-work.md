@@ -211,9 +211,15 @@ sizes; the items are repeated here so this list stays the one tracker.
       crash must not burn an offset. Removing the boundary makes it fail.
       Still to point it at, from this plan's §3.2: the model-call boundary in
       `DurableSubmission`, and the relay's teardown.
-    - **48c. Never acknowledge on the engine's word** -- reconcile the
-      engine's answer against canonical state before completing a waiter,
-      and retain the intent on disagreement.
+    - **48c. Never acknowledge on the engine's word** -- ~~open~~ **SHIPPED
+      2026-09-06.** `DurableAgentClient` reads the session record after the
+      workflow reports a submission settled: a record that still holds the
+      submission's claim is a disagreement, the caller gets a retryable
+      `AgentTransportError` naming it, and the claim -- the intent -- is
+      retained. `test/DurableAgentClient.test.ts` proves it with a store whose
+      `finish` reports success and writes nothing; broken once. `RelayRpc`'s
+      finalizer carries the comment tying it to the same rule. 47c gets the
+      discipline by construction when it lands.
     - **48d. Cancellation belongs in `AgentClientConformance`** -- ~~open~~
       **SHIPPED 2026-09-03** (`351b1e4`), with two corrections to this plan.
       The row is about *interruption*, not teardown: an earlier draft closed

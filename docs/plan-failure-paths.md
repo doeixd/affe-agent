@@ -170,6 +170,10 @@ schema someone reviews.
 
 ### 3.3 (48c) Never acknowledge on the engine's word
 
+> **Shipped 2026-09-06** for `DurableAgentClient` (the reconciliation, with
+> its row in `test/DurableAgentClient.test.ts`) and as the comment on
+> `RelayRpc`'s finalizer. The Durable Object host's half arrives with 47c.
+
 **What theirs does.** When the native workflow completes, they do not trust the
 value it returns. They read the canonical settlement, compare the returned
 reference against it field by field, and on any disagreement they fail the pass

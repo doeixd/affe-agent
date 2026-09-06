@@ -534,6 +534,28 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
             isDefect: exit.value.failure.isDefect
           })
         }
+        // Never acknowledge on the engine's word (`plan-failure-paths.md`
+        // 3.3, item 48c). The workflow's `Outcome` says this submission
+        // settled; the canonical settlement is the session record, whose
+        // `finish` activity clears the claim and advances the history in one
+        // step. If the record still holds this submission's claim, the two
+        // disagree -- the projection never committed, or a store lost the
+        // write -- and telling the caller "completed" would be the relay
+        // bug's shape again: a promise the state does not back. So the
+        // caller gets a transport failure, retryable, and the claim is
+        // *retained*: it is the intent a later pass reconciles against.
+        const record = yield* options.sessionStore.get(sessionId)
+        const unsettled = Option.isSome(record) &&
+          Option.isSome(record.value.claim) &&
+          record.value.claim.value.submissionId === submissionId
+        if (unsettled) {
+          return yield* new AgentClient.AgentTransportError({
+            sessionId,
+            detail:
+              `the workflow reports submission ${submissionId} settled, but the session record still holds its claim; ` +
+              "the outcome is not acknowledged and the claim is retained for repair"
+          })
+        }
         return {
           submissionId: Ids.submissionId(submissionId),
           status: exit.value.status,

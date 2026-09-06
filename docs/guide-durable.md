@@ -97,6 +97,17 @@ exists), and the keyed delivery log does not duplicate chunks it already
 recorded live. A streamed submission commits exactly the history a batched
 one does, first run or replay.
 
+A completed workflow is not, by itself, a completed prompt. The client
+reconciles the workflow's outcome against the session record -- the canonical
+settlement, whose `finish` clears the claim and advances the history in one
+step -- before the caller is told anything. A record that still holds the
+submission's claim is a disagreement: the caller gets a retryable
+`AgentTransportError` that names it, and the claim is retained as the intent a
+later pass reconciles against. The rule is "never acknowledge on the engine's
+word" (`plan-failure-paths.md` 3.3), and the relay's teardown follows the same
+rule in the other direction: it fails what is in flight rather than wait on an
+acknowledgement a closed channel cannot deliver.
+
 ```ts
 import { AgentClient } from "affe-agent/client"
 import {

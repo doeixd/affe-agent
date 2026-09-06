@@ -1776,3 +1776,25 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "over-after-rollover" src/compaction/Compaction.ts
     verify: grep "an input that does not fit the window even alone fails before the call" test/ContextRollover.test.ts
     ```
+
+48c. ~~**Never acknowledge on the engine's word.**~~ **SHIPPED 2026-09-06.**
+    `DurableAgentClient.settled` reads the session record after the workflow
+    reports a `Succeeded` outcome. The canonical settlement is the record:
+    `finish` clears the claim and advances the history in one step. A record
+    that still holds this submission's claim is a disagreement -- the
+    projection never committed, or a store lost the write -- and the caller
+    gets a retryable `AgentTransportError` naming it instead of "completed";
+    the claim is retained, since it is the intent a repair reconciles
+    against. Proved with `losingFinish`, a store whose `finish` reports
+    success and writes nothing (`test/storageFaults.ts`); broken once by
+    returning without the read, which tells the caller "completed" and fails
+    the row's first assertion. `RelayRpc`'s finalizer carries the comment
+    that it is the same rule in the other direction. Ordered before 47c on
+    the second reviewer's advice: the rule first, then the durable lifecycle
+    that depends on it.
+
+    ```text
+    verify: grep "the outcome is not acknowledged and the claim is retained for repair" src/durable/DurableAgentClient.ts
+    verify: grep "export const losingFinish" test/storageFaults.ts
+    verify: grep "an outcome the session record does not back is not acknowledged" test/DurableAgentClient.test.ts
+    ```
