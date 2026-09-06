@@ -37,7 +37,7 @@ export const readBehaviorChanges = (range, onFailure) => {
     [
       "log",
       "--reverse",
-      `--format=${RECORD}%h${FIELD}%s${FIELD}%(trailers:key=${TRAILER},valueonly)`,
+      `--format=${RECORD}%h${FIELD}%s${FIELD}%(trailers:key=${TRAILER},valueonly,unfold)${FIELD}`,
       "--name-only",
       range
     ],
@@ -48,10 +48,11 @@ export const readBehaviorChanges = (range, onFailure) => {
     .map((chunk) => chunk.trim())
     .filter((chunk) => chunk.length > 0)
     .map((chunk) => {
-      const [header, ...rest] = chunk.split("\n")
-      const [hash, subject, trailerBlock] = header.split(FIELD)
+      // Trailers may span several lines. Delimit their entire block before
+      // parsing paths, otherwise the second trailer becomes a filename.
+      const [hash, subject, trailerBlock, fileBlock] = chunk.split(FIELD)
       const trailers = (trailerBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
-      const files = rest.map((line) => line.trim()).filter((line) => line.length > 0)
+      const files = (fileBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
       return { hash, subject: subject ?? "", trailers, files }
     })
 }

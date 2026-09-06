@@ -21,6 +21,9 @@ jobs:
         node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The behavior checks read the baseline and the last release tag.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -28,6 +31,13 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - run: bun install --frozen-lockfile
+        working-directory: apps/tui
 
       # Typecheck, the Effect language service, and the test suite. The language
       # service catches Effect-specific mistakes tsc cannot see, so it is a gate
@@ -66,7 +76,7 @@ jobs:
 
       - run: npm ci
 
-      # Keep latest-v1 runtime conformance in the normal suite while compiling
-      # the same adapter against the oldest v1 declarations we advertise.
-      - run: npm install --no-save --package-lock=false mcp-sdk-v1-floor@npm:@modelcontextprotocol/sdk@1.10.0
+      # The pinned alias is installed by npm ci from the root lockfile. A
+      # second unpinned install here re-resolved peers and crashed npm 10.
+      # Compile against the oldest v1 declarations we advertise.
       - run: npx tsc --noEmit -p tsconfig.mcp-v1-floor.json
