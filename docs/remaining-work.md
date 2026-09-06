@@ -362,32 +362,7 @@ Items 28 and 29 **landed while this section was being written** — `230745d`
 seam`). They are kept below, struck, rather than deleted, because the entry
 records what shipped and the next audit should not have to re-derive it.
 
-Item 27 is still in the working tree unstaged. `STATUS.md` does not claim it
-and should not until it is committed. Item 30 is untouched.
-
-27. **Model capabilities and prompt caching**
-    (`docs/plan-model-capabilities.md`, milestones M0–M6). The plan's own
-    status line now records this; the short version:
-    - **M3 landed**: `ContextTransform.cacheBreakpoint` marks the end of the
-      leading system run so Anthropic and OpenAI can bill the stable prefix at
-      the cached rate, with `Presets.coding` setting it by default.
-      `test/PromptCache.test.ts` pins placement, wire survival, and that
-      canonical history is untouched.
-    - **M1 landed 2026-09-01**: `src/model/ModelCapabilities.ts` (the
-      `Capabilities` value, the service, `fromTable`, `builtin`, and the
-      exhaustiveness test that fails the build when the pinned rc names a model
-      with no row), committed as `be75b83` and reachable: `./model` is entry
-      point 48 and `verify:package` imports it from the packed tarball.
-    - **M2 landed 2026-09-01**: `ModelCapabilities.budget` is a resolver
-      `Compaction.tokens` accepts unchanged, so the `ResolveBudget` seam
-      carried the whole wiring and `src/compaction` did not move. A test hands
-      it to `Compaction.tokens` and fails to compile if either shape drifts.
-    - **M4 landed 2026-09-01**: `Budget.cost`, a money ceiling on the same
-      loop seam as `Budget.within`, pricing `uncached` / `cacheRead` /
-      `cacheWrite` / output separately. A test pins that a cache write is
-      priced above an uncached token and fails if it is priced as a read.
-    - **M5, M6 not started** — the opt-in pre-flight transform, and the
-      selection example.
+Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
 
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
@@ -419,6 +394,27 @@ and should not until it is committed. Item 30 is untouched.
 
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
+
+### Newly ranked — from adopting item 27 (2026-09-06)
+
+61. **Two conventions for a wire tag.** `Errors.ts`, the client's protocol
+    errors, the durable failures and most batteries tag their error classes
+    bare (`"AgentBusyError"`, `"CompactionCannotHelpError"`,
+    `"MissingCapabilityError"`); the relay, blob, code and a few others tag
+    theirs namespaced (`affe-agent/relay/RelaySupersededError`). Both meet
+    other packages' tags in unions on shared wires, which is the reason
+    Effect namespaces. Decision 1 of `plan-two-decisions.md` froze the
+    namespaced ones; it did not touch the bare ones, and a census while
+    adopting item 27 counted dozens. Renaming a bare tag is a wire change
+    for every client that switches on it, so this is a decision to make
+    once -- namespace them all (a measured break, with fixtures) or declare
+    bare the convention for kernel and battery errors and namespaced the
+    convention for identifiers that name a *thing* (peers, endpoints,
+    services) -- not a sweep to run in passing. Small once decided.
+
+    ```text
+    verify: grep "\"AgentBusyError\"" src/Errors.ts
+    ```
 
 ### Known, deliberately left
 

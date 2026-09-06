@@ -266,8 +266,9 @@ until the header is written); `/subagent`; `/state`; `/skills`; `/memory`; `/eva
 `/observability`; `/model` (what upstream's `Model` omits: context window, max
 output, vision/tools/reasoning, per-million cost with `cacheRead` and
 `cacheWrite` priced apart -- with a built-in Anthropic table guarded by an
-exhaustiveness test, and `budget`, a compaction budget the model sizes
-itself); `/export` (JSON envelope + JSONL commit log); `/compaction`
+exhaustiveness test, `budget`, a compaction budget the model sizes
+itself, and `preflight`, an opt-in transform that refuses an image against
+a text-only model before the call, naming both); `/export` (JSON envelope + JSONL commit log); `/compaction`
 (token policy, checkpoints, controller, events; a `Rollover` checkpoint
 beside `Summary` -- the model asks with `new_context`, or a summary that will
 not fit falls back to one -- with the instructions kept ahead of every

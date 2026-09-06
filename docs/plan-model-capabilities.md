@@ -7,8 +7,11 @@ reachable as the `./model` entry point, which `verify:package` imports from the
 packed tarball; the exhaustiveness test fails the build when the pinned rc names
 a model with no capability row. **M2 done** (`ModelCapabilities.budget`, §8),
 **M3 done** (`ContextTransform.cacheBreakpoint`, `test/PromptCache.test.ts`).
-**M4 done** (`Budget.cost`, §8). **M5 and M6 are not started.** Everything above is committed, so `STATUS.md`
-may claim it.
+**M4 done** (`Budget.cost`, §8). **M5 done** (`ModelCapabilities.preflight`,
+`MissingCapabilityError`, `test/ModelCapabilities.test.ts`) and **M6 done**
+(`examples/model-selection.ts`), 2026-09-06 -- both found in the working tree
+unclaimed for two days and adopted under the collaboration rule, reviewed and
+finished. Everything is committed, so `STATUS.md` may claim it.
 
 Drafted 2026-09-01, from a question that arrived as a sketch:
 `InferenceProvider<Models, Contract>` — a model carrying its own options

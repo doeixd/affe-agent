@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { Model } from "effect/unstable/ai"
+import * as ContextTransform from "../ContextTransform.js"
+import { Model, Prompt } from "effect/unstable/ai"
 import * as Namespace from "../internal/namespace.js"
 
 /**
@@ -91,6 +92,22 @@ export class UnknownCurrentModelError
     return "No model in context. `current` reads Model.ProviderName and " +
       "Model.ModelName, which only a `Model` provides -- wire the provider " +
       "with e.g. AnthropicLanguageModel.model(...) rather than .layer(...)."
+  }
+}
+
+/** A prompt that needs something the model does not do. */
+export class MissingCapabilityError extends Schema.TaggedError<MissingCapabilityError>()(
+  "MissingCapabilityError",
+  {
+    provider: Schema.String,
+    model: Schema.String,
+    capability: Schema.String,
+    detail: Schema.String
+  }
+) {
+  override get message() {
+    return `${this.provider}/${this.model} does not support ${this.capability}: ` +
+      `${this.detail}.`
   }
 }
 
@@ -447,3 +464,77 @@ export const priceOfCurrent = (usage: {
       model: Option.getOrElse(model, () => "unknown")
     })
   })
+
+/**
+ * Refuse a prompt the model cannot serve, before the call rather than after it.
+ *
+ * Opt-in, and worth being honest about the size of what it buys. A prompt with
+ * image parts against a text-only model already fails *loudly* at the provider
+ * -- a 400, not silence -- so this does not turn a silent bug into a visible
+ * one. What it buys is failing **once**, here, with the model and the missing
+ * capability named, instead of after an `ExecutionPlan` has spent three
+ * provider round-trips discovering the same thing three times.
+ *
+ * ```ts
+ * Agent.make({
+ *   contextTransform: ContextTransform.compose(
+ *     ModelCapabilities.preflight(),
+ *     ContextTransform.cacheBreakpoint()
+ *   )
+ * })
+ * ```
+ *
+ * A `ContextTransform` because that is the existing seam for inspecting what
+ * reaches the model, and it composes with the transforms already there. The
+ * prompt is returned unchanged: this reads, it never rewrites.
+ *
+ * **Only what the transform can see.** It checks the derived prompt for image
+ * parts against `vision`. It does not check `tools`, because a transform is
+ * handed a prompt and not the toolkit -- claiming to pre-flight tool support
+ * from here would be a check that quietly does nothing.
+ *
+ * **A model with no `vision` row is allowed through.** `Capabilities.vision`
+ * is optional and absent means *nobody has recorded it*, not *no*. Refusing on
+ * an absent fact would turn an incomplete table into an outage, and the
+ * provider's own 400 remains the backstop -- which is the whole reason this is
+ * an optimisation rather than a guarantee.
+ */
+export const preflight = (): ContextTransform.ContextTransform<
+  UnknownModelError | UnknownCurrentModelError | MissingCapabilityError,
+  ModelCapabilities
+> =>
+  ContextTransform.make((context) =>
+    Effect.gen(function*() {
+      const images = imagePartsIn(context.prompt)
+      // Nothing to check costs nothing: the common case never resolves
+      // capabilities at all, so an agent that sends no images pays nothing for
+      // having the transform installed.
+      if (images.length === 0) return context.prompt
+
+      const service = yield* ModelCapabilities
+      const capabilities = yield* service.current
+      if (capabilities.vision !== false) return context.prompt
+
+      const provider = yield* Effect.serviceOption(Model.ProviderName)
+      const model = yield* Effect.serviceOption(Model.ModelName)
+      return yield* new MissingCapabilityError({
+        provider: Option.getOrElse(provider, () => "unknown"),
+        model: Option.getOrElse(model, () => "unknown"),
+        capability: "vision",
+        detail: `the prompt carries ${images.length} image part(s) ` +
+          `(${[...new Set(images)].join(", ")})`
+      })
+    })
+  )
+
+/** The media types of every image part in a prompt, in order. A system message has text, not parts. */
+const imagePartsIn = (prompt: Prompt.Prompt): ReadonlyArray<string> => {
+  const found: Array<string> = []
+  for (const message of prompt.content) {
+    if (message.role === "system") continue
+    for (const part of message.content) {
+      if (part.type === "file" && part.mediaType.startsWith("image/")) found.push(part.mediaType)
+    }
+  }
+  return found
+}

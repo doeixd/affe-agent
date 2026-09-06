@@ -1653,3 +1653,31 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "the parent's own interruption takes precedence over die" test/Subagent.test.ts
     verify: grep "affe-agent/subagent/SubagentInterruptedError" test/fixtures/namespace-manifest.json
     ```
+
+27. ~~**Model capabilities and prompt caching**~~ **DONE 2026-09-06**
+    (`docs/plan-model-capabilities.md`, M0-M6). M1-M4 landed 2026-09-01:
+    the `Capabilities` value and service with `fromTable` and `builtin`, the
+    exhaustiveness test, `ModelCapabilities.budget` as a `ResolveBudget`,
+    `ContextTransform.cacheBreakpoint`, and `Budget.cost`. M5 and M6 sat in
+    the working tree unclaimed from 2026-09-04 and were adopted on
+    2026-09-06 under the collaboration rule, reviewed, and finished: **M5**
+    is `ModelCapabilities.preflight()`, an opt-in `ContextTransform` that
+    refuses a prompt carrying image parts against a model whose row says
+    `vision: false`, before the call, naming provider, model and the media
+    types (`MissingCapabilityError`); a row with no `vision` fact passes,
+    because absent means unrecorded, and a prompt with no images never
+    resolves the table at all. **M6** is `examples/model-selection.ts`:
+    selection by capability and by budget as `Layer.unwrap`, deliberately
+    not a feature, beside `preflight` catching the case a caller wired by
+    hand. The review removed three casts the types made unnecessary (the
+    transform's and the example's walks over prompt parts, and `as never`
+    ids in the test), and left the module's bare error tags as they are:
+    bare tags are the convention for every public error class in `src`,
+    which is a finding recorded as item 61, not a change to make here.
+    Broken once: the vision check inverted fails two rows.
+
+    ```text
+    verify: grep "export const preflight" src/model/ModelCapabilities.ts
+    verify: grep "refuses an image against a text-only model, naming both" test/ModelCapabilities.test.ts
+    verify: exists examples/model-selection.ts
+    ```

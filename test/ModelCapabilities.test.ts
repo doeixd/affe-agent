@@ -1,9 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Generated } from "@effect/ai-anthropic"
 import { Effect, Layer, Option } from "effect"
-import { Model } from "effect/unstable/ai"
+import { Model, Prompt } from "effect/unstable/ai"
 import * as Compaction from "../src/compaction/Compaction.js"
 import * as ModelCapabilities from "../src/model/ModelCapabilities.js"
+import * as Ids from "../src/internal/ids.js"
 
 /**
  * Model capabilities (`docs/plan-model-capabilities.md` §4, M1).
@@ -207,4 +208,84 @@ describe("ModelCapabilities: budget (M2)", () => {
       assert.strictEqual(policy._tag, "Tokens")
       assert.strictEqual(typeof policy.budget, "function")
     }))
+})
+
+describe("ModelCapabilities: preflight (M5)", () => {
+  const table = ModelCapabilities.fromTable({
+    test: {
+      "sighted": { contextWindow: 1000, maxOutputTokens: 100, vision: true },
+      "text-only": { contextWindow: 1000, maxOutputTokens: 100, vision: false },
+      // No `vision` key at all: nobody has recorded it.
+      "unrecorded": { contextWindow: 1000, maxOutputTokens: 100 }
+    }
+  })
+
+  const withModel = (model: string) =>
+    Layer.merge(table, Model.make("test", model, Layer.empty))
+
+  const withImage = Prompt.make([
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "what is this?" },
+        { type: "file", mediaType: "image/png", data: new Uint8Array([1, 2]) }
+      ]
+    }
+  ])
+  const textOnly = Prompt.make([{ role: "user", content: [{ type: "text", text: "hello" }] }])
+
+  const contextFor = (prompt: Prompt.Prompt) => ({
+    sessionId: Ids.sessionId("s"),
+    submissionId: Ids.submissionId("s:submission-1"),
+    runId: Ids.runId("s:run-1"),
+    turnIndex: 1,
+    canonicalPrompt: prompt,
+    prompt
+  })
+
+  it.effect("refuses an image against a text-only model, naming both", () =>
+    Effect.gen(function*() {
+      const result = yield* Effect.result(
+        ModelCapabilities.preflight().transform(contextFor(withImage))
+      )
+
+      assert.isTrue(result._tag === "Failure")
+      if (result._tag !== "Failure") return
+      assert.strictEqual(result.failure._tag, "MissingCapabilityError")
+      if (result.failure._tag !== "MissingCapabilityError") return
+      // The point of failing here rather than at the provider is that the
+      // message says which model and which capability.
+      assert.strictEqual(result.failure.model, "text-only")
+      assert.strictEqual(result.failure.capability, "vision")
+      assert.match(result.failure.message, /does not support vision/)
+      assert.match(result.failure.message, /image\/png/)
+    }).pipe(Effect.provide(withModel("text-only"))))
+
+  it.effect("passes an image to a model that can see, unchanged", () =>
+    Effect.gen(function*() {
+      const out = yield* ModelCapabilities.preflight().transform(contextFor(withImage))
+
+      // This reads; it never rewrites.
+      assert.strictEqual(out, withImage)
+    }).pipe(Effect.provide(withModel("sighted"))))
+
+  it.effect("an unrecorded vision fact is not a refusal", () =>
+    Effect.gen(function*() {
+      // `vision` is optional and absent means nobody recorded it, not "no".
+      // Refusing here would turn an incomplete table into an outage, and the
+      // provider's own 400 is still the backstop.
+      const out = yield* ModelCapabilities.preflight().transform(contextFor(withImage))
+      assert.strictEqual(out, withImage)
+    }).pipe(Effect.provide(withModel("unrecorded"))))
+
+  it.effect("a prompt with no images never resolves the model at all", () =>
+    Effect.gen(function*() {
+      // The capability table is provided but **no `Model` is**, so resolving
+      // would fail with `UnknownCurrentModelError`. Succeeding is the proof
+      // that nothing was resolved: an agent that sends no images pays nothing
+      // for having this installed, and does not acquire a requirement on a
+      // model being in scope at transform time.
+      const out = yield* ModelCapabilities.preflight().transform(contextFor(textOnly))
+      assert.strictEqual(out, textOnly)
+    }).pipe(Effect.provide(table)))
 })
