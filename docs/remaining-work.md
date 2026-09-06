@@ -110,8 +110,16 @@ open, so the next pass does not have to re-derive it.
     a Workers free plan; the HTTPS smoke matched the miniflare test). Left:
     the code tool needs Dynamic Workers, which is paid-plan only (error
     10195), so `apps/worker` as checked in deploys once the account is
-    upgraded; a real model still wants a provider key in a Worker secret;
-    Rivet.
+    upgraded; Rivet. **A real model landed 2026-09-06** as the first slice
+    of the deployment milestone (scoped with a second reviewer, decision
+    record in `plan-two-decisions.md` §3): `worker-real-model.ts` with the
+    key in a Worker secret, `wrangler.real.jsonc`, the README quickstart,
+    `test/WorkerRealModel.test.ts` proving the exact entry on workerd with
+    the provider substituted at miniflare's outbound boundary, and the
+    opt-in `npm run smoke:cloudflare` against a deployment. The live smoke
+    has **not** been run from this machine (no account here); the README's
+    quickstart is the procedure, and a sanitized result belongs in the
+    ledger when someone runs it.
     `Sandbox.fromExec` / `fromOperations` landed 2026-08-30 (a remote
     sandbox for the Worker is now one exec function away); a real remote
     provider (E2B/Daytona) still needs an account. The two upstream findings
@@ -394,6 +402,23 @@ Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
 
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
+
+### Newly ranked — from the real-model entry (2026-09-06)
+
+62. **A model layer that fails to build is an empty 500.** Found writing
+    `test/WorkerRealModel.test.ts`: when the Durable Object cannot build the
+    agent's model layer (the secret missing, so
+    `Binding.BindingNotFoundError`), opening the session answers a bare
+    status with no body. The error names the binding, but only in the
+    Worker's log, and a deployer following the quickstart sees nothing.
+    `CloudflareHost.make` builds the layer inside the object; the failure
+    should reach the HTTP surface as a typed protocol error with the
+    binding's name, the way every other refusal does. Small; a row in the
+    real-model test asserts the body once it does.
+
+    ```text
+    verify: grep "Recorded as a finding (item 62)" test/WorkerRealModel.test.ts
+    ```
 
 ### Known, deliberately left
 

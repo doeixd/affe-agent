@@ -5815,3 +5815,28 @@ Not taken from the plan: the provider-overflow trigger, because Effect's AI
 layer has no provider-neutral classification to catch (60d-i, parked). The
 claims checker held sixty-seven claims across three files at the end; the
 suite stood at 2204 tests in 210 files.
+
+## 2026-09-06 — three decisions made with a second reviewer, and the real model on Cloudflare
+
+Item 61 (bare versus namespaced error tags), the ranking of the parked work,
+and the first slice of the deployment milestone were put to gpt-6-astra with
+the evidence inlined. The reviewer argued for namespacing every error tag;
+not taken, because Effect's own library errors are bare across every package
+-- but its two checks were: a second frozen manifest for the 59 bare tags and
+a definition check that reads every `Schema.TaggedError` in `src`
+(`plan-two-decisions.md` decision 3). Its ranking of the parked items -- 19,
+then 32, 34, 33 -- and its first slice for 19 were taken as written.
+
+That slice is `examples/deploy-cloudflare/worker-real-model.ts`: the free-plan
+entry with Anthropic behind a Worker secret, a checked-in
+`wrangler.real.jsonc`, a README quickstart, and `test/WorkerRealModel.test.ts`,
+which bundles the exact file and runs it on workerd with miniflare's outbound
+service standing in for the provider, so the secret reaching the client, the
+var picking the model, the reply returning through the Durable Object and the
+history surviving the runtime are all asserted with no key and no network.
+`npm run smoke:cloudflare` is the opt-in live half, not yet run from a machine
+with an account. Writing the no-key row found item 62: a model layer that
+fails to build is an empty 500 at session creation.
+
+Earlier the same day item 27's last two milestones, found unclaimed in the
+tree for two days, were adopted, reviewed (three casts removed) and landed.

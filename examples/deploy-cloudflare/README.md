@@ -25,6 +25,33 @@ npx alchemy deploy   # for real
 If the login can see more than one account, set `CLOUDFLARE_ACCOUNT_ID`:
 wrangler refuses to choose one non-interactively.
 
+## Quickstart with a real model
+
+The shortest path from a fresh Cloudflare account to an agent answering
+with a real model, on the **free** plan. `worker-real-model.ts` is
+`worker-without-code-mode.ts` with the scripted model swapped for Anthropic,
+the key in a Worker secret, exactly as `apps/worker`'s header describes.
+
+```bash
+cd examples/deploy-cloudflare
+npx wrangler login                                   # once
+npx wrangler secret put ANTHROPIC_API_KEY --config wrangler.real.jsonc
+npx wrangler deploy --config wrangler.real.jsonc     # prints the Worker URL
+WORKER_URL=https://affe-agent-real.<account>.workers.dev npm run smoke:cloudflare
+```
+
+The smoke opens a session, prompts it, and reads the history back; it prints
+a sanitized result. `ANTHROPIC_MODEL` in `wrangler.real.jsonc` picks the
+model (`claude-haiku-4-5` by default); `ANTHROPIC_BASE_URL` may be added to
+`vars` for a proxy. Without the secret, opening a session fails rather than
+calling the provider unauthenticated; the Worker's log names the binding.
+
+The same file is proved on real workerd in CI with no key and no network:
+`test/WorkerRealModel.test.ts` bundles it as is and stands in for the
+provider at miniflare's outbound boundary, asserting that the secret reaches
+the client, the var picks the model, the reply comes back through the
+Durable Object, and the history outlives the runtime.
+
 ## Proved on real Cloudflare, 2026-09-02
 
 `worker-without-code-mode.ts` deployed as `affe-agent-free` from a Workers
@@ -39,9 +66,8 @@ What that deployment leaves out is the code tool. **Dynamic Workers -- the
 binding that needs a paid plan** (Cloudflare refuses the upload with error
 10195); SQLite-backed Durable Objects and alarms are on free. `apps/worker`
 as checked in, with the loader, deploys the moment the account is upgraded;
-nothing in it changes. The model in both entries is still the scripted one,
-so the remaining half of "a real deployment" is a provider key in a Worker
-secret, exactly the swap the entry's header describes.
+nothing in it changes. The model in both of those entries is the scripted one;
+`worker-real-model.ts` (above) is the swap, and the quickstart deploys it.
 
 The stack's output is the Worker URL. The HTTP surface is the same one every
 other deployment serves (`/sessions`, `/sessions/{id}/prompt`, `…/events`);

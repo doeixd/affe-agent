@@ -1,0 +1,22 @@
+// `worker-real-model.ts` on a Workers free plan, against Anthropic. The
+// quickstart in README.md deploys this. The key is a secret, not a var:
+//
+//   npx wrangler secret put ANTHROPIC_API_KEY --config wrangler.real.jsonc
+//   npx wrangler deploy --config wrangler.real.jsonc
+//
+// `ANTHROPIC_MODEL` is the one knob; `ANTHROPIC_BASE_URL` may be added to
+// `vars` for a proxy or gateway.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "affe-agent-real",
+  "main": "worker-real-model.ts",
+  "tsconfig": "../../apps/worker/tsconfig.json",
+  "compatibility_date": "2026-08-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "ANTHROPIC_MODEL": "claude-haiku-4-5" },
+  "durable_objects": {
+    "bindings": [{ "name": "SESSIONS", "class_name": "AgentSessionObject" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AgentSessionObject"] }],
+  "observability": { "enabled": true }
+}

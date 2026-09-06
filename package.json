@@ -268,6 +268,7 @@
     "verify:remaining-work": "node scripts/verify-remaining-work.mjs",
     "verify:behavior-change": "node scripts/verify-behavior-change.mjs",
     "verify:changelog": "node scripts/changelog-behavior-changes.mjs --check",
+    "smoke:cloudflare": "node scripts/smoke-cloudflare.mjs",
     "changelog:behavior-changes": "node scripts/changelog-behavior-changes.mjs --write",
     "verify:mutations": "node scripts/mutate.mjs",
     "verify:durability": "node scripts/falsify.mjs",
