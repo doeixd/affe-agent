@@ -367,7 +367,11 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
           events: (eventOptions) =>
             eventOptions?.after === undefined
               ? Stream.map(remote.events(), shift)
-              : eventsAfter(sessionId, eventOptions.after)
+              : eventsAfter(sessionId, eventOptions.after),
+          // The same shift: a streamed submission's sequences are the
+          // journal's, so a consumer that loses the stream resumes from the
+          // last one it saw with `events({ after })`.
+          stream: (input, streamOptions) => Stream.map(remote.stream(input, streamOptions), shift)
         }
         open.set(sessionId, resumable)
         yield* Scope.addFinalizer(scope, Effect.sync(() => void open.delete(sessionId)))

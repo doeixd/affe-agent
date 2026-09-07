@@ -69,6 +69,31 @@ re-running anything. The idempotency key lives exactly as long as the
 outcome. The durable client's retention is the journal, which keeps every
 outcome. The rule in full: [docs/plan-submit-await.md](./plan-submit-await.md).
 
+`stream` is `AgentSession.stream` across the seam: submit with `stream: true`
+and receive that submission's own envelopes, from `SubmissionStarted` through
+its terminal, ending once the session is free again:
+
+```ts
+yield* session.stream("explain this").pipe(
+  Stream.filter(AgentEvent.is("MessageDelta")),
+  Stream.runForEach((e) => Console.log(e.event.delta))
+)
+```
+
+The rules are the same on every client, which is the point of having it on
+the seam rather than in an application: the subscription is established
+before admission, so the first envelope cannot be missed; a failed run ends
+with `SubmissionFailed` as data, and only admission and transport are on the
+error channel; each evaluation submits once; and ending the consumer -- a
+dropped connection included -- releases the subscription and nothing else.
+The submission keeps running; `interrupt` stops it, and a consumer that lost
+the stream resumes with `events({ after })` from the last sequence it saw. Over
+HTTP it is `POST /sessions/:id/stream` answered as Server-Sent Events; the
+host does the subscribe-then-submit, so the transport need not. The durable
+client establishes its delivery-log subscription first; without a log it
+refuses rather than offer a stream that may have missed its start. The
+contract (`AgentClientConformance`) holds every client to these.
+
 That is deliberately *not* `AgentTransportError`. An agent failure is a property
 of the request and will recur, so wearing the transport tag would turn a
 caller's retry policy into a loop with a model call per attempt. The same

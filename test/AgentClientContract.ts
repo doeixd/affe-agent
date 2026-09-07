@@ -107,6 +107,7 @@ export const failingHost = <Principal>(
     pending: () => fail,
     history: () => fail,
     status: () => fail,
+    stream: () => fail,
     events: () => fail,
     sessions: () => fail,
     eventLog: () => fail,

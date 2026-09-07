@@ -213,6 +213,17 @@ const sessionsGroup = <const Id extends string>(identifier: Id) =>
       error: Schema.toCodecJson(AgentProtocol.RemoteError)
     }),
     error: HttpErrors
+  }),
+  // A submit whose response is the submission's own envelopes, as SSE.
+  HttpApiEndpoint.post("stream", "/sessions/:id/stream", {
+    params: SessionPath.fields,
+    headers: RequestHeaders,
+    payload: PromptBody,
+    success: HttpApiSchema.StreamSse({
+      data: Schema.toCodecJson(AgentProtocol.AgentEventEnvelope),
+      error: Schema.toCodecJson(AgentProtocol.RemoteError)
+    }),
+    error: HttpErrors
   })
 )
 
@@ -473,6 +484,20 @@ export const fromGenerated = (
     status: lift(id)(
       client.sessions.status({ params: params(id), headers })
     ).pipe(Effect.map((body) => body.status)),
+    stream: (input, streamOptions) =>
+      Stream.unwrap(
+        lift(id)(
+          client.sessions.stream({
+            params: params(id),
+            headers,
+            payload: {
+              requestId: nextRequestId(),
+              input: AgentProtocol.input(input),
+              options: { ...streamOptions, stream: true }
+            }
+          })
+        )
+      ).pipe(Stream.catch((error) => Stream.fail(toRemote(id, error)))),
     events: (eventOptions) =>
       eventOptions?.after === undefined
         ? Stream.unwrap(
@@ -1054,6 +1079,22 @@ export const serverLayer = <Principal>(
         )
       })
 
+      const streamSubmission = Effect.fn("AgentHttp.stream")(function* (
+        request: HttpServerRequest.HttpServerRequest
+      ) {
+        const sessionId = yield* decodeSessionId("submit")
+        const body = yield* decodeBody("submit", PromptBody, request)
+        const identity = yield* principal(
+          request,
+          "submit",
+          Option.some(sessionId)
+        )
+        const stream = yield* host.stream(identity, { ...body, sessionId })
+        return eventResponse(
+          stream.pipe(Stream.interruptWhen(Deferred.await(shutdown)))
+        )
+      })
+
       const events = Effect.fn("AgentHttp.events")(function* (
         request: HttpServerRequest.HttpServerRequest
       ) {
@@ -1108,7 +1149,9 @@ export const serverLayer = <Principal>(
           router.add("GET", route("/sessions/:id/status"), (request) =>
             handled(status(request))),
           router.add("GET", route("/sessions/:id/events"), (request) =>
-            handled(events(request)))
+            handled(events(request))),
+          router.add("POST", route("/sessions/:id/stream"), (request) =>
+            handled(streamSubmission(request)))
         ],
         { discard: true }
       )

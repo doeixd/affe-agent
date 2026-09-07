@@ -87,11 +87,24 @@ scheduling publishes nothing before the receipt returns, so the swapped order
 passes too) and the submission filter (nothing of another submission can arrive
 inside the window once the terminal cuts it).
 
-*Next slices:* the remote mirror on `RemoteSession` -- a cursor known to
-precede the submission, then replay-and-live from that cursor over SSE, with
-reconnection that observes without resubmitting and reports expired retention
-as an observation error; and a text-only convenience that deliberately
-translates an unsuccessful terminal into a failure.
+*Remote mirror (shipped 2026-09-06, item 72):* `RemoteSession.stream` on
+every client. Not the cursor design sketched here: no client can learn a
+cursor that precedes a submission it has not yet made, but two seams return
+*established* -- the in-process bus subscription and a delivery log's
+`subscribe` -- so the mirror is subscribe-then-submit wherever one exists,
+and where none does the host does it: `POST /sessions/:id/stream` and the
+RPC `stream` procedure are served by `AgentSessionHost.stream`, the hosted
+session's own `stream` as SSE or an RPC stream. `AgentClient.streamFrom` is
+the one derivation (established subscription, `submit`, filter, terminal
+cut, `awaitSubmission` to end free) shared by the in-process and durable
+clients; the Cloudflare host applies its sequence shift. A durable client
+without a log refuses. Reconnection is `events({ after })`, never a second
+stream request, which is why the host does not deduplicate one. The
+conformance contract gained three cases -- the stream from start to
+terminal with deltas, ending free and cold; the failed run ending with
+`SubmissionFailed` as data; the refusal for a client that cannot establish
+first -- run by every shipped client. A text-only convenience is still
+unwritten.
 
 ### P2 -- partial tool arguments as an additive event (shipped 2026-09-06)
 

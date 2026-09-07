@@ -570,7 +570,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
         }
       })
 
-    return {
+    const self: AgentClient.RemoteSession = {
     id: sessionId,
 
     prompt: (input, promptOptions) =>
@@ -707,6 +707,36 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
       return found.value.status
     }).pipe(storageAsTransport(sessionId)),
 
+    stream: (input, streamOptions) => {
+      const delivery = options.delivery
+      if (delivery === undefined) {
+        // Without a log there is no subscription to establish before the
+        // submission, and a live stream started afterwards could miss its
+        // first envelopes; refused, rather than offered with a gap.
+        return Stream.fail(
+          new AgentClient.AgentTransportError({
+            sessionId,
+            detail: "this client has no delivery log, so a submission cannot be streamed; submit and await it instead"
+          })
+        )
+      }
+      return Stream.unwrap(
+        Effect.map(
+          delivery.subscribe(sessionId).pipe(
+            Effect.mapError((error) => new AgentClient.AgentTransportError({ sessionId, detail: error.message }))
+          ),
+          (subscribed) =>
+            AgentClient.streamFrom(
+              self,
+              Stream.catchTag(subscribed, "StorageError", (error) =>
+                Stream.fail(new AgentClient.AgentTransportError({ sessionId, detail: error.message }))),
+              input,
+              streamOptions
+            )
+        )
+      )
+    },
+
     events: (eventOptions) => {
       const delivery = options.delivery
       if (delivery === undefined) {
@@ -806,6 +836,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
       )
     }
   }
+    return self
   }
 
   return Layer.effect(

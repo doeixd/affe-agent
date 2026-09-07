@@ -1,4 +1,4 @@
-import { Deferred, Duration, Effect, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
+import { Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
 import type { Layer } from "effect"
 import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -78,6 +78,14 @@ export interface Options {
    * backings rather than an artefact of testing.
    */
   readonly resumesEvents?: boolean | undefined
+  /**
+   * `false` when this client cannot stream a submission -- it has no
+   * subscription seam that is established before admission -- and must
+   * therefore *refuse* `stream` rather than return one that may have missed
+   * its first envelopes. Default `true`, and both answers are asserted, as
+   * for `resumesEvents`.
+   */
+  readonly streamsSubmissions?: boolean | undefined
   /**
    * Where settled outcomes live. `bounded` is the in-process table with the
    * eviction rule; `journal` is the durable engine, which keeps every
@@ -902,6 +910,104 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
             )
           })
         )
+    )),
+
+    /**
+     * One submission as a stream, on every client (`plan-streaming.md` P1,
+     * item 72): the rules must hold wherever the session lives, or closing
+     * a tab changes execution semantics by deployment. A client without a
+     * subscription seam established before admission refuses instead.
+     */
+    options.streamsSubmissions === false
+      ? make("refuses to stream a submission rather than returning one that may have missed its start", withClient(
+        options,
+        { agent: Agent.make({ loop: AgentLoop.bounded(2) }), turns: [TestLanguageModel.text("done")] },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const name = "refuses to stream a submission rather than returning one that may have missed its start"
+              const session = yield* client.createSession()
+              const outcome = yield* Stream.runCollect(session.stream("go")).pipe(
+                Effect.as("streamed" as const),
+                Effect.catchCause(() => Effect.succeed("refused" as const)),
+                Effect.timeout(Duration.seconds(5)),
+                Effect.catchTag("TimeoutError", () => Effect.succeed("returned a stream that never ended" as const))
+              )
+              yield* equal(name)(outcome, "refused", "streaming on a client that cannot establish its subscription first")
+            })
+          )
+      ))
+      : make("streams one submission: its own envelopes from start to terminal, deltas included, ending free and cold", withClient(
+        options,
+        {
+          agent: Agent.make({ loop: AgentLoop.bounded(4) }),
+          turns: [{ text: "streamed", chunks: ["str", "eamed"] }, TestLanguageModel.text("again")]
+        },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const name = "streams one submission: its own envelopes from start to terminal, deltas included, ending free and cold"
+              const session = yield* client.createSession()
+              const once = session.stream("go")
+              const envelopes = yield* Stream.runCollect(once).pipe(
+                Effect.timeout(Duration.seconds(10)),
+                Effect.catchTag("TimeoutError", () =>
+                  Effect.fail(new Failure({ case: name, detail: "the stream never ended: the terminal was not delivered or the cut is missing" })))
+              )
+              const tags = envelopes.map((entry) => entry.event._tag)
+              yield* equal(name)(tags[0], "SubmissionStarted", "the first envelope, which a subscription taken after admission would miss")
+              yield* equal(name)(tags[tags.length - 1], "SubmissionCompleted", "the last envelope")
+              const ids = new Set(envelopes.map((entry) => Option.getOrUndefined(entry.submissionId)))
+              yield* equal(name)(ids.size, 1, "submissions represented")
+              yield* equal(name)(
+                envelopes.flatMap((entry) => AgentEvent.is("MessageDelta")(entry) ? [entry.event.delta] : []),
+                ["str", "eamed"],
+                "the deltas, which means the submission streamed"
+              )
+              const sequences = envelopes.map((entry) => entry.sequence)
+              yield* equal(name)(sequences, [...sequences].sort((a, b) => a - b), "sequences, in the session's order")
+              // Ends free: the session answers at once, and the outcome is retrievable.
+              yield* equal(name)(yield* session.status, "idle", "status the moment the stream ended")
+              const [id] = ids
+              const outcome = yield* session.awaitSubmission(id!)
+              yield* equal(name)(outcome.status, "completed", "the retained outcome")
+              yield* equal(name)(outcome.text, "streamed", "its text")
+              // Cold: evaluating again is a second submission.
+              const second = yield* Stream.runCollect(once)
+              const secondIds = new Set(second.map((entry) => Option.getOrUndefined(entry.submissionId)))
+              yield* equal(name)(secondIds.size, 1, "submissions in the second evaluation")
+              yield* that(name)(!secondIds.has(id), "the second evaluation submitted again rather than replaying")
+            })
+          )
+      )),
+
+    // A failing model call, because that fails a run on every client. A tool
+    // that dies does not: it fails an in-process run and completes a durable
+    // one, a divergence this suite found and item 73 records.
+    make("a streamed submission that fails ends with SubmissionFailed, not a stream failure", withClient(
+      options,
+      {
+        agent: Agent.make({ loop: AgentLoop.bounded(2) }),
+        turns: [{ fail: "the provider is down" }]
+      },
+      (client) =>
+        options.streamsSubmissions === false
+          ? Effect.void
+          : Effect.scoped(
+            Effect.gen(function* () {
+              const name = "a streamed submission that fails ends with SubmissionFailed, not a stream failure"
+              const session = yield* client.createSession()
+              const exit = yield* Effect.exit(Stream.runCollect(session.stream("go")).pipe(
+                Effect.timeout(Duration.seconds(10))
+              ))
+              yield* that(name)(Exit.isSuccess(exit), "observing the outcome succeeded even though the run did not")
+              if (Exit.isSuccess(exit)) {
+                const tags = exit.value.map((entry) => entry.event._tag)
+                yield* equal(name)(tags[tags.length - 1], "SubmissionFailed", "the terminal, as data")
+                yield* equal(name)(tags.filter((tag) => tag.startsWith("Submission")).length, 2, "one start, one terminal")
+              }
+            })
+          )
     ))
   ]
 }

@@ -57,6 +57,7 @@ const idleSession = (id: AgentProtocol.SessionId): AgentClient.RemoteSession => 
   pending: Effect.succeed([]),
   history: Effect.succeed(Prompt.empty),
   status: Effect.succeed("idle"),
+  stream: () => Stream.empty,
   events: () => Stream.empty
 })
 
@@ -355,6 +356,7 @@ describe("AgentServer", () => {
       pending: () => unused,
       history: () => unused,
       status: () => unused,
+      stream: () => unused,
       events: () => unused,
       sessions: () => unused,
       eventLog: () => unused,

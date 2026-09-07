@@ -239,6 +239,15 @@ export const SubmitResponse = Schema.Struct({
 })
 export type SubmitResponse = typeof SubmitResponse.Type
 
+/**
+ * `RemoteSession.stream` on the wire: a submit whose response is the
+ * submission's envelopes. `options.stream` is ignored -- a stream request
+ * streams -- and `requestId` names the request for logging only; a retried
+ * stream request is a second submission, as the client's contract says.
+ */
+export const StreamRequest = SubmitRequest
+export type StreamRequest = typeof StreamRequest.Type
+
 export const AwaitSubmissionRequest = Schema.Struct({
   sessionId: SessionId,
   submissionId: SubmissionId

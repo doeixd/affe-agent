@@ -132,6 +132,20 @@ export interface Host<Principal> {
     AgentProtocol.RemoteError
   >
   /**
+   * One submission as a stream, served by the host so a transport that
+   * cannot establish a subscription before submitting still gets P1's
+   * guarantee. Authorised as a `submit` and as `events`, which is what it
+   * is; not deduplicated by request id, because a reconnection is
+   * `events({ after })`, not a second stream request.
+   */
+  readonly stream: (
+    principal: Principal,
+    request: AgentProtocol.StreamRequest
+  ) => Effect.Effect<
+    Stream.Stream<AgentProtocol.AgentEventEnvelope, AgentProtocol.RemoteError>,
+    AgentProtocol.RemoteError
+  >
+  /**
    * Every hosted session's events, plus this host's own hosting lifecycle.
    *
    * The aggregate `events` is not: that one is per session and answers "what
@@ -733,6 +747,14 @@ export const make = <Principal>(
               Option.some(options.subject(principal))
             )
 
+    // The same, for a stream whose work -- the submission -- happens when it
+    // is pulled, which is after the request handler has returned.
+    const asPrincipalStream = (principal: Principal) =>
+      <A2, E2, R2>(self: Stream.Stream<A2, E2, R2>): Stream.Stream<A2, E2, R2> =>
+        options.subject === undefined
+          ? self
+          : Stream.provideService(self, CurrentPrincipal, Option.some(options.subject(principal)))
+
     const mutate = Effect.fn("AgentSessionHost.mutate")(function* <A, I>(
       operation: MutationOperation,
       sessionId: Option.Option<AgentProtocol.SessionId>,
@@ -1056,6 +1078,17 @@ export const make = <Principal>(
       )
     })
 
+    const stream = Effect.fn("AgentSessionHost.stream")(function* (
+      principal: Principal,
+      request: AgentProtocol.StreamRequest
+    ) {
+      const sessionId = Option.some(request.sessionId)
+      yield* authorize(principal, "submit", sessionId)
+      yield* authorize(principal, "events", sessionId)
+      const hosted = yield* findSession(request.sessionId)
+      return hosted.session.stream(request.input, {}).pipe(asPrincipalStream(principal))
+    })
+
     const awaitSubmission = Effect.fn("AgentSessionHost.awaitSubmission")(function* (
       principal: Principal,
       request: AgentProtocol.AwaitSubmissionRequest
@@ -1317,6 +1350,7 @@ export const make = <Principal>(
       history,
       status,
       events,
+      stream,
       sessions: listSessions,
       eventLog,
       hostEvents,

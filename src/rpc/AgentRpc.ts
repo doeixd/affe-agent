@@ -90,6 +90,12 @@ export const Protocol = RpcGroup.make(
     success: AgentProtocol.EventsResponse,
     error: AgentProtocol.RemoteError,
     stream: true
+  }),
+  Rpc.make("stream", {
+    payload: AgentProtocol.StreamRequest,
+    success: AgentProtocol.EventsResponse,
+    error: AgentProtocol.RemoteError,
+    stream: true
   })
 )
 
@@ -268,6 +274,16 @@ export const serverLayer = <Principal>(
             ).pipe(
               Effect.flatMap((identity) => host.events(identity, request))
             )
+          ),
+        stream: (request, context) =>
+          Stream.unwrap(
+            principal(
+              "submit",
+              Option.some(request.sessionId),
+              context.headers
+            ).pipe(
+              Effect.flatMap((identity) => host.stream(identity, request))
+            )
           )
       }
     })
@@ -441,6 +457,17 @@ export const agentClientFrom = (
         client.events({
           sessionId,
           ...(eventOptions?.after === undefined ? {} : { after: eventOptions.after })
+        }, auth).pipe(
+          Stream.mapError((error) =>
+            error._tag === "RpcClientError" ? transportError(id, error) : error
+          )
+        ),
+      stream: (input, streamOptions) =>
+        client.stream({
+          requestId: nextRequestId(),
+          sessionId,
+          input: AgentProtocol.input(input),
+          options: { ...streamOptions, stream: true }
         }, auth).pipe(
           Stream.mapError((error) =>
             error._tag === "RpcClientError" ? transportError(id, error) : error

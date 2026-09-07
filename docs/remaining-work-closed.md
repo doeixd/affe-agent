@@ -1985,3 +1985,25 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     ```text
     verify: grep "bus retention under a stalled subscriber" test/Streaming.test.ts
     ```
+
+72. ~~**`stream` on the remote client.**~~ **DONE 2026-09-06** --
+    `RemoteSession.stream` on every client, `plan-streaming.md` P1's remote
+    mirror. Subscribe-then-submit wherever a subscription seam returns
+    established (the in-process bus, a delivery log's `subscribe`), and the
+    host doing it for HTTP (`POST /sessions/:id/stream`, SSE) and RPC
+    (`stream`) where the transport cannot. One derivation,
+    `AgentClient.streamFrom`; the Cloudflare host applies its shift; a
+    durable client without a log refuses. Three conformance cases hold every
+    shipped client to P1's rules: start to terminal with deltas, ending free
+    and cold; a failed run ending with `SubmissionFailed` as data; refusal
+    where establishing first is impossible. Broken once by removing the
+    terminal cut: both stream cases time out on every client. Making the
+    durable client subscribe *after* submitting did not bite -- the workflow
+    starts slowly enough that the subscription still lands first -- so
+    subscribe-before-submit there is by construction, said rather than
+    claimed, as it was for P1 in-process.
+
+    ```text
+    verify: grep "readonly stream: (" src/client/AgentClient.ts
+    verify: grep "streams one submission" src/testing/AgentClientConformance.ts
+    ```

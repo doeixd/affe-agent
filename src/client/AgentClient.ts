@@ -396,7 +396,65 @@ export interface RemoteSession {
      */
     readonly after?: number | undefined
   }) => Stream.Stream<AgentEventEnvelope, RemoteError>
+  /**
+   * One submission as a stream: `AgentSession.stream`, remotely.
+   *
+   * Submits with `stream: true` and yields that submission's envelopes from
+   * `SubmissionStarted` through its terminal event, then ends once the
+   * session is free again. The same rules hold on every client, or closing a
+   * tab would change execution semantics by deployment (`plan-streaming.md`
+   * P1): the subscription is established before admission, so the first
+   * envelope cannot be missed; the terminal is data, a failed run yields
+   * `SubmissionFailed` and ends normally, and only admission and transport
+   * are on the error channel; it is cold, each evaluation submits once; and
+   * ending the consumer -- a dropped connection included -- releases the
+   * subscription and nothing else. The submission keeps running; `interrupt`
+   * stops it, and a consumer that lost the stream resumes with
+   * `events({ after })` from the last sequence it saw, without resubmitting.
+   *
+   * Not idempotent: a retried stream request is a second submission. A
+   * caller that needs a retry to join the first uses `submit` with an
+   * `idempotencyKey` and observes with `events`.
+   */
+  readonly stream: (
+    input: RemoteInput,
+    options?: RemoteStreamOptions
+  ) => Stream.Stream<AgentEventEnvelope, RemoteError>
 }
+
+/** `RemotePromptOptions` without `stream`, which `stream` sets, and without a key, which it cannot honour. */
+export type RemoteStreamOptions = Omit<RemotePromptOptions, "stream" | "idempotencyKey">
+
+const isSubmissionTerminal = (envelope: AgentEventEnvelope): boolean =>
+  envelope.event._tag === "SubmissionCompleted" ||
+  envelope.event._tag === "SubmissionFailed" ||
+  envelope.event._tag === "SubmissionInterrupted"
+
+/**
+ * `stream` derived from a subscription that is already established, a
+ * `submit`, and an `awaitSubmission`: the shape every implementation shares
+ * once it has a subscription seam that returns established (the in-process
+ * bus, a delivery log's `subscribe`). Filters to the admitted submission,
+ * cuts at its terminal, and ends only once the outcome is retrievable, so
+ * "the stream ended" means "the session is free".
+ */
+export const streamFrom = (
+  session: Pick<RemoteSession, "submit" | "awaitSubmission">,
+  subscribed: Stream.Stream<AgentEventEnvelope, RemoteError>,
+  input: RemoteInput,
+  options: RemoteStreamOptions | undefined
+): Stream.Stream<AgentEventEnvelope, RemoteError> =>
+  Stream.unwrap(
+    Effect.map(session.submit(input, { ...options, stream: true }), (receipt) =>
+      subscribed.pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed"),
+        Stream.filter((envelope) =>
+          Option.isSome(envelope.submissionId) && envelope.submissionId.value === receipt.submissionId
+        ),
+        Stream.takeUntil(isSubmissionTerminal),
+        Stream.concat(Stream.drain(Stream.fromEffect(Effect.exit(session.awaitSubmission(receipt.submissionId)))))
+      ))
+  )
 
 /** Opens and finds sessions. */
 export interface Service {
@@ -603,7 +661,7 @@ export const fromSession = <Value, Input>(
       : Deferred.await(entry.outcome)
   }
 
-  return {
+  const remoteSession: RemoteSession = {
     id: session.id,
     prompt: (input, promptOptions) =>
       admit("prompt", input).pipe(
@@ -654,6 +712,14 @@ export const fromSession = <Value, Input>(
     pending: AgentSession.pending(session),
     history: session.history,
     status: session.status,
+    stream: (raw, streamOptions) =>
+      Stream.unwrap(
+        // The bus subscription first, then the submission through this
+        // handle's own `submit`, so the outcome is retained and
+        // `awaitSubmission` can end the stream free.
+        Effect.map(AgentSession.subscribe(session), (subscription) =>
+          streamFrom(remoteSession, Stream.fromSubscription(subscription), raw, streamOptions))
+      ),
     /**
      * Live only, and explicit about it.
      *
@@ -675,6 +741,7 @@ export const fromSession = <Value, Input>(
           })
         )
   }
+  return remoteSession
 }
 
 /** Re-exported so the protocol modules can name it beside the other client errors. */

@@ -200,7 +200,14 @@ GET    /sessions/:id/pending        pending
 GET    /sessions/:id/history        history
 GET    /sessions/:id/status         status
 GET    /sessions/:id/events         events        text/event-stream
+POST   /sessions/:id/stream         stream        { requestId, input, options? }  -> text/event-stream, one submission's envelopes
 ```
+
+`POST /sessions/:id/stream` is a `submit` whose response is the admitted
+submission's own envelopes as SSE, from `SubmissionStarted` through its
+terminal; the host subscribes before admitting, so the first frame is never
+missed. It is not deduplicated by `requestId`: a reconnecting client resumes
+with `GET /sessions/:id/events` and `Last-Event-ID`, it does not stream again.
 
 `AgentHttp.Api` is an `HttpApi` definition, so `HttpApiClient.make(AgentHttp.Api, { baseUrl })`
 gives a typed client with the same error union as RPC, and `AgentHttp.serverLayer(...)`

@@ -397,15 +397,18 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "artifact-update" src/a2a/AgentA2A.ts
     ```
 
-72. **`stream` on the remote client.** The mirror of `AgentSession.stream` on
-    `RemoteSession`: a cursor known to precede the submission, then replay-and-
-    live over SSE, reconnection that observes without resubmitting, expired
-    retention as an observation error. Must keep P1's rules: cold, terminal as
-    data, ending the consumer does not end the run. Watch the replay-identity
-    rule in `plan-streaming.md` §4. Medium.
+73. **A tool that dies fails an in-process run and completes a durable one.**
+    Found on 2026-09-06 by the streamed-failure conformance case, which had
+    to switch to a failing model call to fail a run everywhere: with a tool
+    handler that `Effect.die`s, the in-process client ends the submission
+    `SubmissionFailed` and the durable client ends it `SubmissionCompleted`.
+    Decide which is right -- the durable tool activity records a defect as an
+    outcome the model sees, the local turn treats it as the run's defect --
+    and hold every client to it with a conformance case. Small to decide,
+    small to fix, and it belongs in the contract either way.
 
     ```text
-    verify: no-grep "readonly stream: (" src/client/AgentClient.ts
+    verify: no-grep "a tool that dies fails the run everywhere" src/testing/AgentClientConformance.ts
     ```
 
 ### Known, deliberately left

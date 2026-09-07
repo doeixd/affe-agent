@@ -152,6 +152,7 @@ const client = Layer.effect(
             status: Effect.map(Ref.get(running), (active) =>
               active ? "running" as const : "idle" as const
             ),
+            stream: () => Stream.die("stream is not part of this fixture"),
             events: () => Stream.fromPubSub(events)
           }
         }),

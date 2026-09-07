@@ -157,6 +157,7 @@ const fixture = (options?: { readonly blockPrompt?: boolean }) =>
               }])
             ),
             status: Effect.as(record("status"), "idle" as const),
+            stream: () => Stream.die("stream is not part of this fixture"),
             events: () => Stream.fromIterable(events)
           }
         }),

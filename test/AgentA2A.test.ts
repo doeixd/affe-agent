@@ -469,6 +469,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                 }])
             ),
             status: Effect.succeed("idle" as const),
+            stream: () => Stream.die("stream is not part of this fixture"),
             events: () => Stream.fromPubSub(eventQueue)
           }
         }),
