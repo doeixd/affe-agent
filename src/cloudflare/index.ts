@@ -1,4 +1,4 @@
-import { Cause, Context, DateTime, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Scope, Stream } from "effect"
+import { Cause, Context, DateTime, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Scope, Semaphore, Stream } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import { HttpRouter } from "effect/unstable/http"
@@ -239,8 +239,11 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
       WorkerEnvironment | DurableObjectState.DurableObjectState | SqlClient.SqlClient | Isolate.CodeBroker
     >()
     const built = yield* Ref.make(Option.none<Context.Context<LanguageModel.LanguageModel | R>>())
+    // One build at a time: two sessions opening together must not each
+    // build the model, so the second waits and finds the first's result.
+    const building = yield* Semaphore.make(1)
     const services = (sessionId: string) =>
-      Effect.flatMap(Ref.get(built), (cached) =>
+      Semaphore.withPermits(building, 1)(Effect.flatMap(Ref.get(built), (cached) =>
         Option.match(cached, {
           onSome: Effect.succeed,
           onNone: () =>
@@ -258,7 +261,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
               )
             )
         })
-      )
+      ))
     const open = new Map<string, AgentClient.RemoteSession>()
 
     const storedHistory = (sessionId: string) =>
@@ -369,7 +372,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         open.set(sessionId, resumable)
         yield* Scope.addFinalizer(scope, Effect.sync(() => void open.delete(sessionId)))
         return resumable
-      }).pipe((open) => Effect.flatMap(services(sessionId), (context) => Effect.provide(open, context)))
+      }).pipe((opening) => Effect.flatMap(services(sessionId), (context) => opening.pipe(Effect.provide(context))))
 
     const service: AgentClient.Service = {
       createSession: (createOptions) =>

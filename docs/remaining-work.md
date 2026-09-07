@@ -146,12 +146,15 @@ sizes; the items are repeated here so this list stays the one tracker.
     agents reads a value from all of them. `test/InputWire.test.ts` pins the
     wire change as exactly the added field.
 
-47. **What to take from their Workflow RFC** (`plan-rfc-286-durable.md`,
-    2026-09-02). A read of `danieljvdm/effect-agent#286` against `/durable`.
+47. ~~**What to take from their Workflow RFC**~~ **COMPLETE 2026-09-06**
+    (`plan-rfc-286-durable.md`, 2026-09-02): 47a shipped as 48a, 47b answered,
+    47c shipped. Kept until the next audit moves it to the ledger whole. A read of `danieljvdm/effect-agent#286` against `/durable`.
     Their headline goal — any `WorkflowEngine` as a `Layer` — is where
     `/durable` started, so most of the RFC is not a gap for us. Three items
     are, ranked in the plan's §2:
-    - **47a. Retry safety declared on the tool.** The one real correctness
+    - **47a.** ~~**Retry safety declared on the tool.**~~ **SHIPPED as 48a,
+      2026-09-03**, read from `Tool.Idempotent` rather than a field of our
+      own. The original framing, kept for the record: the one real correctness
       gap. `DurableToolkit` wraps every handler as an `Activity`, and
       upstream's `Activity` retries an *interrupted* effect up to ten times
       (`retryOnInterrupt`, `Schedule.while(attempt <= 10 && hasInterrupts)`) —
@@ -183,8 +186,10 @@ sizes; the items are repeated here so this list stays the one tracker.
       kills the runtime at both boundaries on workerd and the job runs exactly
       once. Host-local: `src/durable` did not change.
 
-48. **Making the failure paths provable**
-    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03). A read of
+48. ~~**Making the failure paths provable**~~ **COMPLETE 2026-09-06**
+    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03): 48a
+    through 48f all shipped, 48c last. Kept until the next audit moves it to
+    the ledger whole. A read of
     their *source* rather than their RFC, plus the relay's own post-commit
     review. The finding is not a missing feature: their durable tests can
     crash a pass at a named point and ours cannot, so every "what if the
