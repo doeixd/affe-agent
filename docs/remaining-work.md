@@ -385,19 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-74. **Outcome fidelity across the journal, audited.** Every site where the
-    durable path journals an outcome as a value and re-raises it can drift
-    from in-process, as item 73 did for a tool defect. Inventory the
-    encoders, decoders and re-raises; add an outcome matrix to the client
-    contract (success, expected failure, defect, interruption) exercised on
-    fresh durable execution and on replay; one case per shared recovery
-    rule. Broken once by restoring defect-to-typed on replay alone.
-    `plan-streaming-followups.md` §8. Medium.
-
-    ```text
-    verify: no-grep "outcome matrix" src/testing/AgentClientConformance.ts
-    ```
-
 75. **Bounded remote observation, by bytes and count.** The hosted SSE
     stream is the long-lived subscription P4 named. Bound the whole
     retention chain at the transport seam -- queued bytes and envelopes,

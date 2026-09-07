@@ -2050,3 +2050,23 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "openToolCalls" src/ag-ui/AgentAgUi.ts
     verify: grep "MCP progress notifications" docs/remaining-work.md
     ```
+
+74. ~~**Outcome fidelity across the journal, audited.**~~ **DONE 2026-09-06**
+    -- `plan-streaming-followups.md` §8, the second reviewer's first
+    priority. The inventory is in the plan: six sites, one drifting. A
+    model call that died was recorded `Failed { isDefect: true }` and
+    re-raised typed, so a remote caller read the submission's failure as
+    `isDefect: false` while the same defect in-process was a defect. Both
+    re-raise rules are now one exported function of the recorded value
+    (`DurableToolkit.reraise`, `DurableModel.reraise`) driven by
+    `test/DurableOutcomes.test.ts` with journal-shaped values, which is the
+    path a replay takes. The client contract gained two matrix rows: a
+    tool's expected failure shown to the model under `ReturnToModel`; a
+    model defect reported as a defect and a provider failure as a failure
+    (`TestLanguageModel` gained `failWith`, a typed provider error beside
+    the `fail` defect). Broken once each way; both bit.
+
+    ```text
+    verify: grep "outcome matrix" src/testing/AgentClientConformance.ts
+    verify: grep "export const reraise" src/durable/DurableModel.ts
+    ```

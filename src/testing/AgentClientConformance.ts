@@ -1037,6 +1037,79 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
         )
     )),
 
+    /**
+     * The outcome matrix (`plan-streaming-followups.md` §8, item 74): the
+     * distinctions an outcome carries -- success, expected failure, defect,
+     * interruption -- survive every client, the journal included. The tool
+     * defect row is above; interruption is "interrupts a run and reports
+     * it"; these two hold the expected-failure and the model rows.
+     */
+    make("outcome matrix: a tool's expected failure is shown to the model under ReturnToModel, and the run completes", withClient(
+      options,
+      {
+        agent: Agent.make({
+          toolkit: Agent.toolkit([Boom], { boom: () => Effect.fail("declined") }),
+          loop: AgentLoop.bounded(3)
+        }),
+        turns: [TestLanguageModel.toolCall("boom", {}, { id: "b1" }), TestLanguageModel.text("noted")]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "outcome matrix: a tool's expected failure is shown to the model under ReturnToModel, and the run completes"
+            const session = yield* client.createSession()
+            const collected = yield* Effect.forkChild(
+              Stream.runCollect(
+                Stream.takeUntil(
+                  session.events(),
+                  (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
+                )
+              )
+            )
+            yield* Effect.yieldNow
+            const result = yield* session.prompt("go")
+            yield* equal(name)(result.status, "completed", "status")
+            yield* equal(name)(result.text, "noted", "the model answered after seeing the failure")
+            const events = yield* Fiber.join(collected).pipe(
+              Effect.timeout(Duration.seconds(10)),
+              Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
+            )
+            const failed = events.flatMap((entry) => AgentEvent.is("ToolCallFailed")(entry) ? [entry.event] : [])
+            yield* equal(name)(failed.length, 1, "tool failures reported")
+            yield* equal(name)(failed[0]!.returnedToModel, true, "returned to the model")
+            yield* equal(name)(failed[0]!.failure.isDefect, false, "reported as a defect")
+          })
+        )
+    )),
+
+    make("outcome matrix: a model defect is reported as a defect, a provider failure as a failure", withClient(
+      options,
+      {
+        agent: Agent.make({ loop: AgentLoop.bounded(2) }),
+        turns: [{ fail: "the model handler is broken" }, { failWith: "the provider is down" }]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "outcome matrix: a model defect is reported as a defect, a provider failure as a failure"
+            const session = yield* client.createSession()
+            const defect = yield* failureOf(name)(session.prompt("first"))
+            yield* equal(name)(defect._tag, "AgentExecutionError", "the defect's error")
+            if (defect._tag === "AgentExecutionError") {
+              yield* equal(name)(defect.isDefect, true, "a died model call, reported as a defect")
+            }
+            yield* equal(name)(yield* session.status, "idle", "session status after the defect")
+            const failure = yield* failureOf(name)(session.prompt("second"))
+            yield* equal(name)(failure._tag, "AgentExecutionError", "the failure's error")
+            if (failure._tag === "AgentExecutionError") {
+              yield* equal(name)(failure.isDefect, false, "a provider error, reported as a failure")
+              yield* that(name)(failure.detail.includes("the provider is down"), `detail does not carry the provider's reason: ${failure.detail}`)
+            }
+            yield* equal(name)(yield* session.status, "idle", "session status after the failure")
+          })
+        )
+    )),
+
     // A failing model call rather than a dying tool, so this case is about
     // the stream and not about the rule the case above holds.
     make("a streamed submission that fails ends with SubmissionFailed, not a stream failure", withClient(

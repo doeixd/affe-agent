@@ -52,8 +52,10 @@ export interface Turn {
    * must synchronise on this instead to stay deterministic.
    */
   readonly started?: Deferred.Deferred<void>
-  /** Fails the model call, to exercise run failure. */
+  /** Fails the model call with a *defect* (`Effect.die`), to exercise run failure as a bug would cause it. */
   readonly fail?: string
+  /** Fails the model call with a typed provider error (`AiError.InternalProviderError`), as a provider outage would. */
+  readonly failWith?: string
   /** Never completes, so the run can be interrupted mid-generation. */
   readonly hang?: boolean
   /**
@@ -261,6 +263,15 @@ export const make = (turns: ReadonlyArray<Turn>) =>
         }
         if (turn.fail !== undefined) {
           return yield* Effect.die(new Error(turn.fail))
+        }
+        if (turn.failWith !== undefined) {
+          return yield* Effect.fail(
+            AiError.make({
+              module: "TestLanguageModel",
+              method: "generateText",
+              reason: new AiError.InternalProviderError({ description: turn.failWith })
+            })
+          )
         }
         return turn
       })

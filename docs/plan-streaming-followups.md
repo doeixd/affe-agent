@@ -94,6 +94,30 @@ and re-raises it is a place the two can drift: permission decisions,
 elicitation timeouts, model failures, unresolved tools. *Proposal:* one pass
 listing those sites, and a conformance case per rule they share. Medium.
 
+### §8, done 2026-09-06: the inventory and the matrix
+
+Every site where the durable path records an outcome as a value and turns
+it back into an effect, and the rule each applies:
+
+| site | recorded as | back into | rule |
+| --- | --- | --- | --- |
+| tool call, `DurableToolkit.reraise` | `Succeeded` / `Failed { isDefect }` / `Unresolved` | results / typed `DurableToolFailure` / defect | expected failure typed so the policy applies; defect stays a defect; unknown outcome is a defect |
+| model call, `DurableModel.reraise` | `Succeeded` / `Failed { isDefect }` | response / typed `DurableModelFailure` / defect | **was: always typed**, so a model defect reached a remote caller as `isDefect: false`; now the tool rule |
+| input rendering, `DurableAgent` | `DurableAgentFailure { isDefect }` | typed, projected once | keeps `isDefect`; a failure that already crossed is not projected again |
+| permission decision, `DurablePermission` | `Permission.Decision` | the decision | the policy cannot fail; a policy defect dies as one |
+| the submission, `DurableAgent.workflow` | `DurableAgentFailure` / interrupted marker | the workflow's typed error | interruption outranks the cause; a cause with both is re-raised, not projected |
+| elicitation, `DurableElicitation` | a `DurableDeferred` answer | the answer | no outcome reified; a timeout is the harness's, not a journal value |
+
+Two rules were exercised on the recorded value alone
+(`test/DurableOutcomes.test.ts`), which is the path a replay takes, since no
+suspension point exists between an activity's record and its re-raise. The
+contract gained the matrix rows: a tool's expected failure shown to the
+model under `ReturnToModel`; a model defect reported as a defect and a
+provider failure as a failure, on every client. Broken once each way: the
+model rule restored to always-typed fails the matrix on the durable clients
+and the recorded-value row; the tool rule restored fails the recorded-value
+row. Interruption's row is the existing "interrupts a run and reports it".
+
 ## Second opinion (gpt-6-astra, through the Codex CLI, same day)
 
 Its ranking: **8, 4, 1, 6, 3, 7, 5, 2.** Where it differs from mine and
