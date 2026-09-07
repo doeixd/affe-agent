@@ -1886,3 +1886,24 @@ still resolves -- here, if not in the list. Nothing here is next;
     ```text
     verify: grep "\"effect\": \">=4.0.0-rc.111 <4.0.0\"" package.json
     ```
+
+19-gateway. ~~**One `AgentServer`, a DO-backed mount and an in-process mount,
+    indistinguishable from outside.**~~ **DONE 2026-09-06** -- the deployment
+    plan's §6.2 acceptance box, exercised rather than asserted.
+    `test/GatewayMounts.test.ts` runs `apps/worker` on miniflare on a real
+    port, builds one gateway with an in-process mount and a mount whose
+    `AgentSessionHost` sits over `agentClientLayer` pointed at the worker, and
+    drives the same create, prompt and history through both: equal statuses,
+    equal response and result key sets, `completed` on both, the prompt in
+    both histories, one inventory row shape. No mechanism was added -- a mount
+    is a host over an `AgentClient`, and the HTTP adapter is one -- which is
+    what the plan claimed and had not shown. Broken once by pointing the
+    remote mount at a wrong path: 503s, and the row fails. On the same day
+    the stale acceptance boxes in the primitives, effect-cf, MCP-frontend and
+    workflow-cluster plans were audited against the code and ticked or
+    corrected, and `ref-declarative`'s "shorter by a margin worth quoting"
+    box was left open honestly, since nobody measured it.
+
+    ```text
+    verify: grep "a caller cannot tell the DO-backed mount from the in-process one" test/GatewayMounts.test.ts
+    ```

@@ -308,16 +308,21 @@ than a capability.
 
 ## 9. Success conditions
 
-- [ ] A `src/` file importing `effect-cf` fails `npm run lint:portability`, and
-      the check was broken once to prove it (C1).
-- [ ] The repository can state, from a test rather than from reasoning, whether
-      hibernatable WebSockets change our resumption contract (C3).
-- [ ] `apps/worker` still contains no dependency whose failure could be
-      confused with ours — or, if it does, `plan-deployment.md` §9's portability
-      condition is re-argued rather than quietly amended.
-- [ ] If W1 is built: `AgentRpc`, `AgentSessionHost` and the protocol schemas
+- [x] A `src/` file importing `effect-cf` fails `npm run lint:portability`, and
+      the check was broken once to prove it (C1). *(2026-09-01: the check
+      rejects `effect-cf`, `@cloudflare/*` and `@effect/sql-sqlite-do` outside
+      `src/cloudflare`, each proved to fire; `STATUS.md`'s portability gate.)*
+- [~] The repository can state, from a test rather than from reasoning, whether
+      hibernatable WebSockets change our resumption contract (C3). *Closed
+      2026-09-06 without the test (ledger 32): not until a deployment needs
+      idle sockets; the one settling observable is written there.*
+- [x] `apps/worker` still contains no dependency whose failure could be
+      confused with ours — the host module carries `effect-cf` and the DO SQLite
+      driver by design and nothing else does; `HOST_MODULES` in
+      `verify-portability.mjs` was not loosened for it.
+- [~] If W1 is built: `AgentRpc`, `AgentSessionHost` and the protocol schemas
       are byte-identical before and after, and the diff is confined to one
-      example and one test.
+      example and one test. *W1 was not built; closed 2026-09-06 (ledger 33).*
 
 ## 10. Non-goals
 

@@ -573,8 +573,11 @@ arbitrary programs become durable for free.
 - No multi-agent orchestration graph. Delegation stays a tool that opens a child
   session (PLAN §35); a distributed version routes that through the cluster.
 - No bespoke persistence in the durable package (§2).
-- No streaming. It remains deferred in core, and adding it under replay
-  semantics before it exists locally would be backwards.
+- ~~No streaming.~~ *Superseded: streaming under durability landed -- a
+  `stream: true` prompt reaches the provider's stream from inside the
+  journalled model activity and a replay re-expresses the journalled response
+  as one delta per part (`guide-durable.md`, "The durable client"). The
+  sentence stood while it was true.*
 
 ---
 

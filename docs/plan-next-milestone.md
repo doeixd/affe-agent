@@ -8,6 +8,12 @@ list, the dependency table and the repository's size inlined. Its answer is
 taken nearly whole; where this plan departs, it says so. The plan states
 decisions; the argument is in §2.*
 
+> **Owner's call, 2026-09-06:** the recommendation below was read and
+> declined for now -- the backlog in the plans continues to be worked. Items
+> 63 and 64 stay on the list as available work, not as a gate on anything.
+> The freeze in §1 and §4 is therefore the reviewer's recommendation, recorded,
+> not the project's policy.
+
 ## 1. The decision
 
 **The next milestone is not a feature. It is one person choosing to use

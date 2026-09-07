@@ -89,7 +89,9 @@ open, so the next pass does not have to re-derive it.
     the code tool needs Dynamic Workers, which is paid-plan only (error
     10195), so `apps/worker` as checked in deploys once the account is
     upgraded. Rivet is closed as adopter-triggered (ledger, decision 4 of
-    `plan-two-decisions.md`). **A real model landed 2026-09-06** as the first slice
+    `plan-two-decisions.md`). The deployment plan's §6.2 gateway claim -- one
+    `AgentServer` with a DO-backed mount and an in-process one, indistinguishable
+    from outside -- is exercised by `test/GatewayMounts.test.ts` (2026-09-06). **A real model landed 2026-09-06** as the first slice
     of the deployment milestone (scoped with a second reviewer, decision
     record in `plan-two-decisions.md` §3): `worker-real-model.ts` with the
     key in a Worker secret, `wrangler.real.jsonc`, the README quickstart,
