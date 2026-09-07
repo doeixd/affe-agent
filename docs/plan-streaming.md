@@ -220,6 +220,17 @@ user-visible text into stable artifact identities with explicit replacement
 for abandoned attempts. MCP: progress notifications, honestly; incremental
 output only under an agreed extension. Both after P1-P3.
 
+*AG-UI (shipped 2026-09-06):* `ToolCallDelta` onto `TOOL_CALL_ARGS`. The
+projection keeps the set of calls opened by a fragment: the first named
+fragment sends `TOOL_CALL_START` and `TOOL_CALL_ARGS`, later fragments an
+`ARGS` each, and the assembled `ToolCallStarted` then sends only the end
+rather than the arguments again; a nameless fragment for an unannounced call
+is dropped, since the assembled call still arrives whole; a message that
+fails or is interrupted ends every call still open, with no result, and the
+terminal close does the same. Two projection rows, each frame validated by
+`@ag-ui/core`. Broken once by letting the assembled call resend its
+arguments. A2A and MCP remain item 71.
+
 ## 4. What a streaming design usually gets wrong (kept as rules)
 
 - **Replay identity.** Resumed delivery of recorded envelopes and regenerated

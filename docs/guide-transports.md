@@ -210,7 +210,11 @@ The application resolves an untrusted AG-UI `threadId` together with an
 authenticated principal into a harness session id. Client-provided tools,
 context, state and forwarded properties are rejected until they have an
 unambiguous harness meaning. Text prompts, batch and streaming replies, tool
-lifecycle events, failures and interruption are supported. Harness
+lifecycle events, failures and interruption are supported. A tool call whose
+arguments stream (`ToolCallDelta`) is opened by its first fragment and each
+fragment is a `TOOL_CALL_ARGS`; the assembled call then sends only the end, so
+a consumer never sees the arguments twice, and a message that fails after
+fragments ends the call with no result. Harness
 elicitations become AG-UI interrupt outcomes; a later `resume` entry answers
 the suspended run through the existing session `respond` operation.
 

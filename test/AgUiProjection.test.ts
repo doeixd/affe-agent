@@ -252,6 +252,59 @@ describe("AG-UI projection invariants", () => {
     })
   )
 
+  it.effect("a call forming streams its arguments once: START on the first fragment, ARGS per fragment, END on the assembled call", () =>
+    Effect.gen(function* () {
+      // `plan-streaming.md` P5, AG-UI: the protocol has TOOL_CALL_ARGS, and
+      // the harness now has `ToolCallDelta`. The assembled `ToolCallStarted`
+      // must not resend arguments a consumer already saw stream.
+      const projected = yield* projectAll([
+        [{ _tag: "SubmissionStarted" }],
+        [{ _tag: "MessageStarted" }, { run: "a", turn: 1 }],
+        [{ _tag: "ToolCallDelta", id: "c1", name: "add", delta: '{"a":1' }, { run: "a", turn: 1 }],
+        [{ _tag: "ToolCallDelta", id: "c1", name: "add", delta: ',"b":2}' }, { run: "a", turn: 1 }],
+        [{ _tag: "MessageStreamCompleted" }, { run: "a", turn: 1 }],
+        [{ _tag: "ToolCallStarted", id: "c1", name: "add", params: { a: 1, b: 2 } }, { run: "a", turn: 1 }],
+        [{ _tag: "ToolCallSucceeded", id: "c1", name: "add", result: 3, encodedResult: 3 }, { run: "a", turn: 1 }],
+        [{ _tag: "SubmissionCompleted", runs: 1 }]
+      ])
+      const toolFrames = projected.filter((e) => e.type.startsWith("TOOL_CALL"))
+      assert.deepStrictEqual(types(toolFrames), [
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT"
+      ])
+      const args = projected.flatMap((e) => (e.type === "TOOL_CALL_ARGS" ? [e.delta] : []))
+      assert.deepStrictEqual(args, ['{"a":1', ',"b":2}'], "the fragments, and never the assembled arguments again")
+      const start = projected.find((e) => e.type === "TOOL_CALL_START")
+      assert.strictEqual(start?.type === "TOOL_CALL_START" ? start.toolCallName : undefined, "add")
+      // Opened inside the message, as a batch call would be.
+      assert.isBelow(types(projected).indexOf("TOOL_CALL_START"), types(projected).indexOf("TEXT_MESSAGE_END"))
+    })
+  )
+
+  it.effect("a call whose arguments streamed and whose message then failed is ended, with no result", () =>
+    Effect.gen(function* () {
+      const projected = yield* projectAll([
+        [{ _tag: "SubmissionStarted" }],
+        [{ _tag: "MessageStarted" }, { run: "a", turn: 1 }],
+        [{ _tag: "ToolCallDelta", id: "c1", name: "add", delta: '{"a":1' }, { run: "a", turn: 1 }],
+        // A fragment for a call the provider never announced: no name to
+        // open with, so it is dropped rather than opened as a nameless call.
+        [{ _tag: "ToolCallDelta", id: "zz", delta: "?" }, { run: "a", turn: 1 }],
+        [{ _tag: "MessageFailed", failure: { tag: "E", message: "died", isDefect: false } }, { run: "a", turn: 1 }],
+        [{ _tag: "SubmissionFailed", failure: { tag: "E", message: "died", isDefect: false } }]
+      ])
+      const toolFrames = projected.filter((e) => e.type.startsWith("TOOL_CALL"))
+      assert.deepStrictEqual(types(toolFrames), ["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END"])
+      const ids = toolFrames.flatMap((e) => ("toolCallId" in e ? [e.toolCallId] : []))
+      assert.deepStrictEqual(new Set(ids), new Set(["c1"]))
+      // The call is ended before the message that carried it.
+      assert.isBelow(types(projected).indexOf("TOOL_CALL_END"), types(projected).indexOf("TEXT_MESSAGE_END"))
+    })
+  )
+
   it("transition never mutates the state it was given", () => {
     const initial = AgentAgUi.initialState(options)
     const [afterTurn] = AgentAgUi.transition(
