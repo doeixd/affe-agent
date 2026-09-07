@@ -20,9 +20,9 @@ describe("public API", () => {
       // The shape a submission is asked to end in. A first-class noun because
       // it changes an agent's *type* -- `Result.value` is `Option<never>`
       // without one -- which no helper on another module could express.
-      "AgentOutput",
       // An observer that fell past its bound; see internal/observation.ts.
       "AgentObservationLagError",
+      "AgentOutput",
       "AgentRun",
       "AgentSession",
       "AgentSubmission",
