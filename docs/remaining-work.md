@@ -385,17 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-78. **A2A streaming as a declared policy, with fixtures.** Always-stream
-    changes which provider failures recover, since emitted parts forbid
-    fallback. Make it a `serverLayer` option, and before endorsing the
-    default record: failure before and after the first part, several
-    messages on one result artifact, tool-only turns, cancellation after
-    partial output. `plan-streaming-followups.md` §7. Small.
-
-    ```text
-    verify: no-grep "readonly streamAnswers" src/a2a/AgentA2A.ts
-    ```
-
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:

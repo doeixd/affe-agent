@@ -319,7 +319,15 @@ the harness to stream, and each text delta is a chunk under the same
 message replaces and the rest append, so a run of several messages shows the
 message in progress rather than a concatenation; no chunk is the last, and
 the completed answer arrives whole with `lastChunk` and replaces whatever
-streamed. A task read back holds the completed answer once.
+streamed. A task read back holds the completed answer once. This is a
+declared policy, `streamAnswers` (default `true`), and an execution one as
+much as a presentation one: once a provider has emitted a part the turn's
+execution plan forbids a fallback to another provider, so a streamed run can
+lose a recovery a batched one would have had. `streamAnswers: false` asks
+for a batched model call; the task still streams its status frames and its
+completed answer, without chunks. No chunk is ever the last: a run that
+fails or is cancelled after partial output leaves the chunk it sent and a
+failed or canceled status, never a committed answer.
 
 `affe-agent/a2a` exposes a Harness agent through the official A2A v1
 JSON-RPC and HTTP+JSON protocols:

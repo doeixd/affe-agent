@@ -184,6 +184,18 @@ export interface ServerOptions<Principal> {
    * write does not close the stream.
    */
   readonly sseHeartbeat?: Duration.Duration | false | undefined
+  /**
+   * Whether the harness is asked to stream, so the answer forms as artifact
+   * chunks. Default `true`.
+   *
+   * An execution policy, not only a presentation one: once a provider has
+   * emitted a part, the turn's execution plan forbids a fallback to another
+   * provider (`AgentTurn.withPlanStream`), so a streamed run can lose a
+   * recovery a batched one would have had. `false` asks for a batched
+   * model call: the task still streams its status frames and its completed
+   * answer, without chunks. `plan-streaming-followups.md` §7.
+   */
+  readonly streamAnswers?: boolean | undefined
   readonly pushNotifications?: {
     readonly allowHosts?: ReadonlyArray<string> | undefined
     /** Permit `http`. Off by default: the target receives task content. */
@@ -1006,8 +1018,9 @@ export const serverLayer = <Principal>(
               requestId: AgentProtocol.RequestId.make(`a2a:${taskId}:prompt`),
               sessionId,
               input,
-              // Streamed, so the answer forms as artifact chunks.
-              options: { stream: true }
+              // Streamed by default, so the answer forms as artifact chunks;
+              // see `ServerOptions.streamAnswers` for what turning it off buys.
+              options: { stream: options.streamAnswers !== false }
             }))
             // A cancellation must publish its terminal event before this
             // request can wake and settle the bus, or the CANCELED update is

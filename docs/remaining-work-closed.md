@@ -2126,3 +2126,19 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "after take(1)" test/Streaming.test.ts
     verify: grep "released(self, receipt.submissionId)" src/AgentSession.ts
     ```
+
+78. ~~**A2A streaming as a declared policy, with fixtures.**~~ **DONE
+    2026-09-07** -- `plan-streaming-followups.md` §7.
+    `AgentA2A.ServerOptions.streamAnswers`, default `true`, documented as an
+    execution policy because emitted parts forbid a provider fallback. Four
+    rows through the official client hold the reviewer's cases: the option
+    off; several messages on one artifact with a tool-only one between;
+    failure after the first chunk; cancellation after partial output. In
+    every one no chunk is ever marked last, so a partial artifact stays
+    distinguishable from a committed answer. Broken once by ignoring the
+    option.
+
+    ```text
+    verify: grep "readonly streamAnswers" src/a2a/AgentA2A.ts
+    verify: grep "cancellation after partial output" test/AgentA2A.test.ts
+    ```

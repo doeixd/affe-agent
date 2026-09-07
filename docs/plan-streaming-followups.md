@@ -123,6 +123,18 @@ forms as artifact chunks. That moves every A2A prompt from `generateText` to
 `serverLayer` option, streaming by default, batch as the escape hatch.
 Small.
 
+*Done 2026-09-07, with the reviewer's fixtures:* `ServerOptions.streamAnswers`
+(default `true`), documented as an execution policy, since emitted parts
+forbid a provider fallback. Rows through the official client: the option
+off sends no chunk and the harness is not asked to stream; several messages
+on one artifact, a tool-only one between, give `[false,false] [true,false]
+[false,false] [false,true]`; failure after the first chunk leaves the chunk
+and a failed status with nothing marked last; cancellation after partial
+output, issued from inside the stream once the chunk is seen, leaves the
+chunk and a canceled status with nothing marked last. Failure before the
+first part is the existing failed-run row. Broken once by ignoring the
+option: the first row fails.
+
 ## 8. Item 73 suggests an audit
 
 A tool defect failed an in-process run and completed a durable one, found by
