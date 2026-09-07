@@ -2142,3 +2142,21 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "readonly streamAnswers" src/a2a/AgentA2A.ts
     verify: grep "cancellation after partial output" test/AgentA2A.test.ts
     ```
+
+review-streaming. ~~**The streaming series, reviewed as code.**~~ **DONE
+    2026-09-07** -- `plan-streaming-followups.md`, "Code review of the
+    series". Two readers, one with the code inlined; seven disagreements
+    between code and invariant, all real, all fixed the same day: the
+    pumped bound's subscription was never released; the bus's kill was
+    interruptible half-way; a failed non-empty queue delivered its buffer
+    with a stale cursor; byte accounting raced registration and delivery;
+    the cursor was snapshotted at the kill; bytes were UTF-16 units; the
+    remote tail swallowed transport failures. Five have rows
+    (`test/ObservationPump.test.ts`, the strengthened cursor row, a durable
+    bound row); two are scheduler windows said rather than proved. Broken
+    once each where a row exists; all bit.
+
+    ```text
+    verify: grep "utf8Length" src/internal/observation.ts
+    verify: grep "a transport failure in the wait" test/ObservationPump.test.ts
+    ```

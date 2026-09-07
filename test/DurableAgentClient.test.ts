@@ -1703,3 +1703,55 @@ describe("subscribe before submit on the durable client, proved through a subscr
   )
 })
 
+describe("bounded observation on the durable client", () => {
+  /**
+   * The pumped form of the bound (`Observation.bounded`) over the delivery
+   * log's subscription, which the in-process rows do not reach. A stalled
+   * observer of `events()` is ended with the lag error while the run
+   * completes; `test/ObservationPump.test.ts` holds the release and the
+   * cursor on the pump itself.
+   */
+  it.live("a stalled observer of the delivery log is ended with the lag error, and the run completes", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      const chunk = "x".repeat(512)
+      const { layer: model } = yield* FakeModel.script([{ text: chunk.repeat(32), chunks: Array.from({ length: 32 }, () => chunk) }])
+      const runtime = DurableAgentClient.layer("BoundedAgent", Agent.make({ loop: AgentLoop.bounded(2) }), {
+        store,
+        sessionStore,
+        delivery,
+        maxObservationLag: { envelopes: 4 }
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+      yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "bounded" })
+            const release = yield* Deferred.make<void>()
+            let taken = 0
+            const stalled = yield* Effect.forkChild(
+              Stream.runForEach(session.events(), () => {
+                taken += 1
+                return taken <= 1 ? Effect.void : Deferred.await(release)
+              })
+            )
+            yield* Effect.yieldNow
+            const result = yield* session.prompt("go", { stream: true })
+            assert.strictEqual(result.status, "completed")
+            yield* Deferred.succeed(release, void 0)
+            const exit = yield* Fiber.await(stalled)
+            const error = Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined
+            assert.strictEqual(error?._tag, "AgentObservationLagError")
+            if (error?._tag === "AgentObservationLagError") {
+              assert.strictEqual(error.maxEnvelopes, 4)
+              assert.isAtLeast(error.retainedEnvelopes, 4)
+            }
+          })
+        )
+      }).pipe(Effect.provide(runtime))
+    }), 20_000
+  )
+})
+

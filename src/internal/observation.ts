@@ -1,4 +1,4 @@
-import { Cause, Effect, Queue, Scope, Stream } from "effect"
+import { Cause, Effect, Exit, Queue, Scope, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import { AgentObservationLagError } from "../Errors.js"
 import { positiveInteger } from "./positive.js"
@@ -56,48 +56,94 @@ export const boundOf = (where: string, options: LagOptions | undefined): Bound =
 })
 
 /**
- * The size the bound counts: the envelope as the wire carries it. A
- * transport encodes again, so this is a second serialisation per envelope
- * observed remotely; a bound that counted something cheaper would not be a
- * bound on what is retained.
+ * The size the bound counts: the envelope as the wire carries it, in UTF-8
+ * bytes -- `String.length` counts UTF-16 units and undercounts anything
+ * outside ASCII by up to a factor of three. A transport encodes again, so
+ * this is a second serialisation per envelope observed remotely; a bound
+ * that counted something cheaper would not be a bound on what is retained.
  */
 export const wireSize = (envelope: AgentEvent.AgentEventEnvelope): number =>
-  JSON.stringify(AgentEvent.toWire(envelope)).length
+  utf8Length(JSON.stringify(AgentEvent.toWire(envelope)))
+
+/** UTF-8 byte length of a string, without allocating the encoding. */
+export const utf8Length = (text: string): number => {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      // A surrogate pair is one four-byte code point.
+      bytes += 4
+      i += 1
+    } else bytes += 3
+  }
+  return bytes
+}
+
+/** What the publisher records when it ends an observation; the consumer builds the error at delivery, with an accurate cursor. */
+export interface Killed {
+  readonly retainedEnvelopes: number
+  readonly retainedBytes: number
+}
+
+export const lagError = (
+  sessionId: string,
+  bound: Bound,
+  killed: Killed,
+  lastDelivered: number
+): AgentObservationLagError =>
+  new AgentObservationLagError({
+    sessionId,
+    lastDelivered,
+    retainedEnvelopes: killed.retainedEnvelopes,
+    retainedBytes: killed.retainedBytes,
+    maxEnvelopes: bound.maxEnvelopes,
+    maxBytes: bound.maxBytes
+  })
 
 /**
- * The bounded observation, established on return like the subscription it
- * wraps: the subscription is taken here, on the caller's fibre, and the
- * pump is forked after it. `Stream.unwrap` this where a stream is wanted.
+ * The bounded observation for a subscription the bus cannot watch -- a
+ * delivery log's -- established on return like the subscription it wraps.
+ *
+ * The subscription is taken here, on the caller's fibre, into a scope of
+ * its own, and a pump forked after it drains it into a queue, counting
+ * what the consumer has not taken. Past the bound the pump records why,
+ * **closes the subscription's scope** so the backlog is freed now, and
+ * shuts the queue down so nothing buffered is delivered after the fact:
+ * the consumer's next pull fails with the error built then, so its cursor
+ * is what was really handed out. (A first version failed the queue instead
+ * and stopped the pump: `Queue.fail` on a non-empty queue delivers the
+ * buffer first, so the cursor it had recorded was below what the consumer
+ * then received, and ending the pump released nothing -- the subscription
+ * belonged to the caller's scope. The second reviewer caught both.)
  */
 export const bounded = <E, E2>(
   subscribe: Effect.Effect<Stream.Stream<AgentEvent.AgentEventEnvelope, E>, E2, Scope.Scope>,
   options: Bound & { readonly sessionId: string }
 ): Effect.Effect<Stream.Stream<AgentEvent.AgentEventEnvelope, E | AgentObservationLagError>, E2, Scope.Scope> =>
   Effect.gen(function* () {
-    const source = yield* subscribe
-    const queue = yield* Queue.unbounded<AgentEvent.AgentEventEnvelope, E | AgentObservationLagError | Cause.Done>()
+    const release = yield* Scope.make()
+    yield* Effect.addFinalizer((exit) => Scope.close(release, exit))
+    const source = yield* Scope.provide(subscribe, release)
+    const queue = yield* Queue.unbounded<AgentEvent.AgentEventEnvelope, E | Cause.Done>()
     // Retained by the queue and not yet taken. Updated by the pump on offer
     // and by the consumer on take; both run on one runtime, and a momentary
     // over-count only makes the bound stricter.
     let envelopes = 0
     let bytes = 0
     let lastDelivered = 0
+    let killed: Killed | undefined
     yield* Stream.runForEach(source, (envelope) =>
       Effect.gen(function* () {
         const size = wireSize(envelope)
         if (envelopes + 1 > options.maxEnvelopes || bytes + size > options.maxBytes) {
-          yield* Queue.fail(
-            queue,
-            new AgentObservationLagError({
-              sessionId: options.sessionId,
-              lastDelivered,
-              retainedEnvelopes: envelopes,
-              retainedBytes: bytes,
-              maxEnvelopes: options.maxEnvelopes,
-              maxBytes: options.maxBytes
-            })
+          killed = { retainedEnvelopes: envelopes + 1, retainedBytes: bytes + size }
+          // One uninterruptible step: the backlog is freed and the queue
+          // is cut, or neither is.
+          yield* Effect.uninterruptible(
+            Effect.andThen(Scope.close(release, Exit.void), Queue.shutdown(queue))
           )
-          // Ends the pump; its scope releases the subscription.
           return yield* Effect.interrupt
         }
         envelopes += 1
@@ -107,7 +153,6 @@ export const bounded = <E, E2>(
     ).pipe(
       Effect.matchCauseEffect({
         onSuccess: () => Queue.end(queue),
-        // A queue already failed with the lag error ignores a second cause.
         onFailure: (cause) => Queue.failCause(queue, cause)
       }),
       Effect.forkScoped
@@ -118,6 +163,14 @@ export const bounded = <E, E2>(
         bytes -= wireSize(envelope)
         lastDelivered = envelope.sequence
         return envelope
-      })
+      }),
+      // A shut-down queue cuts the pull; when this observation was ended,
+      // that cut is the failure, built now so the cursor is accurate.
+      Stream.catchCause((cause): Stream.Stream<never, E | AgentObservationLagError> =>
+        killed === undefined
+          ? Stream.failCause(cause)
+          : Stream.fail(lagError(options.sessionId, options, killed, lastDelivered))),
+      Stream.concat(Stream.suspend((): Stream.Stream<never, AgentObservationLagError> =>
+        killed === undefined ? Stream.empty : Stream.fail(lagError(options.sessionId, options, killed, lastDelivered))))
     )
   })

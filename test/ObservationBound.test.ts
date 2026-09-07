@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Stream } from "effect"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import { AgentClient, AgentProtocol, AgentSessionHost } from "../src/client/index.js"
@@ -46,18 +46,19 @@ const hostWith = (lag: { readonly envelopes?: number; readonly bytes?: number } 
 const requestId = (name: string) => AgentProtocol.RequestId.make(name)
 const sessionId = AgentProtocol.SessionId.make("observed")
 
-/** An observer that takes `keep` envelopes, then blocks until released. */
+/** An observer that takes `keep` envelopes, then blocks until released; `handed` is the last sequence it was given. */
 const stalledObserver = (
   host: AgentSessionHost.Service<string>,
   release: Deferred.Deferred<void>,
-  keep: number
+  keep: number,
+  handed: Ref.Ref<number>
 ) =>
   Effect.gen(function* () {
     const stream = yield* host.events(principal, { sessionId })
     let taken = 0
-    return yield* Stream.runForEach(stream, () => {
+    return yield* Stream.runForEach(stream, (envelope) => {
       taken += 1
-      return taken <= keep ? Effect.void : Deferred.await(release)
+      return Effect.andThen(Ref.set(handed, envelope.sequence), taken <= keep ? Effect.void : Deferred.await(release))
     })
   })
 
@@ -70,7 +71,8 @@ describe("bounded remote observation", () => {
           const host = yield* Host
           yield* host.createSession(principal, { requestId: requestId("create"), sessionId })
           const release = yield* Deferred.make<void>()
-          const stalled = yield* Effect.forkChild(stalledObserver(host, release, 1))
+          const handed = yield* Ref.make(0)
+          const stalled = yield* Effect.forkChild(stalledObserver(host, release, 1, handed))
           yield* Effect.yieldNow
 
           // Execution is unaffected by an observer that stopped reading.
@@ -93,8 +95,9 @@ describe("bounded remote observation", () => {
           assert.strictEqual(error.maxEnvelopes, 8)
           assert.strictEqual(error.retainedEnvelopes, 9, "ended by the publish that took it past the bound")
           // Handed out in chunks, so more than the one it took may have been
-          // delivered; what matters is that the record resumes right after.
-          assert.isAtLeast(error.lastDelivered, 2)
+          // delivered; the cursor is exactly the last it was given, built at
+          // delivery rather than when the publisher recorded the kill.
+          assert.strictEqual(error.lastDelivered, yield* Ref.get(handed))
 
           // And the host's record resumes right after the last sequence the
           // observer was handed. The record is an observer of the same
@@ -115,7 +118,7 @@ describe("bounded remote observation", () => {
           const host = yield* Host
           yield* host.createSession(principal, { requestId: requestId("create"), sessionId })
           const release = yield* Deferred.make<void>()
-          const stalled = yield* Effect.forkChild(stalledObserver(host, release, 1))
+          const stalled = yield* Effect.forkChild(stalledObserver(host, release, 1, yield* Ref.make(0)))
           yield* Effect.yieldNow
           yield* host.prompt(principal, { requestId: requestId("prompt"), sessionId, input: AgentProtocol.input("go"), options: { stream: true } })
           yield* Deferred.succeed(release, void 0)

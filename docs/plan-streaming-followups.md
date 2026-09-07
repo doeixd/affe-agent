@@ -167,6 +167,61 @@ model rule restored to always-typed fails the matrix on the durable clients
 and the recorded-value row; the tool rule restored fails the recorded-value
 row. Interruption's row is the existing "interrupts a run and reports it".
 
+## Code review of the series (2026-09-07)
+
+With every item shipped, the code of every seam the series touched was
+read twice: by me, and by the second reviewer with the code inlined
+(`gpt-6-astra`, about 60 KB of source, the invariants stated, the existing
+rows listed). It found seven disagreements between the code and the
+invariants; I agreed with all seven on checking. Fixed the same day, each
+with a row where a row could hold it:
+
+1. **The pumped bound stopped its pump but never released the
+   subscription.** `Observation.bounded` took the subscription into the
+   caller's scope, so ending the pump freed nothing; a stalled durable
+   observer kept its backlog. Now the subscription lives in a scope the seam
+   owns and closes when the bound is broken. Row: release observed while the
+   consumer's scope lives.
+2. **The kill in `EventBus.enforce` was two effects.** Watchers were removed
+   synchronously and their scopes closed by a later effect; a publisher
+   interrupted between the two left a subscription unwatched and unreleased.
+   The releases are now one uninterruptible step. No row: the window is a
+   scheduler boundary a test cannot hold open without a hook, said here.
+3. **`Queue.fail` on a non-empty queue delivers the buffer first.** The
+   pumped form recorded the cursor at the kill and then handed out what was
+   buffered, so `lastDelivered` was below what the peer received. The queue
+   is now shut down at the kill and the error is built at delivery, with the
+   cursor as it is then. Row: nothing buffered is delivered after the kill
+   and the cursor is what was handed out.
+4. **Byte accounting raced registration and delivery.** A watcher
+   registered between a publish and its charge was charged for an envelope
+   it never received; a consumer delivering before the charge credited
+   nothing and was charged after. Envelopes are now weighed before they are
+   published, and a watcher records the bus sequence at registration and is
+   charged and credited only above it. No row for the interleavings
+   themselves; the two-watcher and default-bound rows hold the visible
+   consequence.
+5. **A chunk already in the consumer's hand could be delivered after the
+   cursor was snapshotted.** The bus form built the error at the kill. Both
+   forms now build it at delivery. Row: the cursor equals the last sequence
+   the observer was actually given.
+6. **`String.length` is UTF-16 units, not bytes.** The byte bound
+   undercounted non-ASCII text by up to three times. `utf8Length` counts
+   bytes without allocating. Rows: the unit, and a bound an envelope's
+   UTF-16 length would have fit.
+7. **The remote tail swallowed every typed failure.** `Effect.ignore` on
+   `awaitSubmission` suppressed a transport failure nothing delivered had
+   represented. Only `AgentExecutionError`, which the terminal carried, is
+   suppressed now. Row: a transport failure in the wait propagates.
+
+Also from the review, accepted and recorded: `remainingUnsafe` returning
+`None` means the subscription is shut down, so the watcher is dropped rather
+than charged; the durable client's pumped form had no row and now has one;
+the `WeakMap` of sizes and `Stream.catchCause` under external interruption
+were checked and found sound. Its "cannot tell" verdicts -- reraise wiring
+on replay, `preventFallbackOnPartialStream`, `toWire`, the A2A completion
+path -- name code that was not inlined, not code it doubted.
+
 ## Second opinion (gpt-6-astra, through the Codex CLI, same day)
 
 Its ranking: **8, 4, 1, 6, 3, 7, 5, 2.** Where it differs from mine and

@@ -117,11 +117,13 @@ export interface Watcher {
   readonly release: Scope.Closeable
   readonly bound: Observation.Bound
   readonly sessionId: string
+  /** The bus sequence when this watcher was registered: only envelopes above it are charged or credited. */
+  readonly since: number
   /** Bytes published to this subscription and not yet delivered. */
   retainedBytes: number
   lastDelivered: number
-  /** Set by the publisher when it ends this observation; read by the consumer's next pull. */
-  killed: AgentObservationLagError | undefined
+  /** Set by the publisher when it ends this observation; the consumer builds the error at delivery. */
+  killed: Observation.Killed | undefined
 }
 
 export const make = (
@@ -182,8 +184,13 @@ export const emit = (
         ? Ref.set(bus.closed, Option.some(envelope))
         : Effect.void
       ).pipe(
+        // Weighed before it is published, so a watcher that delivers it
+        // before the charge below still finds its size and credits it.
+        Effect.andThen(Effect.sync(() => {
+          if (bus.watchers.size > 0) bus.sizes.set(envelope, Observation.wireSize(envelope))
+        })),
         Effect.andThen(PubSub.publish(bus.pubsub, envelope)),
-        Effect.andThen(bus.watchers.size === 0 ? Effect.void : enforce(bus, envelope)),
+        Effect.andThen(Effect.suspend(() => bus.watchers.size === 0 ? Effect.void : enforce(bus, envelope))),
         /**
          * The sink is a *participant*, and its failure is the emit's failure.
          *
@@ -222,38 +229,40 @@ export const emit = (
   )
 
 /**
- * After a publish: weigh the envelope once, charge every watched
- * subscription, and end the ones past their bound. Reading a subscription's
+ * After a publish: charge every watched subscription that received the
+ * envelope and end the ones past their bound. Reading a subscription's
  * backlog is exact (`PubSub.remainingUnsafe`); the bytes are this bus's own
- * count, decremented as the observer delivers. A watcher past its bound is
- * removed here, its stream fails through `killed`, and the subscription is
- * released when that stream's scope closes.
+ * count, decremented as the observer delivers. A watcher registered after
+ * this envelope was published never received it and is not charged: its
+ * `since` says so. One uninterruptible step per watcher, so a publisher
+ * interrupted mid-way cannot leave a subscription unwatched and unreleased.
+ * The consumer builds the error at delivery, with the cursor as it is then.
  */
 const enforce = (bus: EventBus, envelope: AgentEventEnvelope): Effect.Effect<void> =>
   Effect.suspend(() => {
-    const size = Observation.wireSize(envelope)
-    bus.sizes.set(envelope, size)
+    const size = bus.sizes.get(envelope) ?? Observation.wireSize(envelope)
     const ended: Array<Effect.Effect<void>> = []
     for (const watcher of bus.watchers) {
-      watcher.retainedBytes += size
-      const remaining = Option.getOrElse(PubSub.remainingUnsafe(watcher.subscription), () => 0)
-      if (remaining > watcher.bound.maxEnvelopes || watcher.retainedBytes > watcher.bound.maxBytes) {
+      if (envelope.sequence <= watcher.since) continue
+      const backlog = PubSub.remainingUnsafe(watcher.subscription)
+      if (Option.isNone(backlog)) {
+        // Shut down from the consumer's side already; nothing to watch.
         bus.watchers.delete(watcher)
-        watcher.killed = new AgentObservationLagError({
-          sessionId: watcher.sessionId,
-          lastDelivered: watcher.lastDelivered,
-          retainedEnvelopes: remaining,
-          retainedBytes: watcher.retainedBytes,
-          maxEnvelopes: watcher.bound.maxEnvelopes,
-          maxBytes: watcher.bound.maxBytes
-        })
+        continue
+      }
+      watcher.retainedBytes += size
+      if (backlog.value > watcher.bound.maxEnvelopes || watcher.retainedBytes > watcher.bound.maxBytes) {
+        bus.watchers.delete(watcher)
+        watcher.killed = { retainedEnvelopes: backlog.value, retainedBytes: watcher.retainedBytes }
         // Released here, by the publisher: the backlog is freed now, not
         // when the stalled consumer next looks. Its next pull finds the
         // subscription gone and the failure recorded.
         ended.push(Scope.close(watcher.release, Exit.void))
       }
     }
-    return ended.length === 0 ? Effect.void : Effect.forEach(ended, (end) => end, { discard: true })
+    return ended.length === 0
+      ? Effect.void
+      : Effect.uninterruptible(Effect.forEach(ended, (end) => end, { discard: true }))
   })
 
 /**
@@ -410,21 +419,24 @@ export function subscribeEvents(
       release,
       bound,
       sessionId: bound.sessionId,
+      // Read after subscribing: an envelope published between the subscribe
+      // and this read is received but never charged, and never credited.
+      since: yield* Ref.get(bus.sequence),
       retainedBytes: 0,
       lastDelivered: 0,
       killed: undefined
     }
     bus.watchers.add(watcher)
     yield* Effect.addFinalizer(() => Effect.sync(() => void bus.watchers.delete(watcher)))
+    const failure = () => Observation.lagError(bound.sessionId, bound, watcher.killed!, watcher.lastDelivered)
     return live.pipe(
       Stream.map((envelope) => {
-        watcher.retainedBytes -= bus.sizes.get(envelope) ?? 0
+        if (envelope.sequence > watcher.since) watcher.retainedBytes -= bus.sizes.get(envelope) ?? 0
         watcher.lastDelivered = envelope.sequence
         return envelope
       }),
-      Stream.catchCause((cause) =>
-        watcher.killed === undefined ? Stream.failCause(cause) : Stream.fail(watcher.killed)),
-      Stream.concat(Stream.suspend(() => watcher.killed === undefined ? Stream.empty : Stream.fail(watcher.killed)))
+      Stream.catchCause((cause) => watcher.killed === undefined ? Stream.failCause(cause) : Stream.fail(failure())),
+      Stream.concat(Stream.suspend(() => watcher.killed === undefined ? Stream.empty : Stream.fail(failure())))
     )
   })
 }

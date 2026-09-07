@@ -408,8 +408,9 @@ export interface RemoteSession {
    * tab would change execution semantics by deployment (`plan-streaming.md`
    * P1): the subscription is established before admission, so the first
    * envelope cannot be missed; the terminal is data, a failed run yields
-   * `SubmissionFailed` and ends normally, and only admission and transport
-   * are on the error channel; it is cold, each evaluation submits once; and
+   * `SubmissionFailed` and ends normally, and only admission, transport and
+   * an observation that fell past its bound (`AgentObservationLagError`) are
+   * on the error channel; it is cold, each evaluation submits once; and
    * ending the consumer -- a dropped connection included -- releases the
    * subscription and nothing else. The submission keeps running; `interrupt`
    * stops it, and a consumer that lost the stream resumes with
@@ -455,10 +456,12 @@ export const streamFrom = (
           Option.isSome(envelope.submissionId) && envelope.submissionId.value === receipt.submissionId
         ),
         Stream.takeUntil(isSubmissionTerminal),
-        // Typed failures only: the terminal carried the run's, and a
-        // transport failure after it would fail a stream that already
-        // delivered its outcome. A defect propagates.
-        Stream.concat(Stream.drain(Stream.fromEffect(Effect.ignore(session.awaitSubmission(receipt.submissionId)))))
+        // Only the run's own failure is suppressed: the terminal carried it.
+        // A transport failure in the wait is not represented by anything
+        // delivered and propagates, as does a defect.
+        Stream.concat(Stream.drain(Stream.fromEffect(
+          Effect.catchTag(session.awaitSubmission(receipt.submissionId), "AgentExecutionError", () => Effect.void)
+        )))
       ))
   )
 
