@@ -2105,3 +2105,24 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "subscription gate" test/Streaming.test.ts
     verify: grep "before-subscribe" src/internal/eventBus.ts
     ```
+
+77. ~~**Stream lifecycle as contract rows.**~~ **DONE 2026-09-07** --
+    `plan-streaming-followups.md`, second opinion. Six rows in
+    `test/Streaming.test.ts` measure the subscription's release through the
+    bus's own subscriber count: after exhaustion while the scope lives,
+    after `take(1)`, after the consumer fails, after interruption while
+    acquiring (nothing was submitted) and after admission (the run settles
+    on its own); and one states that a consumer cutting at the terminal
+    itself has not waited for release, with the outcome still there. The
+    tail of `stream` no longer awaits the outcome, which re-raised the run's
+    failure -- defect included -- that the terminal already carried:
+    in-process it watches the session's state leave the submission, and the
+    remote derivation ignores only the typed failure, so anything that
+    fails in the wait itself is the harness's own and propagates. Broken
+    once by taking the subscription in the session's scope; the release
+    rows fail.
+
+    ```text
+    verify: grep "after take(1)" test/Streaming.test.ts
+    verify: grep "released(self, receipt.submissionId)" src/AgentSession.ts
+    ```

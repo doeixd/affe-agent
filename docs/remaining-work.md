@@ -385,18 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-77. **Stream lifecycle as contract rows.** Release after natural exhaustion
-    while the enclosing scope lives, after `take(1)`, after consumer
-    failure, after interruption during acquisition and after admission; the
-    `awaitSubmission` tail suppressing only failures the terminal already
-    represents, not a waiter defect; a two-level `DelegatedEvent` JSON round
-    trip with absent and present options. `plan-streaming-followups.md`,
-    second opinion. Small.
-
-    ```text
-    verify: no-grep "after take(1)" test/Streaming.test.ts
-    ```
-
 78. **A2A streaming as a declared policy, with fixtures.** Always-stream
     changes which provider failures recover, since emitted parts forbid
     fallback. Make it a `serverLayer` option, and before endorsing the

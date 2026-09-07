@@ -198,7 +198,19 @@ what I take from it:
   not a finalizer, so the guarantee is "normal exhaustion waits for release"
   and a consumer that stops at the terminal has not waited. And
   `Effect.exit` on that tail swallows a waiter *defect* as normal exhaustion;
-  suppress only failures the terminal already represents. Item 77.
+  suppress only failures the terminal already represents. Item 77, done
+  2026-09-07: six rows in `test/Streaming.test.ts` measure the release
+  through the bus's own subscriber count -- exhaustion, `take(1)`, consumer
+  failure, interruption while acquiring (nothing submitted) and after
+  admission (the run settles on its own) -- and one states what cutting at
+  the terminal gives. The tail no longer awaits the outcome, which re-raised
+  the run's failure, defect included, that the terminal already carried:
+  in-process it watches the session's state leave the submission; remotely
+  it ignores only the typed failure. A defect in the wait itself
+  propagates. The two-level `DelegatedEvent` JSON round trip with
+  options present and absent was already `test/DelegatedEvents.test.ts`.
+  Broken once by taking the stream's subscription in the session's scope:
+  the release rows fail.
 
 The full text follows, unedited.
 

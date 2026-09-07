@@ -455,7 +455,10 @@ export const streamFrom = (
           Option.isSome(envelope.submissionId) && envelope.submissionId.value === receipt.submissionId
         ),
         Stream.takeUntil(isSubmissionTerminal),
-        Stream.concat(Stream.drain(Stream.fromEffect(Effect.exit(session.awaitSubmission(receipt.submissionId)))))
+        // Typed failures only: the terminal carried the run's, and a
+        // transport failure after it would fail a stream that already
+        // delivered its outcome. A defect propagates.
+        Stream.concat(Stream.drain(Stream.fromEffect(Effect.ignore(session.awaitSubmission(receipt.submissionId)))))
       ))
   )
 

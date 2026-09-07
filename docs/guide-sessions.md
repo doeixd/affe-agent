@@ -141,8 +141,13 @@ failed run yields `SubmissionFailed` and the stream ends normally, and only
 admission -- `AgentBusyError`, `AgentClosedError` -- is on the error channel.
 It is cold, so each evaluation submits once; ending the consumer early
 releases nothing but the subscription, and `interrupt` stops the run. The
-stream ends only once the session is free again. The design and the rest of
-the streaming plan are in `plan-streaming.md`.
+stream ends only once the session is free again: that wait is a barrier for
+normal consumption, not a finalizer, so a consumer that cuts at the terminal
+itself has not waited and may find the session busy for a moment; the
+outcome is still there through `awaitSubmission`. The subscription is
+released whichever way the consumer stops -- exhaustion, `take`, its own
+failure, interruption -- and never the run. The design and the rest of the
+streaming plan are in `plan-streaming.md`.
 
 ## Pausing for a human
 

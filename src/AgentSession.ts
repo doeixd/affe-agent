@@ -1199,6 +1199,18 @@ export const events = (
   session: AgentSession<any, any, any, any>
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
 
+/** Settles once the session no longer holds `submissionId` as active: released, or closed. */
+const released = (self: Session<any, any, any>, submissionId: Ids.SubmissionId): Effect.Effect<void> =>
+  SubscriptionRef.changes(self.state).pipe(
+    Stream.filter((state) =>
+      state.status === "closed" ||
+      Option.isNone(state.activeSubmissionId) ||
+      state.activeSubmissionId.value !== submissionId
+    ),
+    Stream.take(1),
+    Stream.runDrain
+  )
+
 /** The three events that end a submission; nothing of that submission follows one. */
 const isSubmissionTerminal = (envelope: AgentEventEnvelope): boolean =>
   envelope.event._tag === "SubmissionCompleted" ||
@@ -1268,7 +1280,14 @@ export const stream = <
         // submission, so a consumer acting on it at once could still find the
         // session busy. Ending the stream only once the settled outcome is
         // retrievable makes "the stream ended" mean "the session is free".
-        Stream.concat(Stream.drain(Stream.fromEffect(Effect.exit(awaitSubmission(session, receipt.submissionId)))))
+        //
+        // A barrier for normal consumption, not a finalizer: a consumer that
+        // cuts at the terminal itself has not waited. It watches the session's
+        // state leave this submission rather than awaiting the outcome, which
+        // would re-raise the run's failure -- defect included -- that the
+        // terminal already carried; anything that fails *here* is the
+        // harness's own and propagates rather than passing as exhaustion.
+        Stream.concat(Stream.drain(Stream.fromEffect(released(self, receipt.submissionId))))
       )
     })
   )

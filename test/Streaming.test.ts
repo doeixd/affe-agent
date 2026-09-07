@@ -553,3 +553,127 @@ describe("subscribe before submit, proved through a subscription gate", () => {
   )
 })
 
+describe("stream lifecycle: the subscription's release, and what the tail promises", () => {
+  /**
+   * `plan-streaming-followups.md`, second opinion; item 77. "Scope ends" and
+   * "stream finishes" are different observations, so each way a consumer
+   * can stop gets a row that measures the subscription's release directly:
+   * a probe subscription's `subscribers` map is the bus's own count of live
+   * subscriptions. And the appended `awaitSubmission` is a barrier for
+   * normal consumption, not a finalizer: a consumer that cuts at the
+   * terminal itself has not waited, which the last row states rather than
+   * hides. Broken once by taking the stream's subscription in the session's
+   * scope instead of the stream's: the release rows fail.
+   */
+  const withProbe = <A, E>(
+    turns: ReadonlyArray<TestLanguageModel.Turn>,
+    use: (session: AgentSession.AgentSession<{}, never, string, string>, live: () => number) => Effect.Effect<A, E, Scope.Scope>
+  ) =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script(turns)
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          const probe = yield* AgentSession.subscribe(session)
+          return yield* use(session, () => probe.subscribers.size)
+        })
+      ).pipe(Effect.provide(layer))
+    })
+  const submissionOf = (envelope: AgentEvent.AgentEventEnvelope) => Option.getOrThrow(envelope.submissionId)
+
+  it.effect("released after natural exhaustion, while the enclosing scope lives", () =>
+    withProbe([{ text: "done", chunks: ["do", "ne"] }], (session, live) =>
+      Effect.gen(function* () {
+        const before = live()
+        const envelopes = yield* Stream.runCollect(AgentSession.stream(session, "go"))
+        assert.strictEqual(envelopes[envelopes.length - 1]!.event._tag, "SubmissionCompleted")
+        assert.strictEqual(live(), before, "the stream's subscription outlived the stream")
+      }))
+  )
+
+  it.effect("released after take(1), and the submission runs on", () =>
+    withProbe([{ text: "done", chunks: ["do", "ne"] }], (session, live) =>
+      Effect.gen(function* () {
+        const before = live()
+        const [first] = yield* Stream.runCollect(Stream.take(AgentSession.stream(session, "go"), 1))
+        assert.strictEqual(first!.event._tag, "SubmissionStarted")
+        assert.strictEqual(live(), before, "ending the consumer early left the subscription")
+        // Nothing but the subscription was released: the run completes.
+        const outcome = yield* AgentSession.awaitSubmission(session, submissionOf(first!))
+        assert.strictEqual(outcome.status, "completed")
+      }))
+  )
+
+  it.effect("released after the consumer fails, and the submission runs on", () =>
+    withProbe([{ text: "done", chunks: ["do", "ne"] }], (session, live) =>
+      Effect.gen(function* () {
+        const before = live()
+        const seen = yield* Ref.make<Option.Option<AgentEvent.AgentEventEnvelope>>(Option.none())
+        const exit = yield* Effect.exit(
+          Stream.runForEach(AgentSession.stream(session, "go"), (envelope) =>
+            Effect.andThen(Ref.set(seen, Option.some(envelope)), Effect.fail("the consumer broke")))
+        )
+        assert.isTrue(Exit.isFailure(exit))
+        assert.strictEqual(live(), before, "a failed consumer left the subscription")
+        const first = Option.getOrThrow(yield* Ref.get(seen))
+        const outcome = yield* AgentSession.awaitSubmission(session, submissionOf(first))
+        assert.strictEqual(outcome.status, "completed")
+      }))
+  )
+
+  it.effect("interrupted while acquiring the subscription: nothing was submitted", () =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>()
+      const gate = { hit: (location: string) => location === EventBus.failpoints.qualified("before-subscribe") ? Deferred.await(held) : Effect.void }
+      yield* withProbe([{ text: "done" }], (session, live) =>
+        Effect.gen(function* () {
+          const before = live()
+          const consumer = yield* Effect.forkChild(Stream.runCollect(AgentSession.stream(session, "go")))
+          yield* Effect.yieldNow
+          yield* Fiber.interrupt(consumer)
+          assert.strictEqual(live(), before)
+          assert.strictEqual(yield* session.status, "idle", "a submission was admitted for a consumer that had already gone")
+        })).pipe(Effect.provideService(Failpoint, gate))
+    })
+  )
+
+  it.effect("interrupted after admission: the subscription is released and the run settles on its own", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* withProbe([{ text: "done", started, during: Deferred.await(release) }], (session, live) =>
+        Effect.gen(function* () {
+          const probe = yield* AgentProbe.make(session)
+          const before = live()
+          const consumer = yield* Effect.forkChild(Stream.runCollect(AgentSession.stream(session, "go")))
+          yield* Deferred.await(started)
+          yield* Fiber.interrupt(consumer)
+          assert.strictEqual(live(), before, "interrupting the consumer left the subscription")
+          assert.strictEqual(yield* session.status, "running", "interrupting the consumer stopped the run")
+          yield* Deferred.succeed(release, void 0)
+          const admitted = (yield* probe.events).find(AgentEvent.is("SubmissionStarted"))
+          const outcome = yield* AgentSession.awaitSubmission(session, submissionOf(admitted!))
+          assert.strictEqual(outcome.status, "completed")
+        }))
+    })
+  )
+
+  it.effect("a consumer that cuts at the terminal itself has not waited for release; the run still settles", () =>
+    withProbe([{ text: "done" }, { text: "again" }], (session) =>
+      Effect.gen(function* () {
+        // `takeUntil` on the terminal stops pulling before the stream's own
+        // tail runs, so this consumer may find the session still busy for a
+        // moment. The promise is "normal exhaustion waits for release", and
+        // this row says what the alternative gives: the outcome, once asked
+        // for.
+        const envelopes = yield* Stream.runCollect(
+          Stream.takeUntil(AgentSession.stream(session, "go"), (e) => e.event._tag === "SubmissionCompleted")
+        )
+        const outcome = yield* AgentSession.awaitSubmission(session, submissionOf(envelopes[0]!))
+        assert.strictEqual(outcome.status, "completed")
+        const next = yield* session.prompt("more")
+        assert.strictEqual(next.text, "again")
+      }))
+  )
+})
+
