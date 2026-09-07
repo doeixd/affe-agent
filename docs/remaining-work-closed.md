@@ -1835,3 +1835,23 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "a runtime lost at either boundary leaves a job that ran exactly once" test/WorkerDispatchIntents.test.ts
     verify: grep "affe_dispatch" test/fixtures/namespace-manifest.json
     ```
+
+62. ~~**A model layer that fails to build is an empty 500.**~~ **DONE
+    2026-09-06.** The Cloudflare host built the agent's model and services
+    with the Durable Object, so a failure -- the provider secret missing --
+    was the platform's empty 500 before any route ran. The layer is now
+    built on first use, inside the object's client, from the build context
+    captured once: a session that asks for it and finds it cannot be built
+    fails with an `AgentTransportError` carrying the cause's own words,
+    which the HTTP surface renders as a 503 with a body naming the key. A
+    build that succeeds is kept for the object's life; one that fails is
+    tried again by the next session. The row in
+    `test/WorkerRealModel.test.ts` that had recorded the empty 500 as a
+    finding now asserts the 503, the error tag and the key's name; broken
+    once by turning the typed failure into a defect, which brings the empty
+    500 back.
+
+    ```text
+    verify: grep "the Durable Object could not build the agent's model and services" src/cloudflare/index.ts
+    verify: grep "opening a session is a 503 that names the missing key" test/WorkerRealModel.test.ts
+    ```

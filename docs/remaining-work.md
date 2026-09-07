@@ -325,23 +325,6 @@ Items 27 and 30 are in the ledger.
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-### Newly ranked — from the real-model entry (2026-09-06)
-
-62. **A model layer that fails to build is an empty 500.** Found writing
-    `test/WorkerRealModel.test.ts`: when the Durable Object cannot build the
-    agent's model layer (the secret missing, so
-    `Binding.BindingNotFoundError`), opening the session answers a bare
-    status with no body. The error names the binding, but only in the
-    Worker's log, and a deployer following the quickstart sees nothing.
-    `CloudflareHost.make` builds the layer inside the object; the failure
-    should reach the HTTP surface as a typed protocol error with the
-    binding's name, the way every other refusal does. Small; a row in the
-    real-model test asserts the body once it does.
-
-    ```text
-    verify: grep "Recorded as a finding (item 62)" test/WorkerRealModel.test.ts
-    ```
-
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:

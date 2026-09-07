@@ -1,4 +1,4 @@
-import { Context, DateTime, Duration, Effect, Layer, Option, Schedule, Schema, Scope, Stream } from "effect"
+import { Cause, Context, DateTime, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Scope, Stream } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import { HttpRouter } from "effect/unstable/http"
@@ -206,7 +206,10 @@ const intentsLayer = Layer.effect(
  */
 const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
   agent: Agent.AgentDefinition<Tools, E, R>,
-  options: { readonly maxRetainedSubmissions: number }
+  options: {
+    readonly maxRetainedSubmissions: number
+    readonly layer: Options<Tools, E, R>["layer"]
+  }
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
@@ -217,7 +220,45 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
       session_id TEXT PRIMARY KEY,
       history TEXT NOT NULL
     )`.pipe(Effect.orDie)
-    const services = yield* Effect.context<LanguageModel.LanguageModel | R>()
+    /**
+     * The model and the agent's services, built on first use rather than
+     * with the object (item 62). Built with the object, a failure -- the
+     * provider secret missing, a table refusing to open -- was an empty 500
+     * from the platform before any route ran, and the deployer following the
+     * quickstart saw nothing. Built here, the same failure is a
+     * `AgentTransportError` on the session that asked, with the cause's own
+     * words, which the HTTP surface renders as a 503 with a body. A build
+     * that succeeds is kept for the object's life; one that fails is tried
+     * again by the next session, since bindings do not change under a
+     * running object and a retry costs only the attempt.
+     */
+    const scope = yield* Effect.scope
+    // What the layer builds from: the object's bindings, state, SQLite and
+    // broker, captured once here so a session can build it later.
+    const buildContext = yield* Effect.context<
+      WorkerEnvironment | DurableObjectState.DurableObjectState | SqlClient.SqlClient | Isolate.CodeBroker
+    >()
+    const built = yield* Ref.make(Option.none<Context.Context<LanguageModel.LanguageModel | R>>())
+    const services = (sessionId: string) =>
+      Effect.flatMap(Ref.get(built), (cached) =>
+        Option.match(cached, {
+          onSome: Effect.succeed,
+          onNone: () =>
+            Layer.build(options.layer).pipe(
+              Scope.provide(scope),
+              Effect.provide(buildContext),
+              Effect.tap((context) => Ref.set(built, Option.some(context))),
+              Effect.catchCause((cause) =>
+                Effect.fail(
+                  new AgentClient.AgentTransportError({
+                    sessionId,
+                    detail: `the Durable Object could not build the agent's model and services: ${Cause.pretty(cause)}`
+                  })
+                )
+              )
+            )
+        })
+      )
     const open = new Map<string, AgentClient.RemoteSession>()
 
     const storedHistory = (sessionId: string) =>
@@ -328,7 +369,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         open.set(sessionId, resumable)
         yield* Scope.addFinalizer(scope, Effect.sync(() => void open.delete(sessionId)))
         return resumable
-      }).pipe(Effect.provide(services))
+      }).pipe((open) => Effect.flatMap(services(sessionId), (context) => Effect.provide(open, context)))
 
     const service: AgentClient.Service = {
       createSession: (createOptions) =>
@@ -414,7 +455,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
 
   const clientLayer = Layer.effect(
     AgentClient.AgentClient,
-    makeClient(options.agent, { maxRetainedSubmissions: options.maxRetainedSubmissions ?? 16 })
+    makeClient(options.agent, { maxRetainedSubmissions: options.maxRetainedSubmissions ?? 16, layer: options.layer })
   )
   const surfaceLayer = Layer.effect(
     Surface,
@@ -490,7 +531,6 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
   )
 
   const objectLayer = Layer.mergeAll(clientLayer, surfaceLayer.pipe(Layer.provide(clientLayer)), dispatcherLayer).pipe(
-    Layer.provideMerge(options.layer),
     // The broker before the caller's layer: an isolate executor built there
     // registers its runs with it.
     Layer.provideMerge(Isolate.brokerLayer),

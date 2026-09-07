@@ -186,7 +186,7 @@ describe("the real-model entry on workerd", () => {
     60_000
   )
 
-  it.live("without the secret the object refuses to build a client, naming the binding, rather than calling unauthenticated", () =>
+  it.live("without the secret, opening a session is a 503 that names the missing key, and the provider is never called", () =>
     Effect.gen(function* () {
       const { directory, outfile } = yield* bundleEntry()
       const seen: Array<Seen> = []
@@ -214,11 +214,14 @@ describe("the real-model entry on workerd", () => {
           return yield* call(miniflare, "/sessions", jsonRequest("POST", { requestId: "create-1", sessionId: "nokey" }))
         })
       )
-      assert.isAtLeast(status.status, 400, `expected a refusal, got ${status.status}: ${status.body.slice(0, 200)}`)
+      // Item 62: a model layer that cannot be built is a typed transport
+      // failure on the session that asked -- 503, with the cause's own words
+      // -- not the platform's empty 500. The deployer reads the key's name in
+      // the response.
+      assert.strictEqual(status.status, 503, `expected a 503, got ${status.status}: ${status.body.slice(0, 200)}`)
+      assert.include(status.body, "AgentTransportError")
+      assert.include(status.body, "ANTHROPIC_API_KEY")
       assert.deepStrictEqual(seen, [], "the provider was called without a key")
-      // What a deployer sees is a bare status: the binding's name is in the
-      // Worker's log, not the response. Recorded as a finding (item 62), not
-      // asserted away.
     }),
     60_000
   )
