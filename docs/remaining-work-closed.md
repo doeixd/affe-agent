@@ -1823,7 +1823,11 @@ still resolves -- here, if not in the list. Nothing here is next;
     moved onto the namespace root on the way (value unchanged), which closed
     the one way a table name had escaped the freeze: spelled inside SQL
     text. `test/workers` is typechecked under the worker config, like the
-    deployment example.
+    deployment example. Review found `SubmissionFailed` missing from the
+    settling boundaries -- a failed dispatched job would have left its
+    intent `running` and its handler waiting five seconds for a settlement
+    that never came -- and added it; a failed job on workerd is not driven
+    by a row, which is the honest gap here.
 
     ```text
     verify: grep "Namespace.tag(\"cloudflare/DispatchIntents\")" src/cloudflare/index.ts

@@ -306,7 +306,12 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
           Stream.runForEach(session.events, (envelope) =>
             envelope.event._tag === "TurnCompleted"
               ? persistHistory(sessionId, session, Option.none())
-              : envelope.event._tag === "SubmissionCompleted" || envelope.event._tag === "SubmissionInterrupted"
+              : envelope.event._tag === "SubmissionCompleted" ||
+                  envelope.event._tag === "SubmissionInterrupted" ||
+                  envelope.event._tag === "SubmissionFailed"
+              // Every terminal boundary settles: a failed dispatched job is
+              // done too, and an intent left `running` would make its alarm
+              // handler wait for a settlement that never comes.
               ? persistHistory(sessionId, session, envelope.submissionId)
               : Effect.void
           ).pipe(Effect.catchCause(() => Effect.void)),
