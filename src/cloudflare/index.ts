@@ -1,8 +1,8 @@
-import { Context, DateTime, Duration, Effect, Layer, Option, Schema, Scope, Stream } from "effect"
+import { Context, DateTime, Duration, Effect, Layer, Option, Schedule, Schema, Scope, Stream } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
 import { HttpRouter } from "effect/unstable/http"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlError } from "effect/unstable/sql"
 import {
   DurableObject,
   DurableObjectAlarm,
@@ -22,7 +22,9 @@ import * as AgentHttp from "../http/AgentHttp.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Scheduling from "../scheduling/Scheduling.js"
 import * as Isolate from "./isolate.js"
+import { dispatchFailpoints } from "./dispatchFailpoints.js"
 import * as Namespace from "../internal/namespace.js"
+import { escapeIdentifier } from "../internal/sqlIdentifier.js"
 
 /** Code mode in a Dynamic Worker: the executor and the broker it calls back through. */
 export * as IsolateExecutor from "./isolate.js"
@@ -124,6 +126,79 @@ const PromptJson = Schema.toCodecJson(PromptWire.Prompt)
 /** The dispatched job as a logical alarm's payload: the prompt, encoded. */
 const DISPATCH_TAG = Namespace.tag("dispatch")
 
+export { dispatchFailpoints } from "./dispatchFailpoints.js"
+
+interface Intent {
+  readonly status: "pending" | "running" | "settled"
+  readonly submissionId: Option.Option<string>
+}
+
+/**
+ * Dispatch intents (item 47c, `plan-rfc-286-durable.md` §3.3): one row per
+ * dispatched job, keyed by its alarm id, persisted **in the same transaction
+ * as the alarm**. `pending` until the job's submission is launched,
+ * `running` with the submission's id while it runs, `settled` once the run's
+ * history has committed -- and that transition is written in the *same*
+ * SQL transaction as the history upsert (`persistHistory`), so a runtime
+ * lost between the two cannot leave a committed run whose intent says it
+ * never ran. The alarm handler reads the intent before doing anything: a
+ * `settled` intent is acknowledged without a run, a `running` one whose
+ * submission this life still holds is awaited, and anything else is
+ * launched. Never on the platform's word alone (item 48c): the alarm firing
+ * again is not evidence the job did not run; the intent is.
+ */
+class DispatchIntents extends Context.Service<DispatchIntents, {
+  readonly get: (alarmId: string) => Effect.Effect<Option.Option<Intent>>
+  /** For the alarm transaction: the intent beside its alarm. */
+  readonly record: (alarmId: string, sessionId: string) => Effect.Effect<void, SqlError.SqlError>
+  readonly launched: (alarmId: string, sessionId: string, submissionId: string) => Effect.Effect<void>
+  /** For the history transaction: the settlement beside the history it settles. */
+  readonly settledStatement: (sessionId: string, submissionId: string) => Effect.Effect<void, SqlError.SqlError>
+}>()(Namespace.tag("cloudflare/DispatchIntents")) {}
+
+const intentsLayer = Layer.effect(
+  DispatchIntents,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const table = sql.literal(escapeIdentifier(Namespace.table("dispatch")))
+    yield* sql`CREATE TABLE IF NOT EXISTS ${table} (
+      alarm_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      submission_id TEXT,
+      status TEXT NOT NULL
+    )`.pipe(Effect.orDie)
+    const Row = Schema.Struct({
+      status: Schema.Literals(["pending", "running", "settled"]),
+      submission_id: Schema.NullOr(Schema.String)
+    })
+    return {
+      get: (alarmId) =>
+        sql`SELECT status, submission_id FROM ${table} WHERE alarm_id = ${alarmId}`.pipe(
+          Effect.orDie,
+          Effect.flatMap((rows) =>
+            rows.length === 0
+              ? Effect.succeedNone
+              : Schema.decodeUnknownEffect(Row)(rows[0]).pipe(
+                Effect.orDie,
+                Effect.map((row) => Option.some({ status: row.status, submissionId: Option.fromNullishOr(row.submission_id) }))
+              )
+          )
+        ),
+      record: (alarmId, sessionId) =>
+        sql`INSERT INTO ${table} (alarm_id, session_id, status) VALUES (${alarmId}, ${sessionId}, 'pending')
+          ON CONFLICT(alarm_id) DO NOTHING`.pipe(Effect.asVoid),
+      launched: (alarmId, sessionId, submissionId) =>
+        sql`INSERT INTO ${table} (alarm_id, session_id, submission_id, status)
+          VALUES (${alarmId}, ${sessionId}, ${submissionId}, 'running')
+          ON CONFLICT(alarm_id) DO UPDATE SET submission_id = ${submissionId}, status = 'running'`.pipe(Effect.orDie, Effect.asVoid),
+      settledStatement: (sessionId, submissionId) =>
+        sql`UPDATE ${table} SET status = 'settled' WHERE session_id = ${sessionId} AND submission_id = ${submissionId}`.pipe(
+          Effect.asVoid
+        )
+    }
+  })
+)
+
 /**
  * The Durable Object's client: in-process sessions whose history persists
  * to the object's SQLite as each turn commits, and whose events are
@@ -135,8 +210,10 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
+    const intents = yield* DispatchIntents
     const delivery = yield* DeliveryLog.sqlLogWithTable()
-    yield* sql`CREATE TABLE IF NOT EXISTS affe_history (
+    const historyTable = sql.literal(escapeIdentifier(Namespace.table("history")))
+    yield* sql`CREATE TABLE IF NOT EXISTS ${historyTable} (
       session_id TEXT PRIMARY KEY,
       history TEXT NOT NULL
     )`.pipe(Effect.orDie)
@@ -144,7 +221,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
     const open = new Map<string, AgentClient.RemoteSession>()
 
     const storedHistory = (sessionId: string) =>
-      sql`SELECT history FROM affe_history WHERE session_id = ${sessionId}`.pipe(
+      sql`SELECT history FROM ${historyTable} WHERE session_id = ${sessionId}`.pipe(
         Effect.orDie,
         Effect.flatMap((rows) => {
           const raw = rows[0]?.history
@@ -153,13 +230,28 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         })
       )
 
-    const persistHistory = (sessionId: string, session: AgentSessionEngine.AgentSession<any, any, any>) =>
+    /**
+     * The canonical settlement of a run: the history upserted and, at a
+     * submission boundary, the dispatch intent for that submission marked
+     * `settled` -- in one transaction, so the two cannot disagree across a
+     * lost runtime. A turn boundary upserts the history alone.
+     */
+    const persistHistory = (
+      sessionId: string,
+      session: AgentSessionEngine.AgentSession<any, any, any>,
+      settles: Option.Option<string>
+    ) =>
       AgentSessionEngine.history(session).pipe(
         Effect.flatMap((history) => Schema.encodeEffect(PromptJson)(history)),
         Effect.flatMap((encoded) => {
           const text = JSON.stringify(encoded)
-          return sql`INSERT INTO affe_history (session_id, history) VALUES (${sessionId}, ${text})
+          const upsert = sql`INSERT INTO ${historyTable} (session_id, history) VALUES (${sessionId}, ${text})
             ON CONFLICT(session_id) DO UPDATE SET history = ${text}`
+          return Option.match(settles, {
+            onNone: () => Effect.asVoid(upsert),
+            onSome: (submissionId) =>
+              sql.withTransaction(Effect.andThen(upsert, intents.settledStatement(sessionId, submissionId)))
+          })
         }),
         Effect.catchCause((cause) => Effect.logError("cloudflare: history persist failed", { sessionId, cause }))
       )
@@ -212,10 +304,10 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         // runtime costs the turn in flight and nothing committed before it.
         yield* Effect.forkIn(
           Stream.runForEach(session.events, (envelope) =>
-            envelope.event._tag === "TurnCompleted" ||
-              envelope.event._tag === "SubmissionCompleted" ||
-              envelope.event._tag === "SubmissionInterrupted"
-              ? persistHistory(sessionId, session)
+            envelope.event._tag === "TurnCompleted"
+              ? persistHistory(sessionId, session, Option.none())
+              : envelope.event._tag === "SubmissionCompleted" || envelope.event._tag === "SubmissionInterrupted"
+              ? persistHistory(sessionId, session, envelope.submissionId)
               : Effect.void
           ).pipe(Effect.catchCause(() => Effect.void)),
           scope
@@ -349,6 +441,8 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
     Scheduling.AgentDispatcher,
     Effect.gen(function* () {
       const alarms = yield* DurableObjectAlarm.DurableObjectAlarm
+      const intents = yield* DispatchIntents
+      const owner = yield* sessionIdOfObject
       const dispatch: Scheduling.AgentDispatcher["Service"]["dispatch"] = (job) =>
         // The seam's `dispatch` cannot fail: a job that cannot be persisted
         // is a defect of the host, as `queued`'s store failures are.
@@ -371,12 +465,19 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
             const payload: Schema.Json = AgentInput.isRaw(job.input)
               ? yield* Schema.encodeEffect(PromptJson)(Prompt.make(job.input)).pipe(Effect.orDie)
               : job.input as Schema.Json
-            yield* alarms.scheduleAlarm({
-              tag: DISPATCH_TAG,
-              id: crypto.randomUUID(),
-              runAt,
-              payload
-            })
+            const id = crypto.randomUUID()
+            // The alarm and its intent in one native transaction: a runtime
+            // lost between them would otherwise leave an alarm with no
+            // intent, or an intent with no alarm to fire it.
+            yield* alarms.transaction((tx) =>
+              Effect.andThen(
+                tx.scheduleAlarm({ tag: DISPATCH_TAG, id, runAt, payload }),
+                Option.match(owner, {
+                  onNone: () => Effect.void,
+                  onSome: (sessionId) => intents.record(id, sessionId)
+                })
+              )
+            )
           })
         )
       return { dispatch }
@@ -389,6 +490,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
     // registers its runs with it.
     Layer.provideMerge(Isolate.brokerLayer),
     Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),
+    Layer.provideMerge(intentsLayer),
     Layer.provideMerge(DurableObjectSqlite.layer())
   )
 
@@ -407,25 +509,72 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
     const sessionId = yield* sessionIdOfObject
     if (Option.isNone(sessionId)) return
     const client = yield* AgentClient.AgentClient
+    const intents = yield* DispatchIntents
+    /**
+     * The settlement is written by the session's own event path, in the
+     * transaction that persists the completed submission's history. The
+     * handler waits for that row rather than writing one of its own: a
+     * `settled` written here, ahead of the history, would let a crash
+     * between the two acknowledge a run whose history was never kept.
+     */
+    const awaitSettled = (alarmId: string) =>
+      Effect.retry(
+        Effect.flatMap(intents.get(alarmId), (intent) =>
+          Option.isSome(intent) && intent.value.status === "settled" ? Effect.void : Effect.fail("unsettled" as const)
+        ),
+        { times: 500, schedule: Schedule.spaced("10 millis") }
+      ).pipe(
+        Effect.catch(() =>
+          Effect.logWarning("cloudflare: a dispatched run completed but its settlement was not observed", { alarm: alarmId })
+        )
+      )
     // Explicit channels: the handler's failure is what makes `processDue`
     // retry the job, and inference does not carry it through the seam.
     yield* DurableObjectAlarm.processDue<never, AgentClient.RemoteError>(
       (event) =>
         Effect.gen(function* () {
           if (event.tag !== DISPATCH_TAG) return
+          const intent = yield* intents.get(event.id)
+          // Already settled: the run committed and only the acknowledgement
+          // was lost. Acknowledge now; run nothing.
+          if (Option.isSome(intent) && intent.value.status === "settled") {
+            yield* Effect.logInfo("cloudflare: a dispatched job fired again after settling; acknowledged", { alarm: event.id })
+            return
+          }
           const session = yield* client.session(sessionId.value).pipe(
             Effect.catchTag("AgentSessionNotFoundError", () => client.createSession({ sessionId: sessionId.value }))
           )
+          // Launched in this life and still running: wait for it. A
+          // submission this life does not hold was lost with a runtime, and
+          // nothing of it was committed as this job's settlement -- launch.
+          if (Option.isSome(intent) && intent.value.status === "running" && Option.isSome(intent.value.submissionId)) {
+            const held = yield* session.awaitSubmission(intent.value.submissionId.value).pipe(
+              Effect.as(true),
+              Effect.catchTag("AgentSubmissionNotFoundError", () => Effect.succeed(false)),
+              Effect.catchTag("AgentExecutionError", () => Effect.succeed(true))
+            )
+            if (held) {
+              yield* awaitSettled(event.id)
+              yield* dispatchFailpoints.hit("after-settlement")
+              return
+            }
+          }
           // The payload is the encoded input and the session's boundary
           // decodes it; one that no longer decodes will never decode, so it
           // is logged and acknowledged rather than retried.
-          yield* session.prompt(event.payload).pipe(
+          const receipt = yield* session.submit(event.payload).pipe(
+            Effect.map(Option.some),
             Effect.catchTag("AgentInvalidRequestError", (error) =>
               Effect.logError("cloudflare: a dispatched job's input does not decode; dropped", {
                 sessionId: sessionId.value,
                 alarm: event.id,
                 error: error.detail
-              })),
+              }).pipe(Effect.as(Option.none())))
+          )
+          if (Option.isNone(receipt)) return
+          yield* intents.launched(event.id, sessionId.value, receipt.value.submissionId)
+          yield* dispatchFailpoints.hit("after-launch")
+          yield* session.awaitSubmission(receipt.value.submissionId).pipe(
             Effect.catchTag("AgentExecutionError", (error) =>
               Effect.logError("cloudflare: a dispatched run failed; not retried", {
                 sessionId: sessionId.value,
@@ -434,6 +583,8 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
                 detail: error.detail
               }))
           )
+          yield* awaitSettled(event.id)
+          yield* dispatchFailpoints.hit("after-settlement")
         }).pipe(Effect.scoped),
       {
         retryFailedAfter: options.retryFailedAfter ?? "30 seconds",

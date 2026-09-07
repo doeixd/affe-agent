@@ -175,11 +175,13 @@ sizes; the items are repeated here so this list stays the one tracker.
       only through `DurableDeferred`, whose engine path looks more careful, so
       the answer may be "we are fine" — but that is worth *testing* rather
       than assuming. One test: answer an elicitation before the run awaits it.
-    - **47c. Dispatch intents for the Durable Object host.** Persist an intent
-      before launch, repair in bounded passes, delete only after checking the
-      canonical settlement. It fits precisely where the engine cannot run
-      (the measured workerd stall), and the DO alarm is already the durable
-      trigger it needs. Host-local: `src/durable` does not change.
+    - **47c. Dispatch intents for the Durable Object host.** ~~open~~
+      **SHIPPED 2026-09-06.** An intent row beside every dispatched alarm in
+      one native transaction; the run's settlement marks it `settled` in the
+      same SQL transaction as the history it settles; the alarm handler reads
+      the intent before doing anything. `test/WorkerDispatchIntents.test.ts`
+      kills the runtime at both boundaries on workerd and the job runs exactly
+      once. Host-local: `src/durable` did not change.
 
 48. **Making the failure paths provable**
     ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03). A read of

@@ -1798,3 +1798,36 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "export const losingFinish" test/storageFaults.ts
     verify: grep "an outcome the session record does not back is not acknowledged" test/DurableAgentClient.test.ts
     ```
+
+47c. ~~**Dispatch intents for the Durable Object host.**~~ **SHIPPED
+    2026-09-06.** A `DispatchIntents` service in the host over one table,
+    `affe_dispatch`: `dispatch` writes the intent (`pending`) **in the same
+    native transaction as the alarm** (`alarms.transaction`); the alarm
+    handler reads the intent before anything else -- `settled` is
+    acknowledged without a run, `running` with a submission this life still
+    holds is awaited, anything else is launched, `running` written with the
+    submission id as it is; and the run's settlement marks the intent
+    `settled` in the *same SQL transaction* as the history upsert, at the
+    submission boundary of the session's own event path, so a runtime lost
+    between the two cannot leave a committed run whose intent says it never
+    ran. The handler never writes `settled` itself: it waits for the row,
+    since a settlement written ahead of the history would let a crash
+    acknowledge a run whose history was never kept. The repair pass is the
+    platform's re-fire. Two boundaries, `CloudflareHost.dispatchFailpoints`
+    (`after-launch`, `after-settlement`, in their own module so a Node test
+    can name them without loading the host); `test/WorkerDispatchIntents.test.ts`
+    bundles `test/workers/dispatch-intents.worker.ts` -- the host as shipped
+    with a failpoint armed from a binding -- kills the runtime at each on
+    real workerd, and the job runs exactly once either way; with the intent
+    check disabled it runs three times. The host's `affe_history` table name
+    moved onto the namespace root on the way (value unchanged), which closed
+    the one way a table name had escaped the freeze: spelled inside SQL
+    text. `test/workers` is typechecked under the worker config, like the
+    deployment example.
+
+    ```text
+    verify: grep "Namespace.tag(\"cloudflare/DispatchIntents\")" src/cloudflare/index.ts
+    verify: exists src/cloudflare/dispatchFailpoints.ts
+    verify: grep "a runtime lost at either boundary leaves a job that ran exactly once" test/WorkerDispatchIntents.test.ts
+    verify: grep "affe_dispatch" test/fixtures/namespace-manifest.json
+    ```

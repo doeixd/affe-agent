@@ -86,7 +86,9 @@ routing key to the Durable Object.
 - **Durability is the platform's.** History persists to DO SQLite at every
   committed turn; events are journaled to the ordinary `DeliveryLog`;
   `events?after=N` resumes gaplessly across hibernation and process death;
-  dispatched work is a logical alarm that outlives the runtime.
+  dispatched work is a logical alarm that outlives the runtime, with an
+  intent beside it, so a runtime lost after the job ran but before the alarm
+  was acknowledged does not run it again (item 47c, proved on workerd).
   Effect Workflow does not run inside a DO today (measured — see
   `docs/status-history.md`, 2026-08-30), so `/durable` stays on hosts whose
   engine runs.

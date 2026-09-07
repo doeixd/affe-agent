@@ -79,5 +79,5 @@
   // same rule: it *imports* that entry, which would drag the Workers globals
   // back into this program. It typechecks under apps/worker/tsconfig.json
   // (`npm run typecheck:worker`), where those globals are declared.
-  "exclude": ["src/cloudflare", "examples/deploy-cloudflare"]
+  "exclude": ["src/cloudflare", "examples/deploy-cloudflare", "test/workers"]
 }

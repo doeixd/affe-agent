@@ -89,7 +89,9 @@ describe("the frozen namespace", () => {
   })
 
   it("no identifier is spelled as a literal outside the one module", () => {
-    const literal = /["`]affe-agent\/|"affe_[a-z_]+"|"affe-agent:/
+    // A table name inside SQL text counts too: `affe_history` spelled in a
+    // template was how one escaped the freeze until item 47c routed it.
+    const literal = /["`]affe-agent\/|\baffe_[a-z_]+\b|"affe-agent:/
     const offenders: Array<string> = []
     for (const file of sources(SRC)) {
       if (file === NAMESPACE_MODULE) continue
