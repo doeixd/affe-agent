@@ -392,7 +392,7 @@ again. Feature expansion is frozen until these produce an observation.*
     artifact updates of the result artifact). Small.
 
     ```text
-    verify: no-grep "artifact-update" src/a2a/AgentA2A.ts
+    verify: no-grep "notifications/progress" src/mcp/AgentMcp.ts
     ```
 
 ### Known, deliberately left
