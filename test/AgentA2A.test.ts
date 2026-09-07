@@ -250,11 +250,14 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     readonly sseHeartbeat?: Duration.Duration | false
     /** The parts the fake run answers with; default: one text part of its text. */
     readonly replyContent?: ReadonlyArray<Prompt.Part>
+    /** Text deltas the fake run publishes while answering, when asked to stream. */
+    readonly streamDeltas?: ReadonlyArray<string>
   }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
   const released = yield* Ref.make<ReadonlyArray<string>>([])
   const calls = yield* Ref.make<ReadonlyArray<string>>([])
+  const streamAsked = yield* Ref.make(false)
   const promptStarted = yield* Deferred.make<void>()
   const promptInterrupted = yield* Deferred.make<
     void,
@@ -304,10 +307,18 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
 
           return {
             id,
-            prompt: (input) =>
+            prompt: (input, promptOptions) =>
               Effect.gen(function* () {
                 const text = promptText(promptOf(input))
                 yield* Ref.set(lastInput, Option.some(promptOf(input)))
+                yield* Ref.set(streamAsked, promptOptions?.stream === true)
+                if (fixtureOptions?.streamDeltas !== undefined && promptOptions?.stream === true) {
+                  yield* PubSub.publish(eventQueue, emit({ _tag: "MessageStarted" }))
+                  for (const delta of fixtureOptions.streamDeltas) {
+                    yield* PubSub.publish(eventQueue, emit({ _tag: "MessageDelta", kind: "text", delta }))
+                  }
+                  yield* PubSub.publish(eventQueue, emit({ _tag: "MessageStreamCompleted" }))
+                }
                 const count = yield* Ref.updateAndGet(
                   promptCount,
                   (current) => current + 1
@@ -567,6 +578,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     opened,
     released,
     calls,
+    streamAsked,
     promptStarted,
     /** Releases a `blockFirstPrompt` run, so a test can end it cleanly. */
     promptInterrupted,
@@ -968,6 +980,63 @@ describe("AgentA2A v1 server", () => {
 
       const opened = yield* Ref.get(fixture.opened)
       assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("the answer forms as chunks of the result artifact, and the completed answer replaces them", () =>
+    Effect.gen(function* () {
+      // `plan-streaming.md` P5, A2A: the adapter asks the harness to stream
+      // and forwards each text delta as an artifact update of the *result*
+      // artifact -- the first chunk of a message replacing, the rest
+      // appending, none the last -- and the completed answer then arrives
+      // whole under the same identity with `lastChunk`, replacing them.
+      const fixture = yield* serverFixture({ streamDeltas: ["str", "eamed"] })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(
+              HttpServer.formatAddress(server.address)
+            )
+          )
+          const responses = yield* collect(
+            client.sendMessageStream({
+              tenant: "",
+              message: userMessage("chunks-message", "", "chunks"),
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          assert.deepStrictEqual(
+            responses.map((response) => response.payload?.$case),
+            ["task", "statusUpdate", "artifactUpdate", "artifactUpdate", "artifactUpdate", "statusUpdate"]
+          )
+          const updates = responses.flatMap((response) =>
+            response.payload?.$case === "artifactUpdate" ? [response.payload.value] : []
+          )
+          assert.deepStrictEqual(
+            updates.map((update) => [update.append, update.lastChunk]),
+            [[false, false], [true, false], [false, true]],
+            "the first chunk replaces, the second appends, the completed answer replaces and is last"
+          )
+          assert.strictEqual(new Set(updates.map((update) => update.artifact?.artifactId)).size, 1, "one artifact identity")
+          const texts = updates.map((update) => {
+            const content = update.artifact?.parts[0]?.content
+            return content?.$case === "text" ? content.value : undefined
+          })
+          assert.deepStrictEqual(texts.slice(0, 2), ["str", "eamed"])
+          assert.isTrue(texts[2]?.endsWith(":1:chunks"), `the completed answer, got ${String(texts[2])}`)
+
+          // The stored task holds the completed answer once, not the chunks.
+          const submitted = responses[0]?.payload
+          if (submitted?.$case !== "task") assert.fail("expected the task first")
+          const stored = yield* promise(() => client.getTask({ tenant: "", id: submitted.value.id }))
+          assert.strictEqual(stored.artifacts.length, 1)
+          assert.strictEqual(taskText(stored), texts[2])
+        }).pipe(Effect.provide(fixture.server))
+      )
+      assert.isTrue(yield* Ref.get(fixture.streamAsked), "the adapter asked the harness to stream")
     })
   )
 

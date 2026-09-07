@@ -385,11 +385,11 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-71. **Streaming in the adapters.** A2A artifact updates with append and
-    final-chunk semantics and stable artifact identity across abandoned
-    attempts; MCP progress notifications only; `plan-streaming.md` P5.
-    Medium. The AG-UI half shipped 2026-09-06: `ToolCallDelta` onto
-    `TOOL_CALL_ARGS`, the assembled call sending only the end.
+71. **Streaming in the adapters: MCP.** Progress notifications only,
+    honestly -- MCP has no incremental-output semantics without an agreed
+    extension; `plan-streaming.md` P5. The AG-UI and A2A halves shipped
+    2026-09-06 (`ToolCallDelta` onto `TOOL_CALL_ARGS`; text deltas as
+    artifact updates of the result artifact). Small.
 
     ```text
     verify: no-grep "artifact-update" src/a2a/AgentA2A.ts

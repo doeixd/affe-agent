@@ -313,6 +313,14 @@ artifact with its media type and filename, and file parts in an incoming
 message reach the agent as `Prompt.FilePart`s. Structured `data` parts are
 refused by name.
 
+The answer forms as artifact updates of the result artifact: the adapter asks
+the harness to stream, and each text delta is a chunk under the same
+`artifactId` the completed answer is delivered with. The first chunk of a
+message replaces and the rest append, so a run of several messages shows the
+message in progress rather than a concatenation; no chunk is the last, and
+the completed answer arrives whole with `lastChunk` and replaces whatever
+streamed. A task read back holds the completed answer once.
+
 `affe-agent/a2a` exposes a Harness agent through the official A2A v1
 JSON-RPC and HTTP+JSON protocols:
 

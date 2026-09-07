@@ -229,7 +229,21 @@ is dropped, since the assembled call still arrives whole; a message that
 fails or is interrupted ends every call still open, with no result, and the
 terminal close does the same. Two projection rows, each frame validated by
 `@ag-ui/core`. Broken once by letting the assembled call resend its
-arguments. A2A and MCP remain item 71.
+arguments.
+
+*A2A (shipped 2026-09-06):* the adapter prompts with `stream: true` and a
+forwarder beside the elicitation listener turns every text delta into a
+`TaskArtifactUpdateEvent` of the result artifact -- the identity the
+completed answer already used, so a consumer accumulating chunks and one
+reading the final artifact see one thing. The first chunk of a message
+replaces (`append: false`), later ones append, none is last; the completed
+answer arrives whole with `lastChunk: true` and replaces them, which is the
+explicit-replacement rule for abandoned attempts the reviewer asked for. The
+continuation of a paused run forwards its own. One row through the official
+client: task, working, three artifact updates with `[append, lastChunk]` of
+`[false,false] [true,false] [false,true]`, completed; the stored task holds
+the answer once. Broken once by making every chunk append. MCP remains item
+71: progress notifications only, honestly.
 
 ## 4. What a streaming design usually gets wrong (kept as rules)
 
