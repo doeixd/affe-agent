@@ -242,8 +242,14 @@ explicit-replacement rule for abandoned attempts the reviewer asked for. The
 continuation of a paused run forwards its own. One row through the official
 client: task, working, three artifact updates with `[append, lastChunk]` of
 `[false,false] [true,false] [false,true]`, completed; the stored task holds
-the answer once. Broken once by making every chunk append. MCP remains item
-71: progress notifications only, honestly.
+the answer once. Broken once by making every chunk append.
+
+*MCP:* closed as upstream-blocked (ledger, item 71). A tool handler under
+upstream's `McpServer` receives only its payload -- the request's
+`_meta.progressToken` never reaches it -- and the server's notification
+client is internal to its constructor, so `notifications/progress` cannot
+be sent from the adapter without pretending. Reopens when upstream exposes
+either.
 
 ## 4. What a streaming design usually gets wrong (kept as rules)
 

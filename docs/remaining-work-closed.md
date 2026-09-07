@@ -2027,3 +2027,26 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "a tool that dies fails the run everywhere" src/testing/AgentClientConformance.ts
     verify: grep "isDefect ? yield\* Effect.die" src/durable/DurableToolkit.ts
     ```
+
+71. ~~**Streaming in the adapters.**~~ **DONE 2026-09-06, MCP CLOSED AS
+    UPSTREAM-BLOCKED** -- `plan-streaming.md` P5. AG-UI: `ToolCallDelta`
+    onto `TOOL_CALL_ARGS`, the first named fragment opening the call, the
+    assembled call sending only the end, a failed message ending what it
+    opened. A2A: the adapter prompts with `stream: true` and forwards each
+    text delta as a `TaskArtifactUpdateEvent` of the result artifact -- the
+    first chunk of a message replacing, the rest appending, none last, the
+    completed answer replacing them whole with `lastChunk`. Both broken once
+    (the assembled call resending its arguments; every chunk appending). MCP
+    progress notifications are not implementable honestly here: upstream's
+    `McpServer` (`effect` rc.112, `unstable/ai/McpServer`) gives a tool
+    handler only its payload, so the request's `_meta.progressToken` never
+    reaches it, and the `notifications` RPC client that could send
+    `ProgressNotification` lives on the server's internal `make` result, not
+    on any handler-facing API. Recorded under known-left with its trigger:
+    upstream exposing either.
+
+    ```text
+    verify: grep "forwardTextDeltas" src/a2a/AgentA2A.ts
+    verify: grep "openToolCalls" src/ag-ui/AgentAgUi.ts
+    verify: grep "MCP progress notifications" docs/remaining-work.md
+    ```

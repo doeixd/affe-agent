@@ -385,16 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-71. **Streaming in the adapters: MCP.** Progress notifications only,
-    honestly -- MCP has no incremental-output semantics without an agreed
-    extension; `plan-streaming.md` P5. The AG-UI and A2A halves shipped
-    2026-09-06 (`ToolCallDelta` onto `TOOL_CALL_ARGS`; text deltas as
-    artifact updates of the result artifact). Small.
-
-    ```text
-    verify: no-grep "notifications/progress" src/mcp/AgentMcp.ts
-    ```
-
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
@@ -404,6 +394,12 @@ again. Feature expansion is frozen until these produce an observation.*
   to delete them, and the harness will say so if that changes.
 - **Legacy MCP cancellation id mismatch** — upstream; the official client's
   cancel cannot interrupt the server.
+- **MCP progress notifications** (`notifications/progress` for a running
+  `agent_*` tool call) cannot be sent from this adapter: upstream's
+  `McpServer` hands a tool handler only its payload, so the request's
+  `_meta.progressToken` never reaches it, and the server's notification
+  client is internal to its constructor. Ledger, item 71. Reopens when
+  upstream exposes either.
 - **Anthropic example** has never been run live with a key.
 - **`ClusterMultiNode` on real time** (~15 s) — H7 would move it to
   `TestClock`; cost only.
