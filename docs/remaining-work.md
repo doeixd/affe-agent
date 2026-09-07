@@ -385,6 +385,65 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
+74. **Outcome fidelity across the journal, audited.** Every site where the
+    durable path journals an outcome as a value and re-raises it can drift
+    from in-process, as item 73 did for a tool defect. Inventory the
+    encoders, decoders and re-raises; add an outcome matrix to the client
+    contract (success, expected failure, defect, interruption) exercised on
+    fresh durable execution and on replay; one case per shared recovery
+    rule. Broken once by restoring defect-to-typed on replay alone.
+    `plan-streaming-followups.md` §8. Medium.
+
+    ```text
+    verify: no-grep "outcome matrix" src/testing/AgentClientConformance.ts
+    ```
+
+75. **Bounded remote observation, by bytes and count.** The hosted SSE
+    stream is the long-lived subscription P4 named. Bound the whole
+    retention chain at the transport seam -- queued bytes and envelopes,
+    serialised writes, oversized envelopes -- disconnect a lagging observer
+    with a recorded reason, never touch execution or the journal sink, and
+    resume only from a delivery log by the client's last parsed cursor.
+    Broken once by disabling overflow termination under a finite burst.
+    `plan-streaming-followups.md` §4. Medium.
+
+    ```text
+    verify: no-grep "maxLag" src/client/internal/sessionHost.ts
+    ```
+
+76. **The two orderings, proved.** Subscribe-before-submit in-process and in
+    the durable client survived being broken. Gate the subscription's
+    registration and force the earliest legal publication, without changing
+    admission's contract, so the swapped order provably misses
+    `SubmissionStarted`. `plan-streaming-followups.md` §1. Small.
+
+    ```text
+    verify: no-grep "subscription gate" test/Streaming.test.ts
+    ```
+
+77. **Stream lifecycle as contract rows.** Release after natural exhaustion
+    while the enclosing scope lives, after `take(1)`, after consumer
+    failure, after interruption during acquisition and after admission; the
+    `awaitSubmission` tail suppressing only failures the terminal already
+    represents, not a waiter defect; a two-level `DelegatedEvent` JSON round
+    trip with absent and present options. `plan-streaming-followups.md`,
+    second opinion. Small.
+
+    ```text
+    verify: no-grep "after take(1)" test/Streaming.test.ts
+    ```
+
+78. **A2A streaming as a declared policy, with fixtures.** Always-stream
+    changes which provider failures recover, since emitted parts forbid
+    fallback. Make it a `serverLayer` option, and before endorsing the
+    default record: failure before and after the first part, several
+    messages on one result artifact, tool-only turns, cancellation after
+    partial output. `plan-streaming-followups.md` §7. Small.
+
+    ```text
+    verify: no-grep "streaming:" src/a2a/AgentA2A.ts
+    ```
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
