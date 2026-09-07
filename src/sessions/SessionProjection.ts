@@ -520,6 +520,7 @@ const apply = (
     case "MessagePartCompleted":
     case "MessageStreamCompleted":
     case "MessageInterrupted":
+    case "ToolCallDelta":
     case "ToolCallProgress":
     case "SteeringQueued":
     case "SteeringApplied":

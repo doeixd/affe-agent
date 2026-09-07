@@ -93,7 +93,7 @@ reconnection that observes without resubmitting and reports expired retention
 as an observation error; and a text-only convenience that deliberately
 translates an unsuccessful terminal into a failure.
 
-### P2 -- partial tool arguments as an additive event (item 68)
+### P2 -- partial tool arguments as an additive event (shipped 2026-09-06)
 
 `ToolCallDelta { id, name?, delta }`, raw argument fragments from the
 accumulator's `tool-params-*` branch, in the ordinary envelope. A new tag, not
@@ -113,10 +113,24 @@ express that, fix correlation before shipping this. Partial-JSON parsing stays
 out: a later battery may offer an explicitly provisional representation, and
 never advertises the final output type for a repaired preview.
 
-*First slice:* schema and emission only; fixtures with two interleaved argument
-streams and an interrupted one; committed history unchanged; an older decoder
-yields `UnknownEvent`. Broken once by failing a provider mid-arguments and
-reusing the call id on the replacement. `Behavior-Change:` trailer.
+*Shipped as:* schema and emission only. `ToolCallDelta { id, name?, delta }`
+from the accumulator's `tool-params-*` branch, the name carried from the start
+part to its deltas by id and forgotten at the end part; a fragment for an
+unannounced stream has no name rather than a wrong one. Rows: fragments in
+order before the assembled call, concatenating to its arguments, inside the
+message, with the batched run's history and one execution; interleaved streams
+kept apart by id; a message failed mid-arguments leaves the fragment, a
+`MessageFailed`, no `ToolCallStarted`, no execution, no history; the wire round
+trip with and without a name. Broken once by silencing the emission and once by
+dropping the name tracking; both bit. The failover gate is met by construction
+and was not needed: `withPlanStream` sets `preventFallbackOnPartialStream`, so
+a provider that has emitted any part cannot be replaced within the message, and
+a reused id across attempts cannot arise; the reviewer's "merge" case is
+therefore not a fixture. Durable live streaming carries the fragments
+unchanged, because the durable model re-emits raw provider parts; a replay has
+none, as it has no live chunking either. No fixture was recorded, so no
+`Behavior-Change:` trailer was required; the tolerant decoder's additivity is
+already held by its own rows.
 
 ### P3 -- a child's events on the parent's stream (item 69)
 

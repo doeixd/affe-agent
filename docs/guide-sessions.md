@@ -297,6 +297,18 @@ part of the conversation. For tools running in parallel, progress arrives in
 real completion order while canonical results are still committed in model call
 order.
 
+**A call forming.** Under `stream: true`, a provider that streams a tool call's
+arguments produces `ToolCallDelta { id, name?, delta }` events before the
+assembled `ToolCallStarted`: raw fragments, usually JSON, grouped by `id`, whose
+concatenation is the arguments the call is made with. A typed `AgentOutput` is
+itself a tool call, so this is also how a structured answer is visible taking
+shape. Fragments are observational in the same sense as progress: the harness
+executes, approves and records only the assembled call, and if the message
+fails or is interrupted after fragments, no `ToolCallStarted` follows for that
+`id`, the message's terminal event is what a consumer discards its provisional
+state on, and history has nothing of it. `plan-streaming.md` P2 has the
+invariants.
+
 ## Typed lifecycle events
 
 Every meaningful transition is an event on one stream, with correlation and a

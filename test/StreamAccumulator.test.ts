@@ -18,13 +18,15 @@ type Tools = { readonly search: typeof Search }
 const run = (parts: ReadonlyArray<Response.StreamPart<Tools, true>>) => {
   let state = Accumulator.empty<Tools>()
   const deltas: Array<Accumulator.Delta> = []
+  const fragments: Array<Accumulator.ToolCallDelta> = []
   for (const part of parts) {
     const step = Accumulator.step(state, part)
-    if (step._tag === "Failed") return { failed: step.error, deltas }
+    if (step._tag === "Failed") return { failed: step.error, deltas, fragments }
     state = step.state
     if (step.delta !== undefined) deltas.push(step.delta)
+    if (step.toolCallDelta !== undefined) fragments.push(step.toolCallDelta)
   }
-  return { parts: Accumulator.finish(state), deltas }
+  return { parts: Accumulator.finish(state), deltas, fragments }
 }
 
 const textOf = (parts: ReadonlyArray<Response.Part<Tools, true>> | undefined) =>
@@ -112,10 +114,11 @@ describe("stream accumulator", () => {
     assert.deepStrictEqual(textOf(parts), ["orphan"])
   })
 
-  it("passes tool calls through and drops their incremental parameters", () => {
-    // The harness executes the assembled call, never a partial one, so the
-    // parameter increments are structural noise.
-    const { parts } = run([
+  it("passes tool calls through, reports their incremental parameters, and keeps them out of the response", () => {
+    // The harness executes the assembled call, never a partial one. The
+    // increments are reported as fragments (`plan-streaming.md` P2) and
+    // contribute nothing to the folded response.
+    const { parts, deltas, fragments } = run([
       Response.makePart("tool-params-start", {
         id: "c1",
         name: "search",
@@ -138,6 +141,33 @@ describe("stream accumulator", () => {
         .length,
       0
     )
+    assert.deepStrictEqual(fragments, [{ id: "c1", name: "search", delta: '{"q":' }])
+    assert.deepStrictEqual(deltas, [], "argument fragments are not message output")
+  })
+
+  it("keeps interleaved argument streams apart by id, and names a fragment only from its own start", () => {
+    // Providers may interleave several calls' arguments. Each fragment's name
+    // comes through its own id; a fragment for a stream that was never
+    // announced carries no name rather than a wrong one; and after the end
+    // part the name is forgotten.
+    const { fragments, parts } = run([
+      Response.makePart("tool-params-start", { id: "x", name: "search", providerExecuted: false }),
+      Response.makePart("tool-params-start", { id: "y", name: "search", providerExecuted: false }),
+      Response.makePart("tool-params-delta", { id: "x", delta: "{" }),
+      Response.makePart("tool-params-delta", { id: "y", delta: "[" }),
+      Response.makePart("tool-params-delta", { id: "x", delta: "}" }),
+      Response.makePart("tool-params-end", { id: "x" }),
+      Response.makePart("tool-params-delta", { id: "x", delta: "late" }),
+      Response.makePart("tool-params-delta", { id: "z", delta: "?" })
+    ])
+    assert.deepStrictEqual(fragments, [
+      { id: "x", name: "search", delta: "{" },
+      { id: "y", name: "search", delta: "[" },
+      { id: "x", name: "search", delta: "}" },
+      { id: "x", name: undefined, delta: "late" },
+      { id: "z", name: undefined, delta: "?" }
+    ])
+    assert.deepStrictEqual(parts, [])
   })
 
   it("surfaces an error reported inside the stream", () => {

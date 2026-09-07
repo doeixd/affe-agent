@@ -24,6 +24,20 @@ export interface Turn {
     readonly params: unknown
     /** Marks a call the provider already executed; see `AgentTurn`. */
     readonly providerExecuted?: boolean
+    /**
+     * How this call's arguments arrive when the caller streams: as
+     * `tool-params-start`, one `tool-params-delta` per chunk, `tool-params-end`,
+     * then the assembled `tool-call`. Ignored by a batch call. The chunks are
+     * not checked against `params`; a script that wants them consistent says
+     * so itself.
+     */
+    readonly paramChunks?: ReadonlyArray<string>
+    /**
+     * Streaming only: announce the arguments and send the chunks, then stop --
+     * no end part and no assembled call. A provider that died mid-arguments.
+     * Combine with `streamError` to fail the message after it.
+     */
+    readonly abandon?: boolean
   }>
   /**
    * Runs while the model call is in flight, letting a test drive concurrent
@@ -169,6 +183,14 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
     parts.push({ type: "file", mediaType: file.mediaType, data: Encoding.encodeBase64(file.data) })
   }
   for (const call of turn.toolCalls ?? []) {
+    if (call.paramChunks !== undefined || call.abandon === true) {
+      parts.push({ type: "tool-params-start", id: call.id, name: call.name })
+      for (const chunk of call.paramChunks ?? []) {
+        parts.push({ type: "tool-params-delta", id: call.id, delta: chunk })
+      }
+      if (call.abandon === true) continue
+      parts.push({ type: "tool-params-end", id: call.id })
+    }
     parts.push({
       type: "tool-call",
       id: call.id,

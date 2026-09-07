@@ -1931,3 +1931,26 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "export const stream" src/AgentSession.ts
     verify: grep "one submission as a stream" test/Streaming.test.ts
     ```
+
+68. ~~**Partial tool arguments as an additive event.**~~ **DONE 2026-09-06** --
+    `ToolCallDelta { id, name?, delta }`, `plan-streaming.md` P2. The
+    accumulator's `tool-params-*` branch, which dropped the increments, now
+    reports each delta as a fragment with the name its start part announced,
+    and the turn publishes it in the ordinary envelope; the response it folds
+    is unchanged, so execution, approval, history and typed output still wait
+    for the assembled call. `TestLanguageModel` scripts chunked arguments
+    (`paramChunks`) and a provider that dies mid-arguments (`abandon`). Rows
+    in `test/Streaming.test.ts` and `test/StreamAccumulator.test.ts`: order,
+    concatenation equals the call's arguments, one execution and the batched
+    history; interleaving by id and no wrong names; failure after fragments
+    leaves no call, no execution, no history; wire round trip. Broken once by
+    silencing the emission and once by dropping the name tracking. The
+    reviewer's failover gate -- an id reused across attempts must never merge
+    -- holds by construction, since the plan wrapper forbids a fallback after
+    any emitted part. `SessionProjection` lists the tag rather than
+    defaulting, which is how the compiler pointed at it.
+
+    ```text
+    verify: grep "ToolCallDelta" src/AgentEvent.ts
+    verify: grep "tool-call argument deltas" test/Streaming.test.ts
+    ```

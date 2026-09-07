@@ -306,6 +306,32 @@ export const ElicitationResolved = Schema.TaggedStruct("ElicitationResolved", {
   granted: Schema.Boolean
 })
 
+/**
+ * A fragment of a tool call's arguments, as the model produces them.
+ *
+ * Observational, like `MessageDelta`: a consumer can show a call forming, or
+ * an `AgentOutput` -- itself a tool call -- taking shape, before the arguments
+ * are complete. The harness never acts on a fragment. Execution, approval,
+ * history and typed output all wait for the assembled call, which arrives as
+ * `ToolCallStarted` with `params` decoded. Only emitted under `stream: true`.
+ *
+ * `delta` is raw text, typically a JSON fragment, in the order produced;
+ * the concatenation of one call's fragments is the arguments the provider
+ * sent. Fragments of several calls may interleave, so `id` is what a consumer
+ * groups by. `name` is absent when the provider sent a fragment for an
+ * argument stream it never announced.
+ *
+ * A message may be interrupted or fail after fragments and before the call:
+ * then no `ToolCallStarted` follows for that `id`, the message's terminal event
+ * is what a consumer discards its provisional state on, and canonical history
+ * has nothing of it.
+ */
+export const ToolCallDelta = Schema.TaggedStruct("ToolCallDelta", {
+  id: Schema.String,
+  name: Schema.optional(Schema.String),
+  delta: Schema.String
+})
+
 export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   id: Schema.String,
   name: Schema.String,
@@ -418,6 +444,7 @@ export const AgentEvent = Schema.Union([
   MessageFailed,
   ElicitationRequested,
   ElicitationResolved,
+  ToolCallDelta,
   ToolCallStarted,
   ToolCallProgress,
   ToolCallSucceeded,

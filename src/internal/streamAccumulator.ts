@@ -27,6 +27,20 @@ export interface Delta {
 }
 
 /**
+ * A fragment of a tool call's arguments, as the provider produced it.
+ *
+ * Observational only: the harness never executes, approves or records a
+ * partial call. The assembled `tool-call` part that follows is authoritative,
+ * and this fragment is the same JSON text, earlier. `name` is absent when the
+ * provider sent a delta for an argument stream it never announced.
+ */
+export interface ToolCallDelta {
+  readonly id: string
+  readonly name: string | undefined
+  readonly delta: string
+}
+
+/**
  * Accumulated state, threaded through the fold.
  *
  * `parts` is what will become the response. `open` holds the text and
@@ -37,11 +51,27 @@ export interface Delta {
 export interface State<Tools extends Record<string, Tool.Any>> {
   readonly parts: ReadonlyArray<Response.Part<Tools, true>>
   readonly open: ReadonlyMap<string, { kind: "text" | "reasoning"; text: string }>
+  /** Argument streams announced and not yet ended, by the provider's id, to their tool name. */
+  readonly openToolCalls: ReadonlyMap<string, string>
 }
 
 export const empty = <
   Tools extends Record<string, Tool.Any>
->(): State<Tools> => ({ parts: [], open: new Map() })
+>(): State<Tools> => ({ parts: [], open: new Map(), openToolCalls: new Map() })
+
+const withOpenToolCall = <Tools extends Record<string, Tool.Any>>(
+  state: State<Tools>,
+  id: string,
+  name: string | undefined
+): State<Tools> => {
+  const openToolCalls = new Map(state.openToolCalls)
+  if (name === undefined) {
+    openToolCalls.delete(id)
+  } else {
+    openToolCalls.set(id, name)
+  }
+  return { ...state, openToolCalls }
+}
 
 const withOpen = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>,
@@ -70,13 +100,15 @@ export type Step<Tools extends Record<string, Tool.Any>> =
       readonly _tag: "Continue"
       readonly state: State<Tools>
       readonly delta: Delta | undefined
+      readonly toolCallDelta: ToolCallDelta | undefined
     }
   | { readonly _tag: "Failed"; readonly error: unknown }
 
 const cont = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>,
-  delta?: Delta | undefined
-): Step<Tools> => ({ _tag: "Continue", state, delta })
+  delta?: Delta | undefined,
+  toolCallDelta?: ToolCallDelta | undefined
+): Step<Tools> => ({ _tag: "Continue", state, delta, toolCallDelta })
 
 /**
  * Take one stream part.
@@ -119,12 +151,20 @@ export const step = <Tools extends Record<string, Tool.Any>>(
       return cont({ ...closed, parts: [...closed.parts, finished] })
     }
     // Tool parameters arrive incrementally and then again as a complete
-    // `tool-call`, so the increments are structural noise here: the harness
-    // executes the assembled call, never a partial one.
+    // `tool-call`. The increments contribute nothing to the response -- the
+    // harness executes the assembled call, never a partial one -- but they
+    // are reported, so a consumer can show a call forming. The open map only
+    // carries the name from the start part to its deltas.
     case "tool-params-start":
+      return cont(withOpenToolCall(state, part.id, part.name))
     case "tool-params-delta":
+      return cont(state, undefined, {
+        id: part.id,
+        name: state.openToolCalls.get(part.id),
+        delta: part.delta
+      })
     case "tool-params-end":
-      return cont(state)
+      return cont(withOpenToolCall(state, part.id, undefined))
     case "error":
       return { _tag: "Failed", error: part.error }
     case "finish":

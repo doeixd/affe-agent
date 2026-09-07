@@ -385,17 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-68. **Partial tool arguments as an additive event.** `ToolCallDelta { id,
-    name?, delta }` from the accumulator's `tool-params-*` branch, in the
-    ordinary envelope; execution unchanged, the assembled call authoritative.
-    Invariants and the first slice are `plan-streaming.md` P2, including the
-    one that decides whether it can ship: a provider id reused across failover
-    attempts must never merge. `Behavior-Change:` trailer. Medium.
-
-    ```text
-    verify: no-grep "ToolCallDelta" src/AgentEvent.ts
-    ```
-
 69. **A child's events on the parent's stream, opt-in.** `DelegatedEvent
     { tool, toolCallId, envelope }` wrapping the child's untouched envelope,
     published through the parent's bus by composing the child's sink;
@@ -409,8 +398,7 @@ again. Feature expansion is frozen until these produce an observation.*
 70. **Bus retention, measured before bounded.** An abandoned subscriber of the
     unbounded bus lives indefinitely. Measure retained bytes and teardown under
     a deliberately stalled subscriber before deciding on a bounded observation
-    seam; `plan-streaming.md` P4. A demonstrated memory failure moves this
-    above 68. Small to measure.
+    seam; `plan-streaming.md` P4. Small to measure.
 
     ```text
     verify: no-grep "stalled subscriber" test/Streaming.test.ts
@@ -419,7 +407,7 @@ again. Feature expansion is frozen until these produce an observation.*
 71. **Streaming in the adapters.** A2A artifact updates with append and
     final-chunk semantics and stable artifact identity across abandoned
     attempts; MCP progress notifications only; `plan-streaming.md` P5. After
-    68 and 69. Medium.
+    69. Medium.
 
     ```text
     verify: no-grep "artifact-update" src/a2a/AgentA2A.ts

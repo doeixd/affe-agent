@@ -302,8 +302,19 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
               part: History.filePart(part)
             })
           : Effect.void
+        // A fragment of a tool call's arguments is reported and nothing more;
+        // the assembled call, and everything the harness does with it, comes
+        // with the `tool-call` part that follows.
+        const fragment = next.toolCallDelta === undefined
+          ? Effect.void
+          : EventBus.emit(session.bus, correlation, {
+              _tag: "ToolCallDelta",
+              id: next.toolCallDelta.id,
+              ...(next.toolCallDelta.name === undefined ? {} : { name: next.toolCallDelta.name }),
+              delta: next.toolCallDelta.delta
+            })
         return next.delta === undefined
-          ? Effect.as(announced, next.state)
+          ? Effect.as(Effect.andThen(announced, fragment), next.state)
           : announced.pipe(
               Effect.andThen(
                 EventBus.emit(session.bus, correlation, {

@@ -338,3 +338,117 @@ describe("one submission as a stream", () => {
     })
   )
 })
+
+describe("tool-call argument deltas", () => {
+  /**
+   * `plan-streaming.md` P2. A provider streams a tool call's arguments as
+   * fragments before the assembled call; the accumulator used to drop them.
+   * They are now reported as `ToolCallDelta`, observationally: the harness
+   * still executes, approves and records only the assembled call, so the
+   * committed history of a streamed run is the batched run's, fragment events
+   * or not. The accumulator's own rows are in `StreamAccumulator.test.ts`.
+   */
+  const Add = Tool.make("add", {
+    parameters: Schema.Struct({ a: Schema.Number, b: Schema.Number }),
+    success: Schema.Number
+  })
+  const fragmentsOf = (events: ReadonlyArray<AgentEvent.AgentEventEnvelope>) =>
+    events.filter(AgentEvent.is("ToolCallDelta")).map((e) => e.event)
+
+  it.effect("reports the fragments, in order, before the assembled call, and executes only the call", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const agent = Agent.make({
+        tools: [Agent.tool(Add, ({ a, b }) => Effect.as(Ref.update(calls, (n) => n + 1), a + b))],
+        loop: AgentLoop.bounded(3)
+      })
+      const script = [
+        { toolCalls: [{ id: "c1", name: "add", params: { a: 1, b: 2 }, paramChunks: ['{"a":1', ',"b":2}'] }] },
+        { text: "3" }
+      ]
+      const run = (stream: boolean) =>
+        Effect.gen(function* () {
+          const { layer } = yield* TestLanguageModel.script(script)
+          return yield* Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* AgentSession.make(agent)
+              const probe = yield* AgentProbe.make(session)
+              yield* session.prompt("add them", { stream })
+              return { history: yield* session.history, events: yield* probe.events }
+            })
+          ).pipe(Effect.provide(layer))
+        })
+      const streamed = yield* run(true)
+      const batched = yield* run(false)
+
+      const fragments = fragmentsOf(streamed.events)
+      assert.deepStrictEqual(fragments, [
+        { _tag: "ToolCallDelta", id: "c1", name: "add", delta: '{"a":1' },
+        { _tag: "ToolCallDelta", id: "c1", name: "add", delta: ',"b":2}' }
+      ])
+      // Concatenated, the fragments are the arguments the call was made with.
+      const started = streamed.events.filter(AgentEvent.is("ToolCallStarted"))
+      assert.strictEqual(started.length, 1)
+      assert.deepStrictEqual(started[0]!.event.params, JSON.parse(fragments.map((f) => f.delta).join("")))
+      // Every fragment precedes the call it belongs to, and lives inside the message.
+      const tags = streamed.events.map((e) => e.event._tag)
+      const lastFragment = tags.lastIndexOf("ToolCallDelta")
+      assert.isBelow(lastFragment, tags.indexOf("ToolCallStarted"))
+      assert.isAbove(lastFragment, tags.indexOf("MessageStarted"))
+      assert.isBelow(lastFragment, tags.indexOf("MessageStreamCompleted"))
+      // Nothing was executed on a fragment: two runs, two calls in total.
+      assert.strictEqual(yield* Ref.get(calls), 2)
+      // The fragments are not in the batched run, and neither history has them.
+      assert.deepStrictEqual(fragmentsOf(batched.events), [])
+      assert.deepStrictEqual(streamed.history, batched.history)
+    })
+  )
+
+  it.effect("a message that fails after fragments leaves no call, no execution and no history", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const agent = Agent.make({
+        tools: [Agent.tool(Add, ({ a, b }) => Effect.as(Ref.update(calls, (n) => n + 1), a + b))]
+      })
+      const { layer } = yield* TestLanguageModel.script([
+        {
+          toolCalls: [{ id: "c1", name: "add", params: { a: 1, b: 2 }, paramChunks: ['{"a":1'], abandon: true }],
+          streamError: "provider died mid-arguments"
+        }
+      ])
+      const { exit, events, history } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          const probe = yield* AgentProbe.make(session)
+          const exit = yield* Effect.exit(session.prompt("add them", { stream: true }))
+          return { exit, events: yield* probe.events, history: yield* session.history }
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.isTrue(Exit.isFailure(exit))
+      const tags = events.map((e) => e.event._tag)
+      // The fragment was observed; the message's terminal is what closes it.
+      assert.deepStrictEqual(fragmentsOf(events), [{ _tag: "ToolCallDelta", id: "c1", name: "add", delta: '{"a":1' }])
+      assert.include(tags, "MessageFailed")
+      assert.notInclude(tags, "ToolCallStarted")
+      assert.isBelow(tags.lastIndexOf("ToolCallDelta"), tags.indexOf("MessageFailed"))
+      assert.strictEqual(yield* Ref.get(calls), 0)
+      // Canonical history has nothing of the abandoned call.
+      assert.notInclude(JSON.stringify(history), '"add"')
+    })
+  )
+
+  it.effect("crosses the wire with and without a name", () =>
+    Effect.gen(function* () {
+      const events: ReadonlyArray<AgentEvent.AgentEvent> = [
+        { _tag: "ToolCallDelta", id: "c1", name: "add", delta: "{" },
+        { _tag: "ToolCallDelta", id: "c1", delta: "{" }
+      ]
+      for (const event of events) {
+        const encoded = yield* Schema.encodeEffect(AgentEvent.AgentEvent)(event)
+        const decoded = yield* Schema.decodeUnknownEffect(AgentEvent.AgentEvent)(JSON.parse(JSON.stringify(encoded)))
+        assert.deepStrictEqual(decoded, event)
+      }
+    })
+  )
+})
