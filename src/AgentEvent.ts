@@ -356,8 +356,13 @@ export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
 export const DelegatedEvent = Schema.TaggedStruct("DelegatedEvent", {
   tool: Schema.String,
   toolCallId: Schema.String,
+  // Through the JSON codec, not the envelope schema itself: an event's
+  // encoded form must be JSON, because the journal and the HTTP transport
+  // serialise envelopes with `Schema.toCodecJson` and check that the `event`
+  // field is one. The envelope's own encoding keeps its `Option`s as objects,
+  // which a nested envelope would leak into the outer event.
   envelope: Schema.suspend(
-    (): Schema.Codec<AgentEventEnvelope, AgentEventEnvelopeEncoded> => AgentEventEnvelope
+    (): Schema.Codec<AgentEventEnvelope, Schema.Json> => AgentEventEnvelopeJson
   )
 })
 /**
@@ -672,6 +677,13 @@ export interface AgentEventEnvelopeEncoded {
   readonly sequence: number
   readonly event: unknown
 }
+
+/**
+ * The envelope's JSON codec: ids as strings, options as `{ _tag, value? }`,
+ * the event as it arrived. What the journal and the HTTP transport use, and
+ * how an envelope is nested inside a `DelegatedEvent`.
+ */
+export const AgentEventEnvelopeJson = Schema.toCodecJson(AgentEventEnvelope)
 
 /**
  * Exhaustively handle an event by tag.

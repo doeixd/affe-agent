@@ -212,6 +212,38 @@ describe("a child's events on the parent's stream", () => {
     }
   })
 
+  it.effect("survives the JSON codec the journal and the HTTP transport use", () =>
+    Effect.gen(function* () {
+      // `DeliveryLog` and `AgentHttp` serialise envelopes with
+      // `Schema.toCodecJson`; a recursive schema with `Option`s two levels
+      // down has to come back identical through JSON text.
+      const json = Schema.toCodecJson(AgentEvent.AgentEventEnvelope)
+      const envelope: AgentEvent.AgentEventEnvelope = {
+        sessionId: AgentEvent.SessionId.make("parent"),
+        submissionId: Option.some(AgentEvent.SubmissionId.make("parent:submission-1")),
+        runId: Option.none(),
+        turn: Option.some(2),
+        sequence: 9,
+        event: {
+          _tag: "DelegatedEvent",
+          tool: "research",
+          toolCallId: "r1",
+          envelope: {
+            sessionId: AgentEvent.SessionId.make("child"),
+            submissionId: Option.some(AgentEvent.SubmissionId.make("child:submission-1")),
+            runId: Option.some(AgentEvent.RunId.make("child:submission-1:run-1")),
+            turn: Option.some(1),
+            sequence: 3,
+            event: { _tag: "ToolCallSucceeded", id: "t1", name: "when", result: "x", encodedResult: "x" }
+          }
+        }
+      }
+      const text = JSON.stringify(yield* Schema.encodeEffect(json)(envelope))
+      const decoded = yield* Schema.decodeUnknownEffect(json)(JSON.parse(text))
+      assert.deepStrictEqual(decoded, envelope)
+    })
+  )
+
   it.effect("crosses the wire, an unknown inner tag included", () =>
     Effect.gen(function* () {
       const childEnvelope: AgentEvent.AgentEventEnvelope = {
@@ -242,7 +274,15 @@ describe("a child's events on the parent's stream", () => {
           _tag: "DelegatedEvent",
           tool: "research",
           toolCallId: "r1",
-          envelope: { ...childEnvelope, event: { _tag: "SomethingNewer", a: 1 } }
+          // The nested envelope travels as JSON, so its options do too.
+          envelope: {
+            sessionId: "child",
+            submissionId: { _tag: "Some", value: "child:submission-1" },
+            runId: { _tag: "None" },
+            turn: { _tag: "Some", value: 1 },
+            sequence: 3,
+            event: { _tag: "SomethingNewer", a: 1 }
+          }
         }
       }
       const tolerant = yield* Schema.decodeUnknownEffect(AgentEvent.AgentEventEnvelope)(newer)

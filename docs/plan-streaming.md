@@ -160,7 +160,11 @@ inner tag as `UnknownEvent`; the projection reaching inside. Broken once by
 dropping the harness provision and once by dropping the projection's
 recursion; both bit. The one identifier added, `internal/ParentEvents`, is in
 the namespace manifest; the trailer records that nothing on the wire changed
-for a caller who does not opt in.
+for a caller who does not opt in. *Found in review:* the nested envelope must
+be encoded through the JSON codec, not the envelope schema, or its `Option`s
+leak as objects into the outer event and the journal's and transport's
+`Schema.toCodecJson` refuse the whole envelope; a row now sends a wrapped
+envelope through that codec as text.
 
 ### P4 -- retention, measured before bounded (item 70)
 
