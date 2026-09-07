@@ -21,6 +21,8 @@ describe("public API", () => {
       // it changes an agent's *type* -- `Result.value` is `Option<never>`
       // without one -- which no helper on another module could express.
       "AgentOutput",
+      // An observer that fell past its bound; see internal/observation.ts.
+      "AgentObservationLagError",
       "AgentRun",
       "AgentSession",
       "AgentSubmission",

@@ -11,6 +11,8 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentInput from "../AgentInput.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as AgentSession from "../AgentSession.js"
+import * as Observation from "../internal/observation.js"
+import { AgentObservationLagError } from "../Errors.js"
 import type * as Elicitation from "../Elicitation.js"
 import { SubmissionId } from "../internal/ids.js"
 import {
@@ -186,6 +188,7 @@ export type RemoteError =
   | AgentSessionNotFoundError
   | AgentExecutionError
   | AgentTransportError
+  | AgentObservationLagError
   | AgentSessionAlreadyExistsError
   | AgentRequestConflictError
   | AgentRequestCapacityExceededError
@@ -513,6 +516,13 @@ export const fromSession = <Value, Input>(
     /** How many submissions' outcomes this session keeps. */
     readonly maxRetainedSubmissions: number
     /**
+     * How far an observer of `events` or `stream` may fall behind before its
+     * stream is ended with `AgentObservationLagError`. Defaults: 2048
+     * envelopes, 8 MiB of wire JSON. A bound on the observation, never on
+     * execution; see `internal/observation.ts`.
+     */
+    readonly maxObservationLag?: Observation.LagOptions | undefined
+    /**
      * The agent's declared output, when it has one.
      *
      * Passed in rather than read off the session, because a session does not
@@ -522,6 +532,7 @@ export const fromSession = <Value, Input>(
     readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
   }
 ): RemoteSession => {
+  const bound = Observation.boundOf("AgentClient", options.maxObservationLag)
   const capacity = positiveInteger(
     "AgentClient maxRetainedSubmissions",
     options.maxRetainedSubmissions
@@ -714,11 +725,13 @@ export const fromSession = <Value, Input>(
     status: session.status,
     stream: (raw, streamOptions) =>
       Stream.unwrap(
-        // The bus subscription first, then the submission through this
-        // handle's own `submit`, so the outcome is retained and
+        // The bus subscription first -- bounded -- then the submission
+        // through this handle's own `submit`, so the outcome is retained and
         // `awaitSubmission` can end the stream free.
-        Effect.map(AgentSession.subscribe(session), (subscription) =>
-          streamFrom(remoteSession, Stream.fromSubscription(subscription), raw, streamOptions))
+        Effect.map(
+          AgentSession.subscribeEvents(session, { ...bound, sessionId }),
+          (subscribed) => streamFrom(remoteSession, subscribed, raw, streamOptions)
+        )
       ),
     /**
      * Live only, and explicit about it.
@@ -732,7 +745,7 @@ export const fromSession = <Value, Input>(
      */
     events: (eventOptions) =>
       eventOptions?.after === undefined
-        ? session.events
+        ? Stream.unwrap(AgentSession.subscribeEvents(session, { ...bound, sessionId }))
         : Stream.fail(
           new AgentTransportError({
             sessionId: session.id,
@@ -744,8 +757,8 @@ export const fromSession = <Value, Input>(
   return remoteSession
 }
 
-/** Re-exported so the protocol modules can name it beside the other client errors. */
-export { AgentSubmissionNotFoundError }
+/** Re-exported so the protocol modules can name them beside the other client errors. */
+export { AgentObservationLagError, AgentSubmissionNotFoundError }
 
 /** Outcomes a session keeps by default; see `layer`. */
 const defaultRetainedSubmissions = 64
@@ -774,6 +787,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
      * `docs/plan-submit-await.md`.
      */
     readonly maxRetainedSubmissions?: number | undefined
+    /** See `fromSession`. */
+    readonly maxObservationLag?: Observation.LagOptions | undefined
   }
 ): Layer.Layer<AgentClient, never, Model | R> =>
   Layer.effect(
@@ -784,7 +799,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
 
       const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
-          const { maxRetainedSubmissions, ...sessionMake } = options ?? {}
+          const { maxObservationLag, maxRetainedSubmissions, ...sessionMake } = options ?? {}
           const session = yield* AgentSession.make(agent, {
             ...sessionMake,
             ...(sessionOptions?.sessionId === undefined
@@ -795,7 +810,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
           const remote = fromSession(session, {
             output: agent.output,
             scope: yield* Effect.scope,
-            maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions
+            maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions,
+            ...(maxObservationLag === undefined ? {} : { maxObservationLag })
           })
           yield* Ref.update(open, (all) => new Map(all).set(remote.id, remote))
           // Forgotten when the caller's scope closes, so a client does not

@@ -2070,3 +2070,22 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "outcome matrix" src/testing/AgentClientConformance.ts
     verify: grep "export const reraise" src/durable/DurableModel.ts
     ```
+
+75. ~~**Bounded remote observation, by bytes and count.**~~ **DONE
+    2026-09-07** -- `plan-streaming-followups.md` §4. In-process the bus
+    enforces the bound at publish: a watched subscription's exact backlog
+    and its wire bytes are read after every publish, and one past
+    `maxObservationLag` (default 2048 / 8 MiB) has its own scope closed by
+    the publisher, freeing the backlog at once; the consumer's next pull
+    fails with `AgentObservationLagError` naming the last sequence it was
+    handed. A delivery log gets the pumped form (`Observation.bounded`).
+    Execution never waits on an observer, and delivery stays the consumer's
+    own pull. Two designs were rejected on the way and are recorded in
+    `internal/observation.ts`. Three rows in `test/ObservationBound.test.ts`;
+    broken once by disabling the check. `AgentObservationLagError` joins the
+    error union and the tags manifest.
+
+    ```text
+    verify: grep "maxObservationLag" src/client/AgentClient.ts
+    verify: grep "AgentObservationLagError" test/fixtures/error-tags-manifest.json
+    ```

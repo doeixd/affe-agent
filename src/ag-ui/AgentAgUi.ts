@@ -1018,6 +1018,7 @@ const errorStatus = (error: Error): number => {
     case "AgentExecutionError":
       return 422
     case "AgentTransportError":
+    case "AgentObservationLagError":
       return 503
     case "AgentProtocolCodecError":
       return 500

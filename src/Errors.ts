@@ -205,3 +205,31 @@ export class AgentSubmissionNotFoundError extends Schema.TaggedError<AgentSubmis
     return `Session ${this.sessionId} holds no submission ${this.submissionId}`
   }
 }
+
+/**
+ * An observer fell too far behind, and its stream was ended rather than
+ * letting it retain the session's events without bound.
+ *
+ * An *observation* failure, not the submission's: the run it was watching
+ * is unaffected and so is the journal. `lastDelivered` is the last sequence
+ * the stream handed out before it ended -- an upper bound on what the peer
+ * parsed -- and a consumer resumes with `events({ after })` from the last
+ * sequence it actually saw, where a delivery log stands behind the session.
+ * Retrying the observation is right; resubmitting is not.
+ */
+export class AgentObservationLagError extends Schema.TaggedError<AgentObservationLagError>()(
+  "AgentObservationLagError",
+  {
+    sessionId: Schema.String,
+    lastDelivered: Schema.Number,
+    retainedEnvelopes: Schema.Number,
+    retainedBytes: Schema.Number,
+    maxEnvelopes: Schema.Number,
+    maxBytes: Schema.Number
+  }
+) {
+  override get message() {
+    return `Observer of session ${this.sessionId} fell behind: ${this.retainedEnvelopes} envelopes / ${this.retainedBytes} bytes retained ` +
+      `(bound ${this.maxEnvelopes} / ${this.maxBytes}); last delivered sequence ${this.lastDelivered}`
+  }
+}

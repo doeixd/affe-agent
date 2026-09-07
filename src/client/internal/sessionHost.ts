@@ -354,6 +354,7 @@ export const make = <Principal>(
       options.maxRetainedEvents ?? 256
     )
 
+
     /**
      * Host a session: start keeping its event tail in its own scope.
      *
@@ -1290,6 +1291,9 @@ export const make = <Principal>(
       // Passed through rather than interpreted: whether this session can be
       // resumed is the client's question, and only the client knows whether a
       // log stands behind it.
+      // Passed through: the bound on how far an observer may lag is the
+      // client's, because only the seam that takes the subscription can keep
+      // "subscribed before the next publish" while bounding it.
       return hosted.session.events(
         request.after === undefined ? undefined : { after: request.after }
       )

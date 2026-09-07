@@ -16,6 +16,7 @@
   "AgentMcpElicitationUnsupportedError",
   "AgentMcpTicketNotFoundError",
   "AgentMcpToolFailure",
+  "AgentObservationLagError",
   "AgentProtocolCodecError",
   "AgentRequestCapacityExceededError",
   "AgentRequestConflictError",

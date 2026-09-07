@@ -102,9 +102,11 @@ const CapacityErrors = Schema.Union([
 const ExecutionError = AgentClient.AgentExecutionError.pipe(
   HttpApiSchema.status(422)
 )
-const TransportError = AgentClient.AgentTransportError.pipe(
-  HttpApiSchema.status(503)
-)
+const TransportError = Schema.Union([
+  AgentClient.AgentTransportError,
+  // Retry the observation, so the transport's status.
+  AgentClient.AgentObservationLagError
+]).pipe(HttpApiSchema.status(503))
 const HttpErrors = [
   BadRequestErrors,
   UnauthorizedError,
@@ -316,6 +318,7 @@ const ClientFailure = Schema.Union([
   AgentClient.AgentSessionNotFoundError,
   AgentClient.AgentExecutionError,
   AgentClient.AgentTransportError,
+  AgentClient.AgentObservationLagError,
   AgentProtocol.AgentSessionAlreadyExistsError,
   AgentProtocol.AgentRequestConflictError,
   AgentProtocol.AgentRequestCapacityExceededError,
@@ -600,6 +603,7 @@ export const errorStatus = (error: AgentProtocol.RemoteError): number => {
     case "AgentExecutionError":
       return 422
     case "AgentTransportError":
+    case "AgentObservationLagError":
       return 503
   }
 }

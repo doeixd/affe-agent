@@ -140,6 +140,7 @@ export const RemoteError = Schema.Union([
   AgentClosedError,
   AgentClient.AgentExecutionError,
   AgentClient.AgentTransportError,
+  AgentClient.AgentObservationLagError,
   AgentSessionNotFoundError,
   AgentSessionAlreadyExistsError,
   AgentRequestConflictError,

@@ -16,6 +16,7 @@ import * as Agent from "../Agent.js"
 import * as AgentInput from "../AgentInput.js"
 import * as AgentSessionEngine from "../AgentSession.js"
 import * as AgentClient from "../client/AgentClient.js"
+import * as Observation from "../internal/observation.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import * as DeliveryLog from "../durable/DeliveryLog.js"
 import * as AgentHttp from "../http/AgentHttp.js"
@@ -96,6 +97,8 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
   readonly maxSessions?: number | undefined
   readonly maxRequestsPerSession?: number | undefined
   readonly maxRetainedSubmissions?: number | undefined
+  /** See `AgentClient.fromSession`: how far an observer of a session may lag. */
+  readonly maxObservationLag?: Observation.LagOptions | undefined
   /** How long a failed dispatched run waits before the alarm retries it. Default 30 seconds. */
   readonly retryFailedAfter?: Duration.Input | undefined
   /**
@@ -208,6 +211,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
   agent: Agent.AgentDefinition<Tools, E, R>,
   options: {
     readonly maxRetainedSubmissions: number
+    readonly maxObservationLag?: Observation.LagOptions | undefined
     readonly layer: Options<Tools, E, R>["layer"]
   }
 ) =>
@@ -361,7 +365,11 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
           ).pipe(Effect.catchCause(() => Effect.void)),
           scope
         )
-        const remote = AgentClient.fromSession(session, { scope, maxRetainedSubmissions: options.maxRetainedSubmissions })
+        const remote = AgentClient.fromSession(session, {
+          scope,
+          maxRetainedSubmissions: options.maxRetainedSubmissions,
+          ...(options.maxObservationLag === undefined ? {} : { maxObservationLag: options.maxObservationLag })
+        })
         const resumable: AgentClient.RemoteSession = {
           ...remote,
           events: (eventOptions) =>
@@ -462,7 +470,11 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
 
   const clientLayer = Layer.effect(
     AgentClient.AgentClient,
-    makeClient(options.agent, { maxRetainedSubmissions: options.maxRetainedSubmissions ?? 16, layer: options.layer })
+    makeClient(options.agent, {
+      maxRetainedSubmissions: options.maxRetainedSubmissions ?? 16,
+      ...(options.maxObservationLag === undefined ? {} : { maxObservationLag: options.maxObservationLag }),
+      layer: options.layer
+    })
   )
   const surfaceLayer = Layer.effect(
     Surface,

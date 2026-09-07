@@ -385,19 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-75. **Bounded remote observation, by bytes and count.** The hosted SSE
-    stream is the long-lived subscription P4 named. Bound the whole
-    retention chain at the transport seam -- queued bytes and envelopes,
-    serialised writes, oversized envelopes -- disconnect a lagging observer
-    with a recorded reason, never touch execution or the journal sink, and
-    resume only from a delivery log by the client's last parsed cursor.
-    Broken once by disabling overflow termination under a finite burst.
-    `plan-streaming-followups.md` §4. Medium.
-
-    ```text
-    verify: no-grep "maxLag" src/client/internal/sessionHost.ts
-    ```
-
 76. **The two orderings, proved.** Subscribe-before-submit in-process and in
     the durable client survived being broken. Gate the subscription's
     registration and force the earliest legal publication, without changing

@@ -58,6 +58,30 @@ naming the last sequence it received, and resumes from the journal with
 JSON; disconnecting is the honest bound. The sink (journal) is unaffected.
 Medium; measure again after.
 
+*Done 2026-09-07, as the reviewer reshaped it, in three attempts.* The bound
+is `maxObservationLag` on `AgentClient.layer`, `fromSession`,
+`DurableAgentClient` and the Cloudflare host (defaults 2048 envelopes /
+8 MiB of wire JSON); past it the stream fails with
+`AgentObservationLagError { lastDelivered, retained, bounds }` and the
+subscription is released. In-process it is enforced **by the publisher**:
+`EventBus.subscribeEvents` with a bound registers a watcher, and after each
+publish the bus reads every watched subscription's exact backlog, charges
+the envelope's wire size once, and closes a lagging subscription's own
+scope from its side, so the backlog is freed at once and the consumer's next
+pull finds the failure. For a delivery log, `Observation.bounded` pumps the
+log's established subscription into a counted queue. The two rejected
+designs are recorded in `internal/observation.ts`: a pump around the host's
+stream moved the subscription one fibre hop later than `events` promised
+and the A2A elicitation listener missed its request (four rows caught it);
+a per-pull race against a kill signal made the host's own record read one
+hop stale (two rows caught it). The host passes the failure through, the
+SSE failure frame carries it, status 503 where a status is needed. Rows:
+the envelope bound ends a stalled observer by the publish that took it past
+the bound while the run completes and the record resumes after
+`lastDelivered`; the byte bound ends it before the envelope bound would;
+the default bound does not end an ordinary consumer and the record holds
+the run. Broken once by disabling the check: both bound rows time out.
+
 ## 5. `DelegatedEvent` cost the envelope its inferred types
 
 Nesting an envelope made the schema recursive, so `AgentEventEnvelope` and

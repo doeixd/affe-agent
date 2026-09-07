@@ -23,9 +23,10 @@ import * as AgentInput from "./AgentInput.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
 import * as PromptWire from "./PromptWire.js"
-import { AgentBusyError, AgentClosedError, AgentIdleError, AgentSubmissionNotFoundError } from "./Errors.js"
+import { AgentBusyError, AgentClosedError, AgentIdleError, AgentObservationLagError, AgentSubmissionNotFoundError } from "./Errors.js"
 import type * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
+import type * as Observation from "./internal/observation.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
 import type { SubmissionId } from "./internal/ids.js"
@@ -1333,3 +1334,23 @@ export const subscribe = (
   session: AgentSession<any, any, any, any>
 ): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>
   PubSub.subscribe(unwrap(session).bus.pubsub)
+
+/**
+ * `events`, established on return; see `EventBus.subscribeEvents`. Not on
+ * the public namespace: it exists for the client's bounded observation.
+ */
+export function subscribeEvents(
+  session: AgentSession<any, any, any, any>
+): Effect.Effect<Stream.Stream<AgentEventEnvelope>, never, Scope.Scope>
+export function subscribeEvents(
+  session: AgentSession<any, any, any, any>,
+  bound: Observation.Bound & { readonly sessionId: string }
+): Effect.Effect<Stream.Stream<AgentEventEnvelope, AgentObservationLagError>, never, Scope.Scope>
+export function subscribeEvents(
+  session: AgentSession<any, any, any, any>,
+  bound?: (Observation.Bound & { readonly sessionId: string }) | undefined
+): Effect.Effect<Stream.Stream<AgentEventEnvelope, AgentObservationLagError>, never, Scope.Scope> {
+  return bound === undefined
+    ? EventBus.subscribeEvents(unwrap(session).bus)
+    : EventBus.subscribeEvents(unwrap(session).bus, bound)
+}

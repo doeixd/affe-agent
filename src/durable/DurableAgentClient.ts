@@ -9,6 +9,7 @@ import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentPrincipal } from "../Principal.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
+import * as Observation from "../internal/observation.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
 import { AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
 import * as History from "../internal/history.js"
@@ -126,6 +127,8 @@ export interface Options {
    * pretends to work is worse than one that is honestly absent.
    */
   readonly delivery?: DeliveryLog.DeliveryLog | undefined
+  /** See `AgentClient.fromSession`: how far an observer may lag before its stream is ended. */
+  readonly maxObservationLag?: Observation.LagOptions | undefined
   /** How often `prompt` polls for its outcome. Default: 10ms. */
   readonly pollInterval?: Duration.Duration | undefined
   /** How often a workflow checks for an interrupt intent. Default: 25ms. */
@@ -191,6 +194,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
    * told, and journalled encoded; a prompt passes through for an agent
    * without an input.
    */
+  const observationBound = Observation.boundOf("DurableAgentClient", options.maxObservationLag)
+
   const boundary = (operation: "prompt" | "submit", input: AgentClient.RemoteInput) =>
     InputBoundary.admit(agent, operation, input)
 
@@ -570,6 +575,18 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
         }
       })
 
+    /** The delivery log's subscription, established on return, transport-typed and bounded. */
+    const bounded = (delivery: DeliveryLog.DeliveryLog) =>
+      Observation.bounded(
+        delivery.subscribe(sessionId).pipe(
+          Effect.mapError((error) => new AgentClient.AgentTransportError({ sessionId, detail: error.message })),
+          Effect.map((subscribed) =>
+            Stream.catchTag(subscribed, "StorageError", (error) =>
+              Stream.fail(new AgentClient.AgentTransportError({ sessionId, detail: error.message }))))
+        ),
+        { ...observationBound, sessionId }
+      )
+
     const self: AgentClient.RemoteSession = {
     id: sessionId,
 
@@ -722,17 +739,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
       }
       return Stream.unwrap(
         Effect.map(
-          delivery.subscribe(sessionId).pipe(
-            Effect.mapError((error) => new AgentClient.AgentTransportError({ sessionId, detail: error.message }))
-          ),
-          (subscribed) =>
-            AgentClient.streamFrom(
-              self,
-              Stream.catchTag(subscribed, "StorageError", (error) =>
-                Stream.fail(new AgentClient.AgentTransportError({ sessionId, detail: error.message }))),
-              input,
-              streamOptions
-            )
+          bounded(delivery),
+          (subscribed) => AgentClient.streamFrom(self, subscribed, input, streamOptions)
         )
       )
     },
@@ -773,8 +781,9 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
             new AgentClient.AgentTransportError({ sessionId, detail: error.message })
           ))
 
-      const live = asTransport(delivery.live(sessionId))
-      if (eventOptions?.after === undefined) return live
+      // Live delivery is the established, bounded subscription too: `live`
+      // subscribed at first pull, and a bound needs to own the subscription.
+      if (eventOptions?.after === undefined) return Stream.unwrap(bounded(delivery))
 
       const after = eventOptions.after
       /**
@@ -808,12 +817,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
        */
       return Stream.unwrap(
         Effect.gen(function* () {
-          const continuing = asTransport(yield* delivery.subscribe(sessionId).pipe(
-            Effect.mapError(
-              (error) =>
-                new AgentClient.AgentTransportError({ sessionId, detail: error.message })
-            )
-          ))
+          const continuing = yield* bounded(delivery)
           const history = yield* delivery
             .read(sessionId, { after })
             .pipe(
