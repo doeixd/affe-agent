@@ -407,7 +407,10 @@ again. Feature expansion is frozen until these produce an observation.*
 71. **Streaming in the adapters.** A2A artifact updates with append and
     final-chunk semantics and stable artifact identity across abandoned
     attempts; MCP progress notifications only; `plan-streaming.md` P5. After
-    69. Medium.
+    69. Medium. Also AG-UI: it already has `TOOL_CALL_ARGS`, sent whole at
+    `ToolCallStarted`; mapping `ToolCallDelta` onto it means the first
+    fragment opens the call and the assembled call must not resend arguments
+    already streamed. Stateful, with recorded AG-UI rows.
 
     ```text
     verify: no-grep "artifact-update" src/a2a/AgentA2A.ts

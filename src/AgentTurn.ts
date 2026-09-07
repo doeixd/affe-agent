@@ -313,18 +313,16 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
               ...(next.toolCallDelta.name === undefined ? {} : { name: next.toolCallDelta.name }),
               delta: next.toolCallDelta.delta
             })
-        return next.delta === undefined
-          ? Effect.as(Effect.andThen(announced, fragment), next.state)
-          : announced.pipe(
-              Effect.andThen(
-                EventBus.emit(session.bus, correlation, {
-                  _tag: "MessageDelta",
-                  kind: next.delta.kind,
-                  delta: next.delta.delta
-                })
-              ),
-              Effect.as(next.state)
-            )
+        const output = next.delta === undefined
+          ? Effect.void
+          : EventBus.emit(session.bus, correlation, {
+              _tag: "MessageDelta",
+              kind: next.delta.kind,
+              delta: next.delta.delta
+            })
+        // One part yields at most one of these today; emitting whichever are
+        // present, in this order, does not depend on that staying true.
+        return announced.pipe(Effect.andThen(fragment), Effect.andThen(output), Effect.as(next.state))
       }
     )
 
