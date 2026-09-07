@@ -834,13 +834,6 @@ const executePerTool = <
   })
 
 /**
- * Execute every tool call of one model response.
- *
- * Under `FailRun` the first failure interrupts its siblings, which is ordinary
- * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
- * at all, so siblings always run to completion.
- */
-/**
  * Annotation: this tool must be the only call in its turn.
  *
  * For a tool whose result is a decision about the *next* turn -- the
@@ -890,6 +883,14 @@ const refuseNotAlone = <R>(
     return failureResultPart(call, error)
   })
 
+/**
+ * Execute every tool call of one model response.
+ *
+ * Under `FailRun` the first failure interrupts its siblings, which is ordinary
+ * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
+ * at all, so siblings always run to completion. A call annotated `Alone` that
+ * arrives with siblings is refused without running; see `Alone`.
+ */
 export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
@@ -924,10 +925,12 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
       dispatch(rest)
     ]),
     ([refusals, results]) => {
-      const byId = new Map<string, Response.AnyPart>()
-      refused.forEach((call, index) => byId.set(call.id, refusals[index]!))
-      rest.forEach((call, index) => byId.set(call.id, results[index]!))
-      return calls.map((call) => byId.get(call.id)!)
+      // By position. Keying on the call id would also be correct, because
+      // `AgentTurn` refuses a response whose calls share an id before any of
+      // them runs; this is merely the form that does not depend on that.
+      let refusal = 0
+      let result = 0
+      return calls.map((call) => mustBeAlone(handler, call) ? refusals[refusal++]! : results[result++]!)
     }
   )
 }

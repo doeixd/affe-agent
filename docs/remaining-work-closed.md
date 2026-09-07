@@ -2164,3 +2164,20 @@ review-streaming. ~~**The streaming series, reviewed as code.**~~ **DONE
     verify: grep "utf8Length" src/internal/observation.ts
     verify: grep "a transport failure in the wait" test/ObservationPump.test.ts
     ```
+
+review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
+    -- twelve commits of the last week whose change was not followed by a
+    review commit (60d-ii, 60l, the no-progress rollover, 60g-i, decision
+    2, item 27, decision 3, 60d-i, 48c, the durable layer's type, the
+    gateway mounts row, the retention measurement), read as diffs against
+    the review checklist. No defect. One doc comment for `execute` had been
+    orphaned above the `Alone` annotation and is reattached; the refusal's
+    result reassembly is now by position, which depends on nothing --
+    keying by id was also safe, since `AgentTurn` refuses a response whose
+    calls share an id, which a row written to catch the supposed misfiling
+    proved by hitting that refusal first. The four streaming-era commits in
+    the same set had their code read in the two review passes.
+
+    ```text
+    verify: grep "refuses a response whose calls share an id" src/ToolExecution.ts
+    ```
