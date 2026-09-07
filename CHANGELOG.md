@@ -14,6 +14,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a delegation whose child was interrupted now fails the parent's tool call with `SubagentInterruptedError` carrying the partial text, instead of succeeding with the partial text as the answer. (`dc2d6d6`; measured by `test/fixtures/namespace-manifest.json`)
 - none for a caller -- every error `_tag` keeps its value; the fixture records the bare set so a rename cannot pass unmeasured. (`3e3d1d0`; measured by `test/fixtures/error-tags-manifest.json`)
 - the Cloudflare host gains a dispatch-intent table `affe_dispatch` beside `affe_history`; existing tables keep their names and shapes. (`aa506e5`; measured by `test/fixtures/namespace-manifest.json`)
+- one identifier, `affe-agent/internal/ParentEvents`, joins the namespace manifest; it is a harness-provided reference and never crosses a wire. `DelegatedEvent` is a new event tag, additive under the tolerant decoder, emitted only for a child made with `Inherit.events: "parent"`; nothing changes on the wire for a caller who does not opt in. (`9a9c255`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
