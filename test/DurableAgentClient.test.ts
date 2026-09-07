@@ -28,6 +28,7 @@ import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import { Failpoint } from "../src/internal/failpoint.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 import * as Contract from "./AgentClientContract.js"
@@ -1657,3 +1658,48 @@ describe("D7 at the durable client", () => {
     })
   )
 })
+
+describe("subscribe before submit on the durable client, proved through a subscription gate", () => {
+  /**
+   * `plan-streaming-followups.md` §1, item 76. Swapping the durable
+   * client's subscribe and submit did not bite either: a workflow starts
+   * slowly enough that the log subscription still landed first. Holding
+   * `DurableAgentClient.failpoints`' gate for longer than a workflow takes
+   * to publish its first envelope makes the swapped order miss
+   * `SubmissionStarted`; in the right order the gate delays a subscription
+   * nothing is published to yet. Broken once by subscribing after the
+   * submission in `stream`: this row fails.
+   */
+  it.live("the stream's first envelope is SubmissionStarted even when registering the log subscription waits", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      const { layer: model } = yield* FakeModel.script([{ text: "done", chunks: ["do", "ne"] }])
+      const runtime = DurableAgentClient.layer("GatedAgent", Agent.make({ loop: AgentLoop.bounded(2) }), {
+        store,
+        sessionStore,
+        delivery
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+      const gated = ({
+        hit: (location: string) =>
+          location === DurableAgentClient.failpoints.qualified("before-subscribe")
+            ? Effect.sleep(Duration.millis(250))
+            : Effect.void
+      })
+      const tags = yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "gated" })
+            const envelopes = yield* Stream.runCollect(session.stream("go"))
+            return envelopes.map((e) => e.event._tag)
+          })
+        )
+      }).pipe(Effect.provideService(Failpoint, gated), Effect.provide(runtime))
+      assert.strictEqual(tags[0], "SubmissionStarted")
+      assert.strictEqual(tags[tags.length - 1], "SubmissionCompleted")
+    }), 20_000
+  )
+})
+

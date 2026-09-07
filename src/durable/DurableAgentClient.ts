@@ -9,6 +9,7 @@ import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentPrincipal } from "../Principal.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
+import * as Failpoint from "../internal/failpoint.js"
 import * as Observation from "../internal/observation.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
 import { AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
@@ -111,6 +112,13 @@ const awaitOutcome = (
     }),
     Effect.orDie
   )
+
+/**
+ * The one boundary a test may hold open: registration of the delivery log
+ * subscription a `stream` or `events` takes before submitting. See
+ * `EventBus.failpoints` for why a gate, not a crash.
+ */
+export const failpoints = Failpoint.group("DurableAgentClient", ["before-subscribe"])
 
 export interface Options {
   /**
@@ -578,7 +586,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
     /** The delivery log's subscription, established on return, transport-typed and bounded. */
     const bounded = (delivery: DeliveryLog.DeliveryLog) =>
       Observation.bounded(
-        delivery.subscribe(sessionId).pipe(
+        Effect.andThen(failpoints.hit("before-subscribe"), delivery.subscribe(sessionId)).pipe(
           Effect.mapError((error) => new AgentClient.AgentTransportError({ sessionId, detail: error.message })),
           Effect.map((subscribed) =>
             Stream.catchTag(subscribed, "StorageError", (error) =>

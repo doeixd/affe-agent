@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit, Option, PubSub, Ref, Scope, Semaphore, Stream } from "effect"
 import { AgentObservationLagError } from "../Errors.js"
+import * as Failpoint from "./failpoint.js"
 import * as Observation from "./observation.js"
 import type { AgentEvent, AgentEventEnvelope, Correlation } from "../AgentEvent.js"
 import type { SessionId } from "./ids.js"
@@ -97,6 +98,18 @@ export interface EventBus {
   /** The wire size of each published envelope, while a watcher may still hold it. */
   readonly sizes: WeakMap<AgentEventEnvelope, number>
 }
+
+/**
+ * The one boundary a test may hold open: registration of a subscription.
+ *
+ * Not a crash site. `plan-streaming-followups.md` §1: subscribe-before-submit
+ * is the property `stream` exists for, and it survived being broken because
+ * in-process scheduling publishes nothing before a receipt returns. A test
+ * that holds this gate while other fibres run makes the swapped order
+ * provably miss `SubmissionStarted`, without changing what admission
+ * publishes, which is the proof the reviewer asked for.
+ */
+export const failpoints = Failpoint.group("EventBus", ["before-subscribe"])
 
 export interface Watcher {
   readonly subscription: PubSub.Subscription<AgentEventEnvelope>
@@ -378,6 +391,7 @@ export function subscribeEvents(
     // and a pull in flight is cut.
     const release = yield* Scope.make()
     yield* Effect.addFinalizer((exit) => Scope.close(release, exit))
+    yield* failpoints.hit("before-subscribe")
     const subscription = yield* Scope.provide(PubSub.subscribe(bus.pubsub), release)
     const closed = yield* Ref.get(bus.closed)
     if (Option.isSome(closed)) return Stream.make(closed.value)

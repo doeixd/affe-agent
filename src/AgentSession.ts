@@ -1251,6 +1251,7 @@ export const stream = <
       const self = unwrap(session)
       // Subscribe first: the receipt names the submission, and its first
       // envelopes may already be on the bus by the time it returns.
+      yield* EventBus.failpoints.hit("before-subscribe")
       const subscription = yield* PubSub.subscribe(self.bus.pubsub)
       const closed = yield* Ref.get(self.bus.closed)
       if (Option.isSome(closed)) {

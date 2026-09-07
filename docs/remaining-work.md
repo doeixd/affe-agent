@@ -385,16 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-76. **The two orderings, proved.** Subscribe-before-submit in-process and in
-    the durable client survived being broken. Gate the subscription's
-    registration and force the earliest legal publication, without changing
-    admission's contract, so the swapped order provably misses
-    `SubmissionStarted`. `plan-streaming-followups.md` §1. Small.
-
-    ```text
-    verify: no-grep "subscription gate" test/Streaming.test.ts
-    ```
-
 77. **Stream lifecycle as contract rows.** Release after natural exhaustion
     while the enclosing scope lives, after `take(1)`, after consumer
     failure, after interruption during acquisition and after admission; the

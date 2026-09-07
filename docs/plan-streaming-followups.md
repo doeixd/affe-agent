@@ -21,6 +21,19 @@ subscribing after `submit` provably misses `SubmissionStarted`. Durable, a
 `DeliveryLog` decorator whose `subscribe` returns only after a gate, with
 the workflow started before it opens. Then the two breaks bite. Small.
 
+*Done 2026-09-07, as the reviewer reshaped it:* not a hook that publishes
+during admission, which would prove a contract the harness does not have,
+but a gate on the subscription's registration -- `EventBus.failpoints`
+`before-subscribe` and `DurableAgentClient.failpoints` `before-subscribe`,
+no-ops unless a test provides a `Failpoint` -- held while other fibres run.
+In the right order the gate delays a subscription nothing is published to
+yet; in the swapped order the run publishes through it. Two rows: the
+in-process gate yields thirty-two times, the durable gate sleeps a quarter
+second. Broken once each: swapping subscribe and submit in
+`AgentSession.stream` fails the first, subscribing after the submission in
+the durable client's `stream` fails the second. What was "by construction"
+in the P1 and item 72 ledger entries is now a row.
+
 ## 2. `RemoteSession` is wide, and `stream` is derivable
 
 `prompt`, `submit`, `awaitSubmission`, `events`, `stream`: every fake in the

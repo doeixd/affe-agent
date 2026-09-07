@@ -2089,3 +2089,19 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "maxObservationLag" src/client/AgentClient.ts
     verify: grep "AgentObservationLagError" test/fixtures/error-tags-manifest.json
     ```
+
+76. ~~**The two orderings, proved.**~~ **DONE 2026-09-07** --
+    `plan-streaming-followups.md` §1. A gate on the subscription's
+    registration, not a change to what admission publishes:
+    `EventBus.failpoints` and `DurableAgentClient.failpoints` each expose
+    `before-subscribe`, a no-op unless a test provides a `Failpoint`, which
+    the two rows hold open while other fibres run. In the right order a
+    subscription nothing is published to yet is merely delayed; in the
+    swapped order the run publishes through the gate and `SubmissionStarted`
+    is gone. Broken once each by swapping subscribe and submit; both bit.
+    The P1 and item 72 entries' "by construction" is now a row.
+
+    ```text
+    verify: grep "subscription gate" test/Streaming.test.ts
+    verify: grep "before-subscribe" src/internal/eventBus.ts
+    ```

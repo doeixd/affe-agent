@@ -5,6 +5,8 @@ import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as EventBus from "../src/internal/eventBus.js"
+import { Failpoint } from "../src/internal/failpoint.js"
 import { AgentBusyError } from "../src/Errors.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
@@ -513,3 +515,41 @@ describe("bus retention under a stalled subscriber", () => {
     })
   )
 })
+
+describe("subscribe before submit, proved through a subscription gate", () => {
+  /**
+   * `plan-streaming-followups.md` §1, item 76. Breaking the order did not
+   * bite: in-process scheduling publishes nothing before the receipt
+   * returns, so a subscription taken after `submit` still saw
+   * `SubmissionStarted`. This row holds the gate `EventBus.failpoints`
+   * exposes -- registration of the subscription yields to other fibres many
+   * times -- without changing what admission publishes. In the right order
+   * the gate delays a subscription nothing is being published to yet; in
+   * the swapped order the run publishes through the gate and the first
+   * envelope is gone. Broken once by swapping the two lines in
+   * `AgentSession.stream`: this row fails.
+   */
+  const gated = ({
+    hit: (location: string) =>
+      location === EventBus.failpoints.qualified("before-subscribe")
+        ? Effect.forEach(Array.from({ length: 32 }), () => Effect.yieldNow, { discard: true })
+        : Effect.void
+  })
+
+  it.effect("the stream's first envelope is SubmissionStarted even when registering the subscription yields many times", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script([{ text: "done", chunks: ["do", "ne"] }])
+      const tags = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          const envelopes = yield* Stream.runCollect(AgentSession.stream(session, "go"))
+          return envelopes.map((e) => e.event._tag)
+        })
+      ).pipe(Effect.provideService(Failpoint, gated), Effect.provide(layer))
+      assert.strictEqual(tags[0], "SubmissionStarted")
+      assert.strictEqual(tags[tags.length - 1], "SubmissionCompleted")
+      assert.include(tags, "MessageDelta")
+    })
+  )
+})
+
