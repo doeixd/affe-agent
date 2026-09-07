@@ -441,7 +441,7 @@ again. Feature expansion is frozen until these produce an observation.*
     partial output. `plan-streaming-followups.md` §7. Small.
 
     ```text
-    verify: no-grep "streaming:" src/a2a/AgentA2A.ts
+    verify: no-grep "readonly streamAnswers" src/a2a/AgentA2A.ts
     ```
 
 ### Known, deliberately left
