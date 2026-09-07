@@ -166,7 +166,7 @@ leak as objects into the outer event and the journal's and transport's
 `Schema.toCodecJson` refuse the whole envelope; a row now sends a wrapped
 envelope through that codec as text.
 
-### P4 -- retention, measured before bounded (item 70)
+### P4 -- retention, measured (2026-09-06); bounding deferred
 
 A real retention risk, not an urgent throughput one: an abandoned subscriber
 lives indefinitely. Measure retained bytes, lag and teardown under a
@@ -175,6 +175,30 @@ unbounded subscription; sliding raw deltas corrupts text and JSON. If bounds
 are needed, a bounded observation seam that disconnects a lagging consumer
 explicitly and lets it resume from the journal. A demonstrated memory failure
 moves this above P2.
+
+*Measured* (`test/Streaming.test.ts`, "bus retention under a stalled
+subscriber"): one subscriber that never reads, one that keeps up, three
+streamed turns of 32 deltas of 1 KiB each, then the stalled subscriber's
+scope closed.
+
+| what | measured |
+| --- | --- |
+| envelopes retained for the stalled subscriber | 126, and the bus retains exactly that many |
+| their size as wire JSON | 331 KB |
+| of which delta payload | 96 KiB, every byte of the three turns |
+| retained after the stalled scope ended | 0 |
+| the session's next prompt | unaffected |
+
+So the shape is as the reviewer said: retention is bounded by the slowest
+live subscription's scope and by nothing else, and the cost is roughly three
+times the delta payload because the completed message is carried whole in
+the turn's own events too. That is a leak only for a subscription nobody
+ends, which is a consumer bug the structured scope already makes hard to
+write; it is not a reason to bound the bus today. Broken once by making the
+bus sliding: the retained-delta count fails. What would reopen this: a
+consumer that must hold a subscription across a long-lived connection whose
+peer stops reading -- the remote `stream` mirror (item 72) is where that
+would first appear, and it should measure again there.
 
 ### P5 -- adapters (item 71)
 

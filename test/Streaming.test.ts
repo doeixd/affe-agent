@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, PubSub, Ref, Schema, Scope, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
@@ -449,6 +449,67 @@ describe("tool-call argument deltas", () => {
         const decoded = yield* Schema.decodeUnknownEffect(AgentEvent.AgentEvent)(JSON.parse(JSON.stringify(encoded)))
         assert.deepStrictEqual(decoded, event)
       }
+    })
+  )
+})
+
+describe("bus retention under a stalled subscriber", () => {
+  /**
+   * `plan-streaming.md` P4: measure before bounding. The bus is unbounded and
+   * every subscriber has its own queue, so a subscriber that stops reading
+   * retains every envelope published after it subscribed -- deltas included --
+   * for exactly as long as its scope lives, and not a moment longer. The row
+   * measures that and holds the teardown: once the stalled subscriber's scope
+   * ends, the bus retains nothing for it, and the session never noticed.
+   */
+  it.effect("retains every envelope for a stalled subscriber until its scope ends, then nothing", () =>
+    Effect.gen(function* () {
+      const chunk = "x".repeat(1024)
+      const chunks = Array.from({ length: 32 }, () => chunk)
+      const { layer } = yield* TestLanguageModel.script([
+        { text: chunks.join(""), chunks },
+        { text: chunks.join(""), chunks },
+        { text: chunks.join(""), chunks },
+        { text: "after" }
+      ])
+      const measured = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          // A live subscriber that keeps up, and a stalled one in a scope of
+          // its own that never reads.
+          const live = yield* AgentSession.subscribe(session)
+          const stalledScope = yield* Scope.make()
+          const stalled = yield* Scope.provide(AgentSession.subscribe(session), stalledScope)
+
+          for (let i = 0; i < 3; i++) {
+            yield* session.prompt(`turn ${i}`, { stream: true })
+            yield* PubSub.takeAll(live)
+          }
+          // Everything since it subscribed, still held for it alone: the live
+          // one has drained, so what the bus retains is what the stalled one owes.
+          const retained = yield* PubSub.remaining(stalled)
+          const retainedByBus = live.pubsub.size()
+          // Read them without releasing, to weigh them.
+          const held = yield* PubSub.takeAll(stalled)
+          const bytes = held.reduce((n, envelope) => n + JSON.stringify(AgentEvent.toWire(envelope)).length, 0)
+          const deltaBytes = deltasOf(held).reduce((n, delta) => n + delta.length, 0)
+
+          // Teardown: end the stalled scope; the bus retains nothing for it,
+          // and the session goes on.
+          yield* Scope.close(stalledScope, Exit.void)
+          const result = yield* session.prompt("go on")
+          yield* PubSub.takeAll(live)
+          const afterwards = live.pubsub.size()
+          return { retained, retainedByBus, bytes, deltaBytes, held: held.length, afterwards, text: result.text }
+        })
+      ).pipe(Effect.provide(layer))
+
+      assert.strictEqual(measured.retained, measured.held)
+      assert.strictEqual(measured.retainedByBus, measured.retained, "the bus retains exactly what the stalled subscriber owes")
+      assert.strictEqual(measured.deltaBytes, 3 * 32 * 1024, "every delta of three streamed turns was retained")
+      assert.isAbove(measured.bytes, measured.deltaBytes)
+      assert.strictEqual(measured.afterwards, 0, "nothing is retained once the stalled scope has ended")
+      assert.strictEqual(measured.text, "after")
     })
   )
 })

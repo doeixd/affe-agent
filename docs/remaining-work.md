@@ -385,15 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-70. **Bus retention, measured before bounded.** An abandoned subscriber of the
-    unbounded bus lives indefinitely. Measure retained bytes and teardown under
-    a deliberately stalled subscriber before deciding on a bounded observation
-    seam; `plan-streaming.md` P4. Small to measure.
-
-    ```text
-    verify: no-grep "stalled subscriber" test/Streaming.test.ts
-    ```
-
 71. **Streaming in the adapters.** A2A artifact updates with append and
     final-chunk semantics and stable artifact identity across abandoned
     attempts; MCP progress notifications only; `plan-streaming.md` P5.

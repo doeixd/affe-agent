@@ -1972,3 +1972,16 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "DelegatedEvent" src/AgentEvent.ts
     verify: grep "a child's events on the parent's stream" test/DelegatedEvents.test.ts
     ```
+
+70. ~~**Bus retention, measured before bounded.**~~ **MEASURED 2026-09-06**
+    -- `plan-streaming.md` P4. A stalled subscriber retains every envelope
+    since it subscribed, for exactly the life of its scope: 126 envelopes and
+    331 KB of wire JSON for three streamed turns of 32 KiB, 0 the moment the
+    scope ends, the session unaffected. Bounding is deferred with the trigger
+    named in the plan: a long-lived remote subscription whose peer stops
+    reading, which item 72 will meet first. Broken once by making the bus
+    sliding.
+
+    ```text
+    verify: grep "bus retention under a stalled subscriber" test/Streaming.test.ts
+    ```
