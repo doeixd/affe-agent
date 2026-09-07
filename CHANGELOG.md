@@ -13,6 +13,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - none for a caller -- every tag, table default and key prefix keeps its exact value; the fixture records them so a later change cannot pass unmeasured. (`fb22c34`; measured by `test/fixtures/namespace-manifest.json`)
 - a delegation whose child was interrupted now fails the parent's tool call with `SubagentInterruptedError` carrying the partial text, instead of succeeding with the partial text as the answer. (`dc2d6d6`; measured by `test/fixtures/namespace-manifest.json`)
 - none for a caller -- every error `_tag` keeps its value; the fixture records the bare set so a rename cannot pass unmeasured. (`3e3d1d0`; measured by `test/fixtures/error-tags-manifest.json`)
+- the Cloudflare host gains a dispatch-intent table `affe_dispatch` beside `affe_history`; existing tables keep their names and shapes. (`aa506e5`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
