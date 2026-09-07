@@ -68,6 +68,22 @@ export interface Turn {
    */
   readonly chunks?: ReadonlyArray<string>
   /**
+   * Streaming only: after this many stream parts, interrupt from inside the
+   * stream, as a provider adapter that cancels itself would. Distinct from
+   * `streamError` (a failure the stream carries) and from `hang`: the cause
+   * reaching the caller is an interruption, which is what an activity's
+   * retry-on-interrupt looks for.
+   */
+  readonly interruptAfterParts?: number
+  /**
+   * Streaming only: after this many stream parts, fail the stream itself
+   * with a typed provider error -- the stream's own error channel, which is
+   * what an execution plan's retry and fallback act on. `streamError` is
+   * different: that is an error *part*, folded into a failure downstream of
+   * any plan.
+   */
+  readonly failAfterParts?: string
+  /**
    * Report a failure *inside* the stream rather than by failing it.
    *
    * A real provider can do this, and it is a distinct case: the stream is
@@ -293,6 +309,20 @@ export const make = (turns: ReadonlyArray<Turn>) =>
           Effect.map(nextTurn(options), (turn) =>
             turn === undefined
               ? Stream.fromIterable<Response.StreamPartEncoded>([finishPart()])
+              : turn.interruptAfterParts !== undefined
+              ? Stream.concat(
+                Stream.take(Stream.fromIterable(streamPartsFor(turn)), turn.interruptAfterParts),
+                Stream.drain(Stream.fromEffect(Effect.interrupt))
+              )
+              : turn.failAfterParts !== undefined
+              ? Stream.concat(
+                Stream.take(Stream.fromIterable(streamPartsFor(turn)), 2),
+                Stream.fail(AiError.make({
+                  module: "TestLanguageModel",
+                  method: "streamText",
+                  reason: new AiError.InternalProviderError({ description: turn.failAfterParts })
+                }))
+              )
               : Stream.fromIterable(streamPartsFor(turn))
           )
         )

@@ -1755,3 +1755,62 @@ describe("bounded observation on the durable client", () => {
   )
 })
 
+describe("a live durable stream is never re-run into the same fold", () => {
+  /**
+   * `Activity.make` retries an `execute` interrupted from inside, up to ten
+   * times, then reports the interrupt as a defect. For the live streaming
+   * path each attempt tapped its parts into the same harness fold, so an
+   * observer saw the abandoned attempt's text and then the replacement's in
+   * one message, while the journal kept only the last. The second reviewer's
+   * reproduction. `DurableModel` now gives a tapped stream no in-place
+   * retries: the message closes as failed, the outcome is recorded as a
+   * defect, and no later attempt shares its message. Broken once by
+   * restoring the default policy: one message holds both texts.
+   */
+  it.live("an attempt interrupted after a part closes its message as failed; no message carries two attempts' text", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      // The first stream emits its part and interrupts from inside; a retry
+      // would consume the second turn, whose text would then share the
+      // message.
+      const { layer: model } = yield* FakeModel.script([
+        { text: "old", chunks: ["old"], interruptAfterParts: 2 },
+        { text: "new", chunks: ["new"] }
+      ])
+      const runtime = DurableAgentClient.layer("RetriedStreamAgent", Agent.make({ loop: AgentLoop.bounded(2) }), {
+        store,
+        sessionStore,
+        delivery
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+
+      const envelopes = yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "retried-stream" })
+            const collected = yield* Effect.forkChild(
+              Stream.runCollect(Stream.takeUntil(session.events(), (e) => e.event._tag.startsWith("Submission") && e.event._tag !== "SubmissionStarted"))
+            )
+            yield* Effect.yieldNow
+            yield* Effect.exit(session.prompt("go", { stream: true }))
+            return yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(10)), Effect.orDie)
+          })
+        )
+      }).pipe(Effect.provide(runtime))
+
+      // Group deltas by message: each MessageStarted opens a new group.
+      const messages: Array<Array<string>> = []
+      for (const envelope of envelopes) {
+        if (envelope.event._tag === "MessageStarted") messages.push([])
+        if (envelope.event._tag === "MessageDelta") messages[messages.length - 1]?.push(envelope.event.delta)
+      }
+      assert.deepStrictEqual(messages, [["old"]], `a later attempt shared the message, or ran at all: ${JSON.stringify(messages)}`)
+      const tags = envelopes.map((e) => e.event._tag)
+      assert.include(tags, "MessageFailed")
+      assert.strictEqual(tags[tags.length - 1], "SubmissionFailed")
+    }), 20_000
+  )
+})
+

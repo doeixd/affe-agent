@@ -222,6 +222,53 @@ were checked and found sound. Its "cannot tell" verdicts -- reraise wiring
 on replay, `preventFallbackOnPartialStream`, `toWire`, the A2A completion
 path -- name code that was not inlined, not code it doubted.
 
+### Second pass (2026-09-07): the four seams the first pass had not seen
+
+The envelope codec and `toWire`, the journal's activity wrappers around both
+`reraise` functions, `withPlanStream`, and the A2A executor's completion,
+failure and cancellation paths. My own read found nothing to fix. The
+reviewer found three, each confirmed against rc.112 and fixed:
+
+1. **An activity's own retry re-ran a live model stream into the same
+   fold.** `Activity.make` retries an `execute` interrupted from inside, up
+   to ten times; each attempt tapped its parts into the harness fold that
+   was already open, so an observer saw the abandoned attempt's text and
+   the replacement's in one message while the journal kept only the last.
+   A tapped stream now gets no in-place retries (`interruptRetryPolicy`):
+   the activity reports the interrupt as a defect at once, the message
+   closes as failed, the outcome is recorded as a defect and a replay
+   re-raises it. An interruption of the fibre from outside is not caught by
+   the retry at all and still suspends the workflow. Row: a first attempt
+   that interrupts itself after a part yields exactly one message with
+   `["old"]`, closed as failed, and the second turn never runs.
+   `TestLanguageModel` gained `interruptAfterParts` for it.
+2. **A plan step's own retries were not stopped by
+   `preventFallbackOnPartialStream`.** The guard governs the move to the
+   next step; a step's `attempts` or `schedule` retried the same provider
+   underneath it, re-subscribing the stream into the same fold -- abandoned
+   text kept, fragments merged across attempts under a reused id, one
+   `MessageStarted`. On the streaming path every step now gets one attempt
+   (`AgentTurn.withoutStepRetries`): a failure before the first part still
+   falls through to the next step, a failure after it is final. The batch
+   path keeps its retries. Rows: `attempts: 2` failing after a part is not
+   retried and fails once; `attempts: 2` failing before any part still
+   reaches the fallback with one attempt on the primary.
+3. **Cancellation could publish CANCELED and finish the bus before the
+   delta forwarder stopped.** A chunk the forwarder had pulled but not yet
+   published could land after the terminal frame. The active task now holds
+   its forwarder, and `cancel` interrupts it, waiting for it to stop, before
+   publishing. No deterministic row: the window is between a pull and a
+   publish inside one fibre; the existing cancellation-after-partial-output
+   row keeps holding the visible ordering.
+
+Verdicts otherwise: the codec composition, `toWire`'s idempotence, the
+recorded-outcome re-raising on both paths, the pre-part fallback, and the
+A2A completion ordering were checked and found sound. Two things it could
+not settle without more code: `failureFromCause` on a cause holding both a
+typed error and a defect (it classifies by the typed error first; the same
+function serves every client, so they agree by construction), and the
+paused-run continuation's forwarder, which item 78's rows exercise.
+
 ## Second opinion (gpt-6-astra, through the Codex CLI, same day)
 
 Its ranking: **8, 4, 1, 6, 3, 7, 5, 2.** Where it differs from mine and

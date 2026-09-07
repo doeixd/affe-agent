@@ -487,6 +487,13 @@ interface ActiveTask<Principal> {
   readonly contextId: string
   readonly cancelRequested: Deferred.Deferred<void>
   readonly cancelResolved: Deferred.Deferred<boolean>
+  /**
+   * The text-delta forwarder of the request currently serving this task,
+   * so a cancellation can stop it *before* publishing CANCELED: a chunk it
+   * had pulled but not yet published would otherwise land after the
+   * terminal frame, or after the bus was finished.
+   */
+  readonly forwarder: Ref.Ref<Option.Option<Fiber.Fiber<void, unknown>>>
 }
 
 const createTask = (
@@ -756,6 +763,7 @@ export const serverLayer = <Principal>(
           forwardTextDeltas(eventsStream, eventBus, entry.taskId, entry.contextId),
           layerScope
         )
+        yield* Ref.set(entry.forwarder, Option.some(deltas))
         const settled = yield* Effect.forkIn(
           eventsStream.pipe(
             Stream.filter((envelope) =>
@@ -940,7 +948,8 @@ export const serverLayer = <Principal>(
           sessionId,
           contextId: requestContext.contextId,
           cancelRequested,
-          cancelResolved
+          cancelResolved,
+          forwarder: yield* Ref.make(Option.none<Fiber.Fiber<void, unknown>>())
         }
         // Only this invocation's entry: a continuation re-registering the same
         // task id must not be unregistered by the earlier fibre settling.
@@ -1010,6 +1019,7 @@ export const serverLayer = <Principal>(
           forwardTextDeltas(eventsStream, eventBus, taskId, requestContext.contextId),
           layerScope
         )
+        yield* Ref.set(entry.forwarder, Option.some(deltas))
         // The prompt outlives this request when the run pauses: it is forked
         // into the layer scope and only its exit is reported back here.
         yield* Effect.forkIn(
@@ -1116,6 +1126,12 @@ export const serverLayer = <Principal>(
           yield* Deferred.succeed(running.cancelResolved, false)
           return yield* Effect.failCause(interrupted.cause)
         }
+        // The forwarder first: a chunk it had in hand must not follow the
+        // terminal frame. Interruption waits for it to stop.
+        yield* Effect.flatMap(Ref.get(running.forwarder), Option.match({
+          onNone: () => Effect.void,
+          onSome: (forwarder) => Effect.asVoid(Fiber.interrupt(forwarder))
+        }))
         const canceledAt = yield* timestamp
         yield* Effect.sync(() => {
           eventBus.publish(AgentEvent.statusUpdate(statusUpdate(

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, ExecutionPlan, Metric, Ref, Schema } from "effect"
+import { Context, Effect, ExecutionPlan, Exit, Metric, Ref, Schema } from "effect"
 import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
@@ -423,3 +423,76 @@ export type _ANarrowPlanInputIsRefused = Assert<
 export type _AnOrdinaryPlanIsAccepted = Assert<
   PlanFirst extends string ? false : true
 >
+
+describe("a streamed plan step is never retried in place", () => {
+  /**
+   * `preventFallbackOnPartialStream` guards the move to the next step and
+   * only that: a step's own `attempts` or `schedule` retried the same
+   * provider underneath the guard, re-subscribing the stream into the same
+   * fold. The second reviewer reproduced it on rc.112: a part, a failure, a
+   * successful second attempt, and the viewer saw one message holding both
+   * attempts' text. `AgentTurn.withoutStepRetries` gives a streamed step
+   * one attempt. Broken once by handing the plan through unchanged: the
+   * second turn's text arrives as deltas of the same message.
+   */
+  it.effect("a step with attempts: 2 that fails after a part is not retried, and the message fails once", () =>
+    Effect.gen(function* () {
+      // The script is the call counter: a retry would consume the second
+      // turn, whose text would then appear as deltas.
+      const { layer } = yield* TestLanguageModel.script([
+        // The stream's own error channel, after text-start and one delta:
+        // what a plan's retry acts on. An error *part* would be folded into
+        // a failure downstream of the plan and prove nothing here.
+        { text: "par", chunks: ["par"], failAfterParts: "died after a part" },
+        { text: "again", chunks: ["again"] }
+      ])
+      const plan = ExecutionPlan.make({ provide: layer, attempts: 2 })
+      const agent = Agent.make({ loop: AgentLoop.bounded(2) }).pipe(Agent.withExecutionPlan(plan))
+
+      const { events, exit } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          const probe = yield* AgentProbe.make(session)
+          const exit = yield* Effect.exit(AgentSession.prompt(session, "go", { stream: true }))
+          return { events: yield* probe.events, exit }
+        })
+      )
+      assert.isTrue(Exit.isFailure(exit), "a failure after a part is final")
+      const tags = events.map((e) => e.event._tag)
+      assert.strictEqual(tags.filter((t) => t === "MessageStarted").length, 1)
+      assert.include(tags, "MessageFailed")
+      assert.deepStrictEqual(
+        events.flatMap((e) => e.event._tag === "MessageDelta" ? [e.event.delta] : []),
+        ["par"],
+        "the second attempt's text reached the viewer as part of the same message"
+      )
+    })
+  )
+
+  it.effect("a step with attempts: 2 that fails before any part still falls through to the next step", () =>
+    Effect.gen(function* () {
+      const primaryCalls = yield* Ref.make(0)
+      const primary = yield* TestLanguageModel.script([TestLanguageModel.text("primary")])
+      const fallback = yield* TestLanguageModel.script([{ text: "fallback", chunks: ["fall", "back"] }])
+      const plan = ExecutionPlan.make(
+        { provide: TestLanguageModel.failingAfter(primary.layer, { succeedFirst: 0, calls: primaryCalls }), attempts: 2 },
+        { provide: fallback.layer }
+      )
+      const agent = Agent.make({ loop: AgentLoop.bounded(2) }).pipe(Agent.withExecutionPlan(plan))
+      const events = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          const probe = yield* AgentProbe.make(session)
+          yield* AgentSession.prompt(session, "go", { stream: true })
+          return yield* probe.events
+        })
+      )
+      // One attempt on the primary, then the fallback: the retries a step
+      // declares are not taken on the streaming path, the ladder still is.
+      assert.strictEqual(yield* Ref.get(primaryCalls), 1)
+      assert.deepStrictEqual(events.flatMap((e) => e.event._tag === "MessageDelta" ? [e.event.delta] : []), ["fall", "back"])
+      assert.strictEqual(events.filter((e) => e.event._tag === "MessageStarted").length, 1)
+    })
+  )
+})
+

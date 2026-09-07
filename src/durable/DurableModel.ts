@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Option, Queue, Ref, Schedule, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import * as Accumulator from "../internal/streamAccumulator.js"
 import { AiError, LanguageModel, Response, Toolkit } from "effect/unstable/ai"
@@ -191,6 +191,21 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
             // without it, a second execution's `model-0` meets the first's.
             name: `${prefix}model-${index}`,
             success: outcomeSchema,
+            // `Activity.make` retries an `execute` interrupted from inside up
+            // to ten times on its own, then reports the interrupt as a
+            // defect. For a batched call the retries are invisible. For the
+            // live stream they were not: each attempt tapped its parts into
+            // the *same* harness fold, so an observer saw the abandoned
+            // attempt's text and then the replacement's in one message,
+            // while the journal kept only the last -- fresh and replay
+            // disagreed. The second reviewer's reproduction. A tapped stream
+            // is therefore never retried in place: the activity reports the
+            // interrupt as a defect at once, the outcome is recorded as one,
+            // the harness closes the message as failed, and a replay
+            // re-raises the same defect. An interruption of the fibre from
+            // outside -- a runner shutting down -- is not caught by the
+            // retry at all and still suspends the workflow as before.
+            ...(tap === undefined ? {} : { interruptRetryPolicy: Schedule.recurs(0) }),
             execute: (
               tap === undefined
                 ? (underlying.generateText(options) as unknown as Effect.Effect<

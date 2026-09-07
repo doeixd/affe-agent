@@ -2154,7 +2154,11 @@ review-streaming. ~~**The streaming series, reviewed as code.**~~ **DONE
     remote tail swallowed transport failures. Five have rows
     (`test/ObservationPump.test.ts`, the strengthened cursor row, a durable
     bound row); two are scheduler windows said rather than proved. Broken
-    once each where a row exists; all bit.
+    once each where a row exists; all bit. A second pass over the four
+    seams the first had not seen found three more, all fixed: an activity's
+    interrupt retry re-ran a live stream into the same fold; a plan step's
+    own retries bypassed the partial-stream guard; A2A cancellation could
+    publish its terminal before the forwarder stopped. Two have rows.
 
     ```text
     verify: grep "utf8Length" src/internal/observation.ts

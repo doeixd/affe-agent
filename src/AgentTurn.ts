@@ -1,4 +1,4 @@
-import { Cause, Effect, Option, Ref, Stream } from "effect"
+import { Cause, Effect, ExecutionPlan, Option, Ref, Stream } from "effect"
 import { LanguageModel, Prompt, Response, Toolkit } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -252,11 +252,30 @@ const withPlanStream = <A, E, R>(
   Option.match(session.agent.executionPlan, {
     onNone: () => stream,
     onSome: (plan) =>
-      Stream.withExecutionPlan(stream, plan, {
+      Stream.withExecutionPlan(stream, withoutStepRetries(plan), {
         preventFallbackOnPartialStream: true,
         onEvent: Telemetry.recordAttempt
       })
   })
+
+/**
+ * The plan with each step's own retries removed.
+ *
+ * `preventFallbackOnPartialStream` guards the move to the *next* step, and
+ * only that: a step's `attempts` or `schedule` retry the same provider
+ * underneath the guard, so a stream that emitted a part and then failed was
+ * re-subscribed into the same fold -- the abandoned attempt's text stayed,
+ * a reused tool-call id merged fragments across attempts, and the viewer
+ * saw one ordinary message. The second reviewer's reproduction on rc.112.
+ * So on the streaming path a step gets one attempt: a failure before the
+ * first part still falls through to the next step, and a failure after it
+ * is final, which is the rule the guard was meant to state. The batch path
+ * keeps its retries; nothing has been shown there.
+ */
+const withoutStepRetries = <P extends ExecutionPlan.ExecutionPlan<any>>(plan: P): P => ({
+  ...plan,
+  steps: plan.steps.map((step) => ({ ...step, attempts: 1, schedule: undefined }))
+})
 
 const streamResponse = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools, any, any>,
