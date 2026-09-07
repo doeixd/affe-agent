@@ -1954,3 +1954,21 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "ToolCallDelta" src/AgentEvent.ts
     verify: grep "tool-call argument deltas" test/Streaming.test.ts
     ```
+
+69. ~~**A child's events on the parent's stream, opt-in.**~~ **DONE
+    2026-09-06** -- `Inherit.events: "parent"`, `plan-streaming.md` P3. The
+    harness provides `ParentEvents` around each tool handler, bound to the
+    parent's bus, correlation and call, beside `Elicitation.Current`; a
+    forwarding child is made with it as a synchronous `eventSink`, and every
+    envelope of the child's bus arrives on the parent's wrapped in one
+    `DelegatedEvent { tool, toolCallId, envelope }`, the child's envelope
+    untouched. Nested delegation wraps once per edge. `DelegatedEvent` made
+    the envelope schema recursive, so its Type and Encoded are interfaces
+    held equal to the schema by a row, and `toWire` recurses. Six rows in
+    `test/DelegatedEvents.test.ts`; broken once by dropping the provision and
+    once by dropping the recursion. Default off, as the plan said.
+
+    ```text
+    verify: grep "DelegatedEvent" src/AgentEvent.ts
+    verify: grep "a child's events on the parent's stream" test/DelegatedEvents.test.ts
+    ```

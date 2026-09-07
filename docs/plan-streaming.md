@@ -132,7 +132,7 @@ none, as it has no live chunking either. No fixture was recorded, so no
 `Behavior-Change:` trailer was required; the tolerant decoder's additivity is
 already held by its own rows.
 
-### P3 -- a child's events on the parent's stream (item 69)
+### P3 -- a child's events on the parent's stream (shipped 2026-09-06)
 
 Opt-in, as a composable value on the child-construction seam; `Inherit.events:
 "parent"` may be shorthand. A wrapper event `DelegatedEvent { tool, toolCallId,
@@ -143,6 +143,24 @@ existing sink, do not replace it. Nested delegation wraps per opted-in edge. A
 child terminal never terminates the parent submission. Approvals already
 forward through elicitation and are not duplicated. Default off until a UI
 demonstrates the expectation.
+
+*Shipped as:* `Inherit.events: "parent" | "none"` (default `"none"`). The
+harness provides `ParentEvents` around each handler, bound to the parent's
+bus, correlation and call, the way it provides `Elicitation.Current`; a child
+that forwards is made through the engine constructor with that as its
+`eventSink`, so the sink is synchronous and sees the child's `SessionStarted`
+onward. `DelegatedEvent` carries the envelope through `Schema.suspend`, which
+made the envelope schema recursive; its Type and Encoded are written out as
+interfaces and held equal to the schema's own by a row. `toWire` recurses into
+the wrapped envelope. Rows: wrapper correlation and sequence, the child's
+envelope untouched, inside the call, the parent's one terminal; default and
+`"none"` forward nothing; nested wraps per edge across three sessions; a child
+made outside any handler forwards nowhere; wire round trip with an unknown
+inner tag as `UnknownEvent`; the projection reaching inside. Broken once by
+dropping the harness provision and once by dropping the projection's
+recursion; both bit. The one identifier added, `internal/ParentEvents`, is in
+the namespace manifest; the trailer records that nothing on the wire changed
+for a caller who does not opt in.
 
 ### P4 -- retention, measured before bounded (item 70)
 

@@ -337,6 +337,29 @@ export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   name: Schema.String,
   params: Schema.Unknown
 })
+
+/**
+ * An event of a delegated child session, on its parent's stream.
+ *
+ * A subagent runs on a bus of its own, and by default a parent's consumers see
+ * nothing of it between `ToolCallStarted` and the tool's result. A child made
+ * with `Inherit.events: "parent"` forwards every envelope of its bus here,
+ * untouched -- its own session id, correlation and sequence are inside -- and
+ * the wrapper adds the parent's correlation, a parent sequence and the name
+ * of the tool and call that delegated. A child's terminal events are the
+ * child's: nothing in here ends the parent's submission. Nested delegation
+ * wraps once per forwarding edge, so the path is the nesting.
+ *
+ * The child's approvals are not in here twice: they cross as elicitation
+ * (`Inherit.approval`) and are answered on the parent as before.
+ */
+export const DelegatedEvent = Schema.TaggedStruct("DelegatedEvent", {
+  tool: Schema.String,
+  toolCallId: Schema.String,
+  envelope: Schema.suspend(
+    (): Schema.Codec<AgentEventEnvelope, AgentEventEnvelopeEncoded> => AgentEventEnvelope
+  )
+})
 /**
  * A preliminary result from a tool that is still running.
  *
@@ -444,6 +467,7 @@ export const AgentEvent = Schema.Union([
   MessageFailed,
   ElicitationRequested,
   ElicitationResolved,
+  DelegatedEvent,
   ToolCallDelta,
   ToolCallStarted,
   ToolCallProgress,
@@ -624,7 +648,30 @@ export const AgentEventEnvelope = Schema.Struct({
    */
   event: AgentEventTolerant
 })
-export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
+/**
+ * Written out rather than read off the schema, because `DelegatedEvent`
+ * carries an envelope and the schema is therefore recursive; the two
+ * interfaces are what `Schema.suspend` is told, and `test/Schema.test.ts`
+ * holds them equal to the schema's own.
+ */
+export interface AgentEventEnvelope {
+  readonly sessionId: SessionId
+  readonly submissionId: Option.Option<SubmissionId>
+  readonly runId: Option.Option<RunId>
+  readonly turn: Option.Option<number>
+  readonly sequence: number
+  readonly event: StreamedEvent
+}
+
+/** The envelope as it is encoded: ids as strings, the event as it arrived. */
+export interface AgentEventEnvelopeEncoded {
+  readonly sessionId: string
+  readonly submissionId: Option.Option<string>
+  readonly runId: Option.Option<string>
+  readonly turn: Option.Option<number>
+  readonly sequence: number
+  readonly event: unknown
+}
 
 /**
  * Exhaustively handle an event by tag.
@@ -708,6 +755,12 @@ export const toWire = (envelope: AgentEventEnvelope): AgentEventEnvelope => {
       return {
         ...envelope,
         event: { ...event, result: event.encodedResult }
+      }
+    // A child's envelope crosses the same wire, so it is projected the same way.
+    case "DelegatedEvent":
+      return {
+        ...envelope,
+        event: { ...event, envelope: toWire(event.envelope) }
       }
     default:
       return envelope

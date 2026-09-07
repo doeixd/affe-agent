@@ -7,6 +7,7 @@ import type { SubmissionId } from "./internal/ids.js"
 import { ToolApprovalRequiredError, ToolNotAloneError, ToolPermissionDeniedError } from "./Errors.js"
 import * as Elicitation from "./Elicitation.js"
 import { CurrentSessionId } from "./internal/currentSession.js"
+import { ParentEvents } from "./internal/delegatedEvents.js"
 import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Telemetry from "./internal/telemetry.js"
@@ -657,6 +658,18 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
           // And the session's identity, for the one tool that looks something
           // up by it (the compaction controller's `contextRemaining`).
           Effect.provideService(CurrentSessionId, Option.some(session.id)),
+          // And where a delegated child's envelopes go if it forwards them:
+          // this bus, this correlation, wrapped as this call's.
+          Effect.provideService(
+            ParentEvents,
+            Option.some((envelope: AgentEvent.AgentEventEnvelope) =>
+              EventBus.emit(session.bus, correlation, {
+                _tag: "DelegatedEvent",
+                tool: call.name,
+                toolCallId: call.id,
+                envelope
+              }))
+          ),
           // A finalizer, not an uninterruptible block: once the fiber is
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.

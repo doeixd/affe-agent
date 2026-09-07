@@ -385,16 +385,6 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
-69. **A child's events on the parent's stream, opt-in.** `DelegatedEvent
-    { tool, toolCallId, envelope }` wrapping the child's untouched envelope,
-    published through the parent's bus by composing the child's sink;
-    `plan-streaming.md` P3. Default off until a UI shows the expectation.
-    Medium.
-
-    ```text
-    verify: no-grep "DelegatedEvent" src/AgentEvent.ts
-    ```
-
 70. **Bus retention, measured before bounded.** An abandoned subscriber of the
     unbounded bus lives indefinitely. Measure retained bytes and teardown under
     a deliberately stalled subscriber before deciding on a bounded observation
@@ -406,8 +396,8 @@ again. Feature expansion is frozen until these produce an observation.*
 
 71. **Streaming in the adapters.** A2A artifact updates with append and
     final-chunk semantics and stable artifact identity across abandoned
-    attempts; MCP progress notifications only; `plan-streaming.md` P5. After
-    69. Medium. Also AG-UI: it already has `TOOL_CALL_ARGS`, sent whole at
+    attempts; MCP progress notifications only; `plan-streaming.md` P5.
+    Medium. Also AG-UI: it already has `TOOL_CALL_ARGS`, sent whole at
     `ToolCallStarted`; mapping `ToolCallDelta` onto it means the first
     fragment opens the call and the assembled call must not resend arguments
     already streamed. Stateful, with recorded AG-UI rows.

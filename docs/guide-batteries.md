@@ -47,6 +47,17 @@ says that its tool calls did run, so the parent's model can tell a finished
 answer from half of one. The parent's own interruption takes precedence: an
 interrupted parent ends `interrupted`, whatever `onError` says.
 
+**Seeing the child.** By default the child runs on a bus of its own, and the
+parent's stream shows `ToolCallStarted`, then the result. `inherit: { events:
+"parent" }` forwards every envelope of the child's bus onto the parent's, each
+wrapped in one `DelegatedEvent { tool, toolCallId, envelope }`: the wrapper
+carries the parent's correlation and a parent sequence, and the child's
+envelope inside is untouched, its own session id and sequence included. A
+child's terminal events are the child's and end nothing of the parent's;
+nested delegation wraps once per forwarding edge, so the path is the nesting.
+Approvals are not doubled: they cross as elicitation, under `approval`. Opt-in,
+because it multiplies the parent's stream by the child's.
+
 ## Scheduling & self-dispatch
 
 `affe-agent/scheduling` adds two thin things over Effect's own

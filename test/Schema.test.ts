@@ -83,7 +83,18 @@ describe("schema-defined errors", () => {
   )
 })
 
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+
 describe("schema-defined events", () => {
+  it("the written-out envelope interfaces are the schema's own", () => {
+    // `AgentEventEnvelope` is an interface rather than `typeof Schema.Type`
+    // because `DelegatedEvent` makes the schema recursive. If either drifts
+    // from what the schema derives, this stops compiling.
+    const sameType: Equals<typeof AgentEvent.AgentEventEnvelope.Type, AgentEvent.AgentEventEnvelope> = true
+    const sameEncoded: Equals<typeof AgentEvent.AgentEventEnvelope.Encoded, AgentEvent.AgentEventEnvelopeEncoded> = true
+    assert.isTrue(sameType && sameEncoded)
+  })
+
   it.effect("an envelope round-trips through its codec", () =>
     Effect.gen(function* () {
       const envelope: AgentEvent.AgentEventEnvelope = {

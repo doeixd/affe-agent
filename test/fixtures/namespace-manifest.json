@@ -37,6 +37,7 @@
   "affe-agent/http/InvalidMountNameError",
   "affe-agent/internal/CurrentSessionId",
   "affe-agent/internal/Failpoint",
+  "affe-agent/internal/ParentEvents",
   "affe-agent/memory/Memory",
   "affe-agent/plugins",
   "affe-agent/plugins/PluginError",
