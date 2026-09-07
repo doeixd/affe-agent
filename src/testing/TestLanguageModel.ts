@@ -265,13 +265,11 @@ export const make = (turns: ReadonlyArray<Turn>) =>
           return yield* Effect.die(new Error(turn.fail))
         }
         if (turn.failWith !== undefined) {
-          return yield* Effect.fail(
-            AiError.make({
-              module: "TestLanguageModel",
-              method: "generateText",
-              reason: new AiError.InternalProviderError({ description: turn.failWith })
-            })
-          )
+          return yield* AiError.make({
+            module: "TestLanguageModel",
+            method: "generateText",
+            reason: new AiError.InternalProviderError({ description: turn.failWith })
+          })
         }
         return turn
       })
