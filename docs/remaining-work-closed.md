@@ -1855,3 +1855,34 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "the Durable Object could not build the agent's model and services" src/cloudflare/index.ts
     verify: grep "opening a session is a 503 that names the missing key" test/WorkerRealModel.test.ts
     ```
+
+65-erasure. ~~**`DurableAgent.workflow` requirement erasure.**~~ **DONE
+    2026-09-06.** For a week the "known, deliberately left" list said the
+    workflow's layer claimed `never` while resolving `LanguageModel` at
+    runtime; a type probe confirmed it (the agent's `any`-typed slots reached
+    `toLayer` and the requirement inferred to `never`). The layer is now
+    annotated with what the runtime needs, `WorkflowEngine | LanguageModel`,
+    and `test/DurableTypes.test.ts` holds it by assignability, since a
+    layer's requirement slot is covariant: not assignable to a layer that
+    needs nothing, not to one that needs the engine alone, assignable to one
+    that needs both. Broken once by removing the annotation, which flips the
+    first assertion. Pulled forward from the promise review (item 65) on the
+    second reviewer's advice: a type that says less than the runtime needs is
+    the one kind of API debt that misleads a caller silently.
+
+    ```text
+    verify: grep "const layer: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | LanguageModel.LanguageModel>" src/durable/DurableAgent.ts
+    verify: grep "durable layers say what they need" test/DurableTypes.test.ts
+    ```
+
+66. ~~**The `effect` peer range said the opposite of the README.**~~ **DONE
+    2026-09-06.** The README told a consumer to pin exact versions because
+    the library, `effect` and the provider packages move in lockstep with the
+    release candidate; the published peer range admitted every `4.x`, GA
+    included, which nothing here has been tested against. Narrowed to the
+    release-candidate line (`>=4.0.0-rc.111 <4.0.0`), with the README row
+    saying GA is admitted deliberately when tested, not by the range.
+
+    ```text
+    verify: grep "\"effect\": \">=4.0.0-rc.111 <4.0.0\"" package.json
+    ```

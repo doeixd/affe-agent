@@ -1,4 +1,4 @@
-import { Cause, Config, Deferred, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
+import { Cause, Config, Deferred, Duration, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
@@ -254,7 +254,14 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
     error: DurableAgentFailure
   })
 
-  const layer = definition.toLayer((payload) =>
+  // Annotated, because inference erased it: the body is generic in the
+  // agent's `any`-typed error and requirement slots, and `toLayer`'s
+  // requirement came out as `never` while the body resolves `LanguageModel`
+  // at runtime through `DurableModel.wrap`. `STATUS.md` carried that as a
+  // known lie for a week; `test/DurableTypes.test.ts` now holds the type to
+  // what the runtime needs, so a caller who forgets the model is told at
+  // compile time rather than by a missing-service defect.
+  const layer: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | LanguageModel.LanguageModel> = definition.toLayer((payload) =>
     Effect.gen(function* () {
       // Built inside the workflow body: activities need the workflow context,
       // and `LanguageModel.make` pins its provider's requirements, so the

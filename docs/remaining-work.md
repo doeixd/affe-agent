@@ -330,6 +330,59 @@ Items 27 and 30 are in the ledger.
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
+### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
+
+*Decided with a second reviewer when the list ran out of work one maintainer
+can do alone: the next milestone is one person choosing to use the library
+again. Feature expansion is frozen until these produce an observation.*
+
+63. **A daily consumer: the post-commit review assistant.** A separate
+    consumer of the packed library that reviews a commit -- diff, the source
+    and tests it needs, findings with evidence, challengeable, interruptible.
+    The maintainer's own workflow is the baseline. Measured by reviewed
+    commits, accepted findings, false positives and abandonments, not by
+    tools exercised. First slice: one commit, one diff-to-findings path, a
+    review of the next real commit beside the current one. In parallel,
+    five Effect users invited to a specific trial. Medium.
+
+    ```text
+    verify: absent examples/review-assistant.ts
+    ```
+
+64. **Observe a newcomer before touching the docs.** Someone who has never
+    seen the repository follows the README to a running agent, adds one tool,
+    handles one failure, watched silently. Time to first result, every
+    detour, every rescue, provider friction kept separate from library
+    friction. The README keeps one obvious route; the package map stays as
+    reference. Wrong to restructure if the participant sails through. Needs
+    a person; recorded as missing evidence until one is found. Small.
+
+    ```text
+    verify: no-grep "Newcomer audit" docs/getting-started.md
+    ```
+
+65. **The public promises, reviewed.** Forty-five subpaths inspected for the
+    caller's job, the dependency boundary, maturity and evidence of intended
+    use; accidental exports and duplicate spellings go, optional batteries
+    stay provisional. Timeboxed, and run after 63 has a caller to say which
+    promises matter. The one promise known to be broken -- the durable
+    workflow layer's erased requirement -- is fixed (ledger). Medium.
+
+    ```text
+    verify: no-grep "## Public promises" STATUS.md
+    ```
+
+67. **The journal compatibility promise.** State whether cross-version replay
+    of a durable journal is supported before anyone consumes a new version:
+    if yes, a prior-version journal becomes a recorded fixture replayed
+    against the candidate; if no, an incompatible journal is detected and
+    refused clearly. A `Behavior-Change:` trailer records intent, not
+    compatibility. Decided when 63 produces a journal worth keeping. Small.
+
+    ```text
+    verify: no-grep "journal compatibility" docs/guide-durable.md
+    ```
+
 ### Known, deliberately left
 
 - **D4b** survives the falsification harness by construction:
@@ -337,8 +390,6 @@ Items 27 and 30 are in the ledger.
   disjuncts in `DurableAgent`'s `catchCause` are defence in depth. Recorded in
   `plan-durability-hardening.md` and `scripts/falsify.mjs`; nobody has decided
   to delete them, and the harness will say so if that changes.
-- **`DurableAgent.workflow` requirement erasure** claims `never` while
-  resolving `LanguageModel` at runtime (`STATUS.md`, durable client).
 - **Legacy MCP cancellation id mismatch** — upstream; the official client's
   cancel cannot interrupt the server.
 - **Anthropic example** has never been run live with a key.

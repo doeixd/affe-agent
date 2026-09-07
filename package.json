@@ -288,7 +288,7 @@
     "lint:cloudflare": "node scripts/effect-diagnostics.mjs tsconfig.cloudflare.json"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.111 <5.0.0",
+    "effect": ">=4.0.0-rc.111 <4.0.0",
     "@a2a-js/sdk": ">=1.0.1 <2.0.0",
     "@durable-streams/client": ">=0.2.6 <0.3.0",
     "@modelcontextprotocol/client": ">=2.0.0 <3.0.0",

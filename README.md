@@ -54,7 +54,7 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 
 | Peer | Range | Notes |
 |------|-------|-------|
-| `effect` | `>=4.0.0-rc.111 <5.0.0` | required; this repository builds against `rc.112` |
+| `effect` | `>=4.0.0-rc.111 <4.0.0` | required; the release-candidate line this repository is tested against (`rc.112`). Effect 4 GA is admitted deliberately, when it has been tested, not by the range |
 | `@modelcontextprotocol/sdk` | `>=1.10.0 <2.0.0` | optional; only for `/mcp/v1` |
 | `callscript` | `>=0.1.0 <0.2.0` | optional; only for `/code/callscript` |
 | `@modelcontextprotocol/client` | `>=2.0.0 <3.0.0` | optional; only for `/mcp/v2` |
