@@ -1907,3 +1907,27 @@ still resolves -- here, if not in the list. Nothing here is next;
     ```text
     verify: grep "a caller cannot tell the DO-backed mount from the in-process one" test/GatewayMounts.test.ts
     ```
+
+P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
+    `AgentSession.stream(session, input, options?)`, `plan-streaming.md` P1,
+    designed with a second reviewer. Submit with `stream: true`, then that
+    submission's envelopes through its terminal, then end; derived from
+    `submit` and the bus, no new event. The subscription is registered before
+    admission, which is the one thing a hand-rolled version gets wrong and
+    the reason it lives beside `events` rather than under a subpath. The
+    terminal is data (`SubmissionFailed` is yielded, the stream ends
+    normally); the error channel is `submit`'s; cold; and it ends only once
+    `awaitSubmission` settles, because the terminal is published before the
+    session is released -- found by the row that prompted again at once and
+    was told `Busy`. Four rows in `test/Streaming.test.ts`. Broken once:
+    removing the terminal cut hangs every row. Two properties are by
+    construction and not proved by a row, said rather than claimed:
+    subscribe-before-submit (in-process scheduling publishes nothing before
+    the receipt returns, so the swapped order passes) and the submission
+    filter (nothing of another submission arrives inside the window once the
+    terminal cuts it). Follow-ups are items 68-72.
+
+    ```text
+    verify: grep "export const stream" src/AgentSession.ts
+    verify: grep "one submission as a stream" test/Streaming.test.ts
+    ```

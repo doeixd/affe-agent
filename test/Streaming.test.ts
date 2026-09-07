@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import { AgentBusyError } from "../src/Errors.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -220,6 +222,119 @@ describe("model streaming", () => {
       // Failure and interruption stay distinct, the way they do for tools.
       assert.notInclude(tags, "MessageInterrupted")
       assert.notInclude(tags, "MessageStreamCompleted")
+    })
+  )
+})
+
+describe("one submission as a stream", () => {
+  /**
+   * `plan-streaming.md` P1. `AgentSession.stream` is `submit` plus the bus,
+   * with the subscription registered before admission. The rows hold the
+   * invariants the plan names: the first and last envelopes are the
+   * submission's own boundaries even when the run finishes at once; nothing
+   * of another submission is included; the terminal is data, not a failure;
+   * the stream is cold and submits once per evaluation; admission failures are
+   * the error channel.
+   */
+  const tagsOf = (envelopes: ReadonlyArray<AgentEvent.AgentEventEnvelope>) => envelopes.map((e) => e.event._tag)
+
+  it.effect("yields the submission's envelopes from its start through its terminal, and nothing after", () =>
+    Effect.gen(function* () {
+      // A run that finishes at once: every envelope may already be on the bus
+      // by the time the receipt returns. The subscription came first, so the
+      // stream still starts at SubmissionStarted.
+      const { layer } = yield* TestLanguageModel.script([{ text: "done", chunks: ["do", "ne"] }])
+      const envelopes = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          return yield* Stream.runCollect(AgentSession.stream(session, "go"))
+        })
+      ).pipe(Effect.provide(layer))
+      const tags = tagsOf(envelopes)
+      assert.strictEqual(tags[0], "SubmissionStarted")
+      assert.strictEqual(tags[tags.length - 1], "SubmissionCompleted")
+      assert.deepStrictEqual(deltasOf([...envelopes]), ["do", "ne"])
+      assert.include(tags, "MessageStarted")
+      assert.include(tags, "TurnCompleted")
+      // Every envelope belongs to one submission, in strictly increasing sequence.
+      const ids = new Set(envelopes.map((e) => Option.getOrThrow(e.submissionId)))
+      assert.strictEqual(ids.size, 1)
+      const sequences = envelopes.map((e) => e.sequence)
+      assert.deepStrictEqual(sequences, [...sequences].sort((a, b) => a - b))
+      assert.strictEqual(new Set(sequences).size, sequences.length)
+    })
+  )
+
+  it.effect("includes nothing of an earlier or later submission on the same session", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* TestLanguageModel.script([{ text: "first" }, { text: "second", chunks: ["sec", "ond"] }, { text: "third" }])
+      const { streamed, all } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          const probe = yield* AgentProbe.make(session)
+          yield* session.prompt("one")
+          const streamed = yield* Stream.runCollect(AgentSession.stream(session, "two"))
+          yield* session.prompt("three")
+          return { streamed, all: yield* probe.events }
+        })
+      ).pipe(Effect.provide(layer))
+      const streamedIds = new Set(streamed.map((e) => Option.getOrThrow(e.submissionId)))
+      assert.strictEqual(streamedIds.size, 1)
+      const [id] = streamedIds
+      // Exactly the bus's envelopes for that submission, no more and no fewer.
+      const expected = all.filter((e) => Option.isSome(e.submissionId) && e.submissionId.value === id)
+      assert.deepStrictEqual([...streamed], expected)
+      assert.deepStrictEqual(deltasOf([...streamed]), ["sec", "ond"])
+    })
+  )
+
+  it.effect("a failed submission is a SubmissionFailed envelope and a normal end, not a stream failure", () =>
+    Effect.gen(function* () {
+      const Boom = Tool.make("boom", { parameters: Schema.Struct({}), success: Schema.String })
+      const agent = Agent.make({
+        tools: [Agent.tool(Boom, () => Effect.die(new Error("the tool is broken")))],
+        loop: AgentLoop.bounded(2)
+      })
+      const { layer } = yield* TestLanguageModel.script([{ toolCalls: [{ id: "b1", name: "boom", params: {} }] }])
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(agent)
+          return yield* Stream.runCollect(AgentSession.stream(session, "go"))
+        })
+      ).pipe(Effect.exit, Effect.provide(layer))
+      assert.isTrue(Exit.isSuccess(exit), "the outcome was observed; observing did not fail")
+      if (Exit.isSuccess(exit)) {
+        const tags = tagsOf(exit.value)
+        assert.strictEqual(tags[tags.length - 1], "SubmissionFailed")
+        assert.strictEqual(tags.filter((t) => t.startsWith("Submission")).length, 2, "one start, one terminal")
+      }
+    })
+  )
+
+  it.effect("cold: each evaluation submits once; and admission failures are the error channel", () =>
+    Effect.gen(function* () {
+      const hanging = yield* Deferred.make<void>()
+      const { layer } = yield* TestLanguageModel.script([{ text: "a" }, { text: "b" }, { hang: true, started: hanging }])
+      const { first, second, busy } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({}))
+          const once = AgentSession.stream(session, "go")
+          const first = yield* Stream.runCollect(once)
+          const second = yield* Stream.runCollect(once)
+          // A third submission hangs in its model call; a stream asked for
+          // while it runs is refused at admission.
+          const fiber = yield* Effect.forkChild(session.prompt("hangs"))
+          yield* Deferred.await(hanging)
+          const busy = yield* Effect.exit(Stream.runCollect(AgentSession.stream(session, "too")))
+          yield* AgentSession.interrupt(session)
+          yield* Fiber.await(fiber)
+          return { first, second, busy }
+        })
+      ).pipe(Effect.provide(layer))
+      const idOf = (envelopes: ReadonlyArray<AgentEvent.AgentEventEnvelope>) => Option.getOrThrow(envelopes[0]!.submissionId)
+      assert.notStrictEqual(idOf([...first]), idOf([...second]), "two evaluations must be two submissions")
+      assert.isTrue(Exit.isFailure(busy))
+      if (Exit.isFailure(busy)) assert.instanceOf(Cause.squash(busy.cause), AgentBusyError)
     })
   )
 })

@@ -1198,6 +1198,79 @@ export const events = (
   session: AgentSession<any, any, any, any>
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
 
+/** The three events that end a submission; nothing of that submission follows one. */
+const isSubmissionTerminal = (envelope: AgentEventEnvelope): boolean =>
+  envelope.event._tag === "SubmissionCompleted" ||
+  envelope.event._tag === "SubmissionFailed" ||
+  envelope.event._tag === "SubmissionInterrupted"
+
+/**
+ * One submission as a stream: submit `input` with `stream: true`, then every
+ * envelope of that submission -- message deltas, tool events, turn events --
+ * through its terminal event, and nothing after it.
+ *
+ * Derived from `submit` and the session's bus, not a new mechanism
+ * (`plan-streaming.md` P1). What it adds over subscribing to `events` and
+ * filtering by hand is the one thing a hand-rolled version gets wrong: the
+ * subscription is registered **before** the submission is admitted, so the
+ * first envelope -- `SubmissionStarted`, and a `SubmissionCompleted` that
+ * follows it in the same tick for a run that finishes at once -- cannot be
+ * missed.
+ *
+ * **The terminal is data, not the stream's failure.** A submission that
+ * fails yields `SubmissionFailed` and ends normally: observing the outcome
+ * succeeded, the execution did not, and one outcome has one representation.
+ * The stream's own error channel carries only what `submit`'s does --
+ * admission (`AgentBusyError` when another submission holds the session,
+ * `AgentClosedError` when the session is gone) and a typed input whose
+ * rendering fails. A caller who wants Effect failure semantics uses `prompt`.
+ *
+ * **Cold.** Each evaluation submits once; evaluating the stream twice runs
+ * the prompt twice. Ending the consumer early releases the subscription and
+ * nothing else -- the submission keeps running, as `submit`'s would; stop it
+ * with `interrupt`. `SessionClosed` ends the stream as a safety net, since
+ * nothing of any submission is published after it. The stream ends only once
+ * the submission has settled and the session is free again, so a consumer may
+ * prompt again the moment it ends.
+ *
+ * Envelope sequences are the bus's and stay strictly increasing; they are not
+ * contiguous, because other events of the session are filtered out.
+ */
+export const stream = <
+  Tools extends Record<string, Tool.Any>,
+  E,
+  Input = Prompt.RawInput
+>(
+  session: AgentSession<Tools, E, any, Input>,
+  input: NoInfer<Input>,
+  options: Omit<PromptOptions, "stream"> = {}
+): Stream.Stream<AgentEventEnvelope, AgentBusyError | AgentClosedError | E> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const self = unwrap(session)
+      // Subscribe first: the receipt names the submission, and its first
+      // envelopes may already be on the bus by the time it returns.
+      const subscription = yield* PubSub.subscribe(self.bus.pubsub)
+      const closed = yield* Ref.get(self.bus.closed)
+      if (Option.isSome(closed)) {
+        return yield* new AgentClosedError({ sessionId: self.id })
+      }
+      const receipt = yield* submit(session, input, { ...options, stream: true })
+      return Stream.fromSubscription(subscription).pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed"),
+        Stream.filter((envelope) =>
+          Option.isSome(envelope.submissionId) && envelope.submissionId.value === receipt.submissionId
+        ),
+        Stream.takeUntil(isSubmissionTerminal),
+        // The terminal envelope is published before the session releases the
+        // submission, so a consumer acting on it at once could still find the
+        // session busy. Ending the stream only once the settled outcome is
+        // retrievable makes "the stream ended" mean "the session is free".
+        Stream.concat(Stream.drain(Stream.fromEffect(Effect.exit(awaitSubmission(session, receipt.submissionId)))))
+      )
+    })
+  )
+
 /**
  * Observe events synchronously, as they are published.
  *

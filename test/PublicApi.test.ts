@@ -156,6 +156,9 @@ describe("public API", () => {
         "state",
         "status",
         "steer",
+        // One submission as a stream, derived from `submit` and the bus:
+        // subscribed before admission, terminal as data (`plan-streaming.md`).
+        "stream",
         // Admit without awaiting; the child fiber owns terminal events and
         // release, so a caller that stops observing cannot abandon cleanup.
         "submit",

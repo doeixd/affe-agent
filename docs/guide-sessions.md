@@ -123,6 +123,27 @@ a batched one produce identical transcripts — and an interrupted stream commit
 no partial assistant message, which is a state no later model call could make
 sense of.
 
+**One submission as a stream.** `AgentSession.stream(session, input)` submits
+with `stream: true` and yields that submission's envelopes -- deltas, tool
+events, turn events -- from `SubmissionStarted` through its terminal, then
+ends:
+
+```ts
+yield* AgentSession.stream(session, "explain this").pipe(
+  Stream.filter((e) => e.event._tag === "MessageDelta"),
+  Stream.runForEach((e) => Console.log(e.event.delta))
+)
+```
+
+The subscription is registered before the submission is admitted, so a run
+that finishes at once cannot lose its first envelopes. The terminal is data: a
+failed run yields `SubmissionFailed` and the stream ends normally, and only
+admission -- `AgentBusyError`, `AgentClosedError` -- is on the error channel.
+It is cold, so each evaluation submits once; ending the consumer early
+releases nothing but the subscription, and `interrupt` stops the run. The
+stream ends only once the session is free again. The design and the rest of
+the streaming plan are in `plan-streaming.md`.
+
 ## Pausing for a human
 
 A run can need something a model cannot supply — approval, a credential, an
