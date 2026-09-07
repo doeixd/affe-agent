@@ -1,4 +1,4 @@
-import { Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
 import type { Layer } from "effect"
 import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -981,9 +981,64 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           )
       )),
 
-    // A failing model call, because that fails a run on every client. A tool
-    // that dies does not: it fails an in-process run and completes a durable
-    // one, a divergence this suite found and item 73 records.
+    /**
+     * A tool that dies fails the run everywhere.
+     *
+     * The rule is `ToolExecution`'s: a defect means the handler is broken,
+     * not that the model asked for something the tool could refuse, so it
+     * is never returned to the model. The durable wrapper once folded a
+     * defect into a typed tool failure the model then saw -- found by the
+     * streamed-failure case below, which had to use a failing model call
+     * until this held on every client (item 73).
+     */
+    make("a tool that dies fails the run everywhere, and is not shown to the model", withClient(
+      options,
+      {
+        agent: Agent.make({
+          toolkit: Agent.toolkit([Boom], { boom: () => Effect.die(new Error("the tool is broken")) }),
+          loop: AgentLoop.bounded(3)
+        }),
+        turns: [{ toolCalls: [{ id: "b1", name: "boom", params: {} }] }, TestLanguageModel.text("carried on")]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "a tool that dies fails the run everywhere, and is not shown to the model"
+            const session = yield* client.createSession()
+            const collected = yield* Effect.forkChild(
+              Stream.runCollect(
+                Stream.takeUntil(
+                  session.events(),
+                  (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
+                )
+              )
+            )
+            yield* Effect.yieldNow
+            const exit = yield* Effect.exit(session.prompt("go"))
+            yield* that(name)(Exit.isFailure(exit), "the prompt failed")
+            if (Exit.isFailure(exit)) {
+              const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+              yield* that(name)(error !== undefined && error._tag === "AgentExecutionError", `the failure is the run's, got ${JSON.stringify(error)}`)
+              if (error !== undefined && error._tag === "AgentExecutionError") {
+                yield* that(name)(error.isDefect, "reported as a defect")
+              }
+            }
+            const events = yield* Fiber.join(collected).pipe(
+              Effect.timeout(Duration.seconds(10)),
+              Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
+            )
+            const tags = events.map((entry) => entry.event._tag)
+            yield* equal(name)(tags[tags.length - 1], "SubmissionFailed", "the submission's terminal")
+            const failed = events.flatMap((entry) => AgentEvent.is("ToolCallFailed")(entry) ? [entry.event] : [])
+            yield* equal(name)(failed.length, 1, "tool failures reported")
+            yield* equal(name)(failed[0]!.returnedToModel, false, "returned to the model")
+            yield* that(name)(!tags.includes("MessageCompleted") || tags.indexOf("MessageCompleted") < tags.indexOf("ToolCallFailed"), "no message was produced after the defect")
+          })
+        )
+    )),
+
+    // A failing model call rather than a dying tool, so this case is about
+    // the stream and not about the rule the case above holds.
     make("a streamed submission that fails ends with SubmissionFailed, not a stream failure", withClient(
       options,
       {

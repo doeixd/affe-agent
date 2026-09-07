@@ -2007,3 +2007,23 @@ P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
     verify: grep "readonly stream: (" src/client/AgentClient.ts
     verify: grep "streams one submission" src/testing/AgentClientConformance.ts
     ```
+
+73. ~~**A tool that dies fails an in-process run and completes a durable
+    one.**~~ **DONE 2026-09-06** -- found the same day by the streamed-failure
+    conformance case. `DurableToolkit` folded every non-interrupt cause of a
+    handler into a typed `Failed` outcome and re-raised it typed, so under
+    `ReturnToModel` the model saw a broken handler as a tool failure and
+    could call it again; in-process, `ToolExecution` never returns a defect
+    to the model and fails the run. The durable rule now follows the local
+    one: the journal still records the defect as a value, so a replay fails
+    the same way, and the wrapper re-raises it as a defect. One conformance
+    case holds every client to it -- the prompt fails as a defect, the
+    submission ends `SubmissionFailed`, one `ToolCallFailed` with
+    `returnedToModel: false`, no message after it -- and the streamed-failure
+    case keeps its failing model call so it stays about the stream. Broken
+    once by re-raising typed again: the durable clients fail the case.
+
+    ```text
+    verify: grep "a tool that dies fails the run everywhere" src/testing/AgentClientConformance.ts
+    verify: grep "isDefect ? yield\* Effect.die" src/durable/DurableToolkit.ts
+    ```

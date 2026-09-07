@@ -61,6 +61,11 @@ the journal entry recording the unknown outcome, the call is unjournalled and
 a replay runs it. Only the engine's write can close that, so the guarantee is
 at-most-once for interruption, not for power loss.
 
+A tool handler that *dies* fails the run, as it does in-process: the journal
+records the defect as a value so a replay fails the same way, and the wrapper
+re-raises it as a defect rather than as a tool failure the model would see
+and act on. The client contract holds every client to that.
+
 `result` yields an `Exit`, because a failed submission is still a *completed*
 workflow. Its failure crosses as a typed `DurableAgentFailure` carrying the
 originating error's tag, not an opaque defect.

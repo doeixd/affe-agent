@@ -292,11 +292,19 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         }
 
         if (outcome._tag === "Failed") {
-          return yield* new DurableToolFailure({
+          const failure = new DurableToolFailure({
             toolName: String(name),
             toolCallId: id,
             failure: outcome.failure
           })
+          // A defect stays a defect. The journal holds it as a value so a
+          // replay fails the same way, but re-raising it *typed* handed it to
+          // `ToolExecution` as a tool failure, which under `ReturnToModel`
+          // the model saw and could act on -- while the same handler
+          // in-process fails the run ("a defect means the handler is broken,
+          // not that the model asked for something the tool could refuse").
+          // Item 73: one rule on every client.
+          return outcome.failure.isDefect ? yield* Effect.die(failure) : yield* failure
         }
 
         return Stream.fromIterable(
