@@ -1220,3 +1220,43 @@ export const start = <Tools extends Record<string, Tool.Any>, E, R, Value = stri
       events
     }
   })
+
+/**
+ * Run one prompt and observe it as a stream of events.
+ *
+ * The third of `run` / `start` / `stream`, and the one that owns what it
+ * observes: **the stream owns the ephemeral session**. Taking a prefix,
+ * interrupting, or abandoning the stream closes its scope and interrupts the
+ * model call and any running tools with it.
+ *
+ * That is the opposite of `AgentSession.stream`, deliberately. There the
+ * session owns the submission, so ending the stream detaches observation and
+ * the run continues. Neither is a special case: each stream ends by releasing
+ * whatever it owns, and they own different things.
+ *
+ * ```ts
+ * // Prints as it goes, and stops the agent when it stops reading.
+ * yield* Stream.runForEach(Agent.stream(agent, "summarise this"), print)
+ * ```
+ *
+ * The events are the same `AgentEventEnvelope`s every other surface emits --
+ * there is no stream-only event union and no provider chunk reaches it.
+ */
+export const stream = <Tools extends Record<string, Tool.Any>, E, R, Value = string, Input = Prompt.RawInput>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  input: NoInfer<Input>,
+  options?: AgentSession.PromptOptions & StartOptions
+): Stream.Stream<
+  AgentEvent.AgentEventEnvelope,
+  AgentSession.SubmitError | Errors.AgentTraceLimitError | E,
+  LanguageModel.LanguageModel | R
+> =>
+  // `start` under a scope this stream manages: same collector, same bound, same
+  // replay semantics, and one fewer thing to keep in step than a second
+  // implementation would be.
+  Stream.unwrap(
+    Effect.map(
+      start<Tools, E, R, Value, Input>(agent, input, options),
+      (started) => started.events
+    )
+  )

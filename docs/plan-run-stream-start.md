@@ -1,8 +1,17 @@
 # Plan: `run` / `stream` / `start` ergonomics without weakening session semantics
 
-**Status:** P1 implemented 2026-09-08 — `Agent.start`, `AgentSubmission.Handle`,
-`AgentTraceLimitError`, and the Phase 0 conformance file as
-`test/AgentOneShotContract.test.ts`. P2–P7 remain specified, not implemented.
+**Status:** P1 and P2 implemented 2026-09-08 — `Agent.start`,
+`AgentSubmission.Handle`, `AgentTraceLimitError`, `Agent.stream`, and the
+Phase 0 conformance file as `test/AgentOneShotContract.test.ts`. P3–P7 remain
+specified, not implemented.
+
+P2 was as small as §5 predicted: `Agent.stream` is `start`'s events under a
+scope the stream manages, sharing one collector and one bound rather than a
+second implementation. Its ownership claim is enforced by the type rather than
+only by a test — the signature carries no `Scope`, so the scope must be managed
+inside, and abandoning the stream necessarily releases the ephemeral session.
+The suite asserts the observable half too: the interruption reaches a *running
+tool*, not merely the caller, which is what tells owning apart from detaching.
 
 Two things P1 found, both recorded here because the next phase inherits them:
 

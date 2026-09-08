@@ -80,10 +80,13 @@ describe("public API", () => {
       "describe",
       "make",
       "run",
-      // The third one-shot form: `run` owns the execution for the call,
-      // `start` hands it to the caller's scope so the work outlives the
-      // waiter and a late observer can still replay the beginning.
+      // The other two one-shot forms. `run` owns the execution for the call,
+      // `start` hands it to the caller's scope so the work outlives the waiter
+      // and a late observer can still replay the beginning, and `stream` owns
+      // the ephemeral session itself -- so abandoning it interrupts the work,
+      // where abandoning `AgentSession.stream` only detaches observation.
       "start",
+      "stream",
       "tool",
       "toolkit",
       "updateContextTransform",

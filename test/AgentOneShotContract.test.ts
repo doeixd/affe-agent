@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentSession from "../src/AgentSession.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -79,6 +80,41 @@ describe("the one-shot forms share one execution", () => {
         yield* forRun.recorder.prompts,
         "a one-shot form with its own history would show up as a different model-facing prompt"
       )
+    }))
+
+  it.effect("draining stream yields the same lifecycle as start's events", () =>
+    Effect.gen(function*() {
+      const viaStart = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const started = yield* Agent.start(agent, "how many orders")
+          return yield* Stream.runCollect(started.events)
+        }).pipe(Effect.provide((yield* FakeModel.layer(script)).layer))
+      )
+
+      const viaStream = yield* Stream.runCollect(Agent.stream(agent, "how many orders")).pipe(
+        Effect.provide((yield* FakeModel.layer(script)).layer)
+      )
+
+      assert.deepStrictEqual(
+        viaStream.map((envelope) => envelope.event._tag),
+        viaStart.map((envelope) => envelope.event._tag),
+        "a second event model would show up here as a different lifecycle"
+      )
+    }))
+
+  it.effect("stream reaches the same result as run", () =>
+    Effect.gen(function*() {
+      const viaRun = yield* Effect.provide(
+        Agent.run(agent, "how many orders"),
+        (yield* FakeModel.layer(script)).layer
+      )
+
+      const events = yield* Stream.runCollect(Agent.stream(agent, "how many orders")).pipe(
+        Effect.provide((yield* FakeModel.layer(script)).layer)
+      )
+      const completed = events.find((envelope) => envelope.event._tag === "SubmissionCompleted")
+      assert.isDefined(completed, "the streamed submission never reported completion")
+      assert.strictEqual(viaRun.status, "completed")
     }))
 
   it.effect("both forms execute tools through the same path", () =>
@@ -287,5 +323,92 @@ describe("Agent.start's handle", () => {
           )
         }).pipe(Effect.provide((yield* FakeModel.layer(script)).layer))
       )
+    }))
+})
+
+describe("Agent.stream owns what it observes", () => {
+  /**
+   * The cancellation distinction from §5.1, and the reason `Agent.stream` and
+   * `AgentSession.stream` differ on purpose.
+   *
+   * Here the stream owns the ephemeral session, so reading a prefix and
+   * walking away closes the scope and interrupts the model call. The model in
+   * this test never returns; if the stream did not own its session, collecting
+   * one event and stopping would leave it hanging and this test would time out
+   * rather than fail.
+   */
+  it.effect("abandoning the stream interrupts the work it owns", () =>
+    Effect.gen(function*() {
+      const entered = yield* Deferred.make<void>()
+
+      const taken = yield* Stream.runCollect(
+        Stream.take(Agent.stream(agent, "how many orders"), 1)
+      ).pipe(
+        Effect.provide((yield* FakeModel.layer([{ started: entered, hang: true }])).layer),
+        Effect.timeout("10 seconds")
+      )
+
+      assert.strictEqual(taken.length, 1)
+    }))
+
+  /**
+   * The same claim, but observed from inside the work rather than from the
+   * caller returning promptly. A stream that merely detached would leave the
+   * tool running, and the caller would still come back on time -- so the
+   * finalizer is what tells the two apart.
+   */
+  it.effect("the interruption reaches a running tool, not just the caller", () =>
+    Effect.gen(function*() {
+      const running = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+
+      const slow = Agent.make({
+        tools: [
+          Agent.tool(Lookup, () =>
+            Effect.never.pipe(
+              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+              Effect.andThen(Effect.succeed("found")),
+              Effect.tap(() => Deferred.succeed(running, undefined))
+            ))
+        ],
+        loop: AgentLoop.bounded(4)
+      })
+
+      // Read until the tool is under way, then stop reading.
+      yield* Effect.scoped(
+        Stream.runCollect(
+          Stream.take(
+            Stream.filter(
+              Agent.stream(slow, "how many orders"),
+              (envelope) => envelope.event._tag === "ToolCallStarted"
+            ),
+            1
+          )
+        ).pipe(Effect.provide((yield* FakeModel.layer(script)).layer))
+      )
+
+      // The tool was interrupted by the stream ending, not left running.
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("10 seconds"))
+    }))
+
+  /**
+   * The contrast, asserted rather than described: a session-owned submission
+   * survives its observer. Same script, same prefix taken, opposite outcome.
+   */
+  it.effect("a session-owned submission survives the same treatment", () =>
+    Effect.gen(function*() {
+      const result = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* AgentSession.make(agent)
+          const receipt = yield* AgentSession.submit(session, "how many orders")
+          // Observe one envelope, then stop observing.
+          yield* Stream.runCollect(Stream.take(AgentSession.events(session), 1))
+          // The observer is gone; the submission is not.
+          return yield* AgentSession.awaitSubmission(session, receipt.submissionId)
+        }).pipe(Effect.provide((yield* FakeModel.layer(script)).layer))
+      ).pipe(Effect.timeout("10 seconds"))
+
+      assert.strictEqual(result.status, "completed")
+      assert.strictEqual(result.text, "three orders")
     }))
 })
