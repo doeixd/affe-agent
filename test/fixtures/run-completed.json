@@ -1,0 +1,49 @@
+{
+  "withoutExhaustion": {
+    "sessionId": "recorded-session",
+    "submissionId": {
+      "_id": "Option",
+      "_tag": "Some",
+      "value": "recorded-session:submission-1"
+    },
+    "runId": {
+      "_id": "Option",
+      "_tag": "Some",
+      "value": "recorded-session:run-1"
+    },
+    "turn": {
+      "_id": "Option",
+      "_tag": "None"
+    },
+    "sequence": 9,
+    "event": {
+      "_tag": "RunCompleted",
+      "turns": 1,
+      "stopReason": "supervisor said so"
+    }
+  },
+  "withExhaustion": {
+    "sessionId": "recorded-session",
+    "submissionId": {
+      "_id": "Option",
+      "_tag": "Some",
+      "value": "recorded-session:submission-1"
+    },
+    "runId": {
+      "_id": "Option",
+      "_tag": "Some",
+      "value": "recorded-session:run-1"
+    },
+    "turn": {
+      "_id": "Option",
+      "_tag": "None"
+    },
+    "sequence": 14,
+    "event": {
+      "_tag": "RunCompleted",
+      "turns": 2,
+      "stopReason": "max turns",
+      "exhaustion": "turns"
+    }
+  }
+}

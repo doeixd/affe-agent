@@ -165,7 +165,19 @@ export const RunCompleted = Schema.TaggedStruct("RunCompleted", {
    * `Budget.within` name theirs). Optional so a journal or consumer written
    * before it existed still decodes.
    */
-  stopReason: Schema.optional(Schema.String)
+  stopReason: Schema.optional(Schema.String),
+  /**
+   * How the run ran out, when it ran out rather than finished.
+   *
+   * A classification beside the prose: `stopReason` stays open-ended and a
+   * custom policy keeps naming its own reason, while the built-in ceilings
+   * carry one of these so a consumer branches on it instead of matching
+   * strings. Absent for an ordinary stop -- an idle model did not run out of
+   * anything -- and optional so an older journal still decodes.
+   */
+  exhaustion: Schema.optional(
+    Schema.Literals(["turns", "tool-calls", "duration", "tokens", "cost"])
+  )
 })
 export const RunFailed = Schema.TaggedStruct("RunFailed", {
   failure: Failure

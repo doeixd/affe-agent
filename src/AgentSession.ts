@@ -836,6 +836,9 @@ const settle = <Tools extends Record<string, Tool.Any>, E, Value = string>(
           response: landed.response,
           // No loop decided this stop.
           stopReason: Option.none(),
+          // And nothing ran out: an interruption is not exhaustion, however
+          // close to a ceiling the run happened to be when it was cut.
+          exhaustion: Option.none(),
           // An interrupted submission still reports a value it already got.
           // The tool call that produced it committed atomically with its turn,
           // so this is work that landed, not work in flight. Under the

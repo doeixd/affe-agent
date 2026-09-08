@@ -198,6 +198,9 @@ describe("public API", () => {
       "Stop",
       "and",
       "bounded",
+      // A classified stop: the built-in ceilings say *what* ran out, so a
+      // caller branches on a union rather than matching stopReason strings.
+      "exhausted",
       "final",
       "limits",
       "make",

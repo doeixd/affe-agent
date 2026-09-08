@@ -6,6 +6,7 @@ import type { Correlation } from "./AgentEvent.js"
 // handle's failure channel is the same `PromptError` a session prompt has,
 // and restating it here would be a second thing to keep in step.
 import type * as AgentSession from "./AgentSession.js"
+import type * as AgentLoop from "./AgentLoop.js"
 import * as AgentRun from "./AgentRun.js"
 import type * as Errors from "./Errors.js"
 import type * as AgentTurn from "./AgentTurn.js"
@@ -80,6 +81,15 @@ export interface Result<Tools extends Record<string, Tool.Any>, Value = string> 
    * an interrupted submission, which no loop decided.
    */
   readonly stopReason: Option.Option<string>
+  /**
+   * How the last run ran out, when a built-in ceiling ended it rather than a
+   * policy choosing to stop. `None` for an ordinary completion, for a custom
+   * policy's own reason, and for an interrupted submission.
+   *
+   * Beside `stopReason` rather than replacing it: the prose stays useful and
+   * open-ended, and this is the part a caller can branch on.
+   */
+  readonly exhaustion: Option.Option<AgentLoop.Exhaustion>
   /** The final model response, so usage and finish reason are not discarded. */
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
   /**
@@ -134,6 +144,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
     let stopReason: Option.Option<string> = Option.none()
+    let exhaustion: Option.Option<AgentLoop.Exhaustion> = Option.none()
 
     // `session.progress` is zeroed for this submission by `AgentSession.prompt`,
     // in the uninterruptible claim before this fibre exists, so an interrupt
@@ -187,6 +198,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       // The last run's, not the first's: a follow-up that ran to idle after
       // a bounded first run is a submission that ended by going idle.
       stopReason = exit.value.stopReason
+      exhaustion = exit.value.exhaustion
 
       // Buffered locally rather than re-queued. Putting the tail back on a
       // FIFO one item at a time reverses it, which turned A, B, C into
@@ -276,5 +288,5 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     // the model reported through its tool, or nothing.
     const value = Option.isSome(session.agent.output) ? reported : Option.some(text)
 
-    return { submissionId, runs, turns, text, response, stopReason, value }
+    return { submissionId, runs, turns, text, response, stopReason, exhaustion, value }
   })

@@ -16,6 +16,7 @@ going quiet.
 | `namespace-manifest.json` (2026-09-06 additions) | `2006e32` | `test/Namespace.test.ts` | Three entries added by item 47c: `affe_history` (the value the host always used, now built from the root and so frozen), `affe_dispatch` (new: the dispatch-intent table), and the intents service key. |
 | `error-tags-manifest.json` | `758ac4e` | `test/Namespace.test.ts` | Every bare `_tag` a `Schema.TaggedError` in `src` carries, recorded once from the definitions (decision 3 of `plan-two-decisions.md`, item 61). Asserted equal to what the code defines, both ways, with no tag shared. A new entry is a new error; a missing one is a rename. |
 | `prompt-response.json` | `baf0897` | `test/InputWire.test.ts` | `AgentProtocol.PromptResponse` for an untyped agent, before every agent had a `Value` (step 5). Asserted equal to the response after, plus exactly one field, `value`. |
+| `run-completed.json` | `d6778b3` | `test/Exhaustion.test.ts` | Two `RunCompleted` envelopes as the wire carries them: one from a custom policy that stopped without exhausting anything -- the shape every `RunCompleted` had before `exhaustion` existed -- and one from a `maxTurns` ceiling, which now classifies itself. Asserted that the older shape still decodes and reports no exhaustion, and that the newer one differs by exactly that one field. |
 
 To record one: write a throwaway test that runs the real path (a client, an
 adapter, a store) at the commit *before* the change, encode with the same
