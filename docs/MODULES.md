@@ -84,6 +84,7 @@ The root entry, `affe-agent`. This is the part that executes.
 | **`McpToolkit`** | `/mcp` | Remote MCP tools as an ordinary `Toolkit`. | Two doors: `bind` (declare locally, verify at connect, fully typed) and `bindDiscovered` (`Tool.dynamic` over the server's JSON Schema). That pair is the model [research-tool-sources.md](./research-tool-sources.md) generalises. |
 | **`ToolSource`** | `/tool-source` | One eager extraction + invocation seam over external tool catalogs. | The same declared/discovered doors over MCP, OpenAPI and GraphQL. Extraction reports skipped operations instead of silently creating broken tools; discovered toolkits preserve a `never` service requirement rather than leaking `any`. Credential resolution remains application/auth work. |
 | **`Subagent`** | `/subagent` | A tool that delegates a prompt to a child agent. | Typed convenience over child sessions; adds nothing to the engine. Composes with `/tree` when the children should be navigable. |
+| **`ProcessManager` / `ProcessTools`** | `/process` | A process that outlives the call that started it: an identity that is not a fibre, a lifetime that is not a tool call, and output to read later. | `Sandbox.exec` is a *bounded* command -- right for `git status`, wrong for a dev server, a watch, or a test run the agent means to come back to. |
 | **`CodeMode` / `CodeTool` / `Catalog`** | `/code` | One `execute` tool over a budgeted catalog; the model answers with a program that runs against the real toolkits, every nested call through `Permission`. | Confined by construction of the language (an owned interpreter) with authority decided per call -- not an isolate; the README's "Code mode" section states the boundary and cites its tests. `CodeExecutor` admits other engines (`/code/callscript`). |
 
 ## 4. Context, state and memory
@@ -101,6 +102,7 @@ All four are `ContextTransform`s. None touches canonical history.
 
 | module | path | what | relates to |
 | --- | --- | --- | --- |
+| **`ModelCapabilities`** | `/model` | What a model can do, beside what upstream's `Model` says: context window, cost, and whether it can see an image. | Upstream carries a provider name, a model name and a layer, so everything downstream that needs more is told by a hand-written number at the call site, or not at all. `/compaction` and `/budget` are the callers. |
 | **`Budget`** | `/budget` | A token ceiling enforced through the loop seam. | The canonical example of "a battery is a `Loop` plus a service". |
 | **`Scheduling`** | `/scheduling` | An `AgentDispatcher` seam for future work, plus a resilient `recurring` over `Schedule`. | Adapters over Effect's scheduling, not a scheduler runtime. `/cluster`'s `ScheduledAgent` is the distributed implementation. |
 | **`Hooks`** | `/hooks` | Typed side effects at lifecycle points, with isolated failures. | A convenience over `AgentEvent.match`; adds nothing. |
@@ -125,6 +127,7 @@ These all speak `AgentClient`, not `AgentSession`.
 | **`EffectUaiModel`** | `/effect-uai` | A [`betalyra/effect-uai`](https://github.com/betalyra/effect-uai) provider behind Effect AI's `LanguageModel`, so an Affe agent runs on that ecosystem's providers without the kernel learning a second AI vocabulary. | The direction [plan-effect-uai-integration.md](./plan-effect-uai-integration.md) §4.1 argues for: adapt at the narrow provider seam rather than making Effect AI replaceable in the kernel. Tools are described as effect-uai `SignalTool`s, which have no executor -- so Affe keeps tool execution, and with it every permission, lifecycle and replay semantic, by construction rather than by discipline. Both hooks drain `streamTurn`: effect-uai's assembled turn has no reasoning text. |
 | **`Compatibility`** | `/effect-uai` | Exact / degraded / unsupported, as the loss accounting every cross-ecosystem adapter owes its caller. | A `Degraded` conversion is never silent and an `Unsupported` one never proceeds -- the rule that keeps durable history from looking authoritative while being false. Rows in [plan-effect-uai-compatibility-contract.md](./plan-effect-uai-compatibility-contract.md). |
 | **`Connectors`** | `/connectors` | An agent in front of an external platform — verify, map conversation to session, prompt, reply. | Over `AgentSessionHost`. Slack ships at `/connectors/slack` with a portable Web Crypto verifier. Conformance plan in [plan-integrations.md](./plan-integrations.md) §7. |
+| **`Relay` / `RelayClient` / `RelayServer`** | `/relay` | A secure addressable transport for a node behind NAT, as an `RpcClient.Protocol`: who a node is, which endpoint a message is for, and the envelope carried between them. | The relay never reads a payload -- a `frame` is an encoded RPC message the two ends understand and it only carries. `RelayCredentials`, `RelayProtocol` and `RelayRpc` are the enrolment, wire and RPC halves. |
 
 ## 7. Durability and scale
 
@@ -134,6 +137,7 @@ These all speak `AgentClient`, not `AgentSession`.
 | **`AgentEntity` / `EntityClient` / `ScheduledAgent`** | `/cluster` | The session as a cluster entity. | "At most one run per session" *is* an entity invariant and `AgentSession.Id` *is* a routing key, so single ownership and out-of-band input routing come free. The harness knows nothing about it. |
 | **`DurableStreams`** | `/durable-streams` | The Durable Streams protocol as an Effect backend, and a reconnectable `DeliveryLog` over it. | What makes `events({ after })` a real resumption rather than a live stream wearing a resumption's clothes. |
 | **`SessionTree` / `NodeStore` / `TreeExport`** | `/tree` | Conversations as a tree: every turn boundary is a node, any node can be branched from. | `branch` and `activate` hand back an ordinary `AgentSession`, which is what lets a tree be added without changing how an app talks to an agent. |
+| **`BlobStore` / `BlobWire`** | `/blob`, `/blob/fs` | Content-addressed storage for large binary content: bytes go in once, a small `BlobRef` travels instead, and a receiver fetches what it needs. | Inline base64 is right for a 12 KB screenshot and wrong for a 50 MB video, which inflates by a third and then rides every boundary -- RPC frame, history row, event stream -- on every replay. `/blob/fs` is the filesystem backing. |
 
 ## 8. Observation, export and testing
 
@@ -154,6 +158,7 @@ These all speak `AgentClient`, not `AgentSession`.
 
 | module | path | what | relates to |
 | --- | --- | --- | --- |
+| **`Presets`** | `/presets` | Opinionated assemblies over the primitives -- the wiring a coding or gateway agent would otherwise re-derive -- plus `policy`, which reads back out of a loop's description. | Thirty-plus modules with no recipe means every target re-derives the same wiring, and the ones that get it subtly wrong do not find out. Sugar, and documented as such. |
 | **`Plugins`** | `/plugins` | Loads a portable Agent Plugins directory (`plugin.json` + `skills/` + `mcp.json`). | An adapter over `/skills`, `/mcp` and `/sandbox` — no core change. The main consumer of `McpToolkit.bindDiscovered`, and therefore the case that most needs code mode's catalog work ([research-code-mode.md](./research-code-mode.md) §5). |
 
 ## 10. Not public

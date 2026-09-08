@@ -1,4 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { Effect, Schema } from "effect"
 import * as Harness from "../src/index.js"
 
@@ -900,5 +902,32 @@ describe("durable and cluster surfaces", () => {
       "resolveFor",
       "withReauth"
     ])
+  })
+
+  /**
+   * `MODULES.md` opens by calling itself the answer to "which module do I need
+   * for X". That is only true while it lists them, and it silently stopped:
+   * `/relay`, `/presets`, `/blob`, `/blob/fs`, `/model` and `/process` were
+   * each shipped and never indexed (item 65).
+   *
+   * Checked here rather than trusted, because the failure is invisible -- a
+   * missing row breaks nothing, and the next reader simply does not find the
+   * module.
+   */
+  it("every published subpath is in the module index", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")
+    ) as { readonly exports: Readonly<Record<string, unknown>> }
+    const modules = readFileSync(join(import.meta.dirname, "..", "docs", "MODULES.md"), "utf8")
+
+    const missing = Object.keys(manifest.exports)
+      // The root entry is the package itself, described by section 1 rather
+      // than by a path; `./package.json` is the manifest, exported so tooling
+      // can read it and not a module anyone imports.
+      .filter((entry) => entry !== "." && entry !== "./package.json")
+      .map((entry) => entry.slice(1))
+      .filter((path) => !modules.includes(path))
+
+    assert.deepStrictEqual(missing, [], "published subpaths absent from docs/MODULES.md")
   })
 })
