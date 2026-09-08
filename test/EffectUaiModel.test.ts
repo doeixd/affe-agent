@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, ExecutionPlan, Layer, Option, Ref, Schema, Stream } from "effect"
 import { IdGenerator, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import { ContentFiltered, RateLimited, Unavailable } from "@effect-uai/core/AiError"
 import type * as UaiAiError from "@effect-uai/core/AiError"
@@ -11,6 +11,7 @@ import * as AgentSession from "../src/AgentSession.js"
 import * as Permission from "../src/Permission.js"
 import * as Compatibility from "../src/effect-uai/Compatibility.js"
 import * as EffectUaiModel from "../src/effect-uai/EffectUaiModel.js"
+import * as FakeModel from "./FakeModel.js"
 
 /**
  * These are the conformance rows of
@@ -768,4 +769,163 @@ describe("EffectUaiModel", () => {
       }))
   })
 
+
+  /**
+   * Phase 2's acceptance list, which the Phase 1 commit deliberately did not
+   * claim. Streaming works because `LanguageModel.make` needs both hooks; that
+   * is not the same as it being right.
+   */
+  describe("streaming lifecycle", () => {
+    /** Every opened stream is closed: an unmatched start leaves a consumer waiting forever. */
+    it.effect("text and reasoning streams are opened and closed in pairs", () =>
+      Effect.gen(function*() {
+        const { result } = yield* withModel(
+          [
+            { _tag: "ReasoningDelta", text: "thinking", kind: "trace" },
+            text("and "),
+            text("answering"),
+            complete(turn([], "stop"))
+          ],
+          () => Stream.runCollect(LanguageModel.streamText({ prompt: "hello" }))
+        )
+        const parts = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(parts, failureText(result))
+
+        const count = (type: string) => parts.filter((part) => part.type === type).length
+        assert.strictEqual(count("text-start"), count("text-end"), "a text stream was left open")
+        assert.strictEqual(count("reasoning-start"), count("reasoning-end"), "a reasoning stream was left open")
+        assert.strictEqual(count("text-start"), 1, "two deltas should share one text stream")
+      }))
+
+    /**
+     * Interleaved calls, on the streaming path this time. The batch row above
+     * proves the assembled calls; this proves the *fragments* stay attached to
+     * the right call while both are in flight, which is where a translator
+     * that keyed on "the current call" would merge them.
+     */
+    it.effect("argument fragments keep their call id and order while interleaved", () =>
+      Effect.gen(function*() {
+        const { result } = yield* withModel(
+          [
+            { _tag: "ToolCallStart", call_id: "a", name: "one" },
+            { _tag: "ToolCallStart", call_id: "b", name: "two" },
+            { _tag: "ToolCallArgsDelta", call_id: "a", delta: "{\"x\":" },
+            { _tag: "ToolCallArgsDelta", call_id: "b", delta: "{\"y\":" },
+            { _tag: "ToolCallArgsDelta", call_id: "a", delta: "1}" },
+            { _tag: "ToolCallArgsDelta", call_id: "b", delta: "2}" },
+            complete(
+              turn(
+                [
+                  { type: "function_call", call_id: "a", name: "one", arguments: "{\"x\":1}" },
+                  { type: "function_call", call_id: "b", name: "two", arguments: "{\"y\":2}" }
+                ],
+                "tool_calls"
+              )
+            )
+          ],
+          () =>
+            Stream.runCollect(
+              LanguageModel.streamText({
+                prompt: "hello",
+                toolkit: Toolkit.make(one, two),
+                disableToolCallResolution: true
+              })
+            )
+        )
+        const parts = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(parts, failureText(result))
+
+        // Each fragment carries the id it belongs to, in the order it arrived.
+        assert.deepStrictEqual(
+          parts.flatMap((part) => part.type === "tool-params-delta" ? [[part.id, part.delta]] : []),
+          [["a", "{\"x\":"], ["b", "{\"y\":"], ["a", "1}"], ["b", "2}"]]
+        )
+
+        // And the assembled calls say what the fragments spelled, rather than
+        // one call wearing the other's arguments.
+        assert.deepStrictEqual(
+          parts.flatMap((part) => part.type === "tool-call" ? [[part.id, part.params]] : []),
+          [["a", { x: 1 }], ["b", { y: 2 }]]
+        )
+      }))
+  })
+
+  /**
+   * The plan's §9 claim, exercised: Affe's own `ExecutionPlan` fallback should
+   * route between an official provider and an effect-uai-backed one without a
+   * new fallback subsystem.
+   *
+   * The interesting half is the rule it must not break. `AgentTurn` streams
+   * with `preventFallbackOnPartialStream`, because a fallback after partial
+   * output would leave an observer holding text the transcript will never
+   * contain. That guard is Affe's, above the model -- so what is under test is
+   * whether an effect-uai step *participates* in it correctly, which it only
+   * does if its stream fails the way the guard expects.
+   */
+  describe("as one step of an execution plan", () => {
+    it.effect("a step that emitted nothing falls back, and the run is the fallback's", () =>
+      Effect.gen(function*() {
+        // Fails before any part: the fallback is invisible to an observer,
+        // which is the outcome worth having.
+        const failing = yield* endingBadly([], "fail")
+        const { layer: fallback } = yield* FakeModel.layer([{ text: "the fallback answered" }])
+
+        const result = yield* Effect.scoped(
+          Effect.gen(function*() {
+            const session = yield* AgentSession.make(
+              Agent.make({ loop: AgentLoop.bounded(2) }).pipe(
+                Agent.withExecutionPlan(
+                  ExecutionPlan.make(
+                    { provide: modelOver(failing) },
+                    { provide: fallback }
+                  )
+                )
+              )
+            )
+            return yield* AgentSession.prompt(session, "go")
+          })
+        )
+
+        assert.strictEqual(result.text, "the fallback answered")
+      }))
+
+    /**
+     * Streamed on purpose. The guard is `withPlanStream`, which only applies to
+     * the streaming path -- a batch call that fails has emitted nothing to an
+     * observer, so falling back is safe and correct there, and the row above
+     * shows it happening.
+     */
+    it.effect("a streamed step that already emitted does not fall back, so no message blends two providers", () =>
+      Effect.gen(function*() {
+        // Emits text, then dies. The guard must stop the ladder here.
+        const failing = yield* endingBadly([text("half an ans")], "fail")
+        const { layer: fallback } = yield* FakeModel.layer([{ text: "the fallback answered" }])
+
+        const exit = yield* Effect.exit(
+          Effect.scoped(
+            Effect.gen(function*() {
+              const session = yield* AgentSession.make(
+                Agent.make({ loop: AgentLoop.bounded(2) }).pipe(
+                  Agent.withExecutionPlan(
+                    ExecutionPlan.make(
+                      { provide: modelOver(failing) },
+                      { provide: fallback }
+                    )
+                  )
+                )
+              )
+              return yield* AgentSession.prompt(session, "go", { stream: true })
+            })
+          )
+        )
+
+        // The run fails rather than answering. That is the conservative side of
+        // the trade and the point of the rule: a viewer shown one message made
+        // of two providers' words is a bug in every case, while a provider that
+        // died halfway is rarely rescued by starting over.
+        assert.isTrue(Exit.isFailure(exit), "the ladder continued past a step that had already emitted")
+        const message = failureText(exit)
+        assert.notInclude(message, "the fallback answered", "the fallback ran after partial output")
+      }))
+  })
 })

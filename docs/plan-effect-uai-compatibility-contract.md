@@ -550,11 +550,29 @@ is fabricated for a turn that never completed.
 Two things are also true of the implementation that this contract does not
 claim:
 
-* **Phase 2 arrived early, but not its acceptance.** `LanguageModel.make`
-  requires both hooks, and §2.2 forces `generateText` through `streamTurn`
-  anyway, so streaming works. The streaming acceptance list in §7 is not fully
-  tested — interruption, partial-stream failure and the no-mixed-fallback rule
-  are Phase 2's actual work.
+* **Phase 2's acceptance is now met** (2026-09-08). Streaming arrived early
+  because `LanguageModel.make` requires both hooks and §2.2 forces
+  `generateText` through `streamTurn`; the acceptance came after. Every opened
+  text and reasoning stream is closed, argument fragments keep their call id
+  and order while two calls are in flight, the assembled calls match the
+  fragments, an abandoned fragment is not closed, cancellation stays an
+  interruption, and no `finish` part is fabricated for a turn that never
+  completed.
+
+  The no-mixed-fallback rule is the one worth naming, because the guard is not
+  the adapter's: `AgentTurn` streams with `preventFallbackOnPartialStream`, so
+  what an effect-uai step has to do is *participate* -- fail in the way the
+  guard expects. It does. A step that emitted nothing falls back and the run is
+  the fallback's; a streamed step that had already emitted does not, and the
+  run fails rather than showing one message made of two providers' words.
+  Turning the guard off fails that row, which is how it is known to be the
+  thing under test.
+
+  Worth knowing if you write one of these: the rule applies to the *streamed*
+  path only. A batch call that fails has emitted nothing to an observer, so
+  falling back there is safe and correct, and the first version of the test
+  passed for that reason rather than the intended one.
+
 * **Dynamic tools are untested.** Tools whose parameters are a raw JSON schema
   rather than an Effect `Schema` go through the same path, but no `toolSource`
   test covers them yet.
