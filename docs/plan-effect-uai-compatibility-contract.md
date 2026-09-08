@@ -136,6 +136,9 @@ tool results; user images.
 
 **Response out:** text; reasoning; tool calls; finish reason; usage.
 
+**Request options in:** tool choice, and structured output — the latter because
+`AgentOutput` needs it, not because it is easy (§4.0).
+
 Everything in §4 that is not marked *required* is out of scope for Phase 1 and
 must produce an `Unsupported` failure rather than a best effort.
 
@@ -145,6 +148,43 @@ must produce an `Unsupported` failure rather than a best effort.
 
 The policy column is the contract. `required` rows must have tests before the
 adapter ships; `Unsupported` rows must have a test proving they *fail*.
+
+### 4.0 Request options, Effect AI -> effect-uai
+
+Easy to skip, because the two `CommonRequest` fields look like the two
+`ProviderOptions` fields. Two of the four rows are not.
+
+| Effect AI | effect-uai | fidelity | policy |
+| --- | --- | --- | --- |
+| `toolChoice` `"auto"` / `"none"` / `"required"` | same three literals | Exact | required |
+| `toolChoice` `{ tool }` | `{ type: "function", name }` | Exact | required |
+| `toolChoice` `{ mode?, oneOf }` | — | Degraded | required |
+| `responseFormat: { type: "text" }` | `structured` omitted | Exact | required |
+| `responseFormat: { type: "json", objectName, schema }` | `structured` via `fromEffectSchema` | Exact | required |
+
+**`oneOf` has no counterpart.** effect-uai's `toolChoice` can name one function
+or none; it cannot express "restrict the model to this subset." The honest
+translation is to *render only the subset* into the effect-uai `Toolkit` and map
+`mode` to `auto` / `required`. The model could not have called the excluded
+tools either way, so the permitted behaviour is unchanged — but the excluded
+tools are no longer *described* to the model, and a description can change what
+the model does with the tools it kept. That is why this is `Degraded` and not
+`Exact`, and it is the kind of difference that is invisible unless someone
+writes it down first.
+
+**Structured output is Phase 1, not Phase 3.** Affe's `AgentOutput` rides on
+`generateObject`, which Effect AI implements over the *`generateText` hook* plus
+a `codecTransformer`. So the adapter cannot defer structured output and still
+claim "an existing `AgentSession` runs unchanged" (§7.1). The bridge exists and
+is theirs: `StructuredFormat.fromEffectSchema` wraps an Effect `Schema` as the
+Standard Schema / Standard JSON Schema pair effect-uai wants, which is exactly
+the `Schema.Top` that `responseFormat` carries. `objectName` maps to `name`.
+
+Because effect-uai's providers constrain the wire themselves, the adapter should
+pass `structured` through and leave `LanguageModel.make`'s `codecTransformer`
+unset rather than transforming the schema twice. That is an assumption, so it is
+a test: a structured request must decode to the same value it would have from an
+official provider.
 
 ### 4.1 History, Effect AI -> effect-uai
 
@@ -323,7 +363,9 @@ Phase 1 ships when all of the following hold, per plan §11:
 6. Every `Unsupported` row has a test proving it fails, for the intended reason.
 7. `generateText` is proven to preserve reasoning text (§2.2) — the test that
    would have caught the `turn()` implementation.
-8. `@effect-uai/core` is not a dependency of the default package graph.
+8. A structured-output request decodes to the same value an official provider
+   would have produced (§4.0), since `AgentOutput` depends on it.
+9. `@effect-uai/core` is not a dependency of the default package graph.
 
 And the streaming acceptance from the plan, which Phase 2 inherits: every opened
 text / reasoning / tool-params stream is closed; argument fragments keep their
