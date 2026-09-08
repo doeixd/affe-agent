@@ -294,13 +294,13 @@
   "peerDependencies": {
     "@a2a-js/sdk": ">=1.0.1 <2.0.0",
     "@durable-streams/client": ">=0.2.6 <0.3.0",
+    "@effect-uai/core": ">=0.14.0 <0.15.0",
     "@modelcontextprotocol/client": ">=2.0.0 <3.0.0",
     "@modelcontextprotocol/sdk": ">=1.10.0 <2.0.0",
     "acorn": ">=8.18.0 <9.0.0",
     "callscript": ">=0.1.0 <0.2.0",
     "effect": ">=4.0.0-rc.111 <4.0.0",
-    "effect-cf": ">=0.39.0 <0.40.0",
-    "@effect-uai/core": ">=0.14.0 <0.15.0"
+    "effect-cf": ">=0.39.0 <0.40.0"
   },
   "peerDependenciesMeta": {
     "@a2a-js/sdk": {
@@ -355,6 +355,7 @@
     "esbuild": "^0.28.2",
     "mcp-sdk-v1-floor": "npm:@modelcontextprotocol/sdk@1.10.0",
     "miniflare": "^5.20260828.0-alpha",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.0",
     "vitest": "^4.1.11",
     "zod": "^4.4.3"
