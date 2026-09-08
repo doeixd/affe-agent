@@ -1,3 +1,4 @@
+import type { Cause } from "effect"
 import { Config, Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
@@ -41,3 +42,39 @@ export const main = program.pipe(
     )
   )
 )
+
+/**
+ * The original `Cause` of a tool failure the model recovered from.
+ *
+ * `ToolCallFailed` carries a *projection* -- a name, a message, and whether it
+ * was a defect -- because it has to survive a wire and a journal. That is the
+ * right thing on the stream and the wrong thing for an operator, who wants the
+ * typed error with its fields and the cause's structure.
+ *
+ * The cause never leaves the process, so it is read where it is raised: a
+ * handler is an ordinary `Effect`, and `Effect.tapCause` observes it and
+ * re-raises it, changing nothing about the result. That fires exactly once per
+ * attempt.
+ *
+ * What the handler cannot see is the submission, the run, the turn, or what the
+ * failure policy decided to do about the failure. The event carries all four.
+ * The two join on the tool call id, which the handler is given as
+ * `context.toolCallId` and the event reports as `ToolCallFailed.id`.
+ *
+ * This is a recipe rather than a seam on purpose: `plan-run-stream-start.md`
+ * §8.1 asks whether telemetry can already get the cause exactly once per
+ * attempt without changing run semantics, and it can.
+ * `test/ToolFailureObservation.test.ts` is the audit, so this stays true.
+ */
+export const observedTool = <Args, Success, Error, Requirements>(
+  handler: (input: Args, context: { readonly toolCallId?: string | undefined }) =>
+    Effect.Effect<Success, Error, Requirements>,
+  report: (failure: {
+    readonly toolCallId: string | undefined
+    readonly cause: Cause.Cause<Error>
+  }) => Effect.Effect<void>
+) =>
+(input: Args, context: { readonly toolCallId?: string | undefined }) =>
+  handler(input, context).pipe(
+    Effect.tapCause((cause) => report({ toolCallId: context.toolCallId, cause }))
+  )

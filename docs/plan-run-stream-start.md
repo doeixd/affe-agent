@@ -5,7 +5,8 @@
 `AgentToolProgressLimitError` and the per-submission progress budget,
 `AgentLoop.Exhaustion` on `Result` and `RunCompleted`, and
 `onExhaustion: "stop" | "final-answer" | "fail"` over `withFinalAnswer` and
-`failOnExhaustion`. P6–P7 remain specified, not implemented.
+`failOnExhaustion`. **P6 was audited and deliberately not built** -- see §8. P7
+remains specified, not implemented.
 
 P5 replaced `Limits.finalTurn` rather than adding a second spelling beside it:
 nothing outside `src` and the sessions guide used it, and a boolean cannot say
@@ -571,6 +572,45 @@ Important constraints:
 Do not add a monolithic `RunBudget` runtime that duplicates `AgentLoop` and `/budget`.
 
 The user-facing helper should lower to those existing mechanisms. If its type requirements become dishonest or unreadable, stop at the `Exhaustion` classification and leave policy composition explicit.
+
+---
+
+## 8. Phase 5 — a raw operational tool-failure observer: **audited 2026-09-08, not needed**
+
+**Outcome: no seam.** The audit below answers §8.1's question yes, so this
+phase ends in a documented route and a recipe rather than a service.
+`test/ToolFailureObservation.test.ts` is the audit as tests, so the decision
+is falsifiable: if the route stops working, that file fails and this section
+is wrong.
+
+**The route.** A tool handler is an ordinary `Effect`, so `Effect.tapCause`
+observes its `Cause` and re-raises it -- exactly once per attempt, changing
+nothing about the result, and giving the typed error with its fields rather
+than the projection `ToolCallFailed` carries.
+
+What the handler cannot see is `submissionId`, `runId`, `turn`, or the
+disposition. The event carries all four, including `returnedToModel`, which is
+the disposition under another name. **The two join on the tool call id** --
+`context.toolCallId` for the handler, `ToolCallFailed.id` for the event -- and
+a test asserts those are the same id, since the join is the only thing the
+recommendation depends on.
+
+So the candidate `ToolFailureObservation` below is obtainable today, in two
+pieces, by an application that wants it. Adding a service to deliver it
+pre-joined would buy convenience and cost a seam, a lifetime, an inline-observer
+backpressure question, and a second place where a `Cause` can escape into
+something that might be serialized.
+
+**One limit, stated plainly:** the route covers failures raised *inside the
+handler*, which is the case §8 describes. Failures the harness raises around a
+call -- a permission denial, an approval refusal, the tool-progress ceiling --
+never enter the handler and so are not tapped. They surface as their own typed
+errors on the run, which is a different question from this one.
+
+Documented in `docs/guide-batteries.md`; the combinator is in
+`examples/observability.ts`.
+
+The original phase text follows, and its `if no` branch is the one not taken.
 
 ---
 

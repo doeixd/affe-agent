@@ -195,6 +195,31 @@ leak. `Observability.describe` is the pure event → record mapper if you want t
 build your own exporter; the default `trace` sink logs structured records any
 Effect tracing backend already captures.
 
+**A tool failure the model recovered from is the case worth knowing about.**
+The handler fails, the failure policy hands it back, the model works around it,
+and the submission completes -- so nothing downstream looks wrong, and an
+operator still wants to know the tool broke. `ToolCallFailed` carries a
+*projection* of the failure (a name, a message, whether it was a defect),
+because it has to survive a wire and a journal; the `Cause` itself never leaves
+the process.
+
+So read it where it is raised. A handler is an ordinary `Effect`, and
+`Effect.tapCause` observes the cause and re-raises it -- exactly once per
+attempt, changing nothing about the result:
+
+```ts
+Agent.tool(Search, (input, context) =>
+  search(input).pipe(
+    Effect.tapCause((cause) => report({ toolCallId: context.toolCallId, cause }))
+  ))
+```
+
+The handler does not know the submission, the run, the turn, or what the policy
+decided to do about the failure. The event knows all four. They join on the
+tool call id -- `context.toolCallId` on one side, `ToolCallFailed.id` on the
+other -- and `returnedToModel` is what says the model was given a chance to
+recover. `examples/observability.ts` has the combinator.
+
 Each successful provider call emits `ModelCallCompleted` before any requested
 tools run, with normalised input/output/total token counts and finish reason.
 `Observability.metrics` records those as `agent_model_tokens` (by `direction`),
