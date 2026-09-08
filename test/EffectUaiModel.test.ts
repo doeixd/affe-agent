@@ -259,6 +259,50 @@ describe("EffectUaiModel", () => {
         assert.strictEqual(only(calls).id, "call-1")
       }))
 
+    /**
+     * A call the provider started streaming and then abandoned.
+     *
+     * `TurnComplete` is the authority on what the model actually asked for. A
+     * fragment that never became a call must not be closed as though it had —
+     * Effect AI assembles a call from a completed `tool-params-*` sequence, so
+     * closing an abandoned one fabricates a tool call the model never made,
+     * and Affe would then execute it.
+     */
+    it.effect("a tool call abandoned mid-stream is not fabricated into a real one", () =>
+      Effect.gen(function*() {
+        const { result } = yield* withModel(
+          [
+            { _tag: "ToolCallStart", call_id: "ghost", name: "search" },
+            { _tag: "ToolCallArgsDelta", call_id: "ghost", delta: "{\"query\":" },
+            // The provider gave up: no function_call item on the finished turn.
+            complete(turn([], "stop"))
+          ],
+          () =>
+            Stream.runCollect(
+              LanguageModel.streamText({
+                prompt: "hello",
+                toolkit: Toolkit.make(search),
+                disableToolCallResolution: true
+              })
+            )
+        )
+        const parts = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(parts, failureText(result))
+        assert.deepStrictEqual(
+          parts.filter((one) => one.type === "tool-call"),
+          [],
+          "an abandoned fragment must not become a call"
+        )
+        // And it is not closed either. Affe rebuilds a call from the params
+        // stream itself, so a `tool-params-end` the provider never earned is
+        // enough to fabricate one a layer below Effect AI.
+        assert.deepStrictEqual(
+          parts.filter((one) => one.type === "tool-params-end"),
+          [],
+          "an abandoned fragment must not be closed"
+        )
+      }))
+
     it.effect("interleaved tool calls stay separate", () =>
       Effect.gen(function*() {
         const { result } = yield* withModel(

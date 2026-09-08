@@ -3,8 +3,8 @@
 **Status: Phase 0 written 2026-09-08; Phase 1 implemented the same day** as
 `src/effect-uai` (`affe-agent/effect-uai`), with `@effect-uai/core` as an
 optional peer dependency and the §4 rows as `test/EffectUaiModel.test.ts`. §9
-records the three things writing the adapter changed about this document. This
-is Phase 0 of
+records what writing and then reviewing the adapter changed about this
+document. This is Phase 0 of
 [plan-effect-uai-integration.md](./plan-effect-uai-integration.md) §11, which
 asks for the translation contract to be written and reviewable *before* an
 adapter exists, so that "reviewers can identify exactly what is unsupported
@@ -263,6 +263,7 @@ the type"), and it was just as wrong here.
 | `ReasoningDelta` (`trace`) | reasoning start / delta / end | Exact | required |
 | `ReasoningDelta` (`summary`) | reasoning parts, marked in metadata | Degraded | required |
 | `ToolCallStart` + `ToolCallArgsDelta` | tool-params start / delta / end, then `tool-call` | Exact | required |
+| a streamed call absent from `TurnComplete` | nothing — not started-and-closed | Exact | required |
 | `UsageUpdate` | cumulative; **not** added to the finish usage | Exact | required |
 | `TurnComplete.turn.usage` | `FinishPart.usage` | Exact | required |
 | `RefusalDelta` / `stop_reason: "refusal"` | see §4.5 | Degraded | required |
@@ -280,6 +281,16 @@ same image in canonical history twice. That is a decision, so it gets a test.
 `UsageUpdate` is cumulative, and `TurnComplete` carries the final usage. Adding
 them is the natural bug and the plan names it ("usage/finish metadata is not
 double-counted"), so it is a required row.
+
+**`TurnComplete` is the authority on which calls exist.** A provider may start
+streaming a call and abandon it, leaving fragments with no `function_call` item
+on the finished turn. Those fragments must not be closed. This is sharper than
+it looks: Affe reconstructs a tool call from the params stream itself, so a
+`tool-params-end` the provider never earned is enough to fabricate a call the
+model never made — and Affe would then execute it, with permissions and
+canonical history recording a call that did not happen. Emitting `tool-call`
+only for completed calls is not sufficient on its own; the close has to be
+withheld too.
 
 Effect AI's `Usage` is the richer of the two — `inputTokens` with `uncached`,
 `cacheRead`, `cacheWrite`, and `outputTokens` with `text` and `reasoning` — and
@@ -444,6 +455,13 @@ That helper constrains its schema to one with no decoding services, and
 `responseFormat.schema` is a `Schema.Top` that may have them. The adapter hands
 over the JSON schema instead — which is all the wire needs, since Effect AI
 decodes the result against the original schema itself.
+
+**The post-commit review found one defect (§4.3).** The adapter closed every
+streamed tool-call fragment on `TurnComplete`, including ones the finished turn
+never acknowledged. Because Affe rebuilds a call from the params stream rather
+than only from the assembled `tool-call` part, that unearned close was enough to
+fabricate a call the model never made and hand it to `ToolExecution`. Fixed, and
+the row is now a test that fails when the guard is removed.
 
 Two things are also true of the implementation that this contract does not
 claim:

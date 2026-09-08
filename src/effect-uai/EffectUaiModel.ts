@@ -456,13 +456,13 @@ const toolCallsOf = (turn: UaiTurn) =>
 const reasoningOf = (turn: UaiTurn) =>
   turn.items.flatMap((item) => item.type === "reasoning" ? [item] : [])
 
-const parseArguments = (call: { readonly name: string; readonly arguments: string }) =>
+const parseArguments = (call: { readonly name: string; readonly arguments: string }, method: string) =>
   Effect.try({
     try: () => call.arguments === "" ? {} : JSON.parse(call.arguments) as unknown,
     catch: () =>
       AiError.make({
         module: MODULE,
-        method: "streamText",
+        method,
         reason: new AiError.InvalidOutputError({
           description: `tool call "${call.name}" arrived with arguments that are not JSON: ${call.arguments}`
         })
@@ -479,7 +479,8 @@ const parseArguments = (call: { readonly name: string; readonly arguments: strin
 const handle = (
   event: TurnEvent,
   state: Accumulator,
-  onDegraded: Compatibility.OnDegraded
+  onDegraded: Compatibility.OnDegraded,
+  method: string
 ): Effect.Effect<ReadonlyArray<Response.StreamPartEncoded>, AiError.AiError> => {
   switch (event._tag) {
     case "TextDelta":
@@ -538,7 +539,7 @@ const handle = (
       // also arrives on the assembled turn, and forwarding both would put the
       // same image into canonical history twice.
       if (event.partialIndex !== undefined) return Effect.succeed([])
-      return Effect.fail(asAiError("streamText", "response")(unsupported({
+      return Effect.fail(asAiError(method, "response")(unsupported({
         feature: "assistant image output",
         source: EFFECT_UAI,
         target: EFFECT_AI,
@@ -546,7 +547,7 @@ const handle = (
       })))
     }
     case "CitationAdded": {
-      return Effect.fail(asAiError("streamText", "response")(unsupported({
+      return Effect.fail(asAiError(method, "response")(unsupported({
         feature: "citation",
         source: EFFECT_UAI,
         target: EFFECT_AI,
@@ -554,7 +555,7 @@ const handle = (
       })))
     }
     case "WebSearchCall": {
-      return Effect.fail(asAiError("streamText", "response")(unsupported({
+      return Effect.fail(asAiError(method, "response")(unsupported({
         feature: "provider-executed web search",
         source: EFFECT_UAI,
         target: EFFECT_AI,
@@ -573,15 +574,23 @@ const handle = (
           state.reasoningOpen = false
           parts.push({ type: "reasoning-end", id: REASONING_ID, ...(yield* reasoningMetadata(event.turn, state, onDegraded)) })
         }
+        const calls = toolCallsOf(event.turn)
+        // Only fragments the finished turn acknowledges are closed. A provider
+        // that starts streaming a call and abandons it leaves a fragment with
+        // no `function_call` item, and closing it would fabricate a call the
+        // model never made -- Affe rebuilds a call from the params stream
+        // itself, so an unearned `tool-params-end` is enough to do it, and the
+        // fabricated call would then be executed.
+        const completed = new Set(calls.map((call) => call.call_id))
         for (const streamed of state.streamed) {
-          parts.push({ type: "tool-params-end", id: streamed.id })
+          if (completed.has(streamed.id)) parts.push({ type: "tool-params-end", id: streamed.id })
         }
-        for (const call of toolCallsOf(event.turn)) {
+        for (const call of calls) {
           parts.push({
             type: "tool-call",
             id: call.call_id,
             name: call.name,
-            params: yield* parseArguments(call)
+            params: yield* parseArguments(call, method)
           })
         }
         parts.push({
@@ -667,7 +676,7 @@ const batchParts = (
         type: "tool-call",
         id: call.call_id,
         name: call.name,
-        params: yield* parseArguments(call)
+        params: yield* parseArguments(call, "generateText")
       })
     }
     parts.push({
@@ -744,7 +753,7 @@ export const make = (
           (request) =>
             uai.streamTurn(request).pipe(
               Stream.mapError(uaiError(method)),
-              Stream.mapEffect((event) => handle(event, state, onDegraded)),
+              Stream.mapEffect((event) => handle(event, state, onDegraded, method)),
               Stream.flattenIterable
             )
         )
