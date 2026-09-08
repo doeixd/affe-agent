@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
 import { IdGenerator, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
+import { ContentFiltered, RateLimited, Unavailable } from "@effect-uai/core/AiError"
+import type * as UaiAiError from "@effect-uai/core/AiError"
 import * as UaiLanguageModel from "@effect-uai/core/LanguageModel"
 import type { Turn as UaiTurn, TurnEvent } from "@effect-uai/core/Turn"
 import * as Agent from "../src/Agent.js"
@@ -126,6 +128,27 @@ const only = <A>(all: ReadonlyArray<A>): A => {
   assert.isDefined(first)
   return first
 }
+
+
+/**
+ * A provider whose stream ends the way a real one can: by failing, or by
+ * cancelling itself. `scripted` always ends cleanly, which is exactly the case
+ * these invariants are not about.
+ */
+const endingBadly = (events: ReadonlyArray<TurnEvent>, ending: "fail" | "interrupt") =>
+  Effect.sync(() => {
+    const tail = ending === "fail"
+      ? Stream.fail(new Unavailable({ provider: "test", raw: "the provider went away" }))
+      : Stream.drain(Stream.fromEffect(Effect.interrupt))
+    const streamTurn = () => Stream.concat(Stream.fromIterable(events), tail)
+    return Layer.succeed(UaiLanguageModel.LanguageModel, {
+      streamTurn,
+      turn: UaiLanguageModel.turnFromStream(streamTurn)
+    })
+  })
+
+const modelOver = (layer: Layer.Layer<UaiLanguageModel.LanguageModel>) =>
+  Layer.mergeAll(EffectUaiModel.layer({ model: "test-model" }).pipe(Layer.provide(layer)), ids)
 
 // -------------------------------------------------------------------------------------
 
@@ -648,4 +671,101 @@ describe("EffectUaiModel", () => {
         assert.deepStrictEqual(yield* Ref.get(ran), [])
       }))
   })
+
+  /**
+   * The two invariants an accumulate-then-synthesise translator is most likely
+   * to break.
+   *
+   * Affe requires that a partial stream never becomes a visible answer and that
+   * cancellation never fabricates a completed turn. This adapter builds a turn
+   * from state it accumulated across a stream, so both failures are one missing
+   * guard away: the batch path reads `state.final`, and its answer to a missing
+   * one is to raise "the stream ended without a TurnComplete" -- which would
+   * turn a provider outage, or an interruption, into a translation error and
+   * hide what actually happened.
+   */
+  describe("a stream that ends badly", () => {
+    it.effect("a provider failure mid-stream stays the provider's failure", () =>
+      Effect.gen(function*() {
+        const layer = yield* endingBadly([text("half an ans")], "fail")
+        const exit = yield* Effect.exit(generate().pipe(Effect.provide(modelOver(layer))))
+
+        assert.isTrue(Exit.isFailure(exit))
+        const message = failureText(exit)
+        assert.include(message, "unavailable", "the provider's own account of the failure is lost")
+        // The tell that the adapter swallowed it: its own complaint about the
+        // missing TurnComplete, reported instead of the outage that caused it.
+        assert.notInclude(message, "TurnComplete")
+      }))
+
+    /**
+     * The invariant behind the mapping, and the reason it is not cosmetic.
+     *
+     * `isRetryable` lives on the *reason*, so an `ExecutionPlan` decides what
+     * to do from the class alone. Flattening effect-uai's taxonomy into one
+     * reason would make a plan retry a content-filtered request forever and
+     * give up on a rate limit — the plan's §9 cross-ecosystem fallback is
+     * precisely what would misbehave.
+     */
+    it.effect("the failure class survives, because retry policy reads it", () =>
+      Effect.gen(function*() {
+        const classOf = (fail: Stream.Stream<never, UaiAiError.AiError>) =>
+          Effect.gen(function*() {
+            const streamTurn = () => Stream.concat(Stream.fromIterable([text("part")]), fail)
+            const layer = Layer.succeed(UaiLanguageModel.LanguageModel, {
+              streamTurn,
+              turn: UaiLanguageModel.turnFromStream(streamTurn)
+            })
+            const exit = yield* Effect.exit(generate().pipe(Effect.provide(modelOver(layer))))
+            assert.isTrue(Exit.isFailure(exit))
+            if (!Exit.isFailure(exit)) return undefined
+            const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+            assert.isDefined(error)
+            return { tag: error.reason._tag, retryable: error.isRetryable }
+          })
+
+        assert.deepStrictEqual(
+          yield* classOf(Stream.fail(new RateLimited({ provider: "test", raw: "slow down" }))),
+          { tag: "RateLimitError", retryable: true }
+        )
+        assert.deepStrictEqual(
+          yield* classOf(Stream.fail(new ContentFiltered({ provider: "test", raw: "no" }))),
+          { tag: "ContentPolicyError", retryable: false },
+          "retrying a content-filtered request just repeats it"
+        )
+      }))
+
+    it.effect("cancellation stays an interruption and produces no turn", () =>
+      Effect.gen(function*() {
+        const layer = yield* endingBadly([text("half an ans")], "interrupt")
+        const exit = yield* Effect.exit(generate().pipe(Effect.provide(modelOver(layer))))
+
+        assert.isTrue(Exit.isFailure(exit), "an interrupted generation must not succeed")
+        if (!Exit.isFailure(exit)) return
+        assert.isTrue(
+          Cause.hasInterruptsOnly(exit.cause),
+          `an interruption must not be reported as a failure: ${failureText(exit)}`
+        )
+      }))
+
+    /**
+     * The streaming half. Whatever the consumer saw before the failure is what
+     * the provider actually produced -- but a `finish` part is the adapter
+     * saying the turn completed, and it must not appear for a turn that did
+     * not.
+     */
+    it.effect("no finish part is fabricated for a turn that never completed", () =>
+      Effect.gen(function*() {
+        const layer = yield* endingBadly([text("half an ans")], "fail")
+        // The failure is swallowed on purpose: what is under test is the prefix
+        // the consumer saw, not that the stream failed (asserted above).
+        const seen = yield* Stream.runCollect(
+          LanguageModel.streamText({ prompt: "hello" }).pipe(Stream.catchCause(() => Stream.empty))
+        ).pipe(Effect.provide(modelOver(layer)))
+
+        assert.deepStrictEqual(seen.filter((part) => part.type === "finish"), [])
+        assert.isAbove(seen.length, 0, "the deltas before the failure should still have arrived")
+      }))
+  })
+
 })

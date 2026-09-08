@@ -21,6 +21,7 @@
  */
 import { Effect, Layer, Option, Stream } from "effect"
 import { AiError, LanguageModel, Prompt, Response, Tool } from "effect/unstable/ai"
+import * as UaiAiError from "@effect-uai/core/AiError"
 import * as UaiItems from "@effect-uai/core/Items"
 import * as UaiLanguageModel from "@effect-uai/core/LanguageModel"
 import * as UaiTool from "@effect-uai/core/Tool"
@@ -716,12 +717,62 @@ const requestFor = (
     }
   }).pipe(Effect.catchTag("UnsupportedConversion", (error) => Effect.fail(asAiError(method, "request")(error))))
 
-const uaiError = (method: string) => (error: { readonly message: string }) =>
-  AiError.make({
-    module: MODULE,
-    method,
-    reason: new AiError.InternalProviderError({ description: error.message })
-  })
+/**
+ * An effect-uai failure as an Effect AI one, classification intact.
+ *
+ * The lazy version of this collapses everything into `InternalProviderError`
+ * with the error's `message` -- which is empty on their tagged errors, so an
+ * outage reaches the operator as "Internal provider error:" and nothing else.
+ * Worse, the reason is what carries `isRetryable`: `InternalProviderError` is
+ * retryable and `ContentPolicyError` is not, so flattening the taxonomy makes
+ * an `ExecutionPlan` retry a content-filtered request forever and give up on a
+ * rate limit. Provider fallback across the two ecosystems (plan §9) is exactly
+ * what would then misbehave.
+ *
+ * `describe` is theirs, and its own docs call it prose rather than a contract,
+ * so it supplies the human text while `_tag` decides the reason.
+ */
+const uaiError = (method: string) => (error: UaiAiError.AiError): AiError.AiError => {
+  const description = UaiAiError.describe(error)
+  const reason = ((): AiError.AiErrorReason => {
+    switch (error._tag) {
+      case "RateLimited":
+        return new AiError.RateLimitError(
+          error.retryAfter === undefined ? {} : { retryAfter: error.retryAfter }
+        )
+      case "AuthFailed":
+        // Their `subtype` splits "you may not" from "you have run out", and
+        // Effect AI keeps those as separate reasons because only one of them
+        // is fixed by waiting.
+        return error.subtype === "billing" || error.subtype === "quota"
+          ? new AiError.QuotaExhaustedError({})
+          // "Unknown" rather than a guess between missing, invalid and expired:
+          // their `subtype` does not draw that distinction, and inventing one
+          // would tell an operator something we were not told.
+          : new AiError.AuthenticationError({
+            kind: error.subtype === "permission" ? "InsufficientPermissions" : "Unknown",
+            description
+          })
+      case "ContentFiltered":
+        return new AiError.ContentPolicyError({ description })
+      case "ContextLengthExceeded":
+      case "InvalidRequest":
+      case "Unsupported":
+        return new AiError.InvalidRequestError({ description })
+      case "IncompleteTurn":
+        return new AiError.InvalidOutputError({ description })
+      case "Cancelled":
+        // Not retryable: a cancelled request was usually cancelled on purpose,
+        // and re-issuing it automatically is not the caller's intent.
+        return new AiError.UnknownError({ description })
+      case "Unavailable":
+      case "Timeout":
+      case "GenerationFailed":
+        return new AiError.InternalProviderError({ description })
+    }
+  })()
+  return AiError.make({ module: MODULE, method, reason })
+}
 
 /**
  * An Effect AI `LanguageModel` backed by whatever `effect-uai` provider is in

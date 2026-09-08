@@ -418,14 +418,36 @@ log line.
 ## 6. Errors
 
 effect-uai's service fails with its own `AiError`; the Effect AI hooks must fail
-with `AiError.AiError`. The mapping is not the interesting part — the invariant
-is that a translation failure and a provider failure stay distinguishable, since
-one is our bug and the other is not.
+with `AiError.AiError`. The invariant is that a translation failure and a
+provider failure stay distinguishable, since one is our bug and the other is
+not. A translation failure that is really an `Unsupported` row must surface as
+that, and not be laundered into a generic provider error.
 
-A translation failure that is really an `Unsupported` row must surface as that,
-and not be laundered into a generic provider error.
+**The failure *class* has to survive too, and that is not cosmetic.** Effect AI
+puts `isRetryable` on the reason, so an `ExecutionPlan` decides what to do from
+the class alone. Flattening effect-uai's taxonomy into one reason makes a plan
+retry a content-filtered request forever and give up on a rate limit — and
+cross-ecosystem fallback (plan §9) is exactly what would then misbehave.
 
----
+| effect-uai | Effect AI reason | retryable |
+| --- | --- | --- |
+| `RateLimited` | `RateLimitError` (carrying `retryAfter`) | yes |
+| `AuthFailed` (`billing` / `quota`) | `QuotaExhaustedError` | no |
+| `AuthFailed` (`auth` / `permission`) | `AuthenticationError` | no |
+| `ContentFiltered` | `ContentPolicyError` | no |
+| `ContextLengthExceeded`, `InvalidRequest`, `Unsupported` | `InvalidRequestError` | no |
+| `IncompleteTurn` | `InvalidOutputError` | yes |
+| `Cancelled` | `UnknownError` | no |
+| `Unavailable`, `Timeout`, `GenerationFailed` | `InternalProviderError` | yes |
+
+`Cancelled` is the judgement call: a cancelled request was usually cancelled on
+purpose, so re-issuing it automatically is not the caller's intent, and no
+Effect AI reason means "cancelled". `NetworkError` is unreachable from here — it
+requires HTTP request details this adapter never sees.
+
+The human text comes from effect-uai's own `describe`, whose docs call it prose
+rather than a contract, so the `_tag` decides the reason and `describe` only
+fills the description.
 
 ## 7. Acceptance for Phase 1
 
@@ -511,6 +533,19 @@ That is still not evidence against a **real** provider: no HTTP, no provider
 quirks, and their mock could share a misconception with their own adapters.
 Nothing here has yet made a network call, and the first one may well find
 something.
+
+**Phase 2's invariant tests found a second defect (§6).** Every effect-uai
+failure was collapsed into `InternalProviderError` carrying the error's
+`message` — which is empty on their tagged errors, so a provider outage reached
+the operator as "Internal provider error:" and nothing else. The classification
+went with it, and `isRetryable` lives on the reason, so an `ExecutionPlan` would
+have retried a content-filtered request forever and given up on a rate limit.
+§6 now maps the taxonomy, and the test asserts the class rather than the text.
+
+The two invariants that prompted those tests both hold: a provider failure
+mid-stream stays the provider's failure rather than becoming a complaint about a
+missing `TurnComplete`, cancellation stays an interruption, and no `finish` part
+is fabricated for a turn that never completed.
 
 Two things are also true of the implementation that this contract does not
 claim:
