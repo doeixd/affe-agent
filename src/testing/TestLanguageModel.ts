@@ -40,6 +40,24 @@ export interface Turn {
     readonly abandon?: boolean
   }>
   /**
+   * Reasoning this turn reports, before its text.
+   *
+   * `metadata` is the provider's own slot on the part, and it is the reason
+   * this exists: a reasoning signature lives there, and Anthropic will not
+   * continue a reasoning turn without one. A script that carries a signature
+   * can assert it survives canonical history, `PromptWire`, snapshot and
+   * durable replay all the way into the *next* request, which is the only
+   * place the loss would show.
+   *
+   * Streamed as `reasoning-start` / `reasoning-delta` / `reasoning-end`, with
+   * the metadata on the end part, because that is where Effect AI's
+   * `fromResponseParts` merges it into the prompt part's options.
+   */
+  readonly reasoning?: {
+    readonly text: string
+    readonly metadata?: Response.ProviderMetadata
+  }
+  /**
    * Runs while the model call is in flight, letting a test drive concurrent
    * interaction (steering, interrupt) at a precisely known moment.
    */
@@ -159,6 +177,13 @@ const finishPart = (usage?: Turn["usage"]): Response.FinishPartEncoded => {
 
 const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
   const parts: Array<Response.PartEncoded> = []
+  if (turn.reasoning !== undefined) {
+    parts.push({
+      type: "reasoning",
+      text: turn.reasoning.text,
+      ...(turn.reasoning.metadata === undefined ? {} : { metadata: turn.reasoning.metadata })
+    })
+  }
   if (turn.text !== undefined) {
     parts.push({ type: "text", text: turn.text })
   }
@@ -189,6 +214,18 @@ const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
  */
 const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
   const parts: Array<Response.StreamPartEncoded> = []
+  if (turn.reasoning !== undefined) {
+    const id = "reasoning-0"
+    parts.push({ type: "reasoning-start", id })
+    parts.push({ type: "reasoning-delta", id, delta: turn.reasoning.text })
+    // The metadata rides on the end part: that is where Effect AI's
+    // `fromResponseParts` merges it into the prompt part's options.
+    parts.push({
+      type: "reasoning-end",
+      id,
+      ...(turn.reasoning.metadata === undefined ? {} : { metadata: turn.reasoning.metadata })
+    })
+  }
   if (turn.text !== undefined) {
     const id = "text-0"
     parts.push({ type: "text-start", id })

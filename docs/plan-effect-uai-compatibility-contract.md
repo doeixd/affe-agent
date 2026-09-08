@@ -351,9 +351,45 @@ signature (§2.2, §4.1). Anthropic will not continue a reasoning turn without i
 so if the signature does not survive that path, cross-provider fallback (§9 of
 the plan) is not merely degraded — it fails.
 
-**Phase 1 does not claim this round trip.** It carries the signature into
-`Reasoning.signature` and stops. Phase 3 proves the rest, or fixes the narrowest
-Affe boundary that loses it.
+**Audited 2026-09-08, and it holds** (`test/ProviderContinuation.test.ts`).
+Every hop the property names preserves a reasoning signature: response ->
+canonical history -> next request, `PromptWire` encode/decode, snapshot ->
+restore -> next request, and durable replay across a suspension. Each of the
+end-to-end tests fails when the signature is removed from the script, so they
+are measuring the thing rather than agreeing with it.
+
+Two things that audit is worth knowing for:
+
+* **It is not an effect-uai question.** The tests use the ordinary scripted
+  model and no adapter. Had it failed, snapshot/restore and durable replay
+  would silently break reasoning continuation for the *official* Anthropic
+  provider today.
+* **The durable hop had no coverage.** `DurableReplayHistory.test.ts` asserts
+  that a replayed submission rebuilds the same conversation, but the shape it
+  compares renders every reasoning part as an empty detail — so a replay that
+  dropped every signature would have passed it while handing the next turn a
+  conversation the provider refuses to continue.
+
+The audit also corrected an assumption in this document. Effect AI does not
+treat provider metadata as an opaque bag: it is **typed per provider through
+module augmentation**, and Anthropic's reasoning signature lives at
+`options.anthropic.info.signature` inside a discriminated thinking block. A
+flatter invented shape type-errors, which is how the first draft of the audit
+was caught testing a field no provider writes.
+
+That has one consequence for cross-ecosystem work. The adapter writes the
+signature under its own namespaced key, which an *official* Anthropic adapter
+would not read — fine while a conversation stays on one provider, and exactly
+the mixed-provider question plan §9 defers until the conformance suite covers
+mixed histories. The adapter's request-side reader is deliberately generic (it
+looks for a nested `signature` anywhere in the options) so it tolerates either
+shape on the way back in.
+
+**Phase 1 carried the signature into `Reasoning.signature` and claimed nothing
+further; the audit above has since proved the rest of the path.** What Phase 3
+still owes is the other fields — provider response ids, prompt-cache metadata,
+provider-defined tool metadata, citations — each of which needs the same
+treatment rather than an assumption that the signature's result generalises.
 
 ---
 
