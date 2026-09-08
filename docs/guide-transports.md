@@ -69,6 +69,31 @@ re-running anything. The idempotency key lives exactly as long as the
 outcome. The durable client's retention is the journal, which keeps every
 outcome. The rule in full: [docs/plan-submit-await.md](./plan-submit-await.md).
 
+`stream` is `AgentSession.stream` across the seam: submit with `stream: true`
+and receive that submission's own envelopes, from `SubmissionStarted` through
+its terminal, ending once the session is free again:
+
+```ts
+yield* session.stream("explain this").pipe(
+  Stream.filter(AgentEvent.is("MessageDelta")),
+  Stream.runForEach((e) => Console.log(e.event.delta))
+)
+```
+
+The rules are the same on every client, which is the point of having it on
+the seam rather than in an application: the subscription is established
+before admission, so the first envelope cannot be missed; a failed run ends
+with `SubmissionFailed` as data, and only admission and transport are on the
+error channel; each evaluation submits once; and ending the consumer -- a
+dropped connection included -- releases the subscription and nothing else.
+The submission keeps running; `interrupt` stops it, and a consumer that lost
+the stream resumes with `events({ after })` from the last sequence it saw. Over
+HTTP it is `POST /sessions/:id/stream` answered as Server-Sent Events; the
+host does the subscribe-then-submit, so the transport need not. The durable
+client establishes its delivery-log subscription first; without a log it
+refuses rather than offer a stream that may have missed its start. The
+contract (`AgentClientConformance`) holds every client to these.
+
 That is deliberately *not* `AgentTransportError`. An agent failure is a property
 of the request and will recur, so wearing the transport tag would turn a
 caller's retry policy into a loop with a model call per attempt. The same
@@ -185,7 +210,11 @@ The application resolves an untrusted AG-UI `threadId` together with an
 authenticated principal into a harness session id. Client-provided tools,
 context, state and forwarded properties are rejected until they have an
 unambiguous harness meaning. Text prompts, batch and streaming replies, tool
-lifecycle events, failures and interruption are supported. Harness
+lifecycle events, failures and interruption are supported. A tool call whose
+arguments stream (`ToolCallDelta`) is opened by its first fragment and each
+fragment is a `TOOL_CALL_ARGS`; the assembled call then sends only the end, so
+a consumer never sees the arguments twice, and a message that fails after
+fragments ends the call with no result. Harness
 elicitations become AG-UI interrupt outcomes; a later `resume` entry answers
 the suspended run through the existing session `respond` operation.
 
@@ -283,6 +312,22 @@ file the model returns is a `raw` (or `url`) part of the response message and
 artifact with its media type and filename, and file parts in an incoming
 message reach the agent as `Prompt.FilePart`s. Structured `data` parts are
 refused by name.
+
+The answer forms as artifact updates of the result artifact: the adapter asks
+the harness to stream, and each text delta is a chunk under the same
+`artifactId` the completed answer is delivered with. The first chunk of a
+message replaces and the rest append, so a run of several messages shows the
+message in progress rather than a concatenation; no chunk is the last, and
+the completed answer arrives whole with `lastChunk` and replaces whatever
+streamed. A task read back holds the completed answer once. This is a
+declared policy, `streamAnswers` (default `true`), and an execution one as
+much as a presentation one: once a provider has emitted a part the turn's
+execution plan forbids a fallback to another provider, so a streamed run can
+lose a recovery a batched one would have had. `streamAnswers: false` asks
+for a batched model call; the task still streams its status frames and its
+completed answer, without chunks. No chunk is ever the last: a run that
+fails or is cancelled after partial output leaves the chunk it sent and a
+failed or canceled status, never a committed answer.
 
 `affe-agent/a2a` exposes a Harness agent through the official A2A v1
 JSON-RPC and HTTP+JSON protocols:

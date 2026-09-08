@@ -23,11 +23,13 @@ import * as AgentInput from "./AgentInput.js"
 import type { AgentEventEnvelope } from "./AgentEvent.js"
 import * as AgentSubmission from "./AgentSubmission.js"
 import * as PromptWire from "./PromptWire.js"
-import { AgentBusyError, AgentClosedError, AgentIdleError, AgentSubmissionNotFoundError } from "./Errors.js"
+import { AgentBusyError, AgentClosedError, AgentIdleError, AgentObservationLagError, AgentSubmissionNotFoundError } from "./Errors.js"
 import type * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
+import type * as Observation from "./internal/observation.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
+import * as Limits from "./internal/limits.js"
 import type { SubmissionId } from "./internal/ids.js"
 import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
 import * as Telemetry from "./internal/telemetry.js"
@@ -228,6 +230,19 @@ export interface MakeOptions {
    * one seam that Layer substitution could not already provide.
    */
   readonly channels?: InputChannel.Factory | undefined
+  /**
+   * How much tool progress one submission may publish, in wire bytes.
+   *
+   * Lowerable, not raisable: a value above the library ceiling is clamped to
+   * it, because the point of the bound is that a tool cannot make the runtime
+   * hold an unbounded amount however the application is configured. Defaults
+   * to the ceiling, 8 MiB.
+   *
+   * This is not the observer-lag bound and not the bound on a tool's terminal
+   * result. See `docs/limits.md`: a fix for one of the three is not protection
+   * against the others.
+   */
+  readonly toolProgress?: { readonly maxBytes?: number | undefined } | undefined
 }
 
 /**
@@ -385,6 +400,7 @@ export const makeEngine = <
       value: Option.none()
     })
     const pendingOutput = yield* Ref.make<Option.Option<unknown>>(Option.none())
+    const toolProgressBytes = yield* Ref.make(0)
     const ids = yield* Ids.makeIdSource(id)
     const submissionName = options?.submissionIds ?? ((count: number) => Ids.submissionName(id, count))
     const beforeClose = options?.beforeClose ?? Effect.void
@@ -395,6 +411,8 @@ export const makeEngine = <
       state,
       history,
       progress,
+      toolProgressBytes,
+      toolProgressLimit: Limits.toolProgressBytes(options?.toolProgress?.maxBytes),
       pendingOutput,
       bus,
       steering,
@@ -661,6 +679,10 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
           // must not report the previous one's value as its result.
           value: Option.none()
         })
+        // The progress budget is this submission's, so it is spent from zero.
+        // Resetting it per *run* instead would let a follow-up chain publish
+        // without limit by scheduling continuations.
+        yield* Ref.set(self.toolProgressBytes, 0)
 
         const registered = yield* Deferred.make<void>()
         const submission = Deferred.await(registered).pipe(
@@ -814,6 +836,9 @@ const settle = <Tools extends Record<string, Tool.Any>, E, Value = string>(
           response: landed.response,
           // No loop decided this stop.
           stopReason: Option.none(),
+          // And nothing ran out: an interruption is not exhaustion, however
+          // close to a ceiling the run happened to be when it was cut.
+          exhaustion: Option.none(),
           // An interrupted submission still reports a value it already got.
           // The tool call that produced it committed atomically with its turn,
           // so this is work that landed, not work in flight. Under the
@@ -1198,6 +1223,99 @@ export const events = (
   session: AgentSession<any, any, any, any>
 ): Stream.Stream<AgentEventEnvelope> => eventsOf(unwrap(session))
 
+/** Settles once the session no longer holds `submissionId` as active: released, or closed. */
+const released = (self: Session<any, any, any>, submissionId: Ids.SubmissionId): Effect.Effect<void> =>
+  SubscriptionRef.changes(self.state).pipe(
+    Stream.filter((state) =>
+      state.status === "closed" ||
+      Option.isNone(state.activeSubmissionId) ||
+      state.activeSubmissionId.value !== submissionId
+    ),
+    Stream.take(1),
+    Stream.runDrain
+  )
+
+/** The three events that end a submission; nothing of that submission follows one. */
+const isSubmissionTerminal = (envelope: AgentEventEnvelope): boolean =>
+  envelope.event._tag === "SubmissionCompleted" ||
+  envelope.event._tag === "SubmissionFailed" ||
+  envelope.event._tag === "SubmissionInterrupted"
+
+/**
+ * One submission as a stream: submit `input` with `stream: true`, then every
+ * envelope of that submission -- message deltas, tool events, turn events --
+ * through its terminal event, and nothing after it.
+ *
+ * Derived from `submit` and the session's bus, not a new mechanism
+ * (`plan-streaming.md` P1). What it adds over subscribing to `events` and
+ * filtering by hand is the one thing a hand-rolled version gets wrong: the
+ * subscription is registered **before** the submission is admitted, so the
+ * first envelope -- `SubmissionStarted`, and a `SubmissionCompleted` that
+ * follows it in the same tick for a run that finishes at once -- cannot be
+ * missed.
+ *
+ * **The terminal is data, not the stream's failure.** A submission that
+ * fails yields `SubmissionFailed` and ends normally: observing the outcome
+ * succeeded, the execution did not, and one outcome has one representation.
+ * The stream's own error channel carries only what `submit`'s does --
+ * admission (`AgentBusyError` when another submission holds the session,
+ * `AgentClosedError` when the session is gone) and a typed input whose
+ * rendering fails. A caller who wants Effect failure semantics uses `prompt`.
+ *
+ * **Cold.** Each evaluation submits once; evaluating the stream twice runs
+ * the prompt twice. Ending the consumer early releases the subscription and
+ * nothing else -- the submission keeps running, as `submit`'s would; stop it
+ * with `interrupt`. `SessionClosed` ends the stream as a safety net, since
+ * nothing of any submission is published after it. The stream ends only once
+ * the submission has settled and the session is free again, so a consumer may
+ * prompt again the moment it ends.
+ *
+ * Envelope sequences are the bus's and stay strictly increasing; they are not
+ * contiguous, because other events of the session are filtered out.
+ */
+export const stream = <
+  Tools extends Record<string, Tool.Any>,
+  E,
+  Input = Prompt.RawInput
+>(
+  session: AgentSession<Tools, E, any, Input>,
+  input: NoInfer<Input>,
+  options: Omit<PromptOptions, "stream"> = {}
+): Stream.Stream<AgentEventEnvelope, AgentBusyError | AgentClosedError | E> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const self = unwrap(session)
+      // Subscribe first: the receipt names the submission, and its first
+      // envelopes may already be on the bus by the time it returns.
+      yield* EventBus.failpoints.hit("before-subscribe")
+      const subscription = yield* PubSub.subscribe(self.bus.pubsub)
+      const closed = yield* Ref.get(self.bus.closed)
+      if (Option.isSome(closed)) {
+        return yield* new AgentClosedError({ sessionId: self.id })
+      }
+      const receipt = yield* submit(session, input, { ...options, stream: true })
+      return Stream.fromSubscription(subscription).pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed"),
+        Stream.filter((envelope) =>
+          Option.isSome(envelope.submissionId) && envelope.submissionId.value === receipt.submissionId
+        ),
+        Stream.takeUntil(isSubmissionTerminal),
+        // The terminal envelope is published before the session releases the
+        // submission, so a consumer acting on it at once could still find the
+        // session busy. Ending the stream only once the settled outcome is
+        // retrievable makes "the stream ended" mean "the session is free".
+        //
+        // A barrier for normal consumption, not a finalizer: a consumer that
+        // cuts at the terminal itself has not waited. It watches the session's
+        // state leave this submission rather than awaiting the outcome, which
+        // would re-raise the run's failure -- defect included -- that the
+        // terminal already carried; anything that fails *here* is the
+        // harness's own and propagates rather than passing as exhaustion.
+        Stream.concat(Stream.drain(Stream.fromEffect(released(self, receipt.submissionId))))
+      )
+    })
+  )
+
 /**
  * Observe events synchronously, as they are published.
  *
@@ -1260,3 +1378,23 @@ export const subscribe = (
   session: AgentSession<any, any, any, any>
 ): Effect.Effect<PubSub.Subscription<AgentEventEnvelope>, never, Scope.Scope> =>
   PubSub.subscribe(unwrap(session).bus.pubsub)
+
+/**
+ * `events`, established on return; see `EventBus.subscribeEvents`. Not on
+ * the public namespace: it exists for the client's bounded observation.
+ */
+export function subscribeEvents(
+  session: AgentSession<any, any, any, any>
+): Effect.Effect<Stream.Stream<AgentEventEnvelope>, never, Scope.Scope>
+export function subscribeEvents(
+  session: AgentSession<any, any, any, any>,
+  bound: Observation.Bound & { readonly sessionId: string }
+): Effect.Effect<Stream.Stream<AgentEventEnvelope, AgentObservationLagError>, never, Scope.Scope>
+export function subscribeEvents(
+  session: AgentSession<any, any, any, any>,
+  bound?: (Observation.Bound & { readonly sessionId: string }) | undefined
+): Effect.Effect<Stream.Stream<AgentEventEnvelope, AgentObservationLagError>, never, Scope.Scope> {
+  return bound === undefined
+    ? EventBus.subscribeEvents(unwrap(session).bus)
+    : EventBus.subscribeEvents(unwrap(session).bus, bound)
+}

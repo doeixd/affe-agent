@@ -1,8 +1,14 @@
-import { Cause, Effect, Exit, Option, Ref, SubscriptionRef } from "effect"
+import { Cause, Effect, Exit, Option, Ref, type Stream, SubscriptionRef } from "effect"
 import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
+// Type-only, so the cycle with `AgentSession` stays a type-level one: the
+// handle's failure channel is the same `PromptError` a session prompt has,
+// and restating it here would be a second thing to keep in step.
+import type * as AgentSession from "./AgentSession.js"
+import type * as AgentLoop from "./AgentLoop.js"
 import * as AgentRun from "./AgentRun.js"
+import type * as Errors from "./Errors.js"
 import type * as AgentTurn from "./AgentTurn.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
@@ -14,6 +20,41 @@ import * as Telemetry from "./internal/telemetry.js"
 export const Id = Ids.SubmissionId
 export type Id = Ids.SubmissionId
 import type { Session, SessionState } from "./internal/state.js"
+
+/**
+ * A started submission a caller holds, from `Agent.start`.
+ *
+ * Deliberately narrow. It represents **one submitted unit of work**, not a
+ * miniature session: `steer`, `followUp`, `respond` and session state are
+ * conversation operations and stay on `AgentSession`, where the conversation
+ * they belong to lives.
+ *
+ * There is no `interrupt`. Closing the scope the handle was created in is the
+ * cancellation mechanism, and a second way to mean the same thing is a second
+ * thing to keep consistent.
+ */
+export interface Handle<Tools extends Record<string, Tool.Any>, E, Value = string> {
+  readonly submissionId: Id
+  /**
+   * The outcome, once the submission reaches quiescence.
+   *
+   * Awaiting is not what causes the work to happen -- it is already running --
+   * and not awaiting does not cancel it. Run-local model and tool resources are
+   * released before this returns.
+   */
+  readonly await: Effect.Effect<Result<Tools, Value>, AgentSession.PromptError<Tools, E>>
+  /**
+   * The submission's events: everything already emitted, in order, then
+   * whatever follows, ending when the submission settles.
+   *
+   * Replay is what makes a handle worth holding -- an observer that attaches
+   * after execution began still sees the beginning. It is bounded, and a trace
+   * that outgrew its bound fails with `AgentTraceLimitError` rather than
+   * quietly presenting its surviving tail as the whole story. Observing, or
+   * failing to, never changes the result.
+   */
+  readonly events: Stream.Stream<AgentEvent.AgentEventEnvelope, Errors.AgentTraceLimitError>
+}
 
 /** Proof that a submission was admitted and now owns its own execution. */
 export interface Receipt {
@@ -40,6 +81,15 @@ export interface Result<Tools extends Record<string, Tool.Any>, Value = string> 
    * an interrupted submission, which no loop decided.
    */
   readonly stopReason: Option.Option<string>
+  /**
+   * How the last run ran out, when a built-in ceiling ended it rather than a
+   * policy choosing to stop. `None` for an ordinary completion, for a custom
+   * policy's own reason, and for an interrupted submission.
+   *
+   * Beside `stopReason` rather than replacing it: the prose stays useful and
+   * open-ended, and this is the part a caller can branch on.
+   */
+  readonly exhaustion: Option.Option<AgentLoop.Exhaustion>
   /** The final model response, so usage and finish reason are not discarded. */
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
   /**
@@ -94,6 +144,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
       Option.none()
     let stopReason: Option.Option<string> = Option.none()
+    let exhaustion: Option.Option<AgentLoop.Exhaustion> = Option.none()
 
     // `session.progress` is zeroed for this submission by `AgentSession.prompt`,
     // in the uninterruptible claim before this fibre exists, so an interrupt
@@ -147,6 +198,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       // The last run's, not the first's: a follow-up that ran to idle after
       // a bounded first run is a submission that ended by going idle.
       stopReason = exit.value.stopReason
+      exhaustion = exit.value.exhaustion
 
       // Buffered locally rather than re-queued. Putting the tail back on a
       // FIFO one item at a time reverses it, which turned A, B, C into
@@ -236,5 +288,5 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     // the model reported through its tool, or nothing.
     const value = Option.isSome(session.agent.output) ? reported : Option.some(text)
 
-    return { submissionId, runs, turns, text, response, stopReason, value }
+    return { submissionId, runs, turns, text, response, stopReason, exhaustion, value }
   })

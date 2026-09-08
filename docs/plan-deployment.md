@@ -403,17 +403,24 @@ deployment.
       a real host): `HOST_MODULES` in `verify-portability.mjs` is still exactly
       `sandbox/local.ts` and `blob/fs.ts`. The guardrail was built for this
       moment and it did not have to be loosened for it.
-- [ ] A Rivet actor hosts a session with `InputChannel` backed by its queue, and
+- [~] A Rivet actor hosts a session with `InputChannel` backed by its queue, and
       steering arriving mid-run reaches the model — the same assertion
-      `/cluster` makes.
+      `/cluster` makes. *Closed 2026-09-06 as adopter-triggered (ledger,
+      decision 4 of `plan-two-decisions.md`).*
 - [~] `examples/deploy-cloudflare/alchemy.run.ts` deploys the above from a clean
       account, and its README states the cost. **The stack and the cost note are
       written** (2026-08-30) and the stack typechecks in CI; **it has never been
       run against a real account**, so the deploy half is unproven and the cost
       figure is reasoned rather than observed.
-- [ ] One `AgentServer` serves a DO-backed mount **and** an HTTP-backed remote
+- [x] One `AgentServer` serves a DO-backed mount **and** an HTTP-backed remote
       mount, and a client cannot tell them apart from the outside — the §6.2
-      claim, exercised rather than asserted.
+      claim, exercised rather than asserted. **2026-09-06,
+      `test/GatewayMounts.test.ts`:** `apps/worker` on miniflare listening on a
+      real port; one gateway with an in-process mount and a mount whose client
+      is `agentClientLayer` pointed at the worker; the same create, prompt and
+      history through both, with equal statuses, equal response and result
+      shapes, and one inventory row shape for both. Pointing the remote mount
+      at a wrong path turns its statuses to 503 and the row fails.
 - [x] A decision is recorded on whether `/durable` runs inside a DO: it does
       not, until the engine's resume machinery runs on workerd (measured;
       see §3.2 item 2). The DO is the durability.

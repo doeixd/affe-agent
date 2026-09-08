@@ -343,8 +343,6 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
 - **D4b** survives the falsification harness by construction
   (`instance.suspended` carries the correctness); the remaining disjuncts in
   `DurableAgent`'s `catchCause` are defence in depth.
-- **`DurableAgent.workflow` requirement erasure** claims `never` while
-  resolving `LanguageModel` at runtime.
 - **Legacy MCP cancellation id mismatch** is upstream: the official client's
   cancel cannot interrupt the server.
 - **The Anthropic example** has never been run live with a key;

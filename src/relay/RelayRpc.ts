@@ -236,6 +236,11 @@ export const clientProtocol = <Rpcs extends Rpc.Any>(
           // acknowledgement, so it must not make its own shutdown depend on
           // one. Every outstanding request is failed as interrupted here,
           // which is the truth: the channel carrying it is gone.
+          //
+          // The same rule as `DurableAgentClient`'s reconciliation of a
+          // workflow outcome against the session record (item 48c): never
+          // acknowledge on a promise the state does not back. Kept as a
+          // comment so this is not "fixed" back into waiting for the far end.
           for (const [requestId, clientId] of requestClientMap) {
             yield* writeResponse(clientId, {
               _tag: "Exit",

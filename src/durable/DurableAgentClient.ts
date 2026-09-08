@@ -9,6 +9,8 @@ import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentPrincipal } from "../Principal.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentClient from "../client/AgentClient.js"
+import * as Failpoint from "../internal/failpoint.js"
+import * as Observation from "../internal/observation.js"
 import { AgentBusyError, AgentIdleError } from "../Errors.js"
 import { AgentRequestConflictError, RequestId } from "../client/internal/protocolErrors.js"
 import * as History from "../internal/history.js"
@@ -111,6 +113,13 @@ const awaitOutcome = (
     Effect.orDie
   )
 
+/**
+ * The one boundary a test may hold open: registration of the delivery log
+ * subscription a `stream` or `events` takes before submitting. See
+ * `EventBus.failpoints` for why a gate, not a crash.
+ */
+export const failpoints = Failpoint.group("DurableAgentClient", ["before-subscribe"])
+
 export interface Options {
   /**
    * Where steering and follow-up input waits, and where admission markers
@@ -126,6 +135,8 @@ export interface Options {
    * pretends to work is worse than one that is honestly absent.
    */
   readonly delivery?: DeliveryLog.DeliveryLog | undefined
+  /** See `AgentClient.fromSession`: how far an observer may lag before its stream is ended. */
+  readonly maxObservationLag?: Observation.LagOptions | undefined
   /** How often `prompt` polls for its outcome. Default: 10ms. */
   readonly pollInterval?: Duration.Duration | undefined
   /** How often a workflow checks for an interrupt intent. Default: 25ms. */
@@ -191,6 +202,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
    * told, and journalled encoded; a prompt passes through for an agent
    * without an input.
    */
+  const observationBound = Observation.boundOf("DurableAgentClient", options.maxObservationLag)
+
   const boundary = (operation: "prompt" | "submit", input: AgentClient.RemoteInput) =>
     InputBoundary.admit(agent, operation, input)
 
@@ -534,6 +547,28 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
             isDefect: exit.value.failure.isDefect
           })
         }
+        // Never acknowledge on the engine's word (`plan-failure-paths.md`
+        // 3.3, item 48c). The workflow's `Outcome` says this submission
+        // settled; the canonical settlement is the session record, whose
+        // `finish` activity clears the claim and advances the history in one
+        // step. If the record still holds this submission's claim, the two
+        // disagree -- the projection never committed, or a store lost the
+        // write -- and telling the caller "completed" would be the relay
+        // bug's shape again: a promise the state does not back. So the
+        // caller gets a transport failure, retryable, and the claim is
+        // *retained*: it is the intent a later pass reconciles against.
+        const record = yield* options.sessionStore.get(sessionId)
+        const unsettled = Option.isSome(record) &&
+          Option.isSome(record.value.claim) &&
+          record.value.claim.value.submissionId === submissionId
+        if (unsettled) {
+          return yield* new AgentClient.AgentTransportError({
+            sessionId,
+            detail:
+              `the workflow reports submission ${submissionId} settled, but the session record still holds its claim; ` +
+              "the outcome is not acknowledged and the claim is retained for repair"
+          })
+        }
         return {
           submissionId: Ids.submissionId(submissionId),
           status: exit.value.status,
@@ -548,7 +583,19 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
         }
       })
 
-    return {
+    /** The delivery log's subscription, established on return, transport-typed and bounded. */
+    const bounded = (delivery: DeliveryLog.DeliveryLog) =>
+      Observation.bounded(
+        Effect.andThen(failpoints.hit("before-subscribe"), delivery.subscribe(sessionId)).pipe(
+          Effect.mapError((error) => new AgentClient.AgentTransportError({ sessionId, detail: error.message })),
+          Effect.map((subscribed) =>
+            Stream.catchTag(subscribed, "StorageError", (error) =>
+              Stream.fail(new AgentClient.AgentTransportError({ sessionId, detail: error.message }))))
+        ),
+        { ...observationBound, sessionId }
+      )
+
+    const self: AgentClient.RemoteSession = {
     id: sessionId,
 
     prompt: (input, promptOptions) =>
@@ -685,6 +732,27 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
       return found.value.status
     }).pipe(storageAsTransport(sessionId)),
 
+    stream: (input, streamOptions) => {
+      const delivery = options.delivery
+      if (delivery === undefined) {
+        // Without a log there is no subscription to establish before the
+        // submission, and a live stream started afterwards could miss its
+        // first envelopes; refused, rather than offered with a gap.
+        return Stream.fail(
+          new AgentClient.AgentTransportError({
+            sessionId,
+            detail: "this client has no delivery log, so a submission cannot be streamed; submit and await it instead"
+          })
+        )
+      }
+      return Stream.unwrap(
+        Effect.map(
+          bounded(delivery),
+          (subscribed) => AgentClient.streamFrom(self, subscribed, input, streamOptions)
+        )
+      )
+    },
+
     events: (eventOptions) => {
       const delivery = options.delivery
       if (delivery === undefined) {
@@ -721,8 +789,9 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
             new AgentClient.AgentTransportError({ sessionId, detail: error.message })
           ))
 
-      const live = asTransport(delivery.live(sessionId))
-      if (eventOptions?.after === undefined) return live
+      // Live delivery is the established, bounded subscription too: `live`
+      // subscribed at first pull, and a bound needs to own the subscription.
+      if (eventOptions?.after === undefined) return Stream.unwrap(bounded(delivery))
 
       const after = eventOptions.after
       /**
@@ -756,12 +825,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
        */
       return Stream.unwrap(
         Effect.gen(function* () {
-          const continuing = asTransport(yield* delivery.subscribe(sessionId).pipe(
-            Effect.mapError(
-              (error) =>
-                new AgentClient.AgentTransportError({ sessionId, detail: error.message })
-            )
-          ))
+          const continuing = yield* bounded(delivery)
           const history = yield* delivery
             .read(sessionId, { after })
             .pipe(
@@ -784,6 +848,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
       )
     }
   }
+    return self
   }
 
   return Layer.effect(

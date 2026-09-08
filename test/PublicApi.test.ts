@@ -20,12 +20,16 @@ describe("public API", () => {
       // The shape a submission is asked to end in. A first-class noun because
       // it changes an agent's *type* -- `Result.value` is `Option<never>`
       // without one -- which no helper on another module could express.
+      // An observer that fell past its bound; see internal/observation.ts.
+      "AgentObservationLagError",
       "AgentOutput",
       "AgentRun",
       "AgentSession",
       "AgentSubmission",
       // Raised by awaitSubmission for a submission the session does not hold.
       "AgentSubmissionNotFoundError",
+      "AgentToolProgressLimitError",
+      "AgentTraceLimitError",
       "ContextTransform",
       "Elicitation",
       "InputChannel",
@@ -77,6 +81,13 @@ describe("public API", () => {
       "describe",
       "make",
       "run",
+      // The other two one-shot forms. `run` owns the execution for the call,
+      // `start` hands it to the caller's scope so the work outlives the waiter
+      // and a late observer can still replay the beginning, and `stream` owns
+      // the ephemeral session itself -- so abandoning it interrupts the work,
+      // where abandoning `AgentSession.stream` only detaches observation.
+      "start",
+      "stream",
       "tool",
       "toolkit",
       "updateContextTransform",
@@ -156,6 +167,9 @@ describe("public API", () => {
         "state",
         "status",
         "steer",
+        // One submission as a stream, derived from `submit` and the bus:
+        // subscribed before admission, terminal as data (`plan-streaming.md`).
+        "stream",
         // Admit without awaiting; the child fiber owns terminal events and
         // release, so a caller that stops observing cannot abandon cleanup.
         "submit",
@@ -184,6 +198,9 @@ describe("public API", () => {
       "Stop",
       "and",
       "bounded",
+      // A classified stop: the built-in ceilings say *what* ran out, so a
+      // caller branches on a union rather than matching stopReason strings.
+      "exhausted",
       "final",
       "limits",
       "make",

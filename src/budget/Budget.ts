@@ -36,8 +36,8 @@ import * as Namespace from "../internal/namespace.js"
  */
 
 /** Named once, so `RunCompleted.stopReason` says which ceiling it was. */
-const tokenStop = AgentLoop.stop("token budget")
-const costStop = AgentLoop.stop("cost budget")
+const tokenStop = AgentLoop.exhausted("tokens", "token budget")
+const costStop = AgentLoop.exhausted("cost", "cost budget")
 
 /** Total tokens in one model response, both directions. */
 const tokensOf = (

@@ -65,6 +65,9 @@ registry. P2–P5 land in `/pi`.
 
 Grounded in the source, not the README. Ordered by value.
 
+*The `Mode` column is the decision as made when this plan was written; every
+`Port` row below landed (P1–P5, ✅ in §"What each phase delivers").*
+
 | Piece | Mode | Why it is worth the change |
 | --- | --- | --- |
 | `file-mutation-queue.ts` — canonical-path serialisation with cleanup | **Port the design** | Fixes *both* limitations I documented in our own lock. |

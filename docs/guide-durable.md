@@ -61,6 +61,15 @@ the journal entry recording the unknown outcome, the call is unjournalled and
 a replay runs it. Only the engine's write can close that, so the guarantee is
 at-most-once for interruption, not for power loss.
 
+A tool handler that *dies* fails the run, as it does in-process, and so does
+a model call that dies: the journal records the defect as a value so a
+replay fails the same way, and the wrapper re-raises it as a defect rather
+than as a failure the model would see or a remote caller would read as
+ordinary. An expected failure stays typed, so the failure policy applies. The
+client contract holds every client to the matrix (success, expected failure,
+defect, interruption), and `test/DurableOutcomes.test.ts` drives the two
+re-raise rules with recorded values, which is what a replay does.
+
 `result` yields an `Exit`, because a failed submission is still a *completed*
 workflow. Its failure crosses as a typed `DurableAgentFailure` carrying the
 originating error's tag, not an opaque defect.
@@ -96,6 +105,17 @@ text part (the original chunking belonged to a connection that no longer
 exists), and the keyed delivery log does not duplicate chunks it already
 recorded live. A streamed submission commits exactly the history a batched
 one does, first run or replay.
+
+A completed workflow is not, by itself, a completed prompt. The client
+reconciles the workflow's outcome against the session record -- the canonical
+settlement, whose `finish` clears the claim and advances the history in one
+step -- before the caller is told anything. A record that still holds the
+submission's claim is a disagreement: the caller gets a retryable
+`AgentTransportError` that names it, and the claim is retained as the intent a
+later pass reconciles against. The rule is "never acknowledge on the engine's
+word" (`plan-failure-paths.md` 3.3), and the relay's teardown follows the same
+rule in the other direction: it fails what is in flight rather than wait on an
+acknowledgement a closed channel cannot deliver.
 
 ```ts
 import { AgentClient } from "affe-agent/client"

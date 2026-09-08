@@ -1,4 +1,7 @@
-import { Cause, Effect, Option, PubSub, Ref, Scope, Semaphore, Stream } from "effect"
+import { Cause, Effect, Exit, Option, PubSub, Ref, Scope, Semaphore, Stream } from "effect"
+import { AgentObservationLagError } from "../Errors.js"
+import * as Failpoint from "./failpoint.js"
+import * as Observation from "./observation.js"
 import type { AgentEvent, AgentEventEnvelope, Correlation } from "../AgentEvent.js"
 import type { SessionId } from "./ids.js"
 
@@ -81,6 +84,46 @@ export interface EventBus {
    * respect to publication and there is no window between the two.
    */
   readonly closed: Ref.Ref<Option.Option<AgentEventEnvelope>>
+  /**
+   * Bounded observers, checked by the publisher (`plan-streaming-followups.md`
+   * §4, item 75). The bus is unbounded and never waits on a subscriber, so
+   * this is where a lagging one is *seen*: after each publish, every watched
+   * subscription's backlog is read and the bytes it retains are counted, and
+   * one past its bound is ended with `AgentObservationLagError` through its
+   * `killed` deferred. Enforced here rather than by a pump per observer,
+   * because a pump is a fibre hop the consumer's delivery then lags by, and
+   * the host's own record read one hop stale.
+   */
+  readonly watchers: Set<Watcher>
+  /** The wire size of each published envelope, while a watcher may still hold it. */
+  readonly sizes: WeakMap<AgentEventEnvelope, number>
+}
+
+/**
+ * The one boundary a test may hold open: registration of a subscription.
+ *
+ * Not a crash site. `plan-streaming-followups.md` §1: subscribe-before-submit
+ * is the property `stream` exists for, and it survived being broken because
+ * in-process scheduling publishes nothing before a receipt returns. A test
+ * that holds this gate while other fibres run makes the swapped order
+ * provably miss `SubmissionStarted`, without changing what admission
+ * publishes, which is the proof the reviewer asked for.
+ */
+export const failpoints = Failpoint.group("EventBus", ["before-subscribe"])
+
+export interface Watcher {
+  readonly subscription: PubSub.Subscription<AgentEventEnvelope>
+  /** The subscription's own scope: closing it releases the backlog, from either side. */
+  readonly release: Scope.Closeable
+  readonly bound: Observation.Bound
+  readonly sessionId: string
+  /** The bus sequence when this watcher was registered: only envelopes above it are charged or credited. */
+  readonly since: number
+  /** Bytes published to this subscription and not yet delivered. */
+  retainedBytes: number
+  lastDelivered: number
+  /** Set by the publisher when it ends this observation; the consumer builds the error at delivery. */
+  killed: Observation.Killed | undefined
 }
 
 export const make = (
@@ -101,7 +144,9 @@ export const make = (
       sink,
       observers: new Set(),
       emitting,
-      closed
+      closed,
+      watchers: new Set(),
+      sizes: new WeakMap()
     } satisfies EventBus
   })
 
@@ -139,7 +184,13 @@ export const emit = (
         ? Ref.set(bus.closed, Option.some(envelope))
         : Effect.void
       ).pipe(
+        // Weighed before it is published, so a watcher that delivers it
+        // before the charge below still finds its size and credits it.
+        Effect.andThen(Effect.sync(() => {
+          if (bus.watchers.size > 0) bus.sizes.set(envelope, Observation.wireSize(envelope))
+        })),
         Effect.andThen(PubSub.publish(bus.pubsub, envelope)),
+        Effect.andThen(Effect.suspend(() => bus.watchers.size === 0 ? Effect.void : enforce(bus, envelope))),
         /**
          * The sink is a *participant*, and its failure is the emit's failure.
          *
@@ -176,6 +227,43 @@ export const emit = (
     Semaphore.withPermit(bus.order),
     guardReentry(bus)
   )
+
+/**
+ * After a publish: charge every watched subscription that received the
+ * envelope and end the ones past their bound. Reading a subscription's
+ * backlog is exact (`PubSub.remainingUnsafe`); the bytes are this bus's own
+ * count, decremented as the observer delivers. A watcher registered after
+ * this envelope was published never received it and is not charged: its
+ * `since` says so. One uninterruptible step per watcher, so a publisher
+ * interrupted mid-way cannot leave a subscription unwatched and unreleased.
+ * The consumer builds the error at delivery, with the cursor as it is then.
+ */
+const enforce = (bus: EventBus, envelope: AgentEventEnvelope): Effect.Effect<void> =>
+  Effect.suspend(() => {
+    const size = bus.sizes.get(envelope) ?? Observation.wireSize(envelope)
+    const ended: Array<Effect.Effect<void>> = []
+    for (const watcher of bus.watchers) {
+      if (envelope.sequence <= watcher.since) continue
+      const backlog = PubSub.remainingUnsafe(watcher.subscription)
+      if (Option.isNone(backlog)) {
+        // Shut down from the consumer's side already; nothing to watch.
+        bus.watchers.delete(watcher)
+        continue
+      }
+      watcher.retainedBytes += size
+      if (backlog.value > watcher.bound.maxEnvelopes || watcher.retainedBytes > watcher.bound.maxBytes) {
+        bus.watchers.delete(watcher)
+        watcher.killed = { retainedEnvelopes: backlog.value, retainedBytes: watcher.retainedBytes }
+        // Released here, by the publisher: the backlog is freed now, not
+        // when the stalled consumer next looks. Its next pull finds the
+        // subscription gone and the failure recorded.
+        ended.push(Scope.close(watcher.release, Exit.void))
+      }
+    }
+    return ended.length === 0
+      ? Effect.void
+      : Effect.uninterruptible(Effect.forEach(ended, (end) => end, { discard: true }))
+  })
 
 /**
  * One observer's turn, isolated from the agent and from the others.
@@ -276,7 +364,24 @@ export const observe = (
  * longer existed, until the connection itself was torn down.
  */
 export const events = (bus: EventBus): Stream.Stream<AgentEventEnvelope> =>
-  Stream.unwrap(
+  Stream.unwrap(subscribeEvents(bus))
+
+/**
+ * `events`, established on return: the subscription is taken on the
+ * caller's fibre before this effect completes, so a publish that follows
+ * cannot be missed. What `events` does at its first pull, as an effect a
+ * caller can sequence -- the bounded observation seam needs exactly this.
+ */
+export function subscribeEvents(bus: EventBus): Effect.Effect<Stream.Stream<AgentEventEnvelope>, never, Scope.Scope>
+export function subscribeEvents(
+  bus: EventBus,
+  bound: Observation.Bound & { readonly sessionId: string }
+): Effect.Effect<Stream.Stream<AgentEventEnvelope, AgentObservationLagError>, never, Scope.Scope>
+export function subscribeEvents(
+  bus: EventBus,
+  bound?: (Observation.Bound & { readonly sessionId: string }) | undefined
+): Effect.Effect<Stream.Stream<AgentEventEnvelope, AgentObservationLagError>, never, Scope.Scope> {
+  return Effect.gen(function* () {
     // Subscribe first, then read the marker; no permit. The two cases are
     // exhaustive because `emit` retains the close *before* publishing it:
     // reading `None` after subscribing proves the publish is still to come,
@@ -289,13 +394,49 @@ export const events = (bus: EventBus): Stream.Stream<AgentEventEnvelope> =>
     // which for a subscriber joining mid-run meant missing the events it
     // subscribed for. Ordering the retention before the publish is what makes
     // the permit unnecessary.
-    Effect.flatMap(PubSub.subscribe(bus.pubsub), (subscription) =>
-      Effect.map(Ref.get(bus.closed), (closed) =>
-        Option.isSome(closed)
-          ? Stream.make(closed.value)
-          : Stream.fromSubscription(subscription).pipe(
-            Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed")
-          )
-      )
+    // The subscription lives in a scope of its own, closed with this one --
+    // or, for a watched subscription, by the publisher when the bound is
+    // broken. Either way PubSub's own release runs: the backlog is dropped
+    // and a pull in flight is cut.
+    const release = yield* Scope.make()
+    yield* Effect.addFinalizer((exit) => Scope.close(release, exit))
+    yield* failpoints.hit("before-subscribe")
+    const subscription = yield* Scope.provide(PubSub.subscribe(bus.pubsub), release)
+    const closed = yield* Ref.get(bus.closed)
+    if (Option.isSome(closed)) return Stream.make(closed.value)
+    const live = Stream.fromSubscription(subscription).pipe(
+      Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed")
     )
-  )
+    if (bound === undefined) return live
+    // Watched by the publisher from now until this scope ends. Delivery is
+    // the consumer's own pull with nothing between it and the bus -- no
+    // pump, no race per pull -- which is what keeps the host's own record
+    // as prompt as an unwatched subscriber. A watcher the publisher ended
+    // sees its subscription cut on the next pull and fails with what was
+    // recorded, rather than ending as if the session had closed.
+    const watcher: Watcher = {
+      subscription,
+      release,
+      bound,
+      sessionId: bound.sessionId,
+      // Read after subscribing: an envelope published between the subscribe
+      // and this read is received but never charged, and never credited.
+      since: yield* Ref.get(bus.sequence),
+      retainedBytes: 0,
+      lastDelivered: 0,
+      killed: undefined
+    }
+    bus.watchers.add(watcher)
+    yield* Effect.addFinalizer(() => Effect.sync(() => void bus.watchers.delete(watcher)))
+    const failure = () => Observation.lagError(bound.sessionId, bound, watcher.killed!, watcher.lastDelivered)
+    return live.pipe(
+      Stream.map((envelope) => {
+        if (envelope.sequence > watcher.since) watcher.retainedBytes -= bus.sizes.get(envelope) ?? 0
+        watcher.lastDelivered = envelope.sequence
+        return envelope
+      }),
+      Stream.catchCause((cause) => watcher.killed === undefined ? Stream.failCause(cause) : Stream.fail(failure())),
+      Stream.concat(Stream.suspend(() => watcher.killed === undefined ? Stream.empty : Stream.fail(failure())))
+    )
+  })
+}

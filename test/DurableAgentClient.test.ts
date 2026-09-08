@@ -19,7 +19,7 @@ import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentInput from "../src/AgentInput.js"
-import { breakingClaim, detail, failure } from "./storageFaults.js"
+import { breakingClaim, detail, failure, losingFinish } from "./storageFaults.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as ToolExecution from "../src/ToolExecution.js"
@@ -28,6 +28,7 @@ import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import { Failpoint } from "../src/internal/failpoint.js"
 import * as FakeModel from "./FakeModel.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 import * as Contract from "./AgentClientContract.js"
@@ -279,6 +280,49 @@ describe("DurableAgentClient (durability specifics)", () => {
       const record = yield* f.sessionStore.get("typed")
       assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim))
     }).pipe(Effect.scoped)
+  )
+
+  it.live("an outcome the session record does not back is not acknowledged, and the claim is retained", () =>
+    Effect.gen(function* () {
+      /**
+       * Item 48c, `plan-failure-paths.md` 3.3: never acknowledge on the
+       * engine's word. The store's `finish` here reports success and writes
+       * nothing, so the workflow completes with a `Succeeded` outcome while
+       * the canonical record still says `running` with this submission's
+       * claim. The caller must not be told the prompt completed: a transport
+       * failure, retryable, naming the disagreement -- and the claim stays,
+       * because it is the intent a repair reconciles against. Break by
+       * returning the outcome without reading the record: the caller is told
+       * "completed" and the row fails on the first assertion.
+       */
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(1) }), [{ text: "settled" }], undefined, losingFinish)
+      const { exit, record } = yield* using(f.client, (client) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            Effect.scoped(Effect.flatMap(client.createSession({ sessionId: "unbacked" }), (s) => s.prompt("go")))
+          )
+          const record = yield* f.sessionStore.get("unbacked")
+          return { exit, record }
+        }))
+      assert.isTrue(Exit.isFailure(exit), "the caller was told the prompt completed on the engine's word alone")
+      if (Exit.isFailure(exit)) {
+        const error = Cause.findErrorOption(exit.cause)
+        assert.isTrue(Option.isSome(error))
+        if (Option.isSome(error)) {
+          if (error.value._tag === "AgentTransportError") {
+            assert.include(error.value.detail, "still holds its claim")
+          } else {
+            assert.fail(`expected a transport failure, got ${error.value._tag}`)
+          }
+        }
+      }
+      // The claim is the intent: retained, with the session still running.
+      assert.isTrue(Option.isSome(record))
+      if (Option.isSome(record)) {
+        assert.strictEqual(record.value.status, "running")
+        assert.isTrue(Option.isSome(record.value.claim))
+      }
+    })
   )
 
   it.live("a typed value the schema rejects is refused before the claim, and nothing is journalled", () =>
@@ -1614,3 +1658,159 @@ describe("D7 at the durable client", () => {
     })
   )
 })
+
+describe("subscribe before submit on the durable client, proved through a subscription gate", () => {
+  /**
+   * `plan-streaming-followups.md` §1, item 76. Swapping the durable
+   * client's subscribe and submit did not bite either: a workflow starts
+   * slowly enough that the log subscription still landed first. Holding
+   * `DurableAgentClient.failpoints`' gate for longer than a workflow takes
+   * to publish its first envelope makes the swapped order miss
+   * `SubmissionStarted`; in the right order the gate delays a subscription
+   * nothing is published to yet. Broken once by subscribing after the
+   * submission in `stream`: this row fails.
+   */
+  it.live("the stream's first envelope is SubmissionStarted even when registering the log subscription waits", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      const { layer: model } = yield* FakeModel.script([{ text: "done", chunks: ["do", "ne"] }])
+      const runtime = DurableAgentClient.layer("GatedAgent", Agent.make({ loop: AgentLoop.bounded(2) }), {
+        store,
+        sessionStore,
+        delivery
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+      const gated = ({
+        hit: (location: string) =>
+          location === DurableAgentClient.failpoints.qualified("before-subscribe")
+            ? Effect.sleep(Duration.millis(250))
+            : Effect.void
+      })
+      const tags = yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "gated" })
+            const envelopes = yield* Stream.runCollect(session.stream("go"))
+            return envelopes.map((e) => e.event._tag)
+          })
+        )
+      }).pipe(Effect.provideService(Failpoint, gated), Effect.provide(runtime))
+      assert.strictEqual(tags[0], "SubmissionStarted")
+      assert.strictEqual(tags[tags.length - 1], "SubmissionCompleted")
+    }), 20_000
+  )
+})
+
+describe("bounded observation on the durable client", () => {
+  /**
+   * The pumped form of the bound (`Observation.bounded`) over the delivery
+   * log's subscription, which the in-process rows do not reach. A stalled
+   * observer of `events()` is ended with the lag error while the run
+   * completes; `test/ObservationPump.test.ts` holds the release and the
+   * cursor on the pump itself.
+   */
+  it.live("a stalled observer of the delivery log is ended with the lag error, and the run completes", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      const chunk = "x".repeat(512)
+      const { layer: model } = yield* FakeModel.script([{ text: chunk.repeat(32), chunks: Array.from({ length: 32 }, () => chunk) }])
+      const runtime = DurableAgentClient.layer("BoundedAgent", Agent.make({ loop: AgentLoop.bounded(2) }), {
+        store,
+        sessionStore,
+        delivery,
+        maxObservationLag: { envelopes: 4 }
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+      yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "bounded" })
+            const release = yield* Deferred.make<void>()
+            let taken = 0
+            const stalled = yield* Effect.forkChild(
+              Stream.runForEach(session.events(), () => {
+                taken += 1
+                return taken <= 1 ? Effect.void : Deferred.await(release)
+              })
+            )
+            yield* Effect.yieldNow
+            const result = yield* session.prompt("go", { stream: true })
+            assert.strictEqual(result.status, "completed")
+            yield* Deferred.succeed(release, void 0)
+            const exit = yield* Fiber.await(stalled)
+            const error = Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined
+            assert.strictEqual(error?._tag, "AgentObservationLagError")
+            if (error?._tag === "AgentObservationLagError") {
+              assert.strictEqual(error.maxEnvelopes, 4)
+              assert.isAtLeast(error.retainedEnvelopes, 4)
+            }
+          })
+        )
+      }).pipe(Effect.provide(runtime))
+    }), 20_000
+  )
+})
+
+describe("a live durable stream is never re-run into the same fold", () => {
+  /**
+   * `Activity.make` retries an `execute` interrupted from inside, up to ten
+   * times, then reports the interrupt as a defect. For the live streaming
+   * path each attempt tapped its parts into the same harness fold, so an
+   * observer saw the abandoned attempt's text and then the replacement's in
+   * one message, while the journal kept only the last. The second reviewer's
+   * reproduction. `DurableModel` now gives a tapped stream no in-place
+   * retries: the message closes as failed, the outcome is recorded as a
+   * defect, and no later attempt shares its message. Broken once by
+   * restoring the default policy: one message holds both texts.
+   */
+  it.live("an attempt interrupted after a part closes its message as failed; no message carries two attempts' text", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const delivery = yield* DeliveryLog.memoryLog
+      // The first stream emits its part and interrupts from inside; a retry
+      // would consume the second turn, whose text would then share the
+      // message.
+      const { layer: model } = yield* FakeModel.script([
+        { text: "old", chunks: ["old"], interruptAfterParts: 2 },
+        { text: "new", chunks: ["new"] }
+      ])
+      const runtime = DurableAgentClient.layer("RetriedStreamAgent", Agent.make({ loop: AgentLoop.bounded(2) }), {
+        store,
+        sessionStore,
+        delivery
+      }).pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))
+
+      const envelopes = yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const session = yield* client.createSession({ sessionId: "retried-stream" })
+            const collected = yield* Effect.forkChild(
+              Stream.runCollect(Stream.takeUntil(session.events(), (e) => e.event._tag.startsWith("Submission") && e.event._tag !== "SubmissionStarted"))
+            )
+            yield* Effect.yieldNow
+            yield* Effect.exit(session.prompt("go", { stream: true }))
+            return yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(10)), Effect.orDie)
+          })
+        )
+      }).pipe(Effect.provide(runtime))
+
+      // Group deltas by message: each MessageStarted opens a new group.
+      const messages: Array<Array<string>> = []
+      for (const envelope of envelopes) {
+        if (envelope.event._tag === "MessageStarted") messages.push([])
+        if (envelope.event._tag === "MessageDelta") messages[messages.length - 1]?.push(envelope.event.delta)
+      }
+      assert.deepStrictEqual(messages, [["old"]], `a later attempt shared the message, or ran at all: ${JSON.stringify(messages)}`)
+      const tags = envelopes.map((e) => e.event._tag)
+      assert.include(tags, "MessageFailed")
+      assert.strictEqual(tags[tags.length - 1], "SubmissionFailed")
+    }), 20_000
+  )
+})
+

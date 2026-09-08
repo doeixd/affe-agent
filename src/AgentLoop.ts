@@ -70,6 +70,27 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
 }
 
+/**
+ * Why a run ran out, when it ran out rather than finished.
+ *
+ * A classification, not a reason: `stopReason` stays open-ended prose and
+ * custom policies keep inventing their own, but the built-in ceilings each
+ * carry one of these so a caller can branch on "the budget ran out" without
+ * matching strings. `AgentLoop.stop("waiting for supervisor")` has no
+ * exhaustion, and that is the point -- it did not run out of anything.
+ *
+ * The distinction it preserves:
+ *
+ * ```text
+ * model went idle             -> stop, no exhaustion
+ * output tool reported        -> stop, no exhaustion
+ * a custom policy said stop   -> stop, no exhaustion
+ * maxTurns reached            -> stop, exhaustion "turns"
+ * token ceiling reached       -> stop, exhaustion "tokens"
+ * ```
+ */
+export type Exhaustion = "turns" | "tool-calls" | "duration" | "tokens" | "cost"
+
 export type Decision = Continue | Stop | Final
 
 export interface Continue {
@@ -86,6 +107,8 @@ export interface Continue {
 export interface Stop {
   readonly _tag: "Stop"
   readonly reason?: string | undefined
+  /** Set when a built-in ceiling decided this; absent for an ordinary stop. */
+  readonly exhaustion?: Exhaustion | undefined
 }
 
 /**
@@ -99,6 +122,8 @@ export interface Stop {
 export interface Final {
   readonly _tag: "Final"
   readonly reason?: string | undefined
+  /** Carried through from the `Stop` a final turn replaced, when there was one. */
+  readonly exhaustion?: Exhaustion | undefined
 }
 
 export const Continue: Decision = { _tag: "Continue" }
@@ -112,6 +137,18 @@ export const stop = (reason?: string): Decision =>
 /** `Final`, with the reason `RunCompleted.stopReason` will carry. */
 export const final = (reason?: string): Decision =>
   reason === undefined ? Final : { _tag: "Final", reason }
+
+/**
+ * `Stop`, classified: a built-in ceiling was reached rather than a policy
+ * choosing to end.
+ *
+ * Exported so a custom policy enforcing one of the same ceilings can report it
+ * the same way. A policy stopping for its own reasons should use {@link stop}:
+ * inventing an exhaustion for something that did not run out would make the
+ * classification mean less than the string it replaced.
+ */
+export const exhausted = (exhaustion: Exhaustion, reason?: string): Decision =>
+  reason === undefined ? { _tag: "Stop", exhaustion } : { _tag: "Stop", reason, exhaustion }
 
 /**
  * How much a decision stops. `and` keeps the most, `or` the least.
@@ -217,7 +254,7 @@ export const maxTurns = <
   max: number
 ): AgentLoop<never, never, Tools> => {
   const bound = positiveInteger("AgentLoop.maxTurns", max)
-  const decision = stop("max turns")
+  const decision = exhausted("turns", "max turns")
   return make((state) => Effect.succeed(state.turnIndex >= bound ? decision : Continue), {
     _tag: "MaxTurns",
     max: bound
@@ -239,7 +276,7 @@ export const maxToolCalls = <
   max: number
 ): AgentLoop<never, never, Tools> => {
   const bound = positiveInteger("AgentLoop.maxToolCalls", max)
-  const decision = stop("max tool calls")
+  const decision = exhausted("tool-calls", "max tool calls")
   return make((state) => Effect.succeed(state.toolCallsTotal >= bound ? decision : Continue), {
     _tag: "MaxToolCalls",
     max: bound
@@ -272,7 +309,7 @@ export const maxDuration = <
       `AgentLoop.maxDuration: expected a positive finite duration, got ${String(duration)}`
     )
   }
-  const decision = stop("max duration")
+  const decision = exhausted("duration", "max duration")
   return make(
     (state) => Effect.succeed(Duration.toMillis(state.elapsed) >= millis ? decision : Continue),
     { _tag: "MaxDuration", millis }
@@ -300,7 +337,15 @@ export const withFinalTurn = <
     (state) =>
       Effect.map(inner.decide(state), (decision) =>
         decision._tag === "Stop" && state.toolCalls.length > 0
-          ? final(decision.reason)
+          // The classification survives the conversion: a run that ran out of
+          // turns and then took a final one still ran out of turns, and a
+          // caller asking why should not get a different answer because the
+          // agent was configured to answer politely on the way out.
+          ? {
+            _tag: "Final",
+            ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+            ...(decision.exhaustion === undefined ? {} : { exhaustion: decision.exhaustion })
+          }
           : decision
       ),
     { _tag: "FinalTurn", inner: inner.description }

@@ -455,6 +455,14 @@ export interface ProjectionState {
   readonly openMessages: ReadonlySet<string>
   readonly openSteps: ReadonlySet<string>
   readonly streamedMessages: ReadonlySet<string>
+  /**
+   * Tool calls opened by an argument fragment (`ToolCallDelta`) and not yet
+   * ended: their `TOOL_CALL_START` and `TOOL_CALL_ARGS` have gone out as the
+   * arguments streamed, so the assembled `ToolCallStarted` owes only the
+   * `TOOL_CALL_END`, and a message that fails or is interrupted owes one for
+   * each still open.
+   */
+  readonly openToolCalls: ReadonlySet<string>
   readonly started: boolean
   readonly terminal: boolean
 }
@@ -464,6 +472,7 @@ export const initialState = (options: MapperOptions): ProjectionState => ({
   openMessages: new Set(),
   openSteps: new Set(),
   streamedMessages: new Set(),
+  openToolCalls: new Set(),
   started: options.started === true,
   terminal: false
 })
@@ -557,14 +566,26 @@ export const transition = (
     const openMessages = new Set(current.openMessages)
     const openSteps = new Set(current.openSteps)
     const streamedMessages = new Set(current.streamedMessages)
+    const openToolCalls = new Set(current.openToolCalls)
     let started = current.started
     let terminal: boolean = current.terminal
     let output: ReadonlyArray<Event> = []
     const key = correlationKey(envelope)
     const currentMessageId = messageId(envelope)
     const currentStepName = stepName(envelope)
-    const closeOpenFrames = (): Array<Event> => {
+    // A call whose arguments streamed and whose assembled call never came:
+    // ended, so a consumer is not left with a call that never closes. No
+    // result follows, which is the AG-UI shape of "abandoned".
+    const closeOpenToolCalls = (): Array<Event> => {
       const frames: Array<Event> = []
+      for (const id of openToolCalls) {
+        frames.push(tool.finished({ toolCallId: id }))
+      }
+      openToolCalls.clear()
+      return frames
+    }
+    const closeOpenFrames = (): Array<Event> => {
+      const frames: Array<Event> = closeOpenToolCalls()
       for (const id of openMessages) {
         frames.push(text.end({ messageId: id }))
       }
@@ -693,16 +714,44 @@ export const transition = (
         if (openMessages.has(currentMessageId)) {
           openMessages.delete(currentMessageId)
           streamedMessages.add(key)
-          output = [text.end({ messageId: currentMessageId })]
+          output = [...closeOpenToolCalls(), text.end({ messageId: currentMessageId })]
+        } else {
+          output = closeOpenToolCalls()
+        }
+        break
+      // A call forming: the first fragment opens it with the name the
+      // provider announced, every fragment is an args delta, and the
+      // assembled call then owes only the end. A fragment for a call the
+      // provider never announced has no name to open with and is dropped;
+      // the assembled call still arrives whole.
+      case "ToolCallDelta":
+        if (openToolCalls.has(event.id)) {
+          output = [tool.args({ toolCallId: event.id, delta: event.delta })]
+        } else if (event.name !== undefined) {
+          openToolCalls.add(event.id)
+          output = [
+            tool.started({
+              toolCallId: event.id,
+              toolCallName: event.name,
+              parentMessageId: currentMessageId
+            }),
+            tool.args({ toolCallId: event.id, delta: event.delta })
+          ]
         }
         break
       case "ToolCallStarted":
-        output = tool.call({
-          id: event.id,
-          name: event.name,
-          args: encoded ?? "",
-          parentMessageId: currentMessageId
-        })
+        if (openToolCalls.delete(event.id)) {
+          // Its arguments already streamed; sending them again would show
+          // the consumer the call's arguments twice.
+          output = [tool.finished({ toolCallId: event.id })]
+        } else {
+          output = tool.call({
+            id: event.id,
+            name: event.name,
+            args: encoded ?? "",
+            parentMessageId: currentMessageId
+          })
+        }
         break
       case "ToolCallProgress":
         output = [custom({
@@ -775,6 +824,7 @@ export const transition = (
       openMessages,
       openSteps,
       streamedMessages,
+      openToolCalls,
       started,
       terminal
     }, output]
@@ -968,6 +1018,7 @@ const errorStatus = (error: Error): number => {
     case "AgentExecutionError":
       return 422
     case "AgentTransportError":
+    case "AgentObservationLagError":
       return 503
     case "AgentProtocolCodecError":
       return 500

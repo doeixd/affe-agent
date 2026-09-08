@@ -16,12 +16,15 @@
   "AgentMcpElicitationUnsupportedError",
   "AgentMcpTicketNotFoundError",
   "AgentMcpToolFailure",
+  "AgentObservationLagError",
   "AgentProtocolCodecError",
   "AgentRequestCapacityExceededError",
   "AgentRequestConflictError",
   "AgentSessionAlreadyExistsError",
   "AgentSessionNotFoundError",
   "AgentSubmissionNotFoundError",
+  "AgentToolProgressLimitError",
+  "AgentTraceLimitError",
   "AgentTransportError",
   "AgentUnauthorizedError",
   "ChannelConformanceFailure",
@@ -57,5 +60,6 @@
   "ToolSourceToolError",
   "UnknownCurrentModelError",
   "UnknownModelError",
-  "UnpricedModelError"
+  "UnpricedModelError",
+  "UnsupportedConversion"
 ]

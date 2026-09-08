@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Option, Queue, Ref, Schedule, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import * as Accumulator from "../internal/streamAccumulator.js"
 import { AiError, LanguageModel, Response, Toolkit } from "effect/unstable/ai"
@@ -27,7 +27,7 @@ import { describedTools } from "../internal/describedTools.js"
  * parts on replay, so callers cannot tell the difference.
  */
 /** What a model activity persists: an outcome, never a failure. */
-type ModelOutcome =
+export type ModelOutcome =
   | { readonly _tag: "Succeeded"; readonly parts: ReadonlyArray<any> }
   | { readonly _tag: "Failed"; readonly failure: AgentEvent.Failure }
 
@@ -40,6 +40,31 @@ export class DurableModelFailure extends Schema.TaggedError<DurableModelFailure>
     return `Model call failed: ${this.failure.message}`
   }
 }
+
+/**
+ * A recorded model outcome, back into what the model call would have been.
+ *
+ * The same rule as `DurableToolkit.reraise`, on a first run and on replay:
+ * a response is the response; a provider failure is the typed
+ * `DurableModelFailure`, which the turn fails with as it would with the
+ * provider's own error; a defect stays a defect. Re-raising a defect typed
+ * reported it as an ordinary failure to a caller in another process --
+ * `isDefect: false` on the submission's failure -- while the same defect
+ * in-process was a defect, which is the drift `plan-streaming-followups.md`
+ * §8 audits for.
+ */
+export const reraise = (
+  outcome: ModelOutcome
+): Effect.Effect<LanguageModel.GenerateTextResponse<any, any>, DurableModelFailure> =>
+  Effect.gen(function* () {
+    if (outcome._tag === "Failed") {
+      const failure = new DurableModelFailure({ failure: outcome.failure })
+      return outcome.failure.isDefect ? yield* Effect.die(failure) : yield* failure
+    }
+    return new LanguageModel.GenerateTextResponse(
+      outcome.parts as Array<Response.Part<any, any>>
+    )
+  })
 
 /**
  * A completed response, re-expressed as the stream parts that would have
@@ -166,6 +191,21 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
             // without it, a second execution's `model-0` meets the first's.
             name: `${prefix}model-${index}`,
             success: outcomeSchema,
+            // `Activity.make` retries an `execute` interrupted from inside up
+            // to ten times on its own, then reports the interrupt as a
+            // defect. For a batched call the retries are invisible. For the
+            // live stream they were not: each attempt tapped its parts into
+            // the *same* harness fold, so an observer saw the abandoned
+            // attempt's text and then the replacement's in one message,
+            // while the journal kept only the last -- fresh and replay
+            // disagreed. The second reviewer's reproduction. A tapped stream
+            // is therefore never retried in place: the activity reports the
+            // interrupt as a defect at once, the outcome is recorded as one,
+            // the harness closes the message as failed, and a replay
+            // re-raises the same defect. An interruption of the fibre from
+            // outside -- a runner shutting down -- is not caught by the
+            // retry at all and still suspends the workflow as before.
+            ...(tap === undefined ? {} : { interruptRetryPolicy: Schedule.recurs(0) }),
             execute: (
               tap === undefined
                 ? (underlying.generateText(options) as unknown as Effect.Effect<
@@ -224,14 +264,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
             )
           }).pipe(Effect.provide(workflowContext))
 
-          const result = outcome as ModelOutcome
-          if (result._tag === "Failed") {
-            return yield* new DurableModelFailure({ failure: result.failure })
-          }
-
-          return new LanguageModel.GenerateTextResponse(
-            result.parts as Array<Response.Part<any, any>>
-          )
+          return yield* reraise(outcome as ModelOutcome)
         })
 
     const service: LanguageModel.Service = {

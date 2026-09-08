@@ -162,6 +162,7 @@ const fixture = (options?: {
              * log itself guarantees at the seam is
              * `DurableAgentClient.test.ts`'s subject, not this one's.
              */
+            stream: () => Stream.die("stream is not part of this fixture"),
             events: (eventOptions) =>
               eventOptions?.after === undefined
                 ? events
@@ -199,6 +200,7 @@ const fixture = (options?: {
                 pending: Effect.succeed([]),
                 history: Effect.succeed(Prompt.make("adopted")),
                 status: Effect.succeed("idle" as const),
+                stream: () => Stream.die("stream is not part of this fixture"),
                 events: () => Stream.empty
               } satisfies AgentClient.RemoteSession
             )

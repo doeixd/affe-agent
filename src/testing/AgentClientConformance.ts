@@ -1,4 +1,4 @@
-import { Deferred, Duration, Effect, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
 import type { Layer } from "effect"
 import { LanguageModel, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -78,6 +78,14 @@ export interface Options {
    * backings rather than an artefact of testing.
    */
   readonly resumesEvents?: boolean | undefined
+  /**
+   * `false` when this client cannot stream a submission -- it has no
+   * subscription seam that is established before admission -- and must
+   * therefore *refuse* `stream` rather than return one that may have missed
+   * its first envelopes. Default `true`, and both answers are asserted, as
+   * for `resumesEvents`.
+   */
+  readonly streamsSubmissions?: boolean | undefined
   /**
    * Where settled outcomes live. `bounded` is the in-process table with the
    * eviction rule; `journal` is the durable engine, which keeps every
@@ -902,6 +910,232 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
             )
           })
         )
+    )),
+
+    /**
+     * One submission as a stream, on every client (`plan-streaming.md` P1,
+     * item 72): the rules must hold wherever the session lives, or closing
+     * a tab changes execution semantics by deployment. A client without a
+     * subscription seam established before admission refuses instead.
+     */
+    options.streamsSubmissions === false
+      ? make("refuses to stream a submission rather than returning one that may have missed its start", withClient(
+        options,
+        { agent: Agent.make({ loop: AgentLoop.bounded(2) }), turns: [TestLanguageModel.text("done")] },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const name = "refuses to stream a submission rather than returning one that may have missed its start"
+              const session = yield* client.createSession()
+              const outcome = yield* Stream.runCollect(session.stream("go")).pipe(
+                Effect.as("streamed" as const),
+                Effect.catchCause(() => Effect.succeed("refused" as const)),
+                Effect.timeout(Duration.seconds(5)),
+                Effect.catchTag("TimeoutError", () => Effect.succeed("returned a stream that never ended" as const))
+              )
+              yield* equal(name)(outcome, "refused", "streaming on a client that cannot establish its subscription first")
+            })
+          )
+      ))
+      : make("streams one submission: its own envelopes from start to terminal, deltas included, ending free and cold", withClient(
+        options,
+        {
+          agent: Agent.make({ loop: AgentLoop.bounded(4) }),
+          turns: [{ text: "streamed", chunks: ["str", "eamed"] }, TestLanguageModel.text("again")]
+        },
+        (client) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const name = "streams one submission: its own envelopes from start to terminal, deltas included, ending free and cold"
+              const session = yield* client.createSession()
+              const once = session.stream("go")
+              const envelopes = yield* Stream.runCollect(once).pipe(
+                Effect.timeout(Duration.seconds(10)),
+                Effect.catchTag("TimeoutError", () =>
+                  Effect.fail(new Failure({ case: name, detail: "the stream never ended: the terminal was not delivered or the cut is missing" })))
+              )
+              const tags = envelopes.map((entry) => entry.event._tag)
+              yield* equal(name)(tags[0], "SubmissionStarted", "the first envelope, which a subscription taken after admission would miss")
+              yield* equal(name)(tags[tags.length - 1], "SubmissionCompleted", "the last envelope")
+              const ids = new Set(envelopes.map((entry) => Option.getOrUndefined(entry.submissionId)))
+              yield* equal(name)(ids.size, 1, "submissions represented")
+              yield* equal(name)(
+                envelopes.flatMap((entry) => AgentEvent.is("MessageDelta")(entry) ? [entry.event.delta] : []),
+                ["str", "eamed"],
+                "the deltas, which means the submission streamed"
+              )
+              const sequences = envelopes.map((entry) => entry.sequence)
+              yield* equal(name)(sequences, [...sequences].sort((a, b) => a - b), "sequences, in the session's order")
+              // Ends free: the session answers at once, and the outcome is retrievable.
+              yield* equal(name)(yield* session.status, "idle", "status the moment the stream ended")
+              const [id] = ids
+              const outcome = yield* session.awaitSubmission(id!)
+              yield* equal(name)(outcome.status, "completed", "the retained outcome")
+              yield* equal(name)(outcome.text, "streamed", "its text")
+              // Cold: evaluating again is a second submission.
+              const second = yield* Stream.runCollect(once)
+              const secondIds = new Set(second.map((entry) => Option.getOrUndefined(entry.submissionId)))
+              yield* equal(name)(secondIds.size, 1, "submissions in the second evaluation")
+              yield* that(name)(!secondIds.has(id), "the second evaluation submitted again rather than replaying")
+            })
+          )
+      )),
+
+    /**
+     * A tool that dies fails the run everywhere.
+     *
+     * The rule is `ToolExecution`'s: a defect means the handler is broken,
+     * not that the model asked for something the tool could refuse, so it
+     * is never returned to the model. The durable wrapper once folded a
+     * defect into a typed tool failure the model then saw -- found by the
+     * streamed-failure case below, which had to use a failing model call
+     * until this held on every client (item 73).
+     */
+    make("a tool that dies fails the run everywhere, and is not shown to the model", withClient(
+      options,
+      {
+        agent: Agent.make({
+          toolkit: Agent.toolkit([Boom], { boom: () => Effect.die(new Error("the tool is broken")) }),
+          loop: AgentLoop.bounded(3)
+        }),
+        turns: [{ toolCalls: [{ id: "b1", name: "boom", params: {} }] }, TestLanguageModel.text("carried on")]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "a tool that dies fails the run everywhere, and is not shown to the model"
+            const session = yield* client.createSession()
+            const collected = yield* Effect.forkChild(
+              Stream.runCollect(
+                Stream.takeUntil(
+                  session.events(),
+                  (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
+                )
+              )
+            )
+            yield* Effect.yieldNow
+            const exit = yield* Effect.exit(session.prompt("go"))
+            yield* that(name)(Exit.isFailure(exit), "the prompt failed")
+            if (Exit.isFailure(exit)) {
+              const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+              yield* that(name)(error !== undefined && error._tag === "AgentExecutionError", `the failure is the run's, got ${JSON.stringify(error)}`)
+              if (error !== undefined && error._tag === "AgentExecutionError") {
+                yield* that(name)(error.isDefect, "reported as a defect")
+              }
+            }
+            const events = yield* Fiber.join(collected).pipe(
+              Effect.timeout(Duration.seconds(10)),
+              Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
+            )
+            const tags = events.map((entry) => entry.event._tag)
+            yield* equal(name)(tags[tags.length - 1], "SubmissionFailed", "the submission's terminal")
+            const failed = events.flatMap((entry) => AgentEvent.is("ToolCallFailed")(entry) ? [entry.event] : [])
+            yield* equal(name)(failed.length, 1, "tool failures reported")
+            yield* equal(name)(failed[0]!.returnedToModel, false, "returned to the model")
+            yield* that(name)(!tags.includes("MessageCompleted") || tags.indexOf("MessageCompleted") < tags.indexOf("ToolCallFailed"), "no message was produced after the defect")
+          })
+        )
+    )),
+
+    /**
+     * The outcome matrix (`plan-streaming-followups.md` §8, item 74): the
+     * distinctions an outcome carries -- success, expected failure, defect,
+     * interruption -- survive every client, the journal included. The tool
+     * defect row is above; interruption is "interrupts a run and reports
+     * it"; these two hold the expected-failure and the model rows.
+     */
+    make("outcome matrix: a tool's expected failure is shown to the model under ReturnToModel, and the run completes", withClient(
+      options,
+      {
+        agent: Agent.make({
+          toolkit: Agent.toolkit([Boom], { boom: () => Effect.fail("declined") }),
+          loop: AgentLoop.bounded(3)
+        }),
+        turns: [TestLanguageModel.toolCall("boom", {}, { id: "b1" }), TestLanguageModel.text("noted")]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "outcome matrix: a tool's expected failure is shown to the model under ReturnToModel, and the run completes"
+            const session = yield* client.createSession()
+            const collected = yield* Effect.forkChild(
+              Stream.runCollect(
+                Stream.takeUntil(
+                  session.events(),
+                  (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
+                )
+              )
+            )
+            yield* Effect.yieldNow
+            const result = yield* session.prompt("go")
+            yield* equal(name)(result.status, "completed", "status")
+            yield* equal(name)(result.text, "noted", "the model answered after seeing the failure")
+            const events = yield* Fiber.join(collected).pipe(
+              Effect.timeout(Duration.seconds(10)),
+              Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
+            )
+            const failed = events.flatMap((entry) => AgentEvent.is("ToolCallFailed")(entry) ? [entry.event] : [])
+            yield* equal(name)(failed.length, 1, "tool failures reported")
+            yield* equal(name)(failed[0]!.returnedToModel, true, "returned to the model")
+            yield* equal(name)(failed[0]!.failure.isDefect, false, "reported as a defect")
+          })
+        )
+    )),
+
+    make("outcome matrix: a model defect is reported as a defect, a provider failure as a failure", withClient(
+      options,
+      {
+        agent: Agent.make({ loop: AgentLoop.bounded(2) }),
+        turns: [{ fail: "the model handler is broken" }, { failWith: "the provider is down" }]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "outcome matrix: a model defect is reported as a defect, a provider failure as a failure"
+            const session = yield* client.createSession()
+            const defect = yield* failureOf(name)(session.prompt("first"))
+            yield* equal(name)(defect._tag, "AgentExecutionError", "the defect's error")
+            if (defect._tag === "AgentExecutionError") {
+              yield* equal(name)(defect.isDefect, true, "a died model call, reported as a defect")
+            }
+            yield* equal(name)(yield* session.status, "idle", "session status after the defect")
+            const failure = yield* failureOf(name)(session.prompt("second"))
+            yield* equal(name)(failure._tag, "AgentExecutionError", "the failure's error")
+            if (failure._tag === "AgentExecutionError") {
+              yield* equal(name)(failure.isDefect, false, "a provider error, reported as a failure")
+              yield* that(name)(failure.detail.includes("the provider is down"), `detail does not carry the provider's reason: ${failure.detail}`)
+            }
+            yield* equal(name)(yield* session.status, "idle", "session status after the failure")
+          })
+        )
+    )),
+
+    // A failing model call rather than a dying tool, so this case is about
+    // the stream and not about the rule the case above holds.
+    make("a streamed submission that fails ends with SubmissionFailed, not a stream failure", withClient(
+      options,
+      {
+        agent: Agent.make({ loop: AgentLoop.bounded(2) }),
+        turns: [{ fail: "the provider is down" }]
+      },
+      (client) =>
+        options.streamsSubmissions === false
+          ? Effect.void
+          : Effect.scoped(
+            Effect.gen(function* () {
+              const name = "a streamed submission that fails ends with SubmissionFailed, not a stream failure"
+              const session = yield* client.createSession()
+              const exit = yield* Effect.exit(Stream.runCollect(session.stream("go")).pipe(
+                Effect.timeout(Duration.seconds(10))
+              ))
+              yield* that(name)(Exit.isSuccess(exit), "observing the outcome succeeded even though the run did not")
+              if (Exit.isSuccess(exit)) {
+                const tags = exit.value.map((entry) => entry.event._tag)
+                yield* equal(name)(tags[tags.length - 1], "SubmissionFailed", "the terminal, as data")
+                yield* equal(name)(tags.filter((tag) => tag.startsWith("Submission")).length, 2, "one start, one terminal")
+              }
+            })
+          )
     ))
   ]
 }

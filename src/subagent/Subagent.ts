@@ -8,6 +8,7 @@ import * as AgentSession from "../AgentSession.js"
 import type * as AgentSubmission from "../AgentSubmission.js"
 import * as Budget from "../budget/Budget.js"
 import * as Elicitation from "../Elicitation.js"
+import { ParentEvents } from "../internal/delegatedEvents.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
 import * as Namespace from "../internal/namespace.js"
@@ -139,7 +140,30 @@ export interface Inherit {
    * is opt-in and why the default is the loud refusal rather than this.
    */
   readonly approval?: "parent" | "refuse" | undefined
+  /**
+   * Whether the child's events reach the parent's stream.
+   *
+   * **Default `"none"`**: the child runs on a bus of its own, and a parent's
+   * consumers see `ToolCallStarted`, then the result. A UI that shows the
+   * child's turns as they happen needs more than that.
+   *
+   * `"parent"` forwards every envelope of the child's bus onto the parent's,
+   * each wrapped in one `DelegatedEvent` that names this tool and the call,
+   * with the child's envelope inside untouched. Approvals are not doubled:
+   * they cross as elicitation, under `approval`. Opt-in until a consumer
+   * shows the expectation, because it multiplies the parent's stream by the
+   * child's.
+   */
+  readonly events?: "parent" | "none" | undefined
 }
+
+/**
+ * The child's event sink when it forwards: the parent's `ParentEvents`,
+ * read when the child session is made, inside the parent's handler. Outside
+ * any tool execution it is `None`, and the child forwards nowhere.
+ */
+const sinkFor = (inherit: Inherit | undefined) =>
+  Effect.map(ParentEvents, (parent) => inherit?.events === "parent" ? Option.getOrUndefined(parent) : undefined)
 
 /**
  * The parent's elicitor, as a child's `Elicitation.Factory`.
@@ -287,9 +311,14 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
   )
   return Effect.scoped(
     Effect.flatMap(
-      AgentSession.make(agent, {
-        elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined
-      }),
+      Effect.flatMap(
+        sinkFor(inherit),
+        (eventSink) =>
+          AgentSession.makeEngine(agent, {
+            elicitation: inherit?.approval === "parent" ? forwarded(name) : undefined,
+            eventSink
+          })
+      ),
       (session) =>
         Effect.flatMap(AgentSession.prompt<Tools, E, Value, Input>(session, input), (result) =>
           Effect.gen(function* () {

@@ -1,4 +1,4 @@
-import { Cause, Effect, Option, Ref, Stream } from "effect"
+import { Cause, Effect, ExecutionPlan, Option, Ref, Stream } from "effect"
 import { LanguageModel, Prompt, Response, Toolkit } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -252,11 +252,30 @@ const withPlanStream = <A, E, R>(
   Option.match(session.agent.executionPlan, {
     onNone: () => stream,
     onSome: (plan) =>
-      Stream.withExecutionPlan(stream, plan, {
+      Stream.withExecutionPlan(stream, withoutStepRetries(plan), {
         preventFallbackOnPartialStream: true,
         onEvent: Telemetry.recordAttempt
       })
   })
+
+/**
+ * The plan with each step's own retries removed.
+ *
+ * `preventFallbackOnPartialStream` guards the move to the *next* step, and
+ * only that: a step's `attempts` or `schedule` retry the same provider
+ * underneath the guard, so a stream that emitted a part and then failed was
+ * re-subscribed into the same fold -- the abandoned attempt's text stayed,
+ * a reused tool-call id merged fragments across attempts, and the viewer
+ * saw one ordinary message. The second reviewer's reproduction on rc.112.
+ * So on the streaming path a step gets one attempt: a failure before the
+ * first part still falls through to the next step, and a failure after it
+ * is final, which is the rule the guard was meant to state. The batch path
+ * keeps its retries; nothing has been shown there.
+ */
+const withoutStepRetries = <P extends ExecutionPlan.ExecutionPlan<any>>(plan: P): P => ({
+  ...plan,
+  steps: plan.steps.map((step) => ({ ...step, attempts: 1, schedule: undefined }))
+})
 
 const streamResponse = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools, any, any>,
@@ -302,18 +321,27 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
               part: History.filePart(part)
             })
           : Effect.void
-        return next.delta === undefined
-          ? Effect.as(announced, next.state)
-          : announced.pipe(
-              Effect.andThen(
-                EventBus.emit(session.bus, correlation, {
-                  _tag: "MessageDelta",
-                  kind: next.delta.kind,
-                  delta: next.delta.delta
-                })
-              ),
-              Effect.as(next.state)
-            )
+        // A fragment of a tool call's arguments is reported and nothing more;
+        // the assembled call, and everything the harness does with it, comes
+        // with the `tool-call` part that follows.
+        const fragment = next.toolCallDelta === undefined
+          ? Effect.void
+          : EventBus.emit(session.bus, correlation, {
+              _tag: "ToolCallDelta",
+              id: next.toolCallDelta.id,
+              ...(next.toolCallDelta.name === undefined ? {} : { name: next.toolCallDelta.name }),
+              delta: next.toolCallDelta.delta
+            })
+        const output = next.delta === undefined
+          ? Effect.void
+          : EventBus.emit(session.bus, correlation, {
+              _tag: "MessageDelta",
+              kind: next.delta.kind,
+              delta: next.delta.delta
+            })
+        // One part yields at most one of these today; emitting whichever are
+        // present, in this order, does not depend on that staying true.
+        return announced.pipe(Effect.andThen(fragment), Effect.andThen(output), Effect.as(next.state))
       }
     )
 
@@ -470,7 +498,9 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
           id: session.id,
           bus: session.bus,
           elicitation: session.elicitation,
-          nextElicitationId: session.ids.nextElicitation
+          nextElicitationId: session.ids.nextElicitation,
+          toolProgressBytes: session.toolProgressBytes,
+          toolProgressLimit: session.toolProgressLimit
         },
         agent: {
           strategy: session.agent.toolExecution,

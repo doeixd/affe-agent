@@ -477,8 +477,11 @@ condition within a phase.
       pending resource remains phase 4 rather than being implied here.
 - [x] `agent://session/{id}/history` and `/pending` return authenticated JSON
       snapshots through official v2 HTTP resource reads.
-- [ ] `agent://session/{id}/events?after=N` returns exactly the envelopes above
-      `N`, and fails rather than degrading when the client cannot resume.
+- [x] `agent://session/{id}/events?after=N` returns exactly the envelopes above
+      `N`, and fails rather than degrading when the client cannot resume
+      (`AgentMcp.ts`'s `events/after/{N}` resource; `test/AgentMcpResources.test.ts`
+      reads the log finitely with a cursor, and `test/HostConformance.test.ts`
+      holds the refusal for a host without a delivery log).
 - [x] `ask_agent`'s observable behaviour is unchanged from today for a
       single-shot prompt, including its failure text shape for a failing run.
 
@@ -496,9 +499,11 @@ condition within a phase.
 
 **Quality gates**
 
-- [ ] The post-resource/example `npm run check` was green: every typecheck and
-      build, 329-file Effect diagnostics at zero, portability and workerd,
-      1,389 tests, all 41 packed entry points, and reference/CLI/TUI smoke.
+- [x] The post-resource/example `npm run check` was green: every typecheck and
+      build, Effect diagnostics at zero, portability and workerd, the full suite,
+      every packed entry point, and reference/CLI/TUI smoke. *(The numbers this
+      box first named -- 329 files, 1,389 tests, 41 entry points -- are the
+      gate as it was then; `STATUS.md`'s gates table carries the current ones.)*
       (An earlier note here blamed a typecheck blocker on `test/ZProbe.test.ts`;
       that file never existed and the gate is clean as of `b554458`.)
 - [x] `examples/mcp-frontend.ts` is a portable shared-host stdio frontend with

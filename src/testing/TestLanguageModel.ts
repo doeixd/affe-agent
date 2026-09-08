@@ -24,7 +24,39 @@ export interface Turn {
     readonly params: unknown
     /** Marks a call the provider already executed; see `AgentTurn`. */
     readonly providerExecuted?: boolean
+    /**
+     * How this call's arguments arrive when the caller streams: as
+     * `tool-params-start`, one `tool-params-delta` per chunk, `tool-params-end`,
+     * then the assembled `tool-call`. Ignored by a batch call. The chunks are
+     * not checked against `params`; a script that wants them consistent says
+     * so itself.
+     */
+    readonly paramChunks?: ReadonlyArray<string>
+    /**
+     * Streaming only: announce the arguments and send the chunks, then stop --
+     * no end part and no assembled call. A provider that died mid-arguments.
+     * Combine with `streamError` to fail the message after it.
+     */
+    readonly abandon?: boolean
   }>
+  /**
+   * Reasoning this turn reports, before its text.
+   *
+   * `metadata` is the provider's own slot on the part, and it is the reason
+   * this exists: a reasoning signature lives there, and Anthropic will not
+   * continue a reasoning turn without one. A script that carries a signature
+   * can assert it survives canonical history, `PromptWire`, snapshot and
+   * durable replay all the way into the *next* request, which is the only
+   * place the loss would show.
+   *
+   * Streamed as `reasoning-start` / `reasoning-delta` / `reasoning-end`, with
+   * the metadata on the end part, because that is where Effect AI's
+   * `fromResponseParts` merges it into the prompt part's options.
+   */
+  readonly reasoning?: {
+    readonly text: string
+    readonly metadata?: Response.ProviderMetadata
+  }
   /**
    * Runs while the model call is in flight, letting a test drive concurrent
    * interaction (steering, interrupt) at a precisely known moment.
@@ -38,8 +70,10 @@ export interface Turn {
    * must synchronise on this instead to stay deterministic.
    */
   readonly started?: Deferred.Deferred<void>
-  /** Fails the model call, to exercise run failure. */
+  /** Fails the model call with a *defect* (`Effect.die`), to exercise run failure as a bug would cause it. */
   readonly fail?: string
+  /** Fails the model call with a typed provider error (`AiError.InternalProviderError`), as a provider outage would. */
+  readonly failWith?: string
   /** Never completes, so the run can be interrupted mid-generation. */
   readonly hang?: boolean
   /**
@@ -51,6 +85,22 @@ export interface Turn {
    * chunk.
    */
   readonly chunks?: ReadonlyArray<string>
+  /**
+   * Streaming only: after this many stream parts, interrupt from inside the
+   * stream, as a provider adapter that cancels itself would. Distinct from
+   * `streamError` (a failure the stream carries) and from `hang`: the cause
+   * reaching the caller is an interruption, which is what an activity's
+   * retry-on-interrupt looks for.
+   */
+  readonly interruptAfterParts?: number
+  /**
+   * Streaming only: after this many stream parts, fail the stream itself
+   * with a typed provider error -- the stream's own error channel, which is
+   * what an execution plan's retry and fallback act on. `streamError` is
+   * different: that is an error *part*, folded into a failure downstream of
+   * any plan.
+   */
+  readonly failAfterParts?: string
   /**
    * Report a failure *inside* the stream rather than by failing it.
    *
@@ -127,6 +177,13 @@ const finishPart = (usage?: Turn["usage"]): Response.FinishPartEncoded => {
 
 const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
   const parts: Array<Response.PartEncoded> = []
+  if (turn.reasoning !== undefined) {
+    parts.push({
+      type: "reasoning",
+      text: turn.reasoning.text,
+      ...(turn.reasoning.metadata === undefined ? {} : { metadata: turn.reasoning.metadata })
+    })
+  }
   if (turn.text !== undefined) {
     parts.push({ type: "text", text: turn.text })
   }
@@ -157,6 +214,18 @@ const partsFor = (turn: Turn): Array<Response.PartEncoded> => {
  */
 const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
   const parts: Array<Response.StreamPartEncoded> = []
+  if (turn.reasoning !== undefined) {
+    const id = "reasoning-0"
+    parts.push({ type: "reasoning-start", id })
+    parts.push({ type: "reasoning-delta", id, delta: turn.reasoning.text })
+    // The metadata rides on the end part: that is where Effect AI's
+    // `fromResponseParts` merges it into the prompt part's options.
+    parts.push({
+      type: "reasoning-end",
+      id,
+      ...(turn.reasoning.metadata === undefined ? {} : { metadata: turn.reasoning.metadata })
+    })
+  }
   if (turn.text !== undefined) {
     const id = "text-0"
     parts.push({ type: "text-start", id })
@@ -169,6 +238,14 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
     parts.push({ type: "file", mediaType: file.mediaType, data: Encoding.encodeBase64(file.data) })
   }
   for (const call of turn.toolCalls ?? []) {
+    if (call.paramChunks !== undefined || call.abandon === true) {
+      parts.push({ type: "tool-params-start", id: call.id, name: call.name })
+      for (const chunk of call.paramChunks ?? []) {
+        parts.push({ type: "tool-params-delta", id: call.id, delta: chunk })
+      }
+      if (call.abandon === true) continue
+      parts.push({ type: "tool-params-end", id: call.id })
+    }
     parts.push({
       type: "tool-call",
       id: call.id,
@@ -240,6 +317,13 @@ export const make = (turns: ReadonlyArray<Turn>) =>
         if (turn.fail !== undefined) {
           return yield* Effect.die(new Error(turn.fail))
         }
+        if (turn.failWith !== undefined) {
+          return yield* AiError.make({
+            module: "TestLanguageModel",
+            method: "generateText",
+            reason: new AiError.InternalProviderError({ description: turn.failWith })
+          })
+        }
         return turn
       })
 
@@ -262,6 +346,20 @@ export const make = (turns: ReadonlyArray<Turn>) =>
           Effect.map(nextTurn(options), (turn) =>
             turn === undefined
               ? Stream.fromIterable<Response.StreamPartEncoded>([finishPart()])
+              : turn.interruptAfterParts !== undefined
+              ? Stream.concat(
+                Stream.take(Stream.fromIterable(streamPartsFor(turn)), turn.interruptAfterParts),
+                Stream.drain(Stream.fromEffect(Effect.interrupt))
+              )
+              : turn.failAfterParts !== undefined
+              ? Stream.concat(
+                Stream.take(Stream.fromIterable(streamPartsFor(turn)), 2),
+                Stream.fail(AiError.make({
+                  module: "TestLanguageModel",
+                  method: "streamText",
+                  reason: new AiError.InternalProviderError({ description: turn.failAfterParts })
+                }))
+              )
               : Stream.fromIterable(streamPartsFor(turn))
           )
         )

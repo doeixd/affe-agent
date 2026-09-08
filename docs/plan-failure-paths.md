@@ -170,6 +170,12 @@ schema someone reviews.
 
 ### 3.3 (48c) Never acknowledge on the engine's word
 
+> **Shipped 2026-09-06** for `DurableAgentClient` (the reconciliation, with
+> its row in `test/DurableAgentClient.test.ts`), as the comment on
+> `RelayRpc`'s finalizer, and -- the same day, with 47c -- for the Durable
+> Object host, whose alarm handler reads the dispatch intent before running
+> anything: the alarm firing again is not evidence the job did not run.
+
 **What theirs does.** When the native workflow completes, they do not trust the
 value it returns. They read the canonical settlement, compare the returned
 reference against it field by field, and on any disagreement they fail the pass

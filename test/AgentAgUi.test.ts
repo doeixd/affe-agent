@@ -646,6 +646,7 @@ const serverFixture = (fixtureOptions?: {
         pending: Effect.succeed([]),
         history: Effect.succeed(Prompt.make("")),
         status: Effect.succeed("idle" as const),
+        stream: () => Stream.die("stream is not part of this fixture"),
         events: () => Stream.fromPubSub(eventQueue)
       }),
     session: (id) =>

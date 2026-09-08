@@ -200,7 +200,14 @@ GET    /sessions/:id/pending        pending
 GET    /sessions/:id/history        history
 GET    /sessions/:id/status         status
 GET    /sessions/:id/events         events        text/event-stream
+POST   /sessions/:id/stream         stream        { requestId, input, options? }  -> text/event-stream, one submission's envelopes
 ```
+
+`POST /sessions/:id/stream` is a `submit` whose response is the admitted
+submission's own envelopes as SSE, from `SubmissionStarted` through its
+terminal; the host subscribes before admitting, so the first frame is never
+missed. It is not deduplicated by `requestId`: a reconnecting client resumes
+with `GET /sessions/:id/events` and `Last-Event-ID`, it does not stream again.
 
 `AgentHttp.Api` is an `HttpApi` definition, so `HttpApiClient.make(AgentHttp.Api, { baseUrl })`
 gives a typed client with the same error union as RPC, and `AgentHttp.serverLayer(...)`
@@ -230,6 +237,18 @@ data: {"sessionId":"s","submissionId":{"_tag":"Some","value":"..."},...,"sequenc
   read.
 - `id` is the envelope's `sequence`; `event` is the event's `_tag`; `data` is
   the JSON-codec envelope (§2), with `toWire` applied.
+- **An observer that falls behind is disconnected, not buffered forever.**
+  The client behind the host (`AgentClient.layer`, `DurableAgentClient`,
+  the Cloudflare host) bounds what each observer of `events` or `stream`
+  may have outstanding -- `maxObservationLag`, default 2048 envelopes or
+  8 MiB of wire JSON -- and past it ends the stream with
+  `AgentObservationLagError` as the failure frame below, naming the last
+  sequence it delivered. The run is untouched; the client resumes with
+  `Last-Event-ID` from the last frame it *parsed*, which is what the server
+  cannot know. A sliding buffer would have dropped deltas from the middle of
+  a message and presented the rest as whole. The bound lives on the client
+  and not the host because only the seam that takes the subscription can
+  keep "subscribed before the next publish" while bounding it.
 - **A stream failure is one specific frame**:
 
   ```text

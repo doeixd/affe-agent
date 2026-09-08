@@ -11,6 +11,8 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentInput from "../AgentInput.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as AgentSession from "../AgentSession.js"
+import * as Observation from "../internal/observation.js"
+import { AgentObservationLagError } from "../Errors.js"
 import type * as Elicitation from "../Elicitation.js"
 import { SubmissionId } from "../internal/ids.js"
 import {
@@ -186,6 +188,7 @@ export type RemoteError =
   | AgentSessionNotFoundError
   | AgentExecutionError
   | AgentTransportError
+  | AgentObservationLagError
   | AgentSessionAlreadyExistsError
   | AgentRequestConflictError
   | AgentRequestCapacityExceededError
@@ -396,7 +399,71 @@ export interface RemoteSession {
      */
     readonly after?: number | undefined
   }) => Stream.Stream<AgentEventEnvelope, RemoteError>
+  /**
+   * One submission as a stream: `AgentSession.stream`, remotely.
+   *
+   * Submits with `stream: true` and yields that submission's envelopes from
+   * `SubmissionStarted` through its terminal event, then ends once the
+   * session is free again. The same rules hold on every client, or closing a
+   * tab would change execution semantics by deployment (`plan-streaming.md`
+   * P1): the subscription is established before admission, so the first
+   * envelope cannot be missed; the terminal is data, a failed run yields
+   * `SubmissionFailed` and ends normally, and only admission, transport and
+   * an observation that fell past its bound (`AgentObservationLagError`) are
+   * on the error channel; it is cold, each evaluation submits once; and
+   * ending the consumer -- a dropped connection included -- releases the
+   * subscription and nothing else. The submission keeps running; `interrupt`
+   * stops it, and a consumer that lost the stream resumes with
+   * `events({ after })` from the last sequence it saw, without resubmitting.
+   *
+   * Not idempotent: a retried stream request is a second submission. A
+   * caller that needs a retry to join the first uses `submit` with an
+   * `idempotencyKey` and observes with `events`.
+   */
+  readonly stream: (
+    input: RemoteInput,
+    options?: RemoteStreamOptions
+  ) => Stream.Stream<AgentEventEnvelope, RemoteError>
 }
+
+/** `RemotePromptOptions` without `stream`, which `stream` sets, and without a key, which it cannot honour. */
+export type RemoteStreamOptions = Omit<RemotePromptOptions, "stream" | "idempotencyKey">
+
+const isSubmissionTerminal = (envelope: AgentEventEnvelope): boolean =>
+  envelope.event._tag === "SubmissionCompleted" ||
+  envelope.event._tag === "SubmissionFailed" ||
+  envelope.event._tag === "SubmissionInterrupted"
+
+/**
+ * `stream` derived from a subscription that is already established, a
+ * `submit`, and an `awaitSubmission`: the shape every implementation shares
+ * once it has a subscription seam that returns established (the in-process
+ * bus, a delivery log's `subscribe`). Filters to the admitted submission,
+ * cuts at its terminal, and ends only once the outcome is retrievable, so
+ * "the stream ended" means "the session is free".
+ */
+export const streamFrom = (
+  session: Pick<RemoteSession, "submit" | "awaitSubmission">,
+  subscribed: Stream.Stream<AgentEventEnvelope, RemoteError>,
+  input: RemoteInput,
+  options: RemoteStreamOptions | undefined
+): Stream.Stream<AgentEventEnvelope, RemoteError> =>
+  Stream.unwrap(
+    Effect.map(session.submit(input, { ...options, stream: true }), (receipt) =>
+      subscribed.pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "SessionClosed"),
+        Stream.filter((envelope) =>
+          Option.isSome(envelope.submissionId) && envelope.submissionId.value === receipt.submissionId
+        ),
+        Stream.takeUntil(isSubmissionTerminal),
+        // Only the run's own failure is suppressed: the terminal carried it.
+        // A transport failure in the wait is not represented by anything
+        // delivered and propagates, as does a defect.
+        Stream.concat(Stream.drain(Stream.fromEffect(
+          Effect.catchTag(session.awaitSubmission(receipt.submissionId), "AgentExecutionError", () => Effect.void)
+        )))
+      ))
+  )
 
 /** Opens and finds sessions. */
 export interface Service {
@@ -455,6 +522,13 @@ export const fromSession = <Value, Input>(
     /** How many submissions' outcomes this session keeps. */
     readonly maxRetainedSubmissions: number
     /**
+     * How far an observer of `events` or `stream` may fall behind before its
+     * stream is ended with `AgentObservationLagError`. Defaults: 2048
+     * envelopes, 8 MiB of wire JSON. A bound on the observation, never on
+     * execution; see `internal/observation.ts`.
+     */
+    readonly maxObservationLag?: Observation.LagOptions | undefined
+    /**
      * The agent's declared output, when it has one.
      *
      * Passed in rather than read off the session, because a session does not
@@ -464,6 +538,7 @@ export const fromSession = <Value, Input>(
     readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
   }
 ): RemoteSession => {
+  const bound = Observation.boundOf("AgentClient", options.maxObservationLag)
   const capacity = positiveInteger(
     "AgentClient maxRetainedSubmissions",
     options.maxRetainedSubmissions
@@ -603,7 +678,7 @@ export const fromSession = <Value, Input>(
       : Deferred.await(entry.outcome)
   }
 
-  return {
+  const remoteSession: RemoteSession = {
     id: session.id,
     prompt: (input, promptOptions) =>
       admit("prompt", input).pipe(
@@ -654,6 +729,16 @@ export const fromSession = <Value, Input>(
     pending: AgentSession.pending(session),
     history: session.history,
     status: session.status,
+    stream: (raw, streamOptions) =>
+      Stream.unwrap(
+        // The bus subscription first -- bounded -- then the submission
+        // through this handle's own `submit`, so the outcome is retained and
+        // `awaitSubmission` can end the stream free.
+        Effect.map(
+          AgentSession.subscribeEvents(session, { ...bound, sessionId }),
+          (subscribed) => streamFrom(remoteSession, subscribed, raw, streamOptions)
+        )
+      ),
     /**
      * Live only, and explicit about it.
      *
@@ -666,7 +751,7 @@ export const fromSession = <Value, Input>(
      */
     events: (eventOptions) =>
       eventOptions?.after === undefined
-        ? session.events
+        ? Stream.unwrap(AgentSession.subscribeEvents(session, { ...bound, sessionId }))
         : Stream.fail(
           new AgentTransportError({
             sessionId: session.id,
@@ -675,10 +760,11 @@ export const fromSession = <Value, Input>(
           })
         )
   }
+  return remoteSession
 }
 
-/** Re-exported so the protocol modules can name it beside the other client errors. */
-export { AgentSubmissionNotFoundError }
+/** Re-exported so the protocol modules can name them beside the other client errors. */
+export { AgentObservationLagError, AgentSubmissionNotFoundError }
 
 /** Outcomes a session keeps by default; see `layer`. */
 const defaultRetainedSubmissions = 64
@@ -707,6 +793,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
      * `docs/plan-submit-await.md`.
      */
     readonly maxRetainedSubmissions?: number | undefined
+    /** See `fromSession`. */
+    readonly maxObservationLag?: Observation.LagOptions | undefined
   }
 ): Layer.Layer<AgentClient, never, Model | R> =>
   Layer.effect(
@@ -717,7 +805,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
 
       const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
-          const { maxRetainedSubmissions, ...sessionMake } = options ?? {}
+          const { maxObservationLag, maxRetainedSubmissions, ...sessionMake } = options ?? {}
           const session = yield* AgentSession.make(agent, {
             ...sessionMake,
             ...(sessionOptions?.sessionId === undefined
@@ -728,7 +816,8 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
           const remote = fromSession(session, {
             output: agent.output,
             scope: yield* Effect.scope,
-            maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions
+            maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions,
+            ...(maxObservationLag === undefined ? {} : { maxObservationLag })
           })
           yield* Ref.update(open, (all) => new Map(all).set(remote.id, remote))
           // Forgotten when the caller's scope closes, so a client does not

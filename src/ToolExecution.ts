@@ -1,14 +1,21 @@
-import { Cause, Context, Effect, Exit, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import { Response } from "effect/unstable/ai"
 import type { Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import * as AgentEvent from "./AgentEvent.js"
 import type { Correlation } from "./AgentEvent.js"
 import type { SubmissionId } from "./internal/ids.js"
-import { ToolApprovalRequiredError, ToolNotAloneError, ToolPermissionDeniedError } from "./Errors.js"
+import {
+  AgentToolProgressLimitError,
+  ToolApprovalRequiredError,
+  ToolNotAloneError,
+  ToolPermissionDeniedError
+} from "./Errors.js"
 import * as Elicitation from "./Elicitation.js"
 import { CurrentSessionId } from "./internal/currentSession.js"
+import { ParentEvents } from "./internal/delegatedEvents.js"
 import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
+import * as Observation from "./internal/observation.js"
 import * as Telemetry from "./internal/telemetry.js"
 import * as Namespace from "./internal/namespace.js"
 
@@ -202,6 +209,57 @@ const failureResultPart = (
  * megabyte of it is both useless and expensive; the tool's real value is
  * still carried unrendered in `result` for any caller that wants it.
  */
+/**
+ * A failure the harness raised rather than the tool.
+ *
+ * Checked structurally rather than with `instanceof`: the value arrives as a
+ * tool's declared error type, which the compiler will not narrow to a class
+ * it does not know about.
+ */
+const isEngineLimit = (failure: unknown): boolean =>
+  typeof failure === "object" && failure !== null && "_tag" in failure &&
+  failure._tag === "AgentToolProgressLimitError"
+
+/**
+ * Publish one progress snapshot, against the submission's budget.
+ *
+ * The bytes counted are the wire representation -- the same encoding a remote
+ * observer receives -- so "8 MiB" means the same thing in-process and across a
+ * transport. Counting object identity, heap estimates or UTF-16 units would
+ * each make the number mean something different at the two ends.
+ *
+ * Over budget, the call fails rather than emitting a truncated snapshot. A
+ * structured snapshot cut in half is usually a lie and a consumer cannot tell
+ * it from a whole one; already committed history is untouched either way.
+ */
+const publishProgress = (
+  session: SessionContext,
+  correlation: Correlation,
+  call: { readonly id: string; readonly name: string },
+  snapshot: { readonly result: unknown; readonly encodedResult: unknown }
+) =>
+  Effect.gen(function* () {
+    const event = {
+      _tag: "ToolCallProgress" as const,
+      id: call.id,
+      name: call.name,
+      result: snapshot.result,
+      encodedResult: snapshot.encodedResult
+    }
+    const size = Observation.eventWireSize(event)
+    const spent = yield* Ref.updateAndGet(session.toolProgressBytes, (bytes) => bytes + size)
+    if (spent > session.toolProgressLimit) {
+      return yield* new AgentToolProgressLimitError({
+        submissionId: correlation.submissionId ?? session.id,
+        toolName: call.name,
+        toolCallId: call.id,
+        observedBytes: spent,
+        maxBytes: session.toolProgressLimit
+      })
+    }
+    yield* EventBus.emit(session.bus, correlation, event)
+  })
+
 const MAX_RENDERED_FAILURE = 4096
 
 const renderError = (error: unknown): string => {
@@ -246,6 +304,12 @@ export interface SessionContext {
   readonly elicitation: Elicitation.Elicitor
   /** Allocates the id an elicitation is answered by, namespaced by submission. */
   readonly nextElicitationId: (submissionId: SubmissionId) => Effect.Effect<string>
+  /**
+   * Wire bytes of tool progress the current submission has already published,
+   * and the ceiling it is spent against. Reset per submission by the session.
+   */
+  readonly toolProgressBytes: Ref.Ref<number>
+  readonly toolProgressLimit: number
 }
 
 /** The agent policies a turn's tool calls read. Constant for the life of a session. */
@@ -632,15 +696,12 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
               () => emptyCollected<Tools>(),
               (collected, next) =>
                 next.preliminary
-                  ? EventBus.emit(session.bus, correlation, {
-                      _tag: "ToolCallProgress",
-                      id: call.id,
-                      name: call.name,
-                      result: next.result,
-                      encodedResult: next.encodedResult
-                    }).pipe(
-                      Effect.as({ ...collected, last: Option.some(next) })
-                    )
+                  ? publishProgress(session, correlation, call, {
+                    result: next.result,
+                    encodedResult: next.encodedResult
+                  }).pipe(
+                    Effect.as({ ...collected, last: Option.some(next) })
+                  )
                   : Effect.succeed({
                       final: Option.some(next),
                       last: Option.some(next)
@@ -657,6 +718,18 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
           // And the session's identity, for the one tool that looks something
           // up by it (the compaction controller's `contextRemaining`).
           Effect.provideService(CurrentSessionId, Option.some(session.id)),
+          // And where a delegated child's envelopes go if it forwards them:
+          // this bus, this correlation, wrapped as this call's.
+          Effect.provideService(
+            ParentEvents,
+            Option.some((envelope: AgentEvent.AgentEventEnvelope) =>
+              EventBus.emit(session.bus, correlation, {
+                _tag: "DelegatedEvent",
+                tool: call.name,
+                toolCallId: call.id,
+                envelope
+              }))
+          ),
           // A finalizer, not an uninterruptible block: once the fiber is
           // interrupted the generator below never resumes, so the terminal
           // event has to be emitted from the interruption path itself.
@@ -681,8 +754,14 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
 
       // Defects always fail the run. A defect means the handler is broken, not
       // that the model asked for something the tool could refuse.
+      //
+      // An engine limit is not negotiable either. A progress budget is the
+      // harness's rule rather than the tool's answer: the model cannot act on
+      // it, and handing it back as a failed result would let the next call
+      // start emitting again against a budget already spent.
+      const engineLimit = Option.isSome(failure) && isEngineLimit(failure.value)
       const returnedToModel =
-        !isDefect && agent.failurePolicy._tag === "ReturnToModel"
+        !isDefect && !engineLimit && agent.failurePolicy._tag === "ReturnToModel"
 
       yield* EventBus.emit(session.bus, correlation, {
         _tag: "ToolCallFailed",
@@ -821,13 +900,6 @@ const executePerTool = <
   })
 
 /**
- * Execute every tool call of one model response.
- *
- * Under `FailRun` the first failure interrupts its siblings, which is ordinary
- * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
- * at all, so siblings always run to completion.
- */
-/**
  * Annotation: this tool must be the only call in its turn.
  *
  * For a tool whose result is a decision about the *next* turn -- the
@@ -877,6 +949,14 @@ const refuseNotAlone = <R>(
     return failureResultPart(call, error)
   })
 
+/**
+ * Execute every tool call of one model response.
+ *
+ * Under `FailRun` the first failure interrupts its siblings, which is ordinary
+ * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
+ * at all, so siblings always run to completion. A call annotated `Alone` that
+ * arrives with siblings is refused without running; see `Alone`.
+ */
 export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
@@ -911,10 +991,12 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
       dispatch(rest)
     ]),
     ([refusals, results]) => {
-      const byId = new Map<string, Response.AnyPart>()
-      refused.forEach((call, index) => byId.set(call.id, refusals[index]!))
-      rest.forEach((call, index) => byId.set(call.id, results[index]!))
-      return calls.map((call) => byId.get(call.id)!)
+      // By position. Keying on the call id would also be correct, because
+      // `AgentTurn` refuses a response whose calls share an id before any of
+      // them runs; this is merely the form that does not depend on that.
+      let refusal = 0
+      let result = 0
+      return calls.map((call) => mustBeAlone(handler, call) ? refusals[refusal++]! : results[result++]!)
     }
   )
 }

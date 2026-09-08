@@ -205,3 +205,94 @@ export class AgentSubmissionNotFoundError extends Schema.TaggedError<AgentSubmis
     return `Session ${this.sessionId} holds no submission ${this.submissionId}`
   }
 }
+
+/**
+ * An observer fell too far behind, and its stream was ended rather than
+ * letting it retain the session's events without bound.
+ *
+ * An *observation* failure, not the submission's: the run it was watching
+ * is unaffected and so is the journal. `lastDelivered` is the last sequence
+ * the stream handed out before it ended -- an upper bound on what the peer
+ * parsed -- and a consumer resumes with `events({ after })` from the last
+ * sequence it actually saw, where a delivery log stands behind the session.
+ * Retrying the observation is right; resubmitting is not.
+ */
+export class AgentObservationLagError extends Schema.TaggedError<AgentObservationLagError>()(
+  "AgentObservationLagError",
+  {
+    sessionId: Schema.String,
+    lastDelivered: Schema.Number,
+    retainedEnvelopes: Schema.Number,
+    retainedBytes: Schema.Number,
+    maxEnvelopes: Schema.Number,
+    maxBytes: Schema.Number
+  }
+) {
+  override get message() {
+    return `Observer of session ${this.sessionId} fell behind: ${this.retainedEnvelopes} envelopes / ${this.retainedBytes} bytes retained ` +
+      `(bound ${this.maxEnvelopes} / ${this.maxBytes}); last delivered sequence ${this.lastDelivered}`
+  }
+}
+
+/**
+ * A one-shot handle's retained trace outgrew its bound, so the trace it can
+ * replay is no longer the complete one.
+ *
+ * Raised by `Agent.start`'s `events`, and by nothing else: the submission
+ * itself continues, canonical history is unaffected, and a durable delivery
+ * log is unaffected. Observation stays observational.
+ *
+ * It is a failure rather than a silently truncated stream because the
+ * attraction of a replayable handle is that a late observer sees *everything*
+ * that happened. A trace that quietly dropped its oldest envelopes would still
+ * look like a complete one, which is the more expensive mistake.
+ */
+/**
+ * A submission produced more tool progress than its budget allows.
+ *
+ * Distinct from `AgentObservationLagError`, which bounds how far an *observer*
+ * may fall behind, and from the bound on a tool's terminal result. This one
+ * bounds what the agent *produces*: a tool emitting progress in a loop costs
+ * network, storage and telemetry even when every consumer is keeping up, and a
+ * replaying handle or a delivery log has to hold all of it.
+ *
+ * The budget is per submission rather than per run, because a follow-up chain
+ * is one externally admitted unit of work -- a per-run budget would let one
+ * submission emit without limit simply by scheduling continuations.
+ *
+ * Progress is not truncated to fit. A structured snapshot cut in half is
+ * usually a lie, and a consumer cannot tell it from a real one, so the
+ * offending call fails instead and already committed history is untouched.
+ */
+export class AgentToolProgressLimitError extends Schema.TaggedError<AgentToolProgressLimitError>()(
+  "AgentToolProgressLimitError",
+  {
+    submissionId: Schema.String,
+    toolName: Schema.String,
+    toolCallId: Schema.String,
+    observedBytes: Schema.Number,
+    maxBytes: Schema.Number
+  }
+) {
+  override get message() {
+    return `Tool ${this.toolName} (call ${this.toolCallId}) took submission ${this.submissionId} past its ` +
+      `progress budget: ${this.observedBytes} bytes emitted, limit ${this.maxBytes}`
+  }
+}
+
+export class AgentTraceLimitError extends Schema.TaggedError<AgentTraceLimitError>()(
+  "AgentTraceLimitError",
+  {
+    submissionId: Schema.String,
+    retainedEnvelopes: Schema.Number,
+    retainedBytes: Schema.Number,
+    maxEnvelopes: Schema.Number,
+    maxBytes: Schema.Number
+  }
+) {
+  override get message() {
+    return `Trace of submission ${this.submissionId} outgrew its bound: ${this.retainedEnvelopes} envelopes / ` +
+      `${this.retainedBytes} bytes retained (bound ${this.maxEnvelopes} / ${this.maxBytes}). ` +
+      `The submission is unaffected; only this trace is incomplete.`
+  }
+}

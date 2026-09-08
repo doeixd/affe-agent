@@ -44,7 +44,12 @@ type Journalled = {
   readonly preliminary: boolean
 }
 
-type Outcome =
+/**
+ * A tool call's outcome as the journal records it. Exported with `reraise`
+ * so a recorded value can be driven through the rule that turns it back
+ * into an effect without an engine (`plan-streaming-followups.md` §8).
+ */
+export type Outcome =
   | { readonly _tag: "Succeeded"; readonly results: ReadonlyArray<Journalled> }
   | { readonly _tag: "Failed"; readonly failure: AgentEvent.Failure }
   | { readonly _tag: "Unresolved" }
@@ -263,6 +268,28 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           )
         }).pipe(Effect.provide(workflowContext))) as Outcome
 
+        return Stream.fromIterable(yield* reraise(outcome, String(name), id))
+      })) as unknown as Toolkit.WithHandler<Tools>["handle"]
+
+    return { tools: toolkit.tools, handle }
+  })
+
+/**
+ * A recorded outcome, back into the effect the handler would have been.
+ *
+ * The one rule for tool outcomes across the journal, on a first run and on
+ * every replay: success is the results; an expected failure is the typed
+ * `DurableToolFailure`, which `ToolExecution` treats as the handler's own
+ * failure; a defect stays a defect; an unresolved call is a defect too.
+ * Kept as a function of the recorded value so the rule can be exercised on
+ * reconstruction alone, which is the path a replay takes.
+ */
+export const reraise = (
+  outcome: Outcome,
+  toolName: string,
+  toolCallId: string
+): Effect.Effect<ReadonlyArray<HandlerResult>, DurableToolFailure> =>
+  Effect.gen(function* () {
         if (outcome._tag === "Unresolved") {
           // A defect, deliberately, and this is the half of the fix that
           // matters most.
@@ -285,24 +312,27 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           // resubmit instead.
           return yield* Effect.die(
             new DurableToolUnresolvedError({
-              toolName: String(name),
-              toolCallId: id
+              toolName,
+              toolCallId
             })
           )
         }
 
         if (outcome._tag === "Failed") {
-          return yield* new DurableToolFailure({
-            toolName: String(name),
-            toolCallId: id,
+          const failure = new DurableToolFailure({
+            toolName,
+            toolCallId,
             failure: outcome.failure
           })
+          // A defect stays a defect. The journal holds it as a value so a
+          // replay fails the same way, but re-raising it *typed* handed it to
+          // `ToolExecution` as a tool failure, which under `ReturnToModel`
+          // the model saw and could act on -- while the same handler
+          // in-process fails the run ("a defect means the handler is broken,
+          // not that the model asked for something the tool could refuse").
+          // Item 73: one rule on every client.
+          return outcome.failure.isDefect ? yield* Effect.die(failure) : yield* failure
         }
 
-        return Stream.fromIterable(
-          outcome.results.map(fromJournal) as ReadonlyArray<any>
-        )
-      })) as unknown as Toolkit.WithHandler<Tools>["handle"]
-
-    return { tools: toolkit.tools, handle }
+        return outcome.results.map(fromJournal)
   })

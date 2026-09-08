@@ -61,6 +61,7 @@ const remoteSession: AgentClient.RemoteSession = {
   pending: Effect.succeed([]),
   history: Effect.succeed(Prompt.empty),
   status: Effect.succeed("idle"),
+  stream: () => Stream.empty,
   events: () => Stream.empty
 }
 

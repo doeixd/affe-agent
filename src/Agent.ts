@@ -1,5 +1,5 @@
-import { Effect, Option } from "effect"
-import type { Schema } from "effect"
+import { Effect, Fiber, Option, PubSub, Ref, Stream } from "effect"
+import type { Schema, Scope } from "effect"
 import type * as ExecutionPlan from "effect/ExecutionPlan"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
@@ -9,7 +9,12 @@ import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
 import * as AgentInput from "./AgentInput.js"
 import * as AgentOutput from "./AgentOutput.js"
+import type * as AgentEvent from "./AgentEvent.js"
 import * as AgentSession from "./AgentSession.js"
+import type * as AgentSubmission from "./AgentSubmission.js"
+import * as Errors from "./Errors.js"
+import * as Limits from "./internal/limits.js"
+import * as Observation from "./internal/observation.js"
 import * as ContextTransform from "./ContextTransform.js"
 import * as InternalToolkit from "./internal/toolkit.js"
 import * as Permission from "./Permission.js"
@@ -1001,3 +1006,260 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, Value = string
     )
   )
 
+/**
+ * Treat "no such submission" as the defect it would be here.
+ *
+ * Generic so the remaining error type stays opaque: applied inline, the
+ * narrowing has to fight a conditional handler-error type and gives up,
+ * widening the success channel with it.
+ */
+const dieIfMissing = <A, Err>(
+  effect: Effect.Effect<A, Err | Errors.AgentSubmissionNotFoundError>
+): Effect.Effect<A, Err> =>
+  Effect.catchIf(
+    effect,
+    (error): error is Errors.AgentSubmissionNotFoundError =>
+      error instanceof Errors.AgentSubmissionNotFoundError,
+    (error) => Effect.die(error)
+  )
+
+/** The retained trace, and whether it is still the complete one. */
+interface Trace {
+  readonly envelopes: ReadonlyArray<AgentEvent.AgentEventEnvelope>
+  readonly bytes: number
+  /**
+   * Every envelope seen, retained or not. Numbering has to be independent
+   * of retention: once a trace stops retaining, an index derived from what
+   * it kept stops advancing, and a follower filtering on it never sees
+   * another event -- including the terminal one it ends on.
+   */
+  readonly received: number
+  readonly overflowed: boolean
+  /** Set once the terminal event has been *collected*, not merely emitted. */
+  readonly closed: boolean
+}
+
+/**
+ * The events that end a submission.
+ *
+ * The trace is complete when one of these has been collected -- not when the
+ * awaiting fiber returns. `await` resolves as soon as the submission settles,
+ * which can be before the collector has drained the last envelopes, and a
+ * replay cut off at that moment is missing exactly the ending a reader came
+ * for.
+ */
+const terminal: ReadonlySet<string> = new Set([
+  "SubmissionCompleted",
+  "SubmissionFailed",
+  "SubmissionInterrupted"
+])
+
+/** An envelope with its position, so a late observer can skip what it replayed. */
+interface Numbered {
+  readonly index: number
+  readonly envelope: AgentEvent.AgentEventEnvelope
+}
+
+/**
+ * How much of a started submission's trace the handle keeps.
+ *
+ * Lowerable, not raisable: the ceiling is the library's, so a caller cannot
+ * turn "observers may lag" into "the runtime may allocate forever". Defaults
+ * to the bound bounded observation already uses -- 2048 envelopes, 8 MiB of
+ * wire JSON.
+ */
+export interface StartOptions {
+  readonly traceLimits?: {
+    readonly envelopes?: number | undefined
+    readonly bytes?: number | undefined
+  }
+}
+
+/**
+ * Start one submission and hand back a handle to it.
+ *
+ * The third one-shot form, beside {@link run} and `stream`. Where `run` owns
+ * the execution for the duration of the call, `start` hands ownership to the
+ * caller's `Scope`: the work continues whether or not anyone is awaiting it,
+ * an observer may attach late and still see the beginning, and dropping an
+ * observer does not stop anything. Closing the scope is what cancels.
+ *
+ * ```ts
+ * const started = yield* Agent.start(agent, "summarise this")
+ * const trace = yield* Stream.runCollect(started.events)
+ * const result = yield* started.await
+ * ```
+ *
+ * It is an ephemeral `AgentSession` plus one admitted submission plus a
+ * bounded trace collector, and deliberately nothing more -- no second
+ * execution path, no runtime object, no separate history. Reach for
+ * `AgentSession` as soon as the conversation continues past this one
+ * submission.
+ */
+export const start = <Tools extends Record<string, Tool.Any>, E, R, Value = string, Input = Prompt.RawInput>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  input: NoInfer<Input>,
+  options?: AgentSession.PromptOptions & StartOptions
+): Effect.Effect<
+  AgentSubmission.Handle<Tools, E, Value>,
+  AgentSession.SubmitError | E,
+  Scope.Scope | LanguageModel.LanguageModel | R
+> =>
+  Effect.gen(function* () {
+    // Clamped rather than merely validated: the JSDoc says lowerable and not
+    // raisable, and a ceiling a caller can raise is not a ceiling.
+    const bound = {
+      maxEnvelopes: Limits.traceEnvelopes(options?.traceLimits?.envelopes),
+      maxBytes: Limits.traceBytes(options?.traceLimits?.bytes)
+    }
+    const session = yield* AgentSession.make(agent)
+
+    // Before the submission, not after: a fast deterministic model can settle
+    // an entire submission between `submit` returning and a collector that
+    // subscribed afterwards seeing anything, and the first events lost that way
+    // are exactly the ones replay exists to keep.
+    const subscription = yield* AgentSession.subscribe(session)
+
+    const trace = yield* Ref.make<Trace>({ envelopes: [], bytes: 0, received: 0, overflowed: false, closed: false })
+    const arrived = yield* PubSub.unbounded<Numbered>()
+
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Effect.flatMap(PubSub.take(subscription), (envelope) =>
+          Effect.flatMap(
+            Ref.modify(trace, (current) => {
+              // Counting and closing continue past the bound; only *retention*
+              // stops. A collector that gave up entirely would never see the
+              // terminal event, and every follower would wait for an ending
+              // that had already happened.
+              const received = current.received + 1
+              const closed = current.closed || terminal.has(envelope.event._tag)
+              if (current.overflowed) {
+                const next: Trace = { ...current, received, closed }
+                return [next, next] as const
+              }
+              const bytes = current.bytes + Observation.wireSize(envelope)
+              const envelopes = [...current.envelopes, envelope]
+              const next: Trace = envelopes.length > bound.maxEnvelopes || bytes > bound.maxBytes
+                // Retain what was already there. The tail is not appended,
+                // because a trace that kept growing past its bound would be
+                // the unbounded buffer the bound exists to prevent.
+                ? { ...current, received, overflowed: true, closed }
+                : { envelopes, bytes, received, overflowed: false, closed }
+              return [next, next] as const
+            }),
+            (next) => PubSub.publish(arrived, { index: next.received - 1, envelope })
+          )
+        )
+      )
+    )
+
+    const receipt = yield* AgentSession.submit<Tools, E, Input>(session, input, options ?? {})
+
+    // `awaitSubmission` reports a submission it cannot find. This one was
+    // admitted a few lines above, into a private session that will never hold
+    // another, so not finding it is a defect in this function rather than a
+    // condition a caller could handle -- and leaking it would put an
+    // unreachable branch in every caller's error channel. Annotated, because
+    // the narrowing has to be visible here rather than inferred through a
+    // conditional handler-error type.
+    const awaited: Effect.Effect<
+      AgentSession.Result<Tools, Value>,
+      AgentSession.PromptError<Tools, E>
+    > = dieIfMissing(AgentSession.awaitSubmission<Tools, E, Value>(session, receipt.submissionId))
+
+    // One await, forked, so that `handle.await` can be read more than once and
+    // so the events stream knows when the trace is complete.
+    const settled = yield* Effect.forkScoped(Effect.exit(awaited))
+
+    const events: Stream.Stream<AgentEvent.AgentEventEnvelope, Errors.AgentTraceLimitError> = Stream.unwrap(
+      Effect.gen(function* () {
+        // Subscribe first, then snapshot: the reverse loses anything published
+        // in between. The overlap is resolved by index rather than by timing.
+        const live = yield* PubSub.subscribe(arrived)
+        const snapshot = yield* Ref.get(trace)
+
+        const failIfIncomplete = (current: Trace) =>
+          current.overflowed
+            ? Stream.fail(
+              new Errors.AgentTraceLimitError({
+                submissionId: receipt.submissionId,
+                retainedEnvelopes: current.envelopes.length,
+                retainedBytes: current.bytes,
+                maxEnvelopes: bound.maxEnvelopes,
+                maxBytes: bound.maxBytes
+              })
+            )
+            : Stream.empty
+
+        const replay = Stream.fromIterable(snapshot.envelopes)
+
+        // Already collected to the end: the retained trace is the whole of it,
+        // and there is nothing further to follow.
+        if (snapshot.closed) {
+          return Stream.concat(replay, failIfIncomplete(snapshot))
+        }
+
+        const following = Stream.fromSubscription(live).pipe(
+          Stream.filter((numbered) => numbered.index >= snapshot.received),
+          Stream.map((numbered) => numbered.envelope),
+          // Ends on the terminal event itself, so the ending is always part of
+          // the trace. Interrupting on the awaiting fiber instead would cut the
+          // stream at settlement, which is a moment or two before the collector
+          // has drained what settlement produced.
+          Stream.takeUntil((envelope) => terminal.has(envelope.event._tag))
+        )
+
+        return Stream.concat(
+          Stream.concat(replay, following),
+          Stream.unwrap(Effect.map(Ref.get(trace), failIfIncomplete))
+        )
+      })
+    )
+
+    return {
+      submissionId: receipt.submissionId,
+      await: Effect.flatten(Fiber.join(settled)),
+      events
+    }
+  })
+
+/**
+ * Run one prompt and observe it as a stream of events.
+ *
+ * The third of `run` / `start` / `stream`, and the one that owns what it
+ * observes: **the stream owns the ephemeral session**. Taking a prefix,
+ * interrupting, or abandoning the stream closes its scope and interrupts the
+ * model call and any running tools with it.
+ *
+ * That is the opposite of `AgentSession.stream`, deliberately. There the
+ * session owns the submission, so ending the stream detaches observation and
+ * the run continues. Neither is a special case: each stream ends by releasing
+ * whatever it owns, and they own different things.
+ *
+ * ```ts
+ * // Prints as it goes, and stops the agent when it stops reading.
+ * yield* Stream.runForEach(Agent.stream(agent, "summarise this"), print)
+ * ```
+ *
+ * The events are the same `AgentEventEnvelope`s every other surface emits --
+ * there is no stream-only event union and no provider chunk reaches it.
+ */
+export const stream = <Tools extends Record<string, Tool.Any>, E, R, Value = string, Input = Prompt.RawInput>(
+  agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
+  input: NoInfer<Input>,
+  options?: AgentSession.PromptOptions & StartOptions
+): Stream.Stream<
+  AgentEvent.AgentEventEnvelope,
+  AgentSession.SubmitError | Errors.AgentTraceLimitError | E,
+  LanguageModel.LanguageModel | R
+> =>
+  // `start` under a scope this stream manages: same collector, same bound, same
+  // replay semantics, and one fewer thing to keep in step than a second
+  // implementation would be.
+  Stream.unwrap(
+    Effect.map(
+      start<Tools, E, R, Value, Input>(agent, input, options),
+      (started) => started.events
+    )
+  )

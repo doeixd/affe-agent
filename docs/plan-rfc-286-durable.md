@@ -170,6 +170,12 @@ recorded in `status-history.md`, and if it is upstream's, it joins
 
 ### 3.3 Dispatch intents for the Durable Object host
 
+> **Shipped 2026-09-06** (ledger 47c), after 48c on the second reviewer's
+> ordering: the settlement rule first, then the lifecycle that depends on
+> it. The repair pass is the platform's own re-fire rather than a scan of
+> the intent table: an unacknowledged alarm fires again, and the handler's
+> first act is to read the intent.
+
 **Why this one transfers and the rest does not.** Their two-store design —
 engine state plus their own ledger — costs them intents, repair scans of both,
 and the workaround in §3.2. We have one journal, the engine's, and that is

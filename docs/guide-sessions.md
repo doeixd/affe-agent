@@ -123,6 +123,32 @@ a batched one produce identical transcripts — and an interrupted stream commit
 no partial assistant message, which is a state no later model call could make
 sense of.
 
+**One submission as a stream.** `AgentSession.stream(session, input)` submits
+with `stream: true` and yields that submission's envelopes -- deltas, tool
+events, turn events -- from `SubmissionStarted` through its terminal, then
+ends:
+
+```ts
+yield* AgentSession.stream(session, "explain this").pipe(
+  Stream.filter((e) => e.event._tag === "MessageDelta"),
+  Stream.runForEach((e) => Console.log(e.event.delta))
+)
+```
+
+The subscription is registered before the submission is admitted, so a run
+that finishes at once cannot lose its first envelopes. The terminal is data: a
+failed run yields `SubmissionFailed` and the stream ends normally, and only
+admission -- `AgentBusyError`, `AgentClosedError` -- is on the error channel.
+It is cold, so each evaluation submits once; ending the consumer early
+releases nothing but the subscription, and `interrupt` stops the run. The
+stream ends only once the session is free again: that wait is a barrier for
+normal consumption, not a finalizer, so a consumer that cuts at the terminal
+itself has not waited and may find the session busy for a moment; the
+outcome is still there through `awaitSubmission`. The subscription is
+released whichever way the consumer stops -- exhaustion, `take`, its own
+failure, interruption -- and never the run. The design and the rest of the
+streaming plan are in `plan-streaming.md`.
+
 ## Pausing for a human
 
 A run can need something a model cannot supply — approval, a credential, an
@@ -275,6 +301,18 @@ canonical history, so a consumer may render progress freely without it becoming
 part of the conversation. For tools running in parallel, progress arrives in
 real completion order while canonical results are still committed in model call
 order.
+
+**A call forming.** Under `stream: true`, a provider that streams a tool call's
+arguments produces `ToolCallDelta { id, name?, delta }` events before the
+assembled `ToolCallStarted`: raw fragments, usually JSON, grouped by `id`, whose
+concatenation is the arguments the call is made with. A typed `AgentOutput` is
+itself a tool call, so this is also how a structured answer is visible taking
+shape. Fragments are observational in the same sense as progress: the harness
+executes, approves and records only the assembled call, and if the message
+fails or is interrupted after fragments, no `ToolCallStarted` follows for that
+`id`, the message's terminal event is what a consumer discards its provisional
+state on, and history has nothing of it. `plan-streaming.md` P2 has the
+invariants.
 
 ## Typed lifecycle events
 

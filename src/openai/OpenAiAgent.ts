@@ -203,6 +203,7 @@ export const fromRemoteError = (error: AgentProtocol.RemoteError): OpenAiError =
     case "AgentExecutionError":
       return envelope(422, "server_error", error.tag)
     case "AgentTransportError":
+    case "AgentObservationLagError":
       return envelope(503, "server_error")
   }
 }

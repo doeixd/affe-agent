@@ -165,7 +165,19 @@ export const RunCompleted = Schema.TaggedStruct("RunCompleted", {
    * `Budget.within` name theirs). Optional so a journal or consumer written
    * before it existed still decodes.
    */
-  stopReason: Schema.optional(Schema.String)
+  stopReason: Schema.optional(Schema.String),
+  /**
+   * How the run ran out, when it ran out rather than finished.
+   *
+   * A classification beside the prose: `stopReason` stays open-ended and a
+   * custom policy keeps naming its own reason, while the built-in ceilings
+   * carry one of these so a consumer branches on it instead of matching
+   * strings. Absent for an ordinary stop -- an idle model did not run out of
+   * anything -- and optional so an older journal still decodes.
+   */
+  exhaustion: Schema.optional(
+    Schema.Literals(["turns", "tool-calls", "duration", "tokens", "cost"])
+  )
 })
 export const RunFailed = Schema.TaggedStruct("RunFailed", {
   failure: Failure
@@ -306,10 +318,64 @@ export const ElicitationResolved = Schema.TaggedStruct("ElicitationResolved", {
   granted: Schema.Boolean
 })
 
+/**
+ * A fragment of a tool call's arguments, as the model produces them.
+ *
+ * Observational, like `MessageDelta`: a consumer can show a call forming, or
+ * an `AgentOutput` -- itself a tool call -- taking shape, before the arguments
+ * are complete. The harness never acts on a fragment. Execution, approval,
+ * history and typed output all wait for the assembled call, which arrives as
+ * `ToolCallStarted` with `params` decoded. Only emitted under `stream: true`.
+ *
+ * `delta` is raw text, typically a JSON fragment, in the order produced;
+ * the concatenation of one call's fragments is the arguments the provider
+ * sent. Fragments of several calls may interleave, so `id` is what a consumer
+ * groups by. `name` is absent when the provider sent a fragment for an
+ * argument stream it never announced.
+ *
+ * A message may be interrupted or fail after fragments and before the call:
+ * then no `ToolCallStarted` follows for that `id`, the message's terminal event
+ * is what a consumer discards its provisional state on, and canonical history
+ * has nothing of it.
+ */
+export const ToolCallDelta = Schema.TaggedStruct("ToolCallDelta", {
+  id: Schema.String,
+  name: Schema.optional(Schema.String),
+  delta: Schema.String
+})
+
 export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
   id: Schema.String,
   name: Schema.String,
   params: Schema.Unknown
+})
+
+/**
+ * An event of a delegated child session, on its parent's stream.
+ *
+ * A subagent runs on a bus of its own, and by default a parent's consumers see
+ * nothing of it between `ToolCallStarted` and the tool's result. A child made
+ * with `Inherit.events: "parent"` forwards every envelope of its bus here,
+ * untouched -- its own session id, correlation and sequence are inside -- and
+ * the wrapper adds the parent's correlation, a parent sequence and the name
+ * of the tool and call that delegated. A child's terminal events are the
+ * child's: nothing in here ends the parent's submission. Nested delegation
+ * wraps once per forwarding edge, so the path is the nesting.
+ *
+ * The child's approvals are not in here twice: they cross as elicitation
+ * (`Inherit.approval`) and are answered on the parent as before.
+ */
+export const DelegatedEvent = Schema.TaggedStruct("DelegatedEvent", {
+  tool: Schema.String,
+  toolCallId: Schema.String,
+  // Through the JSON codec, not the envelope schema itself: an event's
+  // encoded form must be JSON, because the journal and the HTTP transport
+  // serialise envelopes with `Schema.toCodecJson` and check that the `event`
+  // field is one. The envelope's own encoding keeps its `Option`s as objects,
+  // which a nested envelope would leak into the outer event.
+  envelope: Schema.suspend(
+    (): Schema.Codec<AgentEventEnvelope, Schema.Json> => AgentEventEnvelopeJson
+  )
 })
 /**
  * A preliminary result from a tool that is still running.
@@ -418,6 +484,8 @@ export const AgentEvent = Schema.Union([
   MessageFailed,
   ElicitationRequested,
   ElicitationResolved,
+  DelegatedEvent,
+  ToolCallDelta,
   ToolCallStarted,
   ToolCallProgress,
   ToolCallSucceeded,
@@ -597,7 +665,37 @@ export const AgentEventEnvelope = Schema.Struct({
    */
   event: AgentEventTolerant
 })
-export type AgentEventEnvelope = typeof AgentEventEnvelope.Type
+/**
+ * Written out rather than read off the schema, because `DelegatedEvent`
+ * carries an envelope and the schema is therefore recursive; the two
+ * interfaces are what `Schema.suspend` is told, and `test/Schema.test.ts`
+ * holds them equal to the schema's own.
+ */
+export interface AgentEventEnvelope {
+  readonly sessionId: SessionId
+  readonly submissionId: Option.Option<SubmissionId>
+  readonly runId: Option.Option<RunId>
+  readonly turn: Option.Option<number>
+  readonly sequence: number
+  readonly event: StreamedEvent
+}
+
+/** The envelope as it is encoded: ids as strings, the event as it arrived. */
+export interface AgentEventEnvelopeEncoded {
+  readonly sessionId: string
+  readonly submissionId: Option.Option<string>
+  readonly runId: Option.Option<string>
+  readonly turn: Option.Option<number>
+  readonly sequence: number
+  readonly event: unknown
+}
+
+/**
+ * The envelope's JSON codec: ids as strings, options as `{ _tag, value? }`,
+ * the event as it arrived. What the journal and the HTTP transport use, and
+ * how an envelope is nested inside a `DelegatedEvent`.
+ */
+export const AgentEventEnvelopeJson = Schema.toCodecJson(AgentEventEnvelope)
 
 /**
  * Exhaustively handle an event by tag.
@@ -681,6 +779,12 @@ export const toWire = (envelope: AgentEventEnvelope): AgentEventEnvelope => {
       return {
         ...envelope,
         event: { ...event, result: event.encodedResult }
+      }
+    // A child's envelope crosses the same wire, so it is projected the same way.
+    case "DelegatedEvent":
+      return {
+        ...envelope,
+        event: { ...event, envelope: toWire(event.envelope) }
       }
     default:
       return envelope

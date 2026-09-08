@@ -102,9 +102,11 @@ const CapacityErrors = Schema.Union([
 const ExecutionError = AgentClient.AgentExecutionError.pipe(
   HttpApiSchema.status(422)
 )
-const TransportError = AgentClient.AgentTransportError.pipe(
-  HttpApiSchema.status(503)
-)
+const TransportError = Schema.Union([
+  AgentClient.AgentTransportError,
+  // Retry the observation, so the transport's status.
+  AgentClient.AgentObservationLagError
+]).pipe(HttpApiSchema.status(503))
 const HttpErrors = [
   BadRequestErrors,
   UnauthorizedError,
@@ -213,6 +215,17 @@ const sessionsGroup = <const Id extends string>(identifier: Id) =>
       error: Schema.toCodecJson(AgentProtocol.RemoteError)
     }),
     error: HttpErrors
+  }),
+  // A submit whose response is the submission's own envelopes, as SSE.
+  HttpApiEndpoint.post("stream", "/sessions/:id/stream", {
+    params: SessionPath.fields,
+    headers: RequestHeaders,
+    payload: PromptBody,
+    success: HttpApiSchema.StreamSse({
+      data: Schema.toCodecJson(AgentProtocol.AgentEventEnvelope),
+      error: Schema.toCodecJson(AgentProtocol.RemoteError)
+    }),
+    error: HttpErrors
   })
 )
 
@@ -305,6 +318,7 @@ const ClientFailure = Schema.Union([
   AgentClient.AgentSessionNotFoundError,
   AgentClient.AgentExecutionError,
   AgentClient.AgentTransportError,
+  AgentClient.AgentObservationLagError,
   AgentProtocol.AgentSessionAlreadyExistsError,
   AgentProtocol.AgentRequestConflictError,
   AgentProtocol.AgentRequestCapacityExceededError,
@@ -473,6 +487,20 @@ export const fromGenerated = (
     status: lift(id)(
       client.sessions.status({ params: params(id), headers })
     ).pipe(Effect.map((body) => body.status)),
+    stream: (input, streamOptions) =>
+      Stream.unwrap(
+        lift(id)(
+          client.sessions.stream({
+            params: params(id),
+            headers,
+            payload: {
+              requestId: nextRequestId(),
+              input: AgentProtocol.input(input),
+              options: { ...streamOptions, stream: true }
+            }
+          })
+        )
+      ).pipe(Stream.catch((error) => Stream.fail(toRemote(id, error)))),
     events: (eventOptions) =>
       eventOptions?.after === undefined
         ? Stream.unwrap(
@@ -575,6 +603,7 @@ export const errorStatus = (error: AgentProtocol.RemoteError): number => {
     case "AgentExecutionError":
       return 422
     case "AgentTransportError":
+    case "AgentObservationLagError":
       return 503
   }
 }
@@ -1054,6 +1083,22 @@ export const serverLayer = <Principal>(
         )
       })
 
+      const streamSubmission = Effect.fn("AgentHttp.stream")(function* (
+        request: HttpServerRequest.HttpServerRequest
+      ) {
+        const sessionId = yield* decodeSessionId("submit")
+        const body = yield* decodeBody("submit", PromptBody, request)
+        const identity = yield* principal(
+          request,
+          "submit",
+          Option.some(sessionId)
+        )
+        const stream = yield* host.stream(identity, { ...body, sessionId })
+        return eventResponse(
+          stream.pipe(Stream.interruptWhen(Deferred.await(shutdown)))
+        )
+      })
+
       const events = Effect.fn("AgentHttp.events")(function* (
         request: HttpServerRequest.HttpServerRequest
       ) {
@@ -1108,7 +1153,9 @@ export const serverLayer = <Principal>(
           router.add("GET", route("/sessions/:id/status"), (request) =>
             handled(status(request))),
           router.add("GET", route("/sessions/:id/events"), (request) =>
-            handled(events(request)))
+            handled(events(request))),
+          router.add("POST", route("/sessions/:id/stream"), (request) =>
+            handled(streamSubmission(request)))
         ],
         { discard: true }
       )

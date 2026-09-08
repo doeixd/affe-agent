@@ -227,22 +227,31 @@ Rules that make them worth the maintenance:
 
 - [x] `examples/ref-coding-agent.ts` runs an edit/search/shell loop with
       permission prompts and compaction, over the public surface, with no casts.
-- [ ] `examples/ref-gateway.ts` serves an MCP endpoint over tools extracted from
+- [x] `examples/ref-gateway.ts` serves an MCP endpoint over tools extracted from
       at least two source kinds, resolves a credential per principal, and denies
       a tool by policy — with the credential provably absent from every event and
-      export.
-- [ ] `examples/ref-declarative.ts` resolves its capability set per turn from
-      state, and is shorter than the equivalent hand-assembly by a margin worth
-      quoting in the README.
-- [ ] All three run in CI, not merely typecheck.
+      export. *(Landed 2026-08-31; runs in CI as `smoke:ref-gateway`. Audited
+      2026-09-06: `McpServer`, `OpenApi` + `ToolSource`, `Credentials.bindings`
+      per principal are all in the file.)*
+- [~] `examples/ref-declarative.ts` resolves its capability set per turn from
+      state *(landed 2026-08-31, `smoke:ref-declarative`)*; the "shorter than
+      hand-assembly by a margin worth quoting" half was never measured and the
+      README carries no such quote. Left open as stated rather than ticked: the
+      claim is unproven, and the file's own finding (a toolkit is fixed at
+      construction; what follows live state is the policy) is the more useful
+      thing it produced.
+- [x] All three run in CI, not merely typecheck (`smoke:ref-coding`,
+      `smoke:ref-gateway`, `smoke:ref-declarative` in `npm run check`).
 - [ ] Each compile-time assertion has been broken once and restored. *(The
       coding reference and ToolSource assertions have been; future references
       still need their own falsification.)*
-- [ ] `STATUS.md` records every primitive the three exposed as missing, and what
-      happened to it.
-- [ ] The README's package map lets a reader answer "which module do I need for
-      X" without reading `src/`.
-- [ ] `npm run check` stays green throughout.
+- [x] `STATUS.md` records every primitive the three exposed as missing, and what
+      happened to it ("What `ref-declarative` found", and the gateway's findings
+      beside it).
+- [x] The README's package map lets a reader answer "which module do I need for
+      X" without reading `src/` (README "Package map"). Whether it does so *for a
+      newcomer* is item 64's question, not this box's.
+- [x] `npm run check` stays green throughout (last full run 2026-09-06).
 
 ## 7. Sequence
 

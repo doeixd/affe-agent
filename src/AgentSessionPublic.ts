@@ -25,6 +25,7 @@ export {
   state,
   status,
   steer,
+  stream,
   submit,
   subscribe
 } from "./AgentSession.js"

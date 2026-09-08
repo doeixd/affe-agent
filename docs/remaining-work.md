@@ -72,28 +72,6 @@ that cites "item 41" and finds no 41 here will find it in the ledger.
 Ordered by user-visible value per unit of work. Each row says why it is still
 open, so the next pass does not have to re-derive it.
 
-### Functional gaps in shipped packages
-
-6. **Tool-source gaps** — mostly landed 2026-08-30: MCP hints ride on
-   `RemoteTool.annotations` through both real clients, and every bind path
-   (`McpToolkit.bind`/`bindDiscovered`, `ToolSource.bind`/`bindDiscovered`,
-   `fromMcpConnection`) turns a source's approval hint into the tool's own
-   `needsApproval` -- the thing `intrinsicApproval` actually reads; before,
-   `requiresApproval` was only a permission *projection*, and no approval was
-   ever asked. Declared tools are floored, never loosened. Dropped names and
-   `skipped` entries are logged. 2026-08-31: query placements applied by both sources (the `credentials`
-    hook), `methodFromOpenApi` deriving methods from `securitySchemes`,
-    per-subject `Bindings`/`resolveFor` over `CurrentPrincipal`, and
-    finally `fromRefreshing` + `withReauth` (the OAuth escape hatch and
-    reconnect-by-elicitation) -- **`plan-tool-credentials.md` is now
-    complete**. The credential design item has its contract
-   (`docs/plan-tool-credentials.md`, 2026-08-30) and its single-user slice:
-   `Credentials` in `/tool-source` -- method (placements), binding
-   (opaque handles, `owner` a role), provider service (`fromValues`,
-   `fromConfig`, `readOnly`), `Redacted` until `render`, typed
-   `CredentialError` with `reauthRequired`, `headers(binding)` into the
-   sources' hook (now typed to accept a failing effect). Multi-user is
-   blocked on the principal reaching the tool fibre; see the parked list.
 ### Larger, correctly parked
 
 19. **Real workerd / Durable Object host** — the core landed 2026-08-30:
@@ -110,7 +88,10 @@ open, so the next pass does not have to re-derive it.
     a Workers free plan; the HTTPS smoke matched the miniflare test). Left:
     the code tool needs Dynamic Workers, which is paid-plan only (error
     10195), so `apps/worker` as checked in deploys once the account is
-    upgraded; Rivet. **A real model landed 2026-09-06** as the first slice
+    upgraded. Rivet is closed as adopter-triggered (ledger, decision 4 of
+    `plan-two-decisions.md`). The deployment plan's §6.2 gateway claim -- one
+    `AgentServer` with a DO-backed mount and an in-process one, indistinguishable
+    from outside -- is exercised by `test/GatewayMounts.test.ts` (2026-09-06). **A real model landed 2026-09-06** as the first slice
     of the deployment milestone (scoped with a second reviewer, decision
     record in `plan-two-decisions.md` §3): `worker-real-model.ts` with the
     key in a Worker secret, `wrangler.real.jsonc`, the README quickstart,
@@ -143,64 +124,13 @@ open, so the next pass does not have to re-derive it.
     data -- and records the boundary it found (a toolkit is fixed at
     construction; what follows live state is the policy, per call). What
     remains: **step 6's batteries** (LSP, truncation as a service,
-    rendered prompts), ranked by what step 1 found. **`plan-primitives.md`
-    steps 1–5 are complete.**
-24. **Session-tree delta storage + `Cache`** — only if whole-snapshot
-    serialisation actually bites.
-26. **`plan-relay.txt`, `effect-plan-2.txt`, and the rest of
-    `plan-a2a-layers-bridges.txt`** — relay transport, `SessionInbox` /
-    `ProcessManager`, and the bridge steps listed under 26c.
-    `plan-deployment.md` §6.3 narrows when the relay is the right tool.
-
-    **Split out 2026-09-01.** This entry was one line covering six unbuilt
-    pieces, which is why the oldest unimplemented work in the repository
-    (`effect-plan-2.txt`, first committed 2026-08-25) was also the least
-    visible: nothing here said that half of it needs no relay and lands in a
-    sitting. The pieces are 26k–26p below. This line stays as the umbrella;
-    the ranking is in the children.
-
-### Newly ranked — from the effect-cf research (2026-09-01)
-
-Full reasoning in [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md).
-Split out because one of these is a defect and the rest are options.
-
-32. **Hibernatable WebSockets: read, then answer the question** (C2–C3). Our
-    worker serves HTTP+SSE, and `plan-deployment.md` §11 already says a dropped
-    connection on a hibernating DO is "the normal case, several times an hour".
-    We answer with resumption over the `DeliveryLog`, which is correct and
-    tested across the runtime's death — but Cloudflare's Hibernatable
-    WebSockets API is a way to need that recovery path *less often*, and
-    verified 2026-09-01 we use none of it (no hibernation handling anywhere in
-    `src/` or `apps/`). `effect-cf` has `DurableObject.WebSocket` /
-    `RpcWebSocket` as prior art. The question worth answering first is ours,
-    not theirs: **does a hibernatable socket carrying `AgentRpc` preserve the
-    resumption contract across eviction, or merely relocate the gap?** A
-    miniflare test importing nothing new can settle it, and "it relocates the
-    gap, the cursor is still the only honest thing" is a good result to record
-    rather than a failed milestone.
-
-33. **`AgentRpc` over WebTransport, as evidence** (W1–W2) — optional, ranked
-    last on purpose. `effect-webtransport`'s `WebTransportSocket` returns
-    Effect's own `Socket.Socket`, and our WebSocket RPC path is already
-    `Socket` → `RpcClient.makeProtocolSocket()` (`test/AgentRpc.test.ts:681`),
-    so the swap is one line and `src/` does not move. The value is *not*
-    WebTransport — resumption is transport-independent by design, so a new
-    socket type solves nothing we have. The value is that `transport.md` §3's
-    "transport-agnostic by Effect's design" has only ever been demonstrated
-    against transports we wired ourselves; a third-party `Socket` is the first
-    independent test of it. **Cloudflare cannot serve WebTransport**
-    ([workerd#6451](https://github.com/cloudflare/workerd/issues/6451): no
-    QUIC/HTTP-3 stack, not on the roadmap), so this never touches the CF path,
-    and the real cost is standing up a Node-side WebTransport server. Drop it
-    if that exceeds a day.
-
-34. **`effect-cf` as a source for `plan-deployment.md` §7 item 2** — it has
-    `D1`, `Kv`, `Storage` and `Sqlite` modules, which is the shopping list for
-    the store layers that plan asks for and item 19 records as never built.
-    This does **not** change the ranking: those layers still block nothing.
-    Recorded only so the next person to want them does not start from the
-    Cloudflare docs.
-
+    rendered prompts), each gated on a caller (decision 4 of
+    `plan-two-decisions.md`, 2026-09-06): LSP on a coding caller that needs
+    diagnostics, references or rename that existing tools cannot supply;
+    truncation on a shell, search or MCP result measured over a caller's
+    budget; rendered prompts on a caller that needs runtime workspace, model
+    or task values in its prompt. None is built speculatively.
+    **`plan-primitives.md` steps 1–5 are complete.**
 ### Newly ranked — from the effect-agent.com comparison (2026-09-01)
 
 [plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) read
@@ -218,12 +148,15 @@ sizes; the items are repeated here so this list stays the one tracker.
     agents reads a value from all of them. `test/InputWire.test.ts` pins the
     wire change as exactly the added field.
 
-47. **What to take from their Workflow RFC** (`plan-rfc-286-durable.md`,
-    2026-09-02). A read of `danieljvdm/effect-agent#286` against `/durable`.
+47. ~~**What to take from their Workflow RFC**~~ **COMPLETE 2026-09-06**
+    (`plan-rfc-286-durable.md`, 2026-09-02): 47a shipped as 48a, 47b answered,
+    47c shipped. Kept until the next audit moves it to the ledger whole. A read of `danieljvdm/effect-agent#286` against `/durable`.
     Their headline goal — any `WorkflowEngine` as a `Layer` — is where
     `/durable` started, so most of the RFC is not a gap for us. Three items
     are, ranked in the plan's §2:
-    - **47a. Retry safety declared on the tool.** The one real correctness
+    - **47a.** ~~**Retry safety declared on the tool.**~~ **SHIPPED as 48a,
+      2026-09-03**, read from `Tool.Idempotent` rather than a field of our
+      own. The original framing, kept for the record: the one real correctness
       gap. `DurableToolkit` wraps every handler as an `Activity`, and
       upstream's `Activity` retries an *interrupted* effect up to ten times
       (`retryOnInterrupt`, `Schedule.while(attempt <= 10 && hasInterrupts)`) —
@@ -247,14 +180,18 @@ sizes; the items are repeated here so this list stays the one tracker.
       only through `DurableDeferred`, whose engine path looks more careful, so
       the answer may be "we are fine" — but that is worth *testing* rather
       than assuming. One test: answer an elicitation before the run awaits it.
-    - **47c. Dispatch intents for the Durable Object host.** Persist an intent
-      before launch, repair in bounded passes, delete only after checking the
-      canonical settlement. It fits precisely where the engine cannot run
-      (the measured workerd stall), and the DO alarm is already the durable
-      trigger it needs. Host-local: `src/durable` does not change.
+    - **47c. Dispatch intents for the Durable Object host.** ~~open~~
+      **SHIPPED 2026-09-06.** An intent row beside every dispatched alarm in
+      one native transaction; the run's settlement marks it `settled` in the
+      same SQL transaction as the history it settles; the alarm handler reads
+      the intent before doing anything. `test/WorkerDispatchIntents.test.ts`
+      kills the runtime at both boundaries on workerd and the job runs exactly
+      once. Host-local: `src/durable` did not change.
 
-48. **Making the failure paths provable**
-    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03). A read of
+48. ~~**Making the failure paths provable**~~ **COMPLETE 2026-09-06**
+    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03): 48a
+    through 48f all shipped, 48c last. Kept until the next audit moves it to
+    the ledger whole. A read of
     their *source* rather than their RFC, plus the relay's own post-commit
     review. The finding is not a missing feature: their durable tests can
     crash a pass at a named point and ours cannot, so every "what if the
@@ -283,9 +220,15 @@ sizes; the items are repeated here so this list stays the one tracker.
       crash must not burn an offset. Removing the boundary makes it fail.
       Still to point it at, from this plan's §3.2: the model-call boundary in
       `DurableSubmission`, and the relay's teardown.
-    - **48c. Never acknowledge on the engine's word** -- reconcile the
-      engine's answer against canonical state before completing a waiter,
-      and retain the intent on disagreement.
+    - **48c. Never acknowledge on the engine's word** -- ~~open~~ **SHIPPED
+      2026-09-06.** `DurableAgentClient` reads the session record after the
+      workflow reports a submission settled: a record that still holds the
+      submission's claim is a disagreement, the caller gets a retryable
+      `AgentTransportError` naming it, and the claim -- the intent -- is
+      retained. `test/DurableAgentClient.test.ts` proves it with a store whose
+      `finish` reports success and writes nothing; broken once. `RelayRpc`'s
+      finalizer carries the comment tying it to the same rule. 47c gets the
+      discipline by construction when it lands.
     - **48d. Cancellation belongs in `AgentClientConformance`** -- ~~open~~
       **SHIPPED 2026-09-03** (`351b1e4`), with two corrections to this plan.
       The row is about *interruption*, not teardown: an earlier draft closed
@@ -370,7 +313,7 @@ Items 28 and 29 **landed while this section was being written** — `230745d`
 seam`). They are kept below, struck, rather than deleted, because the entry
 records what shipped and the next audit should not have to re-derive it.
 
-Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
+Items 27 and 30 are in the ledger.
 
 ### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
 
@@ -381,20 +324,6 @@ Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
     to work them, each pinned on its *open* state so the checker turns red
     the moment one lands and its text has to move to the ledger.
 
-60d-i. **Overflow as a rollover trigger.** 60d shipped the requested and the
-    pressure triggers; the third, the provider refusing a request that is too
-    large, is not caught because Effect's AI layer classifies no such error
-    (`AiError.InvalidRequestError` is the nearest, and it is every 4xx).
-    Wanted: a provider-neutral predicate for "context too long", applied in
-    `AgentTurn` around the model call, retrying once with the controller's
-    fallback (`onCannotHelp: "rollover"`) projection. Until a predicate exists
-    that is not a regex over provider messages, this stays parked. Small once
-    the predicate exists; the projection and the checkpoint are done.
-
-    ```text
-    verify: no-grep "overflow" src/AgentTurn.ts
-    ```
-
 60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
     re-proposes them: their fourteen-knob `AgentPolicy` object (our limits
     and budget compose without one), working notes over memory ports (no
@@ -403,21 +332,57 @@ Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
-### Newly ranked — from the real-model entry (2026-09-06)
+### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
-62. **A model layer that fails to build is an empty 500.** Found writing
-    `test/WorkerRealModel.test.ts`: when the Durable Object cannot build the
-    agent's model layer (the secret missing, so
-    `Binding.BindingNotFoundError`), opening the session answers a bare
-    status with no body. The error names the binding, but only in the
-    Worker's log, and a deployer following the quickstart sees nothing.
-    `CloudflareHost.make` builds the layer inside the object; the failure
-    should reach the HTTP surface as a typed protocol error with the
-    binding's name, the way every other refusal does. Small; a row in the
-    real-model test asserts the body once it does.
+*Decided with a second reviewer when the list ran out of work one maintainer
+can do alone: the next milestone is one person choosing to use the library
+again. Feature expansion is frozen until these produce an observation.*
+
+63. **A daily consumer: the post-commit review assistant.** A separate
+    consumer of the packed library that reviews a commit -- diff, the source
+    and tests it needs, findings with evidence, challengeable, interruptible.
+    The maintainer's own workflow is the baseline. Measured by reviewed
+    commits, accepted findings, false positives and abandonments, not by
+    tools exercised. First slice: one commit, one diff-to-findings path, a
+    review of the next real commit beside the current one. In parallel,
+    five Effect users invited to a specific trial. Medium.
 
     ```text
-    verify: grep "Recorded as a finding (item 62)" test/WorkerRealModel.test.ts
+    verify: absent examples/review-assistant.ts
+    ```
+
+64. **Observe a newcomer before touching the docs.** Someone who has never
+    seen the repository follows the README to a running agent, adds one tool,
+    handles one failure, watched silently. Time to first result, every
+    detour, every rescue, provider friction kept separate from library
+    friction. The README keeps one obvious route; the package map stays as
+    reference. Wrong to restructure if the participant sails through. Needs
+    a person; recorded as missing evidence until one is found. Small.
+
+    ```text
+    verify: no-grep "Newcomer audit" docs/getting-started.md
+    ```
+
+65. **The public promises, reviewed.** Forty-five subpaths inspected for the
+    caller's job, the dependency boundary, maturity and evidence of intended
+    use; accidental exports and duplicate spellings go, optional batteries
+    stay provisional. Timeboxed, and run after 63 has a caller to say which
+    promises matter. The one promise known to be broken -- the durable
+    workflow layer's erased requirement -- is fixed (ledger). Medium.
+
+    ```text
+    verify: no-grep "## Public promises" STATUS.md
+    ```
+
+67. **The journal compatibility promise.** State whether cross-version replay
+    of a durable journal is supported before anyone consumes a new version:
+    if yes, a prior-version journal becomes a recorded fixture replayed
+    against the candidate; if no, an incompatible journal is detected and
+    refused clearly. A `Behavior-Change:` trailer records intent, not
+    compatibility. Decided when 63 produces a journal worth keeping. Small.
+
+    ```text
+    verify: no-grep "journal compatibility" docs/guide-durable.md
     ```
 
 ### Known, deliberately left
@@ -427,10 +392,14 @@ Item 27 landed in full on 2026-09-06 (ledger). Item 30 is untouched.
   disjuncts in `DurableAgent`'s `catchCause` are defence in depth. Recorded in
   `plan-durability-hardening.md` and `scripts/falsify.mjs`; nobody has decided
   to delete them, and the harness will say so if that changes.
-- **`DurableAgent.workflow` requirement erasure** claims `never` while
-  resolving `LanguageModel` at runtime (`STATUS.md`, durable client).
 - **Legacy MCP cancellation id mismatch** — upstream; the official client's
   cancel cannot interrupt the server.
+- **MCP progress notifications** (`notifications/progress` for a running
+  `agent_*` tool call) cannot be sent from this adapter: upstream's
+  `McpServer` hands a tool handler only its payload, so the request's
+  `_meta.progressToken` never reaches it, and the server's notification
+  client is internal to its constructor. Ledger, item 71. Reopens when
+  upstream exposes either.
 - **Anthropic example** has never been run live with a key.
 - **`ClusterMultiNode` on real time** (~15 s) — H7 would move it to
   `TestClock`; cost only.

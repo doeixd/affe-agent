@@ -112,6 +112,18 @@ export interface Session<
    */
   readonly progress: Ref.Ref<SubmissionProgress<Tools>>
   /**
+   * Wire bytes of tool progress this submission has published, against its
+   * budget. Reset alongside `progress` when a submission begins, and per
+   * submission rather than per run because a follow-up chain is one admitted
+   * unit of work.
+   *
+   * Separate from the observer-lag bound on purpose: that one limits how far a
+   * reader may fall behind, this one limits how much there is to read.
+   */
+  readonly toolProgressBytes: Ref.Ref<number>
+  /** The ceiling `toolProgressBytes` is measured against. */
+  readonly toolProgressLimit: number
+  /**
    * Where the output tool's handler puts the value it decoded, until the turn
    * that produced it commits.
    *

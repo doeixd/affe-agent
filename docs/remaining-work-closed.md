@@ -1699,3 +1699,485 @@ still resolves -- here, if not in the list. Nothing here is next;
     verify: grep "every error class carries either a frozen bare tag or a frozen namespaced one" test/Namespace.test.ts
     verify: grep "Error classes are tagged bare" AGENTS.md
     ```
+
+6. ~~**Tool-source gaps.**~~ **DONE**, closed 2026-09-06 on audit. Every
+    piece the entry listed landed by 2026-08-31, including the half it kept
+    calling blocked: per-subject `Bindings` / `resolveFor` over
+    `CurrentPrincipal` in `src/toolSource/Credentials.ts` is the multi-user
+    slice, and the principal has reached the tool fibre since
+    `plan-principal-on-tool-fibre.md` shipped. The entry's "blocked on the
+    principal" sentence outlived the fact by a week.
+
+    ```text
+    verify: grep "Per-principal bindings: the multi-user half, unblocked by CurrentPrincipal" src/toolSource/Credentials.ts
+    ```
+
+24. ~~**Session-tree delta storage + `Cache`.**~~ **Closed 2026-09-06**
+    (decision 4 of `plan-two-decisions.md`) until recorded snapshot costs
+    exceed the agreed budget or a platform limit: reopen when a
+    representative recorded workload shows snapshot encoding or persistence
+    taking more than a tenth of the non-model turn-latency budget, or
+    breaching a storage, CPU or memory limit. Attribute the cost first --
+    writes dominating points at deltas, repeated reads at a cache -- since
+    the two remedies answer different bottlenecks.
+
+26. ~~**`plan-relay.txt`, `effect-plan-2.txt`, and the rest.**~~ **Closed
+    2026-09-06**: the umbrella had no open children -- 26k through 26p all
+    landed between 2026-09-02 and 03 and are above in this ledger.
+
+32. ~~**Hibernatable WebSockets.**~~ **Closed 2026-09-06** (decision 4)
+    pending an idle-socket deployment requirement. Runtime-death recovery
+    is already covered by the `DeliveryLog` cursor over HTTP and SSE, and a
+    surviving socket proves nothing about a surviving RPC subscription,
+    since the object's memory is reset on hibernation. If reopened, the
+    one settling observable: after an independently confirmed object
+    reinitialisation, the client's cursor-deduplicated event sequence over
+    the surviving socket equals the canonical `DeliveryLog` suffix through a
+    recorded terminal cursor, including an event committed before
+    hibernation and not yet observed -- an open connection or a ping is not
+    evidence.
+
+33. ~~**`AgentRpc` over WebTransport, as evidence.**~~ **Closed
+    2026-09-06** (decision 4): independent transport evidence does not
+    justify a Node WebTransport server now; its one-day cap was a maximum,
+    not a reason. Reopen on a caller that needs WebTransport.
+
+34. ~~**`effect-cf` as a source for the deployment plan's store layers.**~~
+    **Closed 2026-09-06** (decision 4) as a reading reference only:
+    `plan-deployment.md` §7 item 2's stores block nothing (DO SQLite covers
+    history and the delivery log), and `effect-cf` is implementation reading
+    for whoever builds one, not a compatibility commitment.
+
+19-Rivet. ~~**A Rivet actor host.**~~ **Closed 2026-09-06** (decision 4) as
+    adopter-triggered. The deployment plan's §4 mapping is attractive, not
+    an exact durability match: `InputChannel` needs the consumed batch
+    recorded alongside its turn, and whether Rivet's queue supports atomic
+    batch-and-journal recording or a recoverable reservation with stable
+    identities is unproved. An adopter reopens it, and the first step is a
+    bounded `InputChannel.Factory` prototype crashed between batch
+    acquisition, journal commit and acknowledgement -- not a host.
+
+60d-i. ~~**Overflow as a rollover trigger.**~~ **DONE 2026-09-06**, by
+    measurement rather than recovery (decision 4): the compaction token
+    policy already measures the projection against the model's window before
+    every call, so a provider refusal for size is never the first signal. The
+    one gap was the fallback rollover's own window: it could still be over
+    the line when the retained input alone did not fit, and the turn went to
+    the provider to be refused. Now the fallback rollover is enforced --
+    `CompactionCannotHelpError` with kind `over-after-rollover` before the
+    call, the rollover on record as the last thing that could help. A
+    rollover the model asked for is not enforced, since it did not claim to
+    fit. A predicate over `InvalidRequestError` messages stays rejected:
+    behaviour keyed on provider prose. Reopens only if a structured overflow
+    code survives the provider adapter. One row; broken once by dropping the
+    enforcement.
+
+    ```text
+    verify: grep "over-after-rollover" src/compaction/Compaction.ts
+    verify: grep "an input that does not fit the window even alone fails before the call" test/ContextRollover.test.ts
+    ```
+
+48c. ~~**Never acknowledge on the engine's word.**~~ **SHIPPED 2026-09-06.**
+    `DurableAgentClient.settled` reads the session record after the workflow
+    reports a `Succeeded` outcome. The canonical settlement is the record:
+    `finish` clears the claim and advances the history in one step. A record
+    that still holds this submission's claim is a disagreement -- the
+    projection never committed, or a store lost the write -- and the caller
+    gets a retryable `AgentTransportError` naming it instead of "completed";
+    the claim is retained, since it is the intent a repair reconciles
+    against. Proved with `losingFinish`, a store whose `finish` reports
+    success and writes nothing (`test/storageFaults.ts`); broken once by
+    returning without the read, which tells the caller "completed" and fails
+    the row's first assertion. `RelayRpc`'s finalizer carries the comment
+    that it is the same rule in the other direction. Ordered before 47c on
+    the second reviewer's advice: the rule first, then the durable lifecycle
+    that depends on it.
+
+    ```text
+    verify: grep "the outcome is not acknowledged and the claim is retained for repair" src/durable/DurableAgentClient.ts
+    verify: grep "export const losingFinish" test/storageFaults.ts
+    verify: grep "an outcome the session record does not back is not acknowledged" test/DurableAgentClient.test.ts
+    ```
+
+47c. ~~**Dispatch intents for the Durable Object host.**~~ **SHIPPED
+    2026-09-06.** A `DispatchIntents` service in the host over one table,
+    `affe_dispatch`: `dispatch` writes the intent (`pending`) **in the same
+    native transaction as the alarm** (`alarms.transaction`); the alarm
+    handler reads the intent before anything else -- `settled` is
+    acknowledged without a run, `running` with a submission this life still
+    holds is awaited, anything else is launched, `running` written with the
+    submission id as it is; and the run's settlement marks the intent
+    `settled` in the *same SQL transaction* as the history upsert, at the
+    submission boundary of the session's own event path, so a runtime lost
+    between the two cannot leave a committed run whose intent says it never
+    ran. The handler never writes `settled` itself: it waits for the row,
+    since a settlement written ahead of the history would let a crash
+    acknowledge a run whose history was never kept. The repair pass is the
+    platform's re-fire. Two boundaries, `CloudflareHost.dispatchFailpoints`
+    (`after-launch`, `after-settlement`, in their own module so a Node test
+    can name them without loading the host); `test/WorkerDispatchIntents.test.ts`
+    bundles `test/workers/dispatch-intents.worker.ts` -- the host as shipped
+    with a failpoint armed from a binding -- kills the runtime at each on
+    real workerd, and the job runs exactly once either way; with the intent
+    check disabled it runs three times. The host's `affe_history` table name
+    moved onto the namespace root on the way (value unchanged), which closed
+    the one way a table name had escaped the freeze: spelled inside SQL
+    text. `test/workers` is typechecked under the worker config, like the
+    deployment example. Review found `SubmissionFailed` missing from the
+    settling boundaries -- a failed dispatched job would have left its
+    intent `running` and its handler waiting five seconds for a settlement
+    that never came -- and added it; a failed job on workerd is not driven
+    by a row, which is the honest gap here.
+
+    ```text
+    verify: grep "Namespace.tag(\"cloudflare/DispatchIntents\")" src/cloudflare/index.ts
+    verify: exists src/cloudflare/dispatchFailpoints.ts
+    verify: grep "a runtime lost at either boundary leaves a job that ran exactly once" test/WorkerDispatchIntents.test.ts
+    verify: grep "affe_dispatch" test/fixtures/namespace-manifest.json
+    ```
+
+62. ~~**A model layer that fails to build is an empty 500.**~~ **DONE
+    2026-09-06.** The Cloudflare host built the agent's model and services
+    with the Durable Object, so a failure -- the provider secret missing --
+    was the platform's empty 500 before any route ran. The layer is now
+    built on first use, inside the object's client, from the build context
+    captured once: a session that asks for it and finds it cannot be built
+    fails with an `AgentTransportError` carrying the cause's own words,
+    which the HTTP surface renders as a 503 with a body naming the key. A
+    build that succeeds is kept for the object's life; one that fails is
+    tried again by the next session. The row in
+    `test/WorkerRealModel.test.ts` that had recorded the empty 500 as a
+    finding now asserts the 503, the error tag and the key's name; broken
+    once by turning the typed failure into a defect, which brings the empty
+    500 back.
+
+    ```text
+    verify: grep "the Durable Object could not build the agent's model and services" src/cloudflare/index.ts
+    verify: grep "opening a session is a 503 that names the missing key" test/WorkerRealModel.test.ts
+    ```
+
+65-erasure. ~~**`DurableAgent.workflow` requirement erasure.**~~ **DONE
+    2026-09-06.** For a week the "known, deliberately left" list said the
+    workflow's layer claimed `never` while resolving `LanguageModel` at
+    runtime; a type probe confirmed it (the agent's `any`-typed slots reached
+    `toLayer` and the requirement inferred to `never`). The layer is now
+    annotated with what the runtime needs, `WorkflowEngine | LanguageModel`,
+    and `test/DurableTypes.test.ts` holds it by assignability, since a
+    layer's requirement slot is covariant: not assignable to a layer that
+    needs nothing, not to one that needs the engine alone, assignable to one
+    that needs both. Broken once by removing the annotation, which flips the
+    first assertion. Pulled forward from the promise review (item 65) on the
+    second reviewer's advice: a type that says less than the runtime needs is
+    the one kind of API debt that misleads a caller silently.
+
+    ```text
+    verify: grep "const layer: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | LanguageModel.LanguageModel>" src/durable/DurableAgent.ts
+    verify: grep "durable layers say what they need" test/DurableTypes.test.ts
+    ```
+
+66. ~~**The `effect` peer range said the opposite of the README.**~~ **DONE
+    2026-09-06.** The README told a consumer to pin exact versions because
+    the library, `effect` and the provider packages move in lockstep with the
+    release candidate; the published peer range admitted every `4.x`, GA
+    included, which nothing here has been tested against. Narrowed to the
+    release-candidate line (`>=4.0.0-rc.111 <4.0.0`), with the README row
+    saying GA is admitted deliberately when tested, not by the range.
+
+    ```text
+    verify: grep "\"effect\": \">=4.0.0-rc.111 <4.0.0\"" package.json
+    ```
+
+19-gateway. ~~**One `AgentServer`, a DO-backed mount and an in-process mount,
+    indistinguishable from outside.**~~ **DONE 2026-09-06** -- the deployment
+    plan's §6.2 acceptance box, exercised rather than asserted.
+    `test/GatewayMounts.test.ts` runs `apps/worker` on miniflare on a real
+    port, builds one gateway with an in-process mount and a mount whose
+    `AgentSessionHost` sits over `agentClientLayer` pointed at the worker, and
+    drives the same create, prompt and history through both: equal statuses,
+    equal response and result key sets, `completed` on both, the prompt in
+    both histories, one inventory row shape. No mechanism was added -- a mount
+    is a host over an `AgentClient`, and the HTTP adapter is one -- which is
+    what the plan claimed and had not shown. Broken once by pointing the
+    remote mount at a wrong path: 503s, and the row fails. On the same day
+    the stale acceptance boxes in the primitives, effect-cf, MCP-frontend and
+    workflow-cluster plans were audited against the code and ticked or
+    corrected, and `ref-declarative`'s "shorter by a margin worth quoting"
+    box was left open honestly, since nobody measured it.
+
+    ```text
+    verify: grep "a caller cannot tell the DO-backed mount from the in-process one" test/GatewayMounts.test.ts
+    ```
+
+P1-stream. ~~**One submission as a stream.**~~ **DONE 2026-09-06** --
+    `AgentSession.stream(session, input, options?)`, `plan-streaming.md` P1,
+    designed with a second reviewer. Submit with `stream: true`, then that
+    submission's envelopes through its terminal, then end; derived from
+    `submit` and the bus, no new event. The subscription is registered before
+    admission, which is the one thing a hand-rolled version gets wrong and
+    the reason it lives beside `events` rather than under a subpath. The
+    terminal is data (`SubmissionFailed` is yielded, the stream ends
+    normally); the error channel is `submit`'s; cold; and it ends only once
+    `awaitSubmission` settles, because the terminal is published before the
+    session is released -- found by the row that prompted again at once and
+    was told `Busy`. Four rows in `test/Streaming.test.ts`. Broken once:
+    removing the terminal cut hangs every row. Two properties are by
+    construction and not proved by a row, said rather than claimed:
+    subscribe-before-submit (in-process scheduling publishes nothing before
+    the receipt returns, so the swapped order passes) and the submission
+    filter (nothing of another submission arrives inside the window once the
+    terminal cuts it). Follow-ups are items 68-72.
+
+    ```text
+    verify: grep "export const stream" src/AgentSession.ts
+    verify: grep "one submission as a stream" test/Streaming.test.ts
+    ```
+
+68. ~~**Partial tool arguments as an additive event.**~~ **DONE 2026-09-06** --
+    `ToolCallDelta { id, name?, delta }`, `plan-streaming.md` P2. The
+    accumulator's `tool-params-*` branch, which dropped the increments, now
+    reports each delta as a fragment with the name its start part announced,
+    and the turn publishes it in the ordinary envelope; the response it folds
+    is unchanged, so execution, approval, history and typed output still wait
+    for the assembled call. `TestLanguageModel` scripts chunked arguments
+    (`paramChunks`) and a provider that dies mid-arguments (`abandon`). Rows
+    in `test/Streaming.test.ts` and `test/StreamAccumulator.test.ts`: order,
+    concatenation equals the call's arguments, one execution and the batched
+    history; interleaving by id and no wrong names; failure after fragments
+    leaves no call, no execution, no history; wire round trip. Broken once by
+    silencing the emission and once by dropping the name tracking. The
+    reviewer's failover gate -- an id reused across attempts must never merge
+    -- holds by construction, since the plan wrapper forbids a fallback after
+    any emitted part. `SessionProjection` lists the tag rather than
+    defaulting, which is how the compiler pointed at it.
+
+    ```text
+    verify: grep "ToolCallDelta" src/AgentEvent.ts
+    verify: grep "tool-call argument deltas" test/Streaming.test.ts
+    ```
+
+69. ~~**A child's events on the parent's stream, opt-in.**~~ **DONE
+    2026-09-06** -- `Inherit.events: "parent"`, `plan-streaming.md` P3. The
+    harness provides `ParentEvents` around each tool handler, bound to the
+    parent's bus, correlation and call, beside `Elicitation.Current`; a
+    forwarding child is made with it as a synchronous `eventSink`, and every
+    envelope of the child's bus arrives on the parent's wrapped in one
+    `DelegatedEvent { tool, toolCallId, envelope }`, the child's envelope
+    untouched. Nested delegation wraps once per edge. `DelegatedEvent` made
+    the envelope schema recursive, so its Type and Encoded are interfaces
+    held equal to the schema by a row, and `toWire` recurses. Six rows in
+    `test/DelegatedEvents.test.ts`; broken once by dropping the provision and
+    once by dropping the recursion. Default off, as the plan said.
+
+    ```text
+    verify: grep "DelegatedEvent" src/AgentEvent.ts
+    verify: grep "a child's events on the parent's stream" test/DelegatedEvents.test.ts
+    ```
+
+70. ~~**Bus retention, measured before bounded.**~~ **MEASURED 2026-09-06**
+    -- `plan-streaming.md` P4. A stalled subscriber retains every envelope
+    since it subscribed, for exactly the life of its scope: 126 envelopes and
+    331 KB of wire JSON for three streamed turns of 32 KiB, 0 the moment the
+    scope ends, the session unaffected. Bounding is deferred with the trigger
+    named in the plan: a long-lived remote subscription whose peer stops
+    reading, which item 72 will meet first. Broken once by making the bus
+    sliding.
+
+    ```text
+    verify: grep "bus retention under a stalled subscriber" test/Streaming.test.ts
+    ```
+
+72. ~~**`stream` on the remote client.**~~ **DONE 2026-09-06** --
+    `RemoteSession.stream` on every client, `plan-streaming.md` P1's remote
+    mirror. Subscribe-then-submit wherever a subscription seam returns
+    established (the in-process bus, a delivery log's `subscribe`), and the
+    host doing it for HTTP (`POST /sessions/:id/stream`, SSE) and RPC
+    (`stream`) where the transport cannot. One derivation,
+    `AgentClient.streamFrom`; the Cloudflare host applies its shift; a
+    durable client without a log refuses. Three conformance cases hold every
+    shipped client to P1's rules: start to terminal with deltas, ending free
+    and cold; a failed run ending with `SubmissionFailed` as data; refusal
+    where establishing first is impossible. Broken once by removing the
+    terminal cut: both stream cases time out on every client. Making the
+    durable client subscribe *after* submitting did not bite -- the workflow
+    starts slowly enough that the subscription still lands first -- so
+    subscribe-before-submit there is by construction, said rather than
+    claimed, as it was for P1 in-process.
+
+    ```text
+    verify: grep "readonly stream: (" src/client/AgentClient.ts
+    verify: grep "streams one submission" src/testing/AgentClientConformance.ts
+    ```
+
+73. ~~**A tool that dies fails an in-process run and completes a durable
+    one.**~~ **DONE 2026-09-06** -- found the same day by the streamed-failure
+    conformance case. `DurableToolkit` folded every non-interrupt cause of a
+    handler into a typed `Failed` outcome and re-raised it typed, so under
+    `ReturnToModel` the model saw a broken handler as a tool failure and
+    could call it again; in-process, `ToolExecution` never returns a defect
+    to the model and fails the run. The durable rule now follows the local
+    one: the journal still records the defect as a value, so a replay fails
+    the same way, and the wrapper re-raises it as a defect. One conformance
+    case holds every client to it -- the prompt fails as a defect, the
+    submission ends `SubmissionFailed`, one `ToolCallFailed` with
+    `returnedToModel: false`, no message after it -- and the streamed-failure
+    case keeps its failing model call so it stays about the stream. Broken
+    once by re-raising typed again: the durable clients fail the case.
+
+    ```text
+    verify: grep "a tool that dies fails the run everywhere" src/testing/AgentClientConformance.ts
+    verify: grep "isDefect ? yield\* Effect.die" src/durable/DurableToolkit.ts
+    ```
+
+71. ~~**Streaming in the adapters.**~~ **DONE 2026-09-06, MCP CLOSED AS
+    UPSTREAM-BLOCKED** -- `plan-streaming.md` P5. AG-UI: `ToolCallDelta`
+    onto `TOOL_CALL_ARGS`, the first named fragment opening the call, the
+    assembled call sending only the end, a failed message ending what it
+    opened. A2A: the adapter prompts with `stream: true` and forwards each
+    text delta as a `TaskArtifactUpdateEvent` of the result artifact -- the
+    first chunk of a message replacing, the rest appending, none last, the
+    completed answer replacing them whole with `lastChunk`. Both broken once
+    (the assembled call resending its arguments; every chunk appending). MCP
+    progress notifications are not implementable honestly here: upstream's
+    `McpServer` (`effect` rc.112, `unstable/ai/McpServer`) gives a tool
+    handler only its payload, so the request's `_meta.progressToken` never
+    reaches it, and the `notifications` RPC client that could send
+    `ProgressNotification` lives on the server's internal `make` result, not
+    on any handler-facing API. Recorded under known-left with its trigger:
+    upstream exposing either.
+
+    ```text
+    verify: grep "forwardTextDeltas" src/a2a/AgentA2A.ts
+    verify: grep "openToolCalls" src/ag-ui/AgentAgUi.ts
+    verify: grep "MCP progress notifications" docs/remaining-work.md
+    ```
+
+74. ~~**Outcome fidelity across the journal, audited.**~~ **DONE 2026-09-06**
+    -- `plan-streaming-followups.md` §8, the second reviewer's first
+    priority. The inventory is in the plan: six sites, one drifting. A
+    model call that died was recorded `Failed { isDefect: true }` and
+    re-raised typed, so a remote caller read the submission's failure as
+    `isDefect: false` while the same defect in-process was a defect. Both
+    re-raise rules are now one exported function of the recorded value
+    (`DurableToolkit.reraise`, `DurableModel.reraise`) driven by
+    `test/DurableOutcomes.test.ts` with journal-shaped values, which is the
+    path a replay takes. The client contract gained two matrix rows: a
+    tool's expected failure shown to the model under `ReturnToModel`; a
+    model defect reported as a defect and a provider failure as a failure
+    (`TestLanguageModel` gained `failWith`, a typed provider error beside
+    the `fail` defect). Broken once each way; both bit.
+
+    ```text
+    verify: grep "outcome matrix" src/testing/AgentClientConformance.ts
+    verify: grep "export const reraise" src/durable/DurableModel.ts
+    ```
+
+75. ~~**Bounded remote observation, by bytes and count.**~~ **DONE
+    2026-09-07** -- `plan-streaming-followups.md` §4. In-process the bus
+    enforces the bound at publish: a watched subscription's exact backlog
+    and its wire bytes are read after every publish, and one past
+    `maxObservationLag` (default 2048 / 8 MiB) has its own scope closed by
+    the publisher, freeing the backlog at once; the consumer's next pull
+    fails with `AgentObservationLagError` naming the last sequence it was
+    handed. A delivery log gets the pumped form (`Observation.bounded`).
+    Execution never waits on an observer, and delivery stays the consumer's
+    own pull. Two designs were rejected on the way and are recorded in
+    `internal/observation.ts`. Three rows in `test/ObservationBound.test.ts`;
+    broken once by disabling the check. `AgentObservationLagError` joins the
+    error union and the tags manifest.
+
+    ```text
+    verify: grep "maxObservationLag" src/client/AgentClient.ts
+    verify: grep "AgentObservationLagError" test/fixtures/error-tags-manifest.json
+    ```
+
+76. ~~**The two orderings, proved.**~~ **DONE 2026-09-07** --
+    `plan-streaming-followups.md` §1. A gate on the subscription's
+    registration, not a change to what admission publishes:
+    `EventBus.failpoints` and `DurableAgentClient.failpoints` each expose
+    `before-subscribe`, a no-op unless a test provides a `Failpoint`, which
+    the two rows hold open while other fibres run. In the right order a
+    subscription nothing is published to yet is merely delayed; in the
+    swapped order the run publishes through the gate and `SubmissionStarted`
+    is gone. Broken once each by swapping subscribe and submit; both bit.
+    The P1 and item 72 entries' "by construction" is now a row.
+
+    ```text
+    verify: grep "subscription gate" test/Streaming.test.ts
+    verify: grep "before-subscribe" src/internal/eventBus.ts
+    ```
+
+77. ~~**Stream lifecycle as contract rows.**~~ **DONE 2026-09-07** --
+    `plan-streaming-followups.md`, second opinion. Six rows in
+    `test/Streaming.test.ts` measure the subscription's release through the
+    bus's own subscriber count: after exhaustion while the scope lives,
+    after `take(1)`, after the consumer fails, after interruption while
+    acquiring (nothing was submitted) and after admission (the run settles
+    on its own); and one states that a consumer cutting at the terminal
+    itself has not waited for release, with the outcome still there. The
+    tail of `stream` no longer awaits the outcome, which re-raised the run's
+    failure -- defect included -- that the terminal already carried:
+    in-process it watches the session's state leave the submission, and the
+    remote derivation ignores only the typed failure, so anything that
+    fails in the wait itself is the harness's own and propagates. Broken
+    once by taking the subscription in the session's scope; the release
+    rows fail.
+
+    ```text
+    verify: grep "after take(1)" test/Streaming.test.ts
+    verify: grep "released(self, receipt.submissionId)" src/AgentSession.ts
+    ```
+
+78. ~~**A2A streaming as a declared policy, with fixtures.**~~ **DONE
+    2026-09-07** -- `plan-streaming-followups.md` §7.
+    `AgentA2A.ServerOptions.streamAnswers`, default `true`, documented as an
+    execution policy because emitted parts forbid a provider fallback. Four
+    rows through the official client hold the reviewer's cases: the option
+    off; several messages on one artifact with a tool-only one between;
+    failure after the first chunk; cancellation after partial output. In
+    every one no chunk is ever marked last, so a partial artifact stays
+    distinguishable from a committed answer. Broken once by ignoring the
+    option.
+
+    ```text
+    verify: grep "readonly streamAnswers" src/a2a/AgentA2A.ts
+    verify: grep "cancellation after partial output" test/AgentA2A.test.ts
+    ```
+
+review-streaming. ~~**The streaming series, reviewed as code.**~~ **DONE
+    2026-09-07** -- `plan-streaming-followups.md`, "Code review of the
+    series". Two readers, one with the code inlined; seven disagreements
+    between code and invariant, all real, all fixed the same day: the
+    pumped bound's subscription was never released; the bus's kill was
+    interruptible half-way; a failed non-empty queue delivered its buffer
+    with a stale cursor; byte accounting raced registration and delivery;
+    the cursor was snapshotted at the kill; bytes were UTF-16 units; the
+    remote tail swallowed transport failures. Five have rows
+    (`test/ObservationPump.test.ts`, the strengthened cursor row, a durable
+    bound row); two are scheduler windows said rather than proved. Broken
+    once each where a row exists; all bit. A second pass over the four
+    seams the first had not seen found three more, all fixed: an activity's
+    interrupt retry re-ran a live stream into the same fold; a plan step's
+    own retries bypassed the partial-stream guard; A2A cancellation could
+    publish its terminal before the forwarder stopped. Two have rows.
+
+    ```text
+    verify: grep "utf8Length" src/internal/observation.ts
+    verify: grep "a transport failure in the wait" test/ObservationPump.test.ts
+    ```
+
+review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
+    -- twelve commits of the last week whose change was not followed by a
+    review commit (60d-ii, 60l, the no-progress rollover, 60g-i, decision
+    2, item 27, decision 3, 60d-i, 48c, the durable layer's type, the
+    gateway mounts row, the retention measurement), read as diffs against
+    the review checklist. No defect. One doc comment for `execute` had been
+    orphaned above the `Alone` annotation and is reattached; the refusal's
+    result reassembly is now by position, which depends on nothing --
+    keying by id was also safe, since `AgentTurn` refuses a response whose
+    calls share an id, which a row written to catch the supposed misfiling
+    proved by hitting that refusal first. The four streaming-era commits in
+    the same set had their code read in the two review passes.
+
+    ```text
+    verify: grep "refuses a response whose calls share an id" src/ToolExecution.ts
+    ```

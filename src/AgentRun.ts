@@ -23,6 +23,12 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly steeringContinuation: boolean
   /** The reason the loop gave for stopping, when it gave one. */
   readonly stopReason: Option.Option<string>
+  /**
+   * Set when a built-in ceiling ended the run rather than a policy choosing
+   * to. Distinct from `stopReason`, which stays open-ended prose: this is the
+   * classification a caller can branch on without matching strings.
+   */
+  readonly exhaustion: Option.Option<AgentLoop.Exhaustion>
 }
 
 /**
@@ -72,6 +78,7 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
       Option.none()
     let steeringContinuation = false
     let stopReason: Option.Option<string> = Option.none()
+    let exhaustion: Option.Option<AgentLoop.Exhaustion> = Option.none()
     // Set by a `Final` decision; the next turn is the last, tools withheld.
     let finalTurn = false
 
@@ -148,12 +155,14 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
       if (decision._tag === "Final") {
         finalTurn = true
         stopReason = Option.fromNullishOr(decision.reason)
+        exhaustion = Option.fromNullishOr(decision.exhaustion)
         continue
       }
 
       if (decision._tag === "Stop") {
         if (!finalTurn) {
           stopReason = Option.fromNullishOr(decision.reason)
+          exhaustion = Option.fromNullishOr(decision.exhaustion)
         }
         // Close remote and local admission before the final drain. An input
         // that won the race is already in the channel and is applied below;
@@ -187,8 +196,9 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "RunCompleted",
       turns: turn,
-      ...(Option.isSome(stopReason) ? { stopReason: stopReason.value } : {})
+      ...(Option.isSome(stopReason) ? { stopReason: stopReason.value } : {}),
+      ...(Option.isSome(exhaustion) ? { exhaustion: exhaustion.value } : {})
     })
 
-    return { runId, turns: turn, text, response, steeringContinuation, stopReason }
+    return { runId, turns: turn, text, response, steeringContinuation, stopReason, exhaustion }
   })

@@ -44,7 +44,7 @@ The smoke opens a session, prompts it, and reads the history back; it prints
 a sanitized result. `ANTHROPIC_MODEL` in `wrangler.real.jsonc` picks the
 model (`claude-haiku-4-5` by default); `ANTHROPIC_BASE_URL` may be added to
 `vars` for a proxy. Without the secret, opening a session fails rather than
-calling the provider unauthenticated; the Worker's log names the missing key.
+calling the provider unauthenticated: a 503 whose body names the missing key.
 
 The same file is proved on real workerd in CI with no key and no network:
 `test/WorkerRealModel.test.ts` bundles it as is and stands in for the
@@ -86,7 +86,9 @@ routing key to the Durable Object.
 - **Durability is the platform's.** History persists to DO SQLite at every
   committed turn; events are journaled to the ordinary `DeliveryLog`;
   `events?after=N` resumes gaplessly across hibernation and process death;
-  dispatched work is a logical alarm that outlives the runtime.
+  dispatched work is a logical alarm that outlives the runtime, with an
+  intent beside it, so a runtime lost after the job ran but before the alarm
+  was acknowledged does not run it again (item 47c, proved on workerd).
   Effect Workflow does not run inside a DO today (measured — see
   `docs/status-history.md`, 2026-08-30), so `/durable` stays on hosts whose
   engine runs.

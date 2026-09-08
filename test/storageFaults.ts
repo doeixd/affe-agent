@@ -69,6 +69,17 @@ export const breakingClaim = (
     refuse(when, "claim", inner.claim(sessionId, submission))
 })
 
+/**
+ * A store whose `finish` reports success and writes nothing: the engine
+ * completes, the canonical record keeps the claim. Item 48c's disagreement.
+ */
+export const losingFinish = (
+  inner: DurableSessionStore.DurableSessionStore
+): DurableSessionStore.DurableSessionStore => ({
+  ...inner,
+  finish: () => Effect.succeed(true)
+})
+
 /** A store whose `finish` fails. */
 export const breakingFinish = (
   inner: DurableSessionStore.DurableSessionStore,

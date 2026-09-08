@@ -3,6 +3,7 @@ import {
   Role,
   TaskState,
   type Message,
+  type StreamResponse,
   type Task
 } from "@a2a-js/sdk"
 import { ClientFactory, RestTransportFactory } from "@a2a-js/sdk/client"
@@ -250,11 +251,18 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     readonly sseHeartbeat?: Duration.Duration | false
     /** The parts the fake run answers with; default: one text part of its text. */
     readonly replyContent?: ReadonlyArray<Prompt.Part>
+    /** Text deltas the fake run publishes while answering, when asked to stream. */
+    readonly streamDeltas?: ReadonlyArray<string>
+    /** Several messages, each a list of deltas (empty: a message with no text, as a tool-only turn produces), when asked to stream. */
+    readonly streamMessages?: ReadonlyArray<ReadonlyArray<string>>
+    /** Passed straight through to `serverLayer`. */
+    readonly streamAnswers?: boolean
   }
 ) {
   const opened = yield* Ref.make<ReadonlyArray<string>>([])
   const released = yield* Ref.make<ReadonlyArray<string>>([])
   const calls = yield* Ref.make<ReadonlyArray<string>>([])
+  const streamAsked = yield* Ref.make(false)
   const promptStarted = yield* Deferred.make<void>()
   const promptInterrupted = yield* Deferred.make<
     void,
@@ -304,10 +312,22 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
 
           return {
             id,
-            prompt: (input) =>
+            prompt: (input, promptOptions) =>
               Effect.gen(function* () {
                 const text = promptText(promptOf(input))
                 yield* Ref.set(lastInput, Option.some(promptOf(input)))
+                yield* Ref.set(streamAsked, promptOptions?.stream === true)
+                const messages = fixtureOptions?.streamMessages ??
+                  (fixtureOptions?.streamDeltas === undefined ? [] : [fixtureOptions.streamDeltas])
+                if (promptOptions?.stream === true) {
+                  for (const deltas of messages) {
+                    yield* PubSub.publish(eventQueue, emit({ _tag: "MessageStarted" }))
+                    for (const delta of deltas) {
+                      yield* PubSub.publish(eventQueue, emit({ _tag: "MessageDelta", kind: "text", delta }))
+                    }
+                    yield* PubSub.publish(eventQueue, emit({ _tag: "MessageStreamCompleted" }))
+                  }
+                }
                 const count = yield* Ref.updateAndGet(
                   promptCount,
                   (current) => current + 1
@@ -469,6 +489,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
                 }])
             ),
             status: Effect.succeed("idle" as const),
+            stream: () => Stream.die("stream is not part of this fixture"),
             events: () => Stream.fromPubSub(eventQueue)
           }
         }),
@@ -530,6 +551,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
       }]
     },
     principal: { subject: (principal) => principal.subject },
+    ...(fixtureOptions?.streamAnswers === undefined ? {} : { streamAnswers: fixtureOptions.streamAnswers }),
     ...(fixtureOptions?.sseHeartbeat === undefined
       ? {}
       : { sseHeartbeat: fixtureOptions.sseHeartbeat }),
@@ -566,6 +588,7 @@ const serverFixture = Effect.fn("AgentA2A.test.serverFixture")(function* (
     opened,
     released,
     calls,
+    streamAsked,
     promptStarted,
     /** Releases a `blockFirstPrompt` run, so a test can end it cleanly. */
     promptInterrupted,
@@ -967,6 +990,172 @@ describe("AgentA2A v1 server", () => {
 
       const opened = yield* Ref.get(fixture.opened)
       assert.deepStrictEqual(yield* Ref.get(fixture.released), opened)
+    })
+  )
+
+  it.effect("the answer forms as chunks of the result artifact, and the completed answer replaces them", () =>
+    Effect.gen(function* () {
+      // `plan-streaming.md` P5, A2A: the adapter asks the harness to stream
+      // and forwards each text delta as an artifact update of the *result*
+      // artifact -- the first chunk of a message replacing, the rest
+      // appending, none the last -- and the completed answer then arrives
+      // whole under the same identity with `lastChunk`, replacing them.
+      const fixture = yield* serverFixture({ streamDeltas: ["str", "eamed"] })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() =>
+            new ClientFactory().createFromUrl(
+              HttpServer.formatAddress(server.address)
+            )
+          )
+          const responses = yield* collect(
+            client.sendMessageStream({
+              tenant: "",
+              message: userMessage("chunks-message", "", "chunks"),
+              configuration: undefined,
+              metadata: undefined
+            })
+          )
+          assert.deepStrictEqual(
+            responses.map((response) => response.payload?.$case),
+            ["task", "statusUpdate", "artifactUpdate", "artifactUpdate", "artifactUpdate", "statusUpdate"]
+          )
+          const updates = responses.flatMap((response) =>
+            response.payload?.$case === "artifactUpdate" ? [response.payload.value] : []
+          )
+          assert.deepStrictEqual(
+            updates.map((update) => [update.append, update.lastChunk]),
+            [[false, false], [true, false], [false, true]],
+            "the first chunk replaces, the second appends, the completed answer replaces and is last"
+          )
+          assert.strictEqual(new Set(updates.map((update) => update.artifact?.artifactId)).size, 1, "one artifact identity")
+          const texts = updates.map((update) => {
+            const content = update.artifact?.parts[0]?.content
+            return content?.$case === "text" ? content.value : undefined
+          })
+          assert.deepStrictEqual(texts.slice(0, 2), ["str", "eamed"])
+          assert.isTrue(texts[2]?.endsWith(":1:chunks"), `the completed answer, got ${String(texts[2])}`)
+
+          // The stored task holds the completed answer once, not the chunks.
+          const submitted = responses[0]?.payload
+          if (submitted?.$case !== "task") assert.fail("expected the task first")
+          const stored = yield* promise(() => client.getTask({ tenant: "", id: submitted.value.id }))
+          assert.strictEqual(stored.artifacts.length, 1)
+          assert.strictEqual(taskText(stored), texts[2])
+        }).pipe(Effect.provide(fixture.server))
+      )
+      assert.isTrue(yield* Ref.get(fixture.streamAsked), "the adapter asked the harness to stream")
+    })
+  )
+
+  /**
+   * Streaming as a declared policy, with the fixtures the second reviewer
+   * asked for before endorsing the default (`plan-streaming-followups.md`
+   * §7, item 78): the option off, several messages on one artifact with a
+   * tool-only one between, failure after the first chunk, and cancellation
+   * after partial output. Each holds that a partial artifact stays
+   * distinguishable from a committed answer: no chunk is ever `lastChunk`,
+   * and only a completed run replaces them whole.
+   */
+  const updatesOf = (responses: ReadonlyArray<StreamResponse>) =>
+    responses.flatMap((response) => response.payload?.$case === "artifactUpdate" ? [response.payload.value] : [])
+
+  it.effect("streamAnswers: false asks for a batched answer and sends no chunks", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ streamDeltas: ["str", "eamed"], streamAnswers: false })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() => new ClientFactory().createFromUrl(HttpServer.formatAddress(server.address)))
+          const responses = yield* collect(
+            client.sendMessageStream({ tenant: "", message: userMessage("batched-message", "", "batched"), configuration: undefined, metadata: undefined })
+          )
+          assert.deepStrictEqual(
+            responses.map((response) => response.payload?.$case),
+            ["task", "statusUpdate", "artifactUpdate", "statusUpdate"]
+          )
+          assert.deepStrictEqual(updatesOf(responses).map((u) => [u.append, u.lastChunk]), [[false, true]])
+        }).pipe(Effect.provide(fixture.server))
+      )
+      assert.isFalse(yield* Ref.get(fixture.streamAsked), "the harness was asked to stream")
+    })
+  )
+
+  it.effect("several messages on one artifact: each message's first chunk replaces, a tool-only message sends nothing", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ streamMessages: [["a1", "a2"], [], ["b1"]] })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() => new ClientFactory().createFromUrl(HttpServer.formatAddress(server.address)))
+          const responses = yield* collect(
+            client.sendMessageStream({ tenant: "", message: userMessage("messages-message", "", "messages"), configuration: undefined, metadata: undefined })
+          )
+          assert.deepStrictEqual(
+            updatesOf(responses).map((u) => [u.append, u.lastChunk]),
+            [[false, false], [true, false], [false, false], [false, true]],
+            "a1 replaces, a2 appends, b1 replaces the first message, the completed answer replaces and is last"
+          )
+        }).pipe(Effect.provide(fixture.server))
+      )
+    })
+  )
+
+  it.effect("failure after the first chunk: the chunk went out, the task failed, and nothing was marked last", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ streamDeltas: ["par"], failFirstPrompt: true })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() => new ClientFactory().createFromUrl(HttpServer.formatAddress(server.address)))
+          const responses = yield* collect(
+            client.sendMessageStream({ tenant: "", message: userMessage("failing-message", "", "break"), configuration: undefined, metadata: undefined })
+          )
+          assert.deepStrictEqual(
+            responses.map((response) => response.payload?.$case),
+            ["task", "statusUpdate", "artifactUpdate", "statusUpdate"]
+          )
+          assert.deepStrictEqual(updatesOf(responses).map((u) => [u.append, u.lastChunk]), [[false, false]])
+          const last = responses[responses.length - 1]?.payload
+          assert.strictEqual(last?.$case === "statusUpdate" ? last.value.status?.state : undefined, TaskState.TASK_STATE_FAILED)
+        }).pipe(Effect.provide(fixture.server))
+      )
+    })
+  )
+
+  it.effect("cancellation after partial output: the chunk went out, the task is canceled, and nothing was marked last", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serverFixture({ streamDeltas: ["par"], blockFirstPrompt: true })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* HttpServer.HttpServer
+          const client = yield* promise(() => new ClientFactory().createFromUrl(HttpServer.formatAddress(server.address)))
+          const taskId = yield* Ref.make<string | undefined>(undefined)
+          // Cancel from inside the stream, once the chunk has been seen: the
+          // task frame names the id, the artifact frame proves partial output.
+          const responses = yield* Stream.fromAsyncIterable(
+            client.sendMessageStream({ tenant: "", message: userMessage("cancel-stream-message", "", "block"), configuration: undefined, metadata: undefined }),
+            (cause) => new AgentA2A.AgentA2ATransportError({ detail: String(cause) })
+          ).pipe(
+            Stream.tap((response) =>
+              response.payload?.$case === "task"
+                ? Ref.set(taskId, response.payload.value.id)
+                : response.payload?.$case === "artifactUpdate"
+                ? Effect.flatMap(Ref.get(taskId), (id) =>
+                    promise(() => client.cancelTask({ tenant: "", id: id ?? "", metadata: undefined })).pipe(Effect.asVoid))
+                : Effect.void),
+            Stream.runCollect,
+            Effect.map((values) => Array.from(values))
+          )
+          const kinds = responses.map((response) => response.payload?.$case)
+          assert.include(kinds, "artifactUpdate")
+          assert.deepStrictEqual(updatesOf(responses).map((u) => u.lastChunk), [false])
+          const last = responses[responses.length - 1]?.payload
+          assert.strictEqual(last?.$case === "statusUpdate" ? last.value.status?.state : undefined, TaskState.TASK_STATE_CANCELED)
+        }).pipe(Effect.provide(fixture.server))
+      )
     })
   )
 

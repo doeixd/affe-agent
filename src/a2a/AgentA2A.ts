@@ -184,6 +184,18 @@ export interface ServerOptions<Principal> {
    * write does not close the stream.
    */
   readonly sseHeartbeat?: Duration.Duration | false | undefined
+  /**
+   * Whether the harness is asked to stream, so the answer forms as artifact
+   * chunks. Default `true`.
+   *
+   * An execution policy, not only a presentation one: once a provider has
+   * emitted a part, the turn's execution plan forbids a fallback to another
+   * provider (`AgentTurn.withPlanStream`), so a streamed run can lose a
+   * recovery a batched one would have had. `false` asks for a batched
+   * model call: the task still streams its status frames and its completed
+   * answer, without chunks. `plan-streaming-followups.md` §7.
+   */
+  readonly streamAnswers?: boolean | undefined
   readonly pushNotifications?: {
     readonly allowHosts?: ReadonlyArray<string> | undefined
     /** Permit `http`. Off by default: the target receives task content. */
@@ -475,6 +487,13 @@ interface ActiveTask<Principal> {
   readonly contextId: string
   readonly cancelRequested: Deferred.Deferred<void>
   readonly cancelResolved: Deferred.Deferred<boolean>
+  /**
+   * The text-delta forwarder of the request currently serving this task,
+   * so a cancellation can stop it *before* publishing CANCELED: a chunk it
+   * had pulled but not yet published would otherwise land after the
+   * terminal frame, or after the bus was finished.
+   */
+  readonly forwarder: Ref.Ref<Option.Option<Fiber.Fiber<void, unknown>>>
 }
 
 const createTask = (
@@ -572,6 +591,55 @@ const responseArtifact = (taskId: string, content: ReadonlyArray<Prompt.Part>): 
   metadata: undefined,
   extensions: []
 })
+
+/**
+ * The answer as it forms, as artifact-update chunks (`plan-streaming.md` P5).
+ *
+ * Every text delta of the run is a chunk of the *result* artifact -- the
+ * same identity the completed answer is delivered under, so a consumer
+ * accumulating chunks and one reading the final artifact see one thing. The
+ * first chunk of each message replaces (`append: false`) and the rest
+ * append: a run of several messages -- a tool turn, then the answer -- shows
+ * the message in progress, not a concatenation, and an abandoned attempt is
+ * replaced by the next rather than left as a prefix. No chunk is the last:
+ * the completed answer arrives whole with `lastChunk: true` and replaces
+ * whatever streamed, which is the canonical text either way.
+ *
+ * Runs until interrupted; the request that forks it ends it with the run.
+ */
+const forwardTextDeltas = (
+  events: Stream.Stream<AgentProtocol.AgentEventEnvelope, AgentProtocol.RemoteError>,
+  eventBus: ExecutionEventBus,
+  taskId: string,
+  contextId: string
+): Effect.Effect<void, AgentProtocol.RemoteError> =>
+  Stream.runFoldEffect(
+    events,
+    () => true,
+    (fresh, envelope) => {
+      const event = envelope.event
+      if (event._tag === "MessageStarted") return Effect.succeed(true)
+      if (event._tag !== "MessageDelta" || event.kind !== "text") return Effect.succeed(fresh)
+      return Effect.sync(() => {
+        eventBus.publish(AgentEvent.artifactUpdate({
+          taskId,
+          contextId,
+          artifact: {
+            artifactId: `${taskId}:result`,
+            name: "Agent response",
+            description: "The Effect Harness agent response, forming",
+            parts: [textPart(event.delta)],
+            metadata: undefined,
+            extensions: []
+          },
+          append: !fresh,
+          lastChunk: false,
+          metadata: undefined
+        }))
+        return false
+      })
+    }
+  ).pipe(Effect.asVoid)
 
 /** An agent message attached to a status update, rendering what the run needs. */
 const statusMessage = (
@@ -691,6 +759,11 @@ export const serverLayer = <Principal>(
         // bus does not replay, so that event was simply gone.
         let settledWith = ""
         const askedAgain = yield* Ref.make<Option.Option<ElicitationRequestedEvent>>(Option.none())
+        const deltas = yield* Effect.forkIn(
+          forwardTextDeltas(eventsStream, eventBus, entry.taskId, entry.contextId),
+          layerScope
+        )
+        yield* Ref.set(entry.forwarder, Option.some(deltas))
         const settled = yield* Effect.forkIn(
           eventsStream.pipe(
             Stream.filter((envelope) =>
@@ -722,6 +795,7 @@ export const serverLayer = <Principal>(
         })
         if (!matched) {
           yield* Fiber.interrupt(settled)
+          yield* Fiber.interrupt(deltas)
           const failedAt = yield* timestamp
           yield* Effect.sync(() =>
             eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
@@ -750,6 +824,7 @@ export const serverLayer = <Principal>(
         // terminal events. A second question is another INPUT_REQUIRED, with
         // the task left paused exactly as the first one left it.
         yield* Fiber.join(settled)
+        yield* Fiber.interrupt(deltas)
         const settledAt = yield* timestamp
         const again = yield* Ref.get(askedAgain)
         if (Option.isSome(again)) {
@@ -873,7 +948,8 @@ export const serverLayer = <Principal>(
           sessionId,
           contextId: requestContext.contextId,
           cancelRequested,
-          cancelResolved
+          cancelResolved,
+          forwarder: yield* Ref.make(Option.none<Fiber.Fiber<void, unknown>>())
         }
         // Only this invocation's entry: a continuation re-registering the same
         // task id must not be unregistered by the earlier fibre settling.
@@ -937,6 +1013,13 @@ export const serverLayer = <Principal>(
           ),
           layerScope
         )
+        // The answer as it forms, until this request's part of the run ends;
+        // a resumed run's continuation forwards its own.
+        const deltas = yield* Effect.forkIn(
+          forwardTextDeltas(eventsStream, eventBus, taskId, requestContext.contextId),
+          layerScope
+        )
+        yield* Ref.set(entry.forwarder, Option.some(deltas))
         // The prompt outlives this request when the run pauses: it is forked
         // into the layer scope and only its exit is reported back here.
         yield* Effect.forkIn(
@@ -944,7 +1027,10 @@ export const serverLayer = <Principal>(
             const result = yield* Effect.exit(host.prompt(principal, {
               requestId: AgentProtocol.RequestId.make(`a2a:${taskId}:prompt`),
               sessionId,
-              input
+              input,
+              // Streamed by default, so the answer forms as artifact chunks;
+              // see `ServerOptions.streamAnswers` for what turning it off buys.
+              options: { stream: options.streamAnswers !== false }
             }))
             // A cancellation must publish its terminal event before this
             // request can wake and settle the bus, or the CANCELED update is
@@ -972,7 +1058,7 @@ export const serverLayer = <Principal>(
         const outcome = yield* Effect.race(
           Deferred.await(promptDone),
           Deferred.await(elicited)
-        ).pipe(Effect.ensuring(Fiber.interrupt(listener)))
+        ).pipe(Effect.ensuring(Fiber.interrupt(listener)), Effect.ensuring(Fiber.interrupt(deltas)))
         if (outcome._tag === "ElicitationRequested") {
           const pausedAt = yield* timestamp
           yield* Effect.sync(() =>
@@ -1040,6 +1126,12 @@ export const serverLayer = <Principal>(
           yield* Deferred.succeed(running.cancelResolved, false)
           return yield* Effect.failCause(interrupted.cause)
         }
+        // The forwarder first: a chunk it had in hand must not follow the
+        // terminal frame. Interruption waits for it to stop.
+        yield* Effect.flatMap(Ref.get(running.forwarder), Option.match({
+          onNone: () => Effect.void,
+          onSome: (forwarder) => Effect.asVoid(Fiber.interrupt(forwarder))
+        }))
         const canceledAt = yield* timestamp
         yield* Effect.sync(() => {
           eventBus.publish(AgentEvent.statusUpdate(statusUpdate(
