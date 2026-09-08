@@ -5840,3 +5840,23 @@ fails to build is an empty 500 at session creation.
 
 Earlier the same day item 27's last two milestones, found unclaimed in the
 tree for two days, were adopted, reviewed (three casts removed) and landed.
+
+
+## 2026-09-06 — CI setup and verification regressions (#82–#85)
+
+The main Actions job stopped at the TUI typecheck because root `npm ci` does
+not install the nested app. The workflow now installs a pinned Bun runtime
+and the app's dependencies with a refreshed, frozen lockfile. Its checkout
+also fetches full history and tags, required by both behavior-change gates.
+
+The shared Git reader now delimits the complete trailer block before reading
+paths and unfolds continuation lines. The portability scanner reads TypeScript
+syntax and local symbols instead of stripping comments and matching source
+text. Seven focused tests pass; restoring the original scripts makes four
+regression tests fail, including the exact two-trailer changelog assertion.
+
+The MCP floor job previously crashed npm while adding its alias after `npm ci`.
+The exact SDK 1.10 alias is now in the root lockfile. Running the previously
+unreached compiler gate exposed unknown annotation extension fields in that
+SDK; the v1 adapter decodes them before returning typed hints. Malformed
+annotations fail with the existing transport error.

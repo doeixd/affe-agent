@@ -23,6 +23,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { builtinModules } from "node:module"
+import ts from "typescript"
 
 const root = process.cwd()
 // An explicit source root lets the check itself be tested against fixtures.
@@ -105,29 +106,59 @@ const walk = (dir) =>
         : []
   })
 
-const importPattern = /(?:^|\n)\s*(?:import|export)\b[^'"]*?from\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
-const globalsPattern = /\b(process\.[a-zA-Z_]+|Buffer\b|__dirname\b|__filename\b|require\s*\()/g
-
+// Parse actual syntax: strings/comments are not imports or global accesses.
+// A small no-lib program also distinguishes a local `process` parameter from
+// the host global without loading dependencies or the application tsconfig.
+const files = walk(sourceRoot)
+const program = ts.createProgram(files, { noResolve: true, noLib: true, types: [] })
+const checker = program.getTypeChecker()
+const hostGlobals = new Set(["process", "Buffer", "__dirname", "__filename", "require"])
 const violations = []
-for (const file of walk(sourceRoot)) {
+for (const file of files) {
   const relative = path.relative(sourceRoot, file).split(path.sep).join("/")
   if (HOST_MODULES.has(relative)) continue
-  const text = fs.readFileSync(file, "utf8")
-  // Comments are not code; strip them so prose can mention `process.env`.
-  const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
+  const source = program.getSourceFile(file)
 
-  for (const match of code.matchAll(importPattern)) {
-    const specifier = match[1] ?? match[2]
-    if (specifier === undefined) continue
+  const checkImport = (literal) => {
+    if (literal === undefined || !ts.isStringLiteralLike(literal)) return
+    const specifier = literal.text
     if (specifier.startsWith("node:") || builtins.has(specifier)) {
       violations.push(`${relative}: imports Node built-in "${specifier}"`)
     } else if (isHostPackage(specifier)) {
       violations.push(`${relative}: imports host package "${specifier}"`)
     }
   }
-  for (const match of code.matchAll(globalsPattern)) {
-    violations.push(`${relative}: uses host global "${match[1].trim()}"`)
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      checkImport(node.moduleSpecifier)
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      checkImport(node.arguments[0])
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      checkImport(node.argument.literal)
+    } else if (ts.isExternalModuleReference(node)) {
+      checkImport(node.expression)
+    }
+
+    if (ts.isIdentifier(node) && hostGlobals.has(node.text)) {
+      const parent = node.parent
+      // A property/declaration name is not a reference; shorthand properties
+      // are, and can capture a global just like an ordinary expression.
+      const nameOnly = parent.name === node && !ts.isShorthandPropertyAssignment(parent)
+      const symbol = checker.getSymbolAtLocation(node)
+      if (!nameOnly && (symbol?.declarations?.length ?? 0) === 0) {
+        const usage = node.text === "process" && ts.isPropertyAccessExpression(parent) && parent.expression === node
+          ? parent.getText(source)
+          : node.text === "process" && ts.isElementAccessExpression(parent) && parent.expression === node
+          ? parent.getText(source)
+          : node.text === "require" && ts.isCallExpression(parent) && parent.expression === node
+          ? "require("
+          : node.text
+        violations.push(`${relative}: uses host global "${usage}"`)
+      }
+    }
+    ts.forEachChild(node, visit)
   }
+  visit(source)
 }
 
 if (violations.length > 0) {

@@ -230,7 +230,21 @@ const mutations = [
   }
 ]
 
-const parse = (out) => {
+/**
+ * Vitest's own colour, removed before anything is read out of its output.
+ *
+ * Locally this changes nothing: vitest sees a pipe and prints plain text. On a
+ * CI runner it decides otherwise, and the summary arrives as
+ * `[2m Tests [22m [1m[32m48 passed` -- where `Tests\s+\d+` no
+ * longer matches, because what follows the word is an escape sequence rather
+ * than a space. The run is then reported as having no summary at all, which
+ * reads as a crashed suite rather than a parser that cannot see.
+ */
+// eslint-disable-next-line no-control-regex
+const stripAnsi = (out) => out.replace(/\u001B\[[0-9;]*m/g, "")
+
+const parse = (raw) => {
+  const out = stripAnsi(raw)
   const summary = /Tests\s+(?:(\d+) failed \|\s*)?(\d+) passed/.exec(out)
   if (summary === null) {
     throw new Error(`no test summary in the run:\n${out.slice(-2000)}`)

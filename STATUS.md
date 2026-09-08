@@ -22,7 +22,8 @@ Regenerate these from the commands; do not hand-edit the numbers.
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`, `:cloudflare`) | clean, examples included |
 | doc claims | `npm run verify:remaining-work` | every `verify:` line in the live list, the ledger and this file holds; a stale claim fails the build. It fired three times in its first two days, each time on text that had gone stale that hour |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
-| portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. Widened 2026-09-01 to reject `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do` and the `bun:` / `deno` specifiers as well as Effect's own host bindings, each proved to fire; the check now covers what the claim says. |
+| CI setup | `.github/workflows/ci.yml` | full Git history and tags; frozen TUI dependency install under Bun; the MCP v1 floor alias is pinned in the root lockfile |
+| portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. Widened 2026-09-01 to reject `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do` and the `bun:` / `deno` specifiers as well as Effect's own host bindings, each proved to fire; syntax-aware import and host-global checks also cover side-effect imports and bracket access without flagging comments, strings or local bindings. |
 | package | `npm run verify:package` | every published entry point imports from the packed tarball |
 | break-once | `npm run verify:mutations` | 16 mutations across `/sessions`, host events and workspace lifetime; each names the tests that must fail, so a mutation failing the *wrong* test is an error too. In `check` (~65s) |
 | durability | `npm run verify:durability` | D1–D7 bite when broken; D4b survives by construction |
