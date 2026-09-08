@@ -28,6 +28,7 @@ describe("public API", () => {
       "AgentSubmission",
       // Raised by awaitSubmission for a submission the session does not hold.
       "AgentSubmissionNotFoundError",
+      "AgentToolProgressLimitError",
       "AgentTraceLimitError",
       "ContextTransform",
       "Elicitation",

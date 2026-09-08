@@ -62,6 +62,25 @@ export const boundOf = (where: string, options: LagOptions | undefined): Bound =
  * this is a second serialisation per envelope observed remotely; a bound
  * that counted something cheaper would not be a bound on what is retained.
  */
+/**
+ * The size of one event on the wire, without an envelope around it.
+ *
+ * For bounds that count what a *producer* emits rather than what an observer
+ * is holding: the envelope's ids and sequence are the transport's overhead,
+ * not the tool's output, and charging them to a tool's budget would make the
+ * limit depend on how long a session id happens to be.
+ *
+ * Encoded exactly as `toWire` encodes an event -- a progress snapshot's
+ * `result` is substituted for its encoded form -- so the number means the same
+ * thing here and at the far end of a transport.
+ */
+export const eventWireSize = (event: AgentEvent.StreamedEvent): number =>
+  utf8Length(JSON.stringify(
+    event._tag === "ToolCallSucceeded" || event._tag === "ToolCallProgress"
+      ? { ...event, result: event.encodedResult }
+      : event
+  ))
+
 export const wireSize = (envelope: AgentEvent.AgentEventEnvelope): number =>
   utf8Length(JSON.stringify(AgentEvent.toWire(envelope)))
 

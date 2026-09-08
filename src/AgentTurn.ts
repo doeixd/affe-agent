@@ -498,7 +498,9 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
           id: session.id,
           bus: session.bus,
           elicitation: session.elicitation,
-          nextElicitationId: session.ids.nextElicitation
+          nextElicitationId: session.ids.nextElicitation,
+          toolProgressBytes: session.toolProgressBytes,
+          toolProgressLimit: session.toolProgressLimit
         },
         agent: {
           strategy: session.agent.toolExecution,

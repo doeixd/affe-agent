@@ -13,6 +13,7 @@ import type * as AgentEvent from "./AgentEvent.js"
 import * as AgentSession from "./AgentSession.js"
 import type * as AgentSubmission from "./AgentSubmission.js"
 import * as Errors from "./Errors.js"
+import * as Limits from "./internal/limits.js"
 import * as Observation from "./internal/observation.js"
 import * as ContextTransform from "./ContextTransform.js"
 import * as InternalToolkit from "./internal/toolkit.js"
@@ -1105,10 +1106,12 @@ export const start = <Tools extends Record<string, Tool.Any>, E, R, Value = stri
   Scope.Scope | LanguageModel.LanguageModel | R
 > =>
   Effect.gen(function* () {
-    const bound = Observation.boundOf("Agent.start traceLimits", {
-      ...(options?.traceLimits?.envelopes === undefined ? {} : { envelopes: options.traceLimits.envelopes }),
-      ...(options?.traceLimits?.bytes === undefined ? {} : { bytes: options.traceLimits.bytes })
-    })
+    // Clamped rather than merely validated: the JSDoc says lowerable and not
+    // raisable, and a ceiling a caller can raise is not a ceiling.
+    const bound = {
+      maxEnvelopes: Limits.traceEnvelopes(options?.traceLimits?.envelopes),
+      maxBytes: Limits.traceBytes(options?.traceLimits?.bytes)
+    }
     const session = yield* AgentSession.make(agent)
 
     // Before the submission, not after: a fast deterministic model can settle

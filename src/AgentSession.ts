@@ -29,6 +29,7 @@ import * as EventBus from "./internal/eventBus.js"
 import type * as Observation from "./internal/observation.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
+import * as Limits from "./internal/limits.js"
 import type { SubmissionId } from "./internal/ids.js"
 import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
 import * as Telemetry from "./internal/telemetry.js"
@@ -229,6 +230,19 @@ export interface MakeOptions {
    * one seam that Layer substitution could not already provide.
    */
   readonly channels?: InputChannel.Factory | undefined
+  /**
+   * How much tool progress one submission may publish, in wire bytes.
+   *
+   * Lowerable, not raisable: a value above the library ceiling is clamped to
+   * it, because the point of the bound is that a tool cannot make the runtime
+   * hold an unbounded amount however the application is configured. Defaults
+   * to the ceiling, 8 MiB.
+   *
+   * This is not the observer-lag bound and not the bound on a tool's terminal
+   * result. See `docs/limits.md`: a fix for one of the three is not protection
+   * against the others.
+   */
+  readonly toolProgress?: { readonly maxBytes?: number | undefined } | undefined
 }
 
 /**
@@ -386,6 +400,7 @@ export const makeEngine = <
       value: Option.none()
     })
     const pendingOutput = yield* Ref.make<Option.Option<unknown>>(Option.none())
+    const toolProgressBytes = yield* Ref.make(0)
     const ids = yield* Ids.makeIdSource(id)
     const submissionName = options?.submissionIds ?? ((count: number) => Ids.submissionName(id, count))
     const beforeClose = options?.beforeClose ?? Effect.void
@@ -396,6 +411,8 @@ export const makeEngine = <
       state,
       history,
       progress,
+      toolProgressBytes,
+      toolProgressLimit: Limits.toolProgressBytes(options?.toolProgress?.maxBytes),
       pendingOutput,
       bus,
       steering,
@@ -662,6 +679,10 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
           // must not report the previous one's value as its result.
           value: Option.none()
         })
+        // The progress budget is this submission's, so it is spent from zero.
+        // Resetting it per *run* instead would let a follow-up chain publish
+        // without limit by scheduling continuations.
+        yield* Ref.set(self.toolProgressBytes, 0)
 
         const registered = yield* Deferred.make<void>()
         const submission = Deferred.await(registered).pipe(

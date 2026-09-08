@@ -25,7 +25,30 @@ constant it names.
 | Slack | `toleranceSeconds` | `300 s` | `Connectors.Slack.Options` | replay window guard |
 | Durable polling | `clientOutcome` / `deliveryLog` / `workflowInterrupt` / `result` | `10 ms` / `250 ms` / `25 ms` / `10 ms` | `DurablePolling.defaults` / `EFFECT_AGENT_*_POLL_INTERVAL` | validated positive `Duration` via `Config`; also `DeliveryLog.live` fans out only in-process, cross-node via `read({ after })` |
 | Interrupt | poll | `25 ms` | `DurablePolling.workflowInterrupt` | signal polled while submission runs |
+| Tool progress | `toolProgress.maxBytes` | `8 MiB` per submission | `AgentSession.MakeOptions`, `internal/limits.ts` | `AgentToolProgressLimitError`; the call fails rather than truncating, and always fails the run rather than returning to the model |
+| One-shot trace | `traceLimits` | `2048` envelopes / `8 MiB` | `Agent.StartOptions` | `AgentTraceLimitError` on `handle.events`; the submission, canonical history and durable delivery are unaffected |
 
 STATUS.md keeps the history of how each was found; the JSDoc above is where a
 user meets it.
 
+## Three bounds that are not each other
+
+These get confused, and a fix for one is regularly cited as protection against
+another. They are not the same thing:
+
+* **Observer lag** (`maxObservationLag`, `AgentObservationLagError`) bounds how
+  far *a reader may fall behind*. It disconnects that reader and leaves the run
+  alone.
+* **Tool progress production** (`toolProgress.maxBytes`,
+  `AgentToolProgressLimitError`) bounds *how much there is to read*. A tool
+  emitting progress in a loop costs network, storage and telemetry even when
+  every observer is keeping up, and a replaying handle or a delivery log has to
+  hold all of it. Observer lag does not help here: there is no lag.
+* **A tool's terminal result** (truncation, `MAX_BYTES`) bounds *one answer*.
+  Progress is a separate observational channel and is not truncated at all --
+  a structured snapshot cut in half is usually a lie, and a consumer cannot
+  tell it from a whole one.
+
+The one-shot trace bound is a fourth thing again: it bounds what
+`Agent.start`'s handle *retains* for replay, and failing it fails only
+observation.

@@ -4,6 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as Limits from "../src/internal/limits.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -273,6 +274,27 @@ describe("Agent.start's handle", () => {
       // The submission is untouched by its observer's misfortune.
       assert.strictEqual(result.status, "completed")
       assert.strictEqual(result.text, "three orders")
+    }))
+
+  it.effect("the trace ceiling cannot be raised, only lowered", () =>
+    Effect.gen(function*() {
+      // The JSDoc says lowerable and not raisable; a ceiling a caller can
+      // raise is not a ceiling, so this asserts the clamp rather than the
+      // sentence.
+      const trace = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const started = yield* Agent.start(agent, "how many orders", {
+            traceLimits: { envelopes: Limits.TRACE_ENVELOPES * 10 }
+          })
+          yield* started.await
+          return yield* Stream.runCollect(started.events)
+        }).pipe(Effect.provide((yield* FakeModel.layer(script)).layer))
+      )
+      // Asking for ten times the ceiling still succeeds -- it is clamped, not
+      // rejected -- and a normal submission stays well inside it.
+      assert.isAbove(trace.length, 0)
+      assert.strictEqual(Limits.traceEnvelopes(Limits.TRACE_ENVELOPES * 10), Limits.TRACE_ENVELOPES)
+      assert.strictEqual(Limits.traceEnvelopes(4), 4)
     }))
 
   it.effect("the handle's submission id is the one the events carry", () =>

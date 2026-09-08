@@ -1,9 +1,24 @@
 # Plan: `run` / `stream` / `start` ergonomics without weakening session semantics
 
-**Status:** P1 and P2 implemented 2026-09-08 — `Agent.start`,
-`AgentSubmission.Handle`, `AgentTraceLimitError`, `Agent.stream`, and the
-Phase 0 conformance file as `test/AgentOneShotContract.test.ts`. P3–P7 remain
-specified, not implemented.
+**Status:** P1–P3 implemented 2026-09-08 — `Agent.start`,
+`AgentSubmission.Handle`, `AgentTraceLimitError`, `Agent.stream`,
+`AgentToolProgressLimitError` and the per-submission progress budget, with the
+Phase 0 conformance file as `test/AgentOneShotContract.test.ts` and the bound's
+rows as `test/ToolProgressLimit.test.ts`. P4–P7 remain specified, not
+implemented.
+
+P3 found two things worth carrying forward:
+
+* **An engine limit must not be negotiable through the failure policy.** The
+  first version let the budget breach reach the default `ReturnToModel` policy,
+  which handed it to the model as an ordinary failed tool result -- so the run
+  completed, and the next call started emitting again against a budget already
+  spent. A harness limit is not the tool's answer: the model cannot act on it,
+  so it always fails the run, as a defect does.
+* **P1's `traceLimits` said "lowerable, not raisable" and did not enforce it.**
+  Written as documentation and never as a clamp. `internal/limits.ts` now holds
+  both ceilings and the one rule about them, and both are tested by asking for
+  more than the ceiling and getting the ceiling.
 
 P2 was as small as §5 predicted: `Agent.stream` is `start`'s events under a
 scope the stream manages, sharing one collector and one bound rather than a
