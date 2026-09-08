@@ -56,11 +56,11 @@ describe("Presets.policy", () => {
     const records: ReadonlyArray<Presets.PolicyOptions> = [
       {},
       { maxTurns: 8 },
-      { maxToolCalls: 20, finalTurn: true },
-      { finalTurn: true },
+      { maxToolCalls: 20, onExhaustion: "final-answer" },
+      { onExhaustion: "final-answer" },
       { tokens: 10 },
       { cost: 2.5 },
-      { maxTurns: 8, maxToolCalls: 20, maxDuration: "2 minutes", finalTurn: true, tokens: 50_000, cost: 5 }
+      { maxTurns: 8, maxToolCalls: 20, maxDuration: "2 minutes", onExhaustion: "final-answer", tokens: 50_000, cost: 5 }
     ]
     for (const record of records) {
       const { loop } = Presets.policy(record)
@@ -72,7 +72,7 @@ describe("Presets.policy", () => {
   })
 
   it("the expansion is the seams' own description, outermost last", () => {
-    const { loop, layer } = Presets.policy({ maxTurns: 8, maxDuration: "2 minutes", finalTurn: true, tokens: 50_000, cost: 5 })
+    const { loop, layer } = Presets.policy({ maxTurns: 8, maxDuration: "2 minutes", onExhaustion: "final-answer", tokens: 50_000, cost: 5 })
     assert.deepStrictEqual(loop.description, {
       _tag: "Custom",
       name: "Budget.cost",

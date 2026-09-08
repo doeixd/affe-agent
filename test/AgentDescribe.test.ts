@@ -48,7 +48,7 @@ describe("Agent.describe", () => {
     const agent = Agent.make({
       instructions: "Be terse.",
       tools: [search],
-      loop: Budget.within(50_000, AgentLoop.limits({ maxTurns: 8, maxToolCalls: 20, maxDuration: "2 minutes", finalTurn: true })),
+      loop: Budget.within(50_000, AgentLoop.limits({ maxTurns: 8, maxToolCalls: 20, maxDuration: "2 minutes", onExhaustion: "final-answer" })),
       permission: Permission.except(
         Permission.rules([{ tool: "search", decision: Permission.allow }], { otherwise: Permission.ask() }),
         [{ resource: /^\/etc\//, decision: Permission.deny("system files") }]

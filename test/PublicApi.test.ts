@@ -12,6 +12,7 @@ describe("public API", () => {
       "AgentBusyError",
       "AgentClosedError",
       "AgentEvent",
+      "AgentExhaustedError",
       "AgentIdleError",
       // The shape a submission is asked in: the mirror of `AgentOutput`,
       // and a noun for the same reason -- it changes `prompt`'s parameter.
@@ -201,6 +202,10 @@ describe("public API", () => {
       // A classified stop: the built-in ceilings say *what* ran out, so a
       // caller branches on a union rather than matching stopReason strings.
       "exhausted",
+      // The two shapes `limits({ onExhaustion })` lowers to. `withFinalAnswer`
+      // is `withFinalTurn` with the judgement §7.3 asks for -- it declines for
+      // a ceiling another model call would contradict.
+      "failOnExhaustion",
       "final",
       "limits",
       "make",
@@ -210,6 +215,7 @@ describe("public API", () => {
       "or",
       "stop",
       "untilIdle",
+      "withFinalAnswer",
       "withFinalTurn"
     ])
     assert.deepStrictEqual(Object.keys(Harness.ContextTransform).sort(), [

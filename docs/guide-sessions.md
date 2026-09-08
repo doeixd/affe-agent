@@ -408,7 +408,7 @@ Agent.make({
     maxDuration: "2 minutes",
     // When a bound cuts the model off mid-work, take one more turn with the
     // tools withheld so the run ends in an answer rather than mid-thought.
-    finalTurn: true
+    onExhaustion: "final-answer"
   })
 })
 ```
@@ -423,16 +423,39 @@ interrupts the run where it stands. Tokens and money stay in `/budget`,
 because their scope is a `Layer`.
 
 The same bounds, with a token or money ceiling, can be written as one record
-through `Presets.policy({ maxTurns, maxToolCalls, maxDuration, finalTurn,
+through `Presets.policy({ maxTurns, maxToolCalls, maxDuration, onExhaustion,
 tokens, cost })`, which returns the loop and the `Budget` layer the record
 expands to and nothing else; `Presets.readPolicy` reads the record back out
 of a loop's description. Sugar, documented as such in `/presets`.
 
-`finalTurn` is a third loop decision, `Final`: exactly one more turn with the
+`onExhaustion` says what a bound being reached should *do*, and the three
+answers are not variations on one theme:
+
+* `"stop"` (the default) ends the run where the bound put it. A ceiling is a
+  spend limit, and anything else spends past it.
+* `"final-answer"` is a third loop decision, `Final`: exactly one more turn
+  with the agent's tools withheld -- or, for an agent with an `AgentOutput`,
+  with only the output tool, so the last word is typed -- after which the loop
+  is not consulted. **That turn is outside the ordinary allowance**:
+  `maxTurns: 5` may run six, because the final turn is a terminal recovery
+  action rather than part of the work. And it is **declined for
+  `maxDuration`**, where one more provider call is precisely what the bound
+  existed to prevent; the same reasoning keeps `/budget`'s token and money
+  ceilings off it.
+* `"fail"` raises `AgentExhaustedError` instead of returning a result whose
+  `exhaustion` the caller has to remember to read. For a caller who cannot use
+  a partial answer.
+
+Each acts on `Result.exhaustion` -- the classification a built-in ceiling
+carries, described below -- and not on any string, so a custom policy that
+stops for its own reasons is untouched by all three.
+
+`AgentLoop.withFinalTurn(inner)` turns any policy's cut-off into
 agent's tools withheld -- or, for an agent with an `AgentOutput`, with only
 the output tool, so the last word is typed -- after which the loop is not
 consulted. `AgentLoop.withFinalTurn(inner)` turns any policy's cut-off into
-one; a stop on an idle model stays a plain stop. `and` keeps the most
+one, without the `maxDuration` judgement; a stop on an idle model stays a
+plain stop either way. `and` keeps the most
 stopping decision and `or` the least, with `Final` between `Continue` and
 `Stop`.
 

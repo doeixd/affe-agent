@@ -1,11 +1,31 @@
 # Plan: `run` / `stream` / `start` ergonomics without weakening session semantics
 
-**Status:** P1–P3 implemented 2026-09-08 — `Agent.start`,
+**Status:** P1–P5 implemented 2026-09-08 — `Agent.start`,
 `AgentSubmission.Handle`, `AgentTraceLimitError`, `Agent.stream`,
-`AgentToolProgressLimitError` and the per-submission progress budget, with the
-Phase 0 conformance file as `test/AgentOneShotContract.test.ts` and the bound's
-rows as `test/ToolProgressLimit.test.ts`. P4–P7 remain specified, not
-implemented.
+`AgentToolProgressLimitError` and the per-submission progress budget,
+`AgentLoop.Exhaustion` on `Result` and `RunCompleted`, and
+`onExhaustion: "stop" | "final-answer" | "fail"` over `withFinalAnswer` and
+`failOnExhaustion`. P6–P7 remain specified, not implemented.
+
+P5 replaced `Limits.finalTurn` rather than adding a second spelling beside it:
+nothing outside `src` and the sessions guide used it, and a boolean cannot say
+"fail". Two things it settled that §7.3 left open:
+
+* **A final answer is declined for `maxDuration`.** §7.3 says not to make every
+  ceiling final-answer capable, and time is the case that proves it -- one more
+  provider call is exactly what the bound existed to prevent. `withFinalTurn`
+  keeps its unconditional behaviour for a caller who asks for it by name;
+  `withFinalAnswer` is the form with the judgement, and it is what `limits`
+  uses.
+* **The error channel widens only for `"fail"`.** A conditional return type
+  rather than always carrying `AgentExhaustedError`, so a caller who did not
+  ask for it does not inherit a branch that cannot happen.
+
+One thing worth knowing if this option grows: a generic type parameter turns
+off excess-property checking, so the first version accepted the removed
+`finalTurn` silently and did nothing with it. `NoExcessProperties` -- the same
+helper Effect's own `LanguageModel` uses -- is what makes a wrong option a
+compile error rather than a quiet no-op.
 
 P3 found two things worth carrying forward:
 

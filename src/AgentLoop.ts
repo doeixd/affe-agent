@@ -1,8 +1,10 @@
 import { Duration, Effect } from "effect"
 import type { Pipeable } from "effect/Pipeable"
+import type { NoExcessProperties } from "effect/Types"
 import { pipeArguments } from "effect/Pipeable"
 import type { LanguageModel, Response, Tool } from "effect/unstable/ai"
 import type { RunId, SessionId, SubmissionId } from "./internal/ids.js"
+import * as Errors from "./Errors.js"
 import { positiveInteger } from "./internal/positive.js"
 
 /**
@@ -351,6 +353,90 @@ export const withFinalTurn = <
     { _tag: "FinalTurn", inner: inner.description }
   )
 
+/**
+ * Exhaustion kinds for which one more model call does not contradict the bound
+ * that was reached.
+ *
+ * A run that used its turn or tool-call allowance can still afford to speak. A
+ * run that used its *time* cannot: a final turn is another provider call, and
+ * spending it is the one thing `maxDuration` was there to prevent. The same
+ * argument applies to a token or cost ceiling, which is why `Budget`'s bounds
+ * are not on this list either.
+ *
+ * `plan-run-stream-start.md` §7.3 asks for exactly this judgement -- "do not
+ * blindly make every ceiling final-answer capable" -- rather than a final turn
+ * that fires wherever it can.
+ */
+const canAnswerAfter: ReadonlySet<Exhaustion> = new Set<Exhaustion>(["turns", "tool-calls"])
+
+/**
+ * One more tool-less turn when a bound cut the run short, where that does not
+ * contradict the bound.
+ *
+ * `withFinalTurn` gives every cut-short stop a final turn, which is right when
+ * a caller asks for it by name. This is the form `limits` uses, and it declines
+ * for a ceiling whose whole point was to stop spending -- see
+ * {@link canAnswerAfter}. A stop that exhausted nothing is left alone, as it is
+ * there: the model was done, or a policy decided, and neither wants a turn it
+ * did not ask for.
+ */
+export const withFinalAnswer = <
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
+  inner: AgentLoop<E, R, Tools>
+): AgentLoop<E, R, Tools> =>
+  make(
+    (state) =>
+      Effect.map(inner.decide(state), (decision) =>
+        decision._tag === "Stop" &&
+          decision.exhaustion !== undefined &&
+          canAnswerAfter.has(decision.exhaustion) &&
+          state.toolCalls.length > 0
+          ? {
+            _tag: "Final",
+            ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+            exhaustion: decision.exhaustion
+          }
+          : decision),
+    { _tag: "FinalTurn", inner: inner.description }
+  )
+
+/**
+ * Fail the run when a built-in ceiling ends it.
+ *
+ * The classification is what makes this expressible without parsing anything:
+ * only a `Stop` that names an exhaustion fails, so an idle model, an output
+ * tool's answer and a custom policy's own decision all still stop normally.
+ *
+ * Failing is not the default and should not be. A run that spent its whole
+ * allowance and answered has done what it was asked; this is for the caller who
+ * cannot use a partial result and would rather be told than remember to check
+ * `Result.exhaustion`.
+ */
+export const failOnExhaustion = <
+  E = never,
+  R = never,
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+>(
+  inner: AgentLoop<E, R, Tools>
+): AgentLoop<E | Errors.AgentExhaustedError, R, Tools> =>
+  make(
+    (state) =>
+      Effect.flatMap(inner.decide(state), (decision) =>
+        decision._tag === "Stop" && decision.exhaustion !== undefined
+          ? new Errors.AgentExhaustedError({
+            exhaustion: decision.exhaustion,
+            ...(decision.reason === undefined ? {} : { reason: decision.reason })
+          })
+          : Effect.succeed(decision)),
+    // Described as `Custom` rather than widening the public `Description`
+    // union for one combinator: it already has a shape for "a policy with a
+    // name and an inner", which is exactly what this is.
+    { _tag: "Custom", name: "failOnExhaustion", inner: inner.description }
+  )
+
 /** The bounds `limits` accepts. At least one must be given; see `limits`. */
 export interface Limits {
   /** Stop after this many turns. */
@@ -360,15 +446,24 @@ export interface Limits {
   /** Stop once the run has been going this long. */
   readonly maxDuration?: Duration.Input | undefined
   /**
-   * When a bound cuts the run short, take one more turn with tools withheld
-   * so it ends in an answer (`withFinalTurn`). Off by default: a bound is a
-   * spend ceiling, and the final turn is one more model call.
+   * What happens when one of these bounds is reached.
+   *
+   * - `"stop"` (default): the run ends where it is. A bound is a spend
+   *   ceiling, and anything else spends past it.
+   * - `"final-answer"`: one more turn with tools withheld, so the run ends in
+   *   an answer rather than mid-thought. That turn is one more model call and
+   *   is *outside* the ordinary allowance -- `maxTurns: 5` may run six -- 
+   *   because it is a terminal recovery action rather than part of the work.
+   *   It is declined for `maxDuration`, where another call is the one thing
+   *   the bound existed to prevent; see `withFinalAnswer`.
+   * - `"fail"`: the run fails with `AgentExhaustedError` instead of returning
+   *   a result whose `exhaustion` the caller has to remember to check.
    */
-  readonly finalTurn?: boolean | undefined
+  readonly onExhaustion?: "stop" | "final-answer" | "fail" | undefined
 }
 
 /**
- * At least one bound, so `limits({})` and `limits({ finalTurn: true })` do
+ * At least one bound, so `limits({})` and `limits({ onExhaustion: "fail" })` do
  * not compile: an unbounded `untilIdle` is what a caller reaching for
  * `limits` was trying not to write.
  */
@@ -381,8 +476,8 @@ type AtLeastOneBound =
  * The usual bounded loop, in one object.
  *
  * `and(untilIdle(), ...)` over the bounds given -- exactly what `bounded` is
- * for `maxTurns` alone -- with `finalTurn` wrapping the result in
- * `withFinalTurn`. It exists because the first policy most agents want is
+ * for `maxTurns` alone -- with `onExhaustion` wrapping the result in
+ * `withFinalAnswer` or `failOnExhaustion`. It exists because the first policy most agents want is
  * "stop when the model is done, but never past these", and writing that as
  * three combinators invites leaving one off; it lowers into them rather than
  * adding a second way to say it.
@@ -391,11 +486,25 @@ type AtLeastOneBound =
  * `Budget.cost` need a `Layer` for their scope -- per session or per
  * application -- and a pure loop cannot carry one; wrap this in them.
  */
+/**
+ * The error a `limits` loop can raise, which is none unless it was asked to
+ * fail. Conditional rather than always-widened: a caller who did not choose
+ * `"fail"` should not find an unreachable branch in their error channel.
+ */
+type ExhaustionError<Options> = Options extends { readonly onExhaustion: "fail" }
+  ? Errors.AgentExhaustedError
+  : never
+
 export const limits = <
-  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>
+  Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>,
+  const Options extends Limits = Limits
 >(
-  options: Limits & AtLeastOneBound
-): AgentLoop<never, never, Tools> => {
+  // `NoExcessProperties` rather than the bare constraint: a generic parameter
+  // turns off excess-property checking, and an option that is quietly ignored
+  // is worse than one that does not compile -- a caller would read the name
+  // they wrote and believe it.
+  options: NoExcessProperties<Limits, Options> & AtLeastOneBound
+): AgentLoop<ExhaustionError<Options>, never, Tools> => {
   let loop: AgentLoop<never, never, Tools> = untilIdle<Tools>()
   if (options.maxTurns !== undefined) {
     loop = and(loop, maxTurns<Tools>(options.maxTurns)) as AgentLoop<never, never, Tools>
@@ -406,7 +515,12 @@ export const limits = <
   if (options.maxDuration !== undefined) {
     loop = and(loop, maxDuration<Tools>(options.maxDuration)) as AgentLoop<never, never, Tools>
   }
-  return options.finalTurn === true ? withFinalTurn(loop) : loop
+  const bounded: AgentLoop<any, never, Tools> = options.onExhaustion === "final-answer"
+    ? withFinalAnswer(loop)
+    : options.onExhaustion === "fail"
+    ? failOnExhaustion(loop)
+    : loop
+  return bounded
 }
 
 /**

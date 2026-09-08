@@ -10,6 +10,7 @@
   "AgentClientConformanceFailure",
   "AgentClosedError",
   "AgentExecutionError",
+  "AgentExhaustedError",
   "AgentForbiddenError",
   "AgentIdleError",
   "AgentInvalidRequestError",

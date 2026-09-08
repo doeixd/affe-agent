@@ -3,6 +3,7 @@ import type { Duration } from "effect"
 import type { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as AgentLoop from "../AgentLoop.js"
+import * as Errors from "../Errors.js"
 import * as Budget from "../budget/Budget.js"
 import type * as ModelCapabilities from "../model/ModelCapabilities.js"
 import * as ContextTransform from "../ContextTransform.js"
@@ -271,8 +272,13 @@ export interface PolicyOptions {
   readonly maxToolCalls?: number | undefined
   /** Stop once the run has been going this long. */
   readonly maxDuration?: Duration.Input | undefined
-  /** When a bound cuts the run short, one more turn with tools withheld. */
-  readonly finalTurn?: boolean | undefined
+  /**
+   * What happens when one of these bounds is reached: stop (the default), take
+   * one more tool-less turn so the run ends in an answer, or fail with
+   * `AgentExhaustedError`. See `AgentLoop.Limits.onExhaustion`, which this
+   * lowers to -- including that a final answer is declined for `maxDuration`.
+   */
+  readonly onExhaustion?: "stop" | "final-answer" | "fail" | undefined
   /** A token ceiling over the ambient `Budget`; `layer` provides one. */
   readonly tokens?: number | undefined
   /** A money ceiling over the ambient `Budget`, in the capability table's unit; needs `ModelCapabilities`. */
@@ -304,16 +310,20 @@ export interface Policy<E, R, L> {
 type Given<O, K extends keyof PolicyOptions> = K extends keyof O ? Exclude<O[K], undefined> : never
 type Ceiling<O> = [Given<O, "tokens"> | Given<O, "cost">] extends [never] ? never : Budget.Budget
 type Priced<O> = [Given<O, "cost">] extends [never] ? false : true
-export type PolicyError<O> = Priced<O> extends true
-  ? ModelCapabilities.UnknownModelError | ModelCapabilities.UnknownCurrentModelError | ModelCapabilities.UnpricedModelError
-  : never
+export type PolicyError<O> =
+  | (Priced<O> extends true
+    ? ModelCapabilities.UnknownModelError | ModelCapabilities.UnknownCurrentModelError | ModelCapabilities.UnpricedModelError
+    : never)
+  // Only when the caller asked for it. Widening unconditionally would put a
+  // branch that cannot happen into every other caller's error channel.
+  | (O extends { readonly onExhaustion: "fail" } ? Errors.AgentExhaustedError : never)
 export type PolicyServices<O> = Ceiling<O> | (Priced<O> extends true ? ModelCapabilities.ModelCapabilities : never)
 
 /**
  * Expand a `PolicyOptions` record to the seams it names.
  *
  * ```ts
- * const bounds = Presets.policy({ maxTurns: 20, tokens: 100_000, finalTurn: true })
+ * const bounds = Presets.policy({ maxTurns: 20, tokens: 100_000, onExhaustion: "final-answer" })
  * const agent = Agent.make({ toolkit, loop: bounds.loop })
  * // ...provide `bounds.layer` at the session.
  * ```
@@ -328,11 +338,12 @@ export const policy = <const O extends PolicyOptions>(
   // The same composition `AgentLoop.limits` performs, spelled out so no bound
   // has to be asserted present: `and` flattens, so the description is one
   // conjunction either way.
-  let bounded: AgentLoop.AgentLoop<never, never, any> = AgentLoop.untilIdle()
+  let bounded: AgentLoop.AgentLoop<any, never, any> = AgentLoop.untilIdle()
   if (options.maxTurns !== undefined) bounded = AgentLoop.and(bounded, AgentLoop.maxTurns(options.maxTurns))
   if (options.maxToolCalls !== undefined) bounded = AgentLoop.and(bounded, AgentLoop.maxToolCalls(options.maxToolCalls))
   if (options.maxDuration !== undefined) bounded = AgentLoop.and(bounded, AgentLoop.maxDuration(options.maxDuration))
-  if (options.finalTurn === true) bounded = AgentLoop.withFinalTurn(bounded)
+  if (options.onExhaustion === "final-answer") bounded = AgentLoop.withFinalAnswer(bounded)
+  else if (options.onExhaustion === "fail") bounded = AgentLoop.failOnExhaustion(bounded)
   const withTokens = options.tokens === undefined ? bounded : Budget.within(options.tokens, bounded)
   const loop = options.cost === undefined ? withTokens : Budget.cost(options.cost, withTokens)
   // The value is exact; only the conditional types above are being restated,
@@ -365,9 +376,12 @@ export const readPolicy = (description: AgentLoop.Description): Option.Option<Po
     tokens = current.details.limit
     current = current.inner
   }
-  let finalTurn: boolean | undefined
+  let onExhaustion: "final-answer" | "fail" | undefined
   if (current._tag === "FinalTurn") {
-    finalTurn = true
+    onExhaustion = "final-answer"
+    current = current.inner
+  } else if (current._tag === "Custom" && current.name === "failOnExhaustion" && current.inner !== undefined) {
+    onExhaustion = "fail"
     current = current.inner
   }
   // `policy` always builds on `untilIdle`: alone, or first in the conjunction
@@ -380,7 +394,7 @@ export const readPolicy = (description: AgentLoop.Description): Option.Option<Po
     maxTurns?: number
     maxToolCalls?: number
     maxDuration?: number
-    finalTurn?: boolean
+    onExhaustion?: "final-answer" | "fail"
     tokens?: number
     cost?: number
   } = {}
@@ -390,7 +404,7 @@ export const readPolicy = (description: AgentLoop.Description): Option.Option<Po
     else if (bound._tag === "MaxDuration" && record.maxDuration === undefined) record.maxDuration = bound.millis
     else return Option.none()
   }
-  if (finalTurn !== undefined) record.finalTurn = finalTurn
+  if (onExhaustion !== undefined) record.onExhaustion = onExhaustion
   if (tokens !== undefined) record.tokens = tokens
   if (cost !== undefined) record.cost = cost
   return Option.some(record)

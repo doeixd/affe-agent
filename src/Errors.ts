@@ -264,6 +264,33 @@ export class AgentObservationLagError extends Schema.TaggedError<AgentObservatio
  * usually a lie, and a consumer cannot tell it from a real one, so the
  * offending call fails instead and already committed history is untouched.
  */
+/**
+ * A run reached a built-in ceiling under a policy that says exhaustion is a
+ * failure.
+ *
+ * Only raised by `onExhaustion: "fail"`. The default is still to stop, because
+ * a run that used its whole allowance and produced an answer has not gone
+ * wrong -- it did exactly what it was told. This exists for the caller who
+ * cannot use a truncated result and would rather be told than inspect
+ * `Result.exhaustion` and remember to.
+ *
+ * `exhaustion` names which ceiling; `reason` carries the loop's own prose for
+ * it, so a log line does not lose what `stopReason` would have said.
+ */
+export class AgentExhaustedError extends Schema.TaggedError<AgentExhaustedError>()(
+  "AgentExhaustedError",
+  {
+    exhaustion: Schema.Literals(["turns", "tool-calls", "duration", "tokens", "cost"]),
+    reason: Schema.optional(Schema.String)
+  }
+) {
+  override get message() {
+    return this.reason === undefined
+      ? `The run was exhausted: ${this.exhaustion}`
+      : `The run was exhausted: ${this.exhaustion} (${this.reason})`
+  }
+}
+
 export class AgentToolProgressLimitError extends Schema.TaggedError<AgentToolProgressLimitError>()(
   "AgentToolProgressLimitError",
   {

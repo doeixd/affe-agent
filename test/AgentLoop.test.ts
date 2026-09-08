@@ -192,7 +192,7 @@ describe("AgentLoop.limits", () => {
       const { result, tools } = yield* runWith(
         Agent.make({
           tools: [noop],
-          loop: AgentLoop.limits({ maxTurns: 5, maxToolCalls: 2, finalTurn: true })
+          loop: AgentLoop.limits({ maxTurns: 5, maxToolCalls: 2, onExhaustion: "final-answer" })
         }),
         [
           { toolCalls: [call("a"), call("b")] },
@@ -209,7 +209,7 @@ describe("AgentLoop.limits", () => {
     // @ts-expect-error -- an unbounded `untilIdle` is what `limits` exists to prevent
     AgentLoop.limits({})
     // @ts-expect-error -- a final turn is not a bound
-    AgentLoop.limits({ finalTurn: true })
+    AgentLoop.limits({ onExhaustion: "final-answer" })
     assert.isDefined(AgentLoop.limits({ maxDuration: "1 minute" }))
   })
 })
