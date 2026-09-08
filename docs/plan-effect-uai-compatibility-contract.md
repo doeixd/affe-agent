@@ -1,6 +1,10 @@
 # effect-uai compatibility contract (Phase 0)
 
-**Status: contract only; no production code.** This is Phase 0 of
+**Status: Phase 0 written 2026-09-08; Phase 1 implemented the same day** as
+`src/effect-uai` (`affe-agent/effect-uai`), with `@effect-uai/core` as an
+optional peer dependency and the §4 rows as `test/EffectUaiModel.test.ts`. §9
+records the three things writing the adapter changed about this document. This
+is Phase 0 of
 [plan-effect-uai-integration.md](./plan-effect-uai-integration.md) §11, which
 asks for the translation contract to be written and reviewable *before* an
 adapter exists, so that "reviewers can identify exactly what is unsupported
@@ -195,16 +199,32 @@ official provider.
 | assistant text | `Message` role `assistant` + `output_text` | Exact | required |
 | assistant reasoning `text` | `Reasoning` — **no text field** | Degraded | required, §4.6 |
 | reasoning signature (metadata) | `Reasoning.signature` | Exact | required |
-| tool call `id` / `name` / params | `function_call` `call_id` / `name` / `arguments` | Exact | required |
+| tool call `id` / `name` | `function_call` `call_id` / `name` | Exact | required |
+| tool call `params` | `function_call.arguments` | Degraded | required |
 | tool result | `function_call_output` `call_id` / `output` | Exact | required |
 | user file, `image/*` | `input_image` + `ImageSource` | Exact | required |
 | user file, non-image | — | Unsupported | required (must fail) |
 | `ToolApprovalRequestPart` / `ToolApprovalResponsePart` | — | Unsupported | required (must fail) |
 | `previousResponseId` / `incrementalPrompt` | — | Unsupported | ignored, full history sent (§2.3) |
 
-`arguments` is a string on both sides, so tool parameters cross as encoded JSON
-without a re-encode. That is the property to test, not the happy path: a
-re-encode would reorder keys and break providers that hash the argument string.
+**Tool arguments cannot cross without a re-encode, and that is a real loss.**
+effect-uai's `function_call.arguments` is a `string`. Effect AI's `params` is
+`unknown` — a *parsed* value, on both the prompt and the response side. Effect
+AI never retains the argument string the provider actually produced, so:
+
+* **uai -> Effect AI** is `JSON.parse(arguments)`. The value survives; the exact
+  bytes do not. A model that emits malformed JSON produces a translation
+  failure, not a silent empty object, and that is a `required` test (§6).
+* **Effect AI -> uai** is `JSON.stringify(params)`. Key order and whitespace are
+  whatever `JSON.stringify` chooses, and the provider's original string is
+  unrecoverable.
+
+This matters when a prior tool call is replayed into a later request: a provider
+that hashes or signs the argument string sees a different string than it sent.
+No re-encode is available that would avoid it, because the original was already
+discarded upstream of the adapter — so this is `Degraded` and declared, not a
+defect to fix here. If a provider is found that actually breaks on it, the fix
+belongs in Effect AI's prompt representation, not in this adapter.
 
 ### 4.2 Tools
 
@@ -219,10 +239,21 @@ name, description and JSON parameter schema per tool, and nothing else.
 | a returned call is executed by Affe `ToolExecution` | required |
 
 This is the ownership rule from §4.1 of the plan, and it is what preserves every
-Affe permission, concurrency, lifecycle and replay semantic. It is a test, not a
-convention: the adapter is correct only if a tool call round-trips through it
-and is executed by Affe with the same approval behaviour as an official
-provider.
+Affe permission, concurrency, lifecycle and replay semantic.
+
+**It turned out to be structural rather than a matter of discipline.** effect-uai
+has four tool kinds, and one of them — `SignalTool` — is defined as
+"model-visible and decodable but never locally executed: the loop intercepts the
+call and acts on it, so there is no fake `run`." Affe *is* that loop. Rendering
+every Effect AI tool as a `SignalTool` means there is no handler for effect-uai
+to call and no way to add one without changing the tool kind, so the rule cannot
+be violated by a later edit that merely looks reasonable.
+
+That is a better outcome than the one this contract originally planned for,
+which was a `Tool.make` carrying a `run` that dies if reached — a fake handler
+whose only job is to be unreachable. Plan §8 warns against exactly that shape in
+the other direction ("do not fabricate a local handler that throws merely to fit
+the type"), and it was just as wrong here.
 
 ### 4.3 Responses, effect-uai -> Effect AI
 
@@ -387,3 +418,41 @@ cancellation does not fabricate a completed turn.
 * Whether Effect AI should become replaceable inside the kernel. Phase 6, and
   only on adapter evidence — §4.2's rule is to do less until the boundary is
   demonstrably insufficient.
+
+---
+
+## 9. What writing the adapter changed
+
+Three corrections, kept here rather than quietly folded into the tables above,
+because a contract that only ever agrees with its implementation is not being
+used as a contract.
+
+**Tool arguments do not cross for free (§4.1).** The first draft claimed
+`arguments` was a string on both sides and therefore crossed without a
+re-encode. It is not: Effect AI's `params` is `unknown` — a parsed value — on
+both the prompt and the response side, and it never retains the string the
+provider sent. So the crossing is `JSON.parse` one way and `JSON.stringify` the
+other, the original bytes are unrecoverable, and the row is `Degraded`. The
+claim was wrong in the direction that matters: it asserted an exactness the code
+cannot deliver.
+
+**The ownership rule is structural (§4.2).** `SignalTool` removes the fake
+handler the contract had assumed was necessary.
+
+**Structured output cannot use `StructuredFormat.fromEffectSchema` (§4.0).**
+That helper constrains its schema to one with no decoding services, and
+`responseFormat.schema` is a `Schema.Top` that may have them. The adapter hands
+over the JSON schema instead — which is all the wire needs, since Effect AI
+decodes the result against the original schema itself.
+
+Two things are also true of the implementation that this contract does not
+claim:
+
+* **Phase 2 arrived early, but not its acceptance.** `LanguageModel.make`
+  requires both hooks, and §2.2 forces `generateText` through `streamTurn`
+  anyway, so streaming works. The streaming acceptance list in §7 is not fully
+  tested — interruption, partial-stream failure and the no-mixed-fallback rule
+  are Phase 2's actual work.
+* **Dynamic tools are untested.** Tools whose parameters are a raw JSON schema
+  rather than an Effect `Schema` go through the same path, but no `toolSource`
+  test covers them yet.

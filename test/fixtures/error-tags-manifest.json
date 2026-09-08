@@ -58,5 +58,6 @@
   "ToolSourceToolError",
   "UnknownCurrentModelError",
   "UnknownModelError",
-  "UnpricedModelError"
+  "UnpricedModelError",
+  "UnsupportedConversion"
 ]
