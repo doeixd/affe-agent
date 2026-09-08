@@ -1,6 +1,24 @@
 # Plan: `run` / `stream` / `start` ergonomics without weakening session semantics
 
-**Status:** specified, not implemented.
+**Status:** P1 implemented 2026-09-08 — `Agent.start`, `AgentSubmission.Handle`,
+`AgentTraceLimitError`, and the Phase 0 conformance file as
+`test/AgentOneShotContract.test.ts`. P2–P7 remain specified, not implemented.
+
+Two things P1 found, both recorded here because the next phase inherits them:
+
+* **Settlement is not the end of the trace.** `await` resolves when the
+  submission settles, which can be before the collector has drained what
+  settlement produced — so a replay cut off at that moment is missing exactly
+  the ending a reader came for. The trace closes on the terminal *event* having
+  been collected, not on the awaiting fiber. §4.5's "after settlement,
+  `handle.events` replays the complete retained trace" is easy to implement in a
+  way that is usually right and occasionally short.
+* **Numbering must be independent of retention.** A follower skips what it
+  already replayed by index. Deriving that index from what the trace *kept*
+  means it stops advancing once the bound is hit, and the follower then never
+  sees another event — including the terminal one it ends on. An over-bound
+  trace hung rather than failing. Counting and closing continue past the bound;
+  only retention stops.
 
 **Written:** 2026-09-08, after comparing the current Affe runtime with a similar Effect-native agent runtime's `Run & stream` contract.
 

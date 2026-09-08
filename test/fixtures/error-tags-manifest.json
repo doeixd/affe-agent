@@ -23,6 +23,7 @@
   "AgentSessionAlreadyExistsError",
   "AgentSessionNotFoundError",
   "AgentSubmissionNotFoundError",
+  "AgentTraceLimitError",
   "AgentTransportError",
   "AgentUnauthorizedError",
   "ChannelConformanceFailure",

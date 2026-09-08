@@ -233,3 +233,33 @@ export class AgentObservationLagError extends Schema.TaggedError<AgentObservatio
       `(bound ${this.maxEnvelopes} / ${this.maxBytes}); last delivered sequence ${this.lastDelivered}`
   }
 }
+
+/**
+ * A one-shot handle's retained trace outgrew its bound, so the trace it can
+ * replay is no longer the complete one.
+ *
+ * Raised by `Agent.start`'s `events`, and by nothing else: the submission
+ * itself continues, canonical history is unaffected, and a durable delivery
+ * log is unaffected. Observation stays observational.
+ *
+ * It is a failure rather than a silently truncated stream because the
+ * attraction of a replayable handle is that a late observer sees *everything*
+ * that happened. A trace that quietly dropped its oldest envelopes would still
+ * look like a complete one, which is the more expensive mistake.
+ */
+export class AgentTraceLimitError extends Schema.TaggedError<AgentTraceLimitError>()(
+  "AgentTraceLimitError",
+  {
+    submissionId: Schema.String,
+    retainedEnvelopes: Schema.Number,
+    retainedBytes: Schema.Number,
+    maxEnvelopes: Schema.Number,
+    maxBytes: Schema.Number
+  }
+) {
+  override get message() {
+    return `Trace of submission ${this.submissionId} outgrew its bound: ${this.retainedEnvelopes} envelopes / ` +
+      `${this.retainedBytes} bytes retained (bound ${this.maxEnvelopes} / ${this.maxBytes}). ` +
+      `The submission is unaffected; only this trace is incomplete.`
+  }
+}

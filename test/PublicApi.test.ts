@@ -28,6 +28,7 @@ describe("public API", () => {
       "AgentSubmission",
       // Raised by awaitSubmission for a submission the session does not hold.
       "AgentSubmissionNotFoundError",
+      "AgentTraceLimitError",
       "ContextTransform",
       "Elicitation",
       "InputChannel",
@@ -79,6 +80,10 @@ describe("public API", () => {
       "describe",
       "make",
       "run",
+      // The third one-shot form: `run` owns the execution for the call,
+      // `start` hands it to the caller's scope so the work outlives the
+      // waiter and a late observer can still replay the beginning.
+      "start",
       "tool",
       "toolkit",
       "updateContextTransform",
