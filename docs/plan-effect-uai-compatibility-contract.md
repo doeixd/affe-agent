@@ -463,6 +463,19 @@ than only from the assembled `tool-call` part, that unearned close was enough to
 fabricate a call the model never made and hand it to `ToolExecution`. Fixed, and
 the row is now a test that fails when the guard is removed.
 
+**The rows were re-run against effect-uai's own `MockProvider`
+(`test/EffectUaiMockProvider.test.ts`).** Every other test drives a provider
+written here, from the same declarations the adapter was written from — a good
+test of the translation and a poor test of whether those declarations were read
+correctly, since a misreading of the event protocol would be baked into the fake
+and the adapter alike and every row would still pass. Their fixture derives the
+deltas itself, so it fails if the reading was wrong. It did not.
+
+That is still not evidence against a **real** provider: no HTTP, no provider
+quirks, and their mock could share a misconception with their own adapters.
+Nothing here has yet made a network call, and the first one may well find
+something.
+
 Two things are also true of the implementation that this contract does not
 claim:
 
