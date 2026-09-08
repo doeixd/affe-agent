@@ -19,9 +19,10 @@
  * lifecycle, atomicity and replay semantic the kernel owns. That rule is not a
  * convention here — see `toToolkit`, which makes it a type-level property.
  */
-import { Effect, Layer, Option, Stream } from "effect"
-import { AiError, LanguageModel, Prompt, Response, Tool } from "effect/unstable/ai"
+import { Effect, Encoding, Layer, Option, Stream } from "effect"
+import { AiError, IdGenerator, LanguageModel, Prompt, Response, Tool } from "effect/unstable/ai"
 import * as UaiAiError from "@effect-uai/core/AiError"
+import type * as UaiImage from "@effect-uai/core/Image"
 import * as UaiItems from "@effect-uai/core/Items"
 import * as UaiLanguageModel from "@effect-uai/core/LanguageModel"
 import * as UaiTool from "@effect-uai/core/Tool"
@@ -208,12 +209,21 @@ export const toHistory = (
                 break
               }
               case "file": {
-                return yield* unsupported({
-                  feature: `assistant file of media type ${part.mediaType}`,
-                  source: EFFECT_AI,
-                  target: EFFECT_UAI,
-                  reason: "effect-uai represents assistant files as output_image only"
-                })
+                // The mirror of the user side: effect-uai has `output_image`
+                // and nothing else, so an image crosses and a document does
+                // not. Replaying an assistant turn that produced a PDF would
+                // otherwise lose it silently.
+                const source = imageSourceFor(part)
+                if (Option.isNone(source)) {
+                  return yield* unsupported({
+                    feature: `assistant file of media type ${part.mediaType}`,
+                    source: EFFECT_AI,
+                    target: EFFECT_UAI,
+                    reason: "effect-uai represents assistant files as output_image only"
+                  })
+                }
+                content.push({ type: "output_image", source: source.value })
+                break
               }
               default: {
                 return yield* unsupported({
@@ -386,6 +396,44 @@ const toStructured = (
 // response: effect-uai -> Effect AI
 // -------------------------------------------------------------------------------------
 
+/**
+ * The parts this adapter emits on both paths.
+ *
+ * A file and a source belong to the batch union and the stream union alike, so
+ * naming them once keeps the streamed emission and the batch render from
+ * drifting into two shapes for one thing.
+ */
+type Carried = Response.FilePartEncoded | Response.UrlSourcePartEncoded
+
+/**
+ * An image the model produced, as an Effect AI response file.
+ *
+ * `None` for a URL source. Effect AI's *prompt* file part accepts a URL and its
+ * *response* file part does not -- a response carries base64 -- so an image the
+ * provider only pointed at has nowhere to go without fetching it.
+ */
+const imagePart = (image: UaiImage.ImageSource): Option.Option<Carried> => {
+  switch (image._tag) {
+    case "base64":
+      return Option.some({ type: "file", mediaType: image.mimeType, data: image.base64 })
+    case "bytes":
+      return Option.some({
+        type: "file",
+        mediaType: image.mimeType,
+        data: Encoding.encodeBase64(image.bytes)
+      })
+    case "url":
+      return Option.none()
+  }
+}
+
+/**
+ * An id for a source part, from the generator Effect AI hands its own
+ * providers. A citation arrives without one, and a part that needs an id should
+ * get the same kind of id everything else does.
+ */
+const nextId = Effect.flatMap(IdGenerator.IdGenerator, (generator) => generator.generateId())
+
 const TEXT_ID = "text"
 const REASONING_ID = "reasoning"
 
@@ -397,6 +445,13 @@ interface Accumulator {
   summarised: boolean
   signatureReported: boolean
   readonly streamed: Array<{ readonly id: string; readonly name: string }>
+  /**
+   * Images and sources, kept so the batch render can repeat what the stream
+   * emitted. Neither appears on the assembled `Turn` in a form this can
+   * rebuild -- an image does, but only as the same `ImageSource` already seen,
+   * and a citation only inside `OutputText.annotations`.
+   */
+  readonly extra: Array<Carried>
   final: UaiTurn | undefined
 }
 
@@ -408,6 +463,7 @@ const accumulator = (): Accumulator => ({
   summarised: false,
   signatureReported: false,
   streamed: [],
+  extra: [],
   final: undefined
 })
 
@@ -482,7 +538,7 @@ const handle = (
   state: Accumulator,
   onDegraded: Compatibility.OnDegraded,
   method: string
-): Effect.Effect<ReadonlyArray<Response.StreamPartEncoded>, AiError.AiError> => {
+): Effect.Effect<ReadonlyArray<Response.StreamPartEncoded>, AiError.AiError, IdGenerator.IdGenerator> => {
   switch (event._tag) {
     case "TextDelta":
     case "RefusalDelta": {
@@ -540,20 +596,48 @@ const handle = (
       // also arrives on the assembled turn, and forwarding both would put the
       // same image into canonical history twice.
       if (event.partialIndex !== undefined) return Effect.succeed([])
-      return Effect.fail(asAiError(method, "response")(unsupported({
-        feature: "assistant image output",
-        source: EFFECT_UAI,
-        target: EFFECT_AI,
-        reason: "multimodal output is Phase 3 of the integration plan and is not claimed yet"
-      })))
+      const part = imagePart(event.image)
+      if (Option.isNone(part)) {
+        // Effect AI carries a response file as base64 and has no URL form, so
+        // an image the provider only pointed at cannot be represented without
+        // fetching it -- which is a request this adapter has no business
+        // making on the caller's behalf.
+        return Effect.fail(asAiError(method, "response")(unsupported({
+          feature: "assistant image given as a URL",
+          source: EFFECT_UAI,
+          target: EFFECT_AI,
+          reason: "a response file part carries base64 and has no URL form; fetching it here would be a request the caller did not make"
+        })))
+      }
+      state.extra.push(part.value)
+      return Effect.succeed([part.value])
     }
     case "CitationAdded": {
-      return Effect.fail(asAiError(method, "response")(unsupported({
-        feature: "citation",
-        source: EFFECT_UAI,
-        target: EFFECT_AI,
-        reason: "citations and sources are Phase 3 of the integration plan and are not claimed yet"
-      })))
+      const annotation = event.annotation
+      if (annotation.type !== "url_citation") {
+        // `file_citation`, `container_file_citation` and `file_path` name a
+        // document by id and nothing else. Effect AI's document source
+        // *requires* a title and a media type, and this has neither to give:
+        // filling them in would put invented metadata into canonical history,
+        // which is worse than saying the citation cannot cross.
+        return Effect.fail(asAiError(method, "response")(unsupported({
+          feature: `citation of kind "${annotation.type}"`,
+          source: EFFECT_UAI,
+          target: EFFECT_AI,
+          reason: "a document source requires a title and a media type, and this citation carries only an id"
+        })))
+      }
+      return Effect.map(nextId, (id) => {
+        const part: Carried = {
+          type: "source",
+          sourceType: "url",
+          id,
+          url: annotation.url,
+          title: annotation.title
+        }
+        state.extra.push(part)
+        return [part]
+      })
     }
     case "WebSearchCall": {
       return Effect.fail(asAiError(method, "response")(unsupported({
@@ -672,6 +756,10 @@ const batchParts = (
     if (state.text !== "") {
       parts.push({ type: "text", text: state.text })
     }
+    // Images and sources in the order the provider produced them. The batch
+    // path drains the same stream, so this is what it saw rather than a second
+    // reading of the assembled turn.
+    for (const part of state.extra) parts.push(part)
     for (const call of toolCallsOf(turn)) {
       parts.push({
         type: "tool-call",

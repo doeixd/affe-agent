@@ -456,21 +456,21 @@ describe("EffectUaiModel", () => {
         assert.include(message, "input_image")
       }))
 
-    it.effect("a citation is refused, because Phase 1 does not claim sources", () =>
+    it.effect("a citation that names only a file id is refused, rather than given invented metadata", () =>
       Effect.gen(function*() {
         const { result } = yield* withModel(
           [
             text("grounded"),
-            {
-              _tag: "CitationAdded",
-              annotation: { type: "url_citation", url: "https://example.com", title: "Example" }
-            },
+            { _tag: "CitationAdded", annotation: { type: "file_citation", file_id: "f-1", index: 0 } },
             complete(turn([], "stop"))
           ],
           () => generate()
         )
         assert.isTrue(Exit.isFailure(result))
-        assert.include(failureText(result), "citation")
+        // Effect AI's document source requires a title and a media type; this
+        // citation carries neither, and filling them in would put invented
+        // metadata into canonical history.
+        assert.include(failureText(result), "title and a media type")
       }))
 
     it.effect("a provider-executed web search is refused, because it would bypass tool execution", () =>
@@ -926,6 +926,129 @@ describe("EffectUaiModel", () => {
         assert.isTrue(Exit.isFailure(exit), "the ladder continued past a step that had already emitted")
         const message = failureText(exit)
         assert.notInclude(message, "the fallback answered", "the fallback ran after partial output")
+      }))
+  })
+
+  /** Phase 3: multimodal output and sources. */
+  describe("images and citations", () => {
+    it.effect("a finished image crosses as a file part, in both paths", () =>
+      Effect.gen(function*() {
+        const image = { _tag: "base64", base64: "aGVsbG8=", mimeType: "image/png" } as const
+        const events: ReadonlyArray<TurnEvent> = [
+          text("here it is"),
+          { _tag: "ImageOutput", image },
+          complete(turn([], "stop"))
+        ]
+
+        const batch = yield* withModel(events, () => generate())
+        const batched = Exit.isSuccess(batch.result) ? batch.result.value : undefined
+        assert.isDefined(batched, failureText(batch.result))
+        const files = batched.content.filter((part) => part.type === "file")
+        assert.strictEqual(files.length, 1)
+
+        const streamed = yield* withModel(
+          events,
+          () => Stream.runCollect(LanguageModel.streamText({ prompt: "hello" }))
+        )
+        const parts = Exit.isSuccess(streamed.result) ? streamed.result.value : undefined
+        assert.isDefined(parts, failureText(streamed.result))
+        assert.strictEqual(
+          parts.filter((part) => part.type === "file").length,
+          1,
+          "the two paths must agree about the image"
+        )
+      }))
+
+    /**
+     * A preview frame is dropped rather than emitted: the finished image also
+     * arrives, and forwarding both would put the same image into canonical
+     * history twice.
+     */
+    it.effect("a preview frame is dropped, so one image is not two", () =>
+      Effect.gen(function*() {
+        const image = { _tag: "base64", base64: "aGVsbG8=", mimeType: "image/png" } as const
+        const { result } = yield* withModel(
+          [
+            { _tag: "ImageOutput", image, partialIndex: 0 },
+            { _tag: "ImageOutput", image, partialIndex: 1 },
+            { _tag: "ImageOutput", image },
+            complete(turn([], "stop"))
+          ],
+          () => generate()
+        )
+        const response = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(response, failureText(result))
+        assert.strictEqual(response.content.filter((part) => part.type === "file").length, 1)
+      }))
+
+    /**
+     * A response file part carries base64 and has no URL form, so an image the
+     * provider only pointed at cannot cross without fetching it -- a request
+     * this adapter has no business making on the caller's behalf.
+     */
+    it.effect("an image given only as a URL is refused rather than fetched", () =>
+      Effect.gen(function*() {
+        const { result } = yield* withModel(
+          [
+            {
+              _tag: "ImageOutput",
+              image: { _tag: "url", url: "https://example.com/cat.png", mimeType: "image/png" }
+            },
+            complete(turn([], "stop"))
+          ],
+          () => generate()
+        )
+        assert.isTrue(Exit.isFailure(result))
+        assert.include(failureText(result), "URL")
+      }))
+
+    it.effect("a url citation crosses as a source, with its url and title", () =>
+      Effect.gen(function*() {
+        const { result } = yield* withModel(
+          [
+            text("grounded"),
+            {
+              _tag: "CitationAdded",
+              annotation: { type: "url_citation", url: "https://example.com/a", title: "An example" }
+            },
+            complete(turn([], "stop"))
+          ],
+          () => generate()
+        )
+        const response = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(response, failureText(result))
+
+        const sources = response.content.filter((part) => part.type === "source")
+        assert.strictEqual(sources.length, 1)
+        const source = sources[0]
+        assert.isDefined(source)
+        if (source?.type !== "source" || source.sourceType !== "url") return
+        // Decoded, not encoded: the wire carries a string and the part holds a URL.
+        assert.strictEqual(String(source.url), "https://example.com/a")
+        assert.strictEqual(source.title, "An example")
+        assert.isNotEmpty(source.id, "a source part needs an id, and the citation carried none")
+      }))
+
+    it.effect("an assistant image replayed into a request crosses as output_image", () =>
+      Effect.gen(function*() {
+        const { recorder, result } = yield* withModel(
+          [text("ok"), complete(turn([], "stop"))],
+          () =>
+            LanguageModel.generateText({
+              prompt: Prompt.make([{
+                role: "assistant",
+                content: [{ type: "file", mediaType: "image/png", data: "aGVsbG8=" }]
+              }])
+            })
+        )
+        assert.isTrue(Exit.isSuccess(result), failureText(result))
+
+        const history = only(yield* recorder.requests).history
+        const blocks = history.flatMap((item) => item.type === "message" ? item.content : [])
+        assert.isTrue(
+          blocks.some((block) => block.type === "output_image"),
+          "an assistant image must survive a replay rather than being refused"
+        )
       }))
   })
 })

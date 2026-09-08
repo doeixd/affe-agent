@@ -267,12 +267,27 @@ the type"), and it was just as wrong here.
 | `UsageUpdate` | cumulative; **not** added to the finish usage | Exact | required |
 | `TurnComplete.turn.usage` | `FinishPart.usage` | Exact | required |
 | `RefusalDelta` / `stop_reason: "refusal"` | see §4.5 | Degraded | required |
-| `CitationAdded` / `url_citation` | `UrlSourcePart` | Exact | Phase 3 |
-| `file_citation` | `DocumentSourcePart` | Degraded | Phase 3 |
-| `container_file_citation`, `file_path` | — | Unsupported | Phase 3 |
-| `ImageOutput` (finished) | `FilePartEncoded` | Exact | Phase 3 |
-| `ImageOutput` (`partialIndex` set) | — | dropped, deliberately | Phase 3 |
+| `CitationAdded` / `url_citation` | `UrlSourcePart` | Exact | required |
+| `file_citation` | — | Unsupported | required (must fail) |
+| `container_file_citation`, `file_path` | — | Unsupported | required (must fail) |
+| `ImageOutput` (finished, base64 or bytes) | `FilePartEncoded` | Exact | required |
+| `ImageOutput` (finished, url) | — | Unsupported | required (must fail) |
+| `ImageOutput` (`partialIndex` set) | — | dropped, deliberately | required |
 | `WebSearchCall` | — | Unsupported | Phase 3 |
+
+**`file_citation` was `Degraded` in the first draft and is `Unsupported`.**
+Effect AI's `DocumentSourcePart` *requires* a title and a media type.
+effect-uai's file citation carries a file id and an index and nothing else, so
+the only way to produce that part is to invent both. Invented metadata in
+canonical history is worse than a citation that does not cross: the second is
+visible and the first is not. `container_file_citation` and `file_path` are the
+same case.
+
+**An image the provider only pointed at cannot cross either.** Effect AI's
+*prompt* file part accepts a URL; its *response* file part carries base64 and
+has no URL form. Fetching it here would be a network request the caller never
+asked for, made by a translation layer, so a URL image is `Unsupported` and
+base64 and bytes are `Exact`.
 
 `ImageOutput` preview frames are dropped rather than degraded because the
 finished image also arrives on `TurnComplete.turn`; emitting both would put the
@@ -573,6 +588,16 @@ claim:
   falling back there is safe and correct, and the first version of the test
   passed for that reason rather than the intended one.
 
-* **Dynamic tools are untested.** Tools whose parameters are a raw JSON schema
+* **Phase 3's multimodal half is done** (2026-09-08). A finished image crosses
+  as a file part on both paths, preview frames are dropped so one image is not
+  two, a url citation crosses as a source with an id from Effect AI's own
+  generator, and an assistant image replayed into a request crosses as
+  `output_image` rather than being refused. What Phase 3 still owes is the
+  provider-metadata round trip for fields other than the reasoning signature --
+  response ids, prompt-cache metadata, provider-defined tool metadata -- each
+  needing the same treatment §4.6 gave the signature rather than an assumption
+  that its result generalises.
+
+* **Dynamic tools are untested.*** **Dynamic tools are untested.** Tools whose parameters are a raw JSON schema
   rather than an Effect `Schema` go through the same path, but no `toolSource`
   test covers them yet.
