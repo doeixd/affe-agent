@@ -1194,10 +1194,23 @@ export const start = <Tools extends Record<string, Tool.Any>, E, R, Value = stri
 
         const replay = Stream.fromIterable(snapshot.envelopes)
 
-        // Already collected to the end: the retained trace is the whole of it,
-        // and there is nothing further to follow.
-        if (snapshot.closed) {
+        // Incompleteness belongs to *this subscriber*, not to the buffer.
+        //
+        // What a reader can be missing is whatever the trace stopped retaining
+        // before they arrived -- so the question is whether it had already
+        // overflowed at that moment, and nothing that happens afterwards
+        // changes their answer. A reader attached before the bound was reached
+        // receives every later envelope live, because the collector publishes
+        // regardless of what it retains; failing them would be an alarm about a
+        // gap they do not have.
+        if (snapshot.overflowed) {
           return Stream.concat(replay, failIfIncomplete(snapshot))
+        }
+
+        // Already collected to the end, and complete: the retained trace is the
+        // whole of it, with nothing further to follow.
+        if (snapshot.closed) {
+          return replay
         }
 
         const following = Stream.fromSubscription(live).pipe(
@@ -1210,10 +1223,7 @@ export const start = <Tools extends Record<string, Tool.Any>, E, R, Value = stri
           Stream.takeUntil((envelope) => terminal.has(envelope.event._tag))
         )
 
-        return Stream.concat(
-          Stream.concat(replay, following),
-          Stream.unwrap(Effect.map(Ref.get(trace), failIfIncomplete))
-        )
+        return Stream.concat(replay, following)
       })
     )
 

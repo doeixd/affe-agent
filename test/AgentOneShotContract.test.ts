@@ -255,6 +255,37 @@ describe("Agent.start's handle", () => {
       assert.isTrue(exit._tag === "Success" || exit._tag === "Failure")
     }))
 
+  /**
+   * The failure is about a gap *this reader* has, not about the buffer.
+   *
+   * A reader attached before the bound was reached receives every later
+   * envelope live -- the collector publishes whatever it retains -- so its own
+   * stream is complete and failing it would be an alarm about nothing. The
+   * reader below attaches first and takes a tiny bound; the one after it
+   * attaches late and is missing the middle, which is the real case.
+   */
+  it.effect("a reader attached before the bound was reached is not failed by it", () =>
+    Effect.gen(function*() {
+      const trace = yield* Effect.scoped(
+        Effect.gen(function*() {
+          const started = yield* Agent.start(agent, "how many orders", {
+            traceLimits: { envelopes: 1 }
+          })
+          // Subscribed before anything was dropped, and reading throughout.
+          return yield* Stream.runCollect(started.events)
+        }).pipe(Effect.provide((yield* FakeModel.layer(script)).layer))
+      )
+
+      const tags = trace.map((envelope) => envelope.event._tag)
+      assert.include(tags, "SubmissionStarted", "a live reader saw the beginning")
+      assert.include(tags, "SubmissionCompleted", "and the end")
+      assert.isAbove(
+        trace.length,
+        1,
+        "a live reader receives what the trace declined to retain"
+      )
+    }))
+
   it.effect("a trace that outgrew its bound fails observation and not the run", () =>
     Effect.gen(function*() {
       const result = yield* Effect.scoped(

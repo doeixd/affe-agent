@@ -8,6 +8,16 @@
 `failOnExhaustion`. **P6 was audited and deliberately not built** -- see §8. P7
 remains specified, not implemented.
 
+A review pass over P1 found one more, and it is the same shape as the first
+two: **incompleteness belongs to a reader, not to the buffer.** The first
+version failed *every* `handle.events` subscriber once retention overflowed,
+including one that attached before the bound was reached and therefore received
+every envelope live -- the collector publishes whatever it retains. That is a
+false alarm, and a false alarm is worse than no alarm, because it teaches a
+reader to distrust the error. The question a subscriber's completeness turns on
+is whether the trace had *already* overflowed when it attached; nothing after
+that changes its answer.
+
 P5 replaced `Limits.finalTurn` rather than adding a second spelling beside it:
 nothing outside `src` and the sessions guide used it, and a boolean cannot say
 "fail". Two things it settled that §7.3 left open:
