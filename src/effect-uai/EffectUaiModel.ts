@@ -130,9 +130,10 @@ const fileBlock = (part: Prompt.FilePart) =>
 /**
  * The prompt as effect-uai history.
  *
- * `providerData` is left off every item: Phase 1 of the plan does not claim the
- * provider round trip, and writing an empty slot would suggest it had been
- * considered and found empty rather than not yet attempted.
+ * Provider options cross where the two shapes line up one to one -- a tool
+ * call, a tool result, a reasoning block -- and are reported where they cannot,
+ * which is any block inside a message. See `providerDataOf` and
+ * `declareLostOptions`.
  */
 export const toHistory = (
   prompt: Prompt.Prompt,
@@ -237,6 +238,10 @@ export const toHistory = (
                   })
                 }
                 content.push({ type: "output_image", source: source.value })
+                // Same slot problem as the text block beside it, and the same
+                // answer: an image rides in a message, and a message has one
+                // `providerData` for all of its blocks.
+                yield* declareLostOptions(part.options, "assistant image", onDegraded)
                 break
               }
               default: {
@@ -303,6 +308,19 @@ const declareLostOptions = (
         })
       )
   })
+
+/**
+ * What a returned item carried, as part metadata.
+ *
+ * The mirror of `providerDataOf`. effect-uai hands continuation state back on
+ * the item it belongs to, and dropping it here would make the crossing one-way:
+ * state would survive into a provider and never come out, which reads as a
+ * round trip right up until the moment something needs the value.
+ */
+const metadataOf = (data: unknown): Option.Option<Response.ProviderMetadata> =>
+  typeof data === "object" && data !== null
+    ? Option.some({ [MODULE]: data as Response.ProviderMetadata[string] })
+    : Option.none()
 
 /**
  * A part's provider options, when it has any.
@@ -730,7 +748,11 @@ const handle = (
             type: "tool-call",
             id: call.call_id,
             name: call.name,
-            params: yield* parseArguments(call, method)
+            params: yield* parseArguments(call, method),
+            ...Option.match(metadataOf(call.providerData), {
+              onNone: () => ({}),
+              onSome: (metadata) => ({ metadata })
+            })
           })
         }
         parts.push({
@@ -820,7 +842,11 @@ const batchParts = (
         type: "tool-call",
         id: call.call_id,
         name: call.name,
-        params: yield* parseArguments(call, "generateText")
+        params: yield* parseArguments(call, "generateText"),
+        ...Option.match(metadataOf(call.providerData), {
+          onNone: () => ({}),
+          onSome: (metadata) => ({ metadata })
+        })
       })
     }
     parts.push({

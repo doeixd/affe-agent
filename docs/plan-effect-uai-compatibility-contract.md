@@ -406,6 +406,11 @@ and Effect AI carries the same thing as a part's `options`, so a tool call, a
 tool result and a reasoning block each cross verbatim -- beside the signature
 rather than instead of it.
 
+**And they come back.** A returned item's `providerData` becomes part metadata,
+because state that goes into a provider and never comes out reads as a round
+trip right up until something needs the value. The first version of this only
+did the outbound half and the commit message called it a round trip anyway.
+
 **A message's content blocks cannot.** A uai `Message` has one `providerData`
 slot and many blocks, so options belonging to one block have nowhere to sit.
 Nothing can be done about that here; what is done is saying so, because the

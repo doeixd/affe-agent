@@ -1176,6 +1176,71 @@ describe("EffectUaiModel", () => {
       }))
 
     /**
+     * The other direction. State that goes into a provider and never comes out
+     * reads as a round trip right up until something needs the value, so a
+     * returned item's `providerData` becomes part metadata.
+     */
+    it.effect("what a returned tool call carried comes back as part metadata", () =>
+      Effect.gen(function*() {
+        const returned = { openai: { responseId: "resp-7" } }
+        const { result } = yield* withModel(
+          [
+            { _tag: "ToolCallStart", call_id: "c1", name: "search" },
+            complete(
+              turn(
+                [{
+                  type: "function_call",
+                  call_id: "c1",
+                  name: "search",
+                  arguments: "{\"query\":\"effect\"}",
+                  providerData: returned
+                }],
+                "tool_calls"
+              )
+            )
+          ],
+          () => generateWithTools(Toolkit.make(search))
+        )
+        const response = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(response, failureText(result))
+
+        const call = only(response.content.filter((part) => part.type === "tool-call"))
+        assert.deepStrictEqual(
+          (call.metadata as Record<string, unknown> | undefined)?.["@effect-harness/effect-uai"],
+          returned,
+          "continuation state went in and never came out"
+        )
+      }))
+
+    /**
+     * The image branch is a message block like any other, and was the one place
+     * the slot problem went unsaid.
+     */
+    it.effect("options on an assistant image are reported too", () =>
+      Effect.gen(function*() {
+        const { degradations, result } = yield* withModel(
+          [text("ok"), complete(turn([], "stop"))],
+          () =>
+            LanguageModel.generateText({
+              prompt: Prompt.make([{
+                role: "assistant",
+                content: [{
+                  type: "file",
+                  mediaType: "image/png",
+                  data: "aGVsbG8=",
+                  options: cacheControl
+                }]
+              }])
+            })
+        )
+        assert.isTrue(Exit.isSuccess(result), failureText(result))
+        assert.isDefined(
+          degradations.find((one) => one.feature.includes("assistant image")),
+          "an image block lost its options without a word"
+        )
+      }))
+
+    /**
      * The case that cannot cross, and therefore has to be said out loud: a uai
      * message has one `providerData` slot and many content blocks, so options
      * belonging to one block have nowhere to sit.
