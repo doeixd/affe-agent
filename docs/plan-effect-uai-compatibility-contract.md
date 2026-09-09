@@ -400,203 +400,27 @@ mixed histories. The adapter's request-side reader is deliberately generic (it
 looks for a nested `signature` anywhere in the options) so it tolerates either
 shape on the way back in.
 
-**Phase 1 carried the signature into `Reasoning.signature` and claimed nothing
-further; the audit above has since proved the rest of the path.** What Phase 3
-still owes is the other fields — provider response ids, prompt-cache metadata,
-provider-defined tool metadata, citations — each of which needs the same
-treatment rather than an assumption that the signature's result generalises.
+**Phase 3 carries provider options across the gap where the two shapes line up**
+(2026-09-08). effect-uai gives each history item an opaque `providerData` slot
+and Effect AI carries the same thing as a part's `options`, so a tool call, a
+tool result and a reasoning block each cross verbatim -- beside the signature
+rather than instead of it.
 
----
+**A message's content blocks cannot.** A uai `Message` has one `providerData`
+slot and many blocks, so options belonging to one block have nowhere to sit.
+Nothing can be done about that here; what is done is saying so, because the
+first version dropped them without a word, which is precisely the failure §5
+exists to prevent. It was my own rule broken in my own adapter, and it was
+invisible -- a prompt-cache hint that quietly stops crossing costs money and
+changes nothing observable.
 
-## 5. Loss accounting
-
-Every conversion in the adapter is classified, per plan §3.2:
-
-* **Exact** — meaning preserved.
-* **Degraded** — output is valid but has lost information; this must be
-  observable, not inferred.
-* **Unsupported** — continuing would misrepresent semantics; fail **before**
-  issuing the model request or **before** committing the result.
-
-The rule that makes this worth having: **a `Degraded` conversion is never
-silent, and an `Unsupported` one never proceeds.** A bridge that quietly drops a
-file, a refusal distinction, or reasoning continuation state is worse than no
-bridge, because durable history then looks authoritative while being false.
-
-The exact carrier for the classification is an implementation choice for
-Phase 1. What is fixed here is that one exists, that it names the feature and
-both sides of the conversion, and that `Unsupported` is a failure rather than a
-log line.
-
----
-
-## 6. Errors
-
-effect-uai's service fails with its own `AiError`; the Effect AI hooks must fail
-with `AiError.AiError`. The invariant is that a translation failure and a
-provider failure stay distinguishable, since one is our bug and the other is
-not. A translation failure that is really an `Unsupported` row must surface as
-that, and not be laundered into a generic provider error.
-
-**The failure *class* has to survive too, and that is not cosmetic.** Effect AI
-puts `isRetryable` on the reason, so an `ExecutionPlan` decides what to do from
-the class alone. Flattening effect-uai's taxonomy into one reason makes a plan
-retry a content-filtered request forever and give up on a rate limit — and
-cross-ecosystem fallback (plan §9) is exactly what would then misbehave.
-
-| effect-uai | Effect AI reason | retryable |
-| --- | --- | --- |
-| `RateLimited` | `RateLimitError` (carrying `retryAfter`) | yes |
-| `AuthFailed` (`billing` / `quota`) | `QuotaExhaustedError` | no |
-| `AuthFailed` (`auth` / `permission`) | `AuthenticationError` | no |
-| `ContentFiltered` | `ContentPolicyError` | no |
-| `ContextLengthExceeded`, `InvalidRequest`, `Unsupported` | `InvalidRequestError` | no |
-| `IncompleteTurn` | `InvalidOutputError` | yes |
-| `Cancelled` | `UnknownError` | no |
-| `Unavailable`, `Timeout`, `GenerationFailed` | `InternalProviderError` | yes |
-
-`Cancelled` is the judgement call: a cancelled request was usually cancelled on
-purpose, so re-issuing it automatically is not the caller's intent, and no
-Effect AI reason means "cancelled". `NetworkError` is unreachable from here — it
-requires HTTP request details this adapter never sees.
-
-The human text comes from effect-uai's own `describe`, whose docs call it prose
-rather than a contract, so the `_tag` decides the reason and `describe` only
-fills the description.
-
-## 7. Acceptance for Phase 1
-
-Phase 1 ships when all of the following hold, per plan §11:
-
-1. An existing Affe `AgentSession` runs against the adapter unchanged.
-2. A tool call passes through the adapter and is executed by Affe
-   `ToolExecution`, not by effect-uai.
-3. Permission and approval behaviour is identical to an official Effect AI
-   provider.
-4. Canonical history contains the same semantic turn as an official provider.
-5. Every `required` row in §4 has a test.
-6. Every `Unsupported` row has a test proving it fails, for the intended reason.
-7. `generateText` is proven to preserve reasoning text (§2.2) — the test that
-   would have caught the `turn()` implementation.
-8. A structured-output request decodes to the same value an official provider
-   would have produced (§4.0), since `AgentOutput` depends on it.
-9. `@effect-uai/core` is not a dependency of the default package graph.
-
-And the streaming acceptance from the plan, which Phase 2 inherits: every opened
-text / reasoning / tool-params stream is closed; argument fragments keep their
-call id and order; interleaved calls do not merge; the assembled call matches
-the fragments; a partial-stream failure obeys the no-mixed-fallback rule;
-cancellation does not fabricate a completed turn.
-
----
-
-## 8. What Phase 0 deliberately does not decide
-
-* The package or subpath name for the adapter. §3.1 requires only that
-  `affe-agent` core has no required dependency on `@effect-uai/core`; the
-  workspace question (§10) is independently useful and should not be made to
-  wait on this.
-* Whether an effect-uai `Toolkit` can be imported *into* Affe. That is Phase 5,
-  it is harder because of the Standard Schema boundary, and it must not be
-  promoted to a normal authoring path if it costs a user-visible cast.
-* Whether Effect AI should become replaceable inside the kernel. Phase 6, and
-  only on adapter evidence — §4.2's rule is to do less until the boundary is
-  demonstrably insufficient.
-
----
-
-## 9. What writing the adapter changed
-
-Three corrections, kept here rather than quietly folded into the tables above,
-because a contract that only ever agrees with its implementation is not being
-used as a contract.
-
-**Tool arguments do not cross for free (§4.1).** The first draft claimed
-`arguments` was a string on both sides and therefore crossed without a
-re-encode. It is not: Effect AI's `params` is `unknown` — a parsed value — on
-both the prompt and the response side, and it never retains the string the
-provider sent. So the crossing is `JSON.parse` one way and `JSON.stringify` the
-other, the original bytes are unrecoverable, and the row is `Degraded`. The
-claim was wrong in the direction that matters: it asserted an exactness the code
-cannot deliver.
-
-**The ownership rule is structural (§4.2).** `SignalTool` removes the fake
-handler the contract had assumed was necessary.
-
-**Structured output cannot use `StructuredFormat.fromEffectSchema` (§4.0).**
-That helper constrains its schema to one with no decoding services, and
-`responseFormat.schema` is a `Schema.Top` that may have them. The adapter hands
-over the JSON schema instead — which is all the wire needs, since Effect AI
-decodes the result against the original schema itself.
-
-**The post-commit review found one defect (§4.3).** The adapter closed every
-streamed tool-call fragment on `TurnComplete`, including ones the finished turn
-never acknowledged. Because Affe rebuilds a call from the params stream rather
-than only from the assembled `tool-call` part, that unearned close was enough to
-fabricate a call the model never made and hand it to `ToolExecution`. Fixed, and
-the row is now a test that fails when the guard is removed.
-
-**The rows were re-run against effect-uai's own `MockProvider`
-(`test/EffectUaiMockProvider.test.ts`).** Every other test drives a provider
-written here, from the same declarations the adapter was written from — a good
-test of the translation and a poor test of whether those declarations were read
-correctly, since a misreading of the event protocol would be baked into the fake
-and the adapter alike and every row would still pass. Their fixture derives the
-deltas itself, so it fails if the reading was wrong. It did not.
-
-That is still not evidence against a **real** provider: no HTTP, no provider
-quirks, and their mock could share a misconception with their own adapters.
-Nothing here has yet made a network call, and the first one may well find
-something.
-
-**Phase 2's invariant tests found a second defect (§6).** Every effect-uai
-failure was collapsed into `InternalProviderError` carrying the error's
-`message` — which is empty on their tagged errors, so a provider outage reached
-the operator as "Internal provider error:" and nothing else. The classification
-went with it, and `isRetryable` lives on the reason, so an `ExecutionPlan` would
-have retried a content-filtered request forever and given up on a rate limit.
-§6 now maps the taxonomy, and the test asserts the class rather than the text.
-
-The two invariants that prompted those tests both hold: a provider failure
-mid-stream stays the provider's failure rather than becoming a complaint about a
-missing `TurnComplete`, cancellation stays an interruption, and no `finish` part
-is fabricated for a turn that never completed.
-
-Two things are also true of the implementation that this contract does not
-claim:
-
-* **Phase 2's acceptance is now met** (2026-09-08). Streaming arrived early
-  because `LanguageModel.make` requires both hooks and §2.2 forces
-  `generateText` through `streamTurn`; the acceptance came after. Every opened
-  text and reasoning stream is closed, argument fragments keep their call id
-  and order while two calls are in flight, the assembled calls match the
-  fragments, an abandoned fragment is not closed, cancellation stays an
-  interruption, and no `finish` part is fabricated for a turn that never
-  completed.
-
-  The no-mixed-fallback rule is the one worth naming, because the guard is not
-  the adapter's: `AgentTurn` streams with `preventFallbackOnPartialStream`, so
-  what an effect-uai step has to do is *participate* -- fail in the way the
-  guard expects. It does. A step that emitted nothing falls back and the run is
-  the fallback's; a streamed step that had already emitted does not, and the
-  run fails rather than showing one message made of two providers' words.
-  Turning the guard off fails that row, which is how it is known to be the
-  thing under test.
-
-  Worth knowing if you write one of these: the rule applies to the *streamed*
-  path only. A batch call that fails has emitted nothing to an observer, so
-  falling back there is safe and correct, and the first version of the test
-  passed for that reason rather than the intended one.
-
-* **Phase 3's multimodal half is done** (2026-09-08). A finished image crosses
-  as a file part on both paths, preview frames are dropped so one image is not
-  two, a url citation crosses as a source with an id from Effect AI's own
-  generator, and an assistant image replayed into a request crosses as
-  `output_image` rather than being refused. What Phase 3 still owes is the
-  provider-metadata round trip for fields other than the reasoning signature --
-  response ids, prompt-cache metadata, provider-defined tool metadata -- each
-  needing the same treatment §4.6 gave the signature rather than an assumption
-  that its result generalises.
+What remains unproven is per-provider rather than structural: that a *given*
+provider reads back what it wrote. The transport is measured by
+`test/ProviderContinuation.test.ts` for Affe's own boundaries and by the rows
+above for this one; whether Anthropic's cache control still applies after a
+round trip through effect-uai is a question only a network test answers, and
+§9's cross-ecosystem note still stands: this adapter writes its signature under
+its own namespaced key, which an official Anthropic adapter would not read.
 
 * **Dynamic tools are untested.*** **Dynamic tools are untested.** Tools whose parameters are a raw JSON schema
   rather than an Effect `Schema` go through the same path, but no `toolSource`

@@ -158,6 +158,7 @@ export const toHistory = (
             } else {
               content.push(yield* fileBlock(part))
             }
+            yield* declareLostOptions(part.options, `user ${part.type}`, onDegraded)
           }
           items.push({ type: "message", role: "user", content })
           break
@@ -168,6 +169,11 @@ export const toHistory = (
             switch (part.type) {
               case "text": {
                 content.push({ type: "output_text", text: part.text })
+                // A message holds many content blocks and one `providerData`
+                // slot, so options on an individual block have nowhere to go.
+                // Reported rather than dropped: a provider hint that vanished
+                // silently is the failure §5 exists to prevent.
+                yield* declareLostOptions(part.options, "assistant text", onDegraded)
                 break
               }
               case "reasoning": {
@@ -176,9 +182,15 @@ export const toHistory = (
                 // signature does, and it is the field a provider actually needs
                 // to continue the turn -- so carry that and declare the rest.
                 const signature = signatureOf(part.options)
+                const reasoningData = providerDataOf(part.options)
                 items.push({
                   type: "reasoning",
-                  ...(Option.isSome(signature) ? { signature: signature.value } : {})
+                  ...(Option.isSome(signature) ? { signature: signature.value } : {}),
+                  // Beside the signature, not instead of it: the signature is
+                  // the field a provider reads, and the rest rides opaquely so
+                  // a round trip through this adapter does not quietly shorten
+                  // what the provider sent.
+                  ...(Option.isSome(reasoningData) ? { providerData: reasoningData.value } : {})
                 })
                 yield* onDegraded(
                   new Compatibility.Degradation({
@@ -191,11 +203,13 @@ export const toHistory = (
                 break
               }
               case "tool-call": {
+                const callData = providerDataOf(part.options)
                 items.push({
                   type: "function_call",
                   call_id: part.id,
                   name: part.name,
-                  arguments: JSON.stringify(part.params)
+                  arguments: JSON.stringify(part.params),
+                  ...(Option.isSome(callData) ? { providerData: callData.value } : {})
                 })
                 yield* onDegraded(
                   new Compatibility.Degradation({
@@ -250,10 +264,12 @@ export const toHistory = (
                 reason: "effect-uai has no approval-response history item"
               })
             }
+            const resultData = providerDataOf(part.options)
             items.push({
               type: "function_call_output",
               call_id: part.id,
-              output: typeof part.result === "string" ? part.result : JSON.stringify(part.result)
+              output: typeof part.result === "string" ? part.result : JSON.stringify(part.result),
+              ...(Option.isSome(resultData) ? { providerData: resultData.value } : {})
             })
           }
           break
@@ -262,6 +278,45 @@ export const toHistory = (
     }
     return items
   })
+
+/**
+ * Say so when a block's provider options cannot cross.
+ *
+ * A uai `Message` has one `providerData` slot and many content blocks, so
+ * options belonging to one block have nowhere to sit. Nothing can be done
+ * about that here; what can be done is not pretending it did not happen.
+ */
+const declareLostOptions = (
+  options: unknown,
+  where: string,
+  onDegraded: Compatibility.OnDegraded
+) =>
+  Option.match(providerDataOf(options), {
+    onNone: () => Effect.void,
+    onSome: () =>
+      onDegraded(
+        new Compatibility.Degradation({
+          feature: `provider options on a ${where} block`,
+          source: EFFECT_AI,
+          target: EFFECT_UAI,
+          reason: "an effect-uai message carries one providerData slot for all of its content blocks"
+        })
+      )
+  })
+
+/**
+ * A part's provider options, when it has any.
+ *
+ * effect-uai gives each history item an opaque `providerData` slot, and Effect
+ * AI carries the same thing as a part's `options`. Where the two line up one
+ * to one -- a tool call, a tool result, a reasoning block -- the value crosses
+ * verbatim, which is what lets a provider's continuation state survive a
+ * replay through this adapter.
+ */
+const providerDataOf = (options: unknown): Option.Option<unknown> =>
+  typeof options === "object" && options !== null && Object.keys(options).length > 0
+    ? Option.some(options)
+    : Option.none()
 
 /**
  * The reasoning signature, if the part carries one.

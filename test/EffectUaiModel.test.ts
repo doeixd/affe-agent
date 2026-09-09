@@ -1051,4 +1051,152 @@ describe("EffectUaiModel", () => {
         )
       }))
   })
+
+  /**
+   * A tool discovered at runtime, whose parameters are a JSON Schema rather
+   * than an Effect `Schema`. This is what `/mcp` builds for every tool a server
+   * offers, so it is the shape most tools crossing this boundary will have --
+   * and it went untested through Phases 1 to 3 because every row until now
+   * declared its tools at compile time.
+   */
+  describe("a dynamic tool, as MCP discovery produces", () => {
+    const discovered = Tool.dynamic("lookup_order", {
+      description: "look an order up by id",
+      // A server's JSON Schema, verbatim: `Tool.dynamic`'s JSON-Schema mode.
+      parameters: {
+        type: "object",
+        properties: { orderId: { type: "string", description: "the order id" } },
+        required: ["orderId"],
+        additionalProperties: false
+      },
+      failure: Schema.Unknown
+    })
+
+    it.effect("is described to the model with the server's own schema", () =>
+      Effect.gen(function*() {
+        const { recorder, result } = yield* withModel(
+          [text("ok"), complete(turn([], "stop"))],
+          () => generateWithTools(Toolkit.make(discovered))
+        )
+        assert.isTrue(Exit.isSuccess(result), failureText(result))
+
+        const tools = only(yield* recorder.requests).tools
+        assert.isDefined(tools)
+        const tool = tools["lookup_order"]
+        assert.isDefined(tool)
+        assert.strictEqual(tool.description, "look an order up by id")
+
+        // The descriptor carries the server's schema rather than a placeholder:
+        // a model told `{}` would be told nothing about the arguments it is
+        // meant to produce.
+        const rendered = tool.inputSchema["~standard"].jsonSchema.input({ target: "draft-2020-12" })
+        assert.deepStrictEqual(rendered["required"], ["orderId"])
+        assert.property(rendered["properties"] as Record<string, unknown>, "orderId")
+      }))
+
+    it.effect("and its call comes back with arguments Affe can execute", () =>
+      Effect.gen(function*() {
+        const { result } = yield* withModel(
+          [
+            { _tag: "ToolCallStart", call_id: "o1", name: "lookup_order" },
+            { _tag: "ToolCallArgsDelta", call_id: "o1", delta: "{\"orderId\":\"A-7\"}" },
+            complete(
+              turn(
+                [{
+                  type: "function_call",
+                  call_id: "o1",
+                  name: "lookup_order",
+                  arguments: "{\"orderId\":\"A-7\"}"
+                }],
+                "tool_calls"
+              )
+            )
+          ],
+          () => generateWithTools(Toolkit.make(discovered))
+        )
+        const response = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(response, failureText(result))
+
+        const call = only(response.toolCalls)
+        assert.strictEqual(call.name, "lookup_order")
+        assert.deepStrictEqual(call.params, { orderId: "A-7" })
+      }))
+  })
+
+  /**
+   * §4.6's other half. The signature was proved to survive Affe's own
+   * boundaries by `test/ProviderContinuation.test.ts`; this is the narrower
+   * question of whether *this adapter* carries provider state across the
+   * ecosystem gap, rather than quietly shortening what the provider sent.
+   */
+  describe("provider options across the boundary", () => {
+    const cacheControl = { anthropic: { cacheControl: { type: "ephemeral" } } } as const
+
+    it.effect("a tool call's and a tool result's options ride the item's providerData", () =>
+      Effect.gen(function*() {
+        const { recorder, result } = yield* withModel(
+          [text("ok"), complete(turn([], "stop"))],
+          () =>
+            LanguageModel.generateText({
+              prompt: Prompt.make([
+                {
+                  role: "assistant",
+                  content: [{
+                    type: "tool-call",
+                    id: "c1",
+                    name: "search",
+                    params: { query: "effect" },
+                    options: cacheControl
+                  }]
+                },
+                {
+                  role: "tool",
+                  content: [{
+                    type: "tool-result",
+                    id: "c1",
+                    name: "search",
+                    result: "found",
+                    isFailure: false,
+                    providerExecuted: false,
+                    options: cacheControl
+                  }]
+                }
+              ])
+            })
+        )
+        assert.isTrue(Exit.isSuccess(result), failureText(result))
+
+        const history = only(yield* recorder.requests).history
+        const call = history.find((item) => item.type === "function_call")
+        const output = history.find((item) => item.type === "function_call_output")
+        assert.isDefined(call)
+        assert.isDefined(output)
+        assert.deepStrictEqual(call?.providerData, cacheControl)
+        assert.deepStrictEqual(output?.providerData, cacheControl)
+      }))
+
+    /**
+     * The case that cannot cross, and therefore has to be said out loud: a uai
+     * message has one `providerData` slot and many content blocks, so options
+     * belonging to one block have nowhere to sit.
+     */
+    it.effect("options on a message block are reported, not dropped in silence", () =>
+      Effect.gen(function*() {
+        const { degradations, result } = yield* withModel(
+          [text("ok"), complete(turn([], "stop"))],
+          () =>
+            LanguageModel.generateText({
+              prompt: Prompt.make([{
+                role: "assistant",
+                content: [{ type: "text", text: "cached prefix", options: cacheControl }]
+              }])
+            })
+        )
+        assert.isTrue(Exit.isSuccess(result), failureText(result))
+
+        const notice = degradations.find((one) => one.feature.includes("provider options"))
+        assert.isDefined(notice, "a provider hint vanished without a word")
+        assert.include(notice.reason, "one providerData slot")
+      }))
+  })
 })
