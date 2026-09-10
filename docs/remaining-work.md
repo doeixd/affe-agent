@@ -375,12 +375,13 @@ and pin the state it starts from.*
     `test/FailureDisposition.test.ts` pins both sides of it (there was no
     test). `Agent.describe().tools` entries now carry `failureMode`,
     `alone`, `readonly` and `idempotent` (most of T6.4), so the
-    agent-level policy does not read as a promise a tool breaks. Open:
-    `failureHandling: "returned-to-model" | "propagated" |
-    "returned-to-program"` on `ToolCallFailed` beside `returnedToModel`
-    (T6.2) and its five consumers (T6.3), nested Code Mode calls reporting
-    `returned-to-program` (T6.5), and the describe entry's source namespace
-    and provider-executed flag. Medium.
+    agent-level policy does not read as a promise a tool breaks.
+    **T6.2/T6.3/T6.5 deferred, deliberately:** nested Code Mode calls do not
+    emit `ToolCallFailed` (they report through `ToolCallProgress`), so the
+    only dispositions that occur are the two `returnedToModel: boolean`
+    already says; a three-valued field would be the same fact twice across
+    five consumers. Worth doing when a third disposition exists. Open: the
+    describe entry's source namespace and provider-executed flag. Small.
 
     ```text
     verify: grep "readonly failureMode: \"error\" | \"return\"" src/Agent.ts
