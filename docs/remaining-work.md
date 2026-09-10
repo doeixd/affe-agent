@@ -470,11 +470,6 @@ and pin the state it starts from.*
      verify: exists bench/run.ts
      ```
 
-101. **Prompt-cache stability (plan E9, §11).** Document it as a
-     `ContextTransform` concern, emit 93's exposed set in a stable order,
-     and assert with a recording model that an unchanged selection yields
-     byte-identical tool lists. Small; lands with 93.
-
 102. **Cloudflare AI Gateway option (plan E10, §12).** An optional model
      option in `/cloudflare`. Adopter-triggered; not built speculatively.
 

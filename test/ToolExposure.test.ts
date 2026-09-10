@@ -126,6 +126,33 @@ describe("progressive tool exposure (item 93)", () => {
       assert.deepStrictEqual(yield* ran, [])
     }))
 
+  it.effect("an unchanged selection sends a byte-identical tool list, so a provider's prompt cache survives (item 101)", () =>
+    Effect.gen(function*() {
+      // A tool list that changes between requests can cost a provider's
+      // prefix cache. Two requests after one discovery, with no new search
+      // between them, must carry the same tools in the same order. The order
+      // is the toolkit's -- Effect AI filters the toolkit by `oneOf` rather
+      // than following `oneOf`'s order -- so it is stable by construction;
+      // this pins it.
+      const { agent } = yield* setup(progressive)
+      const { recorder } = yield* withSession(
+        [
+          { toolCalls: [{ id: "d1", name: "discover_tools", params: { query: "routine operation" } }] },
+          { toolCalls: [{ id: "t1", name: "tool_1", params: {} }] },
+          { toolCalls: [{ id: "t2", name: "tool_2", params: {} }] },
+          { text: "done" }
+        ],
+        agent,
+        ({ session }) => AgentSession.prompt(session, "go")
+      )
+      const offered = yield* recorder.tools
+      assert.strictEqual(offered.length, 4)
+      assert.notDeepEqual(offered[1], offered[0], "discovery did not change the list")
+      assert.deepStrictEqual(offered[2], offered[1])
+      assert.deepStrictEqual(offered[3], offered[1])
+      assert.strictEqual(JSON.stringify(offered[3]), JSON.stringify(offered[1]))
+    }))
+
   it.effect("eager with no rule leaves requests exactly as they were", () =>
     Effect.gen(function*() {
       const { agent } = yield* setup(ToolExposure.eager())

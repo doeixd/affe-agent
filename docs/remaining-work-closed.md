@@ -2236,3 +2236,18 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: grep "a signature survives durable replay, batch and streamed" test/ProviderContinuation.test.ts
      verify: grep "context.turnIndex === 2" test/DurableReplayHistory.test.ts
      ```
+
+101. ~~**Prompt-cache stability (plan E9, §11).**~~ — landed 2026-09-10.
+     The guide's dynamic-instructions section says what per-turn text costs a
+     provider's prefix cache (its own example appends a turn number) and that
+     the library adds none. Under progressive exposure the tool list changes
+     only when a discovery changes the selection, and its order is the
+     toolkit's -- Effect AI filters the toolkit by `toolChoice.oneOf` rather
+     than following `oneOf`'s order -- so an unchanged selection is a
+     byte-identical list; `test/ToolExposure.test.ts` pins it, and a
+     mutation letting the selection drift with history length is caught.
+
+     ```text
+     verify: grep "byte-identical tool list" test/ToolExposure.test.ts
+     verify: grep "It is not free, though." docs/guide-sessions.md
+     ```

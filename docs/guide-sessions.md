@@ -101,6 +101,15 @@ ContextTransform.appendSystem((context) =>
 It is recomputed every turn and never enters canonical history, which is what
 makes that safe.
 
+**It is not free, though.** Providers cache a request's prompt by prefix, and
+text that changes every turn -- the turn number above, a clock, a counter --
+invalidates everything after the point where it sits. Put changing text as
+late in the prompt as the transform allows, or leave it out when the model
+does not need it; the library appends nothing of its own that changes per
+turn. The tool list is part of the same prefix: under `ToolExposure.progressive`
+it changes only when a discovery changes the selection, and is sent in the
+toolkit's own order, so an unchanged selection is a byte-identical list.
+
 ## Streaming
 
 Streaming is a property of the request, not of the agent — the same `Agent`
