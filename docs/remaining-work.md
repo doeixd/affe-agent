@@ -485,16 +485,24 @@ acceptance test for 105, 107 and 108.*
      verify: exists src/testing/DurableEquivalence.ts
      ```
 
-105. **Host scheduling, captured per durable attempt (plan E13, §17).** No
-     host scheduling layer exists, and a recovered durable run takes its tool
-     strategy from the replacement process's agent definition. Add a
-     host-provided `ToolScheduling` that can only tighten the agent's
-     concurrency, capture the effective strategy at admission, and for
-     undecided calls on recovery apply the stricter of captured and current
-     permission -- so a revocation still applies and a new grant does not
-     reach an old run. Medium.
+105. **Host scheduling, captured per durable attempt (plan E13, §17) --
+     first slice landed 2026-09-10.** `ToolScheduling` (kernel) lets a host
+     serialize calls by key across turns and sessions, cap concurrency, or
+     combine both; it wraps each call and can only make it wait, so it
+     tightens the agent's strategy and cannot widen it. Under `/durable` the
+     agent's strategy is journalled at a submission's first execution (the
+     `execution strategy` activity), so a run recovered by a process
+     configured differently runs its tools as admitted --
+     `test/DurableEquivalence.test.ts` crashes a `Sequential` run and
+     recovers it in a `Parallel` process. Still open: (a) I17.3, applying the
+     stricter of the captured and the current permission to an undecided call
+     on recovery -- needs a policy that can be re-created from data (Q6);
+     (b) capturing the host scheduling's description with the attempt and
+     refusing a recovery whose host would widen it.
 
      ```text
+     verify: exists src/ToolScheduling.ts
+     verify: grep "execution-strategy" src/durable/DurableAgent.ts
      verify: grep "permission: durablePermission," src/durable/DurableSubmission.ts
      ```
 

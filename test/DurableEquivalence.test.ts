@@ -1,12 +1,13 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Effect, Schema } from "effect"
+import { Effect, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as ToolExecution from "../src/ToolExecution.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
 import { DurableEquivalence } from "../src/testing/index.js"
 
@@ -70,6 +71,51 @@ const baseline = (stream: boolean) =>
         (observed) => Effect.sync(() => baselines.set(stream, observed))
       )
   })
+
+describe("a recovered run keeps the tool strategy it was admitted with (item 105)", () => {
+  it.live("a replacement configured Parallel still runs a Sequential submission's batch one call at a time", () =>
+    Effect.gen(function*() {
+      // The first process runs the agent Sequential and dies after the model
+      // answered, before either tool ran. The replacement's agent is
+      // Parallel. The strategy was journalled at the first execution, so the
+      // recovered batch runs as admitted -- and the whole run equals the
+      // uninterrupted Sequential one.
+      const flight = yield* Ref.make({ now: 0, max: 0 })
+      const Slow = Tool.make("slow", { parameters: Schema.Struct({ id: Schema.String }), success: Schema.String })
+      const scenario = DurableEquivalence.scenario({
+        agent: (effects, process) =>
+          Agent.make({
+            tools: [
+              Agent.tool(Slow, ({ id }) =>
+                Effect.acquireUseRelease(
+                  Ref.update(flight, (f) => ({ now: f.now + 1, max: Math.max(f.max, f.now + 1) })),
+                  () => Effect.andThen(Effect.sleep("40 millis"), effects.record(id)),
+                  () => Ref.update(flight, (f) => ({ ...f, now: f.now - 1 }))
+                ).pipe(Effect.as(`done ${id}`)))
+            ],
+            toolExecution: process === "first" ? ToolExecution.Sequential : ToolExecution.Parallel,
+            loop: AgentLoop.bounded(4)
+          }),
+        turns: [
+          { toolCalls: [{ id: "s1", name: "slow", params: { id: "a" } }, { id: "s2", name: "slow", params: { id: "b" } }] },
+          { text: "both done" }
+        ],
+        prompt: "do both"
+      })
+
+      const straight = yield* DurableEquivalence.straight(scenario, { database })
+      assert.strictEqual((yield* Ref.get(flight)).max, 1, "the Sequential baseline overlapped")
+      yield* Ref.set(flight, { now: 0, max: 0 })
+
+      const recovered = yield* DurableEquivalence.crashed(scenario, {
+        database,
+        at: turnFailpoints.qualified("after-model-response")
+      })
+      assert.deepStrictEqual(recovered.split, [1, 1])
+      assert.strictEqual((yield* Ref.get(flight)).max, 1, "the replacement ran the recovered batch with its own strategy")
+      assert.deepStrictEqual(recovered.observation, straight)
+    }), 90_000)
+})
 
 describe("durable recovery is indistinguishable from never having crashed (item 104)", () => {
   /**

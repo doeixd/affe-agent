@@ -224,6 +224,45 @@ export const durableInput = (
     }
   })
 
+/** `ToolExecution.Strategy`, as the journal holds it. */
+const StrategySchema = Schema.Union([
+  Schema.TaggedStruct("Sequential", {}),
+  Schema.TaggedStruct("Parallel", {}),
+  Schema.TaggedStruct("Concurrency", { limit: Schema.Number }),
+  Schema.TaggedStruct("PerTool", {
+    limits: Schema.Record(Schema.String, Schema.Union([Schema.Number, Schema.Literal("unbounded")])),
+    defaultLimit: Schema.Union([Schema.Number, Schema.Literal("unbounded")]),
+    total: Schema.Union([Schema.Number, Schema.Literal("unbounded")])
+  })
+])
+
+/**
+ * The agent's tool execution strategy, as this submission first ran it.
+ *
+ * Journalled as the body's first activity, so a recovered attempt runs its
+ * tools the way the original did -- not the way whatever process takes the
+ * shard over happens to be configured. A replacement deployed with
+ * `Parallel` where the original was `Sequential` would otherwise run a
+ * recovered batch concurrently that the original serialized. Captured at the
+ * first execution rather than in the payload, so a journal written before this
+ * existed still replays: its first replay captures the strategy then.
+ *
+ * A decoded `PerTool` has a plain prototype where `perTool` builds a null
+ * one; `ToolExecution` reads its limits with `Object.hasOwn`, so both behave
+ * alike.
+ */
+export const capturedStrategy = (
+  strategy: AgentDefinition<any, any, any>["toolExecution"],
+  prefix: string
+): Effect.Effect<AgentDefinition<any, any, any>["toolExecution"], never, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> =>
+  Activity.make({
+    // Not `tool-…`: that prefix names tool-call activities, and the SD3
+    // census (`test/ActivityBoundaries.test.ts`) classifies by it.
+    name: `${prefix}execution-strategy`,
+    success: StrategySchema,
+    execute: Effect.succeed(strategy)
+  })
+
 export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
   agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
@@ -350,10 +389,12 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       // Decisions are journalled like tool calls: see `DurablePermission`.
       const durablePermission = yield* DurablePermission.wrap(agent.permission)
+      const toolExecution = yield* capturedStrategy(agent.toolExecution, "")
       const durableAgent = {
         ...agent,
         toolkit: durableTools,
         permission: durablePermission,
+        toolExecution,
         input: durableInput(agent.input, "")
       } as AgentDefinition<Tools, any, any, any, any, any>
 

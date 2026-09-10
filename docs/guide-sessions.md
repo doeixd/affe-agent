@@ -282,6 +282,19 @@ not company: it has settled, so a provider-hosted search beside an answer is
 fine. Two tools here carry it: an `AgentOutput`'s reporting tool, so an action
 beside the answer never runs, and the compaction controller's `new_context`.
 
+The agent's strategy says how concurrently one response's calls may run; the
+*host* can add constraints of its own with `ToolScheduling`, provided as a
+layer. `ToolScheduling.serialize("rooms", (call) => call.name === "book_room"
+? "rooms" : undefined)` keeps every `book_room` apart -- across turns and
+sessions, which a strategy scoped to one response cannot -- while other calls
+still overlap; `maxConcurrent(n)` caps every call in the process; `all(...)`
+applies several. A scheduling wraps each call and can only make it wait, never
+start one, so it tightens the agent's concurrency and cannot widen it: a host
+allowing ten does not make a `Sequential` agent run two. A queued call is not
+announced; `ToolCallStarted` means it runs. Under `/durable` the agent's
+strategy is journalled at a submission's first execution, so a run recovered
+by a differently configured process runs its tools as it was admitted.
+
 ## Tool progress
 
 A tool handler may report intermediate results while it is still running, via

@@ -77,6 +77,7 @@ const familyOf = (name: string): string => {
   if (/permission-\d+-/.test(name)) return "permission decision"
   if (/-drain-\d+$/.test(name)) return "channel drain"
   if (/\/finish$/.test(name)) return "session projection"
+  if (/(^|[/:])execution-strategy$/.test(name)) return "execution strategy"
   if (/^tool-|-tool-/.test(name)) return "tool call"
   return `unclassified: ${name}`
 }
@@ -139,8 +140,13 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
        * in one of these lists, and the assertion fails until somebody decides
        * what it means for replay. The failure is the notification.
        */
+      // `execution strategy` (item 105): the agent's tool strategy, journalled
+      // once per submission so a recovered attempt runs its tools as admitted
+      // rather than as the replacement process is configured. Replaying it
+      // returns the recorded strategy; it has no side effect to repeat.
       assert.deepStrictEqual(families, [
         "channel drain",
+        "execution strategy",
         "model call",
         "permission decision",
         "tool call"
@@ -196,6 +202,7 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
       const families = [...new Set((yield* Ref.get(seen)).map(familyOf))].sort()
       assert.deepStrictEqual(families, [
         "channel drain",
+        "execution strategy",
         "model call",
         "session projection"
       ])

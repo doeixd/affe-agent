@@ -684,10 +684,13 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const durablePermission = yield* DurablePermission.wrap(agent.permission, {
         prefix: scopePrefix
       })
+      // As first run, not as this process is configured: see `capturedStrategy`.
+      const toolExecution = yield* DurableAgent.capturedStrategy(agent.toolExecution, scopePrefix)
       const durableAgent = {
         ...agent,
         toolkit: durableTools,
         permission: durablePermission,
+        toolExecution,
         input: DurableAgent.durableInput(agent.input, scopePrefix)
       } as AgentDefinition<Tools, any, any, any, any, any>
 

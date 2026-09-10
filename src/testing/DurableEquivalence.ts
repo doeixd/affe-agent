@@ -60,12 +60,23 @@ export interface Effects {
   readonly record: (label: string) => Effect.Effect<void>
 }
 
+/**
+ * Which process of a run is building the agent: the one that runs first (and,
+ * in a crashed run, dies), or the one that takes over. A straight run has only
+ * a first.
+ */
+export type Process = "first" | "second"
+
 export interface Scenario<Tools extends Record<string, Tool.Any>, Value, Input> {
   /**
    * The agent, built afresh in each process. Its tools should report what
    * they did through `effects`, which is how "each ran once" is checked.
+   *
+   * `process` lets the replacement be configured differently -- a new
+   * deployment taking over an old run -- to check that what a submission was
+   * admitted with outlives the process that admitted it.
    */
-  readonly agent: (effects: Effects) => AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>
+  readonly agent: (effects: Effects, process: Process) => AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>
   /**
    * The model's turns. Picked by the conversation, not by call count
    * (`TestLanguageModel`'s `select: "history"`), so a process that takes over
@@ -147,6 +158,7 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
   sql: Layer.Layer<SqlClient.SqlClient>,
   effects: Effects,
   lockExpiration: Duration.Input,
+  process: Process,
   park?: Park
 ) =>
   Effect.gen(function*() {
@@ -181,7 +193,7 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
       )
     )
     const runtime = yield* Layer.build(
-      DurableAgentClient.layer(NAME, scenario.agent(effects), {
+      DurableAgentClient.layer(NAME, scenario.agent(effects, process), {
         ...stores,
         pollInterval: Duration.millis(50)
       }).pipe(Layer.provideMerge(engine), Layer.provideMerge(model), Layer.provideMerge(failpoint))
@@ -219,7 +231,7 @@ export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
     Effect.gen(function*() {
       const sql = yield* options.database
       const { effects, recorded } = yield* recording
-      const { client, recorder } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second")
+      const { client, recorder } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
       const session = yield* client.createSession({ sessionId: SESSION })
       const result = yield* session.prompt(scenario.prompt, { stream: scenario.stream ?? false })
       return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded)
@@ -258,7 +270,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       const first = yield* Effect.scoped(
         Effect.gen(function*() {
-          const { client, recorder } = yield* processOver(scenario, sql, effects, lock, {
+          const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "first", {
             location: options.at,
             occurrence,
             arrived
@@ -278,7 +290,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       return yield* Effect.scoped(
         Effect.gen(function*() {
-          const { client, recorder } = yield* processOver(scenario, sql, effects, lock)
+          const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "second")
           const session = yield* client.session(SESSION)
           // Retried: until the dead process's shard lock expires, the
           // submission is not this process's to finish.

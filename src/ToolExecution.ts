@@ -19,6 +19,7 @@ import * as EventBus from "./internal/eventBus.js"
 import * as Observation from "./internal/observation.js"
 import * as Telemetry from "./internal/telemetry.js"
 import { turnFailpoints } from "./internal/turnFailpoints.js"
+import * as ToolScheduling from "./ToolScheduling.js"
 import * as Namespace from "./internal/namespace.js"
 
 /**
@@ -821,14 +822,23 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
   })
 
 /**
- * One call, then the `after-tool-call` failpoint (`internal/turnFailpoints.ts`)
- * once it has settled, whichever way. A no-op outside a test that arms it.
+ * One call, held back as the host's `ToolScheduling` requires, then the
+ * `after-tool-call` failpoint (`internal/turnFailpoints.ts`) once it has
+ * settled, whichever way. Both are no-ops unless something provides them.
+ *
+ * The scheduling wraps the whole call, so a queued call has not been
+ * announced: `ToolCallStarted` means it runs.
  */
 const executeSettled = <Tools extends Record<string, Tool.Any>, R>(
   handler: Toolkit.WithHandler<Tools>,
   call: Response.ToolCallParts<Tools, true>,
   context: TurnContext<R>
-) => Effect.tap(executeOne(handler, call, context), () => turnFailpoints.hit("after-tool-call"))
+) =>
+  Effect.flatMap(ToolScheduling.Current, (scheduling) =>
+    Effect.tap(
+      scheduling.around({ name: call.name, params: call.params })(executeOne(handler, call, context)),
+      () => turnFailpoints.hit("after-tool-call")
+    ))
 
 /** What a handler's stream folds into: its final result, and its last. */
 interface Collected<Tools extends Record<string, Tool.Any>> {

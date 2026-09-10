@@ -62,6 +62,10 @@ describe("public API", () => {
       // always returned to it, never a failed run.
       "ToolNotAloneError",
       "ToolPermissionDeniedError",
+      // Host scheduling: the deployment's constraints on tool execution, which
+      // can make a call wait but never start one, so they only tighten the
+      // agent's strategy. A kernel noun because `ToolExecution` consults it.
+      "ToolScheduling",
       "isStorageError"
     ])
   })

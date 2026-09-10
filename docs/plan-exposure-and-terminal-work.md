@@ -853,6 +853,16 @@ crash leaves history in declaration order.
 
 ## 17. E13 — Host scheduling, and authority captured per attempt
 
+**First slice landed 2026-09-10 (item 105 stays open).** T17.1 as
+`ToolScheduling` with a different shape than sketched: rather than a
+`sequential(call)` predicate the engine interprets, a scheduling *wraps* each
+call (`around`), which makes I17.1 structural -- a wrapper can delay a call but
+has no way to start one. T17.2 journals the strategy as the body's first
+activity instead of a payload field, because the payload is built in
+`DurableAgentClient`; a replay reads it back, and an old journal captures it on
+its first replay. I17.3 (stricter-of permission) and capturing the host
+scheduling's description remain open, on Q6.
+
 **Today.** No host scheduling layer exists: the only strategy is the
 agent's (`Sequential`/`Parallel`/`perTool`, `ToolExecution.ts:39–51`),
 scoped to one response, and `ToolExecution.ts:95–108` says so and leaves

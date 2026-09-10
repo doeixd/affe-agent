@@ -14,6 +14,7 @@
   "affe-agent/SessionId",
   "affe-agent/SubmissionId",
   "affe-agent/ToolExecution/Alone",
+  "affe-agent/ToolScheduling/Current",
   "affe-agent/blob/BlobId",
   "affe-agent/blob/BlobMissingError",
   "affe-agent/blob/BlobRejectedError",
