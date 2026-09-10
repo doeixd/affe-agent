@@ -402,6 +402,12 @@ export interface DescribedTool {
   /** Effect AI's `Tool.Readonly` and `Tool.Idempotent` annotations. */
   readonly readonly: boolean
   readonly idempotent: boolean
+  /**
+   * Defined by the provider (`Tool.providerDefined`: a hosted web search,
+   * a code interpreter) rather than by this application. Such a tool may be
+   * executed by the provider, outside `Permission` and this process.
+   */
+  readonly providerDefined: boolean
 }
 
 export const describe = (agent: Any): Description => ({
@@ -415,7 +421,8 @@ export const describe = (agent: Any): Description => ({
       failureMode: tool.failureMode,
       alone: Context.get(tool.annotations, ToolExecution.Alone),
       readonly: Context.get(tool.annotations, Tool.Readonly),
-      idempotent: Context.get(tool.annotations, Tool.Idempotent)
+      idempotent: Context.get(tool.annotations, Tool.Idempotent),
+      providerDefined: Tool.isProviderDefined(tool)
     }))
   ),
   loop: agent.loop.description,

@@ -380,8 +380,10 @@ and pin the state it starts from.*
     emit `ToolCallFailed` (they report through `ToolCallProgress`), so the
     only dispositions that occur are the two `returnedToModel: boolean`
     already says; a three-valued field would be the same fact twice across
-    five consumers. Worth doing when a third disposition exists. Open: the
-    describe entry's source namespace and provider-executed flag. Small.
+    five consumers. Worth doing when a third disposition exists. Entries
+    also say `providerDefined` (a hosted tool the provider may execute,
+    outside `Permission`). Open: the entry's source namespace, which needs
+    a tool source to annotate its tools first. Small.
 
     ```text
     verify: grep "readonly failureMode: \"error\" | \"return\"" src/Agent.ts

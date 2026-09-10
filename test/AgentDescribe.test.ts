@@ -64,7 +64,8 @@ describe("Agent.describe", () => {
         failureMode: "error",
         alone: false,
         readonly: false,
-        idempotent: false
+        idempotent: false,
+        providerDefined: false
       }]),
       loop: {
         _tag: "Custom",
@@ -185,4 +186,20 @@ describe("Agent.describe", () => {
       })
     })
   )
+})
+
+describe("describe marks provider-defined tools (item 94)", () => {
+  it("a hosted tool reads as the provider's, an application tool does not", () => {
+    const WebSearch = Tool.providerDefined({
+      id: "example.web_search",
+      customName: "web_search",
+      providerName: "web_search"
+    })
+    const Lookup = Tool.make("lookup", { parameters: Schema.Struct({}), success: Schema.String })
+    const agent = Agent.make({ toolkit: Toolkit.make(WebSearch(), Lookup) })
+    assert.deepStrictEqual(
+      Option.map(Agent.describe(agent).tools, (tools) => tools.map((t) => [t.name, t.providerDefined])),
+      Option.some([["web_search", true], ["lookup", false]])
+    )
+  })
 })
