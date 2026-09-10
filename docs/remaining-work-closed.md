@@ -2321,3 +2321,18 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "export const AnsweredBy" src/AgentEvent.ts
     verify: grep "projectedFrom: output.projections" src/Agent.ts
     ```
+
+95. ~~**Connector webhook acks before anything is persisted.**~~ — closed
+    2026-09-10 by stating the window, the item's second option.
+    `Connectors.serverLayer`'s doc and the guide's Connectors section say
+    the 200 means received, not persisted: a process that dies after the
+    ack and before the run commits loses the message, and the platform will
+    not redeliver it. The ack cannot wait for the run (Slack allows three
+    seconds); where the loss matters, `decode` writes to a durable store and
+    returns `Connectors.ignored`, so the 200 follows the write and the run
+    starts from the store.
+
+    ```text
+    verify: grep "The 200 means \"received\", not \"persisted\"." src/connectors/Connectors.ts
+    verify: grep "That ack means received, not persisted." docs/guide-batteries.md
+    ```

@@ -388,18 +388,6 @@ and pin the state it starts from.*
     verify: exists test/FailureDisposition.test.ts
     ```
 
-95. **Connector webhook acks before anything is persisted.**
-    `Connector.serverLayer` answers 200 and forks the delivery into the
-    layer scope, deliberately (platform timeouts); a crash between the ack
-    and the run loses the message, and the sender will not retry. The loss
-    window is not documented. Either persist first (e.g. through
-    `SessionInbox`, making 200 mean Persisted) or state the window in the
-    guide. Small.
-
-    ```text
-    verify: grep "so it outlives the 200 ack" src/connectors/Connectors.ts
-    ```
-
 96. **Queued scheduling has no at-least-once store.** `JobStore.claimDue`
     is claim-and-take, documented at-most-once, and says an at-least-once
     store would implement a visibility timeout behind the same interface;

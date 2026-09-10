@@ -160,6 +160,17 @@ export interface ServerOptions<Principal, SE, RE, RR, DE, DR> extends Options<Pr
  * `reply` after the agent runs -- and the route returns 200 at once; a decode
  * that says `respond`/`ignore` answers directly. Mirrors the other adapters'
  * `serverLayer`, adding only the application's `decode`.
+ *
+ * **The 200 means "received", not "persisted".** Nothing is written before
+ * the ack: the delivery lives in this process's memory until the agent's run
+ * has committed it to the session. A process that dies in that window --
+ * after the 200, before the run commits the message -- loses it, and the
+ * platform will not retry a delivery it saw acknowledged. Platforms time a
+ * webhook out in seconds (Slack: 3), which is why the ack cannot wait for
+ * the run. Where that loss matters, have `decode` write the message to a
+ * durable store (a `SessionInbox`, a `JobStore` a `Scheduling.worker`
+ * drains) and return `ignored`: the 200 then follows the write, the run
+ * starts from the store, and the window is the store's, not this process's.
  */
 export const serverLayer = <Principal, SE = never, RE = never, RR = never, DE = never, DR = never>(
   options: ServerOptions<Principal, SE, RE, RR, DE, DR>

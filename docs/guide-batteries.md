@@ -159,6 +159,15 @@ the platform's timeout and does the work in the background; the app's `decode`
 owns the platform specifics (signature check, challenge, retries) — so the core
 stays portable.
 
+**That ack means received, not persisted.** Nothing is written before the 200:
+a process that dies after acking and before the run commits the message loses
+it, and the platform will not redeliver what it saw acknowledged. The ack cannot
+wait for the run (Slack allows 3 seconds). Where the loss matters, have
+`decode` write the message to a durable store — a `SessionInbox`, a
+`JobStore` a `Scheduling.worker` drains — and return `Connectors.ignored`, so the 200
+goes out only after the write; the run then starts from the store, and the
+window is the store's.
+
 Signature verification is the one platform bit that needs real crypto, so it
 ships as a **host-flagged** sub-entry rather than in the portable core:
 `affe-agent/connectors/slack` provides `Slack.verifier`, which checks
