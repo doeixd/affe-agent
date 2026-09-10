@@ -1113,6 +1113,13 @@ is distinguishable from "no matches".
 
 ## 22. E18 — Operational defaults audit
 
+**T22.2, T22.4 and T22.5 landed 2026-09-10; T22.1 waits on Q8, T22.3 is
+documented only.** `Agent.describe()` already reported `{ _tag: "AllowAll" }`,
+so T22.2 needed nothing. The table is in `limits.md`; the inventory is
+`test/ReferenceInventory.test.ts`. The audit missed one row: the Cloudflare
+host's default principal is the raw `authorization` header, so a credential
+doubles as the caller's id.
+
 **Today.** All seven defaulted `Context.Reference`s are **safe** — absence
 means "no feature" (`AgentInput.Current`, `Elicitation.Current`,
 `CurrentSessionId`, `ParentEvents`, `Failpoint`, `CurrentPrincipal`,

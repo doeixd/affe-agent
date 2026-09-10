@@ -31,6 +31,28 @@ constant it names.
 STATUS.md keeps the history of how each was found; the JSDoc above is where a
 user meets it.
 
+## Defaults that weaken something when left out
+
+A default whose absence means "no feature" is harmless. These are the ones
+whose absence quietly means *less* -- less authorization, less durability, no
+sandbox -- so leaving the option out is a decision, not an omission. Every
+defaulted `Context.Reference` is of the harmless kind, and
+`test/ReferenceInventory.test.ts` makes a new one prove it (item 110).
+
+| Default | Where | What leaving it out means |
+|---------|-------|---------------------------|
+| `Permission.allowAll` | `Agent.make({ permission })`, `CodeMode` | every tool call runs; `Agent.describe()` reports `{ _tag: "AllowAll" }` |
+| host authorization `allowAll()` | `cloudflare` `Options.authorization` | **network-facing**: any caller may act on any session |
+| host principal = the `authorization` header, else `"anonymous"` | `cloudflare` `Options.principal` | callers are told apart only by the header's raw value -- a credential, used as the principal id |
+| relay authorization `allowAll` | `RelayServer.layer({ authorization })` | **network-facing**: any authenticated peer may reach any peer |
+| `InputChannel.memory` | `AgentSession.make` | queued input does not survive the process |
+| A2A `InMemoryTaskStore` | `AgentA2A` (not an option) | A2A task records do not survive the process |
+| OpenAI-compatible idempotency in memory | `OpenAiAgent` `idempotency.store` | a retried request after a restart runs again |
+| `Shell.current` → host `bash` | `shell/Shell.ts` | commands run on the host, unsandboxed |
+
+`AgentSessionHost` has no authorization default at all -- the shape the two
+network-facing rows above should have, and do not yet (plan §22, Q8).
+
 ## Three bounds that are not each other
 
 These get confused, and a fix for one is regularly cited as protection against
