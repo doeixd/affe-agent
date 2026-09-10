@@ -405,17 +405,18 @@ and pin the state it starts from.*
     verify: grep "readonly outcome: \"succeeded\" | \"failed\" | \"refused\"" src/code/CodeMode.ts
     ```
 
-99. **Budget topology, stated (plan E7, §9).** Only engine turns reach
-    `Budget.record`; compaction, branch and coding summaries report usage
-    only, and `inherit.budget: false` leaves a child's usage nowhere. Write
-    the per-source table into `limits.md`, make every uncharged source still
-    report usage with a scope, and revisit the documented "counted, not
-    capped" subagent default (a delegation can overshoot the parent by a
-    whole child run). Any future model-backed battery declares its row
-    before landing. Small–medium.
+99. **Budget topology, stated (plan E7, §9) -- the table landed
+    2026-09-10.** `limits.md` has the per-source table: engine turns and
+    (by default) subagent turns are charged; compaction, branch and coding
+    summaries report usage in their own place; eval judges report nothing;
+    `inherit.budget: false` leaves a child's usage in its own session only.
+    Open: make every uncharged source report usage with a scope (eval
+    judges first), and revisit the "counted, not capped" subagent default
+    (a delegation can overshoot the parent by a whole child run). Small.
 
     ```text
     verify: grep "is *counted*, not capped" src/subagent/Subagent.ts
+    verify: grep "## Which model calls a `Budget` sees" docs/limits.md
     ```
 
 100. **Matched release→main benchmark suite (plan E8, §10) -- first slice

@@ -55,6 +55,26 @@ The Cloudflare host and relay used to default to allow-everything, and the
 Cloudflare host to the raw `authorization` header as the caller's id
 (item 110).
 
+## Which model calls a `Budget` sees
+
+A `Budget` caps what reaches `Budget.record`, and only the engine calls it --
+once per committed turn (item 99). Anything else that calls a model is outside
+the cap, and says what it spent in its own place or not at all:
+
+| Model calls from | Charged to the ambient `Budget` | Where the usage is reported |
+|------------------|---------------------------------|-----------------------------|
+| An agent's turns, in-process or durable | yes, every turn, the final one included | `RunLedger`, the turn's response |
+| A subagent's turns, `inherit.budget` default (`true`) | yes, to the parent's counter -- *counted*, not capped, within one delegation; a child that must stop caps its own loop | as above, in the child's session |
+| A subagent's turns, `inherit.budget: false` | no -- a private budget nobody reads | the child's session only |
+| Compaction summaries | no | `Checkpoint.usage`, `CompactionCompleted` |
+| Branch summaries (`/tree`) | no | the summary's `usage` |
+| Coding summaries | no | the summary's `usage` |
+| Eval model judges (`/evals`) | no | not reported |
+
+So a budget of N is a ceiling on the agent's own turns, and on its children's
+by default; a session that also compacts spends more than N by what the
+summaries cost. A battery that calls a model adds its row here before it lands.
+
 ## Three bounds that are not each other
 
 These get confused, and a fix for one is regularly cited as protection against
