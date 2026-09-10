@@ -4,15 +4,15 @@
     "guarantee": "Admission is a promise",
     "applied": "admit even when already claimed",
     "verdict": "bites",
-    "failed": 8,
-    "passed": 176,
+    "failed": 9,
+    "passed": 219,
     "names": [
+      "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > the same idempotency key and input is the same submission; a different input is a conflict",
       "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > rejects a concurrent prompt with AgentBusyError",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > two clients racing for one idle session: exactly one is accepted",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a claim whose dispatch never happened is dispatched on reacquisition",
       "test/DurableAgentClient.test.ts > D7 at the durable client > a retry under the same idempotency key rejoins the claim it already made",
-      "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a retry under the same key is the same claim, not a busy session",
-      "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a different key on a claimed session is still Busy"
+      "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a retry under the same key is the same claim, not a busy session"
     ]
   },
   {
@@ -20,13 +20,15 @@
     "guarantee": "Resumption never repeats completed work",
     "applied": "randomise the tool activity name",
     "verdict": "bites",
-    "failed": 4,
-    "passed": 180,
+    "failed": 11,
+    "passed": 217,
     "names": [
       "test/Durable.test.ts > durable submissions > a subagent run by a tool does not shift the parent's model journal on replay",
-      "test/DurableAudit.test.ts > durable edge cases > parallel tool calls replay without re-running or deadlocking",
-      "test/ToolActivity.test.ts > durable tool activity identity > is unchanged when concurrent calls arrive in a different order",
-      "test/ToolActivity.test.ts > durable tool activity identity > still separates a tool call id reused across turns"
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > batch: a crash at AgentTurn:after-tool-call #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > batch: a crash at AgentTurn:before-commit #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > batch: a crash at AgentTurn:after-commit #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > batch: a crash at AgentTurn:after-commit #2 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > streamed: a crash at AgentTurn:after-tool-call #1 recovers to the run that never crashed"
     ]
   },
   {
@@ -35,7 +37,7 @@
     "applied": "make every occurrence look like the first",
     "verdict": "bites",
     "failed": 2,
-    "passed": 182,
+    "passed": 226,
     "names": [
       "test/DurableAudit.test.ts > durable edge cases > a tool call id reused across turns still executes each time",
       "test/ToolActivity.test.ts > durable tool activity identity > still separates a tool call id reused across turns"
@@ -47,7 +49,7 @@
     "applied": "leave an accepted-but-undispatched claim alone",
     "verdict": "bites",
     "failed": 1,
-    "passed": 183,
+    "passed": 227,
     "names": [
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a claim whose dispatch never happened is dispatched on reacquisition"
     ]
@@ -57,9 +59,10 @@
     "guarantee": "Interruption is terminal, crash is not",
     "applied": "record an interrupted result as completed",
     "verdict": "bites",
-    "failed": 4,
-    "passed": 180,
+    "failed": 5,
+    "passed": 223,
     "names": [
+      "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > an interrupted submission's outcome is retained as interrupted",
       "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > interrupt ends the submission and leaves the session reusable",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > interrupt from another client commits nothing partial and frees the session",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > interrupting a submission parked on an approval ends it without running the tool",
@@ -72,7 +75,7 @@
     "applied": "convert an interrupted run into a typed durable failure",
     "verdict": "SURVIVES",
     "failed": 0,
-    "passed": 184,
+    "passed": 228,
     "names": []
   },
   {
@@ -80,9 +83,10 @@
     "guarantee": "Observation is at-least-once with a stable cursor",
     "applied": "ignore the caller's `after` offset",
     "verdict": "bites",
-    "failed": 3,
-    "passed": 181,
+    "failed": 4,
+    "passed": 224,
     "names": [
+      "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > resumes events from a sequence, with no gap and no repeat",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > events are delivered through the log with durable ids and a session-wide offset",
       "test/DurableAgentClient.test.ts > DurableAgentClient resumable events (H5) > delivers exactly the events above the offset",
       "test/DurableAgentClient.test.ts > DurableAgentClient resumable events (H5) > neither drops nor repeats an event recorded during the catch-up read"
@@ -93,9 +97,10 @@
     "guarantee": "A recorded event is replay-stable",
     "applied": "never notice a duplicate key",
     "verdict": "bites",
-    "failed": 2,
-    "passed": 182,
+    "failed": 3,
+    "passed": 225,
     "names": [
+      "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a typed input is journalled encoded, rendered in the workflow, and replayed from the journal",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > approval asked through one client is answered through another",
       "test/DurableAgentClient.test.ts > DurableAgentClient (durability specifics) > a replayed submission with parallel tools appends no duplicate or conflicting events"
     ]
@@ -105,12 +110,28 @@
     "guarantee": "Storage failure degrades, it does not corrupt",
     "applied": "remove the idempotency key from `claim`",
     "verdict": "bites",
-    "failed": 3,
-    "passed": 181,
+    "failed": 4,
+    "passed": 224,
     "names": [
+      "test/DurableAgentClient.test.ts > AgentClient contract (durable-memory) > the same idempotency key and input is the same submission; a different input is a conflict",
       "test/DurableAgentClient.test.ts > D7 at the durable client > a retry under the same idempotency key rejoins the claim it already made",
       "test/DurableSessionStore.test.ts > DurableSessionStore (memory) > a retry under the same key is the same claim, not a busy session",
       "test/DurableSessionStore.test.ts > DurableSessionStore (sqlite) > a retry under the same key is the same claim, not a busy session"
+    ]
+  },
+  {
+    "id": "D8",
+    "guarantee": "Recovery is indistinguishable from never having crashed",
+    "applied": "empty each text part a streamed replay rebuilds",
+    "verdict": "bites",
+    "failed": 5,
+    "passed": 223,
+    "names": [
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > streamed: a crash at AgentTurn:after-model-response #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > streamed: a crash at AgentTurn:after-tool-call #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > streamed: a crash at AgentTurn:before-commit #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > streamed: a crash at AgentTurn:after-commit #1 recovers to the run that never crashed",
+      "test/DurableEquivalence.test.ts > durable recovery is indistinguishable from never having crashed (item 104) > streamed: a crash at AgentTurn:after-commit #2 recovers to the run that never crashed"
     ]
   }
 ]
