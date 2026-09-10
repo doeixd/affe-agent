@@ -1,4 +1,4 @@
-import { Cause, Effect, ExecutionPlan, Option, Ref, Stream } from "effect"
+import { Cause, Effect, ExecutionPlan, Option, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Prompt, Response, Toolkit } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
@@ -171,6 +171,49 @@ const outputToolkit = <Tools extends Record<string, Tool.Any>>(
     )
   )
 }
+
+/**
+ * The first successful result of a projecting tool, in response order, as
+ * the output value (`AgentOutput.fromTool`).
+ *
+ * Only successes: a failed or refused call has no result to project. The
+ * call's parameters arrive encoded (tool-call resolution is disabled), so
+ * they are decoded with the projecting tool's own schema; the result part
+ * holds the decoded success. A projector that throws, or returns a value the
+ * output schema will not encode, is a defect in the projector -- the model
+ * could not have done anything differently -- and dies naming the tool.
+ */
+const projectedOutput = (
+  output: Option.Option<AgentOutput.AgentOutput<any, any>>,
+  toolCalls: ReadonlyArray<{ readonly id: string; readonly name: string; readonly params: unknown }>,
+  toolResults: ReadonlyArray<Response.AnyPart>
+): Effect.Effect<Option.Option<unknown>> =>
+  Effect.gen(function* () {
+    if (Option.isNone(output) || output.value.projections.length === 0) return Option.none()
+    const { projections, schema } = output.value
+    for (const call of toolCalls) {
+      const projection = projections.find((candidate) => candidate.tool.name === call.name)
+      if (projection === undefined) continue
+      const settled = toolResults.find((part) => part.type === "tool-result" && part.id === call.id)
+      if (settled === undefined || settled.type !== "tool-result" || settled.isFailure) continue
+      // `Tool.Any` exposes the schema as `Schema.Top`, erasing its decoding
+      // services. A projecting tool's parameters decode without any, by the
+      // same rule `AgentOutput` sets for its own schema: whether a turn has
+      // an answer must not depend on a service being in reach at commit.
+      const params = yield* (Schema.decodeUnknownEffect(projection.tool.parametersSchema)(call.params) as Effect.Effect<
+        unknown,
+        Schema.SchemaError
+      >).pipe(Effect.orDie)
+      // A projector that throws dies here, as the defect it is.
+      const value = yield* Effect.sync(() => projection.project({ params, result: settled.result }))
+      if (Option.isNone(value)) continue
+      // Checked as a reported value is; one the schema rejects is the
+      // projector's bug, and the schema's error says what is wrong.
+      yield* Effect.orDie(Schema.encodeUnknownEffect(schema)(value.value))
+      return value
+    }
+    return Option.none()
+  })
 
 /** Per-request execution options, chosen at `prompt` time. */
 export interface Options {
@@ -515,6 +558,11 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       })
     }
 
+    // An answer an ordinary tool's result already is (`AgentOutput.fromTool`),
+    // computed from this turn's successes and promoted with the commit below
+    // -- so it too exists exactly when the turn that produced it does.
+    const projected = yield* projectedOutput(session.agent.output, toolCalls, toolResults)
+
     // One commit, after all work for the turn has succeeded — and an
     // uninterruptible one. Once the tools have run, their side effects are
     // real; an interrupt landing between their completion and this commit
@@ -551,7 +599,9 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     yield* Effect.uninterruptible(
       Effect.gen(function*() {
         yield* History.commit(session.history, committed)
-        value = yield* Ref.get(session.pendingOutput)
+        // A value the model reported wins; it cannot share a turn with a
+        // projecting tool anyway, the output tool being `Alone`.
+        value = Option.orElse(yield* Ref.get(session.pendingOutput), () => projected)
 
         // A message is worth announcing when it says something or carries a
         // file. Reasoning alone is not one: it is the model's working, and a

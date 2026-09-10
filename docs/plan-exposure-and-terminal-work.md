@@ -259,6 +259,14 @@ is §10's measurements, not prompt-token count.
 
 ## 4. E2 — Completion from an ordinary tool result
 
+**Landed 2026-09-10 (item 92; T4.3 and T4.4 open).** T4.1, T4.2, T4.5 as
+written; A4.1–A4.6 are `test/AgentOutputFromTool.test.ts`, A4.5 through
+`DurableEquivalence`. I4.6 needed more than the sketch: in the pipeable form,
+inferring the output type from the projector let one returning too little
+*widen the output's type* silently. The projector's return is now inferred on
+its own and required to be the output's type -- the `@ts-expect-error` row is
+what caught it.
+
 ### 4.1 Shape
 
 ```ts

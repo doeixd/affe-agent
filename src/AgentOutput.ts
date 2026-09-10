@@ -1,4 +1,7 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
+import { dual } from "effect/Function"
+import type { Pipeable } from "effect/Pipeable"
+import { pipeArguments } from "effect/Pipeable"
 import { Tool } from "effect/unstable/ai"
 import * as WireValue from "./internal/wireValue.js"
 import * as ToolExecution from "./ToolExecution.js"
@@ -46,7 +49,7 @@ import * as ToolExecution from "./ToolExecution.js"
  * prompted for. `stream` is per-prompt because it is a delivery concern; this
  * is a contract.
  */
-export interface AgentOutput<A, I> {
+export interface AgentOutput<A, I> extends Pipeable {
   /** The tool the model calls. Its name is model-facing, so it is chosen. */
   readonly toolName: string
   readonly schema: Schema.Codec<A, I>
@@ -55,6 +58,36 @@ export interface AgentOutput<A, I> {
    * definition rather than re-deriving it per turn.
    */
   readonly tool: Tool.Any
+  /**
+   * Ordinary tools whose committed results can *be* the answer, without the
+   * model reporting it. Empty unless `fromTool` added some. See `fromTool`.
+   */
+  readonly projections: ReadonlyArray<Projection<A>>
+}
+
+/** What a projection is given: the call's decoded parameters and the tool's decoded success. */
+export interface ProjectionInput<T extends Tool.Any> {
+  readonly params: Tool.Parameters<T>
+  readonly result: Tool.Success<T>
+}
+
+/**
+ * The compile error a projector returning something other than the output's
+ * value type produces: its fields name what was returned and what was needed.
+ */
+export interface ProjectionDoesNotMatchOutput<Returned, Expected> {
+  readonly "the projector returns": Returned
+  readonly "but the output needs": Expected
+}
+
+/**
+ * One tool whose successful result can complete the submission. The types are
+ * checked where `fromTool` builds it; here the input is erased, because an
+ * output holds projections for many tools.
+ */
+export interface Projection<A> {
+  readonly tool: Tool.Any
+  readonly project: (input: { readonly params: unknown; readonly result: unknown }) => Option.Option<A>
 }
 
 /**
@@ -108,9 +141,87 @@ export const make = <A, I>(
     // The answer ends the run, so an action beside it in the same response is
     // a protocol violation rather than work to do first: the whole batch is
     // rejected before any of it runs, and the model tries again.
-    }).annotate(ToolExecution.Alone, true)
+    }).annotate(ToolExecution.Alone, true),
+    projections: [],
+    pipe() {
+      return pipeArguments(this, arguments)
+    }
   }
 }
+
+/**
+ * Let an ordinary tool's successful result complete the submission (item 92).
+ *
+ * ```ts
+ * const Created = AgentOutput.make(Schema.Struct({ projectId: Schema.String, url: Schema.String })).pipe(
+ *   AgentOutput.fromTool(CreateProject, ({ result }) =>
+ *     result.created ? Option.some({ projectId: result.id, url: result.href }) : Option.none()
+ *   )
+ * )
+ * ```
+ *
+ * "Create the project and give me its URL" used to cost a second model call:
+ * the tool returned `{ id, href }`, and the model was asked again only to copy
+ * them into the output tool -- where it could also miscopy an id. Now, once a
+ * turn commits, each successful result of a projecting tool is offered to its
+ * projector; `Some(value)` is the submission's answer and the run stops, as
+ * if the model had reported it. `None` continues the run normally.
+ *
+ * The rules, and why:
+ *
+ * - **Only committed successes.** A failed result, one returned to the model,
+ *   or one from a rolled-back turn is never projected: the answer must be
+ *   something that happened.
+ * - **Pure.** The projector sees only the call's parameters and the tool's
+ *   result, and returns an `Option`. A durable replay re-runs it over the
+ *   journalled result, so it must not read the clock or anything else. A
+ *   projector that throws is a defect, not a quiet `None`.
+ * - **Checked against the output schema**, as a model-reported value is; one
+ *   that does not encode is a defect in the projector (the model cannot fix
+ *   it).
+ * - **First in the response wins** when several projecting tools succeed in
+ *   one turn; a value the model reported through the output tool wins over
+ *   all of them (it cannot share a turn with them anyway -- it is `Alone`).
+ *
+ * The model-called output tool remains the general case; this is for agents
+ * whose actions already produce the answer.
+ */
+export const fromTool: {
+  /**
+   * Pipeable. The projector's value type `R` is inferred on its own and then
+   * required to be an `A` of the output it is applied to -- inferring `A`
+   * from the projector instead let one that returned too little widen the
+   * whole output's type, silently, which is the one thing an output's type
+   * must never do.
+   */
+  <T extends Tool.Any, R>(
+    tool: T,
+    project: (input: ProjectionInput<T>) => Option.Option<R>
+  ): <A, I>(self: AgentOutput<A, I> & ([R] extends [A] ? unknown : ProjectionDoesNotMatchOutput<R, A>)) => AgentOutput<A, I>
+  <A, I, T extends Tool.Any>(
+    self: AgentOutput<A, I>,
+    tool: T,
+    project: (input: ProjectionInput<T>) => Option.Option<A>
+  ): AgentOutput<A, I>
+} = dual(
+  3,
+  <A, I, T extends Tool.Any>(
+    self: AgentOutput<A, I>,
+    tool: T,
+    project: (input: ProjectionInput<T>) => Option.Option<A>
+  ): AgentOutput<A, I> => ({
+    ...self,
+    projections: [
+      ...self.projections,
+      {
+        tool,
+        // Erased for storage; `AgentTurn` decodes `params` and `result` with
+        // this same tool's schemas before calling it.
+        project: project as (input: { readonly params: unknown; readonly result: unknown }) => Option.Option<A>
+      }
+    ]
+  })
+)
 
 /**
  * The value, in the shape a wire can carry.

@@ -215,6 +215,16 @@ its `Result.value` is its final text, always `Some`. So a caller generic over
 agents reads a value from every one, and the wire and the journal carry it
 uniformly.
 
+When an ordinary tool's result already *is* the answer, say so rather than
+spend a model call copying it: `AgentOutput.make(schema).pipe(
+AgentOutput.fromTool(CreateProject, ({ params, result }) => ...))`. After a
+turn commits, each successful result of that tool goes to the projector; a
+`Some` is the submission's value and the run stops, a `None` lets it continue.
+The projector is pure -- a durable replay re-runs it over the journalled result
+-- and its input is typed from the tool, its return checked against the
+output's type at compile time and its schema at run time. Only committed
+successes are projected; a projector that throws is a defect.
+
 **One wire shape.** Across any transport the `input` field carries the
 session's encoded input -- the prompt wire for the default, byte for byte
 what it always was, and the bare encoded value for a declared shape -- and

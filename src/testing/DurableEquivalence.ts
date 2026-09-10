@@ -117,6 +117,8 @@ export interface Observation {
   readonly status: string
   readonly text: string
   readonly turns: number
+  /** The agent's declared output, encoded, when it reached one. */
+  readonly value: unknown
   /** Model calls, across every process of the run. */
   readonly modelCalls: number
   /**
@@ -209,7 +211,7 @@ const recording = Effect.map(Ref.make<ReadonlyArray<string>>([]), (log) => ({
 
 const observe = (
   history: Prompt.Prompt,
-  result: { readonly status: string; readonly text: string; readonly turns: number },
+  result: { readonly status: string; readonly text: string; readonly turns: number; readonly value?: unknown },
   modelCalls: number,
   effects: ReadonlyArray<string>
 ): Effect.Effect<Observation> =>
@@ -218,6 +220,7 @@ const observe = (
     status: result.status,
     text: result.text,
     turns: result.turns,
+    value: result.value,
     modelCalls,
     effects: [...effects].sort()
   }))
