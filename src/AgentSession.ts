@@ -29,6 +29,7 @@ import * as EventBus from "./internal/eventBus.js"
 import type * as Observation from "./internal/observation.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
+import * as PromptText from "./internal/promptText.js"
 import * as Limits from "./internal/limits.js"
 import type { SubmissionId } from "./internal/ids.js"
 import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
@@ -647,7 +648,11 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
     // Every agent has an input, so there is one path: for the default it
     // encodes the prompt to the prompt wire and renders it as itself.
     const declared = self.agent.input
-    const encoded = yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
+    // A string to the default input skips the schema: its encoding is one
+    // fixed shape (`internal/promptText.ts`, pinned to the schema by test).
+    const encoded = AgentInput.isPrompt(declared) && typeof input === "string"
+      ? PromptText.encodedText(input)
+      : yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
     const raw = yield* AgentInput.rendered(declared, input).pipe(Effect.provide(self.env))
     const resolved = {
       prompt: Prompt.make(raw),
