@@ -47,7 +47,7 @@ type Journalled = {
 /**
  * A tool call's outcome as the journal records it. Exported with `reraise`
  * so a recorded value can be driven through the rule that turns it back
- * into an effect without an engine (`plan-streaming-followups.md` §8).
+ * into an effect without an engine.
  */
 export type Outcome =
   | { readonly _tag: "Succeeded"; readonly results: ReadonlyArray<Journalled> }

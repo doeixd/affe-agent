@@ -7,8 +7,6 @@ import { Duration, Effect, Schedule } from "effect"
  * one was `Schedule.spaced(<a hand-picked constant>)`. Fixed intervals are
  * wrong for two different reasons depending on what is being waited for, and
  * the fixes are not the same, so both live here rather than being re-derived.
- *
- * @see `docs/audit-effect-ecosystem.md` E16
  */
 
 /**

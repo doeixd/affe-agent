@@ -5,7 +5,7 @@ import type * as AgentProtocol from "./AgentProtocol.js"
 import * as Internal from "./internal/sessionHost.js"
 
 /**
- * The session host as a service the transport adapters share (#12 item 2).
+ * The session host as a service the transport adapters share.
  *
  * Before this, each adapter (`AgentHttp`, `AgentRpc`, `AgentAgUi`,
  * `AgentA2A`) built its own host from the same four options. An application
@@ -69,8 +69,8 @@ export interface Options<Principal> {
   readonly authorization: AgentProtocol.Authorization<Principal>
   /**
    * Project the principal to the opaque subject string set as
-   * `CurrentPrincipal` on the fibre that runs a submission
-   * (`docs/plan-principal-on-tool-fibre.md`): tool handlers, the model
+   * `CurrentPrincipal` on the fibre that runs a submission:
+   * tool handlers, the model
    * call and permission evaluation all read it, and a session outside any
    * host reads `None`. The submitter's subject governs the whole run;
    * `respond` sets it too. Absent, the host sets nothing.

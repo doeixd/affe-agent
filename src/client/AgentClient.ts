@@ -87,7 +87,7 @@ export const RemoteResult = Schema.Struct({
    * For an agent with no declared output it is the final text, so every
    * completed result carries one. Absent when a declared output's run ended
    * without producing one -- interrupted, or stopped before it answered --
-   * and absent from a host older than `plan-input-default.md` step 5, which
+   * and absent from a host that predates the field, which
    * is why the field stays optional on the schema.
    */
   value: Schema.optional(Schema.Unknown)
@@ -342,8 +342,7 @@ export interface RemoteSession {
    * Joins one still running; returns the retained outcome of one that
    * settled, failure included; `AgentSubmissionNotFoundError` for one this
    * session does not hold, which after enough newer submissions includes
-   * ones it once did -- retention is bounded, and stated, in
-   * `docs/plan-submit-await.md`.
+   * ones it once did -- retention is bounded.
    */
   readonly awaitSubmission: (
     submissionId: string
@@ -405,8 +404,8 @@ export interface RemoteSession {
    * Submits with `stream: true` and yields that submission's envelopes from
    * `SubmissionStarted` through its terminal event, then ends once the
    * session is free again. The same rules hold on every client, or closing a
-   * tab would change execution semantics by deployment (`plan-streaming.md`
-   * P1): the subscription is established before admission, so the first
+   * tab would change execution semantics by deployment: the subscription is
+   * established before admission, so the first
    * envelope cannot be missed; the terminal is data, a failed run yields
    * `SubmissionFailed` and ends normally, and only admission, transport and
    * an observation that fell past its bound (`AgentObservationLagError`) are
@@ -617,7 +616,7 @@ export const fromSession = <Value, Input>(
    * Idempotency keys, for as long as their submission is retained: a retry
    * under a key joins its receipt, a different request under it is a
    * conflict. Lives and dies with the outcome table, so the two make one
-   * promise -- see `docs/plan-submit-await.md`.
+   * promise.
    */
   const byKey = new Map<string, { readonly fingerprint: string; readonly submissionId: string }>()
 
@@ -789,8 +788,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
     /**
      * How many submissions' outcomes each session keeps for
      * `awaitSubmission`. Default 64. A settled outcome is evicted only to
-     * admit a newer submission; a running one never is. See
-     * `docs/plan-submit-await.md`.
+     * admit a newer submission; a running one never is.
      */
     readonly maxRetainedSubmissions?: number | undefined
     /** See `fromSession`. */

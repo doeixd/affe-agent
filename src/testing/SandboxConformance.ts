@@ -4,7 +4,7 @@ import * as Sandbox from "../sandbox/Sandbox.js"
 /**
  * The conformance suite every `SandboxProvider` must pass.
  *
- * `docs/plan-integrations.md` §6.1: the semantics prose cannot pin --
+ * The semantics prose cannot pin --
  * whether `list` returns paths or names, whether a non-zero exit is a
  * result or a failure, whether stderr is genuinely separate from stdout,
  * whether `timeout` produces `TimeoutError` rather than a hang -- asserted
@@ -64,9 +64,9 @@ export interface Programs {
    * Optional, and supplying it is the claim: it exists for one question no
    * other program can ask -- does this provider deliver output *while* the
    * command runs, or only once it has ended? A provider whose `execStream` is
-   * derived from a buffered `exec` cannot, legitimately (tier 0 of
-   * `docs/plan-integrations.md` §6), so it simply does not supply `drip`: the
-   * case is skipped and the report says `streamsIncrementally: false`. Supply
+   * derived from a buffered `exec` legitimately cannot, so it simply does not
+   * supply `drip`: the case is skipped and the report says
+   * `streamsIncrementally: false`. Supply
    * it when the provider streams natively, and the suite will hold it to that.
    *
    * This is the same opt-in `programs` itself is -- a question the caller

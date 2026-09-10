@@ -11,11 +11,11 @@ import * as Namespace from "../internal/namespace.js"
 /**
  * The management/query model over sessions.
  *
- * `docs/effect-plan-2.txt` §26: `AgentClient` does the work, a directory
+ * `AgentClient` does the work, a directory
  * discovers and manages it. `get` / `list` / `active` / `stats` / `rename` /
  * `move` / `annotate`, paginated from day one, over a backing store.
  *
- * What this is **not**, and the plan is emphatic on all three:
+ * What this is **not**, and all three are deliberate:
  *
  * - not `DurableSessionStore`, which holds the minimal state execution needs
  *   to be *correct*. Nothing here is read by a running conversation, so a
@@ -27,7 +27,7 @@ import * as Namespace from "../internal/namespace.js"
  * The record it keeps per session is {@link Entry}: a name, a namespace,
  * free-form attributes, and {@link Stats} -- the countable core of
  * `SessionProjection`, folded from the session's events. The fold is
- * {@link follow}, over the host-wide stream (§29) rather than threaded
+ * {@link follow}, over the host-wide stream rather than threaded
  * through every host mutation: the host does not know the directory exists.
  *
  * Two implementations share the interface: {@link memory} for one process,
@@ -64,7 +64,7 @@ const Usage = Schema.Struct({
  * repair bookkeeping, which belong to the fold that produced them.
  *
  * A `Schema` where the projection is a plain interface, because this one
- * *is* persisted: the plan's line is that the projection is derived and a
+ * *is* persisted: the projection is derived and a
  * directory that stores it makes the wire decision. This is that decision.
  */
 export const Stats = Schema.Struct({

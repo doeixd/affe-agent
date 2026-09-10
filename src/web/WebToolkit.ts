@@ -142,7 +142,7 @@ export const searchTools = [Search] as const
 export const fetchTools = [Fetch] as const
 /** The rendered-page tools; they need `WebCapture` (and `WebCrawl` over it), not `WebFetch`. */
 export const renderedTools = [Capture, Crawl] as const
-/** All model-facing web tools. Applications may select either bound tool alone. */
+/** The search and fetch tools. Applications may select either bound tool alone. */
 export const tools = [Search, Fetch] as const
 
 /**

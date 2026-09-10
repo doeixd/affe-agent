@@ -6,11 +6,11 @@ import * as Permission from "../Permission.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Skills (issue #4): an on-demand capability -- workflow guidance, reference
+ * Skills: an on-demand capability -- workflow guidance, reference
  * material -- that the model loads only when it needs it.
  *
- * There is deliberately no core skill concept (PLAN §39: "Do not add
- * skill-loading semantics to core"). A skill exposes its contents through the
+ * There is deliberately no core skill concept: the engine must not own
+ * skill-loading semantics. A skill exposes its contents through the
  * two seams that already exist -- context derivation and tool availability --
  * so this package is a registry service, one `ContextTransform` and one tool,
  * and nothing in the engine changes.

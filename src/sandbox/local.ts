@@ -454,8 +454,7 @@ export const layer = (options?: {
                 Effect.tryPromise({
                   try: async () => {
                     const dirents = await fs.readdir(resolved, {
-                      withFileTypes: true,
-                      ...(target === undefined ? {} : {})
+                      withFileTypes: true
                     })
                     const prefix =
                       target === undefined ? "" : `${target}/`

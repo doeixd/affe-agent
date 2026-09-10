@@ -38,6 +38,21 @@ export interface Case<E> {
 
 const { equal, that } = checks((name, detail) => new Failure({ case: name, detail }))
 
+/**
+ * Unwrap the `Some` a preceding `that` asserted.
+ *
+ * `Option.match` rather than a throwing unwrap, so both cases are stated.
+ * The miss is unreachable because the `that` before each use fails the case
+ * first; the error names that contract if the ordering ever slips.
+ */
+const some = <A>(option: Option.Option<A>): A =>
+  Option.match(option, {
+    onNone: () => {
+      throw new Error("expected Some; the preceding check should have failed the case first")
+    },
+    onSome: (value) => value
+  })
+
 const node = (
   id: string,
   parent?: string,
@@ -82,7 +97,7 @@ export const cases = <E, SE>(
         yield* store.put(node("a"), history("first", "second"))
         const found = yield* store.get(nodeId("a"))
         yield* that(name)(Option.isSome(found), "the node was not found")
-        const held = Option.getOrThrow(found)
+        const held = some(found)
         yield* equal(name)(held.node.id, "a", "id")
         yield* equal(name)(held.node.cause, "root", "cause")
         yield* that(name)(Option.isNone(held.node.parent), "a root has no parent")
@@ -144,8 +159,8 @@ export const cases = <E, SE>(
         yield* store.put(node("b", "a", { label: "before refactor", cause: "manual" }), history("one", "two"))
         yield* equal(name)(ids(yield* store.nodes), ["a", "b"], "nodes")
         yield* equal(name)(ids(yield* store.children(nodeId("a"))), ["b"], "children of a")
-        const found = Option.getOrThrow(yield* store.get(nodeId("b")))
-        yield* equal(name)(Option.getOrThrow(found.node.label), "before refactor", "label")
+        const found = some(yield* store.get(nodeId("b")))
+        yield* equal(name)(some(found.node.label), "before refactor", "label")
         yield* equal(name)(found.node.cause, "manual", "cause")
       })),
 
@@ -170,8 +185,8 @@ export const cases = <E, SE>(
 
         yield* equal(name)(ids(yield* store.nodes), ["a", "b"], "nodes after the refusals")
         yield* equal(name)(ids(yield* store.children(nodeId("a"))), ["b"], "children after the refusals")
-        const found = Option.getOrThrow(yield* store.get(nodeId("b")))
-        yield* equal(name)(Option.getOrThrow(found.node.label), "kept", "label")
+        const found = some(yield* store.get(nodeId("b")))
+        yield* equal(name)(some(found.node.label), "kept", "label")
         yield* equal(name)(textOf(found.history), textOf(history("one", "two")), "conversation")
       })),
 

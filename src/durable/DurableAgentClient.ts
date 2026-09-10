@@ -271,7 +271,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
    *
    * So the marker being gone while a claim is still held is not an ambiguous
    * signal, it is a specific one: `finishProjection` got as far as clearing
-   * admission and no further. That is the R173 wedge exactly, and it is why
+   * admission and no further. That is the wedge exactly, and it is why
    * `finishProjection` clears before it finishes -- the ordering is not merely
    * the lesser evil, it is what leaves evidence a later process can read.
    */
@@ -365,7 +365,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
         yield* dispatch(record.sessionId, claim, history)
       } else if (yield* hasEnded(record.sessionId)) {
         /**
-         * A claim whose submission has already ended (R173).
+         * A claim whose submission has already ended.
          *
          * `finishProjection` clears the admission and interrupt channels and
          * then finishes the claim. Those are two stores, so they are one
@@ -386,7 +386,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
          * submission should look like, and is the honest best available.
          *
          * Safe against a `finishProjection` still in flight, because `finish`
-         * only matches a claim whose stored text is unchanged (R66). Whichever
+         * only matches a claim whose stored text is unchanged. Whichever
          * arrives second finds the claim gone and reports `false`, so this
          * cannot erase a finish that succeeded or a claim that has moved on.
          *

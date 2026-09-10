@@ -3,7 +3,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 
 /**
- * Lifecycle hooks (issue #4 §13): run a side effect at points in a run --
+ * Lifecycle hooks: run a side effect at points in a run --
  * a tool starting, a run completing, an elicitation being requested -- without
  * touching the run itself.
  *

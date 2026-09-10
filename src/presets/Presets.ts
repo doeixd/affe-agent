@@ -15,17 +15,16 @@ import * as Sandbox from "../sandbox/Sandbox.js"
 import * as WorkspaceManager from "../sandbox/WorkspaceManager.js"
 
 /**
- * Opinionated assemblies over the primitives
- * (`docs/plan-primitives.md` §3B, §7 step 4).
+ * Opinionated assemblies over the primitives.
  *
  * Thirty-plus modules with no recipe means every target re-derives the
  * same wiring, and the ones that get it subtly wrong do not find out.
  * These are that recipe -- and they are **derived, not designed**: each
  * one is what `examples/ref-coding-agent.ts` and `examples/ref-gateway.ts`
- * had to write by hand, which is why the plan says a preset built before
- * its first two callers is a guess.
+ * had to write by hand, which is why a preset built before its first two
+ * callers is a guess.
  *
- * Three rules, from the plan's invariants:
+ * Three rules:
  *
  * 1. **Compose, never extend.** A preset is layer composition plus
  *    defaults. Nothing here has an execution model, a new type parameter
@@ -37,7 +36,7 @@ import * as WorkspaceManager from "../sandbox/WorkspaceManager.js"
  * 3. **A missing capability is a finding about the primitives**, not a
  *    licence to grow the preset.
  *
- * Deliberately absent: a chat preset. The plan names one, but nothing in
+ * Deliberately absent: a chat preset. Nothing in
  * this repository calls it yet, and a preset with no caller is the guess
  * rule 1 exists to prevent. It arrives with its first two callers.
  */
@@ -101,7 +100,7 @@ export interface CodingExtras {
    *
    * Opt-in rather than the default because it changes a lifetime, and a
    * caller relying on a private throwaway directory per agent should not have
-   * that quietly become a shared one. `docs/effect-plan-2.txt` §12-13.
+   * that quietly become a shared one.
    */
   readonly workspaces?: WorkspaceManager.Service | undefined
 }
@@ -256,10 +255,10 @@ export const gateway = <
 // ---------------------------------------------------------------------------
 
 /**
- * The bounds a run can have, as one record (item 60i, `plan-context-lessons.md`
- * 5.3). Sugar: `policy` expands it to the loop and the layer the seams
- * already are, adds no engine knob, and `readPolicy` reads the record back
- * out of the loop's own description -- which is how it is tested.
+ * The bounds a run can have, as one record. Sugar: `policy` expands it to the
+ * loop and the layer the seams already are, adds no engine knob, and
+ * `readPolicy` reads the record back out of the loop's own description --
+ * which is how it is tested.
  *
  * Compaction is deliberately not a field. A compaction transform owns
  * state and is built with `yield*`; a record cannot hold one unbuilt, and a

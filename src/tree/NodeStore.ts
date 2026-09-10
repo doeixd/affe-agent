@@ -7,8 +7,8 @@ import * as Namespace from "../internal/namespace.js"
 /**
  * Where a tree's nodes live.
  *
- * The tree talks to this and to nothing else about storage, which is what T1's
- * discipline of keeping `history` off `Node` was for: a node carries bounded
+ * The tree talks to this and to nothing else about storage, which is what
+ * keeping `history` off `Node` was for: a node carries bounded
  * metadata, the conversation is reached through an operation, and so the
  * representation is the store's business rather than the API's.
  *
@@ -106,7 +106,7 @@ export class StoreError extends Schema.TaggedError<StoreError>()(
  * persists should not have to handle a failure that cannot happen.
  *
  * Every operation is append-or-read. There is no update and no delete, because
- * IT3 says an ancestor never changes -- a tree grows at the leaves, and a node
+ * an ancestor never changes -- a tree grows at the leaves, and a node
  * that could be rewritten would silently rewrite history for every branch
  * below it.
  */
@@ -132,16 +132,6 @@ export interface NodeStore<E = never> {
 // In memory
 // ---------------------------------------------------------------------------
 
-/**
- * The default: keep everything as it was handed over.
- *
- * No encoding, and that is the reason this exists alongside a key-value
- * backing rather than being replaced by `KeyValueStore.layerMemory`. Prompts
- * are immutable and their message objects are already shared between a node
- * and its parent, so holding them costs a pointer per node. Routing them
- * through a JSON codec would deep-copy every conversation on every write and
- * throw the sharing away, to persist into a map that dies with the process.
- */
 /**
  * What a re-`put` of an existing id is allowed to change.
  *
@@ -197,6 +187,16 @@ const snapshot = (node: Node, history: Prompt.Prompt): Held => ({
   history: Prompt.fromMessages([...history.content])
 })
 
+/**
+ * The default: keep everything as it was handed over.
+ *
+ * No encoding, and that is the reason this exists alongside a key-value
+ * backing rather than being replaced by `KeyValueStore.layerMemory`. Prompts
+ * are immutable and their message objects are already shared between a node
+ * and its parent, so holding them costs a pointer per node. Routing them
+ * through a JSON codec would deep-copy every conversation on every write and
+ * throw the sharing away, to persist into a map that dies with the process.
+ */
 export const memory: Effect.Effect<NodeStore> = Effect.gen(function*() {
   /**
    * One `Ref`, not two.
@@ -260,8 +260,8 @@ const Entry = Schema.Struct({
   /**
    * The conversation, encoded.
    *
-   * Whole rather than a delta from the parent. The plan offers delta storage
-   * as the alternative and it is the better representation for a deep tree --
+   * Whole rather than a delta from the parent. Delta storage is the
+   * alternative and the better representation for a deep tree --
    * O(depth) to materialise, no write amplification -- but it needs a cache in
    * front of it to be worth having, and correctness first: whole snapshots are
    * obviously right, and swapping in deltas changes this module and nothing
@@ -340,17 +340,21 @@ export const keyValue = (
           ))
       ),
       // An index naming a node that is not there is a torn write, not an empty
-      // tree: reporting it as a gap would hide the damage.
+      // tree: reporting it as a gap would hide the damage. `Option.all`
+      // collects only if every entry resolved, so the failure and the
+      // unwrapping are one step rather than a throw after a separate check.
       Effect.flatMap((found) =>
-        found.some(Option.isNone)
-          ? Effect.fail(
-            new StoreError({
-              operation: "read index",
-              id: key,
-              detail: "the index names a node that is not stored"
-            })
-          )
-          : Effect.succeed(found.map((node) => Option.getOrThrow(node)))
+        Option.match(Option.all(found), {
+          onNone: () =>
+            Effect.fail(
+              new StoreError({
+                operation: "read index",
+                id: key,
+                detail: "the index names a node that is not stored"
+              })
+            ),
+          onSome: Effect.succeed
+        })
       )
     )
 

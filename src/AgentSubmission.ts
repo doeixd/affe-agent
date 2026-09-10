@@ -14,12 +14,12 @@ import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
 import type { SubmissionId } from "./internal/ids.js"
+import type { Session, SessionState } from "./internal/state.js"
 import * as Telemetry from "./internal/telemetry.js"
 
 /** Correlation id for one externally observed unit of work. */
 export const Id = Ids.SubmissionId
 export type Id = Ids.SubmissionId
-import type { Session, SessionState } from "./internal/state.js"
 
 /**
  * A started submission a caller holds, from `Agent.start`.

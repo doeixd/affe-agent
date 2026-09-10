@@ -38,14 +38,9 @@ type DiscoveredTool = Tool.Dynamic<
 /**
  * What this needs from an MCP client.
  *
- * Deliberately small, and deliberately an interface. Effect ships `McpServer`,
- * `McpProtocol` and `McpSchema` but no client, so there is nothing to depend
- * on yet — and writing a protocol implementation against a specification with
- * no peer to check it against is how plausible-but-wrong code gets shipped.
- *
- * Keeping the transport abstract means the type story is settled before the
- * client arrives rather than retrofitted around it, and it makes all of this
- * testable against a fake.
+ * Deliberately small, and deliberately an interface: it is the seam the
+ * `McpClient` adapters implement, so the type story is settled independently
+ * of any transport and all of this is testable against a fake.
  */
 export interface Connection {
   /** The server's advertised tools, as `tools/list` reports them. */

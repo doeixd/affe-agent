@@ -52,7 +52,7 @@ export const MAX_SEARCH_FILE_BYTES = 1024 * 1024
  * alphabetically, fills its whole result budget from `dist/` or
  * `node_modules/`, and never reaches the source. Measured on this repository
  * before the rule existed -- 100 matches, 13 files, every one of them build
- * output or a plan document, and 4.6 seconds spent to get there.
+ * output or documentation, and 4.6 seconds spent to get there.
  *
  * ripgrep gets this from `.gitignore`, which it can afford to parse because it
  * is a search tool. A fixed list of the usual suspects is most of that value
@@ -100,14 +100,6 @@ const cap = (text: string): string =>
   text.length > MAX_LINE_LENGTH ? text.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text
 
 /**
- * The rendered results, grouped by file.
- *
- * Grouping is what makes the output cheap to read: a path is stated once and
- * its matching lines listed under it, rather than repeated on every row.
- * Matches must already be ordered by file for the grouping to be meaningful,
- * which the walk guarantees.
- */
-/**
  * What the search says about files it declined to open.
  *
  * Phrased so the model's next move is obvious: the file has a name, and
@@ -117,6 +109,14 @@ export const skippedForSizeNote = (count: number): string =>
   `(${count} file${count === 1 ? "" : "s"} skipped: larger than ${MAX_SEARCH_FILE_BYTES}` +
   ` bytes. Read such a file by name if it is the one you want.)`
 
+/**
+ * The rendered results, grouped by file.
+ *
+ * Grouping is what makes the output cheap to read: a path is stated once and
+ * its matching lines listed under it, rather than repeated on every row.
+ * Matches must already be ordered by file for the grouping to be meaningful,
+ * which the walk guarantees.
+ */
 export const render = (
   matches: ReadonlyArray<Match>,
   skippedForSize = 0

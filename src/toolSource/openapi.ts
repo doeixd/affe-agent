@@ -103,7 +103,7 @@ const sanitizeHeaderName = (name: string): string =>
   name.replace(/[\r\n\0:]/g, "").trim().slice(0, MAX_HEADER_NAME_CHARS)
 
 /**
- * Minimal OpenAPI extractor — `research-tool-sources.md` §6.3.
+ * Minimal OpenAPI extractor.
  *
  * Honest starting point: JSON bodies, JSON responses, `form` query,
  * `simple` path/header, everything else `skipped` rather than broken.
@@ -800,7 +800,7 @@ export const makeOpenApiSource = (
           }
           if (httpResponse.status < 200 || httpResponse.status >= 300) {
             const text = yield* httpResponse.text.pipe(Effect.orElseSucceed(() => ""))
-            return yield* new InvocationError({ sourceId: id, toolName: name, detail: `HTTP ${httpResponse.status} ${""}${text ? `: ${text.slice(0, 500)}` : ""}` })
+            return yield* new InvocationError({ sourceId: id, toolName: name, detail: `HTTP ${httpResponse.status}${text ? `: ${text.slice(0, 500)}` : ""}` })
           }
           const contentType = Option.getOrNull(Headers.get(httpResponse.headers, "content-type")) ?? ""
           if (contentType.includes("application/json") || contentType.includes("+json")) {

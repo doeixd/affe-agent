@@ -16,7 +16,7 @@ import { describedTools } from "../internal/describedTools.js"
  * of asking the model again.
  *
  * This is a Layer that replaces `LanguageModel`, so the harness above it is
- * untouched — it is the substitution point PLAN §30.1 identified.
+ * untouched — it is the substitution point.
  */
 
 /**
@@ -50,8 +50,7 @@ export class DurableModelFailure extends Schema.TaggedError<DurableModelFailure>
  * provider's own error; a defect stays a defect. Re-raising a defect typed
  * reported it as an ordinary failure to a caller in another process --
  * `isDefect: false` on the submission's failure -- while the same defect
- * in-process was a defect, which is the drift `plan-streaming-followups.md`
- * §8 audits for.
+ * in-process was a defect -- the drift this rule closes.
  */
 export const reraise = (
   outcome: ModelOutcome
@@ -80,7 +79,7 @@ export const reraise = (
  * part the first run recorded -- a reasoning signature included -- rather
  * than one with its provider metadata stripped.
  *
- * Built from the *decoded* parts (item 103). It used to encode them first and
+ * Built from the *decoded* parts. It used to encode them first and
  * hand the encoded values on as though they were decoded stream parts, which
  * a cast hid and which is not the same thing: a file part's bytes arrived as
  * their base64 string, so a streamed replay committed a different file part

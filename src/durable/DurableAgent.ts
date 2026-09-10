@@ -87,7 +87,7 @@ const interruptSignalName = (sessionId: string): string =>
  * `Workflow.interrupt` is not this. The engine implements it as *mark and
  * resume*: it sets a flag and forks a fresh replay, and the replay -- which
  * knows nothing about why it was restarted -- runs to completion. That is the
- * D4 violation issue #77 records: an interrupted submission finishing
+ * violation: an interrupted submission finishing
  * successfully, under a guarantee that says it must not.
  *
  * So interruption is a recorded *intent*, exactly as `DurableSubmission`
@@ -111,7 +111,8 @@ export const interrupt = (
  * text, which has no room for an outcome tag, and a session absorbs
  * interruption by design -- `prompt` returns normally with whatever was
  * committed before the cut. Without this conversion that partial text is
- * recorded as a successful completion, which is precisely what D4 forbids.
+ * recorded as a successful completion, which is precisely what this conversion
+ * prevents.
  * The tag matches the event `AgentSession` emits for the same thing, so a
  * caller branching on it needs no second vocabulary.
  */
@@ -316,7 +317,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // *twice*, to `Agent.make` and again here, and every existing test
       // happened to do so, which is why it went unnoticed.
       /**
-       * R37 -- a plan and durability cannot both own the model call.
+       * A plan and durability cannot both own the model call.
        *
        * `DurableModel` wraps the ambient `LanguageModel` so a completed call
        * is journalled and a replay returns the recorded response instead of
@@ -612,7 +613,7 @@ class Reassigning {
  *
  * A workflow's execution id is a hash of its idempotency key, and this
  * package's key is `${name}:${sessionId}` — the prompt is deliberately not part
- * of it, because PLAN §11 allows a session at most one live submission. So the
+ * of it, because a session allows at most one live submission. So the
  * id is a pure function of the session, and callers that hold only a session id
  * (a cluster entity, an operator, an HTTP route) can address its submission
  * without inventing a prompt to hash.
@@ -650,7 +651,7 @@ export const throughShardReassignment: <A, E, R>(
  * The idempotency key is the **session**, not the input. Retrying a submit is
  * therefore safe, but a second submit with *different* input for the same
  * session rejoins the live execution rather than starting a new one — the new
- * input is not processed. That upholds PLAN §11's one-submission-per-session
+ * input is not processed. That upholds the one-submission-per-session
  * rule; queue further work with `followUp` instead. A submit against a
  * session whose execution has already *completed* returns that execution's
  * id without reopening admission: a conversation that continues across

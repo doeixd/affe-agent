@@ -13,7 +13,7 @@ import * as Namespace from "../internal/namespace.js"
 /**
  * A workspace that outlives whoever asked for it first.
  *
- * `docs/effect-plan-2.txt` §12–13. Acquiring a sandbox is `Scope`-bound, and
+ * Acquiring a sandbox is `Scope`-bound, and
  * the local provider makes a fresh temporary directory per acquisition unless
  * a `workspaceRoot` is configured. Two callers naming the same workspace
  * therefore get two different directories, and each one dies with the scope
@@ -48,7 +48,7 @@ import * as Namespace from "../internal/namespace.js"
  * same way -- a keyed scoped resource with a varying number of holders should
  * be released when the last of them goes, rather than when something guesses.
  *
- * `audit-effect-ecosystem.md` E4 rejected `LayerMap` for the agent server's
+ * An earlier audit rejected `LayerMap` for the agent server's
  * *static* routes, because `HttpRouter.use` binds paths when the layer is
  * built rather than on first request. It reserves `LayerMap` for a different,
  * still-unbuilt design -- the agent server with the agent name as a path
@@ -57,7 +57,7 @@ import * as Namespace from "../internal/namespace.js"
  *
  * ## What this must not become
  *
- * **It must not own a process.** §13 is explicit and the reasoning is right: a
+ * **It must not own a process.** The reasoning is right: a
  * process is *managed* precisely because it outlives its handles, so reference
  * counting would kill it exactly when the last handle drops -- which is the
  * opposite of what a managed process is for. Workspaces are reference-counted

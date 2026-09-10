@@ -187,7 +187,7 @@ const finishProjection = (
       // agent. It crosses the journal because it is a `Schema.TaggedError`.
       error: StorageError,
       /**
-       * R173, and why the order stays as it is.
+       * Why the order stays as it is.
        *
        * These two are grouped in one activity but not one storage
        * transaction -- they can be different stores -- so one can commit and
@@ -209,7 +209,7 @@ const finishProjection = (
        * (`admission is closed before the session goes idle, never after`)
        * pins it.
        *
-       * Closing R173 properly needs one of two things this ordering cannot
+       * Closing it properly needs one of two things this ordering cannot
        * provide: both writes in one transaction, or reconciliation that
        * inspects a completed workflow and finishes its claim. Until then the
        * wedge is a real, recorded limitation rather than a fixed one.
@@ -413,7 +413,7 @@ const recordingSink = (
    *
    * Dying is also the outcome we want, which is why this is not a workaround.
    * A submission whose events cannot be recorded has a gap in the client's
-   * reconnect stream (D5), so it must not be reported as having completed
+   * reconnect stream, so it must not be reported as having completed
    * normally -- and `isInfrastructure` turns exactly this into an
    * `Infrastructure` outcome, which the client reports as the retryable
    * transport failure it is.
@@ -467,7 +467,7 @@ const recordingSink = (
      * that failed left the session idle with its terminal event gone -- and
      * gone permanently, because nothing holds it any more and no reader can
      * tell a submission that ended from one whose ending was never recorded.
-     * That is the exact shape D5 forbids.
+     * That is the exact failure the new order avoids.
      *
      * Reading without clearing, appending, and clearing only on success means
      * a failure keeps the event for a retry. The cost is that a *successful*

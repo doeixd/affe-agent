@@ -94,11 +94,11 @@ export interface Turn {
    */
   readonly interruptAfterParts?: number
   /**
-   * Streaming only: after this many stream parts, fail the stream itself
-   * with a typed provider error -- the stream's own error channel, which is
-   * what an execution plan's retry and fallback act on. `streamError` is
-   * different: that is an error *part*, folded into a failure downstream of
-   * any plan.
+   * Streaming only: after the first two stream parts, fail the stream itself
+   * with a typed provider error whose description this is -- the stream's own
+   * error channel, which is what an execution plan's retry and fallback act
+   * on. `streamError` is different: that is an error *part*, folded into a
+   * failure downstream of any plan.
    */
   readonly failAfterParts?: string
   /**

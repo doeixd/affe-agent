@@ -5,12 +5,12 @@ import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
 
 /**
- * Behavioural evals (issue #4 / ADDITIONAL §9).
+ * Behavioural evals.
  *
  * A test asks "does the code do the thing"; an eval asks "does the agent behave
  * the way we want" -- did it call the right tool, stay under a turn budget,
  * answer with the right shape. This package is the second, kept separate from
- * `/testing` as the brief asks.
+ * `/testing`.
  *
  * Everything here runs through the **public** session interface -- `prompt`, the
  * committed `history`, the `Result` -- never internals, so an eval written

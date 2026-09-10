@@ -15,8 +15,7 @@ import * as Namespace from "./namespace.js"
  * code. `test/DurableStorageFaults.test.ts` can make a *store* fail, which is a
  * different question: it exercises error handling, not the window between two
  * durable writes. The relay's own review is the cautionary case -- two real
- * defects in teardown, and a test for them that passed with the fix removed
- * (`docs/plan-failure-paths.md` §3.2).
+ * defects in teardown, and a test for them that passed with the fix removed.
  *
  * **The naming rule.** A location names the durable *boundary* it sits beside
  * -- `before-persist`, `after-persist` -- never a function or a line. Renaming

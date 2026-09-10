@@ -4,7 +4,7 @@ import { Model, Prompt } from "effect/unstable/ai"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * What a model can do (`docs/plan-model-capabilities.md` §4).
+ * What a model can do.
  *
  * Upstream's `Model` carries two strings and a layer: a provider name and a
  * model name. It does not say how much context the model holds, what it costs,
@@ -16,8 +16,8 @@ import * as Namespace from "../internal/namespace.js"
  *
  * It is **not** a provider abstraction. Provider-specific request options
  * (`temperature`, Anthropic's `thinking`, OpenAI's `reasoning.effort`) stay in
- * each provider's own `Config`, reached through `withConfigOverride`; §3 of the
- * plan argues why normalising them across providers is a non-goal. The line
+ * each provider's own `Config`, reached through `withConfigOverride`;
+ * normalising them across providers is deliberately a non-goal. The line
  * this module holds: **a capability is a fact about a model that a caller must
  * branch on; an option is an instruction to a provider.**
  *
@@ -40,8 +40,8 @@ import * as Namespace from "../internal/namespace.js"
  * consumer that cannot answer its question from what is present should say so
  * (or decline to act), not assume.
  *
- * This is a deliberate change from the plan's §4.1 sketch, which had every
- * field required. Filling in the required fields for the models this
+ * This is a deliberate change from an earlier sketch, which had every field
+ * required. Filling in the required fields for the models this
  * repository's pinned rcs name turned out to need data that is not published
  * per model in any source available here -- see `builtin`.
  */
@@ -131,7 +131,7 @@ export class UnpricedModelError extends Schema.TaggedError<UnpricedModelError>()
  * that priced only reads would under-count the first turn of every
  * conversation -- exactly the agents prompt caching is for. `Response.Usage`
  * separates `uncached` / `cacheRead` / `cacheWrite`, which is what makes this
- * possible; §12.1 of the plan verified it before this code existed.
+ * possible.
  *
  * Every field of that usage struct is optional. So `uncached` is taken as
  * given when the provider reports it, and otherwise reconstructed from
@@ -194,7 +194,7 @@ export class ModelCapabilities extends Context.Service<ModelCapabilities, {
     UnknownModelError | UnknownCurrentModelError
   >
   /**
-   * Named `forModel` rather than the plan's `of`: `Context.Service` already
+   * Named `forModel` rather than `of`: `Context.Service` already
    * puts an `of` static on the class, and a method of the same name shadows
    * it -- the constructor call then typechecks the service object against
    * this signature instead. Found by the compiler, not by reasoning.
@@ -343,8 +343,8 @@ export const UNCLASSIFIED: Readonly<Record<string, ReadonlyArray<string>>> = {
  * per id is neither maintainable nor checkable, which is exactly the drift the
  * guard on the Anthropic table exists to prevent. A partial OpenAI table with
  * no guard would give the *appearance* of coverage; `fromTable` gives real
- * coverage for the handful of ids a given deployment actually uses. The plan's
- * §4.3 assumed one exhaustiveness rule for every provider; counting the unions
+ * coverage for the handful of ids a given deployment actually uses. One
+ * exhaustiveness rule for every provider does not hold; counting the unions
  * is what showed a provider's table has to be either exhaustive and guarded,
  * or absent.
  */
@@ -354,6 +354,13 @@ export const builtin: Layer.Layer<ModelCapabilities> = fromTable({
 
 /** The built-in rows, for a caller extending rather than replacing them. */
 export const builtinTable: Table = { anthropic: ANTHROPIC }
+
+/** The `ContextBudget` shape `Compaction.tokens` consumes, stated structurally. */
+export interface ResolvedBudget {
+  readonly contextWindow: number
+  readonly reserveTokens: number
+  readonly keepRecentTokens: number
+}
 
 /**
  * A `Compaction.ResolveBudget` that sizes the window from the model in scope.
@@ -392,13 +399,6 @@ export const builtinTable: Table = { anthropic: ANTHROPIC }
  * shape is what makes it assignable, and `test/ModelCapabilities.test.ts`
  * pins the assignability so the two cannot drift apart unnoticed.
  */
-/** The `ContextBudget` shape `Compaction.tokens` consumes, stated structurally. */
-export interface ResolvedBudget {
-  readonly contextWindow: number
-  readonly reserveTokens: number
-  readonly keepRecentTokens: number
-}
-
 export const budget = (options: {
   /**
    * Tokens held back for the response. Defaults to the model's

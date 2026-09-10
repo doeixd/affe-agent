@@ -76,7 +76,7 @@ export type Summary = typeof Summary.Type
  * instructions), a marker saying which window this is, the model's own
  * handoff note if it left one, and the retained tail.
  *
- * The other kind of checkpoint (`plan-context-lessons.md` 2.1). A summary
+ * The other kind of checkpoint. A summary
  * pays a model call and can invent; a rollover pays nothing and keeps only
  * what the model chose to carry forward. It is what a model asks for with
  * `new_context`, and what a token policy falls back to when a summary will
@@ -192,9 +192,9 @@ const evidenceNotInstructions =
 /**
  * Search the session's own canonical history -- folded and unfolded alike --
  * for a phrase. Read-only, at most three hits, each an excerpt around the
- * first match; nothing here is a summary and no model call is made. Item
- * 60e: after a fold, what the model lost is still there to be searched,
- * bounded so it cannot pull the whole transcript back in.
+ * first match; nothing here is a summary and no model call is made. After a
+ * fold, what the model lost is still there to be searched, bounded so it
+ * cannot pull the whole transcript back in.
  *
  * Which session is searched is decided by where the call runs
  * (`CurrentSessionId`), never by a parameter, so a model cannot read
@@ -496,7 +496,7 @@ const summaryMessage = (summary: string) =>
  * history, which is where a session's instructions live (`AgentSession`
  * seeds history with them). Every projection keeps them ahead of whatever
  * stands in for the rest, summary or marker; a fold that dropped them left
- * the model without its instructions from the first compaction on (item 60l).
+ * the model without its instructions from the first compaction on.
  */
 const protectedPrefix = (
   messages: ReadonlyArray<Prompt.Message>,
@@ -1270,9 +1270,6 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
       )
     })
     const checkpoints = yield* Ref.make(new Map<string, Checkpoint>())
-    // The last projection made for each session, for `contextRemaining`.
-    // Transient by nature -- it describes the turn that just ran -- so it is
-    // in memory even when checkpoints are persisted, and bounded the same way.
     // The canonical history the transform last saw for each session, so the
     // evidence tools can search what the projection folded. A reference to
     // the session's own value, not a copy; bounded like `windows`.
@@ -1289,6 +1286,9 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         }
         return next
       })
+    // The last projection made for each session, for `contextRemaining`.
+    // Transient by nature -- it describes the turn that just ran -- so it is
+    // in memory even when checkpoints are persisted, and bounded the same way.
     const windows = yield* Ref.make(new Map<string, RecordedWindow>())
     const recordWindow = (sessionId: string, status: RecordedWindow) =>
       Ref.update(windows, (all) => {

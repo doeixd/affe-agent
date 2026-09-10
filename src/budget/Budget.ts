@@ -7,7 +7,7 @@ import * as ModelCapabilities from "../model/ModelCapabilities.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Budget enforcement (design-review E1).
+ * Budget enforcement.
  *
  * A ceiling on what a session is allowed to spend, enforced through the existing
  * loop seam -- not a new runtime. Token and turn ceilings otherwise show up only
@@ -45,11 +45,6 @@ const tokensOf = (
 ): number => (response.usage.inputTokens.total ?? 0) + (response.usage.outputTokens.total ?? 0)
 
 /**
- * A session's cumulative token spend. Provided as a Layer, so where you provide
- * it decides the scope: per session (an independent cap per conversation) or
- * once for the whole application (a shared pool).
- */
-/**
  * What a charge is *for*: one turn of one run, named so it can be recognised.
  *
  * A durable submission replays its loop. The model is not asked again -- the
@@ -84,6 +79,11 @@ export const occurrence = (state: {
   readonly turnIndex: number
 }): Occurrence => `${state.runId}:${state.turnIndex}`
 
+/**
+ * A session's cumulative token spend. Provided as a Layer, so where you provide
+ * it decides the scope: per session (an independent cap per conversation) or
+ * once for the whole application (a shared pool).
+ */
 export class Budget extends Context.Service<Budget, {
   /**
    * Add a turn's tokens to the running total and return the new total.
@@ -128,7 +128,7 @@ export const layer: Layer.Layer<Budget> = Layer.effect(Budget, Effect.suspend(()
  * second charge, and only a turn that could still be replayed needs one. A
  * per-session layer never reaches the bound. An application-scoped layer
  * that outlives thousands of sessions did, before this, keep every key it
- * had ever seen (item 60g-i); now the oldest session's keys go first, so a
+ * had ever seen; now the oldest session's keys go first, so a
  * replay of a session evicted long ago would be charged again -- the
  * conservative direction for a ceiling.
  */
@@ -255,10 +255,9 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
  * Record one turn against the ambient `Budget`, if there is one.
  *
  * **Called by the engine after every turn, before the loop is asked.** Not
- * by a loop combinator, and the reason is what `plan-after-seams.md` 2.4
- * found: a loop is per session, so a combinator that both recorded and
- * decided charged only the turns of the session it wrapped, and a delegated
- * child -- a session of its own, running under the parent's context -- was
+ * by a loop combinator: a loop is per session, so a combinator that both
+ * recorded and decided charged only the turns of the session it wrapped, and a
+ * delegated child -- a session of its own, running under the parent's context -- was
  * charged to nobody. With the engine recording, a session under a `Budget`
  * is counted whether or not anything reads the count, a child charges the
  * parent's counter because it runs under the parent's context and for no

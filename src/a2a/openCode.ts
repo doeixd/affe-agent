@@ -40,17 +40,16 @@ import * as DelegatedPermission from "./internal/delegatedPermission.js"
 /**
  * OpenCode as an A2A agent, over `opencode serve`.
  *
- * `docs/plan-a2a-layers-bridges.txt` step 3, and the plan is emphatic about
- * *how*: do not shell out to `opencode run` and parse a terminal. OpenCode is
- * already a server -- sessions, an event bus, and first-class permission
- * requests -- so the bridge speaks its HTTP API and inherits all three. That is
- * also why this needed none of `Sandbox.execStream`: the seam the Claude Code
- * bridge required does not appear here at all, which is the sign it was put in
- * the right place rather than everywhere.
+ * The *how* matters here: do not shell out to `opencode run` and parse a
+ * terminal. OpenCode is already a server -- sessions, an event bus, and
+ * first-class permission requests -- so the bridge speaks its HTTP API and
+ * inherits all three. That is also why this needed none of `Sandbox.execStream`:
+ * the seam the Claude Code bridge required does not appear here at all, which is
+ * the sign it was put in the right place rather than everywhere.
  *
  * The A2A surface is `ClaudeCodeA2A`'s, deliberately. Two runtimes with
- * "wildly different implementations" (the plan's words) present the same
- * `RemoteAgent`, so `AgentA2A.tool` makes either one an ordinary tool and a
+ * "wildly different implementations" present the same `RemoteAgent`, so
+ * `AgentA2A.tool` makes either one an ordinary tool and a
  * manager delegating to both writes the same code twice.
  *
  * **Permissions are tighter here.** Claude Code has to be *given* a prompt tool

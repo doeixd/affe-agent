@@ -12,7 +12,7 @@ import type * as DurableChannels from "../durable/DurableChannels.js"
  * a durable submission, and the cluster guarantees it fires once across the
  * whole deployment rather than once per node.
  *
- * The harness contributes nothing here, which is the point of PLAN §30.2.
+ * The harness contributes nothing here, which is the point.
  */
 
 /**

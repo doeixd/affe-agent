@@ -7,8 +7,7 @@ import * as Catalog from "./Catalog.js"
 import * as CodeMode from "./CodeMode.js"
 
 /**
- * The model-facing half of code mode
- * (`docs/plan-code-mode-engine.md` step 5).
+ * The model-facing half of code mode.
  *
  * One tool the model calls with a program. Its *description* carries the
  * budgeted catalog, which is the entire point of code mode: a large tool
@@ -168,7 +167,7 @@ export interface Options<Groups extends CodeMode.ToolGroups, R> {
   readonly searchToolName?: string | undefined
 }
 
-/**
+/*
  * There is deliberately no `resumeFrom` here.
  *
  * A bound tool is built once and mounted on an agent; a resumption is one

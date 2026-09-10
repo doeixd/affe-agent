@@ -7,14 +7,13 @@ import * as ProcessManager from "./ProcessManager.js"
 
 /**
  * Managed processes as tools, each projected for `Permission` as its own
- * act (`docs/effect-plan-2.txt` §21, §23).
+ * act.
  *
  * The projections are the point. Approving `start_process` for `npm test`
  * approves *that*: it does not approve stopping it later, and a policy that
- * allows `process:start` says nothing about `process:stop`. (The plan spells
- * them `process.start`; the colon is because `lint:portability` reads
- * `process.` as the Node global, and a rule spelling is not worth an
- * exemption.) The runtime's
+ * allows `process:start` says nothing about `process:stop`. (The colon is
+ * because `lint:portability` reads `process.` as the Node global, and a rule
+ * spelling is not worth an exemption.) The runtime's
  * own actions -- the timeout killing it, the manager closing -- need no
  * approval, because they are part of the execution the start approved.
  *
@@ -28,7 +27,7 @@ import * as ProcessManager from "./ProcessManager.js"
  * A process starts in the sandbox the tool runs under (`Sandbox.Current`),
  * so a toolkit that is already confined to a workspace confines what it
  * starts to the same one. There is no `write_process`: `Sandbox` has no
- * stdin, and §21's process-write projection waits for that.
+ * stdin, and a process-write projection waits for that.
  */
 
 const commandLine = (executable: string, args: ReadonlyArray<string>) =>

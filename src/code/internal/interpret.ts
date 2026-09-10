@@ -4,8 +4,7 @@ import { CodeDiagnostic } from "./diagnostics.js"
 import * as Namespace from "../../internal/namespace.js"
 
 /**
- * The owned tree-walking interpreter
- * (`docs/plan-code-mode-engine.md` step 4, the §5.4 minimal subset).
+ * The owned tree-walking interpreter.
  *
  * Effect-based on purpose: every evaluation step is an `Effect`, so host
  * interruption propagates for free, tool calls run on the caller's fibre

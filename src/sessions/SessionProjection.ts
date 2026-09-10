@@ -10,7 +10,7 @@ import type {
 /**
  * A session's event stream, folded into an answer.
  *
- * `docs/effect-plan-2.txt` §27. The stream says what *happened*; a directory,
+ * The stream says what *happened*; a directory,
  * a dashboard or an operator asking "what is this session doing and what has
  * it cost" wants what is *true now*, and deriving that by re-reading the log
  * at every query is the thing this exists to avoid.
@@ -26,9 +26,7 @@ import type {
  *   duplicate is ignorable and a gap is *detectable* -- and this records both
  *   rather than trusting delivery order.
  * - **Not a durable log.** `DeliveryLog` is that, and it already gives
- *   session-wide cursor replay. This folds it; it does not duplicate it. The
- *   plan is explicit on that point and so is `plan-durability-hardening.md`
- *   H4b.
+ *   session-wide cursor replay. This folds it; it does not duplicate it.
  *
  * ## On gaps
  *
@@ -73,7 +71,7 @@ import type {
  *
  * ## What this is not
  *
- * Not a `SessionDirectory` (§26): that is a management store with pagination,
+ * Not a `SessionDirectory`: that is a management store with pagination,
  * rename and namespaces, and it is not built. This is the reducer such a
  * directory would keep per session to answer `stats`. Not `Hooks.on` either,
  * which dispatches on a live stream and holds nothing.
@@ -148,7 +146,7 @@ export interface Projection {
    *
    * Zero for a caller feeding one session's stream, which is what
    * `AgentSession.events` and `DeliveryLog.read` both are. It is not zero when
-   * a host-wide stream (§29) is routed to the wrong projection, which is the
+   * a host-wide stream is routed to the wrong projection, which is the
    * mistake worth surfacing rather than silently folding in.
    */
   readonly foreign: number

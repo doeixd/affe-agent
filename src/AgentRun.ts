@@ -7,12 +7,12 @@ import * as RunLedger from "./RunLedger.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Ids from "./internal/ids.js"
 import type { RunId, SubmissionId } from "./internal/ids.js"
+import type { Session } from "./internal/state.js"
 import * as Telemetry from "./internal/telemetry.js"
 
 /** Correlation id for one run within a submission. */
 export const Id = Ids.RunId
 export type Id = Ids.RunId
-import type { Session } from "./internal/state.js"
 
 export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly runId: RunId

@@ -328,25 +328,6 @@ export const acquireSession = Effect.fn("AgentRpc.acquireSession")(function* (
 
 // --- the client seam -------------------------------------------------------
 
-/**
- * Adapt the RPC client to the `AgentClient` seam.
- *
- * Without this, RPC was the one advertised transport whose client side no
- * suite could see. `AgentClientConformance` covered the in-process, HTTP and
- * durable clients; the RPC file ran only the protocol-error contract, and the
- * relay -- which is Effect RPC over a bus -- ran a single hand-written test.
- * That is how the relay shipped with a teardown bug that was a *contract*
- * violation, caught by review rather than by a suite
- * (`docs/plan-failure-paths.md` 48f).
- *
- * The mapping is thinner than the HTTP one, and the reason is worth stating:
- * the RPC group declares `AgentProtocol.RemoteError`, so every anticipated
- * protocol failure arrives already typed and is passed straight through. Only
- * the transport's own `RpcClientError` has to be translated. HTTP has to
- * decode a status and a body back into the same union, which is where its
- * six-of-fifteen bug came from.
- */
-
 /** A session id is required on the wire; a client-side operation without one is transport-shaped. */
 const transportError = (sessionId: string, error: RpcClientError.RpcClientError) =>
   new AgentClient.AgentTransportError({
@@ -384,7 +365,24 @@ export interface AgentClientOptions {
   readonly headers?: Headers.Input | undefined
 }
 
-/** Adapt an RPC client to `AgentClient`. Exported for a caller holding its own client. */
+/**
+ * Adapt the RPC client to the `AgentClient` seam. Exported for a caller
+ * holding its own client.
+ *
+ * Without this, RPC was the one advertised transport whose client side no
+ * suite could see. `AgentClientConformance` covered the in-process, HTTP and
+ * durable clients; the RPC file ran only the protocol-error contract, and the
+ * relay -- which is Effect RPC over a bus -- ran a single hand-written test.
+ * That is how the relay shipped with a teardown bug that was a *contract*
+ * violation, caught by review rather than by a suite.
+ *
+ * The mapping is thinner than the HTTP one, and the reason is worth stating:
+ * the RPC group declares `AgentProtocol.RemoteError`, so every anticipated
+ * protocol failure arrives already typed and is passed straight through. Only
+ * the transport's own `RpcClientError` has to be translated. HTTP has to
+ * decode a status and a body back into the same union, which is where its
+ * six-of-fifteen bug came from.
+ */
 export const agentClientFrom = (
   client: Service,
   options?: AgentClientOptions

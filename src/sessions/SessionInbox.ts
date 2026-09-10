@@ -7,7 +7,7 @@ import * as Namespace from "../internal/namespace.js"
 /**
  * Where background work reaches a conversation.
  *
- * `effect-plan-2.txt` §1–§5. A process exits, a monitor goes healthy, an
+ * A process exits, a monitor goes healthy, an
  * import finishes: each is a completion that happened *outside* any
  * submission and has to reach the session that cares about it. Without a
  * seam for that, the producer's only options are to hold a session handle
@@ -17,7 +17,7 @@ import * as Namespace from "../internal/namespace.js"
  * ## The rule this module exists to enforce
  *
  * **A ping-back is future session input, never implicitly a follow-up.**
- * §5 argues it with an example worth keeping in mind:
+ * An example is worth keeping in mind:
  *
  * ```text
  * submission A: "research competitors"   → starts background task X
@@ -37,13 +37,13 @@ import * as Namespace from "../internal/namespace.js"
  *
  * `/scheduling`'s `AgentDispatcher` is the thing this resembles and is not.
  * That starts *independent* work -- an `Agent.run` of its own, with no
- * conversation behind it. This resumes an existing one. Both exist; §5 is
- * emphatic that they stay separate, because merging them would make "does
- * this belong to a conversation?" a runtime accident.
+ * conversation behind it. This resumes an existing one. Both exist; keeping
+ * them separate is deliberate, because merging them would make "does this
+ * belong to a conversation?" a runtime accident.
  *
  * ## Idempotency is the item's identity
  *
- * `Item.id` is an idempotency key, and the examples in §1 are the shape to
+ * `Item.id` is an idempotency key, and the examples are the shape to
  * follow: `process:proc-123:exit`, `monitor:deploy-health:healthy`,
  * `job:invoice-import:completed`. It is enforced twice over, deliberately.
  * `PersistedQueue.offer` ignores an id already queued, so observing the same
@@ -57,8 +57,8 @@ import * as Namespace from "../internal/namespace.js"
  * An item carries a **prompt**. An agent that declares a typed input
  * (`AgentInput`) cannot be fed from here yet: the queue would have to carry
  * the encoded value and the delivery decode it with that session's schema,
- * which is the same widening `remaining-work.md` item 46 describes for every
- * other surface. Named here rather than discovered later.
+ * which is the same widening every other surface needs. Named here rather
+ * than discovered later.
  */
 
 /** A completion waiting to reach a session. */
@@ -242,17 +242,13 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
       if (settled === "closed") {
         return undeliverable(item, `session ${item.sessionId} is closed`)
       }
-      // `submit`, not `prompt`: the inbox's job ends when the work is
-      // admitted. Waiting for the answer would let one slow conversation
-      // hold up every other session's completions.
-      //
       // The idempotency key is the item's own id, so a redelivery after a
       // crash between the submit and the queue's acknowledgement is the same
       // request rather than a second one.
+      //
       // A submit that fails here is left transient on purpose: the session
       // was idle a moment ago, so the likeliest cause is another submission
-      // winning the race, and that is worth another attempt. The idempotency
-      // key makes the retry the same request rather than a second one.
+      // winning the race, and that is worth another attempt.
       yield* session.submit(item.input, { idempotencyKey: item.id }).pipe(
         Effect.mapError(fail(`submit ${item.id}`))
       )

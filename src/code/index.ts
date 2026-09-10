@@ -1,12 +1,11 @@
 /**
  * Code mode's interpreter-free half: JSDoc-annotated TypeScript signatures
  * generated from toolkits, the token-budgeted round-robin catalog, and
- * deterministic search (`docs/research-code-mode.md` §5.4 step 1).
+ * deterministic search.
  *
  * Useful on its own -- it is the fix for prompt bloat whether or not a
  * program ever runs. The engine (the owned interpreter, `execute`, the
- * data boundary) is later work with its own plan and, when it lands, its
- * own dependency cost behind this same entry.
+ * data boundary) lives behind this same entry, with its own dependency cost.
  */
 export * as Catalog from "./Catalog.js"
 export * as CodeMode from "./CodeMode.js"

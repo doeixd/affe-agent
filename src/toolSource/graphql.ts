@@ -211,7 +211,7 @@ const validateSelect = (select: string | undefined): string | undefined => {
 }
 
 /**
- * Minimal GraphQL extractor — `research-tool-sources.md` §2.4 / §6.3.
+ * Minimal GraphQL extractor.
  *
  * Walks only root `Query` and `Mutation` fields — the actual API surface,
  * bounded at tens to low hundreds even for large schemas. Field arguments
@@ -754,7 +754,7 @@ export const makeGraphQLSource = (
             return yield* new InvocationError({
               sourceId: id,
               toolName: name,
-              detail: `HTTP ${httpResponse.status} ${""}${text ? `: ${String(text).slice(0, 500)}` : ""}`
+              detail: `HTTP ${httpResponse.status}${text ? `: ${String(text).slice(0, 500)}` : ""}`
             })
           }
           json = yield* httpResponse.json.pipe(

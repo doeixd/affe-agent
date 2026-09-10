@@ -1,6 +1,5 @@
 /**
- * Shape recovery for model-written programs
- * (`docs/plan-code-mode-engine.md` step 3).
+ * Shape recovery for model-written programs.
  *
  * Models wrap answers in code fences, write `export default`, and hand
  * back bare arrow functions -- executor's comment records a 180-second
@@ -11,8 +10,8 @@
  * Deliberately *not* here: TypeScript type-syntax stripping. Without a
  * parser, a regex stripper mangles object literals, ternaries and
  * strings into programs that are wrong yet still run -- the silent
- * corruption class this module exists ahead of. Type stripping is step
- * 4's job, where the parser can do it honestly; until then TS syntax is
+ * corruption class this module exists ahead of. Type stripping is the
+ * parser's job, where it can be done honestly; until then TS syntax is
  * an `UnsupportedSyntax` diagnostic, not a guess.
  *
  * Every applied step is reported, so a diagnostic about the recovered

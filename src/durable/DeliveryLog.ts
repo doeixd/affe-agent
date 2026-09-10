@@ -120,9 +120,9 @@ export const encodeEnvelope = (
 /**
  * Decoding is a different claim, and this one matters more here than anywhere.
  *
- * D5 says a consumer reconnecting from its saved offset sees every event it
+ * A consumer reconnecting from its saved offset must see every event it
  * had not seen, with no gap. A row it cannot decode -- truncated, written by an
- * older schema, corrupted -- is exactly the gap D5 forbids, and `orDie` made it
+ * older schema, corrupted -- is exactly that gap, and `orDie` made it
  * arrive as a dead fibre rather than as something the consumer could report or
  * retry. It is now in the error channel, where a reconnect strategy can see it.
  */

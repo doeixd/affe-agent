@@ -7,7 +7,7 @@ import * as Permission from "../Permission.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Long-term, cross-session memory (issue #4 / ADDITIONAL §8).
+ * Long-term, cross-session memory.
  *
  * This is *not* conversation history -- that is canonical, owned by the run
  * engine and scoped to one session. Memory is what a session should still know

@@ -2,8 +2,7 @@ import type * as acorn from "acorn"
 import type { CodeDiagnostic } from "./diagnostics.js"
 
 /**
- * Pre-flight: every refusal the program earns, in one pass
- * (`docs/plan-code-mode-executors.md` step 3).
+ * Pre-flight: every refusal the program earns, in one pass.
  *
  * The interpreter refuses the first problem it *reaches*, at the moment it
  * reaches it. A program that makes three expensive calls and then names a
@@ -18,7 +17,7 @@ import type { CodeDiagnostic } from "./diagnostics.js"
  *
  * ## What it checks, and why not more
  *
- * The plan for this step assumed the interpreter kept a table of supported
+ * This pass originally assumed the interpreter kept a table of supported
  * node kinds that both could share. It does not: its refusals are inline
  * and several are *contextual* -- "assigning loop variables", "a computed
  * destructuring key" -- which is what makes their fixes good. Lifting
@@ -78,8 +77,8 @@ const isNode = (value: unknown): value is Node =>
  * Every node, parents before children.
  *
  * Written here rather than taken from `acorn-walk` because the walk is
- * six lines and a second dependency for six lines is not a trade -- the
- * engine plan pinned exactly one (`acorn`) and said why.
+ * six lines and a second dependency for six lines is not a trade -- exactly
+ * one parser dependency (`acorn`) was intended.
  */
 const walkFrom = (root: unknown, visit: (node: Node) => void): void => {
   // `unknown` then a type guard, rather than `as unknown as Node`.

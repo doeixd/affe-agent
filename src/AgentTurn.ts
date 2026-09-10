@@ -115,7 +115,7 @@ const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
  * provider, and under `/durable`'s replay, where the journalled model call is
  * re-expressed rather than re-issued.
  *
- * The erasing cast is the second in this file (`AGENTS.md`): an empty
+ * The erasing cast is the second in this file: an empty
  * toolkit is not a `WithHandler<Tools>`, and the type cannot say "the
  * agent's tools, minus all of them" -- `WithHandler` is invariant in its
  * tools. The value is exactly what the turn is documented to offer, and no
@@ -172,15 +172,6 @@ const outputToolkit = <Tools extends Record<string, Tool.Any>>(
   )
 }
 
-/**
- * Execute one turn: derive context, call the model, run its tool calls, and
- * commit the whole thing exactly once.
- *
- * The commit is atomic on purpose. Committing the assistant message before the
- * tools have run would leave an interrupted turn half-recorded — an assistant
- * message requesting tools whose results never arrive — which is a state no
- * subsequent model call can make sense of.
- */
 /** Per-request execution options, chosen at `prompt` time. */
 export interface Options {
   /**
@@ -375,6 +366,15 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
     )
   )
 
+/**
+ * Execute one turn: derive context, call the model, run its tool calls, and
+ * commit the whole thing exactly once.
+ *
+ * The commit is atomic on purpose. Committing the assistant message before the
+ * tools have run would leave an interrupted turn half-recorded — an assistant
+ * message requesting tools whose results never arrive — which is a state no
+ * subsequent model call can make sense of.
+ */
 export const execute = Effect.fn("AgentTurn.execute")(function* <
   Tools extends Record<string, Tool.Any>,
   E,

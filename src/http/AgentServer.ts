@@ -157,7 +157,7 @@ export type MountSnapshot = typeof MountSnapshot.Type
  * `host.size` has no error channel, so "could be read" needed something that
  * can actually go wrong: it is now `false` when any mount's `size` did not
  * arrive within `sizeTimeout`, or failed as a defect, and that mount's
- * snapshot says `None`.
+ * snapshot says `null`.
  */
 export const Inventory = Schema.Struct({
   ok: Schema.Boolean,
@@ -236,8 +236,8 @@ export const make = <Principal>(options: MakeOptions<Principal>) => {
  *
  * Session lifetime is the host's. Closing this layer closes each prefixed
  * adapter; the host layers the application provided are released with
- * whatever scope they were built in, which is AS6 when those layers are
- * provided into the same scope as this one.
+ * whatever scope they were built in -- providing them into the same scope as
+ * this layer releases them with it.
  */
 const inventoryLayer = <Principal>(
   options: MakeOptions<Principal>

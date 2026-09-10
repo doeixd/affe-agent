@@ -17,7 +17,7 @@ import * as Namespace from "../internal/namespace.js"
  * module summarises exactly the stretch the old branch did *after* the two
  * lines parted -- `tree.divergence` names it -- and seeds a fresh branch of
  * the target with that summary, using the same `Summarise` vocabulary as
- * `/compaction` (`docs/plan-branching-and-compaction.md` §16–19).
+ * `/compaction`.
  *
  * Deliberately a separate noun from `Compaction`, because it is not
  * compaction: nothing is projected and nothing is ephemeral. The carryover
@@ -65,10 +65,9 @@ export interface CarryOptions<SE, SR> {
 /**
  * What carrying produced, with its provenance.
  *
- * Provenance lives here rather than on a fake message protocol
- * (`plan-branching-and-compaction.md` §20): a UI that wants "context
- * imported from branch X" keeps this value; the seeded message itself
- * carries only the words.
+ * Provenance lives here rather than on a fake message protocol: a UI that
+ * wants "context imported from branch X" keeps this value; the seeded message
+ * itself carries only the words.
  */
 export interface Carried<Tools extends Record<string, Tool.Any>, E> {
   /** A fresh branch of `to`, its history ending with the carryover. */

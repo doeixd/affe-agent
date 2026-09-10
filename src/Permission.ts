@@ -204,7 +204,7 @@ export interface Policy<R = never> {
 }
 
 /**
- * A permission policy described as data (item 60h). A `Matcher` that is a
+ * A permission policy described as data. A `Matcher` that is a
  * function has no data form and is reported as `"function"`; a `RegExp` as
  * its source, prefixed.
  */
@@ -412,8 +412,8 @@ export const except = <R>(
  * How a remembered grant is keyed: the exact tool, action and resource.
  *
  * Length-prefixed rather than delimited. A NUL separator was here, and
- * neither field forbids one: `{ action: "a", resource: "b c" }` and
- * `{ action: "a b", resource: "c" }` produce the same key, and a resource is
+ * neither field forbids one: `{ action: "a", resource: "b\u0000c" }` and
+ * `{ action: "a\u0000b", resource: "c" }` produce the same key, and a resource is
  * frequently model-controlled text. Any single delimiter has that defect --
  * NUL only makes the colliding input unusual, not impossible. A length prefix
  * has no such input.

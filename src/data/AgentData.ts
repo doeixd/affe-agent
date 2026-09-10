@@ -13,7 +13,7 @@ const droppedEvents = Metric.counter("agent_data_dropped_events", {
 })
 
 /**
- * Structured client/UI data (issue #4 §9).
+ * Structured client/UI data.
  *
  * An agent often has typed output beyond its reply -- an order it created, a
  * chart's data, a row to append to a table. This package gives that a home: a

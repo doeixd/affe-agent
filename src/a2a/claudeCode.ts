@@ -22,8 +22,7 @@ import {
 /**
  * Claude Code as an A2A agent.
  *
- * `docs/plan-a2a-layers-bridges.txt` argues the case and this module is its
- * step 1: **a coding CLI is an agent, not a model.** Putting it behind
+ * **A coding CLI is an agent, not a model.** Putting it behind
  * `LanguageModel` would nest one agent loop inside another and call the inner
  * one a model; putting it behind A2A says what it is -- an autonomous peer with
  * its own loop, tools, workspace and session state -- and costs nothing extra,
@@ -32,11 +31,10 @@ import {
  * `examples/openrouter.ts`: a model gateway *is* a model API and nests under
  * `LanguageModel` with nothing left over.
  *
- * Everything runs through `Sandbox`, which is the plan's physical boundary
- * (§"Physical boundary"): the CLI is spawned inside the workspace, under the
- * sandbox's timeout and output bounds, and this module imports no `node:*` --
- * the host arrives as a provider layer, so the same bridge works against a
- * remote sandbox with no change.
+ * Everything runs through `Sandbox`: the CLI is spawned inside the workspace,
+ * under the sandbox's timeout and output bounds, and this module imports no
+ * `node:*` -- the host arrives as a provider layer, so the same bridge works
+ * against a remote sandbox with no change.
  *
  * ```ts
  * const claude = yield* ClaudeCodeA2A.remote(sandbox)

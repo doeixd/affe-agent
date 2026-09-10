@@ -143,6 +143,11 @@ export type ToolkitInput<
   R = never
 > = Toolkit.WithHandler<Tools> | Effect.Effect<Toolkit.WithHandler<Tools>, E, R>
 
+/**
+ * The loop's and the transform's errors and requirements are unioned onto the
+ * agent, so a policy or a transform can declare its own dependencies and the
+ * session's type reflects them.
+ */
 export interface Config<
   Tools extends Record<string, Tool.Any> = {},
   LE = never,
@@ -232,7 +237,7 @@ export interface Config<
    * `Result.value` becomes `Option<Value>` instead of `Option<never>`.
    *
    * The stop is a policy composed onto whatever loop the agent has, not a
-   * special case in the engine -- see `outputStop`.
+   * special case in the engine -- see `withOutputStop`.
    */
   readonly output?: AgentOutput.AgentOutput<Value, any> | undefined
   /**
@@ -247,11 +252,6 @@ export interface Config<
   readonly input?: AgentInput.AgentInput<Input, any, IE, IR> | undefined
 }
 
-/**
- * The loop's and the transform's errors and requirements are unioned onto the
- * agent, so a policy or a transform can declare its own dependencies and the
- * session's type reflects them.
- */
 /**
  * Build a toolkit and bind its handlers in one step.
  *
@@ -330,24 +330,7 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = Langua
   }) as AgentDefinition<Tools, E, R, Model, Value, Input>
 
 /**
- * Stop the run once the model has reported its output.
- *
- * Composed onto the agent's own loop rather than special-cased in the engine:
- * "the run is over when the answer has been given" is a continuation decision,
- * and continuation decisions live in `AgentLoop`. Nothing in `AgentRun` or
- * `AgentTurn` learns that outputs exist.
- *
- * The inner policy is consulted first and its `Stop` short-circuits, which is
- * exactly `AgentLoop.and(loop, ...)` — written out here only because `and`
- * cannot relate one agent's invariant `Tools` slot to another's (see
- * `Config.loop`). A policy that counts turns or records telemetry therefore
- * still sees the turn that produced the value.
- *
- * Without this, `untilIdle` would see a turn that made a tool call, continue,
- * and spend one more model call on a closing remark nobody reads.
- */
-/**
- * An agent described as data (`plan-context-lessons.md` 5.2, item 60h).
+ * An agent described as data.
  *
  * Derived from the composed values, not declared beside them, so it cannot
  * disagree with what the agent does: the loop's description is built by the
@@ -393,6 +376,23 @@ export const describe = (agent: Any): Description => ({
   output: Option.map(agent.output, (output) => ({ toolName: output.toolName, schema: output.schema }))
 })
 
+/**
+ * Stop the run once the model has reported its output.
+ *
+ * Composed onto the agent's own loop rather than special-cased in the engine:
+ * "the run is over when the answer has been given" is a continuation decision,
+ * and continuation decisions live in `AgentLoop`. Nothing in `AgentRun` or
+ * `AgentTurn` learns that outputs exist.
+ *
+ * The inner policy is consulted first and its `Stop` short-circuits, which is
+ * exactly `AgentLoop.and(loop, ...)` — written out here only because `and`
+ * cannot relate one agent's invariant `Tools` slot to another's (see
+ * `Config.loop`). A policy that counts turns or records telemetry therefore
+ * still sees the turn that produced the value.
+ *
+ * Without this, `untilIdle` would see a turn that made a tool call, continue,
+ * and spend one more model call on a closing remark nobody reads.
+ */
 const withOutputStop = <E, R>(
   loop: AgentLoop.AgentLoop<E, R, any>,
   output: AgentOutput.AgentOutput<any, any> | undefined
@@ -525,7 +525,6 @@ export const tool = <T extends Tool.Any>(
   handler: Handler<T>
 ): BoundTool<T> => ({ tool, handler })
 
-/** The tool record a tuple of bound tools contributes. */
 /**
  * The typed input an agent declares (`AgentInput`), or `never` for one
  * asked with `Prompt.RawInput`.
@@ -559,9 +558,9 @@ export type ModelOf<A> = A extends AgentDefinition<any, any, any, infer Model, i
  *
  * An alias, finally. For a day it had to be a structural interface: `Value`
  * and `Input` are invariant, `any` in an invariant slot does not admit
- * `never`, and both defaulted to `never`. `plan-input-default.md` steps 2
- * and 5 made the defaults `Prompt.RawInput` and `string`, which `any`
- * admits, so this is now what it was always meant to be.
+ * `never`, and both defaulted to `never`. Their defaults are now
+ * `Prompt.RawInput` and `string`, which `any` admits, so this is what it
+ * was always meant to be.
  *
  * What it is for: **accepting** an agent, **passing it through**, and
  * **inspecting** it -- `agent.instructions`, `agent.output`,
@@ -579,6 +578,7 @@ export type ModelOf<A> = A extends AgentDefinition<any, any, any, infer Model, i
  */
 export type Any = AgentDefinition<any, any, any, any, any, any>
 
+/** The tool record a tuple of bound tools contributes. */
 export type ToolsOf<Bound extends ReadonlyArray<BoundTool<Tool.Any>>> = {
   readonly [B in Bound[number] as Tool.Name<B["tool"]>]: B["tool"]
 }
@@ -858,11 +858,11 @@ export const withPermission =
  * tools -- side effects on the world -- because a different part of the turn
  * failed. Confining it to the call also makes retry safe by construction:
  * nothing the harness guarantees has happened yet while the plan is still
- * choosing. See `docs/plan-execution-plan.md`.
+ * choosing.
  *
- * A combinator rather than a `Config` field, per AGENTS.md §42.1 -- and here
- * the rule earns itself twice over, because this is the one cross-cutting
- * concern that changes what the session *requires*.
+ * A combinator rather than a `Config` field -- and here the rule earns
+ * itself twice over, because this is the one cross-cutting concern that
+ * changes what the session *requires*.
  */
 export const withExecutionPlan =
   <
@@ -926,7 +926,7 @@ export const withExecutionPlan =
     Input
   >
     /**
-     * R28 -- the plan's predicates are handed the *model call's* failures.
+     * The plan's predicates are handed the *model call's* failures.
      *
      * `Effect.withExecutionPlan` requires the wrapped effect's error to extend
      * the plan's `input`, because that is what `while` and the schedules

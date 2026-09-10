@@ -39,14 +39,14 @@ import * as Namespace from "./internal/namespace.js"
  * engine calls), so a session under a budget and a ledger records each turn
  * once to both.
  *
- * Bounded by session, like compaction's caches (item 60g-i): entries are
+ * Bounded by session, like compaction's caches: entries are
  * kept per session and the least recently written session is evicted past
  * `maxSessions`, its entries and its occurrence keys together. `entries`
  * and `totals` are therefore exact over the *retained* sessions; a
  * per-session layer never reaches the bound, and an application-scoped one
  * no longer grows for the life of the process.
  *
- * `plan-context-lessons.md` 5.1, item 60g. Not a policy object: facts only.
+ * Facts only, never a policy object.
  */
 
 /** One turn, as the engine saw it end. */

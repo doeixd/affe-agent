@@ -3,12 +3,12 @@ import { Result } from "effect"
 import { CodeDiagnostic } from "./diagnostics.js"
 
 /**
- * Parse a recovered program (`docs/plan-code-mode-engine.md` step 4).
+ * Parse a recovered program.
  *
  * Plain JavaScript, ES2023, as a script whose top level may `return` and
  * `await` -- the program *is* the body of an async function the host
- * runs. TypeScript is deliberately not parsed: v1 answers the research's
- * open question by telling the model to write JavaScript, and when it
+ * runs. TypeScript is deliberately not parsed: v1 answers the open
+ * question by telling the model to write JavaScript, and when it
  * writes TypeScript anyway the diagnostic says exactly that, instead of a
  * regex strip producing a wrong-but-running program.
  */

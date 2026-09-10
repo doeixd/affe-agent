@@ -12,7 +12,6 @@ import { Effect, Schema } from "effect"
  * `Permission.ApprovalDetail`). Nothing on the wire names the schema, and
  * that is the point: the receiver already knows what it expects, so a
  * published schema would only be a second source of truth that could drift.
- * (`plan-after-seams.md` 2b.4.)
  *
  * The rule, once. **Encoding dies; decoding fails.** A value being encoded
  * came from this side's own run, checked against this side's own schema, so

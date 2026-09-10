@@ -6,8 +6,8 @@ import * as Namespace from "./namespace.js"
  * The id of the session a tool call is running in, visible to the tool.
  *
  * The fourth thing a tool can see of its session, beside the principal, the
- * input and the elicitor (`guide-sessions.md`, "What a tool can see of its
- * session"), and the one that is internal: a tool that needs the session's
+ * input and the elicitor, and the one that is internal: a tool that needs
+ * the session's
  * *identity* rather than one of its facts is asking to look something up by
  * it, and the only such tool today is the compaction controller's
  * `contextRemaining`, which reads the last projection it recorded for this

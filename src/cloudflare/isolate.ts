@@ -7,8 +7,7 @@ import * as Namespace from "../internal/namespace.js"
 
 /**
  * Code mode in an isolate: a `CodeExecutor` that runs the model's program
- * in a Dynamic Worker with no outbound network
- * (`docs/plan-effect-agent-comparison.md` §3.5, item 9).
+ * in a Dynamic Worker with no outbound network.
  *
  * The owned interpreter confines a program by construction of the
  * language and runs it in the host's process; this one confines it by the

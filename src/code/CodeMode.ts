@@ -12,7 +12,7 @@ import { validate } from "./internal/validate.js"
 import { toData } from "./internal/data.js"
 
 /**
- * The code-mode host API (`docs/plan-code-mode-engine.md` step 5).
+ * The code-mode host API.
  *
  * A program the model wrote runs against the toolkits the host supplied,
  * and nothing else -- the engine confines it to those tools and decides
@@ -22,7 +22,7 @@ import { toData } from "./internal/data.js"
  * A nested call is a tool call (invariant 2): the same `Permission`
  * projection and policy that govern a direct call govern it here, so code
  * mode is never a cheaper path to a tool. The failure shape is the
- * executor split, decided in the plan: a tool's *declared* failure comes
+ * executor split: a tool's *declared* failure comes
  * back to the program as `{ ok: false, error }` -- a value its happy path
  * can branch on -- a policy refusal *throws* into the program, and an
  * unknown host failure is opaque.
@@ -64,7 +64,7 @@ export type ServicesOf<Groups extends ToolGroups> = {
     : never
 }[keyof Groups]
 
-/** Budgets are host policy: nothing here has a default (plan decision 6). */
+/** Budgets are host policy: nothing here has a default. */
 export interface Limits {
   /** Nested tool calls one program may make. */
   readonly maxToolCalls?: number | undefined
@@ -91,14 +91,14 @@ export interface MakeOptions<Groups extends ToolGroups, R> {
    * Evaluated per nested call, over the tool's own `Permission`
    * projection. `allowAll` when omitted -- the same default a session
    * has. A `Deny` throws into the program; an `Ask` is refused the same
-   * way until step 6 wires elicitation, and its message says so.
+   * way unless the host supplies an `elicitor`, and its message says so.
    */
   readonly permission?: Permission.Policy<R> | undefined
   readonly limits?: Limits | undefined
   /** The engine. The owned interpreter unless a host supplies another. */
   readonly executor?: CodeExecutor | undefined
   /**
-   * Where an `Ask` decision is asked (plan step 6).
+   * Where an `Ask` decision is asked.
    *
    * The host supplies it -- usually the very elicitor its session was
    * built with, so an in-program approval is answered through the same
@@ -109,12 +109,12 @@ export interface MakeOptions<Groups extends ToolGroups, R> {
    * **Not durable.** With a durable elicitor the workflow suspends and
    * the program is re-executed from the top on resume; only journalled
    * tool calls are replay-safe. Durable suspension of a *paused program*
-   * is explicitly out of scope (`plan-code-mode-engine.md` decision 7).
+   * is explicitly out of scope.
    */
   readonly elicitor?: Elicitation.Elicitor | undefined
 }
 
-/** One nested call, observed. What step 5's events project from. */
+/** One nested call, observed. What the progress events project from. */
 export interface ObservedCall {
   readonly path: ReadonlyArray<string>
   readonly input: unknown
@@ -126,8 +126,7 @@ export type Outcome =
   | { readonly _tag: "RanOffTheEnd" }
   | {
     /**
-     * The engine paused and can continue later
-     * (`docs/plan-code-mode-executors.md` step 1).
+     * The engine paused and can continue later.
      *
      * Only an executor whose state survives a process boundary ever
      * produces this. The owned interpreter never does -- its state is a
@@ -167,8 +166,7 @@ export interface ExecuteResult {
 }
 
 /**
- * What an engine has to say when it stops running
- * (`docs/plan-code-mode-executors.md` step 1).
+ * What an engine has to say when it stops running.
  *
  * Two variants, not one, because "a program either finishes or fails" is
  * true of the owned interpreter and was being asserted as the interface
@@ -192,9 +190,9 @@ export type ExecutorOutcome =
      * interprets: persist it, hand it back to `run` as `resumeFrom`,
      * unchanged.
      *
-     * `unknown` on purpose, and not the `unknown` AGENTS.md forbids --
-     * that rule is about *error channels*, where an unknown erases the
-     * information a caller must branch on. Nothing branches on this. It
+     * `unknown` on purpose, and not the `unknown` the error-channel rule
+     * forbids -- an unknown in an error channel erases the information a
+     * caller must branch on. Nothing branches on this. It
      * is a storage payload whose schema belongs to a component the kernel
      * does not know, and an executor that returns `Suspended` warrants by
      * doing so that the value is JSON-serialisable.
@@ -207,7 +205,7 @@ export type ExecutorOutcome =
   }
 
 /**
- * The engine seam (engine-plan decision 1): one engine today, and the
+ * The engine seam: one engine today, and the
  * shape that lets a `node:vm`, QuickJS or plan-compiling engine arrive
  * behind its own package entry without touching anything above it.
  */
@@ -244,7 +242,7 @@ export interface CodeExecutor {
 /**
  * The owned tree-walking interpreter as a `CodeExecutor`.
  *
- * Never suspends (engine-plan decision 7, not reopened): its state is a
+ * Never suspends: its state is a
  * JS call stack, so a paused program cannot cross a process boundary and
  * this module does not pretend otherwise.
  *
@@ -333,7 +331,7 @@ export interface ExecuteOptions {
    * `calls` are per *call to `execute`*, so a resumed run starts both
    * afresh, and a program that suspends repeatedly could exceed the
    * budget a host thought it had set. That is stated rather than
-   * defaulted (engine-plan decision 6: budgets are host policy) -- a host
+   * defaulted (budgets are host policy) -- a host
    * that needs a budget across resumptions carries its own count and
    * lowers `maxToolCalls` on the way back in.
    */
@@ -595,7 +593,7 @@ export const make = <Groups extends ToolGroups, R = never>(
           }
 
           /**
-           * The one erasing cast in `/code`, inventoried in AGENTS.md and
+           * The one erasing cast in `/code`, inventoried in
            * `test/Casts.test.ts`. `Toolkit.WithHandler` is invariant in its
            * tools, so the groups are constrained as `WithHandler<any>` and
            * `handle`'s requirement surfaces as `unknown` -- a type-level

@@ -6,7 +6,7 @@ import { detailOf } from "../internal/detail.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Persistent, typed agent state (issue #4).
+ * Persistent, typed agent state.
  *
  * The library keeps no first-class state slot on a session on purpose: "state
  * belongs in ordinary Effect services, so the harness never becomes a
@@ -53,9 +53,6 @@ import * as Namespace from "../internal/namespace.js"
  * ephemeral, and a serialized swap-and-persist when the layer has a store --
  * and, with persistence, written through to the store before it returns.
  * `changes` is the live stream for a UI that watches the state move.
- */
-/**
- * State of type `A`.
  *
  * Mutations declare `StorageError` because a persisted state writes through to
  * a store on every one, and a store can be unreachable. Reads do not: the value

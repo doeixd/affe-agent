@@ -14,9 +14,8 @@ import * as Namespace from "../internal/namespace.js"
  * output is untrusted external text either way.
  *
  * Deliberately not a browser session. Navigate-click-fill is a different
- * capability with its own lifetime and its own uncertainty after a crash;
- * it is parked in `docs/plan-effect-agent-comparison.md` §3.6 until a host
- * can carry it.
+ * capability with its own lifetime and its own uncertainty after a crash,
+ * and is not implemented here.
  */
 
 /** One rendered page. `markdown` and `links` are untrusted external input. */

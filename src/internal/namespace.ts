@@ -1,6 +1,6 @@
 /**
  * The one place the package's wire-level and storage-level identifiers are
- * spelled (`docs/plan-two-decisions.md`, decision 1, 2026-09-05).
+ * spelled.
  *
  * Every `_tag` a `Schema.TaggedError` puts on a wire, every `Context`
  * service key, every `Schema.brand`, every SQL table default and every

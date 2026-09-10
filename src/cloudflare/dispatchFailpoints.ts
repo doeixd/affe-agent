@@ -1,7 +1,7 @@
 import * as Failpoint from "../internal/failpoint.js"
 
 /**
- * The two durable boundaries of a dispatched job (item 47c): after its
+ * The two durable boundaries of a dispatched job: after its
  * submission is launched and its intent says so, and after the run's
  * settlement has committed but before the platform acknowledged the alarm.
  * `test/WorkerDispatchIntents.test.ts` kills the runtime at each on workerd

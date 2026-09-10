@@ -6,7 +6,7 @@
  * conversion produces valid output, so nothing downstream can tell it apart
  * from an exact one unless the adapter says so.
  *
- * The rule, from `docs/plan-effect-uai-compatibility-contract.md` §5:
+ * The rule:
  *
  * > A `Degraded` conversion is never silent, and an `Unsupported` one never
  * > proceeds.

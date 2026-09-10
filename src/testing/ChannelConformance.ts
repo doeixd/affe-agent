@@ -3,7 +3,7 @@ import { Cause, Clock, Effect, Exit, Option, Schema } from "effect"
 /**
  * The conformance suite for a channel's inbound verification.
  *
- * `docs/plan-integrations.md` §10: the cases a webhook channel must hold --
+ * The cases a webhook channel must hold --
  * a correct signature is accepted; a tampered body, the wrong secret, a
  * request outside the replay window, a missing or mangled header are all
  * refused *without throwing*; a large or unusual body is a body like any

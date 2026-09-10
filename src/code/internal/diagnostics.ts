@@ -48,9 +48,8 @@ const Further = Schema.Struct({
 })
 
 /**
- * What the engine says when it refuses a program
- * (`docs/plan-code-mode-engine.md` decision 4: every diagnostic names the
- * fix). The whole value of owning the language over embedding an engine
+ * What the engine says when it refuses a program: every diagnostic names
+ * the fix. The whole value of owning the language over embedding an engine
  * is that a refusal can say "use for...of" instead of iterating zero
  * times -- a diagnostic that only reports a failure has thrown away the
  * reason for owning the interpreter.

@@ -2,15 +2,14 @@ import { Tool } from "effect/unstable/ai"
 
 /**
  * Signatures, the budgeted catalog, and deterministic search: the
- * interpreter-free half of code mode
- * (`docs/research-code-mode.md` §5.4 step 1).
+ * interpreter-free half of code mode.
  *
  * The premise of code mode is that a large tool catalog should not sit in
  * the prompt -- which is only honest if the model can still *find* tools.
  * This module is that answer on its own, useful before any program ever
  * runs: `bindDiscovered` over a large plugin set needs it today.
  *
- * Three rules carried over from the research deliberately:
+ * Three rules, deliberately:
  *
  * - **Every namespace is always listed with its tool count**, whatever the
  *   budget; only full signatures are budgeted.
@@ -187,8 +186,8 @@ const renderJsdoc = (lines: ReadonlyArray<string>, indent: string): string =>
  * Constraints TypeScript cannot express ride along as tags (`@default`);
  * field descriptions come from the schema's own annotations. If the
  * repo's tools do not annotate, the signature is accurate and terse --
- * which is the open question the research names, answered by annotating
- * the tools, not by inventing text here.
+ * which is the open question, answered by annotating the tools, not by
+ * inventing text here.
  */
 export const signatureOf = (namespace: string, tool: Tool.Any): string => {
   const schema = derivedOf(tool).schema

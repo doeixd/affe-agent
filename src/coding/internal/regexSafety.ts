@@ -42,7 +42,7 @@
  * `search` this process serves afterwards is gone with it, because the event
  * loop is.
  *
- * Recorded here rather than in a plan document, because this is where someone
+ * Recorded here, because this is where someone
  * deciding whether the check is sufficient will be standing.
  *
  * **The real fix is a linear-time engine** (RE2 or equivalent) or running the

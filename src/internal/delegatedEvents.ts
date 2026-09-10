@@ -10,8 +10,8 @@ import * as Namespace from "./namespace.js"
  * bus, the parent's correlation and this tool call: a child session made
  * inside the handler with `Inherit.events: "parent"` gives every envelope of
  * its own bus to this, and each arrives on the parent's stream wrapped in
- * one `DelegatedEvent` naming the tool and the call (`plan-streaming.md`
- * P3). `None` outside any tool execution, so a child made directly in a test
+ * one `DelegatedEvent` naming the tool and the call. `None` outside any tool
+ * execution, so a child made directly in a test
  * forwards nowhere and says so.
  *
  * Same shape and rule as `CurrentSessionId`: a `Reference` with a `None`

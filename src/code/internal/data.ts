@@ -2,12 +2,12 @@ import { Result, Schema } from "effect"
 import * as Namespace from "../../internal/namespace.js"
 
 /**
- * The plain-data boundary (`docs/plan-code-mode-engine.md` step 2).
+ * The plain-data boundary.
  *
  * Everything that crosses between host and program -- tool results in,
- * tool arguments and the final result out -- passes through here. The
- * research calls this the source of silent corruption if deferred, and
- * each rule below is one of those corruptions made impossible:
+ * tool arguments and the final result out -- passes through here. This is
+ * the source of silent corruption if deferred, and each rule below is one
+ * of those corruptions made impossible:
  *
  * - foreign prototypes never cross (objects are rebuilt);
  * - `__proto__` / `constructor` / `prototype` keys are dropped, so a

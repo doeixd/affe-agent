@@ -1,6 +1,6 @@
 /**
  * Opinionated assemblies over the primitives: the recipe that stops every
- * target re-deriving the same wiring (`docs/plan-primitives.md` §3B).
+ * target re-deriving the same wiring.
  *
  * A preset composes existing layers and adds defaults. It has no
  * execution model of its own, adds no type parameter to `Agent.make`,

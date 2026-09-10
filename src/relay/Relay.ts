@@ -6,8 +6,7 @@ import * as Namespace from "../internal/namespace.js"
  * The relay's vocabulary: who a node is, which endpoint on it a message is
  * for, and the envelope the relay routes. The relay never reads a payload;
  * an envelope's `frame` is an encoded Effect RPC message the two ends
- * understand and the relay only carries (`docs/plan-relay.txt`, "the public
- * relay protocol can be tiny").
+ * understand and the relay only carries.
  */
 
 /** One authenticated running node. */

@@ -48,11 +48,11 @@ export const MINIMUM_READABLE_VERSION = 1
 /**
  * Where a transcript came from.
  *
- * **Advisory, and deliberately so.** The session-tree research established
- * that a snapshot is not bound to the agent that produced it and that types
- * cannot fix that -- `Snapshot` is Schema-defined precisely so it can be
- * serialised, and no phantom parameter survives a database. This is the
- * runtime half of the answer: recording the tool names means an import can
+ * **Advisory, and deliberately so.** A snapshot is not bound to the agent that
+ * produced it, and types cannot fix that -- `Snapshot` is Schema-defined
+ * precisely so it can be serialised, and no phantom parameter survives a
+ * database. This is the runtime half of the answer: recording the tool names
+ * means an import can
  * *explain* that a transcript calling `edit_file` is being restored into an
  * agent with no such tool. It does not prevent it, and it must never be
  * presented as though it did.
@@ -233,10 +233,10 @@ const encodeMessage = Schema.encodeUnknownEffect(PromptWire.Message)
  * `History.commit` already is -- seen from the other side of the process
  * boundary.
  *
- * H4b settled that `effect/unstable/eventlog` overlaps this without
- * substituting for it (`plan-durability-hardening.md`). The tree's T5 store
- * already persists whole snapshots over `KeyValueStore`; swapping that for
- * deltas later is a change to `NodeStore`, not a second log format.
+ * `effect/unstable/eventlog` overlaps this without
+ * substituting for it. The tree's node store already persists whole snapshots
+ * over `KeyValueStore`; swapping that for deltas later is a change to
+ * `NodeStore`, not a second log format.
  */
 export const Header = Schema.Struct({
   version: Schema.Number,

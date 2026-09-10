@@ -6,9 +6,9 @@ import * as ToolExecution from "./ToolExecution.js"
 /**
  * A typed value a submission is expected to end with.
  *
- * The kernel does not own structured output — `PLAN.md` §1 lists it among the
- * things Effect AI already provides, and `LanguageModel.generateObject` remains
- * the right call for a chain that is not agentic. What was missing is the
+ * The kernel does not own structured output — it is among the things Effect
+ * AI already provides, and `LanguageModel.generateObject` remains the right
+ * call for a chain that is not agentic. What was missing is the
  * *agentic* case: a run that uses tools, takes steering and follow-ups, and
  * must still end with something better than a string. Dropping to
  * `generateObject` there means giving up the session; routing the value through

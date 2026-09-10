@@ -34,10 +34,10 @@ export * as IsolateExecutor from "./isolate.js"
  * The agent on Cloudflare: one Durable Object per session, a Worker routing
  * by session id, as a published host entry.
  *
- * **This is the one place `effect-cf` enters `src/`** -- decided 2026-09-01
- * against `docs/plan-effect-cf-and-webtransport.md` §3, which had said
- * "read and mine, do not adopt". The category is the same one
- * `/sandbox/local` established: host coupling lives behind its own entry
+ * **This is the one place `effect-cf` enters `src/`** -- a deliberate
+ * reversal of the earlier "read and mine, do not adopt" position. The
+ * category is the same one `/sandbox/local` established: host coupling lives
+ * behind its own entry
  * and nowhere else, and this entry *is* the Cloudflare host, so the
  * package that makes Cloudflare's primitives Effect services is what it is
  * meant to reach for. What it takes from `effect-cf`: `DurableObject.make`
@@ -50,8 +50,8 @@ export * as IsolateExecutor from "./isolate.js"
  * `effect-cf` everywhere but here.
  *
  * **The durability here is the platform's, not `/durable`'s.** Effect
- * Workflow stalls on workerd (`docs/status-history.md`, 2026-08-30), so a
- * session is durable the way a Durable Object is durable:
+ * Workflow stalls on workerd, so a session is durable the way a Durable
+ * Object is durable:
  *
  * - **History** is written to DO SQLite as every turn commits and restored
  *   when the object wakes, so the conversation survives hibernation and
@@ -137,7 +137,7 @@ interface Intent {
 }
 
 /**
- * Dispatch intents (item 47c, `plan-rfc-286-durable.md` §3.3): one row per
+ * Dispatch intents: one row per
  * dispatched job, keyed by its alarm id, persisted **in the same transaction
  * as the alarm**. `pending` until the job's submission is launched,
  * `running` with the submission's id while it runs, `settled` once the run's
@@ -147,7 +147,7 @@ interface Intent {
  * never ran. The alarm handler reads the intent before doing anything: a
  * `settled` intent is acknowledged without a run, a `running` one whose
  * submission this life still holds is awaited, and anything else is
- * launched. Never on the platform's word alone (item 48c): the alarm firing
+ * launched. Never on the platform's word alone: the alarm firing
  * again is not evidence the job did not run; the intent is.
  */
 class DispatchIntents extends Context.Service<DispatchIntents, {
@@ -226,7 +226,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
     )`.pipe(Effect.orDie)
     /**
      * The model and the agent's services, built on first use rather than
-     * with the object (item 62). Built with the object, a failure -- the
+     * with the object. Built with the object, a failure -- the
      * provider secret missing, a table refusing to open -- was an empty 500
      * from the platform before any route ran, and the deployer following the
      * quickstart saw nothing. Built here, the same failure is a

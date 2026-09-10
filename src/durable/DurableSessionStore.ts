@@ -81,8 +81,8 @@ export const Claim = Schema.Struct({
    * The submitter's subject, when one was on the claiming fibre.
    *
    * Recorded here because the engine's fibres inherit nothing from the
-   * caller: whatever the run must see has to ride the persisted intent
-   * (`docs/plan-principal-on-tool-fibre.md`). Optional and additive, so
+   * caller: whatever the run must see has to ride the persisted intent.
+   * Optional and additive, so
    * claims written before this field decode unchanged.
    */
   principal: Schema.optional(Schema.String)
@@ -654,7 +654,7 @@ const rowToRecord = (row: SessionRow): Effect.Effect<SessionRecord, StorageError
  * needs one for its journal. `sqlStoreWithTables` creates the tables; a
  * deployment managing its own schema uses `sqlStore` over existing ones.
  *
- * ## What "one transaction" does and does not guarantee (R66)
+ * ## What "one transaction" does and does not guarantee
  *
  * A transaction gives atomicity and rollback. It does **not**, by itself, give
  * serialisability: under the read-committed isolation that most engines
@@ -750,7 +750,7 @@ export const sqlStore = (
               Effect.gen(function* () {
                 /**
                  * The precondition is in the statement, not in a read before
-                 * it (R66).
+                 * it.
                  *
                  * `SELECT`-then-`INSERT` is only safe if nothing can commit in
                  * between, which read-committed -- the default nearly
@@ -855,7 +855,7 @@ export const sqlStore = (
               if (held.submissionId !== submissionId) return
               const claimJson = yield* encodeClaim({ ...held, executionId })
               /**
-               * Conditional for the reason `finish` gives (R66): writing this
+               * Conditional for the reason `finish` gives: writing this
                * unconditionally would stamp an execution id onto whatever
                * claim happened to be there, which after a concurrent
                * finish-and-reclaim is a *different* submission's.
@@ -876,7 +876,7 @@ export const sqlStore = (
               Effect.gen(function* () {
                 /**
                  * Read the row, not the record: the claim's stored text is the
-                 * precondition (R66).
+                 * precondition.
                  *
                  * Deciding from the read and then writing unconditionally is
                  * the one transition here where losing the race *corrupts*
@@ -930,7 +930,7 @@ export const sqlStore = (
              * already-answered one keeps its answer.
              *
              * The absence is re-checked as part of the insert rather than in a
-             * read before it, for the reason `getOrCreate` gives (R66) -- and
+             * read before it, for the reason `getOrCreate` gives -- and
              * here the row carries `UNIQUE (session_id, request_id)`, so the
              * losing writer of a select-then-insert got a constraint violation
              * rather than the silent no-op this operation promises.
@@ -968,7 +968,7 @@ export const sqlStore = (
                 const id = waiting[0]!.id
                 /**
                  * `AND state = 'pending'` is the precondition restated in the
-                 * write (R66). Without it, two answers to one request both
+                 * write. Without it, two answers to one request both
                  * matched and the second overwrote the first -- an answer
                  * accepted, reported as accepted, and then silently replaced.
                  */
@@ -995,7 +995,7 @@ export const sqlStore = (
                 return Option.none<Elicitation.Response>()
               }
               /**
-               * `AND state = 'answered'` for the reason the others give (R66):
+               * `AND state = 'answered'` for the reason the others give:
                * without it this deletes whatever occupies the row, including a
                * request re-asked and still pending under the same id.
                *

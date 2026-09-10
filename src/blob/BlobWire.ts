@@ -2,8 +2,7 @@ import { Array as Arr, Effect, Encoding, Result, Schema, Stream } from "effect"
 import * as BlobStore from "./BlobStore.js"
 
 /**
- * Externalise large file parts out of a wire-encoded prompt
- * (`docs/plan-filetypes.txt`, "then the wire can externalize").
+ * Externalise large file parts out of a wire-encoded prompt.
  *
  * `PromptWire` encodes a runtime prompt to JSON whose file data is tagged
  * `String` / `Bytes` / `Url`. These helpers operate on *that* form -- the

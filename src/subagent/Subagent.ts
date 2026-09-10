@@ -14,7 +14,7 @@ import * as InternalToolkit from "../internal/toolkit.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Subagents (issue #4 item 4): ergonomics for the pattern the library already
+ * Subagents: ergonomics for the pattern the library already
  * has, not a new concept.
  *
  * The design position is deliberate -- "a subagent is a tool that opens a
@@ -55,8 +55,8 @@ import * as Namespace from "../internal/namespace.js"
  *
  * A child that was **cut short** -- its run ended `interrupted`, by its own
  * loop's timeout or a signal that reached only it -- is a child failure too
- * (`SubagentInterruptedError`), decided in `plan-two-decisions.md` §2: the
- * parent's model must be able to tell a finished answer from half of one.
+ * (`SubagentInterruptedError`): the parent's model must be able to tell a
+ * finished answer from half of one.
  * The failure carries what the child had said, because two lookups' worth of
  * findings are still findings; it does not say that nothing happened, since
  * the child's tool calls are committed. Under `"return"` the parent reads
@@ -105,8 +105,7 @@ const parametersOf = (declared: InputBoundary.Declared): Schema.Codec<unknown, u
  * Each cross-cutting concern reaches the child by a different route --
  * a principal is a fibre reference and crosses on its own; a budget is a
  * loop combinator and does not; an approval is a session option and does
- * not -- and `plan-seams.md` found that nobody had chosen any of those
- * answers. These are the choices, with their defaults argued for.
+ * not. These are the choices, with their defaults argued for.
  */
 export interface Inherit {
   /**
@@ -235,8 +234,8 @@ const budgetFor = (inherit: Inherit | undefined): Effect.Effect<Layer.Layer<Budg
  * model sees as JSON rather than prose; and its final text otherwise, since
  * `string` is every agent's default `Value`. The tool's `success` schema is
  * the child's output schema in the first case, so the parent's tool record
- * is typed by it. (An alias rather than a conditional since
- * `plan-input-default.md` step 5; kept as a name because the docs point at it.)
+ * is typed by it. (An alias rather than a conditional; kept as a name because
+ * the docs point at it.)
  */
 export type Answer<Value> = Value
 

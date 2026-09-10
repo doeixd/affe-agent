@@ -1,11 +1,9 @@
 /**
  * An `effect-uai` provider behind Effect AI's `LanguageModel`.
  *
- * This is the adapter `docs/plan-effect-uai-integration.md` §4.1 recommends
- * building first, and it implements the contract written in
- * `docs/plan-effect-uai-compatibility-contract.md`. Read that contract before
- * changing anything here: most of what looks like an arbitrary choice below is
- * a row in one of its tables, and several of them are load-bearing.
+ * This adapter implements the effect-uai compatibility contract: most of what
+ * looks like an arbitrary choice below is a load-bearing row in that contract,
+ * and several of them are deliberate.
  *
  * The shape:
  *
@@ -72,8 +70,8 @@ const unsupported = (params: {
  * an `AiError`.
  *
  * The `module` is ours, so a caller can still tell a translation refusal from a
- * provider refusal — which is the invariant the contract's §6 actually asks
- * for, rather than the particular reason tag.
+ * provider refusal — that distinction is the invariant, rather than the
+ * particular reason tag.
  */
 const asAiError = (
   method: string,
@@ -378,7 +376,7 @@ const standardSchemaFor = (jsonSchema: Record<string, unknown>): UaiTool.ToolInp
  * Every tool becomes a `SignalTool`, which effect-uai defines as "model-visible
  * and decodable but never locally executed — the loop intercepts the call and
  * acts on it, so there is no fake `run`." Affe *is* that loop. So the ownership
- * rule the plan states as a requirement —
+ * rule —
  *
  * > the adapter exposes tool descriptions to the model, but affe-agent
  * > continues to execute the original Effect AI handlers
@@ -445,7 +443,7 @@ export const toToolChoice = (
 /**
  * Structured output.
  *
- * Not deferrable to a later phase: `AgentOutput` rides on `generateObject`,
+ * Not deferrable: `AgentOutput` rides on `generateObject`,
  * which Effect AI implements over the `generateText` hook. effect-uai's
  * providers constrain the wire themselves, so the schema is handed over as-is
  * and `LanguageModel.make`'s `codecTransformer` is left unset — transforming it
@@ -895,7 +893,7 @@ const requestFor = (
  * Worse, the reason is what carries `isRetryable`: `InternalProviderError` is
  * retryable and `ContentPolicyError` is not, so flattening the taxonomy makes
  * an `ExecutionPlan` retry a content-filtered request forever and give up on a
- * rate limit. Provider fallback across the two ecosystems (plan §9) is exactly
+ * rate limit. Provider fallback across the two ecosystems is exactly
  * what would then misbehave.
  *
  * `describe` is theirs, and its own docs call it prose rather than a contract,

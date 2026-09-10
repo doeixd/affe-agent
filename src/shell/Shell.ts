@@ -140,9 +140,8 @@ export const layer = (shell: Service | Kind): Layer.Layer<Shell> =>
  *
  * For application-authored dynamic tools. The built-in toolkits do *not*
  * call this: they resolve their shell once, when constructed, so that the
- * dialect the model was told about is the one that runs (`SH2`/`SH4` in
- * `docs/plan-shell-tool.md`). An application that wants Layer-sourced
- * selection reads the service before building the agent:
+ * dialect the model was told about is the one that runs. An application that
+ * wants Layer-sourced selection reads the service before building the agent:
  *
  * ```ts
  * const shell = yield* Shell.Shell

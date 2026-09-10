@@ -16,8 +16,7 @@ import { ProgramThrow, type Invoke } from "./internal/interpret.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * CallScript as a `CodeExecutor`
- * (`docs/plan-code-mode-executors.md` step 4).
+ * CallScript as a `CodeExecutor`.
  *
  * The same premise as the owned interpreter, reached from the other end.
  * The model writes JavaScript-shaped source, and **nothing executes it**:
@@ -115,11 +114,11 @@ const pathOf = (tool: string): ReadonlyArray<string> => tool.split(".")
 /**
  * A compile failure as one diagnostic carrying every issue.
  *
- * This is the half of pre-flight the interpreter cannot do at all
- * (step 3): CallScript validates the *whole* plan -- unknown tools,
+ * This is the half of pre-flight the interpreter cannot do at all:
+ * CallScript validates the *whole* plan -- unknown tools,
  * unbound references, malformed arguments, limits -- before a single call
  * runs, so every problem arrives in one turn. `CodeDiagnostic.more` is
- * already the carrier for that, which is why step 3 came first.
+ * already the carrier for that, which is why the pre-flight pass came first.
  */
 const compileFailure = (error: ScriptValidationError): CodeDiagnostic => {
   const issues = error.issues.length > 0

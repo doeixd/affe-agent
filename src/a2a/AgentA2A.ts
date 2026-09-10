@@ -152,20 +152,6 @@ export interface ServerOptions<Principal> {
   /** Public endpoint URL for reverse-proxy deployments; otherwise derived per request. */
   readonly publicUrl?: string | undefined
   /**
-   * Where push notifications may be sent.
-   *
-   * A push notification config names a URL this server will later POST task
-   * content to, chosen by the caller. That is an outbound request on the
-   * server's behalf to an address it did not pick, so the default refuses
-   * anything but `https` to a non-loopback, non-private host.
-   *
-   * `allowHosts` opts specific hostnames back in -- the usual reason being an
-   * internal collector reachable only on a private network. Supplying it is
-   * a deliberate statement that those hosts are safe to reach; there is no
-   * wildcard, because a wildcard would silently restore the default-open
-   * behaviour this exists to remove.
-   */
-  /**
    * How long an SSE stream may sit idle before a keep-alive comment frame is
    * written, or `false` to write none.
    *
@@ -193,9 +179,23 @@ export interface ServerOptions<Principal> {
    * provider (`AgentTurn.withPlanStream`), so a streamed run can lose a
    * recovery a batched one would have had. `false` asks for a batched
    * model call: the task still streams its status frames and its completed
-   * answer, without chunks. `plan-streaming-followups.md` §7.
+   * answer, without chunks.
    */
   readonly streamAnswers?: boolean | undefined
+  /**
+   * Where push notifications may be sent.
+   *
+   * A push notification config names a URL this server will later POST task
+   * content to, chosen by the caller. That is an outbound request on the
+   * server's behalf to an address it did not pick, so the default refuses
+   * anything but `https` to a non-loopback, non-private host.
+   *
+   * `allowHosts` opts specific hostnames back in -- the usual reason being an
+   * internal collector reachable only on a private network. Supplying it is
+   * a deliberate statement that those hosts are safe to reach; there is no
+   * wildcard, because a wildcard would silently restore the default-open
+   * behaviour this exists to remove.
+   */
   readonly pushNotifications?: {
     readonly allowHosts?: ReadonlyArray<string> | undefined
     /** Permit `http`. Off by default: the target receives task content. */
@@ -593,7 +593,7 @@ const responseArtifact = (taskId: string, content: ReadonlyArray<Prompt.Part>): 
 })
 
 /**
- * The answer as it forms, as artifact-update chunks (`plan-streaming.md` P5).
+ * The answer as it forms, as artifact-update chunks.
  *
  * Every text delta of the run is a chunk of the *result* artifact -- the
  * same identity the completed answer is delivered under, so a consumer

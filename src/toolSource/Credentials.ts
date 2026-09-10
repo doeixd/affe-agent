@@ -6,9 +6,8 @@ import * as Namespace from "../internal/namespace.js"
 
 /**
  * Credentials for tool sources: the method, the binding and the provider,
- * kept apart because their lifetimes differ. See
- * `docs/plan-tool-credentials.md` for the contract; this is its single-user
- * slice, on a seam built for more than one.
+ * kept apart because their lifetimes differ. This is a single-user slice on a
+ * seam built for more than one.
  *
  * A method says *how* a credential is applied (header or query, name,
  * prefix, which variable). A binding says *which* method and, per variable,
@@ -268,8 +267,8 @@ export const headers = (binding: Binding): Effect.Effect<Headers.Headers, Creden
 /**
  * Which bindings exist, per integration and per subject.
  *
- * The store the contract promised once the principal could reach the tool
- * fibre (plan-tool-credentials.md, section 6). Selection is by
+ * The store that holds bindings per principal, once the principal can reach
+ * the tool fibre. Selection is by
  * `(integration, subject)`: a user-owned binding matches only its subject,
  * an org-owned binding matches everyone, and the user binding wins when
  * both exist -- identity lives in the partition, never in a model-facing
@@ -460,8 +459,8 @@ export const methodFromOpenApi = (spec: unknown): DerivedMethod => {
  * A provider whose tokens expire and can be refreshed -- OAuth, or
  * anything else stateful.
  *
- * This is the escape hatch `research-tool-sources.md` §7.4 argues for, and
- * the shape of it is the argument: **static credentials are declarative,
+ * This is the escape hatch, and the shape of it is the argument: **static
+ * credentials are declarative,
  * OAuth is stateful and protocol-specific, and pretending otherwise
  * produces an abstraction that fits neither.** So OAuth never enters the
  * *method* vocabulary -- there is no `oauth` placement, and there will not
@@ -521,7 +520,7 @@ const encodeReauth = Schema.encodeSync(Schema.toCodecJson(ReauthDetail))
 /**
  * Ask a human to reconnect, then try once more.
  *
- * The §5 promise, and the shape is the same one code mode's in-program
+ * The reauth promise, and the shape is the same one code mode's in-program
  * approvals use, for the same reason: the elicitor is the *host's* to
  * supply, so an application passes the very one its session was built
  * with and the question lands in `session.pending` beside every other.

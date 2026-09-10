@@ -32,8 +32,8 @@ export interface Options<Principal> {
   readonly authorization: Authorization<Principal>
   /**
    * Project the principal to the opaque subject string set as
-   * `CurrentPrincipal` on the fibre that runs a submission
-   * (`docs/plan-principal-on-tool-fibre.md`). The submitter's subject
+   * `CurrentPrincipal` on the fibre that runs a submission.
+   * The submitter's subject
    * governs the whole run: it is provided around the mutation that starts
    * it, the fork inherits it, and the session's captured environment
    * cannot clobber a key it never held. `respond` sets it too -- an
@@ -150,7 +150,7 @@ export interface Host<Principal> {
    *
    * The aggregate `events` is not: that one is per session and answers "what
    * is this conversation doing", where this answers "what is happening on
-   * this host". `docs/effect-plan-2.txt` §29.
+   * this host".
    *
    * Per-session order is preserved; across sessions the merge is arbitrary and
    * carries no host-wide sequence, for the reasons on

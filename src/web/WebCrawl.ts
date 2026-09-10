@@ -25,7 +25,7 @@ export const MAX_PAGES = 100
 export const DEFAULT_DEPTH = 3
 /** The deepest any crawl follows links, whatever is asked. */
 export const MAX_DEPTH = 10
-/** Total Markdown bytes across pages; the page that crosses it is the last kept. */
+/** Total Markdown bytes across pages; a page that would cross it is not kept. */
 export const MAX_TOTAL_BYTES = 8 * 1024 * 1024
 /** Whole-crawl budget, on Effect's clock: pages captured after it are not kept. */
 export const DEADLINE_MILLIS = 5 * 60_000

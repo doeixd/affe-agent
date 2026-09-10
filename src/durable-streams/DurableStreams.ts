@@ -9,7 +9,7 @@ import { Cause, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * The official Durable Streams protocol, as Effect values (issue #10).
+ * The official Durable Streams protocol, as Effect values.
  *
  * A durable stream is a URL-addressable, append-only, ordered log with
  * opaque offsets, catch-up reads, live tailing and a durable close. This

@@ -22,7 +22,7 @@ import { Clock, Effect, Redacted } from "effect"
  *
  * Note this is *not* `effect/Crypto`, which was the obvious candidate and does
  * not fit: it offers random bytes, UUIDs and SHA digests, and neither HMAC nor
- * a constant-time compare. See `docs/audit-effect-ecosystem.md` E10.
+ * a constant-time compare.
  *
  * Slack signs each request: `X-Slack-Signature` is `v0=` + the HMAC-SHA256 of
  * `v0:{timestamp}:{body}` under the app's signing secret, and

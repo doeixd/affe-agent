@@ -14,7 +14,7 @@ import * as DurableChannels from "../durable/DurableChannels.js"
 /**
  * A session, addressed as a cluster entity.
  *
- * PLAN §11's "at most one run per session" is exactly an entity invariant, and
+ * "At most one run per session" is exactly an entity invariant, and
  * `AgentSession.Id` is exactly a routing key. Making the session an entity
  * therefore buys two things the harness would otherwise have to invent:
  *
@@ -99,7 +99,7 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
        * dispatched before the process died therefore costs a no-op, and one
        * that was not gets its submission.
        *
-       * **Run from every handler, not only `submit` (R172).** The recovery
+       * **Run from every handler, not only `submit`.** The recovery
        * used to happen on the next submission and nowhere else, so a lost
        * submission whose caller went on to steer, interrupt, or answer an
        * elicitation -- rather than submit again -- sat in the outbox with a
@@ -167,9 +167,8 @@ export const layer = <W extends ReturnType<typeof DurableAgent.workflow>>(
             // submissions.
             yield* DurableAgent.open(store, sessionId)
             /**
-             * R173's sibling, R172: this acknowledgement runs ahead of the
-             * work, and the fork is why -- and why it cannot simply be
-             * awaited.
+             * This acknowledgement runs ahead of the work, and the fork is why
+             * -- and why it cannot simply be awaited.
              *
              * The caller is handed an execution id the instant admission
              * opens, before anything durable exists. Process loss in that

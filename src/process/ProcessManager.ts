@@ -7,13 +7,13 @@ import * as Namespace from "../internal/namespace.js"
 /**
  * A process that outlives the call that started it.
  *
- * `docs/effect-plan-2.txt` §8–§11, §21–§24. `Sandbox.exec` is a *bounded
+ * `Sandbox.exec` is a *bounded
  * command*: it runs inside the caller's scope, waits for the exit, and dies
  * with the tool call. That is the right shape for `git status` and the wrong
  * one for a dev server, a watch, or a test run the agent wants to come back
  * to. Those need an identity that is not a fibre, a lifetime that is not a
  * tool call, a place to read output from later, and a way for a second
- * caller to find them. That is all this adds -- and, by the plan's rule,
+ * caller to find them. That is all this adds -- and, by design,
  * *only* that:
  *
  * ```text
@@ -23,9 +23,9 @@ import * as Namespace from "../internal/namespace.js"
  *
  * ## What it is built on, and why not `ChildProcess`
  *
- * §11 asked for a spike before building a process manager on Effect's own
- * `ChildProcess`, and the spike (`evaluation-sandbox-effect-platform.md`,
- * re-run as `test/ProcessSpike.test.ts`) found the sandbox's local adapter
+ * A spike preceded building a process manager on Effect's own
+ * `ChildProcess`, and the spike (re-run as `test/ProcessSpike.test.ts`)
+ * found the sandbox's local adapter
  * keeps two guarantees Effect's spawner does not: a finished command's
  * *descendants* are killed rather than left holding its stdio, and the
  * workspace boundary is checked with `lstat` and a native `realpath`. So a
@@ -37,13 +37,13 @@ import * as Namespace from "../internal/namespace.js"
  *
  * ## Ownership
  *
- * The manager's scope owns every process, through a `FiberMap` (§10). A
+ * The manager's scope owns every process, through a `FiberMap`. A
  * `ManagedProcess` handle owns nothing: dropping it changes nothing, and two
  * callers holding handles to one process are holding one process. That is
  * the whole difference from a fibre, and it is why `WorkspaceManager` --
  * reference-counted, released when the last holder goes -- is the wrong
  * owner for a process and the right owner for its *workspace*: each process
- * holds its workspace for exactly as long as it runs (§12–§13), so a dev
+ * holds its workspace for exactly as long as it runs, so a dev
  * server keeps the directory alive between the tool calls that read it.
  *
  * Closing the manager terminates what is still running. A process is not a
@@ -52,13 +52,13 @@ import * as Namespace from "../internal/namespace.js"
  * ## What it deliberately does not do
  *
  * - **No stdin.** `Sandbox` has no `write` to a running command, so neither
- *   does this. §21's `process.write` projection waits for that primitive.
+ *   does this. The `process.write` projection waits for that primitive.
  * - **No persistence.** Identity and output live in memory, with the
- *   manager. §38 phase 9 (metadata and output persistence) comes after
+ *   manager. Metadata and output persistence come after
  *   this, and a store shaped before a second backend exists would be
  *   guessed.
  * - **No pagination on `list`.** One consumer, in-process, over a bounded
- *   set; §9's `ProcessPage` arrives with the store that would make it mean
+ *   set; a `ProcessPage` arrives with the store that would make it mean
  *   something.
  * - **No timeout default.** A managed process is defined by outliving the
  *   call, so the sandbox's 10-second default would be wrong and an infinite
@@ -189,7 +189,7 @@ export interface ManagedProcess {
   readonly wait: Effect.Effect<ProcessExit, WaitError>
   /**
    * Stop it. The sandbox ends the whole process tree. A no-op once it is
-   * over. This is a separate model-initiated act from starting it (§23), and
+   * over. This is a separate model-initiated act from starting it, and
    * `ProcessTools` projects it as one.
    */
   readonly terminate: Effect.Effect<void>

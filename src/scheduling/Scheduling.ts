@@ -11,7 +11,7 @@ import * as InputBoundary from "../internal/inputBoundary.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Scheduling and self-dispatch (issue #4 §14).
+ * Scheduling and self-dispatch.
  *
  * There is no scheduler runtime here, on purpose. Effect already schedules:
  * `Effect.repeat`/`Effect.schedule` over a `Schedule` (including `Schedule.cron`)

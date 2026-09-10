@@ -2,8 +2,7 @@ import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
 import * as Namespace from "../internal/namespace.js"
 
 /**
- * Content-addressed storage for large binary content
- * (`docs/plan-filetypes.txt` phase 5).
+ * Content-addressed storage for large binary content.
  *
  * Inline base64 is right for a 12 KB screenshot and wrong for a 50 MB
  * video: it inflates by a third and then rides *every* boundary -- RPC
@@ -199,8 +198,7 @@ export const describe = (
 // ---------------------------------------------------------------------------
 
 /**
- * What an application will accept at all
- * (`plan-filetypes.txt`, the security rules).
+ * What an application will accept at all.
  *
  * `mediaTypes.allow` admits exact types and `type/*` families; `deny`
  * wins over `allow`, so "images, but never SVG" is two lines. A policy

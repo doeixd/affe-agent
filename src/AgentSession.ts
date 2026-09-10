@@ -141,7 +141,7 @@ export interface AgentSession<
    * outcomes beyond that one, because an `Agent` is a value and this handle
    * lives in the caller's scope. Retention across submissions is the client
    * boundary's job (`AgentClient`, the durable client), where a bound can be
-   * stated; see `docs/plan-submit-await.md`.
+   * stated.
    *
    * Unlike `prompt`, interrupting the waiter does not interrupt the run: the
    * submission was detached by `submit`, and a caller giving up on waiting is
@@ -239,7 +239,7 @@ export interface MakeOptions {
    * to the ceiling, 8 MiB.
    *
    * This is not the observer-lag bound and not the bound on a tool's terminal
-   * result. See `docs/limits.md`: a fix for one of the three is not protection
+   * result. A fix for one of the three is not protection
    * against the others.
    */
   readonly toolProgress?: { readonly maxBytes?: number | undefined } | undefined
@@ -249,7 +249,7 @@ export interface MakeOptions {
  * What an *engine* -- a durable interpreter, this library's own tests --
  * may set that an application never needs to. Accepted by `makeEngine`
  * only; `make`, the public constructor, takes `MakeOptions` alone, so these
- * cannot become something a user depends on (design-assessment rec 2).
+ * cannot become something a user depends on.
  */
 export interface EngineOptions {
   /**
@@ -1202,7 +1202,7 @@ export const restore = <
  *
  * Deliberately not the underlying `SubscriptionRef`. Handing that out would let
  * a caller write to it, and canonical history lives there — which would break
- * the invariant that the session is its sole owner (PLAN §45). Observation is
+ * the invariant that the session is its sole owner. Observation is
  * a different capability from mutation, and only one of them is on offer.
  */
 export interface StateView {
@@ -1246,8 +1246,8 @@ const isSubmissionTerminal = (envelope: AgentEventEnvelope): boolean =>
  * envelope of that submission -- message deltas, tool events, turn events --
  * through its terminal event, and nothing after it.
  *
- * Derived from `submit` and the session's bus, not a new mechanism
- * (`plan-streaming.md` P1). What it adds over subscribing to `events` and
+ * Derived from `submit` and the session's bus, not a new mechanism.
+ * What it adds over subscribing to `events` and
  * filtering by hand is the one thing a hand-rolled version gets wrong: the
  * subscription is registered **before** the submission is admitted, so the
  * first envelope -- `SubmissionStarted`, and a `SubmissionCompleted` that

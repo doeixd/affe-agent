@@ -2,8 +2,7 @@ import { Context, Option } from "effect"
 import * as Namespace from "./internal/namespace.js"
 
 /**
- * Who asked, on the fibre that acts
- * (`docs/plan-principal-on-tool-fibre.md`, decided 2026-08-31).
+ * Who asked, on the fibre that acts.
  *
  * A `Context.Reference`, not a kernel noun: the kernel neither reads nor
  * requires it, no session or tool signature changes, and a session run

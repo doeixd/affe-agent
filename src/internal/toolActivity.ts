@@ -17,7 +17,7 @@
  * earlier result instead of executing.
  *
  * The obvious fix — a global counter, incremented per call — is wrong once a
- * turn's tools run concurrently, which PLAN §17 says they do. The counter is
+ * turn's tools run concurrently, which they do. The counter is
  * read at call time, so two tools racing to start take their ordinals in
  * whatever order the scheduler picked. If replay picks the other order, each
  * call looks up an activity belonging to its sibling: at best the journal entry

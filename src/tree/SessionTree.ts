@@ -27,8 +27,7 @@ import * as Namespace from "../internal/namespace.js"
  * a branch is a session seeded with that node's history. Built entirely on the
  * existing primitives -- `AgentSession.snapshot` captures a node,
  * `AgentSession.make({ history })` starts one from it -- so nothing in the core
- * changes to support this. See `docs/research-session-tree.md` for the spike
- * that established that, and `docs/plan-session-tree.md` for the design.
+ * changes to support this.
  *
  * **Branching forks the conversation, not the world.** Files a tool wrote,
  * `AgentState` and memory are services: they are shared by every branch and
@@ -242,8 +241,7 @@ export interface BranchOptions {
 /**
  * `branch` alone also takes a seed.
  *
- * The one capability branch carryover needed from the tree
- * (`docs/plan-branching-and-compaction.md` §18), kept deliberately generic:
+ * The one capability branch carryover needed from the tree, kept deliberately generic:
  * the tree knows how to build a session from a node, and this lets a caller
  * decorate that starting history without the tree learning what a summary
  * is. `BranchSummary` is the consumer; anything else that must enter a new
@@ -279,14 +277,6 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
     options?: CommitOptions
   ) => Effect.Effect<Node, SessionBusy | SessionClosed | SE>
 
-  /**
-   * Start a session from a node.
-   *
-   * A *new* session with a fresh id: resuming is the same conversation
-   * continuing, branching is a different one, and the two should not be
-   * confused in a log. History is materialised internally, so a caller never
-   * has to know how nodes are stored.
-   */
   /**
    * Capture a node at every turn boundary, for as long as the scope lives.
    *
@@ -389,6 +379,14 @@ export interface SessionTree<Tools extends Record<string, Tool.Any>, E, SE = nev
    */
   readonly status: Stream.Stream<AgentSession.State>
 
+  /**
+   * Start a session from a node.
+   *
+   * A *new* session with a fresh id: resuming is the same conversation
+   * continuing, branching is a different one, and the two should not be
+   * confused in a log. History is materialised internally, so a caller never
+   * has to know how nodes are stored.
+   */
   readonly branch: (
     node: Node,
     options?: BranchSeedOptions
@@ -608,7 +606,7 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
      * The length check is a short-circuit rather than the comparison. It is
      * the common case at a turn boundary, where a turn has added messages, so
      * the structural walk runs only when the two are the same size -- which is
-     * the case R34 is about and the one worth paying for.
+     * the case worth paying for.
      */
     const sameMessages = (left: Prompt.Prompt, right: Prompt.Prompt): boolean =>
       left.content.length === right.content.length && Equal.equals(left, right)
@@ -738,10 +736,15 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R, SE = never>(
           return marked
         }
         // Only reachable for an empty conversation with no prior node.
-        return yield* Effect.map(
-          record(captured.sessionId, captured.history, { ...commitOptions, cause: "root" }),
-          Option.getOrThrow
-        )
+        const rootRecord = yield* record(captured.sessionId, captured.history, {
+          ...commitOptions,
+          cause: "root"
+        })
+        return yield* Option.match(rootRecord, {
+          onNone: () =>
+            Effect.die(new Error("SessionTree.commit: the root commit produced no node")),
+          onSome: Effect.succeed
+        })
       }).pipe(Semaphore.withPermit(committing))
 
     const branch: SessionTree<Tools, E, SE>["branch"] = (node, branchOptions) =>

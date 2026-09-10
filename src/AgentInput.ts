@@ -86,7 +86,7 @@ const RawInput = Schema.declare(
 /**
  * The default input: a prompt, in the shape the system already speaks.
  *
- * Every agent has an input (`plan-input-default.md`). One that declares
+ * Every agent has an input. One that declares
  * none is asked with `Prompt.RawInput`, and this is that declaration made
  * explicit: the schema is the prompt wire codec every boundary already
  * uses, so the encoded form of a prompt is today's prompt wire byte for
@@ -165,7 +165,7 @@ export const rendered = <A, I, E, R>(
  * Whether a remote input is a raw prompt rather than an already-encoded value.
  *
  * The wire carries one shape -- the session's encoded input, which the host
- * decodes with the session's own schema (`plan-input-default.md` step 3).
+ * decodes with the session's own schema.
  * A caller in-process may still hand a client a `Prompt.RawInput`, and this
  * is how the client tells the two apart before encoding: a string, a
  * `Prompt`, or an iterable of messages is raw; anything else is the encoded

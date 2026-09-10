@@ -4,7 +4,7 @@ import { AgentObservationLagError } from "../Errors.js"
 import { positiveInteger } from "./positive.js"
 
 /**
- * Bounded observation (`plan-streaming-followups.md` §4, item 75): the
+ * Bounded observation: the
  * vocabulary, the wire size, and the pumped form for a delivery log.
  *
  * The bus is unbounded and a subscriber that stops reading retains every
@@ -56,13 +56,6 @@ export const boundOf = (where: string, options: LagOptions | undefined): Bound =
 })
 
 /**
- * The size the bound counts: the envelope as the wire carries it, in UTF-8
- * bytes -- `String.length` counts UTF-16 units and undercounts anything
- * outside ASCII by up to a factor of three. A transport encodes again, so
- * this is a second serialisation per envelope observed remotely; a bound
- * that counted something cheaper would not be a bound on what is retained.
- */
-/**
  * The size of one event on the wire, without an envelope around it.
  *
  * For bounds that count what a *producer* emits rather than what an observer
@@ -81,6 +74,13 @@ export const eventWireSize = (event: AgentEvent.StreamedEvent): number =>
       : event
   ))
 
+/**
+ * The size the bound counts: the envelope as the wire carries it, in UTF-8
+ * bytes -- `String.length` counts UTF-16 units and undercounts anything
+ * outside ASCII by up to a factor of three. A transport encodes again, so
+ * this is a second serialisation per envelope observed remotely; a bound
+ * that counted something cheaper would not be a bound on what is retained.
+ */
 export const wireSize = (envelope: AgentEvent.AgentEventEnvelope): number =>
   utf8Length(JSON.stringify(AgentEvent.toWire(envelope)))
 

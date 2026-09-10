@@ -553,9 +553,9 @@ export const timeoutMillis = (options: ExecOptions | undefined): number =>
  *
  * `exec` is the one required primitive: run a command with a working
  * directory. Everything else is derived from POSIX commands over it --
- * `sh`, `base64`, `find`, `stat -c`, `readlink -f` -- which is tier 0 of
- * `docs/plan-integrations.md` §6: any host that can run a command is a
- * sandbox in one expression. The costs are stated there and are real:
+ * `sh`, `base64`, `find`, `stat -c`, `readlink -f` -- which is tier 0:
+ * any host that can run a command is a sandbox in one expression. The
+ * costs are real:
  * binary content rides base64 through argv, errors arrive as exit codes and
  * stderr text, a Windows-only userland needs overrides, one process per
  * file operation, and large files should not travel this way.
@@ -665,8 +665,8 @@ const defaultClassify = (context: ClassifyContext): FileError => {
 }
 
 /**
- * Tier 1: a provider from one `exec` plus whatever it does natively
- * (`docs/plan-integrations.md` §6.3). Everything omitted derives from POSIX
+ * Tier 1: a provider from one `exec` plus whatever it does natively.
+ * Everything omitted derives from POSIX
  * commands over `exec`; `derived` names exactly which operations are
  * shell-derived, so nothing pretends to be native that is not. Validated by
  * rebuilding the local provider from its own `exec` and passing
@@ -849,8 +849,8 @@ export const fromOperations = (
 }
 
 /**
- * Tier 0: the whole provider from one function
- * (`docs/plan-integrations.md` §6.2). Any host that can run a command -- an
+ * Tier 0: the whole provider from one function.
+ * Any host that can run a command -- an
  * SSH box, a container exec, a CI runner -- becomes a sandbox in one
  * expression, every file operation derived and reported as such.
  */

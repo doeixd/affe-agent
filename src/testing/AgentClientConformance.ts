@@ -913,10 +913,10 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
     )),
 
     /**
-     * One submission as a stream, on every client (`plan-streaming.md` P1,
-     * item 72): the rules must hold wherever the session lives, or closing
-     * a tab changes execution semantics by deployment. A client without a
-     * subscription seam established before admission refuses instead.
+     * One submission as a stream, on every client: the rules must hold
+     * wherever the session lives, or closing a tab changes execution
+     * semantics by deployment. A client without a subscription seam
+     * established before admission refuses instead.
      */
     options.streamsSubmissions === false
       ? make("refuses to stream a submission rather than returning one that may have missed its start", withClient(
@@ -989,7 +989,7 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
      * is never returned to the model. The durable wrapper once folded a
      * defect into a typed tool failure the model then saw -- found by the
      * streamed-failure case below, which had to use a failing model call
-     * until this held on every client (item 73).
+     * until this held on every client.
      */
     make("a tool that dies fails the run everywhere, and is not shown to the model", withClient(
       options,
@@ -1038,9 +1038,9 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
     )),
 
     /**
-     * The outcome matrix (`plan-streaming-followups.md` §8, item 74): the
-     * distinctions an outcome carries -- success, expected failure, defect,
-     * interruption -- survive every client, the journal included. The tool
+     * The outcome matrix: the distinctions an outcome carries -- success,
+     * expected failure, defect, interruption -- survive every client, the
+     * journal included. The tool
      * defect row is above; interruption is "interrupts a run and reports
      * it"; these two hold the expected-failure and the model rows.
      */

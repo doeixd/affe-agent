@@ -9,13 +9,13 @@ import * as Namespace from "../internal/namespace.js"
  * The bridged CLI's permission prompts, answered by *this* application's
  * policy.
  *
- * `docs/plan-a2a-layers-bridges.txt` step 2, and the boundary
- * `ClaudeCodeA2A` deliberately left open. Claude Code decides for itself what
- * it may do -- from its own flags and settings -- unless it is given
- * `--permission-prompt-tool`, which routes every prompt it would have shown a
- * human to an MCP tool instead. That tool is this module, and behind it sit
- * `Permission.Policy` and `Elicitation`: the same policy that governs this
- * agent's own tools, and the same question mechanism a person already answers.
+ * The boundary `ClaudeCodeA2A` deliberately left open. Claude Code decides for
+ * itself what it may do -- from its own flags and settings -- unless it is
+ * given `--permission-prompt-tool`, which routes every prompt it would have
+ * shown a human to an MCP tool instead. That tool is this module, and behind
+ * it sit `Permission.Policy` and `Elicitation`: the same policy that governs
+ * this agent's own tools, and the same question mechanism a person already
+ * answers.
  *
  * **One policy, two runtimes** is the point, and it is not a slogan: the
  * default projection maps the CLI's tools onto the same `action` vocabulary
@@ -266,13 +266,6 @@ export const args = (options: {
   toolReference(options)
 ]
 
-/**
- * One prompt, decided.
- *
- * Exported because it is the whole of the behaviour and needs no server to
- * test: hand it a tool name and an input, get back exactly what the CLI will
- * be told. The MCP tool below is this function with a schema on each side.
- */
 /**
  * One prompt, decided.
  *

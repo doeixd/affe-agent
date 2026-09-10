@@ -14,11 +14,8 @@ import {
 } from "effect"
 import { McpSchema, McpServer, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import { Headers, HttpServerRequest } from "effect/unstable/http"
-import { AgentClient } from "../client/AgentClient.js"
-import { positiveInteger } from "../internal/positive.js"
 import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
-import * as Client from "../client/AgentClient.js"
 import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 import * as PromptWire from "../PromptWire.js"
@@ -26,27 +23,14 @@ import * as PromptWire from "../PromptWire.js"
 /**
  * An agent, exposed to MCP clients as a tool.
  *
- * The interesting thing is how little of it is MCP. The handler talks to
- * `AgentClient` — the transport seam — and knows nothing about sessions,
- * scopes, or the harness. MCP is a protocol adapter over that seam, which is
- * what the seam was for.
+ * The interesting thing is how little of it is MCP. The handlers talk to an
+ * `AgentSessionHost` — the transport seam every adapter shares — and MCP is a
+ * protocol adapter over it, which is what the seam was for.
  *
- * Only this direction is implemented. Consuming a remote MCP server's tools —
- * turning them into an Effect AI `Toolkit` — would need an MCP *client*, and
- * Effect ships `McpServer`, `McpProtocol` and `McpSchema` but no client. That
- * is a protocol implementation, not an adapter, and writing one against a
- * specification with no peer to check it against is how plausible-but-wrong
- * code gets shipped.
+ * This is the server direction. Consuming a remote MCP server's tools is
+ * `McpToolkit`, over the `McpClient` adapters.
  */
 
-/**
- * Conversation continuity across calls.
- *
- * MCP tool calls are individually stateless, so a client that wants a
- * conversation has to say which one. Omitting `sessionId` gives a fresh
- * session, which is the right default for a one-shot question; supplying one
- * reaches the same session again, and it lives as long as the server does.
- */
 /**
  * The declared failure of every agent tool.
  *
@@ -67,6 +51,14 @@ export class ToolFailure extends Schema.TaggedError<ToolFailure>()(
   }
 }
 
+/**
+ * Conversation continuity across calls.
+ *
+ * MCP tool calls are individually stateless, so a client that wants a
+ * conversation has to say which one. Omitting `sessionId` gives a fresh
+ * session, which is the right default for a one-shot question; supplying one
+ * reaches the same session again, and it lives as long as the server does.
+ */
 export const AskAgent = Tool.make("ask_agent", {
   parameters: Schema.Struct({
     prompt: Schema.String,
@@ -283,10 +275,10 @@ const requestHeaders: Effect.Effect<Headers.Headers> = Effect.map(
  * Build the frontend handlers over an application-owned host.
  *
  * Deliberately private: applications compose `serverLayer`; exposing another
- * handler constructor would add public vocabulary for one consumer. Unlike
- * `handlers`, this path owns no session registry, session scope or creation
- * lock. It retains only bounded start/await tickets; session ownership,
- * mutation idempotency and capacity remain with the supplied host.
+ * handler constructor would add public vocabulary for one consumer. This path
+ * owns no session registry, session scope or creation lock. It retains only
+ * bounded start/await tickets; session ownership, mutation idempotency and
+ * capacity remain with the supplied host.
  */
 const handlersFromHost = <Principal>(
   hostTag: AgentSessionHost.Tag<Principal>,
@@ -1131,10 +1123,9 @@ export interface ServerOptions<Principal> {
 /**
  * Register the MCP agent frontend over a shared `AgentSessionHost`.
  *
- * This is the preferred application path. The older `handlers` and `layer`
- * remain intact because their bounded registry evicts the oldest idle session,
- * while `AgentSessionHost` deliberately refuses new sessions at capacity. That
- * observable policy choice cannot be changed under the name of a refactor.
+ * The host deliberately refuses new sessions at capacity rather than evicting
+ * an idle one, and that observable policy choice cannot be changed under the
+ * name of a refactor.
  *
  * ```ts
  * const Host = AgentSessionHost.Tag<User>("app/AgentSessionHost")

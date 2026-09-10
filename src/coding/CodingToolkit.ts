@@ -15,7 +15,7 @@ import * as Truncate from "./internal/truncate.js"
 import * as Replace from "./internal/replace.js"
 
 /**
- * A coding agent's tools, over the sandbox seam (issue #4 item 2).
+ * A coding agent's tools, over the sandbox seam.
  *
  * This is a *battery*, not a core capability: every tool is an ordinary
  * Effect AI `Tool` whose handler depends on `Sandbox.Current`, exactly as a
@@ -256,7 +256,7 @@ export const Search = Permission.annotate(
  * -- "using PowerShell 7 (pwsh)" -- and a description is static once an
  * agent is built. The same `Service` that renders it also builds the argv the
  * handler executes, so the model is never told one dialect and run under
- * another (SH2 in `docs/plan-shell-tool.md`).
+ * another.
  */
 const shellTool = (shell: ShellRuntime.Service) =>
   Permission.annotate(

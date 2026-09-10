@@ -12,8 +12,7 @@ import * as BlobStore from "./BlobStore.js"
  * is the content hash, so a write is naturally idempotent and a re-put of
  * held content touches nothing. Ids come from this package's own hashing
  * and are hex; nothing user-supplied is ever used as a path segment --
- * `fileName` lives inside the metadata JSON, never on disk
- * (`plan-filetypes.txt`'s "never trust fileName as a filesystem path").
+ * `fileName` lives inside the metadata JSON, never on disk.
  */
 
 const decodeRef = Schema.decodeUnknownEffect(BlobStore.BlobRef)

@@ -73,14 +73,6 @@ export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRe
 }
 
 /**
- * A tool call the permission policy refused.
- *
- * Distinct from `ToolApprovalRequiredError`, which is a question that was
- * asked and answered "no". A denial was never a question: the policy -- or
- * the tool's own projection -- said this action on this resource is not
- * permitted here. `reason` is the policy's word, when it gave one.
- */
-/**
  * A tool annotated `ToolExecution.Alone` arrived in a turn with other calls.
  *
  * Not a permission answer and not the handler's failure: the model's own
@@ -134,6 +126,14 @@ export class ToolBatchRejectedError extends Schema.TaggedError<ToolBatchRejected
   }
 }
 
+/**
+ * A tool call the permission policy refused.
+ *
+ * Distinct from `ToolApprovalRequiredError`, which is a question that was
+ * asked and answered "no". A denial was never a question: the policy -- or
+ * the tool's own projection -- said this action on this resource is not
+ * permitted here. `reason` is the policy's word, when it gave one.
+ */
 export class ToolPermissionDeniedError extends Schema.TaggedError<ToolPermissionDeniedError>()(
   "ToolPermissionDeniedError",
   {
@@ -172,11 +172,11 @@ export class ToolPermissionDeniedError extends Schema.TaggedError<ToolPermission
  * `"SqlError"`. That check reconstructs, unreliably, exactly the information
  * `orDie` threw away.
  *
- * And the durability plan's fault-injection milestone (H4) could not say
+ * And fault injection could not say
  * anything. A wrapper that fails a write, duplicates a record or half-commits
  * produces one observation through an `orDie`d store -- a defect -- so the
  * suite can prove the system noticed and nothing about *how* it degraded.
- * Invariant D7 ("storage failure degrades, it does not corrupt") was
+ * The invariant that storage failure degrades rather than corrupts was
  * untestable by construction.
  *
  * ## What is still a defect
@@ -189,8 +189,6 @@ export class ToolPermissionDeniedError extends Schema.TaggedError<ToolPermission
  * Lives here rather than in `/durable` because it is not durability-specific:
  * `/state` persists through a `Store` too, and a second error meaning the same
  * thing is exactly the duplication this audit set out to remove.
- *
- * @see `docs/audit-effect-ecosystem.md` E14
  */
 export class StorageError extends Schema.TaggedError<StorageError>()(
   "StorageError",
@@ -224,7 +222,7 @@ export const isStorageError = (u: unknown): u is StorageError =>
  * `awaitSubmission` named a submission the session does not hold.
  *
  * Either it never existed here, or its outcome has been evicted: retention
- * is bounded (`docs/plan-submit-await.md`), and an evicted outcome is
+ * is bounded, and an evicted outcome is
  * reported as gone rather than re-run or confused with another's.
  */
 export class AgentSubmissionNotFoundError extends Schema.TaggedError<AgentSubmissionNotFoundError>()(
@@ -265,36 +263,6 @@ export class AgentObservationLagError extends Schema.TaggedError<AgentObservatio
 }
 
 /**
- * A one-shot handle's retained trace outgrew its bound, so the trace it can
- * replay is no longer the complete one.
- *
- * Raised by `Agent.start`'s `events`, and by nothing else: the submission
- * itself continues, canonical history is unaffected, and a durable delivery
- * log is unaffected. Observation stays observational.
- *
- * It is a failure rather than a silently truncated stream because the
- * attraction of a replayable handle is that a late observer sees *everything*
- * that happened. A trace that quietly dropped its oldest envelopes would still
- * look like a complete one, which is the more expensive mistake.
- */
-/**
- * A submission produced more tool progress than its budget allows.
- *
- * Distinct from `AgentObservationLagError`, which bounds how far an *observer*
- * may fall behind, and from the bound on a tool's terminal result. This one
- * bounds what the agent *produces*: a tool emitting progress in a loop costs
- * network, storage and telemetry even when every consumer is keeping up, and a
- * replaying handle or a delivery log has to hold all of it.
- *
- * The budget is per submission rather than per run, because a follow-up chain
- * is one externally admitted unit of work -- a per-run budget would let one
- * submission emit without limit simply by scheduling continuations.
- *
- * Progress is not truncated to fit. A structured snapshot cut in half is
- * usually a lie, and a consumer cannot tell it from a real one, so the
- * offending call fails instead and already committed history is untouched.
- */
-/**
  * A run reached a built-in ceiling under a policy that says exhaustion is a
  * failure.
  *
@@ -321,6 +289,23 @@ export class AgentExhaustedError extends Schema.TaggedError<AgentExhaustedError>
   }
 }
 
+/**
+ * A submission produced more tool progress than its budget allows.
+ *
+ * Distinct from `AgentObservationLagError`, which bounds how far an *observer*
+ * may fall behind, and from the bound on a tool's terminal result. This one
+ * bounds what the agent *produces*: a tool emitting progress in a loop costs
+ * network, storage and telemetry even when every consumer is keeping up, and a
+ * replaying handle or a delivery log has to hold all of it.
+ *
+ * The budget is per submission rather than per run, because a follow-up chain
+ * is one externally admitted unit of work -- a per-run budget would let one
+ * submission emit without limit simply by scheduling continuations.
+ *
+ * Progress is not truncated to fit. A structured snapshot cut in half is
+ * usually a lie, and a consumer cannot tell it from a real one, so the
+ * offending call fails instead and already committed history is untouched.
+ */
 export class AgentToolProgressLimitError extends Schema.TaggedError<AgentToolProgressLimitError>()(
   "AgentToolProgressLimitError",
   {
@@ -337,6 +322,19 @@ export class AgentToolProgressLimitError extends Schema.TaggedError<AgentToolPro
   }
 }
 
+/**
+ * A one-shot handle's retained trace outgrew its bound, so the trace it can
+ * replay is no longer the complete one.
+ *
+ * Raised by `Agent.start`'s `events`, and by nothing else: the submission
+ * itself continues, canonical history is unaffected, and a durable delivery
+ * log is unaffected. Observation stays observational.
+ *
+ * It is a failure rather than a silently truncated stream because the
+ * attraction of a replayable handle is that a late observer sees *everything*
+ * that happened. A trace that quietly dropped its oldest envelopes would still
+ * look like a complete one, which is the more expensive mistake.
+ */
 export class AgentTraceLimitError extends Schema.TaggedError<AgentTraceLimitError>()(
   "AgentTraceLimitError",
   {

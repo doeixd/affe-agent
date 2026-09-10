@@ -5,7 +5,7 @@ import * as AgentProtocol from "../client/AgentProtocol.js"
 import * as AgentSessionHost from "../client/AgentSessionHost.js"
 
 /**
- * Connectors (issue #4 §10): put an agent in front of an external platform --
+ * Connectors: put an agent in front of an external platform --
  * Slack, a webhook, a queue -- over the same `AgentSessionHost` seam the HTTP,
  * RPC, AG-UI and A2A adapters use. A connector is a thin adapter, not a second
  * Agent API; it owns at most four things, and everything else is the host's:

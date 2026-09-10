@@ -236,7 +236,7 @@ const sessionsGroup = <const Id extends string>(identifier: Id) =>
  * several agents through `HttpApi.prefix` + `addHttpApi` silently drops all
  * but one -- both copies keep the group id `sessions`, and the second
  * replaces the first. `api({ name })` is the way out: each agent gets its
- * own group id and a prefixed path. See `docs/plan-agent-server.md`.
+ * own group id and a prefixed path.
  */
 const Sessions = sessionsGroup("sessions")
 export const Api = HttpApi.make("AgentHttp").add(Sessions)
@@ -374,7 +374,7 @@ const nextRequestId = (): AgentProtocol.RequestId => {
  * one `AgentServer` mount a local agent and a remote one: the remote mount is
  * an ordinary host whose client happens to speak HTTP. `AgentClientContract`
  * runs against this adapter the same way it runs against the in-process
- * client — that is AS3, rather than a second suite of HTTP assertions.
+ * client — rather than a second suite of HTTP assertions.
  */
 export const fromGenerated = (
   client: Generated,

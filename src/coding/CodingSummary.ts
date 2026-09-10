@@ -3,8 +3,7 @@ import type { Prompt } from "effect/unstable/ai"
 import type * as Compaction from "../compaction/Compaction.js"
 
 /**
- * Cumulative file details for coding agents
- * (`docs/plan-branching-and-compaction.md` §21–23).
+ * Cumulative file details for coding agents.
  *
  * A coding session's most valuable carryover is which files were read and
  * which were modified, accumulated across every compaction and branch
@@ -17,11 +16,11 @@ import type * as Compaction from "../compaction/Compaction.js"
  * summarising model for a Files section and hope; this one is computed from
  * the folded stretch's own tool calls (`read_file`, and `write_file` /
  * `edit_file` for modifications -- the known `/coding` toolkit definitions,
- * which are ours, exactly the first-version compromise §22 allows) and
+ * which are ours, exactly the first-version compromise the design allows) and
  * unioned with what previous summaries already carried. Accumulation works
  * through text on purpose: a checkpoint persists the summary string and
  * nothing else, so details that live *in* the string survive every store,
- * every branch carryover, and a summary of a summary -- the §23 cases --
+ * every branch carryover, and a summary of a summary -- the nested cases --
  * without widening `SummaryResult` or the checkpoint schema.
  */
 
@@ -110,7 +109,7 @@ const union = (left: FilesTouched, right: FilesTouched): FilesTouched => ({
  * system messages (a branch carryover later compacted), and the folded
  * stretch's own `/coding` tool calls. Usage passes through untouched.
  *
- * Works unchanged as a `BranchSummary` summariser, which is §23's point:
+ * Works unchanged as a `BranchSummary` summariser, which is the point:
  * one mechanism serves repeated compaction, branch carryover, and nested
  * carryover.
  */

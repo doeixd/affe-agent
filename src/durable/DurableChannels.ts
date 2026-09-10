@@ -12,7 +12,7 @@ import * as Namespace from "../internal/namespace.js"
 /**
  * Steering and follow-up input, persisted per drain.
  *
- * This is the seam PLAN §16.2 exists for. A durable replay returns persisted
+ * This seam keeps a replay coherent. A durable replay returns persisted
  * model and tool results, so a turn re-derives the prompt it derived the first
  * time — unless it drains a queue, which on replay is empty. The turn would
  * then derive a *different* prompt from the one whose model result is being
@@ -246,7 +246,7 @@ const encodePrompt = (prompt: Prompt.Prompt): Effect.Effect<string> =>
 /**
  * Decoding is steering or follow-up input coming *back* out of the store, so it
  * can be a truncated write or a row from an older schema -- conditions, not
- * bugs. D1 makes this one matter more than it looks: input reported as accepted
+ * bugs. This one matters more than it looks: input reported as accepted
  * must be executed or its failure reported, and a defect while draining is
  * neither.
  */

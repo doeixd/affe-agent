@@ -232,16 +232,6 @@ export const cacheBreakpoint = (options?: {
 }
 
 /**
- * Left-to-right composition.
- *
- * Each transform sees the previous one's output in `prompt`, while
- * `canonicalPrompt` keeps pointing at the session's committed history. An
- * earlier version threaded the accumulated value through `canonicalPrompt`
- * itself, which quietly made the field mean two different things depending on
- * position in the chain — the one distinction this design cannot afford to
- * blur.
- */
-/**
  * The pieces of a composed transform, extracted per element.
  *
  * Declaring `compose` over a single `E` and `R` reads naturally and does not
@@ -260,6 +250,16 @@ type ServicesOf<Transform> = Transform extends ContextTransform<
   ? R
   : never
 
+/**
+ * Left-to-right composition.
+ *
+ * Each transform sees the previous one's output in `prompt`, while
+ * `canonicalPrompt` keeps pointing at the session's committed history. An
+ * earlier version threaded the accumulated value through `canonicalPrompt`
+ * itself, which quietly made the field mean two different things depending on
+ * position in the chain — the one distinction this design cannot afford to
+ * blur.
+ */
 export const compose = <
   const Transforms extends ReadonlyArray<ContextTransform<any, any>>
 >(

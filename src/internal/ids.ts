@@ -55,7 +55,6 @@ export interface IdSource {
   readonly nextElicitation: (submissionId: SubmissionId) => Effect.Effect<string>
 }
 
-/** The id of a submission's n-th question, for a caller that must answer without having watched it asked. */
 /**
  * The session a run id -- or anything that starts with one, such as a
  * `Budget.Occurrence` -- was minted by: the prefix before `:run-`. A string
@@ -67,6 +66,7 @@ export const sessionOfRun = (runId: string): string => {
   return at === -1 ? runId : runId.slice(0, at)
 }
 
+/** The id of a submission's n-th question, for a caller that must answer without having watched it asked. */
 export const elicitationId = (submissionId: string, n: number): string =>
   `${submissionId}:elicit-${n}`
 

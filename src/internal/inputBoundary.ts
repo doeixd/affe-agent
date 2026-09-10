@@ -120,9 +120,8 @@ export const admit = (
  * by an agent whose input is now the prompt -- is a bug in whoever changed
  * the agent under its own journal, and dies as one.
  *
- * `plan-input-default.md` step 4 asked for `input` to be written for every
- * record; it is not, deliberately, because for the default it would store
- * every prompt twice forever to delete this one branch. See the plan.
+ * `input` is not written for every record, deliberately, because for the
+ * default it would store every prompt twice forever to delete this one branch.
  */
 export const askedOf = (
   agent: { readonly input: AgentInput.AgentInput<any, any, any, any> },

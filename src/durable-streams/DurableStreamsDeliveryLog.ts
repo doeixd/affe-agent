@@ -4,7 +4,7 @@ import * as DeliveryLog from "../durable/DeliveryLog.js"
 import * as DurableStreams from "./DurableStreams.js"
 
 /**
- * The durable client's `DeliveryLog`, on Durable Streams (issue #10).
+ * The durable client's `DeliveryLog`, on Durable Streams.
  *
  * One durable stream per session, at `${baseUrl}/${sessionId}`. What a
  * client observes of a session is an ordered, URL-addressable log it can

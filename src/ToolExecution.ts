@@ -196,23 +196,6 @@ const failureResultPart = (
   }) as Response.AnyPart
 
 /**
- * The failure, as a string the model can read. Never a throw.
- *
- * This runs *after* `ToolCallFailed` has announced `returnedToModel: true`, so
- * a throw here does not merely lose the rendering -- it defects the run that
- * has already promised the model would get a chance to recover, and leaves
- * history and events disagreeing about whether the failure was returned.
- *
- * `JSON.stringify` is not a total function, and the values it refuses are not
- * exotic: it throws outright on a `bigint` and on a cycle, and returns
- * `undefined` -- not a string -- for `undefined`, a symbol or a function. A
- * tool's declared failure schema can produce any of them.
- *
- * The result is also bounded. A failure is a *message to a model*, and a
- * megabyte of it is both useless and expensive; the tool's real value is
- * still carried unrendered in `result` for any caller that wants it.
- */
-/**
  * A failure the harness raised rather than the tool.
  *
  * Checked structurally rather than with `instanceof`: the value arrives as a
@@ -265,6 +248,23 @@ const publishProgress = (
 
 const MAX_RENDERED_FAILURE = 4096
 
+/**
+ * The failure, as a string the model can read. Never a throw.
+ *
+ * This runs *after* `ToolCallFailed` has announced `returnedToModel: true`, so
+ * a throw here does not merely lose the rendering -- it defects the run that
+ * has already promised the model would get a chance to recover, and leaves
+ * history and events disagreeing about whether the failure was returned.
+ *
+ * `JSON.stringify` is not a total function, and the values it refuses are not
+ * exotic: it throws outright on a `bigint` and on a cycle, and returns
+ * `undefined` -- not a string -- for `undefined`, a symbol or a function. A
+ * tool's declared failure schema can produce any of them.
+ *
+ * The result is also bounded. A failure is a *message to a model*, and a
+ * megabyte of it is both useless and expensive; the tool's real value is
+ * still carried unrendered in `result` for any caller that wants it.
+ */
 const renderError = (error: unknown): string => {
   if (typeof error === "string") return bounded(error)
   if (error instanceof Error) {

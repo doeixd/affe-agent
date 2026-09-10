@@ -3,7 +3,7 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as Telemetry from "../internal/telemetry.js"
 
 /**
- * Observability (issue #4 §12): semantic tracing conventions, not a wrapper.
+ * Observability: semantic tracing conventions, not a wrapper.
  *
  * Effect already has tracing and logging; this package standardises the *names
  * and attributes* an agent should emit, and adds the one policy telemetry needs
@@ -499,8 +499,8 @@ export const metrics = (
  *
  * ## Why a `Layer` here does not break the harness's rule
  *
- * AGENTS.md is explicit that *"tracing export is application wiring, never a
- * harness dependency"*, and that rule is worth keeping. This does not touch it:
+ * Tracing export is application wiring, never a harness dependency, and that
+ * rule is worth keeping. This does not touch it:
  *
  * - it imports no exporter and names no backend;
  * - it decides nothing about where spans go -- it wraps whichever `Tracer` is

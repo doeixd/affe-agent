@@ -49,7 +49,7 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
    * The response as the harness received it.
    *
    * Tool parameters are **encoded**, not decoded. The harness runs with
-   * `disableToolCallResolution: true` (§16), and Effect AI deliberately leaves
+   * `disableToolCallResolution: true`, and Effect AI deliberately leaves
    * parameters in their encoded schema form in that mode — the handler is what
    * decodes them. For a tool whose parameters are a plain struct the two
    * coincide, but for a transformed schema they do not, so a policy reading
@@ -196,7 +196,7 @@ export interface AgentLoop<
 }
 
 /**
- * A loop described as data (`plan-context-lessons.md` 5.2, item 60h).
+ * A loop described as data.
  *
  * The first-hour readability of a policy record, without the record: read
  * this and know what the run is bounded by. `Custom` is the escape hatch for
@@ -375,9 +375,8 @@ export const withFinalTurn = <
  * argument applies to a token or cost ceiling, which is why `Budget`'s bounds
  * are not on this list either.
  *
- * `plan-run-stream-start.md` §7.3 asks for exactly this judgement -- "do not
- * blindly make every ceiling final-answer capable" -- rather than a final turn
- * that fires wherever it can.
+ * The judgement is deliberate -- do not blindly make every ceiling
+ * final-answer capable -- rather than a final turn that fires wherever it can.
  */
 const canAnswerAfter: ReadonlySet<Exhaustion> = new Set<Exhaustion>(["turns", "tool-calls"])
 
@@ -485,6 +484,15 @@ type AtLeastOneBound =
   | { readonly maxDuration: Duration.Input }
 
 /**
+ * The error a `limits` loop can raise, which is none unless it was asked to
+ * fail. Conditional rather than always-widened: a caller who did not choose
+ * `"fail"` should not find an unreachable branch in their error channel.
+ */
+type ExhaustionError<Options> = Options extends { readonly onExhaustion: "fail" }
+  ? Errors.AgentExhaustedError
+  : never
+
+/**
  * The usual bounded loop, in one object.
  *
  * `and(untilIdle(), ...)` over the bounds given -- exactly what `bounded` is
@@ -498,15 +506,6 @@ type AtLeastOneBound =
  * `Budget.cost` need a `Layer` for their scope -- per session or per
  * application -- and a pure loop cannot carry one; wrap this in them.
  */
-/**
- * The error a `limits` loop can raise, which is none unless it was asked to
- * fail. Conditional rather than always-widened: a caller who did not choose
- * `"fail"` should not find an unreachable branch in their error channel.
- */
-type ExhaustionError<Options> = Options extends { readonly onExhaustion: "fail" }
-  ? Errors.AgentExhaustedError
-  : never
-
 export const limits = <
   Tools extends Record<string, Tool.Any> = Record<string, Tool.Any>,
   const Options extends Limits = Limits
@@ -536,16 +535,6 @@ export const limits = <
 }
 
 /**
- * Continue only while every policy continues.
- *
- * Composition is explicit rather than hidden inside `.pipe`, so a reader never
- * has to guess whether combination means conjunction or disjunction.
- *
- * At least one policy is required. An empty conjunction is vacuously true,
- * which here would mean a run that never stops — a footgun worth making
- * unrepresentable rather than documenting.
- */
-/**
  * The pieces of a composed policy, extracted per element.
  *
  * Declaring `and` over a single `E` and `R` reads naturally and does not work:
@@ -571,6 +560,16 @@ type Policies = readonly [
   ...ReadonlyArray<AgentLoop<any, any, any>>
 ]
 
+/**
+ * Continue only while every policy continues.
+ *
+ * Composition is explicit rather than hidden inside `.pipe`, so a reader never
+ * has to guess whether combination means conjunction or disjunction.
+ *
+ * At least one policy is required. An empty conjunction is vacuously true,
+ * which here would mean a run that never stops — a footgun worth making
+ * unrepresentable rather than documenting.
+ */
 export const and = <const Loops extends Policies>(
   ...loops: Loops
 ): AgentLoop<

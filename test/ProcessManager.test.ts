@@ -68,8 +68,11 @@ const withManager = <A, E>(
   use: (manager: ProcessManager.Service) => Effect.Effect<A, E, Scope.Scope>
 ) =>
   Effect.scoped(Effect.flatMap(ProcessManager.make(), use)).pipe(
-    Effect.provide(WorkspaceManager.layer({ idleTimeToLive: "1 second" })),
-    Effect.provide(provider)
+    Effect.provide(
+      WorkspaceManager.layer({ idleTimeToLive: "1 second" }).pipe(
+        Layer.provideMerge(provider)
+      )
+    )
   )
 
 const request = (command = Sandbox.command("tool")): ProcessManager.Request => ({

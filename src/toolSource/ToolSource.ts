@@ -5,8 +5,7 @@ import * as McpToolkit from "../mcp/McpToolkit.js"
 import * as Permission from "../Permission.js"
 
 /**
- * One tool as a source describes it — the dual-schema shape from
- * `research-tool-sources.md` §4.
+ * One tool as a source describes it — the dual-schema shape.
  *
  * Tier 1 (declared) callers provide their own `Tool.make` with a Schema;
  * the source verifies at `extract` that the name is offered. Tier 3
@@ -95,7 +94,7 @@ export class ToolError extends Schema.TaggedError<ToolError>()(
 export type SourceError = ExtractionError | InvocationError | ToolError
 
 /**
- * A source of tools — the seam `research-tool-sources.md` §6.1 describes.
+ * A source of tools — the seam in front of one origin.
  *
  * One implementation per origin (OpenAPI operation, GraphQL field, MCP server,
  * WebMCP page, CLI subcommand). Extraction is eager (at connect/refresh) and

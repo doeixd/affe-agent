@@ -85,8 +85,8 @@ export interface EventBus {
    */
   readonly closed: Ref.Ref<Option.Option<AgentEventEnvelope>>
   /**
-   * Bounded observers, checked by the publisher (`plan-streaming-followups.md`
-   * §4, item 75). The bus is unbounded and never waits on a subscriber, so
+   * Bounded observers, checked by the publisher. The bus is unbounded and
+   * never waits on a subscriber, so
    * this is where a lagging one is *seen*: after each publish, every watched
    * subscription's backlog is read and the bytes it retains are counted, and
    * one past its bound is ended with `AgentObservationLagError` through its
@@ -102,7 +102,7 @@ export interface EventBus {
 /**
  * The one boundary a test may hold open: registration of a subscription.
  *
- * Not a crash site. `plan-streaming-followups.md` §1: subscribe-before-submit
+ * Not a crash site. Subscribe-before-submit
  * is the property `stream` exists for, and it survived being broken because
  * in-process scheduling publishes nothing before a receipt returns. A test
  * that holds this gate while other fibres run makes the swapped order

@@ -5,9 +5,9 @@
  * the runtime cannot be made to hold an unbounded amount however the
  * application is configured, and a raisable ceiling is not that.
  *
- * `docs/limits.md` keeps the three distinct bounds apart, and they must stay
- * apart here too: observer lag, tool-progress production, and a tool's terminal
- * result each protect against a different thing.
+ * Three distinct bounds stay apart here: observer lag, tool-progress
+ * production, and a tool's terminal result each protect against a different
+ * thing.
  */
 
 /** 8 MiB of wire JSON per submission. */
