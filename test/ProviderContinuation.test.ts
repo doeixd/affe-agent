@@ -89,6 +89,23 @@ const reasonsThenCalls: FakeModel.Turn = {
   toolCalls: [{ id: "call-1", name: "lookup", params: { query: "effect" } }]
 }
 
+/**
+ * Everything a response can carry at once (item 103's fixture): signed
+ * reasoning, text, a file, and three tool calls, so a replay that rebuilt the
+ * message from its tool calls -- or reordered them, or lost the file -- shows
+ * up in the whole-history comparison rather than only in the signature.
+ */
+const everythingThenCalls: FakeModel.Turn = {
+  reasoning: { text: "Three lookups, then answer.", metadata },
+  text: "Checking three things.",
+  files: [{ mediaType: "image/png", data: new Uint8Array([137, 80, 78, 71]) }],
+  toolCalls: [
+    { id: "call-a", name: "lookup", params: { query: "a" } },
+    { id: "call-b", name: "lookup", params: { query: "b" } },
+    { id: "call-c", name: "lookup", params: { query: "c" } }
+  ]
+}
+
 const Engine = ClusterWorkflowEngine.layer.pipe(Layer.provide(TestRunner.layer))
 
 const agent = Agent.make({
@@ -202,23 +219,29 @@ describe("provider continuation state across Affe's boundaries", () => {
    * signature would pass it while handing the next turn a conversation the
    * provider will refuse to continue.
    *
-   * Run straight through and run across a suspension, the signature must
-   * survive both.
+   * Run straight through and run across a suspension, batch and streamed, the
+   * signature must survive all four.
+   *
+   * The suspension is taken before the *second* turn (item 103). It used to be
+   * taken in the first `ContextTransform` call, before `model-0` had run, so
+   * no journalled model response was ever replayed and the test could not see
+   * the hop it names. Suspending before turn two means the replay re-reads the
+   * first turn's response from the journal and rebuilds history from it.
    */
-  it.live("a signature survives durable replay", () =>
+  it.live("a signature survives durable replay, batch and streamed", () =>
     Effect.gen(function*() {
-      const historyOf = (suspend: boolean) =>
+      const historyOf = (suspend: boolean, stream: boolean) =>
         Effect.gen(function*() {
           const toolkit = yield* Agent.toolkit([Lookup], {
             lookup: () => Effect.succeed("found it")
           })
 
           const gateReady = yield* Deferred.make<DurableDeferred.Token>()
-          const Gate = DurableDeferred.make(`ContinuationGate/${suspend}`, { success: Schema.String })
+          const Gate = DurableDeferred.make(`ContinuationGate/${suspend}/${stream}`, { success: Schema.String })
           const suspendOnce = yield* Ref.make(suspend)
           const gating = ContextTransform.make((context) =>
             Effect.gen(function*() {
-              if (yield* Ref.getAndSet(suspendOnce, false)) {
+              if (context.turnIndex === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
                 const token = yield* DurableDeferred.token(Gate)
                 yield* Deferred.succeed(gateReady, token)
                 yield* DurableDeferred.await(Gate)
@@ -237,7 +260,7 @@ describe("provider continuation state across Affe's boundaries", () => {
           const sessionStore = yield* DurableSessionStore.memoryStore
           const delivery = yield* DeliveryLog.memoryLog
           const { layer: model } = yield* FakeModel.script([
-            reasonsThenCalls,
+            everythingThenCalls,
             { text: "here it is" }
           ])
           const runtime = DurableAgentClient.layer("ContinuationAgent", durableAgent, {
@@ -250,8 +273,8 @@ describe("provider continuation state across Affe's boundaries", () => {
             const client = yield* Effect.service(AgentClient.AgentClient)
             return yield* Effect.scoped(
               Effect.gen(function*() {
-                const session = yield* client.createSession({ sessionId: `continuation-${suspend}` })
-                const running = yield* Effect.forkChild(session.prompt("go"))
+                const session = yield* client.createSession({ sessionId: `continuation-${suspend}-${stream}` })
+                const running = yield* Effect.forkChild(session.prompt("go", { stream }))
                 if (suspend) {
                   const token = yield* Deferred.await(gateReady)
                   yield* DurableDeferred.succeed(Gate, { token, value: "go" })
@@ -263,18 +286,69 @@ describe("provider continuation state across Affe's boundaries", () => {
           }).pipe(Effect.provide(runtime))
         })
 
-      const straight = yield* historyOf(false)
-      const replayed = yield* historyOf(true)
+      for (const stream of [false, true]) {
+        const mode = stream ? "streamed" : "batch"
+        const straight = yield* historyOf(false, stream)
+        const replayed = yield* historyOf(true, stream)
 
-      assert.deepStrictEqual(
-        signaturesIn(straight),
-        [SIGNATURE],
-        "the straight durable run lost the signature before the journal was even involved"
+        assert.deepStrictEqual(
+          signaturesIn(straight),
+          [SIGNATURE],
+          `${mode}: the straight durable run lost the signature before the journal was even involved`
+        )
+        assert.deepStrictEqual(
+          signaturesIn(replayed),
+          [SIGNATURE],
+          `${mode}: a replayed submission rebuilt a conversation the provider would refuse to continue`
+        )
+        // The whole conversation, not just the signature: a replay must rebuild
+        // exactly what the uninterrupted run committed.
+        // This is what caught a streamed replay committing a file's bytes as
+        // their base64 string.
+        assert.deepStrictEqual(
+          yield* Schema.encodeEffect(PromptWire.Prompt)(replayed),
+          yield* Schema.encodeEffect(PromptWire.Prompt)(straight),
+          `${mode}: the replayed history differs from the uninterrupted one`
+        )
+        // Not vacuous: the fixture's text, file and all three calls, in the
+        // order the model declared them, are in what was compared.
+        const assistant = straight.content.flatMap((message) =>
+          message.role === "assistant" && typeof message.content !== "string" ? message.content : []
+        )
+        assert.deepStrictEqual(
+          assistant.flatMap((part) => (part.type === "tool-call" ? [part.id] : [])),
+          ["call-a", "call-b", "call-c"]
+        )
+        assert.isTrue(assistant.some((part) => part.type === "file"), `${mode}: the file part is missing`)
+        assert.isTrue(
+          assistant.some((part) => part.type === "text" && part.text === "Checking three things."),
+          `${mode}: the text part is missing`
+        )
+      }
+    }))
+
+  /**
+   * The streaming path folds the response itself, and it used to rebuild text
+   * and reasoning parts from their text alone -- so a streamed turn lost the
+   * signature at the very first hop, locally, with no durability involved
+   * (item 103). The batch test above could not see it.
+   */
+  it.effect("a reasoning signature reaches the next request when the turn streamed", () =>
+    Effect.gen(function*() {
+      const { layer, recorder } = yield* FakeModel.layer([
+        reasonsThenCalls,
+        { text: "here it is" }
+      ])
+
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* AgentSession.make(agent)
+          return yield* AgentSession.prompt(session, "go", { stream: true })
+        }).pipe(Effect.provide(layer))
       )
-      assert.deepStrictEqual(
-        signaturesIn(replayed),
-        [SIGNATURE],
-        "a replayed submission rebuilt a conversation the provider would refuse to continue"
-      )
+
+      const prompts = yield* recorder.prompts
+      assert.strictEqual(prompts.length, 2)
+      assert.deepStrictEqual(signaturesIn(prompts[1]!), [SIGNATURE])
     }))
 })

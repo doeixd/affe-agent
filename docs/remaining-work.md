@@ -459,22 +459,6 @@ oracle), 105 (host scheduling and authority capture), 106 (continuity
 evaluation). Work order: 91 and 103 first, then 104, whose oracle is the
 acceptance test for 105, 107 and 108.*
 
-103. **Streaming loses text and reasoning metadata (plan E11, §15).** The
-     accumulator closes a chunk as `makePart("text" | "reasoning", { text })`,
-     so start/delta/end metadata -- Anthropic reasoning signatures included
-     -- never reaches the canonical message, locally or under `/durable`,
-     whose streaming replay re-emits no metadata either. The batch path is
-     correct. The signature test is batch-only, and the two replay tests that
-     claim to gate "between the turns" suspend in the first
-     `ContextTransform` call, before any model response is journalled, so no
-     test replays one. Fix the accumulator and replay; add the text +
-     reasoning + file + metadata + three-call fixture across batch/stream and
-     local/durable; gate those tests on `turnIndex`. Small–medium.
-
-     ```text
-     verify: grep "Response.makePart(\"text\", { text: current.text })" src/internal/streamAccumulator.ts
-     ```
-
 104. **Crash/no-crash canonical equivalence oracle (plan E12, §16).** No
      test compares a crashed run with an uncrashed one on full history,
      events, usage, disposition and next model context, and there is no

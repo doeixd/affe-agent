@@ -6,6 +6,7 @@ import { DurableDeferred } from "effect/unstable/workflow"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
+import * as PromptWire from "../src/PromptWire.js"
 import { AgentClient } from "../src/client/index.js"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
@@ -52,6 +53,12 @@ const script: ReadonlyArray<FakeModel.Turn> = [
  * before a model call -- the established way in this suite to stop a
  * submission mid-flight and let it be resumed by an external actor, which is
  * what a resumed process is from the journal's point of view.
+ *
+ * It closes before the *second* turn. It used to close in the first
+ * transform call, before `model-0` had run -- so the replay re-read nothing
+ * from the journal and the test could not see the rebuild it is about (item
+ * 103). Before turn two, the first turn's model response and tool result are
+ * both journalled, and the replay must rebuild them.
  */
 const historyOf = (suspend: boolean) =>
   Effect.gen(function* () {
@@ -65,7 +72,7 @@ const historyOf = (suspend: boolean) =>
     const suspendOnce = yield* Ref.make(suspend)
     const gating = ContextTransform.make((context) =>
       Effect.gen(function* () {
-        if (yield* Ref.getAndSet(suspendOnce, false)) {
+        if (context.turnIndex === 2 && (yield* Ref.getAndSet(suspendOnce, false))) {
           const token = yield* DurableDeferred.token(Gate)
           yield* Deferred.succeed(gateReady, token)
           yield* DurableDeferred.await(Gate)
@@ -146,6 +153,13 @@ describe("durable replay rebuilds the same history", () => {
         shape(replayed.history),
         shape(straight.history),
         "a resumed submission rebuilt a different conversation than the one it would have had"
+      )
+      // `shape` renders reasoning and files as empty details, so it is also
+      // compared whole, as the wire encodes it: every part and every option.
+      assert.deepStrictEqual(
+        yield* Schema.encodeEffect(PromptWire.Prompt)(replayed.history),
+        yield* Schema.encodeEffect(PromptWire.Prompt)(straight.history),
+        "the rebuilt history differs from the uninterrupted one in something `shape` does not show"
       )
       // And it is not vacuously equal: the tool call and its result are both
       // in there, which is what a rebuild could most plausibly lose.

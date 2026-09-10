@@ -1,3 +1,4 @@
+import { Predicate } from "effect"
 import { Response } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 
@@ -18,7 +19,49 @@ import type { Tool } from "effect/unstable/ai"
  * Nothing here is committed. The caller decides what to do with the result,
  * which is what keeps a partial stream out of canonical history when a turn is
  * interrupted part-way.
+ *
+ * **Provider metadata is folded, not dropped.** A chunk's start, deltas and
+ * end may each carry `metadata`, and what they carry can be load-bearing:
+ * Anthropic sends a thinking block's signature as an *empty* `reasoning-delta`
+ * whose only content is its metadata, and the provider refuses a later
+ * request that replays the thinking without it. The assembled part's
+ * metadata is the start's, with each delta's and the end's merged in by
+ * provider key -- the rule Effect AI's own `Prompt.fromResponseParts` uses
+ * for the same fold, so a streamed turn and a batch turn record the same
+ * message.
  */
+
+type Metadata = Response.ProviderMetadata
+
+/**
+ * Merge provider metadata the way `Prompt.fromResponseParts` does: per
+ * provider key, a later object is shallow-merged over an earlier one, and
+ * anything else replaces it. (Effect's own helper is module-private.)
+ */
+const mergeMetadata = (left: Metadata, right: Metadata | undefined): Metadata => {
+  if (right === undefined) return left
+  const merged: Record<string, Metadata[string]> = { ...left }
+  for (const [provider, value] of Object.entries(right)) {
+    const previous = merged[provider]
+    merged[provider] = Predicate.isObject(previous) && Predicate.isObject(value)
+      ? Object.assign({}, previous, value)
+      : value
+  }
+  return merged
+}
+
+/** A text or reasoning chunk still being streamed. */
+interface Open {
+  readonly kind: "text" | "reasoning"
+  readonly text: string
+  readonly metadata: Metadata
+}
+
+/** The part an open chunk becomes once it closes. */
+const closedPart = <Tools extends Record<string, Tool.Any>>(chunk: Open): Response.Part<Tools, true> =>
+  chunk.kind === "text"
+    ? Response.makePart("text", { text: chunk.text, metadata: chunk.metadata })
+    : Response.makePart("reasoning", { text: chunk.text, metadata: chunk.metadata })
 
 /** A chunk of output as the harness reports it, normalised across providers. */
 export interface Delta {
@@ -50,7 +93,7 @@ export interface ToolCallDelta {
  */
 export interface State<Tools extends Record<string, Tool.Any>> {
   readonly parts: ReadonlyArray<Response.Part<Tools, true>>
-  readonly open: ReadonlyMap<string, { kind: "text" | "reasoning"; text: string }>
+  readonly open: ReadonlyMap<string, Open>
   /** Argument streams announced and not yet ended, by the provider's id, to their tool name. */
   readonly openToolCalls: ReadonlyMap<string, string>
 }
@@ -76,7 +119,7 @@ const withOpenToolCall = <Tools extends Record<string, Tool.Any>>(
 const withOpen = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>,
   id: string,
-  value: { kind: "text" | "reasoning"; text: string } | undefined
+  value: Open | undefined
 ): State<Tools> => {
   const open = new Map(state.open)
   if (value === undefined) {
@@ -123,9 +166,9 @@ export const step = <Tools extends Record<string, Tool.Any>>(
 ): Step<Tools> => {
   switch (part.type) {
     case "text-start":
-      return cont(withOpen(state, part.id, { kind: "text", text: "" }))
+      return cont(withOpen(state, part.id, { kind: "text", text: "", metadata: mergeMetadata({}, part.metadata) }))
     case "reasoning-start":
-      return cont(withOpen(state, part.id, { kind: "reasoning", text: "" }))
+      return cont(withOpen(state, part.id, { kind: "reasoning", text: "", metadata: mergeMetadata({}, part.metadata) }))
     case "text-delta":
     case "reasoning-delta": {
       const kind = part.type === "text-delta" ? "text" : "reasoning"
@@ -134,7 +177,10 @@ export const step = <Tools extends Record<string, Tool.Any>>(
       // uniformly careful about emitting one, and dropping output because a
       // structural part was missing would be the worse failure.
       const text = (current?.text ?? "") + part.delta
-      return cont(withOpen(state, part.id, { kind, text }), {
+      // An empty delta may exist only to carry metadata (Anthropic's
+      // signature), so its metadata is folded like any other's.
+      const metadata = mergeMetadata(current?.metadata ?? {}, part.metadata)
+      return cont(withOpen(state, part.id, { kind, text, metadata }), {
         kind,
         delta: part.delta
       })
@@ -144,10 +190,7 @@ export const step = <Tools extends Record<string, Tool.Any>>(
       const current = state.open.get(part.id)
       if (current === undefined) return cont(state)
       const closed = withOpen(state, part.id, undefined)
-      const finished =
-        current.kind === "text"
-          ? Response.makePart("text", { text: current.text })
-          : Response.makePart("reasoning", { text: current.text })
+      const finished = closedPart<Tools>({ ...current, metadata: mergeMetadata(current.metadata, part.metadata) })
       return cont({ ...closed, parts: [...closed.parts, finished] })
     }
     // Tool parameters arrive incrementally and then again as a complete
@@ -189,11 +232,7 @@ export const step = <Tools extends Record<string, Tool.Any>>(
 const flushOpen = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>
 ): ReadonlyArray<Response.Part<Tools, true>> =>
-  Array.from(state.open.values()).map((chunk) =>
-    chunk.kind === "text"
-      ? Response.makePart("text", { text: chunk.text })
-      : Response.makePart("reasoning", { text: chunk.text })
-  )
+  Array.from(state.open.values()).map((chunk) => closedPart<Tools>(chunk))
 
 /**
  * Close the accumulation.

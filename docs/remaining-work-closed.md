@@ -2207,3 +2207,27 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "readonly outputReported: boolean" src/AgentLoop.ts
     verify: no-grep "calls the tool twice in one turn" src/AgentTurn.ts
     ```
+
+103. ~~**Streaming loses text and reasoning metadata (plan E11, §15).**~~ —
+     landed 2026-09-10. The stream accumulator now folds provider metadata
+     from a chunk's start, deltas and end onto the assembled part, by
+     provider key -- the rule Effect AI's `Prompt.fromResponseParts` uses --
+     so Anthropic's signature, which arrives on an *empty* `reasoning-delta`,
+     reaches canonical history on both the local and durable streaming paths.
+     Durable streaming replay re-emits each part's metadata. A second
+     fidelity bug surfaced once the replay test carried a file: the replayed
+     stream was built from *encoded* parts passed off as decoded by a cast, so
+     a streamed replay committed a file's bytes as their base64 string. It is
+     now built from the decoded parts and the cast is gone (DurableModel's
+     inventory 5 -> 4). The two replay tests that suspended before any model
+     response was journalled now gate on turn 2 and compare the encoded
+     history whole; the continuation test runs batch and streamed over
+     signed reasoning, text, a file and three calls. Both mutations (end
+     metadata dropped; replay start metadata dropped) were caught.
+
+     ```text
+     verify: grep "const mergeMetadata" src/internal/streamAccumulator.ts
+     verify: no-grep "streamPartsFor(encoded)" src/durable/DurableModel.ts
+     verify: grep "a signature survives durable replay, batch and streamed" test/ProviderContinuation.test.ts
+     verify: grep "context.turnIndex === 2" test/DurableReplayHistory.test.ts
+     ```

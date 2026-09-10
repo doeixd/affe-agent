@@ -62,7 +62,7 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   `ToolSource.bind` (1) raise a declared tool's approval floor from the
   source's hints. `Array.map` widens the tuple `Tools` to `Tool.Any[]`, and
   nothing but an erasure restores the tuple the elements never left;
-* **wrapping a service whose method types are closed** — `DurableModel` (5),
+* **wrapping a service whose method types are closed** — `DurableModel` (4),
   `DurableToolkit` (3) and `TestLanguageModel` (6). Each replaces a method on a
   `LanguageModel.Service` or a `Toolkit.WithHandler` with one that journals,
   counts or replays around it. The value is the original's behaviour plus a

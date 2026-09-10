@@ -74,18 +74,35 @@ export const reraise = (
  * property of the provider's connection, not of the turn, and is exactly the
  * thing the journal must not depend on. Everything else passes through as it
  * is.
+ *
+ * The journalled part's metadata rides on the start part, which the fold
+ * takes as the chunk's base: a replayed stream then reassembles the same
+ * part the first run recorded -- a reasoning signature included -- rather
+ * than one with its provider metadata stripped.
+ *
+ * Built from the *decoded* parts (item 103). It used to encode them first and
+ * hand the encoded values on as though they were decoded stream parts, which
+ * a cast hid and which is not the same thing: a file part's bytes arrived as
+ * their base64 string, so a streamed replay committed a different file part
+ * than the run it replayed. Every non-text, non-reasoning part is already a
+ * stream part, so it passes through as the value it is.
  */
-const streamPartsFor = (
-  parts: ReadonlyArray<Response.PartEncoded>
-): Array<Response.StreamPartEncoded> => {
-  const out: Array<Response.StreamPartEncoded> = []
+const streamPartsFor = <Tools extends Record<string, Tool.Any>>(
+  parts: ReadonlyArray<Response.Part<Tools, true>>
+): Array<Response.StreamPart<Tools, true>> => {
+  const out: Array<Response.StreamPart<Tools, true>> = []
   let chunk = 0
   for (const part of parts) {
-    if (part.type === "text" || part.type === "reasoning") {
-      const id = `durable-${part.type}-${chunk++}`
-      out.push({ type: `${part.type}-start`, id })
-      out.push({ type: `${part.type}-delta`, id, delta: part.text })
-      out.push({ type: `${part.type}-end`, id })
+    if (part.type === "text") {
+      const id = `durable-text-${chunk++}`
+      out.push(Response.makePart("text-start", { id, metadata: part.metadata }))
+      out.push(Response.makePart("text-delta", { id, delta: part.text }))
+      out.push(Response.makePart("text-end", { id }))
+    } else if (part.type === "reasoning") {
+      const id = `durable-reasoning-${chunk++}`
+      out.push(Response.makePart("reasoning-start", { id, metadata: part.metadata }))
+      out.push(Response.makePart("reasoning-delta", { id, delta: part.text }))
+      out.push(Response.makePart("reasoning-end", { id }))
     } else {
       out.push(part)
     }
@@ -309,12 +326,9 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
             if (!live) {
               // A replay, or a provider whose stream produced nothing: the
               // journalled response, as the parts that would have produced it.
-              const encoded = yield* Schema.encodeEffect(partsSchema)(
-                exit.value.content as ReadonlyArray<Response.Part<Tools, true>>
-              ).pipe(Effect.orDie)
               Queue.offerAllUnsafe(
                 queue,
-                streamPartsFor(encoded) as unknown as ReadonlyArray<Response.StreamPart<Tools, true>>
+                streamPartsFor(exit.value.content as ReadonlyArray<Response.Part<Tools, true>>)
               )
             }
             Queue.endUnsafe(queue)

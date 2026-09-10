@@ -143,7 +143,9 @@ const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
   ],
   [
     "src/durable/DurableModel.ts",
-    5,
+    // 4 since item 103: the replayed stream is built from decoded parts, so
+    // the cast that passed encoded ones off as decoded is gone.
+    4,
     "wrapping a `LanguageModel.Service` whose method types are closed, and " +
       "widening an error channel to cross an `Activity` boundary"
   ],

@@ -734,6 +734,12 @@ never crashed.
 
 ## 15. E11 — The exact model response survives recovery
 
+**Landed 2026-09-10 (item 103, ledger).** T15.1–T15.4 as written, with the
+merge rule taken from Effect AI's own `Prompt.fromResponseParts`. The rich
+fixture found a second bug the plan did not name: the streamed replay built
+its parts from *encoded* values behind a cast, so a file's bytes came back as
+their base64 string. The replay now works on decoded parts.
+
 **Today.** The batch path is right: the model activity journals the full
 `Response.Part[]` (`DurableModel.ts:149–170`) and the assistant message is
 rebuilt from those parts (`AgentTurn.ts:514–526`), not from tool-call
