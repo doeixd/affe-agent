@@ -2412,3 +2412,26 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "## Which model calls a \`Budget\` sees" docs/limits.md
     verify: grep "is *counted*, not capped" src/subagent/Subagent.ts
     ```
+
+94. ~~**Failure disposition (plan E4, §6).**~~ — closed 2026-09-10.
+    Decided (T6.1), as the plan recommended: a tool's own `failureMode:
+    "return"` wins over the agent's `toolFailurePolicy: FailRun` -- the
+    tool author made its failure a value the model reads -- and
+    `test/FailureDisposition.test.ts` pins both sides of it (there was no
+    test). `Agent.describe().tools` entries now carry `failureMode`,
+    `alone`, `readonly` and `idempotent` (most of T6.4), so the
+    agent-level policy does not read as a promise a tool breaks.
+    **T6.2/T6.3/T6.5 deferred, deliberately:** nested Code Mode calls do not
+    emit `ToolCallFailed` (they report through `ToolCallProgress`), so the
+    only dispositions that occur are the two `returnedToModel: boolean`
+    already says; a three-valued field would be the same fact twice across
+    five consumers. Worth doing when a third disposition exists. Entries
+    also say `providerDefined` (a hosted tool the provider may execute,
+    outside `Permission`), and `source`: the `ToolSource` id a tool was
+    bound from (`bind` and `bindDiscovered` annotate it). Nothing else is
+    open; the deferred `failureHandling` field waits on a third disposition.
+
+    ```text
+    verify: grep "readonly failureMode: \"error\" | \"return\"" src/Agent.ts
+    verify: exists test/FailureDisposition.test.ts
+    ```
