@@ -455,9 +455,12 @@ and pin the state it starts from.*
      the artifacts are identical. Deterministic scenarios over the scripted
      model; the exposure pair also records requests, tools and schema bytes
      sent (100 tools: eager 2 requests / 200 tools / ~45 KB, progressive 3 /
-     17 / ~3.5 KB). First observations, not verdicts: streaming 1024 chunks
-     and a long history look slower than v0.0.1, on a noisy machine --
-     identical refs differed by ~20% at small samples. Still open: durable
+     17 / ~3.5 KB). First observations, not verdicts, on a machine shared with
+     other test runs (identical refs differed by ~20% at small samples):
+     streaming 1024 chunks read +42% in one run and +0.8% in the next --
+     noise; the forty-prompt history scenario was slower than v0.0.1 in all
+     three runs (+20%, +114%, +33%), the one signal worth investigating
+     (`docs/reports/bench-2026-09-10.json`). Still open: durable
      scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
      effect-uai native vs adapter, a live-model cost run for item 93, and
      characterising variance before any gate.

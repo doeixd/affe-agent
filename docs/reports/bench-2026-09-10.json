@@ -1,0 +1,336 @@
+{
+  "at": "2026-09-10T16:39:00.575Z",
+  "base": {
+    "ref": "v0.0.1",
+    "commit": "dbe2fecda675e9dc0f9ff93acde75c505b77751e",
+    "src": "bd702517a79236a712918dcb769523020560e743",
+    "lockfile": "48f1618bfbbfbe562d22aa829f245496014a8213",
+    "dependencies": "own install (npm ci)"
+  },
+  "head": {
+    "ref": "HEAD",
+    "commit": "022e91074384c1320c6e1538ee4f8fdabedfebfc",
+    "src": "eb635824e7d6f86ca98e61fb16ef6587f0451671",
+    "lockfile": "68c717d76cfdcb194453220ece8953b1b9d974a8",
+    "dependencies": "linked (same lockfile)"
+  },
+  "identicalArtifacts": false,
+  "method": {
+    "samplesPerSide": 18,
+    "rounds": 3,
+    "perRun": 3,
+    "interleaved": true,
+    "statistic": "median, IQR"
+  },
+  "machine": {
+    "cpus": 16,
+    "model": "AMD Ryzen 7 6800U with Radeon Graphics         ",
+    "loadavg": [
+      0,
+      0,
+      0
+    ],
+    "platform": "win32"
+  },
+  "caveat": "Timings are observations under the scripted model, not confidence intervals or regression verdicts.",
+  "scenarios": [
+    {
+      "scenario": "one-turn run",
+      "base": {
+        "n": 9,
+        "median": 3.163,
+        "q1": 1.838,
+        "q3": 4.697,
+        "metrics": {},
+        "samples": [
+          7.709,
+          5.672,
+          3.467,
+          4.697,
+          2.459,
+          1.838,
+          3.163,
+          1.68,
+          1.448
+        ]
+      },
+      "head": {
+        "n": 9,
+        "median": 2.929,
+        "q1": 2.735,
+        "q3": 4.906,
+        "metrics": {},
+        "samples": [
+          8.352,
+          5.807,
+          2.929,
+          4.906,
+          2.623,
+          2.362,
+          4.874,
+          2.735,
+          2.846
+        ]
+      },
+      "deltaPercent": -7.4
+    },
+    {
+      "scenario": "stream 64 chunks",
+      "base": {
+        "n": 9,
+        "median": 5.091,
+        "q1": 4.716,
+        "q3": 6.068,
+        "metrics": {},
+        "samples": [
+          10.452,
+          4.874,
+          9.541,
+          6.068,
+          4.716,
+          5.248,
+          5.091,
+          3.641,
+          3.912
+        ]
+      },
+      "head": {
+        "n": 9,
+        "median": 5.481,
+        "q1": 4.961,
+        "q3": 6.787,
+        "metrics": {},
+        "samples": [
+          7.261,
+          5.396,
+          9.266,
+          6.116,
+          5.481,
+          4.099,
+          6.787,
+          4.713,
+          4.961
+        ]
+      },
+      "deltaPercent": 7.7
+    },
+    {
+      "scenario": "stream 1024 chunks",
+      "base": {
+        "n": 9,
+        "median": 21.862,
+        "q1": 17.22,
+        "q3": 22.26,
+        "metrics": {},
+        "samples": [
+          31.319,
+          22.007,
+          17.22,
+          23.893,
+          22.26,
+          21.862,
+          19.355,
+          15.29,
+          12.411
+        ]
+      },
+      "head": {
+        "n": 9,
+        "median": 22.032,
+        "q1": 20.363,
+        "q3": 23.751,
+        "metrics": {},
+        "samples": [
+          27.977,
+          20.363,
+          17.547,
+          24.089,
+          21.219,
+          20.047,
+          22.33,
+          22.032,
+          23.751
+        ]
+      },
+      "deltaPercent": 0.8
+    },
+    {
+      "scenario": "8 parallel tools",
+      "base": {
+        "n": 9,
+        "median": 12.477,
+        "q1": 8.974,
+        "q3": 15.122,
+        "metrics": {},
+        "samples": [
+          12.477,
+          16.164,
+          15.122,
+          15.676,
+          12.988,
+          10.405,
+          8.118,
+          8.974,
+          7.991
+        ]
+      },
+      "head": {
+        "n": 9,
+        "median": 9.383,
+        "q1": 8.936,
+        "q3": 9.735,
+        "metrics": {},
+        "samples": [
+          9.408,
+          7.932,
+          9.962,
+          8.979,
+          8.936,
+          9.383,
+          9.735,
+          8.35,
+          9.803
+        ]
+      },
+      "deltaPercent": -24.8
+    },
+    {
+      "scenario": "4 tool rounds",
+      "base": {
+        "n": 9,
+        "median": 8.627,
+        "q1": 6.034,
+        "q3": 10.206,
+        "metrics": {},
+        "samples": [
+          12.338,
+          11.809,
+          7.07,
+          10.206,
+          8.627,
+          10.088,
+          5.119,
+          4.743,
+          6.034
+        ]
+      },
+      "head": {
+        "n": 9,
+        "median": 6.525,
+        "q1": 5.922,
+        "q3": 7.484,
+        "metrics": {},
+        "samples": [
+          7.567,
+          9.656,
+          7.054,
+          6.525,
+          5.701,
+          6.102,
+          7.484,
+          5.922,
+          5.735
+        ]
+      },
+      "deltaPercent": -24.4
+    },
+    {
+      "scenario": "40 prompts of history, then one more",
+      "base": {
+        "n": 9,
+        "median": 24.55,
+        "q1": 22.43,
+        "q3": 30.877,
+        "metrics": {},
+        "samples": [
+          30.877,
+          24.55,
+          22.764,
+          31.361,
+          34.81,
+          22.43,
+          21.748,
+          28.283,
+          16.156
+        ]
+      },
+      "head": {
+        "n": 9,
+        "median": 32.675,
+        "q1": 32.409,
+        "q3": 37.717,
+        "metrics": {},
+        "samples": [
+          37.717,
+          28.813,
+          32.994,
+          32.675,
+          31.678,
+          32.409,
+          41.59,
+          32.606,
+          40.877
+        ]
+      },
+      "deltaPercent": 33.1
+    },
+    {
+      "scenario": "100 tools, eager",
+      "base": {
+        "unavailable": "Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\Patrick\\AppData\\Local\\Temp\\affe-bench-oGamzU\\src\\ToolExposure.js' imported from C:\\Users\\Patrick\\AppData\\Local\\Temp\\affe-bench-oGamzU\\bench\\run.ts"
+      },
+      "head": {
+        "n": 9,
+        "median": 56.55,
+        "q1": 51.412,
+        "q3": 64.767,
+        "metrics": {
+          "requests": 2,
+          "toolsSent": 200,
+          "schemaBytesSent": 44800
+        },
+        "samples": [
+          54.439,
+          75.249,
+          44.66,
+          51.412,
+          66.687,
+          57.253,
+          64.767,
+          56.55,
+          49.561
+        ]
+      },
+      "deltaPercent": null
+    },
+    {
+      "scenario": "100 tools, progressive",
+      "base": {
+        "unavailable": "Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\Patrick\\AppData\\Local\\Temp\\affe-bench-oGamzU\\src\\ToolExposure.js' imported from C:\\Users\\Patrick\\AppData\\Local\\Temp\\affe-bench-oGamzU\\bench\\run.ts"
+      },
+      "head": {
+        "n": 9,
+        "median": 79.465,
+        "q1": 73.977,
+        "q3": 86.464,
+        "metrics": {
+          "requests": 3,
+          "toolsSent": 17,
+          "schemaBytesSent": 3460
+        },
+        "samples": [
+          89.929,
+          76.168,
+          82.165,
+          100.342,
+          69.3,
+          73.977,
+          86.464,
+          70.088,
+          79.465
+        ]
+      },
+      "deltaPercent": null
+    }
+  ]
+}

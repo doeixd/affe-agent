@@ -85,7 +85,13 @@ const checkout = (ref) => {
     }
   } else {
     process.stderr.write(`${ref}: its lockfile differs, installing its own dependencies...\n`)
-    execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, stdio: "ignore", shell: true })
+    try {
+      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, stdio: "pipe", shell: true })
+    } catch (error) {
+      // A failed install leaves a real directory, never a link: safe to remove.
+      git("worktree", "remove", "--force", dir)
+      throw new Error(`npm ci failed for ${ref}:\n${String(error.stderr ?? error).slice(-2000)}`)
+    }
   }
   return {
     dir,
@@ -128,7 +134,17 @@ const stats = (values) => {
   }
 }
 
-const sides = { base: checkout(baseRef), head: checkout(headRef) }
+// The base is released if the head's checkout throws: a side created before a
+// later failure must not be left behind (it was, once).
+const baseSide = checkout(baseRef)
+let headSide
+try {
+  headSide = checkout(headRef)
+} catch (error) {
+  baseSide.release()
+  throw error
+}
+const sides = { base: baseSide, head: headSide }
 const collected = { base: new Map(), head: new Map() }
 try {
   for (let round = 0; round < rounds; round++) {
