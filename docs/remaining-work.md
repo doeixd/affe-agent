@@ -528,10 +528,14 @@ acceptance test for 105, 107 and 108.*
      (`test/Continuity.test.ts`: 12+ folds, 3 restarts, all three questions
      pass; a no-fold control fails; breaking search over folded history fails
      it); `npm run eval:continuity` runs it against a real model and writes a
-     report -- **not yet run from this machine** (no key). It pins item 109's
-     limit: a correction that is the fourth mention is never found. Still open:
-     kills *inside* a submission (combine with `DurableEquivalence`), more
-     scenarios, and a scheduled job for the live tier.
+     report -- **not yet run from this machine** (no key). Since 109 made
+     search newest-first, a correction that is the fourth mention is found,
+     and the suite pins that. A second scenario, `correctionChain` (a value
+     corrected twice across restarts; both older values count as stale),
+     separates finding *a* mention from finding the one still true -- a
+     reference model answering from the oldest hit fails it. Still open:
+     kills *inside* a submission (combine with `DurableEquivalence`), and a
+     scheduled job for the live tier.
 
      ```text
      verify: exists src/evals/Continuity.ts

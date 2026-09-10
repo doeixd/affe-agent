@@ -367,3 +367,31 @@ export const standard: Scenario = {
     })
   ]
 }
+
+/**
+ * A value corrected twice, across restarts, with the older values still in
+ * canonical history: the answer must be the latest, and both superseded ones
+ * count as stale rather than as a pass. Separates a model that finds *a*
+ * mention from one that finds the one that is still true.
+ */
+export const correctionChain: Scenario = {
+  name: "correction-chain",
+  steps: [
+    say("The on-call owner this week is Priya."),
+    ...filler(1, 8),
+    restart,
+    say("Update: the on-call owner is now Tomas, Priya is travelling."),
+    ...filler(9, 8),
+    restart,
+    say("Update again: the on-call owner is Wen from today."),
+    ...filler(17, 8),
+    ask({
+      id: "latest-of-three",
+      phrase: "on-call owner",
+      question: "Who is the on-call owner?",
+      expect: "Wen",
+      stale: ["Priya", "Tomas"],
+      source: "Update again: the on-call owner is Wen from today."
+    })
+  ]
+}

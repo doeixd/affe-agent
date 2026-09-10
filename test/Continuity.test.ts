@@ -77,4 +77,14 @@ describe("continuity over a long lifetime (item 106)", () => {
       assert.isTrue(Option.isSome(answer!.provenance))
       assert.isTrue(report.passed)
     }))
+  it.effect("a value corrected twice: the answer is the latest, and neither older value passes", () =>
+    Effect.gen(function*() {
+      const report = yield* Continuity.run(Continuity.correctionChain).pipe(Effect.provide(Continuity.referenceModel))
+      assert.isAtLeast(report.folds, 4)
+      assert.strictEqual(report.restarts, 2)
+      const [ask] = report.asks
+      assert.isTrue(ask!.correct, JSON.stringify(ask))
+      assert.isFalse(ask!.inView, "the statement should have been folded out of view")
+      assert.isTrue(report.passed)
+    }))
 })
