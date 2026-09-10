@@ -571,15 +571,18 @@ acceptance test for 105, 107 and 108.*
      verify: no-grep "if (Option.isSome(request)) {" src/compaction/Compaction.ts
      ```
 
-108. **Checkpoints are disposable caches (plan E16, §20).** Stale
-     compaction checkpoints are already discarded; a *corrupt* one fails the
-     turn instead, and the prefix fingerprint is FNV-1a 32-bit. Discard and
-     rebuild on decode failure, strengthen the fingerprint, write the
-     truth/snapshot/checkpoint/index vocabulary into `guide-durable.md`,
-     version `AgentSession.Snapshot`. Small–medium.
+108. **Checkpoints are disposable caches (plan E16, §20) -- the
+     mechanics landed 2026-09-10.** A stored checkpoint that does not decode
+     used to fail the turn with a `SchemaError`; it is now removed, reported
+     as `CompactionCheckpointDiscarded`, and rebuilt from history (an
+     unreachable store still fails -- that is infrastructure). The prefix
+     fingerprint is two 32-bit lanes plus the message count instead of one
+     FNV-1a lane; old checkpoints rebuild once. Open: the
+     truth/snapshot/checkpoint/index vocabulary in `guide-durable.md`, and a
+     version tag on `AgentSession.Snapshot`. Small.
 
      ```text
-     verify: grep "KeyValueStore.toSchemaStore(" src/compaction/Compaction.ts
+     verify: grep "CompactionCheckpointDiscarded" src/compaction/Compaction.ts
      ```
 
 109. **Cursors over mutable sets; incomplete ≠ empty (plan E17, §21) --

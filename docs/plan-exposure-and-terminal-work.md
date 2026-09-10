@@ -1043,6 +1043,14 @@ A19.3 mutation: restore `decodeUnknownOption` → a test fails.
 
 ## 20. E16 — Checkpoints are disposable caches
 
+**T20.1 and T20.2 landed 2026-09-10 (item 108 stays open for T20.3–T20.4).**
+A checkpoint that does not decode is removed, reported as
+`CompactionCheckpointDiscarded` (a new `CompactionEvent` variant -- code that
+read `event.trigger` without narrowing on `_tag` now has to), and rebuilt
+from history. The fingerprint is two independent 32-bit lanes plus the
+message count; `coveredThrough` was already checked against the length
+separately. A20.2 was already covered by the fingerprint-mismatch row.
+
 **Today.** Compaction checkpoints are already treated as projections of
 history: a missing one falls back to the full transcript, and a stale one
 (`coveredThrough > length` or prefix fingerprint mismatch) is discarded

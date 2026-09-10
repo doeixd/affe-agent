@@ -685,6 +685,53 @@ describe("compaction", () => {
     })
   )
 
+  it.effect("a stored checkpoint that does not decode is discarded and rebuilt, not fatal (item 108)", () =>
+    Effect.gen(function* () {
+      // A checkpoint is a cache over history. One that cannot be read -- a
+      // schema change, a torn write, bytes from somewhere else -- costs a
+      // summary, never the turn.
+      const kv = yield* KeyValueStore.KeyValueStore.use(Effect.succeed).pipe(
+        Effect.provide(KeyValueStore.layerMemory)
+      )
+      const summarised = yield* Ref.make(0)
+      const compaction = yield* Compaction.controller({
+        policy: Compaction.whenLongerThan(2, { retain: 2 }),
+        summarise: () => Effect.as(Ref.update(summarised, (n) => n + 1), "rebuilt summary"),
+        checkpointStore: kv
+      })
+      const seen = yield* Ref.make<Array<Compaction.CompactionEvent>>([])
+      yield* Effect.forkScoped(
+        Stream.runForEach(compaction.events, (event) => Ref.update(seen, (all) => [...all, event]))
+      )
+      yield* Effect.yieldNow
+      yield* kv.set("affe-agent:compaction:corrupt", "{\"_tag\":\"Summary\",\"not\":\"a checkpoint\"")
+
+      const history = Prompt.make(
+        ["a", "b", "c", "d", "e"].map((text) => Prompt.userMessage({ content: [Prompt.textPart({ text })] }))
+      )
+      const transformed = yield* compaction.transform.transform({
+        sessionId: AgentSession.Id.make("corrupt"),
+        submissionId: AgentSubmission.Id.make("corrupt"),
+        runId: AgentRun.Id.make("corrupt"),
+        turnIndex: 1,
+        canonicalPrompt: history,
+        prompt: history
+      })
+      yield* Effect.yieldNow
+
+      assert.strictEqual(yield* Ref.get(summarised), 1, "rebuilt from history")
+      assert.include(JSON.stringify(transformed.content[0]), "rebuilt summary")
+      const discarded = (yield* Ref.get(seen)).filter((e) => e._tag === "CompactionCheckpointDiscarded")
+      assert.strictEqual(discarded.length, 1)
+      assert.strictEqual(discarded[0]!.sessionId, "corrupt")
+      // And the garbage is replaced by a readable checkpoint.
+      const stored = yield* KeyValueStore.toSchemaStore(
+        KeyValueStore.prefix(kv, "affe-agent:compaction:"),
+        Compaction.Checkpoint
+      ).get("corrupt")
+      assert.isTrue(Option.isSome(stored))
+    }))
+
   it.effect("compacts against token pressure and keeps a token-sized tail", () =>
     Effect.gen(function* () {
       const summarised = yield* Ref.make<ReadonlyArray<number>>([])
@@ -1215,7 +1262,7 @@ describe("compaction controller (phases 8-10)", () => {
       yield* Effect.yieldNow
 
       const events = yield* Ref.get(seen)
-      assert.deepStrictEqual(events.map((e) => [e._tag, e.trigger]), [
+      assert.deepStrictEqual(events.map((e) => [e._tag, "trigger" in e ? e.trigger : undefined]), [
         ["CompactionStarted", "automatic"],
         ["CompactionCompleted", "automatic"],
         ["CompactionStarted", "manual"],

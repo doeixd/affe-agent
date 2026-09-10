@@ -268,7 +268,7 @@ describe("a fresh window as a compaction decision", () => {
       // Announced as a completed automatic compaction -- the kind is on the
       // checkpoint, not the event -- and not as a failure: nothing failed.
       assert.deepStrictEqual(
-        (yield* events).map((event) => [event._tag, event.trigger]),
+        (yield* events).map((event) => [event._tag, "trigger" in event ? event.trigger : undefined]),
         [["CompactionStarted", "automatic"], ["CompactionCompleted", "automatic"]]
       )
     })

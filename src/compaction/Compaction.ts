@@ -497,8 +497,13 @@ const normalizeSummary = (result: string | SummaryResult): SummaryResult =>
  *
  * Not cryptographic, and it does not need to be. The question is only "is this
  * the same prefix I summarised?", and the alternative being guarded against is
- * an unrelated conversation, not a forged one. A 32-bit FNV-1a over a stable
- * rendering answers that.
+ * an unrelated conversation, not a forged one. Two independent 32-bit lanes
+ * (64 bits) over a stable rendering, prefixed with the message count
+ * (item 108). A single 32-bit FNV-1a was the previous form: a one-in-four-
+ * billion collision per mismatched transcript is rare, but a checkpoint
+ * mistaken for this conversation's projects someone else's summary into it,
+ * so the margin was worth widening. A checkpoint written under the old form
+ * no longer matches and is rebuilt once -- which is what a cache is for.
  *
  * Rendering is defensive: message content can hold decoded values a tool
  * produced — a `Date`, a class instance — and a fingerprint that threw on one
@@ -506,12 +511,20 @@ const normalizeSummary = (result: string | SummaryResult): SummaryResult =>
  * catches the case that matters.
  */
 const fingerprint = (messages: ReadonlyArray<Prompt.Message>): string => {
-  let hash = 0x811c9dc5
+  // Lane one is FNV-1a; lane two a differently seeded multiply-xorshift, so a
+  // collision in one is not a collision in the other.
+  let a = 0x811c9dc5
+  let b = 0x9e3779b9
   const absorb = (text: string) => {
     for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i)
-      hash = Math.imul(hash, 0x01000193) >>> 0
+      const c = text.charCodeAt(i)
+      a = Math.imul(a ^ c, 0x01000193) >>> 0
+      b = Math.imul(b ^ c, 0x5bd1e995) >>> 0
+      b = (b ^ (b >>> 15)) >>> 0
     }
+    // A separator, so ["ab","c"] and ["a","bc"] do not render alike.
+    a = Math.imul(a ^ 0xff, 0x01000193) >>> 0
+    b = Math.imul(b ^ 0xff, 0x5bd1e995) >>> 0
   }
   for (const message of messages) {
     absorb(message.role)
@@ -521,7 +534,8 @@ const fingerprint = (messages: ReadonlyArray<Prompt.Message>): string => {
       absorb(String(message.content.length))
     }
   }
-  return hash.toString(16)
+  const hex = (n: number) => n.toString(16).padStart(8, "0")
+  return `${messages.length}:${hex(a)}${hex(b)}`
 }
 
 const summaryMessage = (summary: string) =>
@@ -1107,6 +1121,17 @@ export const CompactionFailed = Schema.TaggedStruct("CompactionFailed", {
   trigger: Trigger,
   reason: Schema.String
 })
+/**
+ * A stored checkpoint could not be read, so it was thrown away and the
+ * projection rebuilt from canonical history (item 108). A checkpoint is a
+ * cache of work done on history, never truth: losing one costs a summary,
+ * and failing the turn over it would make a derived value more important
+ * than the history it was derived from.
+ */
+export const CompactionCheckpointDiscarded = Schema.TaggedStruct("CompactionCheckpointDiscarded", {
+  sessionId: Schema.String,
+  reason: Schema.String
+})
 
 /**
  * What a controller reports.
@@ -1121,7 +1146,8 @@ export const CompactionFailed = Schema.TaggedStruct("CompactionFailed", {
 export const CompactionEvent = Schema.Union([
   CompactionStarted,
   CompactionCompleted,
-  CompactionFailed
+  CompactionFailed,
+  CompactionCheckpointDiscarded
 ])
 export type CompactionEvent = typeof CompactionEvent.Type
 
@@ -1364,12 +1390,27 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
           Checkpoint
         )
 
+    // A stored checkpoint that does not decode is discarded, not fatal: it is
+    // a cache over history, and the projection can always be rebuilt from
+    // the history itself. It used to fail the turn with the `SchemaError`.
+    // A store that cannot be *reached* still fails -- that is infrastructure,
+    // not a bad cache entry.
     const load = (sessionId: string) =>
       persisted === undefined
         ? Ref.get(checkpoints).pipe(
             Effect.map((all) => Option.fromUndefinedOr(all.get(sessionId)))
           )
-        : persisted.get(sessionId)
+        : persisted.get(sessionId).pipe(
+            Effect.catchTag("SchemaError", (error) =>
+              persisted.remove(sessionId).pipe(
+                Effect.andThen(emit({
+                  _tag: "CompactionCheckpointDiscarded",
+                  sessionId,
+                  reason: `the stored checkpoint does not decode: ${String(error.message).slice(0, 300)}`
+                })),
+                Effect.as(Option.none<Checkpoint>())
+              ))
+          )
 
     const save = (sessionId: string, checkpoint: Checkpoint) =>
       persisted === undefined
