@@ -33,6 +33,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Code Mode's per-call outcome can now be "uncertain" or "not-started" when a program is interrupted; consumers matching the three old values should handle both. (`a35673a`; unmeasured)
 - a durable non-idempotent tool call now journals a start marker activity; a submission whose process died inside (or just before) such a handler ends with DurableToolUnresolvedError instead of running the handler again. (`1a770eb`; unmeasured)
 - ToolContracts is exported from affe-agent/durable, with CompatibleWith; ToolContractChangedError's message prints the full recorded digest and names the declaration. (`d730666`; measured by `test/fixtures/namespace-manifest.json`)
+- a recovered durable run's undecided permission calls now run under the stricter of the policy it was admitted with and the current one, or are refused if a changed policy cannot be re-created; a regexp matcher with matching flags now describes as regexp/<flags>:<source>. (`725551e`; measured by `test/fixtures/error-tags-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
