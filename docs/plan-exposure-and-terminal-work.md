@@ -1220,9 +1220,10 @@ recovery cost matters**; E12's oracle is its acceptance test when it comes.
 * **Q6** E13's "stricter of captured and current" permission: is journalling
   `Permission.describe` enough, or does a policy with closures need its own
   capture form?
-* **Q7** E15: refuse on any digest change, or allow declared-compatible
-  changes (additive optional fields)? Leaning: refuse by default, with an
-  explicit compatibility declaration per tool.
+* **Q7** ~~E15: refuse on any digest change, or allow declared-compatible
+  changes (additive optional fields)?~~ Decided 2026-09-10 as leaned:
+  refused by default; `ToolContracts.CompatibleWith` on a tool declares the
+  exact recorded digests it can replay.
 * **Q8** E18: making Cloudflare/relay authorization required is a breaking
   change to two entry points; acceptable pre-1.0? **Decided 2026-09-10: yes**
   (the owner left it to judgement), and the Cloudflare principal with it.

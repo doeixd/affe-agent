@@ -2,6 +2,7 @@ import { Context, Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import * as ToolExecution from "../ToolExecution.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * A durable tool contract is part of the persisted program (item 107).
@@ -22,7 +23,29 @@ import * as ToolExecution from "../ToolExecution.js"
  * JSON Schema of the parameters, success and failure schemas, and whether the
  * tool must be `Alone` in its turn. Not the description -- rewording what the
  * model reads changes nothing a journal holds.
+ *
+ * **A change can be declared compatible (Q7).** Any change is refused by
+ * default -- the library cannot tell an additive optional field from a
+ * renamed one. The tool's author can: annotating the tool with
+ * `CompatibleWith` and the recorded digest says "journals recorded under
+ * that contract replay correctly under this one", and those replays go on.
+ * The declaration is per tool and names exact digests, so it is an audit
+ * trail rather than a switch, and the refusal prints the digest to declare.
  */
+
+/**
+ * Earlier contract digests this tool declares it can replay (see the module
+ * doc). The default is none: every change is refused.
+ *
+ * ```ts
+ * const Lookup = Tool.make("lookup", { ... })
+ *   .annotate(ToolContracts.CompatibleWith, ["<digest from the refusal>"])
+ * ```
+ */
+export const CompatibleWith = Context.Reference<ReadonlyArray<string>>(
+  Namespace.tag("durable/ToolContracts/CompatibleWith"),
+  { defaultValue: () => [] }
+)
 
 /** One tool whose recorded contract no longer matches the running one. */
 export const ChangedContract = Schema.Struct({
@@ -43,10 +66,11 @@ export class ToolContractChangedError extends Schema.TaggedError<ToolContractCha
         .map((tool) =>
           tool.current === null
             ? `${tool.name} was removed`
-            : `${tool.name} changed (recorded ${tool.recorded.slice(0, 12)}, now ${tool.current.slice(0, 12)})`
+            : `${tool.name} changed (recorded ${tool.recorded}, now ${tool.current.slice(0, 12)})`
         )
         .join("; ") +
-      ". Restore the recorded definitions to finish it, or let it fail."
+      ". Restore the recorded definitions to finish it, let it fail, or -- if the new contract reads what " +
+      "was recorded -- annotate the tool with ToolContracts.CompatibleWith and the recorded digest."
     )
   }
 }
@@ -102,7 +126,11 @@ export const check = (
 ): Effect.Effect<void, ToolContractChangedError, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> =>
   Effect.gen(function*() {
     const current: Record<string, string> = {}
-    for (const tool of tools) current[tool.name] = yield* digestOf(tool)
+    const declared: Record<string, ReadonlyArray<string>> = {}
+    for (const tool of tools) {
+      current[tool.name] = yield* digestOf(tool)
+      declared[tool.name] = Context.get(tool.annotations, CompatibleWith)
+    }
     const recorded = yield* Activity.make({
       name: `${prefix}contract-digests`,
       success: Schema.Record(Schema.String, Schema.String),
@@ -111,7 +139,7 @@ export const check = (
     const changed = Object.keys(recorded)
       .sort()
       .flatMap((name) =>
-        current[name] === recorded[name]
+        current[name] === recorded[name] || (declared[name] ?? []).includes(recorded[name]!)
           ? []
           : [{ name, recorded: recorded[name]!, current: current[name] ?? null }]
       )

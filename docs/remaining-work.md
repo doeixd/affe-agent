@@ -559,9 +559,12 @@ acceptance test for 105, 107 and 108.*
      and both digests, as an ordinary agent failure that frees the session.
      An added tool is not a conflict. A recorded `new_context` result that no
      longer decodes now dies with an explanation instead of being read as no
-     request. Still open: frozen legacy definitions for control tools, so a
-     recorded run can finish rather than only be refused (T15.3), and
-     declared-compatible changes (Q7).
+     request. Q7 decided as the plan leaned: refused by default, and a tool
+     may declare earlier recorded digests compatible
+     (`ToolContracts.CompatibleWith`, now exported from
+     `affe-agent/durable` with the error), which the refusal prints in full.
+     Still open: frozen legacy definitions for control tools, so a recorded
+     run can finish rather than only be refused (T15.3).
 
      ```text
      verify: exists src/durable/ToolContracts.ts

@@ -274,7 +274,8 @@ describe("durable and cluster surfaces", () => {
       "DurablePolling",
       "DurableSessionStore",
       "DurableSubmission",
-      "DurableToolkit"
+      "DurableToolkit",
+      "ToolContracts"
     ])
   })
 

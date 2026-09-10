@@ -32,6 +32,7 @@
   "affe-agent/code/callscript",
   "affe-agent/data/DataChannels",
   "affe-agent/dispatch",
+  "affe-agent/durable/ToolContracts/CompatibleWith",
   "affe-agent/export/ExportError",
   "affe-agent/http/Client",
   "affe-agent/http/DuplicateMountError",

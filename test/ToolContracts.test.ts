@@ -126,6 +126,25 @@ describe("a durable replay under changed tool contracts (item 107)", () => {
       }
     }), 90_000)
 
+  it.live("proceeds when the changed tool declares the recorded contract compatible (Q7)", () =>
+    Effect.gen(function*() {
+      // The author knows an added optional field reads what was recorded;
+      // the library cannot tell that from a rename, so the author says so,
+      // by the exact digest the refusal would print.
+      const recorded = yield* ToolContracts.digestOf(lookup({ of: Schema.String }))
+      const widened = lookup({ of: Schema.String, limit: Schema.optional(Schema.Number) })
+        .annotate(ToolContracts.CompatibleWith, [recorded])
+      const scenario = recovery((effects) => [
+        Agent.tool(widened, ({ of }) => Effect.as(effects.record(of), `found ${of}`))
+      ])
+      const recovered = yield* DurableEquivalence.crashed(scenario, {
+        database,
+        at: turnFailpoints.qualified("after-model-response")
+      })
+      assert.strictEqual(recovered.observation.text, "done")
+      assert.deepStrictEqual(recovered.observation.effects, ["orders"])
+    }), 90_000)
+
   it.live("proceeds when the replacement only added a tool: nothing recorded refers to it", () =>
     Effect.gen(function*() {
       const Extra = Tool.make("extra", { parameters: Schema.Struct({}), success: Schema.String })

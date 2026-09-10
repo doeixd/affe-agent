@@ -39,6 +39,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "no principal: visibility rules see None, and hosts that authenticate always set it"
   },
+  "src/durable/ToolContracts.ts:CompatibleWith": {
+    class: "no-feature",
+    why: "a tool annotation: none declared means every contract change is refused, the safe default"
+  },
   "src/internal/failpoint.ts:Failpoint": {
     class: "seam",
     why: "no-op outside the crash tests"
