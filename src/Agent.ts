@@ -375,7 +375,15 @@ export interface Description {
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
   readonly toolDenialPolicy: ToolExecution.FailurePolicy
   readonly input: { readonly raw: boolean; readonly schema: Schema.Top }
-  readonly output: Option.Option<{ readonly toolName: string; readonly schema: Schema.Top }>
+  readonly output: Option.Option<{
+    readonly toolName: string
+    readonly schema: Schema.Top
+    /**
+     * Tools whose successful result can complete the run without the output
+     * tool (`AgentOutput.fromTool`), in the order they were added.
+     */
+    readonly projectedFrom: ReadonlyArray<string>
+  }>
 }
 
 export const describe = (agent: Any): Description => ({
@@ -403,7 +411,11 @@ export const describe = (agent: Any): Description => ({
   toolFailurePolicy: agent.toolFailurePolicy,
   toolDenialPolicy: agent.toolDenialPolicy,
   input: { raw: agent.input === AgentInput.prompt, schema: agent.input.schema },
-  output: Option.map(agent.output, (output) => ({ toolName: output.toolName, schema: output.schema }))
+  output: Option.map(agent.output, (output) => ({
+    toolName: output.toolName,
+    schema: output.schema,
+    projectedFrom: output.projections.map((projection) => projection.tool.name)
+  }))
 })
 
 /**

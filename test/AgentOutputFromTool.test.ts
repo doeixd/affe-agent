@@ -68,6 +68,14 @@ const run = <Tools extends Record<string, Tool.Any>, Value>(
 const createCall: FakeModel.Turn = { toolCalls: [{ id: "c1", name: "create_project", params: { name: "atlas" } }] }
 
 describe("AgentOutput.fromTool (item 92)", () => {
+  it("describe names the tools that can complete the run (T4.4)", () => {
+    const described = Agent.describe(Agent.make({ output }))
+    assert.deepStrictEqual(
+      Option.map(described.output, (o) => o.projectedFrom),
+      Option.some(["create_project"])
+    )
+  })
+
   it.effect("a projecting tool's success is the answer, and the model is not asked again", () =>
     Effect.gen(function*() {
       const { agent, runs } = yield* setup(true)

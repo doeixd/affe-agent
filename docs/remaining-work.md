@@ -348,9 +348,10 @@ and pin the state it starts from.*
     against the output's type (a projector returning too little is a compile
     error, not a silently widened output) and its schema; a throwing
     projector is a defect; a durable crash after the tool commits recovers
-    the same answer with no model call. Open: T4.3, an event field saying
-    *how* the run completed (output tool or which projecting call), and
-    T4.4, `Agent.describe().output` listing the projecting tools.
+    the same answer with no model call. `Agent.describe().output` lists
+    the projecting tools as `projectedFrom` (T4.4). Open: T4.3, an event
+    field saying *how* the run completed (output tool or which projecting
+    call).
 
     ```text
     verify: grep "export const fromTool" src/AgentOutput.ts

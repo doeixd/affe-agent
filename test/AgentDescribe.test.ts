@@ -118,7 +118,7 @@ describe("Agent.describe", () => {
       details: { toolName: output.toolName },
       inner: { _tag: "UntilIdle" }
     })
-    assert.deepStrictEqual(typed.output, Option.some({ toolName: output.toolName, schema: Verdict }))
+    assert.deepStrictEqual(typed.output, Option.some({ toolName: output.toolName, schema: Verdict, projectedFrom: [] }))
   })
 
   it("a toolkit resolved per turn has no tools to describe, and says None rather than guessing", () => {
