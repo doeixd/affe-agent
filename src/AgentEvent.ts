@@ -157,8 +157,26 @@ export const SubmissionInterrupted = Schema.TaggedStruct(
 )
 
 export const RunStarted = Schema.TaggedStruct("RunStarted", {})
+
+/**
+ * How a run's declared output was answered (item 92, T4.3): by the model
+ * calling the output tool, or by a projecting tool's committed result
+ * (`AgentOutput.fromTool`), naming the call either way.
+ */
+export const AnsweredBy = Schema.Union([
+  Schema.TaggedStruct("OutputTool", { toolCallId: Schema.String }),
+  Schema.TaggedStruct("Projected", { toolName: Schema.String, toolCallId: Schema.String })
+])
+export type AnsweredBy = typeof AnsweredBy.Type
+
 export const RunCompleted = Schema.TaggedStruct("RunCompleted", {
   turns: Schema.Number,
+  /**
+   * How this run's output was answered, when it was: the latest answer
+   * wins, as the value does. Absent when the agent declares no output or
+   * the run ended without one, and optional so an older journal decodes.
+   */
+  answeredBy: Schema.optional(AnsweredBy),
   /**
    * The reason the loop gave for stopping, when it gave one (`AgentLoop.stop`
    * / `final` with a reason; `maxTurns`, `maxToolCalls`, `maxDuration` and

@@ -2304,3 +2304,20 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: grep "truncated: scored.length > limit" src/memory/Memory.ts
      verify: grep "reads in pages by limit" src/testing/DeliveryLogConformance.ts
      ```
+
+92. ~~**Completion from an ordinary tool result (plan E2, §4).**~~ — landed
+    2026-09-10. `AgentOutput.fromTool(Tool, project)`: after a turn commits,
+    each successful result of a projecting tool goes to a pure projector,
+    and `Some` is the submission's value -- no second model call to copy it.
+    Typed from the tool and checked against the output's type and schema; a
+    throwing projector is a defect; a durable crash after the tool commits
+    recovers the same answer with no model call. `RunCompleted.answeredBy`
+    says how the run was answered -- `OutputTool` or `Projected` with the
+    tool and call id (T4.3) -- and `Agent.describe().output.projectedFrom`
+    lists the projecting tools (T4.4).
+
+    ```text
+    verify: grep "export const fromTool" src/AgentOutput.ts
+    verify: grep "export const AnsweredBy" src/AgentEvent.ts
+    verify: grep "projectedFrom: output.projections" src/Agent.ts
+    ```

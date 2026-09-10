@@ -11,7 +11,8 @@ import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentOutput from "../src/AgentOutput.js"
 import * as AgentSession from "../src/AgentSession.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
-import { DurableEquivalence } from "../src/testing/index.js"
+import { AgentProbe, DurableEquivalence } from "../src/testing/index.js"
+import * as AgentEvent from "../src/AgentEvent.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -59,8 +60,10 @@ const run = <Tools extends Record<string, Tool.Any>, Value>(
     return yield* Effect.scoped(
       Effect.gen(function*() {
         const session = yield* AgentSession.make(agent)
+        const probe = yield* AgentProbe.make(session)
         const result = yield* AgentSession.prompt<Tools, never, Value, Prompt.RawInput>(session, "create it")
-        return { result, calls: yield* recorder.calls }
+        const completed = (yield* probe.events).flatMap((e) => AgentEvent.is("RunCompleted")(e) ? [e.event] : [])
+        return { result, calls: yield* recorder.calls, completed }
       }).pipe(Effect.provide(layer))
     )
   })
@@ -86,15 +89,26 @@ describe("AgentOutput.fromTool (item 92)", () => {
       assert.strictEqual(result.status, "completed")
     }))
 
+  it.effect("the run says how it was answered: by which projecting call (T4.3)", () =>
+    Effect.gen(function*() {
+      const { agent } = yield* setup(true)
+      const { completed } = yield* run([createCall], agent)
+      assert.deepStrictEqual(completed.map((e) => e.answeredBy), [
+        { _tag: "Projected", toolName: "create_project", toolCallId: "c1" }
+      ])
+    }))
+
   it.effect("None continues the run, and the model can still answer itself", () =>
     Effect.gen(function*() {
       const { agent } = yield* setup(false)
-      const { calls, result } = yield* run(
+      const { calls, completed, result } = yield* run(
         [createCall, FakeModel.toolCall(output.toolName, { projectId: "manual", url: "https://x/manual" })],
         agent
       )
       assert.strictEqual(calls, 2)
       assert.deepStrictEqual(result.value, Option.some({ projectId: "manual", url: "https://x/manual" }))
+      // Answered by the output tool, and the event names its call.
+      assert.strictEqual(completed[0]?.answeredBy?._tag, "OutputTool")
     }))
 
   it.effect("a failed call is not projected: there is no result to be the answer", () =>

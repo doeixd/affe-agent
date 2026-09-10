@@ -340,24 +340,6 @@ the largest and wants 100's harness to be judged. The plan carries each
 item's invariants and acceptance tests; the entries here say what is open
 and pin the state it starts from.*
 
-92. **Completion from an ordinary tool result (plan E2, §4) -- landed
-    2026-09-10, two small pieces open.** `AgentOutput.fromTool(Tool,
-    project)`: after a turn commits, each successful result of a projecting
-    tool goes to a pure projector, and `Some` is the submission's value --
-    no second model call to copy it. Typed from the tool, return checked
-    against the output's type (a projector returning too little is a compile
-    error, not a silently widened output) and its schema; a throwing
-    projector is a defect; a durable crash after the tool commits recovers
-    the same answer with no model call. `Agent.describe().output` lists
-    the projecting tools as `projectedFrom` (T4.4). Open: T4.3, an event
-    field saying *how* the run completed (output tool or which projecting
-    call).
-
-    ```text
-    verify: grep "export const fromTool" src/AgentOutput.ts
-    verify: no-grep "projectedBy" src/Agent.ts
-    ```
-
 93. **Visibility, progressive exposure and discovery (plan E3, §3) -- first
     slice landed 2026-09-10.** `ToolExposure` (kernel): `eager` or
     `progressive({ pinned, maxTools, maxResults })`, each with an optional

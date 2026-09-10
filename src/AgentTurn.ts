@@ -34,6 +34,8 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
    * visible to the submission only once its turn has committed.
    */
   readonly value: Option.Option<unknown>
+  /** How `value` arrived, when it did. */
+  readonly answeredBy: Option.Option<AgentEvent.AnsweredBy>
 }
 
 /**
@@ -266,7 +268,7 @@ const projectedOutput = (
   output: Option.Option<AgentOutput.AgentOutput<any, any>>,
   toolCalls: ReadonlyArray<{ readonly id: string; readonly name: string; readonly params: unknown }>,
   toolResults: ReadonlyArray<Response.AnyPart>
-): Effect.Effect<Option.Option<unknown>> =>
+): Effect.Effect<Option.Option<{ readonly value: unknown; readonly toolName: string; readonly toolCallId: string }>> =>
   Effect.gen(function* () {
     if (Option.isNone(output) || output.value.projections.length === 0) return Option.none()
     const { projections, schema } = output.value
@@ -289,7 +291,7 @@ const projectedOutput = (
       // Checked as a reported value is; one the schema rejects is the
       // projector's bug, and the schema's error says what is wrong.
       yield* Effect.orDie(Schema.encodeUnknownEffect(schema)(value.value))
-      return value
+      return Option.some({ value: value.value, toolName: call.name, toolCallId: call.id })
     }
     return Option.none()
   })
@@ -685,13 +687,27 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     // Read inside the same uninterruptible region as the commit, so a value
     // is promoted exactly when the turn that produced it becomes canonical.
     let value: Option.Option<unknown> = Option.none()
+    let answeredBy: Option.Option<AgentEvent.AnsweredBy> = Option.none()
     yield* turnFailpoints.hit("before-commit")
     yield* Effect.uninterruptible(
       Effect.gen(function*() {
         yield* History.commit(session.history, committed)
         // A value the model reported wins; it cannot share a turn with a
         // projecting tool anyway, the output tool being `Alone`.
-        value = Option.orElse(yield* Ref.get(session.pendingOutput), () => projected)
+        const reported = yield* Ref.get(session.pendingOutput)
+        if (Option.isSome(reported)) {
+          value = reported
+          // The output tool is `Alone`, so its call is the turn's only one.
+          const call = toolCalls.find((c) => Option.exists(session.agent.output, (o) => o.toolName === c.name))
+          answeredBy = Option.map(Option.fromUndefinedOr(call), (c) => ({ _tag: "OutputTool" as const, toolCallId: c.id }))
+        } else if (Option.isSome(projected)) {
+          value = Option.some(projected.value.value)
+          answeredBy = Option.some({
+            _tag: "Projected" as const,
+            toolName: projected.value.toolName,
+            toolCallId: projected.value.toolCallId
+          })
+        }
 
         // A message is worth announcing when it says something or carries a
         // file. Reasoning alone is not one: it is the model's working, and a
@@ -710,5 +726,5 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     )
     yield* turnFailpoints.hit("after-commit")
 
-    return { response, toolCalls, text, value }
+    return { response, toolCalls, text, value, answeredBy }
   })

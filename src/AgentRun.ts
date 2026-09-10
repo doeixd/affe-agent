@@ -1,6 +1,6 @@
 import { Clock, Duration, Effect, Option, Ref, SubscriptionRef } from "effect"
 import type { LanguageModel, Tool } from "effect/unstable/ai"
-import type { Correlation } from "./AgentEvent.js"
+import type { AnsweredBy, Correlation } from "./AgentEvent.js"
 import type * as AgentLoop from "./AgentLoop.js"
 import * as AgentTurn from "./AgentTurn.js"
 import * as RunLedger from "./RunLedger.js"
@@ -78,6 +78,8 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
       Option.none()
     let steeringContinuation = false
     let stopReason: Option.Option<string> = Option.none()
+    // How this run's output was answered, latest wins (item 92, T4.3).
+    let answeredBy: Option.Option<AnsweredBy> = Option.none()
     let exhaustion: Option.Option<AgentLoop.Exhaustion> = Option.none()
     // Set by a `Final` decision; the next turn is the last, tools withheld.
     let finalTurn = false
@@ -101,6 +103,7 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         text = result.text
       }
       toolCallsTotal = toolCallsTotal + result.toolCalls.length
+      if (Option.isSome(result.answeredBy)) answeredBy = result.answeredBy
 
       // The turn has committed atomically. Record it in the submission's live
       // progress (turns is the submission-wide total, so it increments by one
@@ -197,6 +200,7 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "RunCompleted",
       turns: turn,
+      ...(Option.isSome(answeredBy) ? { answeredBy: answeredBy.value } : {}),
       ...(Option.isSome(stopReason) ? { stopReason: stopReason.value } : {}),
       ...(Option.isSome(exhaustion) ? { exhaustion: exhaustion.value } : {})
     })
