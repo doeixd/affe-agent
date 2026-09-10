@@ -514,32 +514,6 @@ acceptance test for 105, 107 and 108.*
      verify: exists src/testing/DurableEquivalence.ts
      ```
 
-105. **Host scheduling, captured per durable attempt (plan E13, §17) --
-     first slice landed 2026-09-10.** `ToolScheduling` (kernel) lets a host
-     serialize calls by key across turns and sessions, cap concurrency, or
-     combine both; it wraps each call and can only make it wait, so it
-     tightens the agent's strategy and cannot widen it. Under `/durable` the
-     agent's strategy is journalled at a submission's first execution (the
-     `execution strategy` activity), so a run recovered by a process
-     configured differently runs its tools as admitted --
-     `test/DurableEquivalence.test.ts` crashes a `Sequential` run and
-     recovers it in a `Parallel` process. I17.3 landed the same day (Q6
-     decided): a submission journals its permission policy's description,
-     and a recovered attempt's undecided calls run under the recorded and
-     the current policy combined conservatively -- the stricter of the two
-     -- by re-creating the recorded one (`Permission.fromDescription`; a
-     regexp's matching flags now survive its description). A changed policy
-     that cannot be re-created (`Custom`, a function matcher) is refused
-     with `PermissionPolicyChangedError`. Still open: (b) capturing the host
-     scheduling's description with the attempt and refusing a recovery
-     whose host would widen it.
-
-     ```text
-     verify: exists src/ToolScheduling.ts
-     verify: grep "execution-strategy" src/durable/DurableAgent.ts
-     verify: grep "permission: durablePermission," src/durable/DurableSubmission.ts
-     ```
-
 106. **Long-lifetime continuity evaluation (plan E14, §18) -- first slice
      landed 2026-09-10.** `affe-agent/evals`'s `Continuity`: a scenario as
      data (statements, corrections, restarts, questions with ground truth), a

@@ -9,6 +9,7 @@ import type { AgentDefinition } from "../Agent.js"
 import * as AgentInput from "../AgentInput.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Permission from "../Permission.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Ids from "../internal/ids.js"
@@ -267,6 +268,60 @@ export const capturedStrategy = (
     execute: Effect.succeed(strategy)
   })
 
+/**
+ * A recovered attempt's host scheduling differs from the one it was admitted
+ * under, and the recorded one cannot be re-created to combine with it: it
+ * serialized calls by a key function (item 105). See `capturedScheduling`.
+ */
+export class ToolSchedulingChangedError extends Schema.TaggedError<ToolSchedulingChangedError>()(
+  "ToolSchedulingChangedError",
+  { recorded: Schema.String, current: Schema.String }
+) {
+  override get message() {
+    return (
+      "This submission was admitted under host tool scheduling that cannot be re-created, and this host schedules " +
+      `differently, so it cannot be recovered here: recorded ${this.recorded}, now ${this.current}.`
+    )
+  }
+}
+
+/**
+ * The host scheduling (`ToolScheduling`) a recovered attempt runs its calls
+ * under (item 105, I17.2). The same shape as the permission policy's
+ * (`DurablePermission.effective`): journalled at the first execution;
+ * unchanged is the host's; changed and re-creatable is both, combined -- a
+ * scheduling can only hold calls back, so combining never widens; changed
+ * and not re-creatable (a `Serialize`, whose key is a function) is refused,
+ * since a replacement without that serialization could run together what the
+ * admitted run kept apart.
+ */
+export const capturedScheduling = (
+  host: ToolScheduling.ToolScheduling,
+  prefix: string
+): Effect.Effect<
+  ToolScheduling.ToolScheduling,
+  ToolSchedulingChangedError,
+  WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+> =>
+  Effect.gen(function*() {
+    const current = JSON.stringify(host.description)
+    const recorded = yield* Activity.make({
+      name: `${prefix}host-scheduling`,
+      success: Schema.String,
+      execute: Effect.succeed(current)
+    })
+    if (recorded === current) return host
+    const admitted = (() => {
+      try {
+        return ToolScheduling.fromDescription(JSON.parse(recorded) as ToolScheduling.Description)
+      } catch {
+        return Option.none<ToolScheduling.ToolScheduling>()
+      }
+    })()
+    if (Option.isNone(admitted)) return yield* new ToolSchedulingChangedError({ recorded, current })
+    return ToolScheduling.all(admitted.value, host)
+  })
+
 export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
   agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
@@ -398,6 +453,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // Through a ref, set to the policy this attempt may use once
       // `DurablePermission.effective` has decided it, below.
       const admittedPolicy = yield* Ref.make(agent.permission)
+      // The host's tool scheduling, likewise: the body runs under a delegate
+      // set once `capturedScheduling` has decided it (item 105).
+      const hostScheduling = yield* ToolScheduling.Current
+      const admittedScheduling = yield* Ref.make(hostScheduling)
       const durablePermission = yield* DurablePermission.wrap(
         DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission))
       )
@@ -417,6 +476,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           yield* ToolContracts.check(describedTools(toolkit.tools, agent), "")
           // And the permission policy it was admitted under (item 105, Q6).
           yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, ""))
+          yield* Ref.set(admittedScheduling, yield* capturedScheduling(hostScheduling, ""))
           const session = yield* AgentSession.make(durableAgent, {
             channels,
             elicitation,
@@ -473,6 +533,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
         })
       ).pipe(
         Effect.provide(modelLayer),
+        Effect.provideService(
+          ToolScheduling.Current,
+          ToolScheduling.delegating(admittedScheduling, hostScheduling.description)
+        ),
         // Interruption is deliberately not converted into a failure.
         // Suspension is signalled by interrupting the fiber, so projecting it
         // would turn every parked submission into a permanently failed one.

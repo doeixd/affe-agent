@@ -16,6 +16,7 @@ import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Permission from "../Permission.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 import * as Ids from "../internal/ids.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as Elicitation from "../Elicitation.js"
@@ -688,6 +689,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // Through a ref, set to the policy this attempt may use once
       // `DurablePermission.effective` has decided it, below.
       const admittedPolicy = yield* Ref.make(agent.permission)
+      // The host's tool scheduling, likewise: the body runs under a delegate
+      // set once `capturedScheduling` has decided it (item 105).
+      const hostScheduling = yield* ToolScheduling.Current
+      const admittedScheduling = yield* Ref.make(hostScheduling)
       const durablePermission = yield* DurablePermission.wrap(
         DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission)),
         { prefix: scopePrefix }
@@ -738,6 +743,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           yield* ToolContracts.check(describedTools(toolkit.tools, agent), scopePrefix)
           // And the permission policy it was admitted under (item 105, Q6).
           yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, scopePrefix))
+          yield* Ref.set(admittedScheduling, yield* DurableAgent.capturedScheduling(hostScheduling, scopePrefix))
           const session = yield* AgentSession.makeEngine(durableAgent, {
             channels,
             elicitation,
@@ -835,6 +841,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
         })
       ).pipe(
         Effect.provide(modelLayer),
+        Effect.provideService(
+          ToolScheduling.Current,
+          ToolScheduling.delegating(admittedScheduling, hostScheduling.description)
+        ),
         // Success commits its projection and crosses as data — unless the
         // "success" is a suspension. A session absorbs interruption by
         // design, so a parked workflow's prompt returns normally, as an

@@ -2373,3 +2373,26 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "a non-idempotent call is not run again" test/DurableToolCrash.test.ts
     verify: grep "\"uncertain\" | \"not-started\"" src/code/CodeMode.ts
     ```
+
+105. ~~**Host scheduling, captured per durable attempt (plan E13, §17).**~~ —
+     landed 2026-09-10. `ToolScheduling` (kernel) lets a host serialize
+     calls by key, cap concurrency, or both, and can only make a call wait.
+     Under `/durable` a submission journals, at its first execution, the
+     agent's tool strategy, its permission policy's description and the host
+     scheduling's description; a recovered attempt runs its tools as
+     admitted, and its undecided calls under the stricter of the admitted
+     and the current policy and scheduling -- the recorded one re-created
+     from its description (`Permission.fromDescription`,
+     `ToolScheduling.fromDescription`) and combined with the running one.
+     A changed one that cannot be re-created (a `Custom` policy, a function
+     matcher, a `Serialize`) is refused by name
+     (`PermissionPolicyChangedError`, `ToolSchedulingChangedError`) rather
+     than guessed at (Q6). Tests: a wider replacement policy still denies; a
+     narrower one applies; a replacement host that stopped serializing is
+     refused; one that only changed a limit recovers under both.
+
+     ```text
+     verify: grep "export const effective" src/durable/DurablePermission.ts
+     verify: grep "export const capturedScheduling" src/durable/DurableAgent.ts
+     verify: grep "export const fromDescription" src/ToolScheduling.ts
+     ```

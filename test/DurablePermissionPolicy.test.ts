@@ -8,6 +8,8 @@ import * as NodePath from "node:path"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as Permission from "../src/Permission.js"
+import * as ToolExecution from "../src/ToolExecution.js"
+import * as ToolScheduling from "../src/ToolScheduling.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
 import { DurableEquivalence } from "../src/testing/index.js"
 
@@ -132,4 +134,46 @@ describe("Permission.fromDescription", () => {
     ))))
     assert.isTrue(Option.isNone(Permission.fromDescription(Permission.describe(custom("x", Permission.allow)))))
   })
+})
+
+describe("a recovered attempt keeps the host scheduling it was admitted under (item 105)", () => {
+  const Slow = Tool.make("slow", { parameters: Schema.Struct({ id: Schema.String }), success: Schema.String })
+  const serialized = (process: "first" | "second") =>
+    process === "first"
+      ? ToolScheduling.serialize("slow-one-at-a-time", () => "all")
+      : ToolScheduling.unconstrained
+  const batch = (hostScheduling: (process: "first" | "second") => ToolScheduling.ToolScheduling) =>
+    DurableEquivalence.scenario({
+      agent: (effects) =>
+        Agent.make({
+          tools: [Agent.tool(Slow, ({ id }) => Effect.as(effects.record(id), `done ${id}`))],
+          toolExecution: ToolExecution.Parallel,
+          loop: AgentLoop.bounded(3)
+        }),
+      turns: [
+        { toolCalls: [{ id: "s1", name: "slow", params: { id: "a" } }, { id: "s2", name: "slow", params: { id: "b" } }] },
+        { text: "both done" }
+      ],
+      prompt: "do both",
+      hostScheduling
+    })
+
+  it.live("a replacement host that no longer serializes is refused: it could run together what was kept apart", () =>
+    Effect.gen(function*() {
+      const exit = yield* Effect.exit(
+        DurableEquivalence.crashed(batch(serialized), { database, at: turnFailpoints.qualified("after-model-response") })
+      )
+      assert.isTrue(Exit.isFailure(exit))
+      if (Exit.isFailure(exit)) assert.include(Cause.pretty(exit.cause), "ToolSchedulingChangedError")
+    }), 90_000)
+
+  it.live("a replacement that only changed a re-creatable limit recovers, under both", () =>
+    Effect.gen(function*() {
+      const recovered = yield* DurableEquivalence.crashed(
+        batch((process) => ToolScheduling.maxConcurrent(process === "first" ? 1 : 4)),
+        { database, at: turnFailpoints.qualified("after-model-response") }
+      )
+      assert.deepStrictEqual(recovered.observation.effects, ["a", "b"])
+      assert.strictEqual(recovered.observation.text, "both done")
+    }), 90_000)
 })

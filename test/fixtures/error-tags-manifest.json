@@ -59,6 +59,7 @@
   "ToolNotAloneError",
   "ToolNotExposedError",
   "ToolPermissionDeniedError",
+  "ToolSchedulingChangedError",
   "ToolSourceExtractionError",
   "ToolSourceInvocationError",
   "ToolSourceMissingError",

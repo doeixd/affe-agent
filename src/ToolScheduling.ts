@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Semaphore } from "effect"
+import { Context, Effect, Layer, Option, Ref, Semaphore } from "effect"
 import * as Namespace from "./internal/namespace.js"
 
 /**
@@ -126,4 +126,35 @@ export const all = (...schedulings: ReadonlyArray<ToolScheduling>): ToolScheduli
   around: (call) => (run) =>
     schedulings.reduceRight((inner, scheduling) => scheduling.around(call)(inner), run),
   description: { _tag: "All", schedulings: schedulings.map((scheduling) => scheduling.description) }
+})
+
+/**
+ * A scheduling re-created from its description, or `None` when the
+ * description does not carry enough: `Serialize` keys calls by a function it
+ * has no data form for. What comes back holds calls back as the described
+ * one did, with its own permits: a re-created `maxConcurrent` bounds the
+ * calls made through it, not the host-wide ones the original also counted.
+ * For durable recovery (item 105), combined with the running host's.
+ */
+export const fromDescription = (described: Description): Option.Option<ToolScheduling> => {
+  switch (described._tag) {
+    case "Unconstrained":
+      return Option.some(unconstrained)
+    case "MaxConcurrent":
+      return Option.some(maxConcurrent(described.max))
+    case "All":
+      return Option.map(Option.all(described.schedulings.map(fromDescription)), (schedulings) => all(...schedulings))
+    case "Serialize":
+      return Option.none()
+  }
+}
+
+/**
+ * A scheduling whose every call goes to what `ref` holds, described as
+ * `description` -- so a durable body can be run under it before recovery has
+ * decided which scheduling that is.
+ */
+export const delegating = (ref: Ref.Ref<ToolScheduling>, description: Description): ToolScheduling => ({
+  around: (call) => (run) => Effect.flatMap(Ref.get(ref), (scheduling) => scheduling.around(call)(run)),
+  description
 })

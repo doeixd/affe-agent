@@ -5,6 +5,7 @@ import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
 import type { AgentDefinition } from "../Agent.js"
 import * as PromptWire from "../PromptWire.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 import { AgentClient } from "../client/index.js"
 import * as DeliveryLog from "../durable/DeliveryLog.js"
 import * as DurableAgentClient from "../durable/DurableAgentClient.js"
@@ -85,6 +86,11 @@ export interface Scenario<Tools extends Record<string, Tool.Any>, Value, Input> 
   readonly turns: ReadonlyArray<TestLanguageModel.Turn>
   readonly prompt: string
   readonly stream?: boolean | undefined
+  /**
+   * The host's `ToolScheduling` in each process, when the scenario is about
+   * a replacement host scheduling differently (item 105). Default: none.
+   */
+  readonly hostScheduling?: ((process: Process) => ToolScheduling.ToolScheduling) | undefined
 }
 
 /**
@@ -206,7 +212,16 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
       DurableAgentClient.layer(NAME, scenario.agent(effects, process), {
         ...stores,
         pollInterval: Duration.millis(50)
-      }).pipe(Layer.provideMerge(engine), Layer.provideMerge(model), Layer.provideMerge(failpoint))
+      }).pipe(
+        Layer.provideMerge(engine),
+        Layer.provideMerge(model),
+        Layer.provideMerge(failpoint),
+        Layer.provideMerge(
+          scenario.hostScheduling === undefined
+            ? Layer.empty
+            : ToolScheduling.layer(scenario.hostScheduling(process))
+        )
+      )
     )
     const client = yield* Effect.service(AgentClient.AgentClient).pipe(Effect.provide(runtime))
     return { client, recorder, delivery: stores.delivery }

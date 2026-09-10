@@ -76,6 +76,7 @@ const familyOf = (name: string): string => {
   if (/(^|[/:])model-\d+$/.test(name)) return "model call"
   if (/permission-\d+-/.test(name)) return "permission decision"
   if (/(^|[/:])permission-policy$/.test(name)) return "permission policy"
+  if (/(^|[/:])host-scheduling$/.test(name)) return "host scheduling"
   if (/-drain-\d+$/.test(name)) return "channel drain"
   if (/\/finish$/.test(name)) return "session projection"
   if (/(^|[/:])execution-strategy$/.test(name)) return "execution strategy"
@@ -154,9 +155,13 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
       // replacement for a process that died inside the handler refuses to
       // run it again rather than repeating its side effect. Its execute only
       // notes that this attempt wrote it; replaying it does nothing.
+      // `permission policy` and `host scheduling` (item 105): the admitted
+      // policy's and the host scheduling's descriptions, so a recovered
+      // attempt runs under the stricter of those and the replacement's.
       assert.deepStrictEqual(families, [
         "channel drain",
         "execution strategy",
+        "host scheduling",
         "model call",
         "permission decision",
         "permission policy",
@@ -218,6 +223,7 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
       assert.deepStrictEqual(families, [
         "channel drain",
         "execution strategy",
+        "host scheduling",
         "model call",
         "permission policy",
         "session projection",
