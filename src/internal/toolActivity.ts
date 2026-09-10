@@ -44,3 +44,10 @@ export const activityName = (
   name: string,
   id: string
 ): string => `tool-${occurrence}-${name}-${id}`
+
+/** The start marker a non-idempotent call journals before its handler runs (`DurableToolkit`). */
+export const startMarkerName = (
+  occurrence: number,
+  name: string,
+  id: string
+): string => `tool-start-${occurrence}-${name}-${id}`

@@ -2,7 +2,7 @@ import { Cause, Context, Effect, Ref, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
-import { activityName, nextOccurrence } from "../internal/toolActivity.js"
+import { activityName, nextOccurrence, startMarkerName } from "../internal/toolActivity.js"
 
 /**
  * Makes every tool call a durable `Activity`.
@@ -85,7 +85,7 @@ export class DurableToolUnresolvedError extends Schema.TaggedError<DurableToolUn
   }
 ) {
   override get message() {
-    return `Tool ${this.toolName} was interrupted and is not retry-safe, so its outcome is unknown`
+    return `Tool ${this.toolName} was interrupted, or its process stopped, while it ran; it is not retry-safe, so its outcome is unknown`
   }
 }
 
@@ -213,10 +213,47 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         ])
         const retrySafe = isRetrySafe(tool)
 
+        /**
+         * The crash window, closed for a call that must not run twice.
+         *
+         * Interruption is handled below by journalling `Unresolved`. A
+         * process that *dies* mid-handler writes nothing -- the entry below is
+         * never recorded -- so a replacement ran the handler again: measured,
+         * a non-idempotent tool crashed inside its handler did its side
+         * effect twice, under a history that read as one clean call.
+         *
+         * So a non-idempotent call first journals a start marker, and notes
+         * whether *this* attempt wrote it: a marker's `execute` never runs on
+         * replay, which makes "written now" a fact rather than a guess. A
+         * replacement that finds the marker already written and no outcome
+         * for the call knows the handler may have run in a process that did
+         * not live to say so, and records `Unresolved` instead of running it
+         * -- the same answer, and the same refusal to guess, as an
+         * interruption. A call whose outcome was journalled replays it as
+         * before. A crash between the marker and the handler's first step is
+         * reported unresolved too: conservative, and indistinguishable from
+         * outside. A journal from before the marker existed has none, so its
+         * calls write it fresh and behave as they always did.
+         *
+         * Retry-safe tools skip it: running them again is the point.
+         */
+        let startedHere = true
+        if (!retrySafe) {
+          startedHere = false
+          yield* Activity.make({
+            name: startMarkerName(index, String(name), id),
+            success: Schema.Literal(true),
+            execute: Effect.sync(() => {
+              startedHere = true
+              return true as const
+            })
+          }).pipe(Effect.provide(workflowContext))
+        }
+
         const outcome = (yield* Activity.make({
           name: activityName(index, String(name), id),
           success: outcomeSchema,
-          execute: (
+          execute: !startedHere ? Effect.succeed<Outcome>({ _tag: "Unresolved" }) : (
             toolkit.handle(name, params, toolCallId).pipe(
               Effect.flatMap(Stream.runCollect)
             ) as unknown as Effect.Effect<ReadonlyArray<HandlerResult>, unknown>

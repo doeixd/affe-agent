@@ -2351,3 +2351,25 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "At-least-once is not reachable behind" src/scheduling/Scheduling.ts
     verify: no-grep "re-queues on non-completion, behind this same interface" src/scheduling/Scheduling.ts
     ```
+
+98. ~~**Code Mode `uncertain` and `not-started` (plan E6, §7).**~~ — landed
+    2026-09-10. In process: every call a program issues ends with exactly
+    one outcome; an interruption reports a started call `uncertain` and a
+    queued one `not-started`, never `failed` (A7.1). Durable: measured first
+    -- a process that died *inside* any non-idempotent tool's handler had
+    its replacement run the handler again, the side effect twice under a
+    clean-looking history, because a death journals nothing. `DurableToolkit`
+    now journals a start marker before a non-idempotent handler and knows
+    whether this attempt wrote it; a replacement that finds the marker and
+    no outcome records `Unresolved` instead of running it (A7.2, for Code
+    Mode's tool and every other). Deliberately not the plan's "the model
+    sees uncertain": `Unresolved` ends the run, because a model told a call
+    failed calls it again. The price is one boundary -- a death between the
+    marker and the handler's first step -- that also ends unresolved;
+    `ClusterMultiNode`'s sweep asserts it (no refund at all, never two).
+
+    ```text
+    verify: grep "export const startMarkerName" src/internal/toolActivity.ts
+    verify: grep "a non-idempotent call is not run again" test/DurableToolCrash.test.ts
+    verify: grep "\"uncertain\" | \"not-started\"" src/code/CodeMode.ts
+    ```

@@ -349,6 +349,9 @@ describe("a cluster with two runners (H6)", () => {
   it.live("recovers D1-D4 before the first and after every completed activity", () =>
     Effect.scoped(
       Effect.gen(function* () {
+        // The representative run's activity names, in order, once collected:
+        // what each crash position is "after".
+        let census: ReadonlyArray<string> = []
         const run = Effect.fn("ClusterMultiNode.crashPoint")(function* (
           position: number,
           collectOnly: boolean,
@@ -468,6 +471,18 @@ describe("a cluster with two runners (H6)", () => {
             interval: Duration.millis(25)
           }).pipe(Effect.provide(peer))
 
+          // Lost right after the refund's start marker (item 98): the handler
+          // had not begun, but nothing can tell that from a handler that died
+          // halfway, so the peer refuses to run it again. The one boundary
+          // that does not settle -- the price of never refunding twice -- and
+          // the refund ran not at all rather than twice.
+          if (position > 0 && /(^|[/:-])tool-start-/.test(census[position - 1] ?? "")) {
+            assert.include(String(answer), "DurableToolUnresolvedError")
+            assert.strictEqual(yield* Ref.get(toolCalls), 0)
+            yield* Scope.close(peerScope, Exit.void)
+            return []
+          }
+
           assert.include(String(answer), "settled")
           const activityNames = yield* Ref.get(names)
           const modelActivities = new Set(
@@ -495,6 +510,7 @@ describe("a cluster with two runners (H6)", () => {
 
         const boundaries = yield* run(-1, true)
         assert.isAbove(boundaries.length, 0)
+        census = boundaries
 
         // N activities have N+1 places to lose the owner: before the first,
         // and immediately after each completed activity. The census is

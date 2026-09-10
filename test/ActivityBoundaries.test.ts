@@ -79,6 +79,7 @@ const familyOf = (name: string): string => {
   if (/\/finish$/.test(name)) return "session projection"
   if (/(^|[/:])execution-strategy$/.test(name)) return "execution strategy"
   if (/(^|[/:])contract-digests$/.test(name)) return "tool contracts"
+  if (/^tool-start-|-tool-start-/.test(name)) return "tool start"
   if (/^tool-|-tool-/.test(name)) return "tool call"
   return `unclassified: ${name}`
 }
@@ -148,19 +149,26 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
       // `tool contracts` (item 107): each tool's contract digest, journalled
       // at the first execution and compared on every replay, so a journal
       // recorded under other definitions is refused by name, not misread.
+      // `tool start` (item 98): a non-idempotent call's start marker, so a
+      // replacement for a process that died inside the handler refuses to
+      // run it again rather than repeating its side effect. Its execute only
+      // notes that this attempt wrote it; replaying it does nothing.
       assert.deepStrictEqual(families, [
         "channel drain",
         "execution strategy",
         "model call",
         "permission decision",
         "tool call",
-        "tool contracts"
+        "tool contracts",
+        "tool start"
       ])
 
       // A representative run, not a trivial one: it really did call a model
       // twice and run the side-effecting tool.
       assert.isAtLeast(names.filter((n) => familyOf(n) === "model call").length, 2)
       assert.strictEqual(names.filter((n) => familyOf(n) === "tool call").length, 1)
+      // The refund is not idempotent, so its call carries one start marker.
+      assert.strictEqual(names.filter((n) => familyOf(n) === "tool start").length, 1)
       assert.strictEqual(yield* Ref.get(refunds), 1)
     })
   )
