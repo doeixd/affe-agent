@@ -27,6 +27,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a new `ToolExposure` kernel module and `Agent` field (default `eager()`, unchanged requests); under a visibility rule or progressive exposure the model is sent a `toolChoice.oneOf` subset and a call outside it is refused with the new `ToolNotExposedError`. (`2772b6f`; measured by `test/fixtures/error-tags-manifest.json`)
 - a corrupt persisted compaction checkpoint no longer fails the turn; it is discarded, reported as CompactionCheckpointDiscarded, and rebuilt. Old checkpoints are rebuilt once under the new fingerprint. (`0b289f9`; unmeasured)
 - subagent delegation is now refused past 8 levels by default (SubagentDepthExceededError); pass maxDepth to change it. (`a165708`; measured by `test/fixtures/namespace-manifest.json`)
+- CloudflareHost.make now requires principal and authorization, and RelayServer.layer requires authorization; the allow-everything defaults and the header-as-principal default are gone. (`9342c8e`; unmeasured)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
