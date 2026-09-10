@@ -784,10 +784,10 @@ restore it is the *same message* — never one reconstructed from less.
 ## 16. E12 — Crash/no-crash canonical equivalence as the durability oracle
 
 **First slice landed 2026-09-10 (item 104 stays open).** T16.1 and T16.4 as
-written. T16.2 landed in `test/`, not `src/testing/`: a real crash needs a
-journal that outlives the process, which here is SQLite, and a shipped harness
-cannot depend on it -- it wants a portable seam for "build a process over this
-store" first. T16.3 covers plain parallel tools, batch and streamed; the other
+written. T16.2 ships as `affe-agent/testing`'s `DurableEquivalence`: a real
+crash needs a journal that outlives the process, and everything durable here
+already speaks Effect's `SqlClient`, so the harness takes the database as a
+`SqlClient` layer and names no driver -- the test supplies SQLite. T16.3 covers plain parallel tools, batch and streamed; the other
 scenarios are open. Two design points on the way: a crash is simulated as a
 process dying (parked, then its scope closed), not as an interrupt raised
 inside the turn -- an in-turn interrupt is the in-workflow session's own

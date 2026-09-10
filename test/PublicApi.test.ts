@@ -308,6 +308,9 @@ describe("durable and cluster surfaces", () => {
       "AgentProbe",
       "ChannelConformance",
       "DeliveryLogConformance",
+      // The durability oracle: crashed-and-recovered equals never crashed,
+      // over whatever `SqlClient` the caller supplies (item 104).
+      "DurableEquivalence",
       "DurableSessionStoreConformance",
       "Failpoints",
       "NodeStoreConformance",

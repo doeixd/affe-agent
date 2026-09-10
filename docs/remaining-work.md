@@ -470,17 +470,19 @@ acceptance test for 105, 107 and 108.*
      split exactly between the two processes, and each tool run once. Batch
      and streamed; two cells in `npm test`, the whole matrix under
      `AFFE_EQUIVALENCE=full`, which `verify:durability`'s new D8 row sets.
-     Still open: (a) a *shipped* harness in `src/testing` -- this one needs
-     SQLite, so shipping it wants a portable "process" seam first; (b) the
-     plan's other scenarios: the output tool, compaction fold and rollover,
-     a subagent with a suspended child elicitation, Code Mode with a
-     suspending executor; (c) comparing events, usage/`RunLedger` and claim
-     state, not only history and counts.
+     The harness ships as `affe-agent/testing`'s `DurableEquivalence` and
+     speaks only Effect's `SqlClient` -- the journal (`SingleRunner` with SQL
+     runner storage), channels, session store and delivery log all run over
+     it -- so the caller supplies the database and the harness names no
+     driver. Still open: (b) the plan's other scenarios: the output tool,
+     compaction fold and rollover, a subagent with a suspended child
+     elicitation, Code Mode with a suspending executor; (c) comparing events,
+     usage/`RunLedger` and claim state, not only history and counts.
 
      ```text
      verify: exists test/DurableEquivalence.test.ts
      verify: grep "id: \"D8\"" scripts/falsify.mjs
-     verify: absent src/testing/Equivalence.ts
+     verify: exists src/testing/DurableEquivalence.ts
      ```
 
 105. **Host scheduling, captured per durable attempt (plan E13, §17).** No
