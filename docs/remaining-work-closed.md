@@ -2435,3 +2435,19 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "readonly failureMode: \"error\" | \"return\"" src/Agent.ts
     verify: exists test/FailureDisposition.test.ts
     ```
+
+108. ~~**Checkpoints are disposable caches (plan E16, §20).**~~ — landed
+     2026-09-10. A stored compaction checkpoint that does not decode is
+     removed, reported as `CompactionCheckpointDiscarded`, and rebuilt from
+     history, where it used to fail the turn; the prefix fingerprint is two
+     32-bit lanes plus the message count. `AgentSession.Snapshot` carries
+     `version: 1` (unversioned reads as 1, unknown is refused).
+     `guide-durable.md`'s "What is truth, and what is rebuilt" names the
+     four roles -- truth, snapshot, checkpoint, index -- and what each does
+     when lost or unreadable.
+
+     ```text
+     verify: grep "CompactionCheckpointDiscarded" src/compaction/Compaction.ts
+     verify: grep "## What is truth, and what is rebuilt" docs/guide-durable.md
+     verify: grep "export const SnapshotVersion" src/AgentSession.ts
+     ```

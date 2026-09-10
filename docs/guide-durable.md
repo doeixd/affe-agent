@@ -80,6 +80,23 @@ submission running in another process, and they are drained exactly once. A
 closes, further input is refused with `AgentIdleError` rather than accepted and
 dropped.
 
+## What is truth, and what is rebuilt
+
+Durable state comes in four roles, and each fails differently (item 108):
+
+| Role | What | When it is lost or unreadable |
+|------|------|-------------------------------|
+| **Truth** | The workflow journal -- model responses, tool outcomes, permission decisions, and what a submission was admitted under (tool strategy, permission policy, host scheduling, tool contracts) -- and canonical history in the session store | Never discarded or guessed at. A shape that changed is refused by name (`ToolContractChangedError`, `PermissionPolicyChangedError`, `ToolSchedulingChangedError`) or declared compatible; a tool call that may have run and was not recorded ends unresolved rather than running again |
+| **Snapshot** | `AgentSession.Snapshot`: a conversation as a value, carried across a process | Versioned: an unversioned one reads as version 1, one from a version this code does not know is refused, never half-read |
+| **Checkpoint** | Compaction's summaries, persisted or in memory | A cache: one that is stale or does not decode is discarded (`CompactionCheckpointDiscarded`) and rebuilt from history |
+| **Index** | The delivery log a client reads, session directory projections | Derived from truth and deduplicated by key, so a replay cannot say a thing twice |
+
+A recovered attempt therefore runs as it was admitted: its tools under the
+strategy it was admitted with, its undecided calls under the stricter of the
+admitted and current permission policy and host scheduling, and a
+non-idempotent tool that may have started in the process that died is
+reported unresolved instead of being run a second time.
+
 ## Across a cluster
 
 Streaming and durability compose, with a caveat worth knowing: the journal holds
