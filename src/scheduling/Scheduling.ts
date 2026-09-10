@@ -231,9 +231,11 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R, Value, Inpu
       // however it ends. Also the backstop for a store that ignores `limit`:
       // its excess waits here for a slot rather than running past the bound.
       const slots = yield* Semaphore.make(limit ?? Number.MAX_SAFE_INTEGER)
-      const running = yield* Ref.make(0)
+      // Claimed and not yet finished -- the count the limit bounds, not merely
+      // the running ones.
+      const outstanding = yield* Ref.make(0)
       while (true) {
-        const free = limit === undefined ? undefined : limit - (yield* Ref.get(running))
+        const free = limit === undefined ? undefined : limit - (yield* Ref.get(outstanding))
         if (free === undefined || free > 0) {
           const now = yield* Clock.currentTimeMillis
           const due = yield* store.claimDue(now, free)
@@ -242,7 +244,7 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R, Value, Inpu
               `scheduling: the job store returned ${due.length} jobs for ${free} free slots; the excess waits for a slot`
             )
           }
-          yield* Ref.update(running, (n) => n + due.length)
+          yield* Ref.update(outstanding, (n) => n + due.length)
           yield* Effect.forEach(
             due,
             (job) =>
@@ -252,7 +254,7 @@ export const worker = <Tools extends Record<string, Tool.Any>, E, R, Value, Inpu
                     ? Effect.void
                     : Effect.logError("scheduling: a queued run failed", cause)),
                 (run) => Semaphore.withPermit(slots, run),
-                Effect.ensuring(Ref.update(running, (n) => n - 1)),
+                Effect.ensuring(Ref.update(outstanding, (n) => n - 1)),
                 Effect.forkIn(scope)
               ),
             { discard: true }
