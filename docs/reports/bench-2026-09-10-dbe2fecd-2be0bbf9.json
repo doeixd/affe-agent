@@ -1,0 +1,222 @@
+{
+  "at": "2026-09-10T20:16:26.776Z",
+  "base": {
+    "ref": "v0.0.1",
+    "commit": "dbe2fecda675e9dc0f9ff93acde75c505b77751e",
+    "src": "bd702517a79236a712918dcb769523020560e743",
+    "lockfile": "48f1618bfbbfbe562d22aa829f245496014a8213",
+    "dependencies": "own install (npm ci)"
+  },
+  "head": {
+    "ref": "HEAD",
+    "commit": "2be0bbf9269db56db474fb5257314461b2bd25f9",
+    "src": "c4889ecf107c1d46b25438ece0716ce04582d699",
+    "lockfile": "68c717d76cfdcb194453220ece8953b1b9d974a8",
+    "dependencies": "linked (same lockfile)"
+  },
+  "identicalArtifacts": false,
+  "method": {
+    "samplesPerSide": 24,
+    "rounds": 4,
+    "perRun": 3,
+    "interleaved": true,
+    "statistic": "median, IQR"
+  },
+  "machine": {
+    "cpus": 16,
+    "model": "AMD Ryzen 7 6800U with Radeon Graphics         ",
+    "loadavg": [
+      0,
+      0,
+      0
+    ],
+    "platform": "win32"
+  },
+  "caveat": "Timings are observations under the scripted model, not confidence intervals or regression verdicts.",
+  "scenarios": [
+    {
+      "scenario": "one-turn run",
+      "base": {
+        "n": 12,
+        "median": 1.697,
+        "q1": 1.5565,
+        "q3": 2.6145,
+        "metrics": {},
+        "samples": [
+          4.915,
+          2.793,
+          1.718,
+          2.697,
+          1.562,
+          1.676,
+          2.474,
+          1.54,
+          1.397,
+          2.587,
+          1.617,
+          1.438
+        ]
+      },
+      "head": {
+        "n": 12,
+        "median": 2.848,
+        "q1": 2.4975,
+        "q3": 3.37975,
+        "metrics": {},
+        "samples": [
+          6.549,
+          3.709,
+          2.553,
+          3.122,
+          2.574,
+          2.57,
+          3.161,
+          8.385,
+          2.331,
+          3.27,
+          2.149,
+          2.248
+        ]
+      },
+      "deltaPercent": 67.8
+    },
+    {
+      "scenario": "stream 64 chunks",
+      "base": {
+        "n": 12,
+        "median": 3.4,
+        "q1": 3.12425,
+        "q3": 4.2490000000000006,
+        "metrics": {},
+        "samples": [
+          4.402,
+          3.417,
+          7.254,
+          4.125,
+          3.355,
+          2.53,
+          4.813,
+          3.254,
+          2.735,
+          4.198,
+          3.383,
+          2.721
+        ]
+      },
+      "head": {
+        "n": 12,
+        "median": 4.2075,
+        "q1": 3.594,
+        "q3": 5.35175,
+        "metrics": {},
+        "samples": [
+          5.844,
+          4.51,
+          7.574,
+          5.465,
+          3.905,
+          3.426,
+          5.126,
+          3.77,
+          3.312,
+          5.314,
+          3.65,
+          3.357
+        ]
+      },
+      "deltaPercent": 23.7
+    },
+    {
+      "scenario": "4 tool rounds",
+      "base": {
+        "n": 12,
+        "median": 5.004,
+        "q1": 4.590999999999999,
+        "q3": 6.765000000000001,
+        "metrics": {},
+        "samples": [
+          7.463,
+          5.525,
+          4.717,
+          7.243,
+          4.943,
+          4.164,
+          6.849,
+          5.065,
+          4.213,
+          6.737,
+          4.869,
+          3.843
+        ]
+      },
+      "head": {
+        "n": 12,
+        "median": 7.535,
+        "q1": 6.345,
+        "q3": 9.72825,
+        "metrics": {},
+        "samples": [
+          9.681,
+          7.62,
+          5.599,
+          10.366,
+          7.45,
+          6.701,
+          11.484,
+          6.497,
+          5.067,
+          8.312,
+          9.87,
+          5.889
+        ]
+      },
+      "deltaPercent": 50.6
+    },
+    {
+      "scenario": "40 prompts of history, then one more",
+      "base": {
+        "n": 12,
+        "median": 20.0085,
+        "q1": 17.8455,
+        "q3": 20.25325,
+        "metrics": {},
+        "samples": [
+          22.028,
+          16.5,
+          21.773,
+          19.952,
+          20.155,
+          17.244,
+          20.473,
+          20.18,
+          18.046,
+          19.293,
+          20.065,
+          15.732
+        ]
+      },
+      "head": {
+        "n": 12,
+        "median": 26.749499999999998,
+        "q1": 25.34475,
+        "q3": 27.518,
+        "metrics": {},
+        "samples": [
+          35.582,
+          26.727,
+          27.026,
+          27.503,
+          24.87,
+          25.63,
+          23.311,
+          27.563,
+          25.503,
+          23.984,
+          26.772,
+          27.625
+        ]
+      },
+      "deltaPercent": 33.7
+    }
+  ]
+}

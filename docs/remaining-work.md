@@ -445,9 +445,18 @@ and pin the state it starts from.*
      three runs (+20%, +114%, +33%), the one signal worth investigating
      (`docs/reports/bench-2026-09-10.json`). Not from this week's work:
      `c5ed5dc` vs `e096b7b` on that scenario alone, 24 samples a side, is
-     -0.4%, so it lies somewhere in the 514 commits before; bisecting it
-     with `npm run bench -- --base <a> --head <b> --only "<scenario>"` is
-     open. Still open: durable
+     -0.4%, so it lies somewhere in the 514 commits before. **Attributed in
+     part, 2026-09-10:** a bisect was misled by noise near its threshold;
+     timing each commit in one install put a step of ~5 ms at `97f6f7c`
+     (every submission encoding its input through the schema, a full
+     `PromptWire` encode for the default prompt). `2be0bbf` builds a text
+     prompt's encoding directly, pinned to the schema by test: v0.0.1 vs
+     HEAD on that scenario went from +65% to +34%
+     (`docs/reports/bench-2026-09-10-dbe2fecd-*.json`, before and after).
+     What remains is a fixed per-submission cost -- a one-turn run is +68%,
+     1.7 → 2.8 ms, four tool rounds +51% -- not yet attributed; the next
+     step is a side-by-side CPU profile, since this machine's noise defeats
+     bisecting a millisecond. Still open: durable
      scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
      effect-uai native vs adapter, a live-model cost run for item 93, and
      characterising variance before any gate.
