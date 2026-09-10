@@ -37,7 +37,8 @@ const fail = (message) => {
   process.exit(1)
 }
 
-const lastTag = () => git(["describe", "--tags", "--abbrev=0"], fail).trim()
+/** The last *release* tag is `v<number>...`; a non-release tag (an archive marker) is not a boundary. */
+const lastTag = () => git(["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"], fail).trim()
 const range = process.env.BEHAVIOR_CHANGE_RANGE ?? `${lastTag()}..HEAD`
 
 const lines = readBehaviorChanges(range, fail)
