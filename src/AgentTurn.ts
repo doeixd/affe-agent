@@ -169,7 +169,7 @@ const discoveryToolkit = (
           const found = Catalog.search({ tools: { tools: Object.fromEntries(byName) } }, query, {
             limit: exposure.maxResults
           })
-          const tools = found.results.flatMap((entry) => {
+          const matched = found.results.flatMap((entry) => {
             const tool = byName.get(entry.name)
             return tool === undefined
               ? []
@@ -179,7 +179,21 @@ const discoveryToolkit = (
                 parameters: Tool.getJsonSchema(tool)
               }]
           })
-          return { tools, selected: tools.map((tool) => tool.name), more: found.next !== undefined }
+          // Best first while they fit the byte budget; one that does not fit
+          // is skipped rather than ending the list, so a smaller later match
+          // still gets in.
+          let budget = Option.getOrElse(exposure.maxSchemaBytes, () => Number.POSITIVE_INFINITY)
+          const tools = matched.filter((tool) => {
+            const size = ToolExposure.schemaBytes(tool.parameters)
+            if (size > budget) return false
+            budget -= size
+            return true
+          })
+          return {
+            tools,
+            selected: tools.map((tool) => tool.name),
+            more: found.next !== undefined || tools.length < matched.length
+          }
         })
     } as Toolkit.HandlersFrom<Toolkit.ToolsByName<[Tool.Any]>>))
   )

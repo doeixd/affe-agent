@@ -26,6 +26,7 @@ constant it names.
 | Durable polling | `clientOutcome` / `deliveryLog` / `workflowInterrupt` / `result` | `10 ms` / `250 ms` / `25 ms` / `10 ms` | `DurablePolling.defaults` / `EFFECT_AGENT_*_POLL_INTERVAL` | validated positive `Duration` via `Config`; also `DeliveryLog.live` fans out only in-process, cross-node via `read({ after })` |
 | Interrupt | poll | `25 ms` | `DurablePolling.workflowInterrupt` | signal polled while submission runs |
 | Tool progress | `toolProgress.maxBytes` | `8 MiB` per submission | `AgentSession.MakeOptions`, `internal/limits.ts` | `AgentToolProgressLimitError`; the call fails rather than truncating, and always fails the run rather than returning to the model |
+| Tool exposure | `maxTools` / `maxResults` / `maxSchemaBytes` | `16` / `8` / none | `ToolExposure.progressive` | a request carries at most `maxTools` (pinned and protocol tools included); a discovery returns at most `maxResults`, and only while their parameter schemas fit `maxSchemaBytes` (UTF-8) -- one too large is skipped and `more` says so |
 | One-shot trace | `traceLimits` | `2048` envelopes / `8 MiB` | `Agent.StartOptions` | `AgentTraceLimitError` on `handle.events`; the submission, canonical history and durable delivery are unaffected |
 
 STATUS.md keeps the history of how each was found; the JSDoc above is where a

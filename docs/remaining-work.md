@@ -350,15 +350,19 @@ and pin the state it starts from.*
     call outside the exposed set is refused with `ToolNotExposedError`; a
     hidden tool is absent from requests and discovery even when pinned; the
     selection is read from history, and a durable crash after discovery
-    recovers it. Still open: the eager-vs-progressive measurement (100)
-    before the guide recommends it; a byte cap (`maxSchemaBytes`); a
-    `ToolExposureChanged` event (T3.9); a `/tool-source` composition test
-    (T3.7); `limits.md` rows.
+    recovers it. `maxSchemaBytes` bounds what one discovery selects by
+    the UTF-8 size of the parameter schemas, skipping a match too large to
+    fit and saying `more`; the exposure bounds are rows in `limits.md`.
+    Measured by 100's scenario: over 100 tools, eager sends 2 requests, 200
+    tool entries and ~45 KB of schema; progressive 3, 17 and ~3.5 KB, for
+    one more model call. Still open: a `ToolExposureChanged` event (T3.9),
+    a `/tool-source` composition test (T3.7), and a live-model cost run
+    before the guide recommends progressive.
 
     ```text
     verify: exists src/ToolExposure.ts
     verify: grep "readonly toolExposure: ToolExposure.ToolExposure" src/Agent.ts
-    verify: no-grep "maxSchemaBytes" src/ToolExposure.ts
+    verify: grep "readonly maxSchemaBytes: Option.Option<number>" src/ToolExposure.ts
     ```
 
 94. **Failure disposition (plan E4, §6).** `ToolCallFailed` carries only

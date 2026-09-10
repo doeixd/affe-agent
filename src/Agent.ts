@@ -371,6 +371,7 @@ export interface Description {
       readonly pinned: ReadonlyArray<string>
       readonly maxTools: number
       readonly maxResults: number
+      readonly maxSchemaBytes: Option.Option<number>
     }
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
   readonly toolDenialPolicy: ToolExecution.FailurePolicy
@@ -406,7 +407,8 @@ export const describe = (agent: Any): Description => ({
       visibility: Option.isSome(agent.toolExposure.visible),
       pinned: agent.toolExposure.pinned,
       maxTools: agent.toolExposure.maxTools,
-      maxResults: agent.toolExposure.maxResults
+      maxResults: agent.toolExposure.maxResults,
+      maxSchemaBytes: agent.toolExposure.maxSchemaBytes
     },
   toolFailurePolicy: agent.toolFailurePolicy,
   toolDenialPolicy: agent.toolDenialPolicy,

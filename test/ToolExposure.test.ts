@@ -153,6 +153,50 @@ describe("progressive tool exposure (item 93)", () => {
       assert.strictEqual(JSON.stringify(offered[3]), JSON.stringify(offered[1]))
     }))
 
+  it.effect("maxSchemaBytes bounds what discovery selects by size, skipping one too large to fit", () =>
+    Effect.gen(function*() {
+      // One match whose schema outweighs the budget on its own, ranked first,
+      // and small ones behind it: the big one is skipped, the small ones fit.
+      const huge = Tool.make("report_huge", {
+        description: "report on everything",
+        parameters: Schema.Struct(Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`field_${i}`, Schema.String]))),
+        success: Schema.String
+      })
+      const small = Array.from({ length: 3 }, (_, i) => make(`report_${i}`, `report number ${i}`))
+      const all = [huge, ...small]
+      const budget = 400
+      const agent = Agent.make({
+        tools: all.map((tool) => Agent.tool(tool, () => Effect.succeed("ok"))),
+        toolExposure: ToolExposure.progressive({ maxSchemaBytes: budget }),
+        loop: AgentLoop.bounded(3)
+      })
+      const { events, recorder } = yield* withSession(
+        [
+          { toolCalls: [{ id: "d1", name: "discover_tools", params: { query: "report everything" } }] },
+          { text: "done" }
+        ],
+        agent,
+        ({ session }) => AgentSession.prompt(session, "go")
+      )
+      const discovery = events.flatMap((e) =>
+        AgentEvent.is("ToolCallSucceeded")(e) && e.event.name === "discover_tools"
+          ? [Schema.decodeUnknownSync(ToolExposure.Discovery)(e.event.result)]
+          : []
+      )[0]!
+      assert.isAbove(ToolExposure.schemaBytes(Tool.getJsonSchema(huge)), budget, "the fixture's big tool must not fit")
+      assert.notInclude(discovery.selected, "report_huge")
+      assert.isAbove(discovery.selected.length, 0, "the small matches behind it still get in")
+      assert.isTrue(discovery.more, "something was left out, and discovery says so")
+      // The next request carries only what fit.
+      const byName = new Map(all.map((tool) => [tool.name, ToolExposure.schemaBytes(Tool.getJsonSchema(tool))]))
+      const sent = (yield* recorder.tools)[1]!.reduce((sum, name) => sum + (byName.get(name) ?? 0), 0)
+      assert.isAtMost(sent, budget)
+    }))
+
+  it("a byte budget that is not a positive integer is refused", () => {
+    assert.throws(() => ToolExposure.progressive({ maxSchemaBytes: 0 }), RangeError)
+  })
+
   it.effect("eager with no rule leaves requests exactly as they were", () =>
     Effect.gen(function*() {
       const { agent } = yield* setup(ToolExposure.eager())

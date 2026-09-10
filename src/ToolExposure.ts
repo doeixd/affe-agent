@@ -56,6 +56,11 @@ export type ToolExposure =
     readonly maxTools: number
     /** The most tools one discovery returns. */
     readonly maxResults: number
+    /**
+     * The most bytes of parameter JSON Schema one discovery may select, or
+     * `None` for no byte bound. See `progressive`.
+     */
+    readonly maxSchemaBytes: Option.Option<number>
   }
 
 /** Every eligible tool on every request -- today's behaviour. The default. */
@@ -69,10 +74,23 @@ export const progressive = (options: {
   readonly pinned?: ReadonlyArray<string> | undefined
   readonly maxTools?: number | undefined
   readonly maxResults?: number | undefined
+  /**
+   * A byte budget for what discovery selects: matches are taken best first
+   * while their parameters' JSON Schemas (UTF-8) fit, one too large to fit
+   * is skipped, and `more` says something was left out. A count alone does
+   * not bound a request's size -- one tool's schema can outweigh twenty
+   * others' -- and schema bytes are what a provider bills. Pinned and
+   * protocol tools are not counted: they are declared, not discovered.
+   * Default none.
+   */
+  readonly maxSchemaBytes?: number | undefined
   readonly visible?: Visible | undefined
 }): ToolExposure => {
   const maxTools = options.maxTools ?? 16
   const maxResults = options.maxResults ?? 8
+  if (options.maxSchemaBytes !== undefined && (!Number.isSafeInteger(options.maxSchemaBytes) || options.maxSchemaBytes < 1)) {
+    throw new RangeError("ToolExposure.progressive: maxSchemaBytes must be a positive integer")
+  }
   if (!Number.isSafeInteger(maxTools) || maxTools < 2) {
     throw new RangeError("ToolExposure.progressive: maxTools must be an integer of at least 2")
   }
@@ -84,9 +102,15 @@ export const progressive = (options: {
     visible: Option.fromUndefinedOr(options.visible),
     pinned: options.pinned ?? [],
     maxTools,
-    maxResults
+    maxResults,
+    maxSchemaBytes: Option.fromUndefinedOr(options.maxSchemaBytes)
   }
 }
+
+const encoder = new TextEncoder()
+
+/** The UTF-8 size of a tool's parameters JSON Schema: what `maxSchemaBytes` counts. */
+export const schemaBytes = (parameters: unknown): number => encoder.encode(JSON.stringify(parameters)).length
 
 /** One tool discovery found: enough to call it without a second lookup. */
 export const DiscoveredTool = Schema.Struct({
