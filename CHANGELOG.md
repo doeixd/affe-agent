@@ -26,6 +26,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a durable submission journals a `contract-digests` activity at its first execution and refuses a replay whose tools changed or were removed with `ToolContractChangedError` (a new error tag); a recorded `new_context` result that does not decode now fails the turn instead of being ignored. (`bc40db7`; measured by `test/fixtures/error-tags-manifest.json`)
 - a new `ToolExposure` kernel module and `Agent` field (default `eager()`, unchanged requests); under a visibility rule or progressive exposure the model is sent a `toolChoice.oneOf` subset and a call outside it is refused with the new `ToolNotExposedError`. (`2772b6f`; measured by `test/fixtures/error-tags-manifest.json`)
 - a corrupt persisted compaction checkpoint no longer fails the turn; it is discarded, reported as CompactionCheckpointDiscarded, and rebuilt. Old checkpoints are rebuilt once under the new fingerprint. (`0b289f9`; unmeasured)
+- subagent delegation is now refused past 8 levels by default (SubagentDepthExceededError); pass maxDepth to change it. (`a165708`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
