@@ -678,7 +678,7 @@ took it and started), **settled** (it finished, with its result).
 | `DurableAgentClient.submit` | persisted and accepted, as one step; the same idempotency key rejoins | ...is recovered by another process |
 | `SessionInbox.enqueue` | persisted (idempotent on the item id) | ...leaves it in the inbox |
 | `SessionInbox.deliver` → `Delivered` | accepted, not settled | ...leaves the run to the session |
-| `Scheduling.dispatch` under `queued` | persisted to the `JobStore`, claimed at most once | ...before a worker claims it keeps it; after the claim loses it |
+| `Scheduling.dispatch` under `queued` | persisted to the `JobStore` (if the store is durable -- `memoryStore` is not), claimed at most once | ...before a worker claims it keeps it; after the claim loses it |
 | `Scheduling.dispatch` under `local` | handed over: a fibre in this process | ...loses it |
 | `RelayClient.send` | handed over to an online peer's queue | ...or a peer that drops before reading loses it |
 | `Connectors.serverLayer`'s HTTP 200 | handed over (received, not persisted) | ...before the run commits loses it; the platform will not redeliver |
