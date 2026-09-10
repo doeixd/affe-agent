@@ -4,3 +4,4 @@
  * from `/testing`; see `Evals`.
  */
 export * as Evals from "./Evals.js"
+export * as Continuity from "./Continuity.js"

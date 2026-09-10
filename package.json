@@ -286,6 +286,7 @@
     "smoke:ref-declarative": "tsx examples/ref-declarative.ts",
     "smoke:ref-delegation": "tsx examples/ref-delegation.ts",
     "smoke:durable-resume": "tsx examples/durable-resume.ts",
+    "eval:continuity": "tsx examples/continuity-eval.ts",
     "smoke:host-events": "tsx examples/host-events.ts",
     "smoke:tui": "node scripts/tui-smoke.mjs",
     "typecheck:cloudflare": "tsc --noEmit --project tsconfig.cloudflare.json",

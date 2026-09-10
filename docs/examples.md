@@ -118,6 +118,12 @@ inference stayed precise. All *run in CI* as the `smoke:ref-*` scripts.
   activation hands back. *Runs in CI.*
 - [`evals.ts`](../examples/evals.ts) — one behavioural eval run against both
   a scripted model and a real provider
+- [`continuity-eval.ts`](../examples/continuity-eval.ts) — the live tier of the
+  continuity evaluation: a dozen folds, three restarts, and questions about a
+  fact, a correction and an open task long out of view, scored without an LLM
+  judge; writes `docs/reports/continuity-<date>.json`. Needs
+  `ANTHROPIC_API_KEY` (`npm run eval:continuity`); the deterministic tier runs
+  in CI as `test/Continuity.test.ts`.
 - [`observability.ts`](../examples/observability.ts) — tracing a run with the
   standard semantic attributes and a redaction policy
 - [`tracing.ts`](../examples/tracing.ts) — OTLP export

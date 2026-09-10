@@ -506,16 +506,26 @@ acceptance test for 105, 107 and 108.*
      verify: grep "permission: durablePermission," src/durable/DurableSubmission.ts
      ```
 
-106. **Long-lifetime continuity evaluation (plan E14, §18).** Nothing
-     combines many turns, repeated rollovers, process death and a
-     deterministic recall check (original fact, latest correction,
-     unfinished task, provenance). A deterministic tier in `check` over the
-     scripted model, then an opt-in live tier (`npm run eval:continuity`),
-     scored programmatically, never by an LLM judge. Needs an `Evals.run`
-     over a restorable session. Medium–large.
+106. **Long-lifetime continuity evaluation (plan E14, §18) -- first slice
+     landed 2026-09-10.** `affe-agent/evals`'s `Continuity`: a scenario as
+     data (statements, corrections, restarts, questions with ground truth), a
+     model-agnostic runner that folds repeatedly with a content-free summary and
+     restarts the session between submissions (snapshot, scope closed,
+     restore), and programmatic scoring -- the answer is right and not stale,
+     the statement was out of the prompt the model was sent, and a
+     `search_context` hit pointed at the canonical message that stated it. A
+     deterministic reference model runs the standard scenario in `npm test`
+     (`test/Continuity.test.ts`: 12+ folds, 3 restarts, all three questions
+     pass; a no-fold control fails; breaking search over folded history fails
+     it); `npm run eval:continuity` runs it against a real model and writes a
+     report -- **not yet run from this machine** (no key). It pins item 109's
+     limit: a correction that is the fourth mention is never found. Still open:
+     kills *inside* a submission (combine with `DurableEquivalence`), more
+     scenarios, and a scheduled job for the live tier.
 
      ```text
-     verify: no-grep "eval:continuity" package.json
+     verify: exists src/evals/Continuity.ts
+     verify: grep "eval:continuity" package.json
      ```
 
 107. **Durable tool contracts are versioned (plan E15, §19).** No tool

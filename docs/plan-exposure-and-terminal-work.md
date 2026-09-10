@@ -916,6 +916,18 @@ a new one: an old run does not gain it.
 
 ## 18. E14 — Long-lifetime continuity evaluation
 
+**First slice landed 2026-09-10 (item 106 stays open).** `Continuity` in
+`/evals` rather than an `Evals.run` variant (T18.1): the scenario needs its own
+session lifecycle -- restarts between segments -- and its own scoring, so a
+runner of its own was simpler than bending `Evals`. T18.2 via a deterministic
+*reference model* that follows the intended strategy (search the quoted phrase,
+answer from the latest user statement), which tests the pipeline rather than a
+script. T18.3 is `npm run eval:continuity`, not yet run live. Two lessons:
+`inView` must look for the *statement*, not the answer word ("ember" is inside
+"remember"); and the eval immediately pinned item 109 -- a correction that is
+the fourth mention is invisible to `search_context`. Kills are between
+submissions here; kills inside one are `DurableEquivalence`'s.
+
 **Today.** Nothing combines many turns, repeated compaction/rollover,
 process death and a deterministic recall check. Pieces are tested alone:
 `Compaction.test.ts`, `ContextRollover.test.ts` (one or two windows),
