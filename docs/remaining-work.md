@@ -620,12 +620,18 @@ acceptance test for 105, 107 and 108.*
      verify: grep "options?.authorization ?? allowAll" src/relay/RelayServer.ts
      ```
 
-111. **Admission limits decided at the reservation (plan E19, §23).** The
-     durable claim is a real atomic reservation; the scheduling worker forks
-     every due job with no concurrency limit, and subagents have no
-     concurrency or depth limit. Take worker slots inside `claimDue`, reserve
-     subagent depth/concurrency at delegation, and state that lowering a
-     limit only blocks new reservations. Medium.
+111. **Admission limits decided at the reservation (plan E19, §23) -- the
+     worker's landed 2026-09-10.** `Scheduling.worker({ maxConcurrent })`
+     asks `claimDue(now, limit)` for its free slots only, so a job it cannot
+     start stays in the store (A23.1: 100 jobs, limit 4, never more than four
+     claimed and unanswered; a store that ignores `limit` is held to four
+     running by a semaphore backstop). Open: subagent depth and concurrency
+     reserved at delegation, with a typed error the model sees (A23.2), and
+     the lowering rule in the guides. Medium.
+
+     ```text
+     verify: grep "claimDue(now, free)" src/scheduling/Scheduling.ts
+     ```
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;

@@ -1,4 +1,4 @@
-import { Cause, Clock, Context, Duration, Effect, Layer, Ref, Schedule } from "effect"
+import { Cause, Clock, Context, Duration, Effect, Layer, Ref, Schedule, Semaphore } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { LanguageModel } from "effect/unstable/ai"
@@ -127,7 +127,11 @@ export interface PersistedJob {
  * outside it needs one.
  *
  * `claimDue` is claim-and-take: it returns the jobs whose time has come and
- * removes them, so no two workers run the same job. Semantics are at-most-once —
+ * removes them, so no two workers run the same job. Given `limit`, it claims
+ * at most that many and leaves the rest queued: a worker with a concurrency
+ * limit asks only for the slots it has free, so no job is taken that cannot
+ * start (item 111). A store that ignores `limit` still works -- the worker
+ * runs the excess as slots free, and logs that the store over-claimed. Semantics are at-most-once —
  * a worker that crashes after claiming but before running drops that job, which
  * matches `local`'s fire-and-forget stance (a lost run is not retried). A store
  * that needs at-least-once implements `claimDue` with a visibility timeout and
@@ -135,7 +139,10 @@ export interface PersistedJob {
  */
 export interface JobStore {
   readonly enqueue: (job: PersistedJob) => Effect.Effect<void>
-  readonly claimDue: (nowMillis: number) => Effect.Effect<ReadonlyArray<PersistedJob>>
+  readonly claimDue: (
+    nowMillis: number,
+    limit?: number | undefined
+  ) => Effect.Effect<ReadonlyArray<PersistedJob>>
 }
 
 /** An in-memory `JobStore`. Durable only for as long as the process lives. */
@@ -143,11 +150,16 @@ export const memoryStore: Effect.Effect<JobStore> = Effect.map(
   Ref.make<ReadonlyArray<PersistedJob>>([]),
   (ref): JobStore => ({
     enqueue: (job) => Ref.update(ref, (all) => [...all, job]),
-    claimDue: (now) =>
-      Ref.modify(ref, (all) => [
-        all.filter((job) => job.runAfterMillis <= now),
-        all.filter((job) => job.runAfterMillis > now)
-      ])
+    claimDue: (now, limit) =>
+      Ref.modify(ref, (all) => {
+        const claimed: Array<PersistedJob> = []
+        const kept: Array<PersistedJob> = []
+        for (const job of all) {
+          if (job.runAfterMillis <= now && (limit === undefined || claimed.length < limit)) claimed.push(job)
+          else kept.push(job)
+        }
+        return [claimed, kept]
+      })
   })
 )
 
@@ -185,8 +197,14 @@ export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
  * Each claimed job runs in a fibre forked into the worker's scope -- as `local`
  * forks its dispatched runs -- so a slow or hung run never blocks the worker
  * from claiming the next batch, and every in-flight run is interrupted when the
- * worker stops. (The trade is `local`'s: no backpressure, so pair a durable
- * store with bounded producers, or run the loop with a modest `pollInterval`.)
+ * worker stops.
+ *
+ * `maxConcurrent` bounds how many runs are in flight, and is decided where the
+ * job is claimed, not after: the worker asks `claimDue` for its free slots
+ * only, so a job it cannot start stays in the store for another worker rather
+ * than waiting in this one's memory, where a crash would drop it. Without it,
+ * every due job is claimed and started at once -- no backpressure, so pair
+ * that with bounded producers.
  *
  * ```ts
  * yield* Effect.forkScoped(Scheduling.worker(Assistant, store))
@@ -195,31 +213,56 @@ export const queued = (store: JobStore): Layer.Layer<AgentDispatcher> =>
 export const worker = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
   agent: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   store: JobStore,
-  options?: { readonly pollInterval?: Duration.Input | undefined }
-): Effect.Effect<never, never, LanguageModel.LanguageModel | R> =>
-  Effect.scoped(
+  options?: {
+    readonly pollInterval?: Duration.Input | undefined
+    /** The most runs in flight at once. A positive integer; default unbounded. */
+    readonly maxConcurrent?: number | undefined
+  }
+): Effect.Effect<never, never, LanguageModel.LanguageModel | R> => {
+  const limit = options?.maxConcurrent
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+    throw new RangeError("Scheduling.worker: maxConcurrent must be a positive integer")
+  }
+  return Effect.scoped(
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const poll = options?.pollInterval ?? Duration.seconds(1)
+      // Slots, taken before a job starts and returned when its fibre ends
+      // however it ends. Also the backstop for a store that ignores `limit`:
+      // its excess waits here for a slot rather than running past the bound.
+      const slots = yield* Semaphore.make(limit ?? Number.MAX_SAFE_INTEGER)
+      const running = yield* Ref.make(0)
       while (true) {
-        const now = yield* Clock.currentTimeMillis
-        const due = yield* store.claimDue(now)
-        yield* Effect.forEach(
-          due,
-          (job) =>
-            InputBoundary.runRecorded(agent, job).pipe(
-              Effect.catchCause((cause): Effect.Effect<void> =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.void
-                  : Effect.logError("scheduling: a queued run failed", cause)),
-              Effect.forkIn(scope)
-            ),
-          { discard: true }
-        )
+        const free = limit === undefined ? undefined : limit - (yield* Ref.get(running))
+        if (free === undefined || free > 0) {
+          const now = yield* Clock.currentTimeMillis
+          const due = yield* store.claimDue(now, free)
+          if (free !== undefined && due.length > free) {
+            yield* Effect.logWarning(
+              `scheduling: the job store returned ${due.length} jobs for ${free} free slots; the excess waits for a slot`
+            )
+          }
+          yield* Ref.update(running, (n) => n + due.length)
+          yield* Effect.forEach(
+            due,
+            (job) =>
+              InputBoundary.runRecorded(agent, job).pipe(
+                Effect.catchCause((cause): Effect.Effect<void> =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.void
+                    : Effect.logError("scheduling: a queued run failed", cause)),
+                (run) => Semaphore.withPermit(slots, run),
+                Effect.ensuring(Ref.update(running, (n) => n - 1)),
+                Effect.forkIn(scope)
+              ),
+            { discard: true }
+          )
+        }
         yield* Effect.sleep(poll)
       }
     })
   )
+}
 
 /**
  * Run an agent on a schedule, forever, resiliently: each run's failure is

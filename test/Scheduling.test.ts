@@ -309,3 +309,76 @@ describe("Scheduling.worker resilience", () => {
     })
   )
 })
+
+describe("Scheduling.worker admission (item 111)", () => {
+  /**
+   * 100 due jobs, `maxConcurrent: 4`. What is measured is *claimed and not yet
+   * answered*, not merely running: a worker that claimed everything and queued
+   * it behind a semaphore keeps four running and ninety-six claimed jobs in
+   * its memory, where a crash drops them. The bound has to hold at the claim.
+   * A job counts as answered when its model call returns, a little before the
+   * worker frees its slot, so this can only under-count the worker's own view
+   * -- it never excuses an over-claim.
+   */
+  const admission = (store: Scheduling.JobStore) =>
+    Effect.gen(function* () {
+      let claimed = 0
+      let answered = 0
+      let peakOutstanding = 0
+      let running = 0
+      let peakRunning = 0
+      const counted: Scheduling.JobStore = {
+        enqueue: store.enqueue,
+        claimDue: (now, limit) =>
+          Effect.map(store.claimDue(now, limit), (jobs) => {
+            claimed += jobs.length
+            peakOutstanding = Math.max(peakOutstanding, claimed - answered)
+            return jobs
+          })
+      }
+      const during = Effect.gen(function* () {
+        running++
+        peakRunning = Math.max(peakRunning, running)
+        yield* Effect.sleep("2 millis")
+        running--
+        answered++
+      })
+      const { layer: model } = yield* TestLanguageModel.script(
+        Array.from({ length: 100 }, () => ({ text: "ok", during }))
+      )
+      for (let i = 0; i < 100; i++) {
+        yield* Scheduling.dispatch({ input: `job ${i}` }).pipe(Effect.provide(Scheduling.queued(counted)))
+      }
+      yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(
+          Scheduling.worker(Simple, counted, { pollInterval: "1 millis", maxConcurrent: 4 })
+        )
+        while (answered < 100) yield* Effect.sleep("5 millis")
+      }).pipe(Effect.provide(model), Effect.scoped)
+      return { claimed, peakOutstanding, peakRunning }
+    })
+
+  it.live("never more than the limit claimed and unanswered, and every job runs", () =>
+    Effect.gen(function* () {
+      const seen = yield* admission(yield* Scheduling.memoryStore)
+      assert.strictEqual(seen.claimed, 100)
+      assert.isAtMost(seen.peakOutstanding, 4)
+      assert.isAtMost(seen.peakRunning, 4)
+      // And the limit is used, not merely respected.
+      assert.isAtLeast(seen.peakRunning, 2)
+    }), 30_000)
+
+  it.live("a store that ignores the limit still never runs more than the limit at once", () =>
+    Effect.gen(function* () {
+      const inner = yield* Scheduling.memoryStore
+      const greedy: Scheduling.JobStore = { enqueue: inner.enqueue, claimDue: (now) => inner.claimDue(now) }
+      const seen = yield* admission(greedy)
+      assert.strictEqual(seen.claimed, 100)
+      assert.isAtMost(seen.peakRunning, 4)
+    }), 30_000)
+
+  it("a limit that is not a positive integer is refused at construction", () => {
+    const empty: Scheduling.JobStore = { enqueue: () => Effect.void, claimDue: () => Effect.succeed([]) }
+    assert.throws(() => Scheduling.worker(Simple, empty, { maxConcurrent: 0 }), RangeError)
+  })
+})

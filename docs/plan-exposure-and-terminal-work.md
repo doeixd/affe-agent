@@ -1158,6 +1158,12 @@ unclassified Reference is added (break it once).
 
 ## 23. E19 — Admission limits decided at the reservation
 
+**T23.1 landed 2026-09-10 (item 111 stays open for T23.2–T23.3).**
+`claimDue` takes an optional `limit`; the worker passes its free slots, and
+a semaphore bounds the runs of a store that ignores it (logged as an
+over-claim). An optional parameter keeps existing stores compiling, which is
+why the backstop exists: it is the only guard such a store gets.
+
 **Rule.** Quota inspection and reservation are one atomic operation;
 retries reuse the owner that won the reservation; lowering a limit blocks
 new reservations and never retroactively invalidates admitted work.
