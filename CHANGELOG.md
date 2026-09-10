@@ -28,6 +28,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a corrupt persisted compaction checkpoint no longer fails the turn; it is discarded, reported as CompactionCheckpointDiscarded, and rebuilt. Old checkpoints are rebuilt once under the new fingerprint. (`0b289f9`; unmeasured)
 - subagent delegation is now refused past 8 levels by default (SubagentDepthExceededError); pass maxDepth to change it. (`a165708`; measured by `test/fixtures/namespace-manifest.json`)
 - CloudflareHost.make now requires principal and authorization, and RelayServer.layer requires authorization; the allow-everything defaults and the header-as-principal default are gone. (`9342c8e`; unmeasured)
+- AgentSession.Snapshot has a required version field (1), written by snapshot and by exports; snapshots without one still decode as version 1, and an unknown version is refused. (`4acc464`; unmeasured)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
