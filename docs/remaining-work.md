@@ -460,7 +460,11 @@ and pin the state it starts from.*
      streaming 1024 chunks read +42% in one run and +0.8% in the next --
      noise; the forty-prompt history scenario was slower than v0.0.1 in all
      three runs (+20%, +114%, +33%), the one signal worth investigating
-     (`docs/reports/bench-2026-09-10.json`). Still open: durable
+     (`docs/reports/bench-2026-09-10.json`). Not from this week's work:
+     `c5ed5dc` vs `e096b7b` on that scenario alone, 24 samples a side, is
+     -0.4%, so it lies somewhere in the 514 commits before; bisecting it
+     with `npm run bench -- --base <a> --head <b> --only "<scenario>"` is
+     open. Still open: durable
      scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
      effect-uai native vs adapter, a live-model cost run for item 93, and
      characterising variance before any gate.

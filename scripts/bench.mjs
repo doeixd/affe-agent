@@ -109,8 +109,12 @@ const checkout = (ref) => {
   }
 }
 
+// `--only "<name>|<name>"`: the scenarios to run, passed through.
+const onlyArg = arg("only", undefined)
 const runOnce = (dir) => {
-  const out = execFileSync("npx", ["tsx", "bench/run.ts", "--samples", String(perRun), "--warmup", "1"], {
+  const args = ["tsx", "bench/run.ts", "--samples", String(perRun), "--warmup", "1"]
+  if (onlyArg !== undefined) args.push("--only", JSON.stringify(onlyArg))
+  const out = execFileSync("npx", args, {
     cwd: dir,
     encoding: "utf8",
     shell: true,
@@ -189,7 +193,13 @@ const report = {
   caveat: "Timings are observations under the scripted model, not confidence intervals or regression verdicts.",
   scenarios
 }
-const file = path.join("docs", "reports", `bench-${report.at.slice(0, 10)}.json`)
+// Named by both sides, so a second comparison on the same day does not
+// overwrite the first (it did, once).
+const file = path.join(
+  "docs",
+  "reports",
+  `bench-${report.at.slice(0, 10)}-${base.commit.slice(0, 8)}-${head.commit.slice(0, 8).replace("+", "")}.json`
+)
 fs.writeFileSync(path.join(root, file), JSON.stringify(report, null, 2) + "\n")
 
 const fmt = (s) => (s && "median" in s ? `${s.median.toFixed(1)} ms [${s.q1.toFixed(1)}–${s.q3.toFixed(1)}]` : "unavailable")
