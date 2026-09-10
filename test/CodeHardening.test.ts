@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Ref, Schema } from "effect"
+import { Deferred, Duration, Effect, Fiber, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import { CodeMode } from "../src/code/index.js"
@@ -170,4 +170,37 @@ describe("code mode hardening", () => {
       }
     })
   )
+})
+
+describe("interrupted programs report every issued call (item 98)", () => {
+  const Hang = Tool.make("hang", { parameters: Schema.Struct({}), success: Schema.String })
+
+  it.live("a call in flight is uncertain and one still queued is not-started, never failed", () =>
+    Effect.gen(function*() {
+      const hanging = yield* Deferred.make<void>()
+      const data = yield* Agent.toolkit([Echo, Hang], {
+        echo: ({ text }) => Effect.succeed(text),
+        hang: () => Deferred.succeed(hanging, void 0).pipe(Effect.andThen(Effect.never))
+      })
+      const calls: Array<CodeMode.ObservedCall> = []
+      const runtime = CodeMode.make({ tools: { data }, limits: { maxConcurrentCalls: 1 } })
+      const fiber = yield* Effect.forkChild(
+        runtime.execute(
+          [
+            "return await Promise.all([",
+            "  tools.data.echo({ text: \"a\" }),",
+            "  tools.data.hang({}),",
+            "  tools.data.echo({ text: \"c\" })",
+            "])"
+          ].join("\n"),
+          { onCall: (call) => Effect.sync(() => void calls.push(call)) }
+        )
+      )
+      yield* Deferred.await(hanging)
+      yield* Fiber.interrupt(fiber)
+      assert.deepStrictEqual(
+        calls.map((call) => [call.path.join("."), call.outcome]).sort(),
+        [["data.echo", "not-started"], ["data.echo", "succeeded"], ["data.hang", "uncertain"]]
+      )
+    }))
 })

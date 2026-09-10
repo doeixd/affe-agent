@@ -114,11 +114,21 @@ export interface MakeOptions<Groups extends ToolGroups, R> {
   readonly elicitor?: Elicitation.Elicitor | undefined
 }
 
-/** One nested call, observed. What the progress events project from. */
+/**
+ * One nested call, observed. What the progress events project from.
+ *
+ * Every call the program issued gets exactly one outcome (item 98). Two
+ * are about interruption: `uncertain` -- its handler had started and the
+ * program was interrupted before its result was seen, so its side effect
+ * may or may not have happened -- and `not-started`, a call still queued
+ * behind `maxConcurrentCalls` or waiting on an approval when the program
+ * was interrupted, whose handler never ran. Interruption never reports a
+ * call as `failed`: a failure is a result, and there was none.
+ */
 export interface ObservedCall {
   readonly path: ReadonlyArray<string>
   readonly input: unknown
-  readonly outcome: "succeeded" | "failed" | "refused"
+  readonly outcome: "succeeded" | "failed" | "refused" | "uncertain" | "not-started"
 }
 
 export type Outcome =
@@ -454,12 +464,21 @@ export const make = <Groups extends ToolGroups, R = never>(
             : runOptions.onCall(call)
         })
 
-      const invoke: Invoke<R | ServicesOf<Groups>> = (path, input) =>
-        Effect.gen(function*() {
+      const invoke: Invoke<R | ServicesOf<Groups>> = (path, input) => {
+        // Per call: whether it has been reported, and whether its handler
+        // began -- what an interruption reports it as, if neither ran out.
+        let reported = false
+        let started = false
+        const report = (outcome: ObservedCall["outcome"]) =>
+          Effect.suspend(() => {
+            reported = true
+            return observed(path, input, outcome)
+          })
+        return Effect.gen(function*() {
           const refuse = (diagnostic: CodeDiagnostic) =>
-            observed(path, input, "refused").pipe(Effect.andThen(diagnostic))
+            report("refused").pipe(Effect.andThen(diagnostic))
           const rethrow = (error: ProgramThrow) =>
-            observed(path, input, "refused").pipe(Effect.andThen(error))
+            report("refused").pipe(Effect.andThen(error))
 
           callCount += 1
           const limit = options.limits?.maxToolCalls
@@ -602,6 +621,7 @@ export const make = <Groups extends ToolGroups, R = never>(
            * `ServicesOf<Groups>`, which `execute` already declares and the
            * caller already provides.
            */
+          started = true
           const drained = group.handle(name, inputData.success).pipe(
             Effect.flatMap((stream) => Stream.runCollect(stream)),
             Effect.map((results) => {
@@ -620,7 +640,7 @@ export const make = <Groups extends ToolGroups, R = never>(
             // A tool's declared failure is a value the program branches
             // on. Encoded through the data boundary like any result.
             const errorData = toData(handled.failure)
-            yield* observed(path, input, "failed")
+            yield* report("failed")
             return {
               ok: false,
               error: Result.isSuccess(errorData)
@@ -639,13 +659,16 @@ export const make = <Groups extends ToolGroups, R = never>(
               })
             )
           }
-          yield* observed(path, input, "succeeded")
+          yield* report("succeeded")
           return { ok: true, value: outData.success }
         }).pipe(
           // The host's bound on in-flight nested calls, applied around the
           // whole call including its approval wait: a program that is
           // parked on a question is not holding an upstream connection.
           (self) => permits === undefined ? self : permits.withPermits(1)(self),
+          // Outside the permit, so a call still queued for one is reported
+          // too: every issued call ends with exactly one outcome.
+          Effect.onInterrupt(() => reported ? Effect.void : report(started ? "uncertain" : "not-started")),
           // A handler defect is the host's problem, and its cause never
           // reaches the program (invariant 4).
           Effect.catchDefect(() =>
@@ -657,6 +680,7 @@ export const make = <Groups extends ToolGroups, R = never>(
             )
           )
         )
+      }
 
       const recovered = recover(program)
       const budget = options.limits?.timeout

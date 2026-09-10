@@ -396,13 +396,20 @@ and pin the state it starts from.*
     dropping it. There is no background subagent mode; one added later must
     adopt the vocabulary. After 95–96. Medium.
 
-98. **Code Mode `uncertain` and `not-started` (plan E6, §7).** A call in
-    flight at interruption is reported `failed` or not at all; add
-    `uncertain` and `not-started`, and refuse to blindly re-run a program
-    whose non-idempotent calls are uncertain on durable recovery. Medium.
+98. **Code Mode `uncertain` and `not-started` (plan E6, §7) -- the
+    in-process half landed 2026-09-10.** Every call a program issues now
+    ends with exactly one outcome: an interruption reports a call whose
+    handler had started as `uncertain` and one still queued behind
+    `maxConcurrentCalls` or an approval as `not-started`, never
+    `failed` (A7.1: `Promise.all([a, hang, c])` under a limit of one,
+    interrupted -- `a` succeeded, `hang` uncertain, `c` not-started). Open:
+    the durable half (T7.3, A7.2) -- a process that dies runs no finalizer,
+    so recovery needs its own rule: a program whose non-idempotent calls may
+    have run is reported `uncertain` to the model, not re-run blindly.
+    Medium.
 
     ```text
-    verify: grep "readonly outcome: \"succeeded\" | \"failed\" | \"refused\"" src/code/CodeMode.ts
+    verify: grep "readonly outcome: \"succeeded\" | \"failed\" | \"refused\" | \"uncertain\" | \"not-started\"" src/code/CodeMode.ts
     ```
 
 99. **Budget topology, stated (plan E7, §9) -- the table landed

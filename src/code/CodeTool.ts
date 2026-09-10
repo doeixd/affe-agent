@@ -28,7 +28,7 @@ import * as CodeMode from "./CodeMode.js"
 const Call = Schema.Struct({
   /** `data.lookup`, as the program addressed it. */
   path: Schema.String,
-  outcome: Schema.Literals(["succeeded", "failed", "refused"])
+  outcome: Schema.Literals(["succeeded", "failed", "refused", "uncertain", "not-started"])
 })
 
 /**
