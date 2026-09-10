@@ -72,9 +72,10 @@ export const isRetrySafe = (tool: Tool.Any): boolean => Context.get(tool.annotat
 /**
  * Raised when a tool's outcome cannot be known.
  *
- * The handler was interrupted after it may already have done its work, and the
- * tool is not annotated `Tool.Idempotent`, so running it again could issue the
- * side effect twice. Neither answer is available, and inventing one would be
+ * The handler was interrupted, or its process died, after it may already have
+ * done its work (the start marker says it began; nothing says it finished),
+ * and the tool is not annotated `Tool.Idempotent`, so running it again could
+ * issue the side effect twice. Neither answer is available, and inventing one would be
  * worse than saying so.
  */
 export class DurableToolUnresolvedError extends Schema.TaggedError<DurableToolUnresolvedError>()(
