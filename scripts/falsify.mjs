@@ -162,6 +162,22 @@ const breaks = [
                       record.claim.value.key === submission.key`,
       to: "                  return false"
     }
+  },
+  {
+    /**
+     * Item 104's oracle. A replay-only loss: the streamed replay rebuilds each
+     * journalled text part with its text emptied, so a recovered run's
+     * history differs from the uninterrupted one while every count and every
+     * "ran once" check still holds. `test/DurableEquivalence.test.ts` runs its
+     * full matrix here (`AFFE_EQUIVALENCE=full`, set by `run` below) and
+     * every streamed cell must bite.
+     */
+    id: "D8",
+    guarantee: "Recovery is indistinguishable from never having crashed",
+    applied: "empty each text part a streamed replay rebuilds",
+    file: "src/durable/DurableModel.ts",
+    from: `      out.push(Response.makePart("text-delta", { id, delta: part.text }))`,
+    to: `      out.push(Response.makePart("text-delta", { id, delta: "" }))`
   }
 ]
 
@@ -182,7 +198,8 @@ const suite = [
   "test/DurableStreams.test.ts",
   "test/ToolActivity.test.ts",
   "test/AgentSession.test.ts",
-  "test/DurableHttpIntegration.test.ts"
+  "test/DurableHttpIntegration.test.ts",
+  "test/DurableEquivalence.test.ts"
 ]
 
 const parse = (out) => {
@@ -202,6 +219,8 @@ const run = () => {
     return parse(
       execFileSync("npx", ["vitest", "run", ...suite], {
         encoding: "utf8",
+        // The equivalence oracle's whole matrix, not the two cells `npm test` runs.
+        env: { ...process.env, AFFE_EQUIVALENCE: "full" },
         stdio: "pipe",
         shell: true,
         timeout: 1_800_000,

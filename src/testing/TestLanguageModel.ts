@@ -280,11 +280,27 @@ const streamPartsFor = (turn: Turn): Array<Response.StreamPartEncoded> => {
  * short reads as an empty reply rather than an error, so a test asserting on a
  * reply should assert its text, not merely that the run completed.
  */
-export const make = (turns: ReadonlyArray<Turn>) =>
+export interface Options {
+  /**
+   * How a call picks its turn. Default `"position"`: the Nth call gets the Nth
+   * turn, which is what every ordinary script means.
+   *
+   * `"history"` picks by the conversation instead: a call whose prompt already
+   * holds N assistant messages gets turn N. For a process that takes over a
+   * durable run half-way -- its first call may be the run's third -- so a
+   * replacement answers the turn the conversation is actually at, and a
+   * journalled turn is never answered twice by accident. `calls` still counts
+   * calls.
+   */
+  readonly select?: "position" | "history" | undefined
+}
+
+export const make = (turns: ReadonlyArray<Turn>, options?: Options) =>
   Effect.gen(function* () {
     const seen = yield* Ref.make<Array<Prompt.Prompt>>([])
     const offered = yield* Ref.make<Array<ReadonlyArray<string>>>([])
     const index = yield* Ref.make(0)
+    const byHistory = options?.select === "history"
 
     /**
      * Advance the script and run this turn's hooks.
@@ -300,7 +316,10 @@ export const make = (turns: ReadonlyArray<Turn>) =>
       Effect.gen(function* () {
         yield* Ref.update(seen, (all) => [...all, options.prompt])
         yield* Ref.update(offered, (all) => [...all, options.tools.map((tool) => tool.name)])
-        const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+        const called = yield* Ref.getAndUpdate(index, (n) => n + 1)
+        const i = byHistory
+          ? options.prompt.content.filter((message) => message.role === "assistant").length
+          : called
         const turn = turns[i]
         if (turn === undefined) {
           return undefined
@@ -385,9 +404,9 @@ export const make = (turns: ReadonlyArray<Turn>) =>
  * ])
  * ```
  */
-export const script = (turns: ReadonlyArray<Turn>) =>
+export const script = (turns: ReadonlyArray<Turn>, options?: Options) =>
   Effect.gen(function* () {
-    const { recorder, service } = yield* make(turns)
+    const { recorder, service } = yield* make(turns, options)
     const layer = Layer.succeed(LanguageModel.LanguageModel, service).pipe(
       Layer.provideMerge(
         Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)

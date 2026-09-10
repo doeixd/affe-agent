@@ -13,6 +13,7 @@ import type { RunId, SubmissionId } from "./internal/ids.js"
 import type { Session } from "./internal/state.js"
 import * as Accumulator from "./internal/streamAccumulator.js"
 import * as Telemetry from "./internal/telemetry.js"
+import { turnFailpoints } from "./internal/turnFailpoints.js"
 
 export interface Result<Tools extends Record<string, Tool.Any>> {
   /**
@@ -444,6 +445,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       },
       finishReason: response.finishReason
     })
+    yield* turnFailpoints.hit("after-model-response")
 
     // Calls the provider already executed are resolved: their results are in
     // the response, and Effect AI's own resolver skips them too. Running them
@@ -545,6 +547,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     // Read inside the same uninterruptible region as the commit, so a value
     // is promoted exactly when the turn that produced it becomes canonical.
     let value: Option.Option<unknown> = Option.none()
+    yield* turnFailpoints.hit("before-commit")
     yield* Effect.uninterruptible(
       Effect.gen(function*() {
         yield* History.commit(session.history, committed)
@@ -565,6 +568,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
         yield* EventBus.emit(session.bus, correlation, { _tag: "TurnCompleted" })
       })
     )
+    yield* turnFailpoints.hit("after-commit")
 
     return { response, toolCalls, text, value }
   })

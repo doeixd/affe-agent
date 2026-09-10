@@ -783,6 +783,19 @@ restore it is the *same message* — never one reconstructed from less.
 
 ## 16. E12 — Crash/no-crash canonical equivalence as the durability oracle
 
+**First slice landed 2026-09-10 (item 104 stays open).** T16.1 and T16.4 as
+written. T16.2 landed in `test/`, not `src/testing/`: a real crash needs a
+journal that outlives the process, which here is SQLite, and a shipped harness
+cannot depend on it -- it wants a portable seam for "build a process over this
+store" first. T16.3 covers plain parallel tools, batch and streamed; the other
+scenarios are open. Two design points on the way: a crash is simulated as a
+process dying (parked, then its scope closed), not as an interrupt raised
+inside the turn -- an in-turn interrupt is the in-workflow session's own
+interruption path, so it risks being recorded as a user interrupt rather than
+a crash (reasoned from the code, not run) -- and after a takeover the
+scripted model must answer by conversation, not by call count, or the
+replacement answers the wrong turn (`TestLanguageModel`'s `select: "history"`).
+
 **Today.** No test compares a crashed run with an uncrashed one on full
 history, events or usage. Existing failpoint tests compare narrower things —
 `DeliveryLog` rows (`Failpoints.test.ts:87–195`), the last prompt's texts

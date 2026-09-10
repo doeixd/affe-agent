@@ -18,6 +18,7 @@ import * as Permission from "./Permission.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as Observation from "./internal/observation.js"
 import * as Telemetry from "./internal/telemetry.js"
+import { turnFailpoints } from "./internal/turnFailpoints.js"
 import * as Namespace from "./internal/namespace.js"
 
 /**
@@ -819,6 +820,16 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     }) as Response.AnyPart
   })
 
+/**
+ * One call, then the `after-tool-call` failpoint (`internal/turnFailpoints.ts`)
+ * once it has settled, whichever way. A no-op outside a test that arms it.
+ */
+const executeSettled = <Tools extends Record<string, Tool.Any>, R>(
+  handler: Toolkit.WithHandler<Tools>,
+  call: Response.ToolCallParts<Tools, true>,
+  context: TurnContext<R>
+) => Effect.tap(executeOne(handler, call, context), () => turnFailpoints.hit("after-tool-call"))
+
 /** What a handler's stream folds into: its final result, and its last. */
 interface Collected<Tools extends Record<string, Tool.Any>> {
   readonly final: Option.Option<Tool.HandlerResult<Tools[keyof Tools]>>
@@ -872,7 +883,7 @@ const executePerTool = <
           Effect.all(
             group.map(({ call, index }) => {
               const one = Effect.map(
-                executeOne(handler, call, context),
+                executeSettled(handler, call, context),
                 (part) => ({ index, part })
               )
               return ceiling === undefined
@@ -991,7 +1002,7 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
     context.agent.strategy._tag === "PerTool"
       ? executePerTool(handler, batch, context, context.agent.strategy)
       : Effect.all(
-          batch.map((call) => executeOne(handler, call, context)),
+          batch.map((call) => executeSettled(handler, call, context)),
           concurrencyOption(context.agent.strategy)
         )
   if (calls.length < 2 || !calls.some((call) => mustBeAlone(handler, call))) return dispatch(calls)

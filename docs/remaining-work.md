@@ -459,17 +459,28 @@ oracle), 105 (host scheduling and authority capture), 106 (continuity
 evaluation). Work order: 91 and 103 first, then 104, whose oracle is the
 acceptance test for 105, 107 and 108.*
 
-104. **Crash/no-crash canonical equivalence oracle (plan E12, §16).** No
-     test compares a crashed run with an uncrashed one on full history,
-     events, usage, disposition and next model context, and there is no
-     failpoint inside a turn. Add in-turn failpoints, a shipped
-     `equivalence(scenario, boundaries)` harness in `src/testing/`, the
-     scenario set in the plan (including declaration order after parallel
-     execution, crash and subagent suspension), and a D8 break in
-     `falsify.mjs`. Medium.
+104. **Crash/no-crash canonical equivalence oracle (plan E12, §16) --
+     first slice landed 2026-09-10.** In-turn failpoints exist
+     (`internal/turnFailpoints.ts`: after the model response, after each tool
+     call settles, before and after the commit), and
+     `test/DurableEquivalence.test.ts` crashes a real process at each one --
+     parked at the boundary, scope closed, a second process over the same
+     SQLite file takes the shard over -- and asserts the recovered run equals
+     the uninterrupted one: encoded canonical history, result, model calls
+     split exactly between the two processes, and each tool run once. Batch
+     and streamed; two cells in `npm test`, the whole matrix under
+     `AFFE_EQUIVALENCE=full`, which `verify:durability`'s new D8 row sets.
+     Still open: (a) a *shipped* harness in `src/testing` -- this one needs
+     SQLite, so shipping it wants a portable "process" seam first; (b) the
+     plan's other scenarios: the output tool, compaction fold and rollover,
+     a subagent with a suspended child elicitation, Code Mode with a
+     suspending executor; (c) comparing events, usage/`RunLedger` and claim
+     state, not only history and counts.
 
      ```text
-     verify: no-grep "D8" scripts/falsify.mjs
+     verify: exists test/DurableEquivalence.test.ts
+     verify: grep "id: \"D8\"" scripts/falsify.mjs
+     verify: absent src/testing/Equivalence.ts
      ```
 
 105. **Host scheduling, captured per durable attempt (plan E13, §17).** No
