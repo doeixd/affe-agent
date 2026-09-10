@@ -7,6 +7,7 @@ import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentOutput from "../src/AgentOutput.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
 import { DurableEquivalence } from "../src/testing/index.js"
@@ -173,5 +174,38 @@ describe("durable recovery is indistinguishable from never having crashed (item 
           assert.deepStrictEqual(recovered.observation, straight)
         }), 90_000)
     }
+  }
+})
+
+describe("a run answered through its output tool recovers to the same value (item 104, b)", () => {
+  const Verdict = Schema.Struct({ approved: Schema.Boolean, reason: Schema.String })
+  const verdict = DurableEquivalence.scenario({
+    agent: (effects) =>
+      Agent.make({
+        output: AgentOutput.make(Verdict),
+        tools: [Agent.tool(Lookup, ({ of }) => Effect.as(effects.record(of), "clean history"))],
+        loop: AgentLoop.bounded(4)
+      }),
+    turns: [
+      { toolCalls: [{ id: "l1", name: "lookup", params: { of: "customer" } }] },
+      { toolCalls: [{ id: "o1", name: AgentOutput.make(Verdict).toolName, params: { approved: true, reason: "clean" } }] }
+    ],
+    prompt: "approve the refund?"
+  })
+
+  // Every in-turn boundary, including the output tool's own turn: a crash
+  // there must not lose the value, report it twice, or ask the model again.
+  // One cell in `npm test` -- after the commit that holds the answer -- and
+  // the rest under `AFFE_EQUIVALENCE=full`, as above.
+  const everyBoundary = process.env["AFFE_EQUIVALENCE"] === "full"
+  for (const at of DurableEquivalence.boundaries) {
+    if (!everyBoundary && at !== turnFailpoints.qualified("after-commit")) continue
+    it.live(`a crash at ${at} recovers the same answer`, () =>
+      Effect.gen(function*() {
+        const straight = yield* DurableEquivalence.straight(verdict, { database })
+        assert.deepStrictEqual(straight.value, { approved: true, reason: "clean" })
+        const recovered = yield* DurableEquivalence.crashed(verdict, { database, at })
+        assert.deepStrictEqual(recovered.observation, straight)
+      }), 120_000)
   }
 })

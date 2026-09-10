@@ -492,8 +492,11 @@ acceptance test for 105, 107 and 108.*
      speaks only Effect's `SqlClient` -- the journal (`SingleRunner` with SQL
      runner storage), channels, session store and delivery log all run over
      it -- so the caller supplies the database and the harness names no
-     driver. Still open: (b) the plan's other scenarios: the output tool,
-     compaction fold and rollover, a subagent with a suspended child
+     driver. The output tool is a scenario now: a run that answers through
+     it recovers the same value, events and model calls from every in-turn
+     boundary (one cell by default, all under `AFFE_EQUIVALENCE=full`).
+     Still open: (b) the plan's other scenarios: compaction fold and
+     rollover, a subagent with a suspended child
      elicitation, Code Mode with a suspending executor; (c) usage/`RunLedger`
      and claim state. Events are compared now: `Observation.events` is the
      session's delivery log as tags in order, shared by both processes, so a
