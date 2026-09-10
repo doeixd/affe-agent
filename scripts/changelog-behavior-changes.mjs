@@ -77,7 +77,10 @@ if (mode === undefined) {
   process.exit(0)
 }
 
-const current = readFileSync(CHANGELOG, "utf8")
+// Read with LF endings: a Windows checkout with `core.autocrlf` holds the file
+// as CRLF, and the block is built with LF, so a byte comparison failed `check`
+// in every fresh Windows clone while passing in the working copy that wrote it.
+const current = readFileSync(CHANGELOG, "utf8").replaceAll("\r\n", "\n")
 const start = current.indexOf(START)
 const end = current.indexOf(END)
 let next
