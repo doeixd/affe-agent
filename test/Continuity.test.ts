@@ -45,13 +45,13 @@ describe("continuity over a long lifetime (item 106)", () => {
       assert.isFalse(report.passed)
     }))
 
-  it.effect("known limit, pinned: a correction that is the fourth mention is never found (item 109)", () =>
+  it.effect("a correction that is the fourth mention is still found (item 109)", () =>
     Effect.gen(function*() {
-      // `search_context` returns the *first* three matches in history order
-      // and stops. Three earlier mentions of the deploy window fill every
-      // slot, so the correction is never returned and the latest-value
-      // question is answered with a stale one. When item 109 makes the search
-      // report that more matches exist (or return the latest), flip this.
+      // This row was pinned the other way first: `search_context` returned
+      // the *first* three matches in history order, so three earlier
+      // mentions filled every slot and the correction was never returned.
+      // It searches newest first now, with `more` and a `before` cursor for
+      // the older ones -- and this eval is what flipped.
       const scenario: Continuity.Scenario = {
         name: "correction-after-three-mentions",
         steps: [
@@ -73,7 +73,8 @@ describe("continuity over a long lifetime (item 106)", () => {
       const report = yield* Continuity.run(scenario).pipe(Effect.provide(Continuity.referenceModel))
       const [answer] = report.asks
       assert.isFalse(answer!.inView)
-      assert.isFalse(answer!.correct, "the fourth mention was found -- item 109 may have landed; flip this row")
-      assert.isTrue(Option.isNone(answer!.provenance))
+      assert.isTrue(answer!.correct, `answered ${JSON.stringify(answer!.answer)}`)
+      assert.isTrue(Option.isSome(answer!.provenance))
+      assert.isTrue(report.passed)
     }))
 })

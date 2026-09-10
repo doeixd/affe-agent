@@ -557,16 +557,21 @@ acceptance test for 105, 107 and 108.*
      verify: grep "KeyValueStore.toSchemaStore(" src/compaction/Compaction.ts
      ```
 
-109. **Cursors over mutable sets; incomplete ≠ empty (plan E17, §21).**
-     `Catalog.search` pages by offset into a list a tool-source refresh can
-     shift (fix before 93 reuses it); `Memory.recall` and `search_context`
-     return short results that read as complete (the latter reports
-     `searched: messages.length` after stopping at three hits);
-     `DeliveryLog.read` has no limit at all. Anchor cursors, honest
-     `scanned`/`truncated`, a typed limit error. Small–medium.
+109. **Cursors over mutable sets; incomplete ≠ empty (plan E17, §21) --
+     `search_context` landed 2026-09-10.** It returned the *first* three
+     matches in history order and stopped silently, so a value corrected on
+     its fourth mention was never found (the continuity eval pinned it). It
+     now searches newest first, pages older with a `before` canonical-index
+     cursor, reports `more` when the bound ended it and an honest
+     `searched`, and skips the evidence tools' own calls and results, which
+     only echo the phrase. Still open: `Catalog.search` pages by offset into a
+     list a tool-source refresh can shift (fix before 93 reuses it);
+     `Memory.recall` returns a short result that reads as complete;
+     `DeliveryLog.read` has no limit at all.
 
      ```text
-     verify: grep "return { hits, searched: messages.length }" src/compaction/Compaction.ts
+     verify: grep "more: Schema.Boolean" src/compaction/Compaction.ts
+     verify: grep "readonly next: { readonly offset: number } | undefined" src/code/Catalog.ts
      ```
 
 110. **Operational defaults at network-facing boundaries (plan E18, §22).**

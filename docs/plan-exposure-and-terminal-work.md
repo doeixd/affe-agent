@@ -1036,6 +1036,14 @@ discarded.
 
 ## 21. E17 — Cursors over mutable sets; incomplete ≠ empty
 
+**`search_context` landed 2026-09-10 (item 109 stays open).** Newest first
+rather than only a truncation flag: the continuity eval (§18) showed that the
+*most recent* statement is the one a question usually needs, so `more` plus a
+`before` canonical cursor pages the older ones. One case the plan missed: an
+earlier search's call and result both contain the searched phrase, so they
+were matching themselves; they are skipped as echoes. Catalog, Memory and
+DeliveryLog remain.
+
 **Rule.** When a collection can change between pages, page by a stable
 canonical anchor (`before`/`after` an opaque id), not a numeric offset. When
 a scan or work bound is hit, say so — a short result must not read as a

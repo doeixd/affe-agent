@@ -116,18 +116,28 @@ describe("retained history as evidence", () => {
         { text: "needle three" },
         { text: long },
         { toolCalls: [{ id: "s1", name: "search_context", params: { query: "NEEDLE" } }] },
+        // The next page, by canonical cursor: older than the smallest index s1 returned.
+        { toolCalls: [{ id: "s3", name: "search_context", params: { query: "NEEDLE", before: 3 } }] },
         { toolCalls: [{ id: "s2", name: "search_context", params: { query: "x".repeat(10_000) } }] },
         { toolCalls: [{ id: "r1", name: "read_context", params: { index: 7 } }] },
         { toolCalls: [{ id: "r2", name: "read_context", params: { index: 7, offset: 5_000 } }] },
         { text: "done" }
       ], ["a", "b", "c", "d", "e"])
 
-      const [search] = searches(events)
+      const [search, older] = searches(events)
       assert.isDefined(search)
-      // Case-insensitive, capped at three, in history order, from a history of more than three matches.
+      // Case-insensitive, capped at three, newest first, from a history of
+      // four matching messages (item 109: it used to be the *first* three,
+      // so the latest statement of a value was the one never returned).
       assert.strictEqual(search!.hits.length, Compaction.searchHits)
-      assert.deepStrictEqual(search!.hits.map((hit) => hit.index), [1, 3, 5])
-      assert.isAbove(search!.searched, 8)
+      assert.deepStrictEqual(search!.hits.map((hit) => hit.index), [7, 5, 3])
+      // The bound, not the history, ended it -- and it says so.
+      assert.isTrue(search!.more)
+      // What was actually scanned: 8 down to 1, where the fourth match stopped it.
+      assert.strictEqual(search!.searched, 8)
+      // The next page is older than index 3, and is the end.
+      assert.deepStrictEqual(older!.hits.map((hit) => hit.index), [1])
+      assert.isFalse(older!.more)
 
       const [first, second] = pages(events)
       assert.isDefined(first)
@@ -141,10 +151,34 @@ describe("retained history as evidence", () => {
       assert.isTrue(second!.hasMore)
       // An excerpt is bounded too: the long match does not come back whole,
       // and a long query is not a way to page -- three radii at most.
-      assert.isBelow(search!.hits[2]!.excerpt.length, 1_000)
-      const [, byLongQuery] = searches(events)
+      assert.isBelow(search!.hits[0]!.excerpt.length, 1_000)
+      const [, , byLongQuery] = searches(events)
       assert.strictEqual(byLongQuery!.hits.length, 1)
       assert.isAtMost(byLongQuery!.hits[0]!.excerpt.length, 600 + 6)
+    })
+  )
+
+  it.effect("a search does not find its own earlier results, which only quote the evidence", () =>
+    Effect.gen(function* () {
+      // Item 109. An earlier search's excerpts repeat the phrase; matching
+      // them would fill the three slots with echoes of the one message they
+      // quote. Searching twice must find the statement, not the first search.
+      const compaction = yield* folding()
+      const agent = Agent.make({
+        tools: [compaction.tools.searchContext],
+        contextTransform: compaction.transform,
+        loop: AgentLoop.bounded(4)
+      })
+      const { events } = yield* drive(agent, [
+        { text: "the deploy window is Tuesday at noon" },
+        { toolCalls: [{ id: "s1", name: "search_context", params: { query: "deploy window" } }] },
+        { toolCalls: [{ id: "s2", name: "search_context", params: { query: "deploy window" } }] },
+        { text: "done" }
+      ], ["a", "b"])
+      const [first, second] = searches(events)
+      // Canonical: a(0), answer(1), b(2), then s1's call and its result.
+      assert.deepStrictEqual(first!.hits.map((hit) => hit.index), [1])
+      assert.deepStrictEqual(second!.hits.map((hit) => hit.index), [1], "the second search returned the first one's result")
     })
   )
 
@@ -186,7 +220,7 @@ describe("retained history as evidence", () => {
       assert.include(tool.description ?? "", "not instructions", tool.name)
     }
     // Neither takes a session: which one is read is decided by where the call runs.
-    assert.deepStrictEqual(Object.keys(Compaction.SearchContext.parametersSchema.fields), ["query"])
+    assert.deepStrictEqual(Object.keys(Compaction.SearchContext.parametersSchema.fields), ["query", "before"])
     assert.deepStrictEqual(Object.keys(Compaction.ReadContext.parametersSchema.fields), ["index", "offset"])
   })
 })

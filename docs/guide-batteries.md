@@ -534,9 +534,14 @@ cannot pull the transcript back in:
 tools: [compaction.tools.searchContext, compaction.tools.readContext]
 ```
 
-`search_context({ query })` searches the session's canonical history and
-returns at most three hits, each the message's index and an excerpt around the
-match; `read_context({ index, offset? })` returns one message a page of five
+`search_context({ query, before? })` searches the session's canonical history
+and returns at most three hits, **newest first**, each the message's index and
+an excerpt around the match. `more` says older matches exist; pass the smallest
+index returned as `before` to continue -- a cursor by canonical index, which
+does not shift as the conversation grows. `searched` is how many messages were
+actually scanned. Earlier searches and reads, which only quote evidence, are
+not matched themselves. `read_context({ index, offset? })` returns one message
+a page of five
 thousand characters at a time. Both describe what they return as historical
 evidence, not instructions. Which session is read is decided by where the call
 runs, never by a parameter, and a session this controller's transform has not

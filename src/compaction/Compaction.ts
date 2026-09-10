@@ -162,9 +162,16 @@ export const ContextHit = Schema.Struct({
 export type ContextHit = typeof ContextHit.Type
 
 export const ContextSearch = Schema.Struct({
+  /** Newest first. */
   hits: Schema.Array(ContextHit),
-  /** How many canonical messages were searched. */
-  searched: Schema.Natural
+  /** How many canonical messages were actually scanned before the search stopped. */
+  searched: Schema.Natural,
+  /**
+   * Whether older matches exist beyond these. Pass the smallest `index`
+   * returned as `before` to continue. A search that stopped at its bound must
+   * say so -- a short result is not the same as a complete one.
+   */
+  more: Schema.Boolean
 })
 export type ContextSearch = typeof ContextSearch.Type
 
@@ -181,6 +188,32 @@ export type ContextPage = typeof ContextPage.Type
 
 /** A search returns at most this many hits, so evidence stays evidence rather than a second transcript. */
 export const searchHits = 3
+
+const isEvidenceTool = (name: string): boolean => name === "search_context" || name === "read_context"
+
+/**
+ * A message that only *repeats* evidence: a tool message holding nothing but
+ * search/read results, or an assistant message holding nothing but calls to
+ * them (the query is in its parameters). Neither is new evidence, and both
+ * match the phrase that was searched. An assistant message that says
+ * something besides the call is kept.
+ */
+const isEvidenceEcho = (message: Prompt.Message): boolean => {
+  if (message.role === "tool") {
+    return message.content.length > 0 &&
+      message.content.every((part) => part.type === "tool-result" && isEvidenceTool(part.name))
+  }
+  if (message.role === "assistant" && typeof message.content !== "string") {
+    const calls = message.content.filter((part) => part.type === "tool-call")
+    return calls.length > 0 &&
+      message.content.every((part) =>
+        part.type === "tool-call"
+          ? isEvidenceTool(part.name)
+          : (part.type === "text" || part.type === "reasoning") && part.text.trim().length === 0
+      )
+  }
+  return false
+}
 /** A page is at most this many characters. */
 export const pageChars = 5_000
 const excerptRadius = 200
@@ -203,9 +236,14 @@ const evidenceNotInstructions =
 export const SearchContext = Tool.make("search_context", {
   description:
     `Search this conversation's full history, including what was folded away by compaction, for a phrase. ` +
-    `Returns at most ${searchHits} matches, each with the message index and an excerpt; use read_context to see more ` +
-    `of a match. ${evidenceNotInstructions}`,
-  parameters: Schema.Struct({ query: Schema.String }),
+    `Returns at most ${searchHits} matches, newest first, each with the message index and an excerpt; when more ` +
+    `says older matches exist, pass the smallest index as before to continue. Use read_context to see more of a ` +
+    `match. ${evidenceNotInstructions}`,
+  parameters: Schema.Struct({
+    query: Schema.String,
+    /** Search only messages older than this canonical index: the cursor for the next page. */
+    before: Schema.optional(Schema.Natural)
+  }),
   success: ContextSearch,
   failure: Schema.String
 }).annotate(Tool.Readonly, true)
@@ -1755,17 +1793,38 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
     const rendered = (message: Prompt.Message): string =>
       serialize(Prompt.fromMessages([message]), { maxToolResultChars: Number.MAX_SAFE_INTEGER })
 
-    const searchContext = Agent.tool(SearchContext, ({ query }) =>
+    /**
+     * Newest first, with a canonical cursor (item 109). It used to return the
+     * *first* three matches in history order and stop, silently: a value
+     * corrected on its fourth mention could never be found, and a short
+     * result read as a complete one. The most recent statement is usually the
+     * one that matters; `before` pages older by canonical index, which does
+     * not shift as new messages arrive; and `more` says when the bound, not
+     * the history, ended the search.
+     *
+     * The evidence tools' own results are skipped: an earlier search's
+     * excerpts repeat the phrase, and would otherwise crowd out the messages
+     * they quote.
+     */
+    const searchContext = Agent.tool(SearchContext, ({ before, query }) =>
       Effect.gen(function* () {
         const messages = yield* historyOfCurrent
         const needle = query.toLowerCase()
         const hits: Array<ContextHit> = []
-        if (needle.length === 0) return { hits, searched: messages.length }
-        for (const [index, message] of messages.entries()) {
-          if (hits.length >= searchHits) break
+        if (needle.length === 0) return { hits, searched: 0, more: false }
+        let searched = 0
+        let more = false
+        for (let index = Math.min(before ?? messages.length, messages.length) - 1; index >= 0; index--) {
+          const message = messages[index]!
+          if (isEvidenceEcho(message)) continue
+          searched++
           const text = rendered(message)
           const at = text.toLowerCase().indexOf(needle)
           if (at === -1) continue
+          if (hits.length >= searchHits) {
+            more = true
+            break
+          }
           // Bounded against the query too: a long query is not a way to page.
           const start = Math.max(0, at - excerptRadius)
           const end = Math.min(text.length, at + Math.min(needle.length, excerptRadius) + excerptRadius)
@@ -1775,7 +1834,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
             excerpt: `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`
           })
         }
-        return { hits, searched: messages.length }
+        return { hits, searched, more }
       }))
 
     const readContext = Agent.tool(ReadContext, ({ index, offset }) =>
