@@ -8,6 +8,7 @@ import * as NodePath from "node:path"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentOutput from "../src/AgentOutput.js"
+import { Compaction } from "../src/compaction/index.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
 import { DurableEquivalence } from "../src/testing/index.js"
@@ -208,4 +209,43 @@ describe("a run answered through its output tool recovers to the same value (ite
         assert.deepStrictEqual(recovered.observation, straight)
       }), 120_000)
   }
+})
+
+describe("a run that compacts as it goes recovers to the same run (item 104, b)", () => {
+  // Three tool rounds against a threshold of two messages, so the transform
+  // folds on most turns. The summary is derived and never canonical; the
+  // replacement rebuilds it from history in its own process, and nothing a
+  // client or the journal holds may differ for it. The model follows the
+  // run by its tool results, which compaction keeps (`select: "results"`).
+  const compacting = DurableEquivalence.scenario({
+    agent: (effects) =>
+      Agent.make({
+        contextTransform: Effect.runSync(Compaction.make({
+          policy: Compaction.whenLongerThan(2, { retain: 2 }),
+          summarise: ({ messages }) => Effect.succeed(`folded ${messages.content.length} messages`)
+        })),
+        tools: [Agent.tool(Lookup, ({ of }) => Effect.as(effects.record(of), `${of}: ok`))],
+        loop: AgentLoop.bounded(6)
+      }),
+    turns: [
+      { toolCalls: [{ id: "a", name: "lookup", params: { of: "one" } }] },
+      { toolCalls: [{ id: "b", name: "lookup", params: { of: "two" } }] },
+      { toolCalls: [{ id: "c", name: "lookup", params: { of: "three" } }] },
+      { text: "all three are ok" }
+    ],
+    select: "results",
+    prompt: "check all three"
+  })
+
+  it.live("a crash after the second turn commits recovers the same history, events and effects", () =>
+    Effect.gen(function*() {
+      const straight = yield* DurableEquivalence.straight(compacting, { database })
+      assert.deepStrictEqual(straight.effects, ["one", "three", "two"])
+      const recovered = yield* DurableEquivalence.crashed(compacting, {
+        database,
+        at: turnFailpoints.qualified("after-commit"),
+        occurrence: 2
+      })
+      assert.deepStrictEqual(recovered.observation, straight)
+    }), 120_000)
 })

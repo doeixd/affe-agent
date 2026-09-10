@@ -461,12 +461,11 @@ acceptance test for 105, 107 and 108.*
      driver. The output tool is a scenario now: a run that answers through
      it recovers the same value, events and model calls from every in-turn
      boundary (one cell by default, all under `AFFE_EQUIVALENCE=full`).
-     Still open: (b) the plan's other scenarios: compaction fold and
-     rollover -- which first needs the harness's model scripted by content:
-     it picks a turn by counting assistant messages in the prompt it is
-     sent, compaction folds those away, and a compacting run replays turns
-     it already answered even with no crash (measured: every tool ran
-     twice) -- a subagent with a suspended child
+     A compacting run is a scenario too, once the harness's model could
+     follow one (`select: "results"`: counting assistant messages lost its
+     place when compaction folded them, and every tool ran twice): crashed
+     after its second turn, it recovers to the same history, events and
+     effects. Still open: (b) the plan's other scenarios: rollover, a subagent with a suspended child
      elicitation, Code Mode with a suspending executor; (c) usage/`RunLedger`
      and claim state. Events are compared now: `Observation.events` is the
      session's delivery log as tags in order, shared by both processes, so a

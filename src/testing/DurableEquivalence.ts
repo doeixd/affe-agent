@@ -84,6 +84,11 @@ export interface Scenario<Tools extends Record<string, Tool.Any>, Value, Input> 
    * half-way answers the turn the run is actually at.
    */
   readonly turns: ReadonlyArray<TestLanguageModel.Turn>
+  /**
+   * How the model picks its turn. Default `"history"`; `"results"` for a run
+   * whose context is compacted (see `TestLanguageModel.Options.select`).
+   */
+  readonly select?: "history" | "results" | undefined
   readonly prompt: string
   readonly stream?: boolean | undefined
   /**
@@ -184,7 +189,7 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
       sessionStore: DurableSessionStore.sqlStoreWithTables(),
       delivery: DeliveryLog.sqlLogWithTable()
     }).pipe(Effect.provide(connection))
-    const { layer: model, recorder } = yield* TestLanguageModel.script(scenario.turns, { select: "history" })
+    const { layer: model, recorder } = yield* TestLanguageModel.script(scenario.turns, { select: scenario.select ?? "history" })
     const reached = yield* Ref.make(0)
     const failpoint = Layer.succeed(Failpoint, {
       hit: (location: string) =>
