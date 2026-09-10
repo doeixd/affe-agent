@@ -663,6 +663,14 @@ not bugs; what is open is whether they are the right defaults.
 
 ## 10. E8 — Matched performance suite
 
+**First slice landed 2026-09-10 (item 100 stays open).** T10.1–T10.3 and
+A10.1. Two corrections to the plan: nothing is published, so the release is a
+git ref (`v0.0.1`); and "matched conditions" had to include each ref's *own*
+dependencies -- running the old source against today's `node_modules` failed
+outright, so a ref whose lockfile differs gets its own `npm ci`. The machine is
+shared with other agents' test runs, which T10.4 predicted: identical refs
+differed by ~20% at small sample counts, so no number here is a verdict yet.
+
 Methodology to copy: **latest published release vs current `main`**, both
 freshly built, same machine, same lockfile policy; median + IQR; raw samples
 and exact build/lock identities kept; percentage deltas suppressed when the

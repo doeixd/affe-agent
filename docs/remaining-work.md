@@ -444,15 +444,27 @@ and pin the state it starts from.*
     verify: grep "is *counted*, not capped" src/subagent/Subagent.ts
     ```
 
-100. **Matched release→main benchmark suite (plan E8, §10).** Both refs
-     freshly built, interleaved runs, median + IQR, raw samples and
-     build/lock identities kept, no percentage when artifacts are identical,
-     informational only until variance is known. Scenarios in the plan,
-     including 93's eager-vs-progressive comparison measured on latency,
-     model calls, cache reads/writes, cost and success rate. Medium.
+100. **Matched release→main benchmark suite (plan E8, §10) -- first slice
+     landed 2026-09-10.** `npm run bench` (`scripts/bench.mjs` over
+     `bench/run.ts`): base and head each in their own worktree -- the
+     "release" is a git ref, `v0.0.1` by default, since nothing is published
+     -- with that ref's own dependencies (linked when the lockfile matches,
+     `npm ci` when it does not; v0.0.1 against today's modules fails), head's
+     scenarios copied in, runs interleaved in rounds, median and IQR with raw
+     samples and exact commit/src/lockfile identities, and no percentage when
+     the artifacts are identical. Deterministic scenarios over the scripted
+     model; the exposure pair also records requests, tools and schema bytes
+     sent (100 tools: eager 2 requests / 200 tools / ~45 KB, progressive 3 /
+     17 / ~3.5 KB). First observations, not verdicts: streaming 1024 chunks
+     and a long history look slower than v0.0.1, on a noisy machine --
+     identical refs differed by ~20% at small samples. Still open: durable
+     scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
+     effect-uai native vs adapter, a live-model cost run for item 93, and
+     characterising variance before any gate.
 
      ```text
-     verify: absent bench
+     verify: exists scripts/bench.mjs
+     verify: exists bench/run.ts
      ```
 
 101. **Prompt-cache stability (plan E9, §11).** Document it as a

@@ -72,7 +72,7 @@
     },
     "plugins": [{ "name": "@effect/language-service" }]
   },
-  "include": ["src", "test", "examples", "vitest.config.ts"],
+  "include": ["src", "test", "examples", "bench", "vitest.config.ts"],
   // The Cloudflare host entry compiles under tsconfig.cloudflare.json: its
   // types reach the Workers globals, which collide with the DOM lib here.
   // `examples/deploy-cloudflare` is excluded for the same reason and by the
