@@ -1,0 +1,5 @@
+{
+  "_tag": "CompactionCheckpointDiscarded",
+  "sessionId": "s",
+  "reason": "the stored checkpoint does not decode: Expected a valid JSON string"
+}

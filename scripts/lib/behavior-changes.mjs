@@ -7,6 +7,12 @@
 import { execFileSync } from "node:child_process"
 
 export const TRAILER = "Behavior-Change"
+/**
+ * Names an earlier commit whose behaviour change this one measures: the
+ * fixture was recorded after the change landed. The commit carrying it must
+ * touch a fixture itself.
+ */
+export const MEASURES = "Behavior-Change-Measures"
 export const FIXTURES = "test/fixtures/"
 
 /** The README describes the convention; editing it changes no behaviour. */
@@ -29,7 +35,7 @@ const RECORD = "\u001e"
 const FIELD = "\u001f"
 
 /**
- * @returns {Array<{ hash: string, subject: string, trailers: Array<string>, files: Array<string> }>}
+ * @returns {Array<{ hash: string, subject: string, trailers: Array<string>, measures: Array<string>, files: Array<string> }>}
  *   oldest first, as a changelog reads.
  */
 export const readBehaviorChanges = (range, onFailure) => {
@@ -37,7 +43,7 @@ export const readBehaviorChanges = (range, onFailure) => {
     [
       "log",
       "--reverse",
-      `--format=${RECORD}%h${FIELD}%s${FIELD}%(trailers:key=${TRAILER},valueonly,unfold)${FIELD}`,
+      `--format=${RECORD}%h${FIELD}%s${FIELD}%(trailers:key=${TRAILER},valueonly,unfold)${FIELD}%(trailers:key=${MEASURES},valueonly,unfold)${FIELD}`,
       "--name-only",
       range
     ],
@@ -50,9 +56,14 @@ export const readBehaviorChanges = (range, onFailure) => {
     .map((chunk) => {
       // Trailers may span several lines. Delimit their entire block before
       // parsing paths, otherwise the second trailer becomes a filename.
-      const [hash, subject, trailerBlock, fileBlock] = chunk.split(FIELD)
+      const [hash, subject, trailerBlock, measuresBlock, fileBlock] = chunk.split(FIELD)
+      // Each value begins with the measured commit's hash; anything after it
+      // is the reason, for a reader.
+      const measures = (measuresBlock ?? "").split("\n")
+        .map((line) => line.trim().split(/\s/)[0] ?? "")
+        .filter((named) => named.length > 0)
       const trailers = (trailerBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
       const files = (fileBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
-      return { hash, subject: subject ?? "", trailers, files }
+      return { hash, subject: subject ?? "", trailers, measures, files }
     })
 }

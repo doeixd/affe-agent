@@ -503,27 +503,6 @@ acceptance test for 105, 107 and 108.*
      verify: grep "eval:continuity" package.json
      ```
 
-107. **Durable tool contracts are versioned (plan E15, §19) -- first slice
-     landed 2026-09-10.** A submission journals a SHA-256 digest of every
-     tool contract it can mention at its first execution (the `tool
-     contracts` activity: name, parameter/success/failure JSON Schemas, the
-     `Alone` annotation -- not the description); a replay under a changed or
-     removed tool is refused with `ToolContractChangedError` naming each tool
-     and both digests, as an ordinary agent failure that frees the session.
-     An added tool is not a conflict. A recorded `new_context` result that no
-     longer decodes now dies with an explanation instead of being read as no
-     request. Q7 decided as the plan leaned: refused by default, and a tool
-     may declare earlier recorded digests compatible
-     (`ToolContracts.CompatibleWith`, now exported from
-     `affe-agent/durable` with the error), which the refusal prints in full.
-     Still open: frozen legacy definitions for control tools, so a recorded
-     run can finish rather than only be refused (T15.3).
-
-     ```text
-     verify: exists src/durable/ToolContracts.ts
-     verify: no-grep "if (Option.isSome(request)) {" src/compaction/Compaction.ts
-     ```
-
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
      104's oracle is its acceptance test.

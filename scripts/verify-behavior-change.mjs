@@ -34,8 +34,29 @@ const commits = readBehaviorChanges(range, (message) => {
 const missing = commits.filter(
   (commit) => commit.files.some(isFixture) && commit.trailers.length === 0
 )
+/**
+ * A commit whose fixture was recorded later, by a commit that says so with a
+ * `Behavior-Change-Measures: <hash> <reason>` trailer and touches a fixture
+ * itself: the measurement exists, it was just made afterwards.
+ */
+const measuredLater = commits.filter((commit) => commit.files.some(isFixture)).flatMap((commit) => commit.measures)
+const measuredBy = (hash) => measuredLater.some((named) => hash.startsWith(named) || named.startsWith(hash))
+
+/**
+ * Behaviour changes with nothing on a wire or in a journal to record: a
+ * change to types, or to what a caller must pass. Each with its reason, so the
+ * exception is reviewed rather than assumed.
+ */
+const TYPE_ONLY = {
+  "9342c8e": "authorization and principal became required options of two entry points; no wire or journal bytes changed"
+}
+
 const unmeasured = commits.filter(
-  (commit) => commit.trailers.length > 0 && !commit.files.some(isFixture)
+  (commit) =>
+    commit.trailers.length > 0 &&
+    !commit.files.some(isFixture) &&
+    !measuredBy(commit.hash) &&
+    !Object.keys(TYPE_ONLY).some((hash) => commit.hash.startsWith(hash))
 )
 
 if (missing.length > 0) {

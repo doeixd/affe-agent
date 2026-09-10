@@ -1,0 +1,39 @@
+{
+  "before": {
+    "outcome": "returned",
+    "value": 1,
+    "logs": [],
+    "calls": [
+      {
+        "path": "data.read",
+        "outcome": "succeeded"
+      },
+      {
+        "path": "data.write",
+        "outcome": "failed"
+      },
+      {
+        "path": "data.drop",
+        "outcome": "refused"
+      }
+    ]
+  },
+  "after": {
+    "outcome": "running",
+    "logs": [],
+    "calls": [
+      {
+        "path": "data.read",
+        "outcome": "succeeded"
+      },
+      {
+        "path": "data.write",
+        "outcome": "uncertain"
+      },
+      {
+        "path": "data.read",
+        "outcome": "not-started"
+      }
+    ]
+  }
+}

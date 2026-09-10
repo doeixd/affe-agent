@@ -1,0 +1,12 @@
+{
+  "sessionId": "recorded",
+  "history": {
+    "content": [
+      {
+        "options": {},
+        "role": "user",
+        "content": "hello"
+      }
+    ]
+  }
+}

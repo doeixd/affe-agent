@@ -2451,3 +2451,27 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: grep "## What is truth, and what is rebuilt" docs/guide-durable.md
      verify: grep "export const SnapshotVersion" src/AgentSession.ts
      ```
+
+107. ~~**Durable tool contracts are versioned (plan E15, §19).**~~ — landed
+     2026-09-10. A submission journals a SHA-256 digest of every tool
+     contract it can mention at its first execution; a replay under a
+     changed or removed tool is refused with `ToolContractChangedError`
+     naming each tool and printing the recorded digest, unless the tool
+     declares that digest compatible (`ToolContracts.CompatibleWith`, Q7). A
+     recorded `new_context` result that no longer decodes dies with an
+     explanation. T15.3 as a guard rather than a museum: the library's own
+     control tools are frozen by digest (`test/fixtures/control-tool-digests.json`),
+     so changing one fails the suite until its author declares the old
+     digest compatible -- letting recorded runs finish -- or accepts that
+     they are refused. An Effect upgrade that changes generated JSON Schema
+     trips it too, which is the same event for a recorded run.
+
+     ```text
+     verify: exists src/durable/ToolContracts.ts
+     verify: exists test/fixtures/control-tool-digests.json
+     verify: exists test/fixtures/snapshot-unversioned.json
+     verify: exists test/fixtures/code-mode-outcomes.json
+     verify: exists test/fixtures/compaction-checkpoint-discarded.json
+     verify: exists test/fixtures/tool-activity-names.json
+     verify: exists test/fixtures/memory-recall-truncated.json
+     ```
