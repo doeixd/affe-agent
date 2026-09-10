@@ -69,7 +69,7 @@ the cap, and says what it spent in its own place or not at all:
 | Compaction summaries | no | `Checkpoint.usage`, `CompactionCompleted` |
 | Branch summaries (`/tree`) | no | the summary's `usage` |
 | Coding summaries | no | the summary's `usage` |
-| Eval model judges (`/evals`) | no | not reported |
+| Eval model judges (`/evals`) | no | the judged `Check`'s `usage` |
 
 So a budget of N is a ceiling on the agent's own turns, and on its children's
 by default; a session that also compacts spends more than N by what the

@@ -399,11 +399,12 @@ and pin the state it starts from.*
 99. **Budget topology, stated (plan E7, §9) -- the table landed
     2026-09-10.** `limits.md` has the per-source table: engine turns and
     (by default) subagent turns are charged; compaction, branch and coding
-    summaries report usage in their own place; eval judges report nothing;
-    `inherit.budget: false` leaves a child's usage in its own session only.
-    Open: make every uncharged source report usage with a scope (eval
-    judges first), and revisit the "counted, not capped" subagent default
-    (a delegation can overshoot the parent by a whole child run). Small.
+    summaries report usage in their own place, and so do eval judges now
+    (a judged `Check` carries its call's `usage`); `inherit.budget: false`
+    leaves a child's usage in its own session only. Every uncharged source
+    now reports what it spent. Open: revisit the "counted, not capped"
+    subagent default (a delegation can overshoot the parent by a whole
+    child run). Small.
 
     ```text
     verify: grep "is *counted*, not capped" src/subagent/Subagent.ts

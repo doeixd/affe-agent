@@ -105,7 +105,7 @@ describe("Evals", () => {
       // Turn one answers; the judge's own generateText consumes turn two.
       const { layer } = yield* TestLanguageModel.script([
         TestLanguageModel.text("The answer is 42."),
-        TestLanguageModel.text("PASS")
+        { text: "PASS", usage: { input: 30, output: 1 } }
       ])
       const evaluation = Evals.defineEval({
         name: "judged",
@@ -118,6 +118,12 @@ describe("Evals", () => {
       })
       const result = yield* Evals.run(evaluation).pipe(Effect.provide(layer))
       assert.isTrue(result.passed)
+      // The judge's own call is outside any Budget; its check says what it
+      // cost instead (item 99).
+      assert.deepStrictEqual(
+        result.checks.find((check) => check.label.startsWith("judge:"))?.usage,
+        { inputTokens: 30, outputTokens: 1, totalTokens: 31 }
+      )
     })
   )
 

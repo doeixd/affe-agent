@@ -2,6 +2,7 @@ import { Effect, Option, Ref } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
+import type { ModelUsage } from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
 
 /**
@@ -90,6 +91,12 @@ export interface Check {
   readonly passed: boolean
   /** Present on failure: what was wanted versus what happened. */
   readonly detail?: string | undefined
+  /**
+   * What a model-judged check cost (`t.judge`), when the provider reported
+   * it. A judge's call is outside any `Budget` -- `limits.md` lists it --
+   * so this is where its spend is visible (item 99).
+   */
+  readonly usage?: ModelUsage | undefined
 }
 
 /** The outcome of one eval: every check it recorded, and whether all passed. */
@@ -198,8 +205,13 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value 
     Effect.gen(function* () {
       const checks = yield* Ref.make<ReadonlyArray<Check>>([])
       const last = yield* Ref.make<Option.Option<AgentSession.Result<Tools, Value>>>(Option.none())
-      const record = (label: string, passed: boolean, detail?: string) =>
-        Ref.update(checks, (all) => [...all, { label, passed, ...(detail === undefined ? {} : { detail }) }])
+      const record = (label: string, passed: boolean, detail?: string, usage?: ModelUsage) =>
+        Ref.update(checks, (all) => [...all, {
+          label,
+          passed,
+          ...(detail === undefined ? {} : { detail }),
+          ...(usage === undefined ? {} : { usage })
+        }])
 
       const session = yield* AgentSession.make(evaluation.agent)
 
@@ -257,8 +269,17 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value 
               model.generateText({
                 prompt: `${rubric}\n\nThe reply to judge:\n${result.text}\n\nRespond with only PASS or FAIL.`
               })).pipe(
-              Effect.map((response) => parseVerdict(response.text)),
-              Effect.flatMap((passed) => record(`judge: ${rubric}`, passed, passed ? undefined : "the judge said FAIL")),
+              Effect.flatMap((response) => {
+                const passed = parseVerdict(response.text)
+                const input = response.usage.inputTokens.total ?? 0
+                const output = response.usage.outputTokens.total ?? 0
+                return record(
+                  `judge: ${rubric}`,
+                  passed,
+                  passed ? undefined : "the judge said FAIL",
+                  { inputTokens: input, outputTokens: output, totalTokens: input + output }
+                )
+              }),
               Effect.catchCause((cause) => record(`judge: ${rubric}`, false, `the judge could not run: ${String(cause)}`))
             ))
       }
