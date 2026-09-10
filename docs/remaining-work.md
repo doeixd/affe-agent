@@ -454,9 +454,16 @@ and pin the state it starts from.*
      HEAD on that scenario went from +65% to +34%
      (`docs/reports/bench-2026-09-10-dbe2fecd-*.json`, before and after).
      What remains is a fixed per-submission cost -- a one-turn run is +68%,
-     1.7 → 2.8 ms, four tool rounds +51% -- not yet attributed; the next
-     step is a side-by-side CPU profile, since this machine's noise defeats
-     bisecting a millisecond. Still open: durable
+     1.7 → 2.8 ms, four tool rounds +51% -- and a profile of a bundled
+     one-turn run (source-mapped by esbuild's file markers) finds no hotspot
+     of ours: the time is Effect's run loop, i.e. more effect steps per
+     submission as features landed, plus ~8% schema work of which the
+     largest piece is Effect AI rebuilding `Response.Part`'s union on every
+     `LanguageModel` call (upstream). It is also confounded: v0.0.1 runs on
+     its own lockfile with an older Effect RC, so some of the gap may be the
+     dependencies, and v0.0.1's source cannot run against today's to
+     separate them. Treated as the cost of the features, not a regression,
+     unless a scenario shows one. Still open: durable
      scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
      effect-uai native vs adapter, a live-model cost run for item 93, and
      characterising variance before any gate.
