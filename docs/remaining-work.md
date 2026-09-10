@@ -528,16 +528,22 @@ acceptance test for 105, 107 and 108.*
      verify: grep "eval:continuity" package.json
      ```
 
-107. **Durable tool contracts are versioned (plan E15, §19).** No tool
-     definition digest is persisted; replay decodes against the current
-     schemas, so an upgrade surfaces as a decode failure or defect -- and a
-     recorded `new_context` request that no longer decodes is silently read
-     as no request. Persist per-tool digests at admission, refuse a changed
-     contract with a typed error, keep frozen legacy control-tool
-     definitions, and remove the silent decode. Feeds 67. Medium.
+107. **Durable tool contracts are versioned (plan E15, §19) -- first slice
+     landed 2026-09-10.** A submission journals a SHA-256 digest of every
+     tool contract it can mention at its first execution (the `tool
+     contracts` activity: name, parameter/success/failure JSON Schemas, the
+     `Alone` annotation -- not the description); a replay under a changed or
+     removed tool is refused with `ToolContractChangedError` naming each tool
+     and both digests, as an ordinary agent failure that frees the session.
+     An added tool is not a conflict. A recorded `new_context` result that no
+     longer decodes now dies with an explanation instead of being read as no
+     request. Still open: frozen legacy definitions for control tools, so a
+     recorded run can finish rather than only be refused (T15.3), and
+     declared-compatible changes (Q7).
 
      ```text
-     verify: grep "Schema.decodeUnknownOption(RolloverRequest)" src/compaction/Compaction.ts
+     verify: exists src/durable/ToolContracts.ts
+     verify: no-grep "if (Option.isSome(request)) {" src/compaction/Compaction.ts
      ```
 
 108. **Checkpoints are disposable caches (plan E16, §20).** Stale

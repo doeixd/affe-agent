@@ -78,6 +78,7 @@ const familyOf = (name: string): string => {
   if (/-drain-\d+$/.test(name)) return "channel drain"
   if (/\/finish$/.test(name)) return "session projection"
   if (/(^|[/:])execution-strategy$/.test(name)) return "execution strategy"
+  if (/(^|[/:])contract-digests$/.test(name)) return "tool contracts"
   if (/^tool-|-tool-/.test(name)) return "tool call"
   return `unclassified: ${name}`
 }
@@ -144,12 +145,16 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
       // once per submission so a recovered attempt runs its tools as admitted
       // rather than as the replacement process is configured. Replaying it
       // returns the recorded strategy; it has no side effect to repeat.
+      // `tool contracts` (item 107): each tool's contract digest, journalled
+      // at the first execution and compared on every replay, so a journal
+      // recorded under other definitions is refused by name, not misread.
       assert.deepStrictEqual(families, [
         "channel drain",
         "execution strategy",
         "model call",
         "permission decision",
-        "tool call"
+        "tool call",
+        "tool contracts"
       ])
 
       // A representative run, not a trivial one: it really did call a model
@@ -204,7 +209,8 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
         "channel drain",
         "execution strategy",
         "model call",
-        "session projection"
+        "session projection",
+        "tool contracts"
       ])
     })
   )

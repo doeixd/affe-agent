@@ -546,19 +546,25 @@ const checkpointMessages = (
 const requestedRollover = (
   messages: ReadonlyArray<Prompt.Message>,
   covered: number
-): Option.Option<{ readonly coveredThrough: number; readonly handoff: Option.Option<string> }> => {
+):
+  | Option.Option<{ readonly coveredThrough: number; readonly handoff: Option.Option<string> }>
+  | { readonly _tag: "Undecodable"; readonly index: number } =>
+{
   for (let index = messages.length - 1; index >= covered; index--) {
     const message = messages[index]
     if (message === undefined || message.role !== "tool") continue
     for (const part of message.content) {
       if (part.type !== "tool-result" || part.name !== NewContext.name || part.isFailure) continue
+      // Not `decodeUnknownOption`: a recorded request that no longer decodes
+      // was written under another `new_context` contract, and reading it as
+      // "no request" silently skips a rollover the model asked for. It is
+      // reported, and the caller refuses the turn (item 107).
       const request = Schema.decodeUnknownOption(RolloverRequest)(part.result)
-      if (Option.isSome(request)) {
-        return Option.some({
-          coveredThrough: index + 1,
-          handoff: Option.fromUndefinedOr(request.value.handoff)
-        })
-      }
+      if (Option.isNone(request)) return { _tag: "Undecodable", index }
+      return Option.some({
+        coveredThrough: index + 1,
+        handoff: Option.fromUndefinedOr(request.value.handoff)
+      })
     }
   }
   return Option.none()
@@ -1571,6 +1577,16 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
         // The model's own decision comes before the policy's: a `new_context`
         // result in the uncovered tail is acted on whatever the pressure.
         const requested = requestedRollover(messages, covered)
+        if (!Option.isOption(requested)) {
+          return yield* Effect.die(
+            new Error(
+              `The new_context result at canonical message ${requested.index} does not decode as a rollover ` +
+                "request: it was recorded under a different new_context contract. Restore the recorded " +
+                "definition to continue this session; treating it as no request would skip the rollover the " +
+                "model asked for."
+            )
+          )
+        }
         if (Option.isSome(requested)) {
           return yield* rolledOver(
             "requested",

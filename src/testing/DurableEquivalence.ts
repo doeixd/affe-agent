@@ -293,9 +293,14 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
           const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "second")
           const session = yield* client.session(SESSION)
           // Retried: until the dead process's shard lock expires, the
-          // submission is not this process's to finish.
+          // submission is not this process's to finish. Not an agent failure,
+          // though -- a submission that *failed* is an outcome, and the caller
+          // gets it (a refused replay, say) rather than a timeout.
           const result = yield* session.awaitSubmission(first.submissionId).pipe(
-            Effect.retry({ schedule: Schedule.spaced(Duration.millis(100)) }),
+            Effect.retry({
+              schedule: Schedule.spaced(Duration.millis(100)),
+              while: (error) => error._tag !== "AgentExecutionError"
+            }),
             Effect.timeoutOrElse({
               duration: timeout,
               orElse: () => Effect.die(new Error(`no process finished the submission crashed at ${options.at}`))

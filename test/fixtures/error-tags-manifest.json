@@ -54,6 +54,7 @@
   "StorageError",
   "ToolApprovalRequiredError",
   "ToolBatchRejectedError",
+  "ToolContractChangedError",
   "ToolNotAloneError",
   "ToolPermissionDeniedError",
   "ToolSourceExtractionError",

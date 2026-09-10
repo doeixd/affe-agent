@@ -19,6 +19,8 @@ import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
+import * as ToolContracts from "./ToolContracts.js"
+import { describedTools } from "../internal/describedTools.js"
 import * as Schedules from "../internal/schedules.js"
 import type { StorageError } from "../Errors.js"
 
@@ -401,6 +403,9 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
+          // Before anything is replayed, and inside this block so a refusal
+          // takes the ordinary failure path below: see `ToolContracts`.
+          yield* ToolContracts.check(describedTools(toolkit.tools, agent), "")
           const session = yield* AgentSession.make(durableAgent, {
             channels,
             elicitation,

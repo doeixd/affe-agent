@@ -970,6 +970,14 @@ cites a canonical message index for every provenance answer.
 
 ## 19. E15 — A durable tool contract is part of the persisted program
 
+**First slice landed 2026-09-10 (item 107 stays open).** T15.1–T15.2 and T15.4.
+The digests are journalled as an activity at the first execution rather than in
+the payload, the same move as §17, and the check runs *inside* the block whose
+failure handler commits the projection -- before it, a refusal would have left
+the session claimed. Without the check the same replay still failed, but as an
+anonymous decode error; the point is the name. T15.3 (legacy definitions) and
+Q7 remain.
+
 **Today.** No tool-definition digest or version is persisted. Replay
 decodes journalled model parts and tool results against the **current**
 toolkit's schemas (`DurableModel.ts:149–163`, `DurableToolkit.ts:109–123`);

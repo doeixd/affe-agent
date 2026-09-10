@@ -26,6 +26,8 @@ import * as DurableModel from "./DurableModel.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
+import * as ToolContracts from "./ToolContracts.js"
+import { describedTools } from "../internal/describedTools.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import * as AgentOutput from "../AgentOutput.js"
@@ -722,6 +724,12 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
+          // Before anything is replayed: a journal recorded under other tool
+          // contracts is refused by name, not misread (`ToolContracts`).
+          // Inside this block, so the refusal is an agent failure like any
+          // other -- its projection commits and the session is freed rather
+          // than left claimed behind a body that failed before it began.
+          yield* ToolContracts.check(describedTools(toolkit.tools, agent), scopePrefix)
           const session = yield* AgentSession.makeEngine(durableAgent, {
             channels,
             elicitation,
