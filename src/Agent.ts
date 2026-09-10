@@ -1,11 +1,10 @@
-import { Effect, Fiber, Option, PubSub, Ref, Stream } from "effect"
+import { Context, Effect, Fiber, Option, PubSub, Ref, Stream } from "effect"
 import type { Schema, Scope } from "effect"
 import type * as ExecutionPlan from "effect/ExecutionPlan"
 import type { Pipeable } from "effect/Pipeable"
 import { pipeArguments } from "effect/Pipeable"
-import { Toolkit } from "effect/unstable/ai"
+import { Tool, Toolkit } from "effect/unstable/ai"
 import type { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
-import type { Tool } from "effect/unstable/ai"
 import * as AgentLoop from "./AgentLoop.js"
 import * as AgentInput from "./AgentInput.js"
 import * as AgentOutput from "./AgentOutput.js"
@@ -358,7 +357,7 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = Langua
  */
 export interface Description {
   readonly instructions: Option.Option<string>
-  readonly tools: Option.Option<ReadonlyArray<{ readonly name: string; readonly description: Option.Option<string> }>>
+  readonly tools: Option.Option<ReadonlyArray<DescribedTool>>
   readonly loop: AgentLoop.Description
   readonly permission: Permission.Description
   readonly toolExecution: ToolExecution.Strategy
@@ -387,14 +386,36 @@ export interface Description {
   }>
 }
 
+/**
+ * One tool, as configured (item 94). `failureMode` is the tool's own
+ * Effect AI setting, and it wins over the agent's `toolFailurePolicy`: a
+ * `"return"` tool made its failure a value the model reads, so its failures
+ * are returned to the model even under `FailRun`. Listed here so an agent
+ * whose policy says `FailRun` does not read as a promise the tool breaks.
+ */
+export interface DescribedTool {
+  readonly name: string
+  readonly description: Option.Option<string>
+  readonly failureMode: "error" | "return"
+  /** Must run alone in its turn (`ToolExecution.Alone`). */
+  readonly alone: boolean
+  /** Effect AI's `Tool.Readonly` and `Tool.Idempotent` annotations. */
+  readonly readonly: boolean
+  readonly idempotent: boolean
+}
+
 export const describe = (agent: Any): Description => ({
   instructions: agent.instructions,
   // The one place "can we know the tools yet?" is answered: a handled value
   // and a `Declared` Effect say; a bare Effect does not until it has run.
   tools: Option.map(InternalToolkit.declaredTools(agent.toolkit), (tools: Record<string, Tool.Any>) =>
-    Object.values(tools).map((tool) => ({
+    Object.values(tools).map((tool): DescribedTool => ({
       name: tool.name,
-      description: Option.fromUndefinedOr(tool.description)
+      description: Option.fromUndefinedOr(tool.description),
+      failureMode: tool.failureMode,
+      alone: Context.get(tool.annotations, ToolExecution.Alone),
+      readonly: Context.get(tool.annotations, Tool.Readonly),
+      idempotent: Context.get(tool.annotations, Tool.Idempotent)
     }))
   ),
   loop: agent.loop.description,

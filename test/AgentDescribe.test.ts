@@ -58,7 +58,14 @@ describe("Agent.describe", () => {
     const description = Agent.describe(agent)
     assert.deepStrictEqual(description, {
       instructions: Option.some("Be terse."),
-      tools: Option.some([{ name: "search", description: Option.some("Search the index.") }]),
+      tools: Option.some<ReadonlyArray<Agent.DescribedTool>>([{
+        name: "search",
+        description: Option.some("Search the index."),
+        failureMode: "error",
+        alone: false,
+        readonly: false,
+        idempotent: false
+      }]),
       loop: {
         _tag: "Custom",
         name: "Budget.within",

@@ -368,17 +368,23 @@ and pin the state it starts from.*
     verify: grep "readonly maxSchemaBytes: Option.Option<number>" src/ToolExposure.ts
     ```
 
-94. **Failure disposition (plan E4, §6).** `ToolCallFailed` carries only
-    `returnedToModel: boolean`; add `failureHandling: "returned-to-model" |
-    "propagated" | "returned-to-program"` beside it (five consumers), and
-    extend `Agent.describe()`'s tool entries with failure mode, exclusivity,
-    idempotence and source rather than adding `inspectTools`. First decide
-    the untested interaction it surfaces: a tool with Effect AI
-    `failureMode: "return"` has its failure returned to the model even under
-    `toolFailurePolicy: FailRun`. Medium.
+94. **Failure disposition (plan E4, §6) -- first slice landed 2026-09-10.**
+    Decided (T6.1), as the plan recommended: a tool's own `failureMode:
+    "return"` wins over the agent's `toolFailurePolicy: FailRun` -- the
+    tool author made its failure a value the model reads -- and
+    `test/FailureDisposition.test.ts` pins both sides of it (there was no
+    test). `Agent.describe().tools` entries now carry `failureMode`,
+    `alone`, `readonly` and `idempotent` (most of T6.4), so the
+    agent-level policy does not read as a promise a tool breaks. Open:
+    `failureHandling: "returned-to-model" | "propagated" |
+    "returned-to-program"` on `ToolCallFailed` beside `returnedToModel`
+    (T6.2) and its five consumers (T6.3), nested Code Mode calls reporting
+    `returned-to-program` (T6.5), and the describe entry's source namespace
+    and provider-executed flag. Medium.
 
     ```text
-    verify: grep "returnedToModel: Schema.Boolean" src/AgentEvent.ts
+    verify: grep "readonly failureMode: \"error\" | \"return\"" src/Agent.ts
+    verify: exists test/FailureDisposition.test.ts
     ```
 
 95. **Connector webhook acks before anything is persisted.**
