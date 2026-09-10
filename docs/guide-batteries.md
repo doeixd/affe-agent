@@ -58,6 +58,17 @@ nested delegation wraps once per forwarding edge, so the path is the nesting.
 Approvals are not doubled: they cross as elicitation, under `approval`. Opt-in,
 because it multiplies the parent's stream by the child's.
 
+**Depth and concurrency.** Delegation depth is counted across every subagent
+tool, and a delegation that would open a child deeper than its `maxDepth`
+(default `Subagent.defaultMaxDepth`, 8) is refused before the child opens,
+with a `SubagentDepthExceededError` the delegating model reads -- so an agent
+that delegates to itself stops at the limit instead of at the bill.
+`maxConcurrent` bounds how many children of one tool are open at once; a
+delegation past it waits for a slot rather than being refused, so a parallel
+batch still completes. Both are decided when the delegation is admitted:
+lowering a limit (on a new tool value) blocks new delegations and never
+cuts short a child already running.
+
 ## Scheduling & self-dispatch
 
 `affe-agent/scheduling` adds two thin things over Effect's own
@@ -83,6 +94,14 @@ yield* Effect.forkScoped(Scheduling.recurring(Digest, "summarise today", Schedul
 fibre in the layer's scope); for durability, provide a Workflow/queue
 implementation of the same `AgentDispatcher` — the agent doesn't change. For
 durable, cluster-wide cron there's already `ScheduledAgent` over `ClusterCron`.
+
+`Scheduling.queued(store)` persists jobs to a `JobStore` and
+`Scheduling.worker(agent, store, { maxConcurrent })` drains it. The limit is
+taken at the claim: the worker asks the store for its free slots only, so a
+job it cannot start stays in the store for another worker rather than
+waiting in this one's memory. The limit is fixed for a worker's life; a
+worker started with a lower one claims less, and nothing already running
+elsewhere is cut short.
 
 ## Lifecycle hooks
 

@@ -2251,3 +2251,20 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: grep "byte-identical tool list" test/ToolExposure.test.ts
      verify: grep "It is not free, though." docs/guide-sessions.md
      ```
+
+111. ~~**Admission limits decided at the reservation (plan E19, §23).**~~ —
+     landed 2026-09-10. `Scheduling.worker({ maxConcurrent })` asks
+     `claimDue(now, limit)` for its free slots only, so a job it cannot start
+     stays in the store; a store that ignores `limit` is held to the bound by
+     a semaphore and the over-claim is logged (A23.1: 100 jobs, limit 4).
+     Subagent delegation depth is counted across every subagent tool and
+     refused past `maxDepth` (default 8) before the child opens, with a
+     `SubagentDepthExceededError` the delegating model reads (A23.2); a
+     tool's `maxConcurrent` waits for a slot. The lowering rule is in
+     `guide-batteries.md`. Every limit's mutation is caught.
+
+     ```text
+     verify: grep "claimDue(now, free)" src/scheduling/Scheduling.ts
+     verify: grep "class SubagentDepthExceededError" src/subagent/Subagent.ts
+     verify: grep "a ninth-level delegation is refused" test/SubagentAdmission.test.ts
+     ```

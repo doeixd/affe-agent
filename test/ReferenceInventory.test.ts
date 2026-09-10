@@ -47,6 +47,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "not delegated: events have no parent to forward to"
   },
+  "src/internal/delegationDepth.ts:DelegationDepth": {
+    class: "no-feature",
+    why: "0 is exactly \"not delegated\"; only Subagent raises it, and the limit it feeds is Subagent's own"
+  },
   "src/internal/currentSession.ts:CurrentSessionId": {
     class: "no-feature",
     why: "outside a session: nothing session-scoped is reachable"

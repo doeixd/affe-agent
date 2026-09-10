@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Schema, Semaphore } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -9,6 +9,7 @@ import type * as AgentSubmission from "../AgentSubmission.js"
 import * as Budget from "../budget/Budget.js"
 import * as Elicitation from "../Elicitation.js"
 import { ParentEvents } from "../internal/delegatedEvents.js"
+import { DelegationDepth } from "../internal/delegationDepth.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
 import * as Namespace from "../internal/namespace.js"
@@ -264,6 +265,60 @@ export class SubagentInterruptedError extends Schema.TaggedError<SubagentInterru
   }
 }
 
+/**
+ * A delegation refused because it would open a child deeper than the
+ * delegating tool's `maxDepth`. Refused before the child opens, so nothing
+ * of it ran; returned to the model like any child failure under the default
+ * `onError`, so it can answer without delegating.
+ */
+export class SubagentDepthExceededError extends Schema.TaggedError<SubagentDepthExceededError>()(
+  Namespace.tag("subagent/SubagentDepthExceededError"),
+  { toolName: Schema.String, depth: Schema.Number, maxDepth: Schema.Number }
+) {
+  override get message() {
+    return (
+      `The delegation ${this.toolName} was refused: it would run ${this.depth} delegations deep, and the limit is ` +
+      `${this.maxDepth}. Answer with what you have, or without delegating.`
+    )
+  }
+}
+
+/** The default `maxDepth`: deep enough for any deliberate hierarchy, short of a runaway recursion's bill. */
+export const defaultMaxDepth = 8
+
+/**
+ * Depth and concurrency, reserved before the child opens (item 111). Depth
+ * is refused -- waiting would not make a recursion shallower; concurrency
+ * waits for a slot, so a parallel batch of delegations still completes, only
+ * `maxConcurrent` at a time. Lowering either on a new tool value blocks new
+ * delegations only; a child already open finishes.
+ */
+const admission = (
+  name: string,
+  options: { readonly maxDepth?: number | undefined; readonly maxConcurrent?: number | undefined }
+) => {
+  const maxDepth = options.maxDepth ?? defaultMaxDepth
+  if (!Number.isSafeInteger(maxDepth) || maxDepth < 1) {
+    throw new RangeError(`Subagent "${name}": maxDepth must be a positive integer`)
+  }
+  const max = options.maxConcurrent
+  if (max !== undefined && (!Number.isSafeInteger(max) || max < 1)) {
+    throw new RangeError(`Subagent "${name}": maxConcurrent must be a positive integer`)
+  }
+  // One per tool value, made at construction: every delegation through this
+  // tool shares it.
+  const slots = max === undefined ? undefined : Semaphore.makeUnsafe(max)
+  return <A, E, R>(child: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const depth = (yield* DelegationDepth) + 1
+      if (depth > maxDepth) {
+        return yield* new SubagentDepthExceededError({ toolName: name, depth, maxDepth })
+      }
+      const deeper = Effect.provideService(child, DelegationDepth, depth)
+      return yield* (slots === undefined ? deeper : Semaphore.withPermit(slots, deeper))
+    })
+}
+
 /** The `success` schema a delegation declares: the child's output schema, or a string. */
 const successOf = <Value>(agent: {
   readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
@@ -367,6 +422,19 @@ export interface Options<R, LE = never> {
   readonly onError?: OnError | undefined
   /** What crosses the delegation. See `Inherit` for each default and why. */
   readonly inherit?: Inherit | undefined
+  /**
+   * The deepest this delegation may open a child: `1` means only a top-level
+   * agent may use it. Counted across every subagent tool, so a child that
+   * delegates onward -- to itself, say -- is refused at the limit with a
+   * `SubagentDepthExceededError` rather than recursing until the bill stops
+   * it. Default {@link defaultMaxDepth}.
+   */
+  readonly maxDepth?: number | undefined
+  /**
+   * The most children of this tool open at once. A delegation past it waits
+   * for one to finish rather than being refused. Default unbounded.
+   */
+  readonly maxConcurrent?: number | undefined
 }
 
 const describeError = (error: unknown): string => {
@@ -497,6 +565,7 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   options: Options<R, LE>
 ) => {
   refuseUnapprovable(name, agent, options.inherit)
+  const admit = admission(name, options)
   const definition = Tool.make(name, {
     description: options.description,
     parameters: parametersOf(InputBoundary.declared(agent)),
@@ -505,14 +574,14 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   })
 
   const run = (params: unknown) =>
-    Effect.flatMap(budgetFor(options.inherit), (budget) =>
+    admit(Effect.flatMap(budgetFor(options.inherit), (budget) =>
       askChild(name, agent, options.inherit, params).pipe(
         // The child's `LanguageModel | R` is discharged here and only here, so
         // the tool carries no requirement of its own and parent and child never
         // share a context. The budget is the one exception, by decision: see
         // `Inherit.budget`.
         Effect.provide(Layer.merge(options.provide, budget))
-      ))
+      )))
 
   const handler: Agent.Handler<typeof definition> = (params) =>
     options.onError === "die"
@@ -563,8 +632,9 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
   // fault should not cost a connection pool to discover.
   Effect.suspend(() => {
     refuseUnapprovable(name, agent, options.inherit)
-    return Layer.build(options.provide)
-  }).pipe(Effect.map((services) => {
+    const admit = admission(name, options)
+    return Effect.map(Layer.build(options.provide), (services) => ({ admit, services }))
+  }).pipe(Effect.map(({ admit, services }) => {
     const definition = Tool.make(name, {
       description: options.description,
       parameters: parametersOf(InputBoundary.declared(agent)),
@@ -573,14 +643,14 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     })
 
     const run = (params: unknown) =>
-      Effect.flatMap(budgetFor(options.inherit), (budget) =>
+      admit(Effect.flatMap(budgetFor(options.inherit), (budget) =>
         askChild(name, agent, options.inherit, params).pipe(
           // The already-built services, not the layer: this is the whole
           // difference from `tool`. The child's `LanguageModel | R` is still
           // discharged here and only here, so parent and child share no
           // context -- the budget excepted, by decision (`Inherit.budget`).
           Effect.provide(Layer.merge(Layer.succeedContext(services), budget))
-        ))
+        )))
 
     const handler: Agent.Handler<typeof definition> = (params) =>
       options.onError === "die"

@@ -1158,7 +1158,13 @@ unclassified Reference is added (break it once).
 
 ## 23. E19 — Admission limits decided at the reservation
 
-**T23.1 landed 2026-09-10 (item 111 stays open for T23.2–T23.3).**
+**Landed 2026-09-10 (item 111 closed).** T23.2: depth is a
+`DelegationDepth` Reference raised by each delegation and refused past
+`maxDepth` (default 8) before the child opens; `maxConcurrent` per subagent
+tool waits rather than refuses, since a refusal would fail half a parallel
+batch the model asked for together. T23.3 is in `guide-batteries.md`.
+
+**T23.1:**
 `claimDue` takes an optional `limit`; the worker passes its free slots, and
 a semaphore bounds the runs of a store that ignores it (logged as an
 over-claim). An optional parameter keeps existing stores compiling, which is
