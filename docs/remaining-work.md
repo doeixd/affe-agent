@@ -332,6 +332,264 @@ Items 27 and 30 are in the ledger.
     **Design, from comparing the two** (the plan's §5): their coherence
     without their centre.
 
+### Tool exposure, terminal work and failure routes — 2026-09-10 — [plan-exposure-and-terminal-work.md](./plan-exposure-and-terminal-work.md)
+
+*From `danieljvdm/effect-agent` #395–#424. Order of work, not priority:
+91 first (small, closes a live side-effect hazard), 92 builds on it, 93 is
+the largest and wants 100's harness to be judged. The plan carries each
+item's invariants and acceptance tests; the entries here say what is open
+and pin the state it starts from.*
+
+91. **Exclusive terminal batches (plan E1, §5).** A response carrying
+    `create_invoice(...)` and the output tool runs `create_invoice` today:
+    the output tool is not `ToolExecution.Alone`, and `Alone` refuses only
+    the marked call while its siblings run -- so `new_context`'s sibling
+    side effects happen too, despite its doc. Strengthen `Alone` to reject
+    the whole *application* batch before any handler or `Permission` runs
+    (provider-executed calls excluded, as `AgentTurn`'s filter already
+    does), commit a failed result per call, count the attempt against the
+    budgets, and annotate the output tool. Resolves the documented
+    two-output-calls race. Behaviour change for `new_context`; record it.
+    Small.
+
+    ```text
+    verify: grep "annotate(ToolExecution.Alone, true)" src/compaction/Compaction.ts
+    verify: grep "calls the tool twice in one turn" src/AgentTurn.ts
+    ```
+
+92. **Completion from an ordinary tool result (plan E2, §4).**
+    `AgentOutput.fromTool(Tool, project)`: a pure projection of a committed,
+    successful result that completes the submission without another model
+    call, validated against the output schema and re-evaluated on replay.
+    The model-called output tool stays the general case. After 91. Medium.
+
+    ```text
+    verify: no-grep "fromTool" src/AgentOutput.ts
+    ```
+
+93. **Visibility, progressive exposure and discovery (plan E3, §3).** There
+    is no pre-model visibility stage: `Permission` decides per call after the
+    model has seen every schema, and the only exposure control is the `Final`
+    turn's all-or-nothing withholding. Add visibility (principal/delegation,
+    never overridden by pinning), exposure (pinned ∪ selected ∪ mandatory
+    under count/byte caps, changed only at a batch boundary, rebuilt from
+    history) and a `discover_tools` battery searching only eligible tools,
+    over `Catalog` lifted from Code Mode namespaces to any toolkit and
+    composed with `/tool-source`. Open: visibility per agent or per session
+    (Q1). Recommended in the guide only after 100 measures it against an
+    eager toolkit. Large.
+
+    ```text
+    verify: absent src/ToolExposure.ts
+    verify: grep "readonly complete: boolean" src/code/Catalog.ts
+    ```
+
+94. **Failure disposition (plan E4, §6).** `ToolCallFailed` carries only
+    `returnedToModel: boolean`; add `failureHandling: "returned-to-model" |
+    "propagated" | "returned-to-program"` beside it (five consumers), and
+    extend `Agent.describe()`'s tool entries with failure mode, exclusivity,
+    idempotence and source rather than adding `inspectTools`. First decide
+    the untested interaction it surfaces: a tool with Effect AI
+    `failureMode: "return"` has its failure returned to the model even under
+    `toolFailurePolicy: FailRun`. Medium.
+
+    ```text
+    verify: grep "returnedToModel: Schema.Boolean" src/AgentEvent.ts
+    ```
+
+95. **Connector webhook acks before anything is persisted.**
+    `Connector.serverLayer` answers 200 and forks the delivery into the
+    layer scope, deliberately (platform timeouts); a crash between the ack
+    and the run loses the message, and the sender will not retry. The loss
+    window is not documented. Either persist first (e.g. through
+    `SessionInbox`, making 200 mean Persisted) or state the window in the
+    guide. Small.
+
+    ```text
+    verify: grep "so it outlives the 200 ack" src/connectors/Connectors.ts
+    ```
+
+96. **Queued scheduling has no at-least-once store.** `JobStore.claimDue`
+    is claim-and-take, documented at-most-once, and says an at-least-once
+    store would implement a visibility timeout behind the same interface;
+    none ships. Decide whether one should (a lease held by a live worker is
+    the plan's `DeliveryPending`), or leave it adopter-triggered and say so.
+    Small–medium.
+
+    ```text
+    verify: grep "Semantics are at-most-once" src/scheduling/Scheduling.ts
+    ```
+
+97. **Acknowledgement vocabulary (plan E5, §8).** Persisted /
+    DeliveryPending / Accepted / Running / Settled: document which one each
+    submit-like API's success means (audit table in the plan), retype the
+    ambiguous `void`s, and surface the incumbent claim when
+    `DurableAgentClient.submit` refuses with `AgentBusyError` rather than
+    dropping it. There is no background subagent mode; one added later must
+    adopt the vocabulary. After 95–96. Medium.
+
+98. **Code Mode `uncertain` and `not-started` (plan E6, §7).** A call in
+    flight at interruption is reported `failed` or not at all; add
+    `uncertain` and `not-started`, and refuse to blindly re-run a program
+    whose non-idempotent calls are uncertain on durable recovery. Medium.
+
+    ```text
+    verify: grep "readonly outcome: \"succeeded\" | \"failed\" | \"refused\"" src/code/CodeMode.ts
+    ```
+
+99. **Budget topology, stated (plan E7, §9).** Only engine turns reach
+    `Budget.record`; compaction, branch and coding summaries report usage
+    only, and `inherit.budget: false` leaves a child's usage nowhere. Write
+    the per-source table into `limits.md`, make every uncharged source still
+    report usage with a scope, and revisit the documented "counted, not
+    capped" subagent default (a delegation can overshoot the parent by a
+    whole child run). Any future model-backed battery declares its row
+    before landing. Small–medium.
+
+    ```text
+    verify: grep "is *counted*, not capped" src/subagent/Subagent.ts
+    ```
+
+100. **Matched release→main benchmark suite (plan E8, §10).** Both refs
+     freshly built, interleaved runs, median + IQR, raw samples and
+     build/lock identities kept, no percentage when artifacts are identical,
+     informational only until variance is known. Scenarios in the plan,
+     including 93's eager-vs-progressive comparison measured on latency,
+     model calls, cache reads/writes, cost and success rate. Medium.
+
+     ```text
+     verify: absent bench
+     ```
+
+101. **Prompt-cache stability (plan E9, §11).** Document it as a
+     `ContextTransform` concern, emit 93's exposed set in a stable order,
+     and assert with a recording model that an unchanged selection yields
+     byte-identical tool lists. Small; lands with 93.
+
+102. **Cloudflare AI Gateway option (plan E10, §12).** An optional model
+     option in `/cloudflare`. Adopter-triggered; not built speculatively.
+
+*Part II of the plan (durability and correctness, from #376–#391). The
+near-term priorities across both parts are five: 93 (exposure), 91+92
+(terminal work), 103+104 (exact-response recovery and the equivalence
+oracle), 105 (host scheduling and authority capture), 106 (continuity
+evaluation). Work order: 91 and 103 first, then 104, whose oracle is the
+acceptance test for 105, 107 and 108.*
+
+103. **Streaming loses text and reasoning metadata (plan E11, §15).** The
+     accumulator closes a chunk as `makePart("text" | "reasoning", { text })`,
+     so start/delta/end metadata -- Anthropic reasoning signatures included
+     -- never reaches the canonical message, locally or under `/durable`,
+     whose streaming replay re-emits no metadata either. The batch path is
+     correct. The signature test is batch-only, and the two replay tests that
+     claim to gate "between the turns" suspend in the first
+     `ContextTransform` call, before any model response is journalled, so no
+     test replays one. Fix the accumulator and replay; add the text +
+     reasoning + file + metadata + three-call fixture across batch/stream and
+     local/durable; gate those tests on `turnIndex`. Small–medium.
+
+     ```text
+     verify: grep "Response.makePart(\"text\", { text: current.text })" src/internal/streamAccumulator.ts
+     ```
+
+104. **Crash/no-crash canonical equivalence oracle (plan E12, §16).** No
+     test compares a crashed run with an uncrashed one on full history,
+     events, usage, disposition and next model context, and there is no
+     failpoint inside a turn. Add in-turn failpoints, a shipped
+     `equivalence(scenario, boundaries)` harness in `src/testing/`, the
+     scenario set in the plan (including declaration order after parallel
+     execution, crash and subagent suspension), and a D8 break in
+     `falsify.mjs`. Medium.
+
+     ```text
+     verify: no-grep "D8" scripts/falsify.mjs
+     ```
+
+105. **Host scheduling, captured per durable attempt (plan E13, §17).** No
+     host scheduling layer exists, and a recovered durable run takes its tool
+     strategy from the replacement process's agent definition. Add a
+     host-provided `ToolScheduling` that can only tighten the agent's
+     concurrency, capture the effective strategy at admission, and for
+     undecided calls on recovery apply the stricter of captured and current
+     permission -- so a revocation still applies and a new grant does not
+     reach an old run. Medium.
+
+     ```text
+     verify: grep "permission: durablePermission," src/durable/DurableSubmission.ts
+     ```
+
+106. **Long-lifetime continuity evaluation (plan E14, §18).** Nothing
+     combines many turns, repeated rollovers, process death and a
+     deterministic recall check (original fact, latest correction,
+     unfinished task, provenance). A deterministic tier in `check` over the
+     scripted model, then an opt-in live tier (`npm run eval:continuity`),
+     scored programmatically, never by an LLM judge. Needs an `Evals.run`
+     over a restorable session. Medium–large.
+
+     ```text
+     verify: no-grep "eval:continuity" package.json
+     ```
+
+107. **Durable tool contracts are versioned (plan E15, §19).** No tool
+     definition digest is persisted; replay decodes against the current
+     schemas, so an upgrade surfaces as a decode failure or defect -- and a
+     recorded `new_context` request that no longer decodes is silently read
+     as no request. Persist per-tool digests at admission, refuse a changed
+     contract with a typed error, keep frozen legacy control-tool
+     definitions, and remove the silent decode. Feeds 67. Medium.
+
+     ```text
+     verify: grep "Schema.decodeUnknownOption(RolloverRequest)" src/compaction/Compaction.ts
+     ```
+
+108. **Checkpoints are disposable caches (plan E16, §20).** Stale
+     compaction checkpoints are already discarded; a *corrupt* one fails the
+     turn instead, and the prefix fingerprint is FNV-1a 32-bit. Discard and
+     rebuild on decode failure, strengthen the fingerprint, write the
+     truth/snapshot/checkpoint/index vocabulary into `guide-durable.md`,
+     version `AgentSession.Snapshot`. Small–medium.
+
+     ```text
+     verify: grep "KeyValueStore.toSchemaStore(" src/compaction/Compaction.ts
+     ```
+
+109. **Cursors over mutable sets; incomplete ≠ empty (plan E17, §21).**
+     `Catalog.search` pages by offset into a list a tool-source refresh can
+     shift (fix before 93 reuses it); `Memory.recall` and `search_context`
+     return short results that read as complete (the latter reports
+     `searched: messages.length` after stopping at three hits);
+     `DeliveryLog.read` has no limit at all. Anchor cursors, honest
+     `scanned`/`truncated`, a typed limit error. Small–medium.
+
+     ```text
+     verify: grep "return { hits, searched: messages.length }" src/compaction/Compaction.ts
+     ```
+
+110. **Operational defaults at network-facing boundaries (plan E18, §22).**
+     Every defaulted `Context.Reference` is safe; the unsafe defaults are
+     option fallbacks -- `allowAll` authorization on the Cloudflare host and
+     relay server, in-memory A2A task and OpenAI idempotency stores. Make
+     network-facing authorization required (as `AgentSessionHost` already
+     does), surface in-memory and `allowAll` defaults in `describe`, and add
+     an inventory test that forces a new Reference to be classified.
+     Breaking for two entry points (Q8). Small–medium.
+
+     ```text
+     verify: grep "options.authorization ?? AgentSessionHost.allowAll()" src/cloudflare/index.ts
+     verify: grep "options?.authorization ?? allowAll" src/relay/RelayServer.ts
+     ```
+
+111. **Admission limits decided at the reservation (plan E19, §23).** The
+     durable claim is a real atomic reservation; the scheduling worker forks
+     every due job with no concurrency limit, and subagents have no
+     concurrency or depth limit. Take worker slots inside `claimDue`, reserve
+     subagent depth/concurrency at delegation, and state that lowering a
+     limit only blocks new reservations. Medium.
+
+112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
+     Parked until 100 measures a session where cold recovery cost matters;
+     104's oracle is its acceptance test.
+
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
 *Decided with a second reviewer when the list ran out of work one maintainer
