@@ -19,6 +19,7 @@ import * as ContextTransform from "./ContextTransform.js"
 import * as InternalToolkit from "./internal/toolkit.js"
 import * as Permission from "./Permission.js"
 import * as ToolExecution from "./ToolExecution.js"
+import * as ToolExposure from "./ToolExposure.js"
 
 /**
  * A reusable description of agent behaviour.
@@ -89,6 +90,8 @@ export interface AgentDefinition<
   readonly loop: AgentLoop.AgentLoop<E, R, Tools>
   readonly contextTransform: ContextTransform.ContextTransform<E, R>
   readonly toolExecution: ToolExecution.Strategy
+  /** Which tools the model is shown, turn by turn. See `ToolExposure`. */
+  readonly toolExposure: ToolExposure.ToolExposure
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
   /**
    * Whether the agent may attempt each tool call. See `Permission`.
@@ -212,6 +215,13 @@ export interface Config<
   /** Defaults to `ToolExecution.Parallel`. */
   readonly toolExecution?: ToolExecution.Strategy | undefined
   /**
+   * Defaults to `ToolExposure.eager()`: every tool on every request.
+   * `ToolExposure.progressive(...)` shows pinned tools and a discovery tool,
+   * then what discovery selects -- for an agent with more tools than a
+   * request should carry.
+   */
+  readonly toolExposure?: ToolExposure.ToolExposure | undefined
+  /**
    * Defaults to `ToolExecution.ReturnToModel`: a tool that fails on a bad
    * argument should let the model try again rather than destroy the run.
    * Defects still fail the run regardless.
@@ -318,6 +328,7 @@ const definition = <Tools extends Record<string, Tool.Any>, E, R, Model = Langua
     loop: fields.loop,
     contextTransform: fields.contextTransform,
     toolExecution: fields.toolExecution,
+    toolExposure: fields.toolExposure,
     toolFailurePolicy: fields.toolFailurePolicy,
     permission: fields.permission,
     toolDenialPolicy: fields.toolDenialPolicy,
@@ -351,6 +362,16 @@ export interface Description {
   readonly loop: AgentLoop.Description
   readonly permission: Permission.Description
   readonly toolExecution: ToolExecution.Strategy
+  /** The exposure as data: the visibility rule is a function, so only whether there is one. */
+  readonly toolExposure:
+    | { readonly _tag: "Eager"; readonly visibility: boolean }
+    | {
+      readonly _tag: "Progressive"
+      readonly visibility: boolean
+      readonly pinned: ReadonlyArray<string>
+      readonly maxTools: number
+      readonly maxResults: number
+    }
   readonly toolFailurePolicy: ToolExecution.FailurePolicy
   readonly toolDenialPolicy: ToolExecution.FailurePolicy
   readonly input: { readonly raw: boolean; readonly schema: Schema.Top }
@@ -370,6 +391,15 @@ export const describe = (agent: Any): Description => ({
   loop: agent.loop.description,
   permission: Permission.describe(agent.permission),
   toolExecution: agent.toolExecution,
+  toolExposure: agent.toolExposure._tag === "Eager"
+    ? { _tag: "Eager", visibility: Option.isSome(agent.toolExposure.visible) }
+    : {
+      _tag: "Progressive",
+      visibility: Option.isSome(agent.toolExposure.visible),
+      pinned: agent.toolExposure.pinned,
+      maxTools: agent.toolExposure.maxTools,
+      maxResults: agent.toolExposure.maxResults
+    },
   toolFailurePolicy: agent.toolFailurePolicy,
   toolDenialPolicy: agent.toolDenialPolicy,
   input: { raw: agent.input === AgentInput.prompt, schema: agent.input.schema },
@@ -476,6 +506,7 @@ export const make = <
           ? ContextTransform.make(config.contextTransform)
           : config.contextTransform,
     toolExecution: config?.toolExecution ?? ToolExecution.Parallel,
+    toolExposure: config?.toolExposure ?? ToolExposure.eager(),
     toolFailurePolicy: config?.toolFailurePolicy ?? ToolExecution.ReturnToModel,
     permission: config?.permission ?? Permission.allowAll,
     toolDenialPolicy: config?.toolDenialPolicy ?? ToolExecution.FailRun,
@@ -813,6 +844,14 @@ export const withToolExecution =
     agent: AgentDefinition<Tools, E, R, Model, Value, Input>
   ): AgentDefinition<Tools, E, R, Model, Value, Input> =>
     definition({ ...agent, toolExecution: strategy })
+
+/** Replace which tools the model is shown. See `ToolExposure`. */
+export const withToolExposure =
+  (exposure: ToolExposure.ToolExposure) =>
+  <Tools extends Record<string, Tool.Any>, E, R, Model, Value, Input>(
+    agent: AgentDefinition<Tools, E, R, Model, Value, Input>
+  ): AgentDefinition<Tools, E, R, Model, Value, Input> =>
+    definition({ ...agent, toolExposure: exposure })
 
 /** Replace the tool failure policy. */
 export const withToolFailurePolicy =

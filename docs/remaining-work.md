@@ -357,21 +357,25 @@ and pin the state it starts from.*
     verify: no-grep "projectedBy" src/Agent.ts
     ```
 
-93. **Visibility, progressive exposure and discovery (plan E3, §3).** There
-    is no pre-model visibility stage: `Permission` decides per call after the
-    model has seen every schema, and the only exposure control is the `Final`
-    turn's all-or-nothing withholding. Add visibility (principal/delegation,
-    never overridden by pinning), exposure (pinned ∪ selected ∪ mandatory
-    under count/byte caps, changed only at a batch boundary, rebuilt from
-    history) and a `discover_tools` battery searching only eligible tools,
-    over `Catalog` lifted from Code Mode namespaces to any toolkit and
-    composed with `/tool-source`. Open: visibility per agent or per session
-    (Q1). Recommended in the guide only after 100 measures it against an
-    eager toolkit. Large.
+93. **Visibility, progressive exposure and discovery (plan E3, §3) -- first
+    slice landed 2026-09-10.** `ToolExposure` (kernel): `eager` or
+    `progressive({ pinned, maxTools, maxResults })`, each with an optional
+    `visible(tool, principal)` rule -- declared on the agent, decided per
+    caller (Q1). The model is sent pinned ∪ latest discovery selection ∪
+    protocol tools as `toolChoice.oneOf`, so the provider sees only those
+    schemas while the response still decodes against the whole toolkit; a
+    call outside the exposed set is refused with `ToolNotExposedError`; a
+    hidden tool is absent from requests and discovery even when pinned; the
+    selection is read from history, and a durable crash after discovery
+    recovers it. Still open: the eager-vs-progressive measurement (100)
+    before the guide recommends it; a byte cap (`maxSchemaBytes`); a
+    `ToolExposureChanged` event (T3.9); a `/tool-source` composition test
+    (T3.7); `limits.md` rows.
 
     ```text
-    verify: absent src/ToolExposure.ts
-    verify: grep "readonly complete: boolean" src/code/Catalog.ts
+    verify: exists src/ToolExposure.ts
+    verify: grep "readonly toolExposure: ToolExposure.ToolExposure" src/Agent.ts
+    verify: no-grep "maxSchemaBytes" src/ToolExposure.ts
     ```
 
 94. **Failure disposition (plan E4, §6).** `ToolCallFailed` carries only

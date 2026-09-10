@@ -305,6 +305,20 @@ announced; `ToolCallStarted` means it runs. Under `/durable` the agent's
 strategy is journalled at a submission's first execution, so a run recovered
 by a differently configured process runs its tools as it was admitted.
 
+**Which tools the model is shown** is a separate setting from which it may
+call. `toolExposure: ToolExposure.progressive({ pinned: ["read_file"], maxTools:
+16 })` sends the pinned tools and a `discover_tools` tool instead of every
+schema; discovery searches the tools this caller may see and its result is the
+selection the next request carries (a new search replaces it). A `visible:
+(tool, principal) => boolean` rule, on `eager` or `progressive`, decides what a
+caller may know exists: a hidden tool is absent from every request and every
+discovery result, and pinning does not bring it back. A call to a tool the turn
+did not expose is refused with `ToolNotExposedError` rather than run, and a
+call that does run still goes through `Permission` -- exposure changes what the
+model sees, never what it may do. The selection is read from history, so replay
+and restore rebuild it. It is not automatically cheaper: a discovery turn costs
+a model call.
+
 ## Tool progress
 
 A tool handler may report intermediate results while it is still running, via

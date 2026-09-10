@@ -58,6 +58,10 @@ describe("public API", () => {
       // batch is rejected, and each sibling is told why.
       "ToolBatchRejectedError",
       "ToolExecution",
+      // Which tools the model is shown, turn by turn, as distinct from which
+      // it may call: eager, or progressive with discovery. A kernel noun
+      // because `AgentTurn` reads it and `ToolExecution` enforces it.
+      "ToolExposure",
       // An `Alone` tool that arrived with siblings: the model's mistake,
       // always returned to it, never a failed run.
       "ToolNotAloneError",
@@ -116,6 +120,7 @@ describe("public API", () => {
       "withTool",
       "withToolDenialPolicy",
       "withToolExecution",
+      "withToolExposure",
       "withToolFailurePolicy",
       "withToolkit",
       "withTools"

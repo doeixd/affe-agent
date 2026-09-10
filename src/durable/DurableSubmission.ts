@@ -631,7 +631,8 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const scopePrefix = `${payload.submissionId}:`
       const modelLayer = yield* DurableModel.wrap(durableTools, {
         prefix: scopePrefix,
-        output: agent.output
+        output: agent.output,
+        toolExposure: agent.toolExposure
       })
       const channels = yield* DurableChannels.factory(options.store, {
         prefix: scopePrefix

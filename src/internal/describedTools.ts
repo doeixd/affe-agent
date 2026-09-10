@@ -1,6 +1,7 @@
 import { Option } from "effect"
 import type { Tool } from "effect/unstable/ai"
 import type * as AgentOutput from "../AgentOutput.js"
+import * as ToolExposure from "../ToolExposure.js"
 
 /**
  * Every tool a response from this agent can mention.
@@ -23,9 +24,13 @@ import type * as AgentOutput from "../AgentOutput.js"
  */
 export const describedTools = (
   tools: Readonly<Record<string, Tool.Any>>,
-  agent: { readonly output: Option.Option<AgentOutput.AgentOutput<any, any>> }
-): ReadonlyArray<Tool.Any> =>
-  Option.match(agent.output, {
-    onNone: () => Object.values(tools),
-    onSome: (output) => [...Object.values(tools), output.tool]
-  })
+  agent: {
+    readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
+    /** Progressive exposure injects `discover_tools` per turn, the same way. */
+    readonly toolExposure?: ToolExposure.ToolExposure | undefined
+  }
+): ReadonlyArray<Tool.Any> => [
+  ...Object.values(tools),
+  ...Option.match(agent.output, { onNone: () => [], onSome: (output) => [output.tool] }),
+  ...(agent.toolExposure?._tag === "Progressive" ? [ToolExposure.DiscoverTools] : [])
+]

@@ -106,6 +106,20 @@ live tier waits on E8's reporting.
 
 ## 3. E3 — Progressive tool exposure and discovery
 
+**First slice landed 2026-09-10 (item 93 stays open).** Q1 resolved as a
+visibility rule *declared on the agent and decided per caller*
+(`visible(tool, principal)`), so one agent serves callers with different
+grants. The mechanism the plan left open: Effect AI's `toolChoice.oneOf`
+filters the tools *sent to the provider* while the response is decoded against
+the full toolkit, so exposure narrows what the model sees and a hallucinated
+call to an unexposed tool still decodes and is refused by name (I3.7) --
+shrinking the toolkit instead would have failed the turn as an undecodable
+response. Protocol tools (the output tool, `discover_tools`) are always
+exposed rather than failing closed (I3.6). A3.1–A3.5 are
+`test/ToolExposure.test.ts`, A3.5 through `DurableEquivalence`. Not yet: the
+byte cap, the exposure event, the `/tool-source` composition test, and A3.8's
+measurement.
+
 ### 3.1 The layers
 
 ```text

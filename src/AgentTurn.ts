@@ -1,7 +1,9 @@
 import { Cause, Effect, ExecutionPlan, Option, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Prompt, Response, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
-import type { Tool } from "effect/unstable/ai"
+import * as Catalog from "./code/Catalog.js"
+import { CurrentPrincipal } from "./Principal.js"
+import * as ToolExposure from "./ToolExposure.js"
 import * as AgentEvent from "./AgentEvent.js"
 import type * as AgentOutput from "./AgentOutput.js"
 import type { Correlation } from "./AgentEvent.js"
@@ -81,28 +83,105 @@ export const applySteering = <Tools extends Record<string, Tool.Any>>(
  */
 const resolveToolkit = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools>,
-  withholdTools: boolean
-): Effect.Effect<Toolkit.WithHandler<Tools>> =>
-  Effect.flatMap(
-    withholdTools
-      ? withheld<Tools>()
+  withholdTools: boolean,
+  history: Prompt.Prompt,
+  principal: Option.Option<string>
+): Effect.Effect<{
+  readonly handler: Toolkit.WithHandler<Tools>
+  /** The names this turn exposes (`ToolExposure`), or `None` when nothing is restricted. */
+  readonly exposed: Option.Option<ReadonlySet<string>>
+}> =>
+  Effect.gen(function* () {
+    const resolved = withholdTools
+      ? yield* withheld<Tools>()
       // The session env satisfies the toolkit's requirements, so the shared
       // resolver's `E`/`R` are discharged to `never` here.
-      : InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<
+      : yield* (InternalToolkit.resolveToolkitInput(session.agent.toolkit) as Effect.Effect<
         Toolkit.WithHandler<Tools>
-      >,
-    (resolved) =>
-      Option.match(session.agent.output, {
-        onNone: () => Effect.succeed(resolved),
-        onSome: (output) =>
-          Effect.map(
-            outputToolkit(session, output),
-            (extra) =>
-              InternalToolkit.mergeHandled(resolved, extra) as unknown as
-                Toolkit.WithHandler<Tools>
-          )
-      })
+      >)
+    const registered: ReadonlyArray<Tool.Any> = Object.values(resolved.tools)
+    const exposure = session.agent.toolExposure
+    // The harness's own tools, merged per turn: the output tool, and under
+    // progressive exposure the discovery tool -- never on a `Final` turn.
+    const discovery = !withholdTools && exposure._tag === "Progressive"
+      ? Option.some(yield* discoveryToolkit(exposure, registered, principal))
+      : Option.none()
+    const output = yield* Effect.transposeOption(Option.map(session.agent.output, (o) => outputToolkit(session, o)))
+    const extra = Option.isSome(output) && Option.isSome(discovery)
+      ? Option.some(InternalToolkit.mergeHandled(output.value, discovery.value))
+      : Option.orElse(output, () => discovery)
+    const handler = Option.match(extra, {
+      onNone: () => resolved,
+      onSome: (tools) => InternalToolkit.mergeHandled(resolved, tools) as unknown as Toolkit.WithHandler<Tools>
+    })
+    const exposed = withholdTools
+      ? Option.none()
+      : ToolExposure.exposed(
+        exposure,
+        registered.map((tool) => tool.name),
+        Option.match(session.agent.output, { onNone: () => [], onSome: (o) => [o.toolName] }),
+        principal,
+        history
+      )
+    return { handler, exposed }
+  })
+
+/**
+ * The model call's `toolChoice` for an exposure: `oneOf` the exposed names, so
+ * the provider is sent only their schemas, while the response is still
+ * decoded against the whole toolkit -- a call to an unexposed tool then
+ * reaches `ToolExecution` and is refused there by name, rather than failing
+ * the turn as an undecodable response. Nothing when exposure restricts
+ * nothing, so an eager agent's requests are unchanged.
+ */
+const choiceFor = (exposed: Option.Option<ReadonlySet<string>>): { readonly toolChoice?: { readonly oneOf: ReadonlyArray<any> } } =>
+  Option.match(exposed, {
+    onNone: () => ({}),
+    onSome: (names) => ({ toolChoice: { oneOf: [...names] } })
+  })
+
+/**
+ * `discover_tools`, handled for one turn: a search over the tools this caller
+ * may see (`ToolExposure.eligible`), never a hidden one, returning each
+ * match's parameters so it is callable next turn without another lookup. The
+ * result is the selection; `ToolExposure.selectionFrom` reads it back out of
+ * history. A pure function of the declarations, so a durable replay that runs
+ * it again finds the same thing.
+ */
+const discoveryToolkit = (
+  exposure: Extract<ToolExposure.ToolExposure, { readonly _tag: "Progressive" }>,
+  registered: ReadonlyArray<Tool.Any>,
+  principal: Option.Option<string>
+): Effect.Effect<Toolkit.WithHandler<Record<string, Tool.Any>>> => {
+  // Built over `Tool.Any`, as `outputToolkit` is, so the two protocol
+  // toolkits share a type and merge; the handler's input is the tool's own
+  // parameters, decoded by `Toolkit.handle` before it is called.
+  const tool: Tool.Any = ToolExposure.DiscoverTools
+  const built = Toolkit.make(tool)
+  const pool = ToolExposure.eligible(exposure, registered, principal)
+  const byName = new Map(pool.map((tool) => [tool.name, tool]))
+  return built.pipe(
+    Effect.provide(built.toLayer({
+      discover_tools: ({ query }: { readonly query: string }) =>
+        Effect.sync(() => {
+          const found = Catalog.search({ tools: { tools: Object.fromEntries(byName) } }, query, {
+            limit: exposure.maxResults
+          })
+          const tools = found.results.flatMap((entry) => {
+            const tool = byName.get(entry.name)
+            return tool === undefined
+              ? []
+              : [{
+                name: tool.name,
+                ...(tool.description === undefined ? {} : { description: tool.description }),
+                parameters: Tool.getJsonSchema(tool)
+              }]
+          })
+          return { tools, selected: tools.map((tool) => tool.name), more: found.next !== undefined }
+        })
+    } as Toolkit.HandlersFrom<Toolkit.ToolsByName<[Tool.Any]>>))
   )
+}
 
 /**
  * The toolkit a `Final` turn sees: nothing.
@@ -314,7 +393,8 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
   session: Session<Tools, any, any>,
   correlation: Correlation,
   context: Prompt.Prompt,
-  handler: Toolkit.WithHandler<Tools>
+  handler: Toolkit.WithHandler<Tools>,
+  exposed: Option.Option<ReadonlySet<string>>
 ): Effect.Effect<LanguageModel.GenerateTextResponse<Tools, true>, any, any> =>
   Effect.gen(function* () {
     // Uninterruptible, so the open always precedes the close the finalizer
@@ -330,7 +410,8 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
         LanguageModel.streamText({
           prompt: context,
           toolkit: handler,
-          disableToolCallResolution: true
+          disableToolCallResolution: true,
+          ...choiceFor(exposed)
         })
       ),
       () => Accumulator.empty<Tools>(),
@@ -458,12 +539,19 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
       canonicalPrompt,
       prompt: canonicalPrompt
     })
-    const handler = yield* resolveToolkit(session, kind.withholdTools)
+    // Exposure is read from canonical history -- the latest discovery's
+    // selection -- and the caller's principal, so replay rebuilds it.
+    const { exposed, handler } = yield* resolveToolkit(
+      session,
+      kind.withholdTools,
+      canonicalPrompt,
+      yield* CurrentPrincipal
+    )
 
     yield* EventBus.emit(session.bus, correlation, { _tag: "TurnStarted" })
 
     const response = options.stream === true
-      ? yield* streamResponse(session, correlation, context, handler)
+      ? yield* streamResponse(session, correlation, context, handler, exposed)
       : yield* withPlan(
           session,
           LanguageModel.generateText({
@@ -471,7 +559,8 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
             toolkit: handler,
             // The harness owns tool execution so that it can emit the lifecycle
             // events, choose the concurrency, and commit results itself.
-            disableToolCallResolution: true
+            disableToolCallResolution: true,
+            ...choiceFor(exposed)
           })
         )
 
@@ -554,7 +643,8 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
         correlation,
         // What the model saw, plus what it said: the conversation up to
         // the call, as Effect AI's own resolver would hand `needsApproval`.
-        messages: [...context.content, ...History.fromResponseParts(response.content).content]
+        messages: [...context.content, ...History.fromResponseParts(response.content).content],
+        exposed
       })
     }
 

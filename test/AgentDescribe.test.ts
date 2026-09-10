@@ -86,6 +86,7 @@ describe("Agent.describe", () => {
         exceptions: [{ resource: "regexp:^\\/etc\\/", decision: { _tag: "Deny", reason: "system files" } }]
       },
       toolExecution: { _tag: "Concurrency", limit: 2 },
+      toolExposure: { _tag: "Eager", visibility: false },
       toolFailurePolicy: { _tag: "ReturnToModel" },
       toolDenialPolicy: { _tag: "FailRun" },
       input: { raw: true, schema: AgentInput.prompt.schema },

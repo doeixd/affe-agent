@@ -5,6 +5,7 @@ import { AiError, LanguageModel, Response, Toolkit } from "effect/unstable/ai"
 import type { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import type * as AgentOutput from "../AgentOutput.js"
+import type * as ToolExposure from "../ToolExposure.js"
 import { describedTools } from "../internal/describedTools.js"
 
 /**
@@ -128,6 +129,12 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
      * is not an activity to replay.
      */
     readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
+    /**
+     * The agent's tool exposure. A progressive one injects `discover_tools`
+     * per turn, which the journal's part schema must know about for the same
+     * reason as the output tool.
+     */
+    readonly toolExposure?: ToolExposure.ToolExposure | undefined
   }
 ): Effect.Effect<
   Layer.Layer<LanguageModel.LanguageModel>,
@@ -162,7 +169,10 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     // codec encoded parameter schemas; result schemas remain unchanged.
     // Everything a response can mention: the agent's own tools, plus whatever
     // the harness injects per turn and the agent's record therefore omits.
-    const described = describedTools(toolkit.tools, { output: options?.output ?? Option.none() })
+    const described = describedTools(toolkit.tools, {
+      output: options?.output ?? Option.none(),
+      toolExposure: options?.toolExposure
+    })
     // Left over the agent's own toolkit on purpose: this one is used only for
     // its *type* parameters, which the cast below restates, and widening it to
     // `Tool.Any` erases `Tools` and takes the stream's element type with it.

@@ -20,6 +20,7 @@ import * as Observation from "./internal/observation.js"
 import * as Telemetry from "./internal/telemetry.js"
 import { turnFailpoints } from "./internal/turnFailpoints.js"
 import * as ToolScheduling from "./ToolScheduling.js"
+import * as ToolExposure from "./ToolExposure.js"
 import * as Namespace from "./internal/namespace.js"
 
 /**
@@ -348,6 +349,12 @@ export interface TurnContext<R = never> {
   readonly correlation: Correlation
   /** The conversation the model saw, for `needsApproval` and the policy. */
   readonly messages: ReadonlyArray<Prompt.Message>
+  /**
+   * The tools this turn exposed (`ToolExposure`), when exposure restricted
+   * anything. A call outside it is refused with `ToolNotExposedError`
+   * rather than run. Absent or `None`: every tool is callable.
+   */
+  readonly exposed?: Option.Option<ReadonlySet<string>> | undefined
 }
 
 /**
@@ -963,7 +970,7 @@ const mustBeAlone = <Tools extends Record<string, Tool.Any>>(
  */
 const refuseBatchMember = <R>(
   call: { readonly id: string; readonly name: string; readonly params: unknown },
-  error: ToolNotAloneError | ToolBatchRejectedError,
+  error: ToolNotAloneError | ToolBatchRejectedError | ToolExposure.ToolNotExposedError,
   context: TurnContext<R>
 ): Effect.Effect<Response.AnyPart> =>
   Effect.gen(function* () {
@@ -1015,7 +1022,28 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
           batch.map((call) => executeSettled(handler, call, context)),
           concurrencyOption(context.agent.strategy)
         )
-  if (calls.length < 2 || !calls.some((call) => mustBeAlone(handler, call))) return dispatch(calls)
+  if (calls.length < 2 || !calls.some((call) => mustBeAlone(handler, call))) {
+    // A call to a tool this turn did not expose -- one the model has not
+    // been shown, or may not see -- is refused by name and never runs; the
+    // rest run as they would have. The model is told to discover it first.
+    const exposed = context.exposed ?? Option.none()
+    const hidden = Option.isSome(exposed) ? calls.filter((call) => !exposed.value.has(call.name)) : []
+    if (hidden.length === 0) return dispatch(calls)
+    const shown = calls.filter((call) => !hidden.includes(call))
+    return Effect.map(
+      Effect.all([
+        Effect.forEach(hidden, (call) =>
+          refuseBatchMember(call, new ToolExposure.ToolNotExposedError({ toolName: call.name, toolCallId: call.id }), context)),
+        dispatch(shown)
+      ]),
+      ([refusals, results]) => {
+        // By position, so history reads as the model asked.
+        let refusal = 0
+        let result = 0
+        return calls.map((call) => hidden.includes(call) ? refusals[refusal++]! : results[result++]!)
+      }
+    )
+  }
   // A call that must be alone, with company: the whole batch is refused and
   // nothing runs -- see `Alone`. One result per call, in the calls' order, so
   // the history reads as the model asked.
