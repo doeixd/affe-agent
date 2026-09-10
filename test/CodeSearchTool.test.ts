@@ -164,18 +164,16 @@ describe("CodeTool.searchTool", () => {
       const first = yield* run({ query: "report" })
       assert.strictEqual(first.results.length, 3)
       assert.strictEqual(first.total, 6)
-      assert.strictEqual(first.nextOffset, 3)
+      assert.isDefined(first.next)
 
-      const second = yield* run({ query: "report", offset: 3 })
-      // Deterministic scoring is what makes an offset mean what the model
-      // thinks it means: the same query never reshuffles under paging.
+      // The page token continues where the first page ended.
+      const second = yield* run({ query: "report", after: first.next })
+      assert.strictEqual(second.results.length, 3)
       assert.notDeepEqual(second.results, first.results)
+      // Six results, two pages of three: the second is the last.
+      assert.strictEqual(second.next, undefined)
       const again = yield* run({ query: "report" })
       assert.deepStrictEqual(again.results, first.results)
-
-      const last = yield* run({ query: "report", offset: 5 })
-      assert.strictEqual(last.results.length, 1)
-      assert.strictEqual(last.nextOffset, undefined)
     })
   )
 
@@ -197,7 +195,7 @@ describe("CodeTool.searchTool", () => {
       // model can act on, and a failed tool call is not.
       assert.deepStrictEqual(result.results, [])
       assert.strictEqual(result.total, 0)
-      assert.strictEqual(result.nextOffset, undefined)
+      assert.strictEqual(result.next, undefined)
     })
   )
 

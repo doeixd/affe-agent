@@ -201,16 +201,41 @@ describe("Catalog.search", () => {
     }
   })
 
-  it("pagination hands back an offset that continues the same ordering", () => {
+  it("pagination hands back a cursor that continues the same ordering", () => {
     const all = Catalog.search(namespaces, "issue")
     const first = Catalog.search(namespaces, "issue", { limit: 1 })
     assert.strictEqual(first.results.length, 1)
-    assert.deepStrictEqual(first.next, { offset: 1 })
-    const second = Catalog.search(namespaces, "issue", { ...first.next, limit: 1 })
+    assert.deepStrictEqual(first.next, { score: all.results[0]!.score, path: all.results[0]!.path })
+    const second = Catalog.search(namespaces, "issue", { after: first.next, limit: 1 })
     assert.strictEqual(second.results[0]!.path, all.results[1]!.path)
-    const last = Catalog.search(namespaces, "issue", { offset: all.total })
-    assert.strictEqual(last.results.length, 0)
-    assert.isUndefined(last.next)
+    // Walking to the end: every result once, then no next page.
+    const seen: Array<string> = []
+    let cursor: Catalog.Cursor | undefined = undefined
+    do {
+      const page: Catalog.SearchResult = Catalog.search(namespaces, "issue", { after: cursor, limit: 1 })
+      seen.push(...page.results.map((entry) => entry.path))
+      cursor = page.next
+    } while (cursor !== undefined)
+    assert.deepStrictEqual(seen, all.results.map((entry) => entry.path))
+  })
+
+  it("a catalog refreshed between two pages repeats nothing and skips nothing (item 109)", () => {
+    // An offset counted positions: a tool arriving above the cut shifted the
+    // next page back by one, repeating a result. A cursor names where the
+    // last page ended, which the new tool does not move.
+    const first = Catalog.search(namespaces, "issue", { limit: 1 })
+    const refreshed = {
+      ...namespaces,
+      alpha: {
+        tools: {
+          issue: Tool.make("issue", { description: "issue issue", parameters: Schema.Struct({}), success: Schema.String })
+        }
+      }
+    }
+    const before = Catalog.search(namespaces, "issue").results.map((entry) => entry.path)
+    const second = Catalog.search(refreshed, "issue", { after: first.next, limit: 1 })
+    assert.notInclude(second.results.map((entry) => entry.path), first.results[0]!.path, "a result was repeated")
+    assert.strictEqual(second.results[0]!.path, before[1], "the next result in the original order was skipped")
   })
 
   it("no match is an empty result, not an error", () => {

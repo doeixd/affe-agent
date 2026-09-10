@@ -368,15 +368,26 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
 /**
  * What the model asks for.
  *
- * `offset` rather than a page token, because `Catalog.search` is
- * deterministic: the same query scores the same tools in the same order
- * every time, so an offset means exactly what the model thinks it does.
+ * A page token, not an offset. Scoring is deterministic, but the *set* is
+ * not fixed: a tool source that refreshes between two pages can put a tool
+ * above the cut, and an offset would then repeat one result and skip another.
+ * The token names where the last page ended (`Catalog.Cursor`), which a
+ * refresh does not move. Opaque to the model: pass back what `next` gave.
  */
 const SearchParameters = Schema.Struct({
   query: Schema.String,
-  /** Continue a previous search from `nextOffset`. Omit to start. */
-  offset: Schema.optional(Schema.Number)
+  /** Continue a previous search: the `next` it returned. Omit to start. */
+  after: Schema.optional(Schema.String)
 })
+
+/** A cursor as the opaque token the model passes back: `<score>:<path>`. */
+const encodeCursor = (cursor: Catalog.Cursor): string => `${cursor.score}:${cursor.path}`
+
+const decodeCursor = (token: string): Catalog.Cursor | undefined => {
+  const at = token.indexOf(":")
+  const score = Number(token.slice(0, at))
+  return at > 0 && Number.isFinite(score) ? { score, path: token.slice(at + 1) } : undefined
+}
 
 /**
  * What comes back: the same generated signature the inline catalog
@@ -393,8 +404,8 @@ export const SearchResult = Schema.Struct({
   })),
   /** Matches in total, so the model can tell "none" from "more". */
   total: Schema.Number,
-  /** Pass back as `offset` for the next page. Absent when there is none. */
-  nextOffset: Schema.optional(Schema.Number)
+  /** Pass back as `after` for the next page. Absent when there is none. */
+  next: Schema.optional(Schema.String)
 })
 export type SearchResult = typeof SearchResult.Type
 
@@ -450,13 +461,20 @@ export const searchTool = <Groups extends CodeMode.ToolGroups>(
   const definition = Tool.make(options.name ?? "search", {
     description: SEARCH_DESCRIPTION,
     parameters: SearchParameters,
-    success: SearchResult
+    success: SearchResult,
+    failure: Schema.String
   })
 
-  const handler: Agent.Handler<typeof definition> = ({ offset, query }) =>
-    Effect.sync(() => {
+  const handler: Agent.Handler<typeof definition> = ({ after, query }) =>
+    Effect.gen(function*() {
+      const cursor = after === undefined ? undefined : decodeCursor(after)
+      // A token this tool did not hand out is the model's mistake, and it
+      // is told so; starting over silently would repeat a page it has seen.
+      if (after !== undefined && cursor === undefined) {
+        return yield* Effect.fail(`not a page token this search returned: ${JSON.stringify(after)}`)
+      }
       const found = Catalog.search(options.tools, query, {
-        ...(offset === undefined ? {} : { offset }),
+        ...(cursor === undefined ? {} : { after: cursor }),
         ...(options.limit === undefined ? {} : { limit: options.limit })
       })
       return {
@@ -466,7 +484,7 @@ export const searchTool = <Groups extends CodeMode.ToolGroups>(
           signature: entry.signature
         })),
         total: found.total,
-        ...(found.next === undefined ? {} : { nextOffset: found.next.offset })
+        ...(found.next === undefined ? {} : { next: encodeCursor(found.next) })
       }
     })
 

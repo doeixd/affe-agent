@@ -564,14 +564,15 @@ acceptance test for 105, 107 and 108.*
      now searches newest first, pages older with a `before` canonical-index
      cursor, reports `more` when the bound ended it and an honest
      `searched`, and skips the evidence tools' own calls and results, which
-     only echo the phrase. Still open: `Catalog.search` pages by offset into a
-     list a tool-source refresh can shift (fix before 93 reuses it);
-     `Memory.recall` returns a short result that reads as complete;
-     `DeliveryLog.read` has no limit at all.
+     only echo the phrase. `Catalog.search` (and Code Mode's `search` tool)
+     landed the same day: it pages by a `(score, path)` key rather than an
+     offset, so a tool-source refresh between pages repeats and skips nothing
+     -- done before 93 reuses it. Still open: `Memory.recall` returns a short
+     result that reads as complete; `DeliveryLog.read` has no limit at all.
 
      ```text
      verify: grep "more: Schema.Boolean" src/compaction/Compaction.ts
-     verify: grep "readonly next: { readonly offset: number } | undefined" src/code/Catalog.ts
+     verify: grep "readonly next: Cursor | undefined" src/code/Catalog.ts
      ```
 
 110. **Operational defaults at network-facing boundaries (plan E18, §22).**

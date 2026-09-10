@@ -345,25 +345,44 @@ const tokenize = (value: string): ReadonlyArray<string> =>
 const variants = (token: string): ReadonlyArray<string> =>
   token.endsWith("s") && token.length > 3 ? [token, token.slice(0, -1)] : [token]
 
+/**
+ * Where a page ended: the last result's score and path. Results are ordered
+ * by score, then path, so "everything after this key" is the next page.
+ */
+export interface Cursor {
+  readonly score: number
+  readonly path: string
+}
+
 export interface SearchResult {
   readonly results: ReadonlyArray<Entry & { readonly score: number }>
-  /** Spread back into the next request to continue: `{ offset }`. */
-  readonly next: { readonly offset: number } | undefined
+  /** Pass back as `after` to continue. Absent when there is no next page. */
+  readonly next: Cursor | undefined
   readonly total: number
 }
+
+/** Whether `entry` sorts after `cursor`: lower score, or equal score and a later path. */
+const isAfter = (entry: { readonly score: number; readonly path: string }, cursor: Cursor): boolean =>
+  entry.score < cursor.score || (entry.score === cursor.score && entry.path.localeCompare(cursor.path) > 0)
 
 /**
  * Field-weighted additive scoring: exact path or path segment 20, path
  * substring 8, description substring 4, searchable text (input property
  * names and their descriptions) 2 -- per query token, singular variants
  * included. Deterministic: equal scores order by path.
+ *
+ * Pages by a key, not a position (item 109). An offset counted positions in
+ * a list that a tool source's refresh can reorder between two pages -- a
+ * tool scoring above the cut arrives, and the next page repeats one result
+ * and skips another. `after` names where the last page ended, which a
+ * refresh does not move.
  */
 export const search = (
   namespaces: Readonly<Record<string, ToolGroup>>,
   query: string,
-  options?: { readonly offset?: number | undefined; readonly limit?: number | undefined }
+  options?: { readonly after?: Cursor | undefined; readonly limit?: number | undefined }
 ): SearchResult => {
-  const offset = Math.max(0, options?.offset ?? 0)
+  const after = options?.after
   const limit = Math.max(1, options?.limit ?? 10)
   const queryTokens = tokenize(query)
 
@@ -396,11 +415,12 @@ export const search = (
       right.score - left.score || left.path.localeCompare(right.path)
     )
 
-  const page = scored.slice(offset, offset + limit)
-  const nextOffset = offset + page.length
+  const remaining = after === undefined ? scored : scored.filter((entry) => isAfter(entry, after))
+  const page = remaining.slice(0, limit)
+  const last = page[page.length - 1]
   return {
     results: page,
-    next: nextOffset < scored.length ? { offset: nextOffset } : undefined,
+    next: last !== undefined && remaining.length > page.length ? { score: last.score, path: last.path } : undefined,
     total: scored.length
   }
 }
