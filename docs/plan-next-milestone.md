@@ -114,7 +114,11 @@ matter.
   range for `effect` admitted every 4.x, which said the opposite. **Narrowed
   2026-09-06 to the release-candidate line the repository is tested against**
   (`>=4.0.0-rc.111 <4.0.0`); GA is admitted when it has been tested, by a
-  deliberate change, not by the range. Upstream is upgraded deliberately, with
+  deliberate change, not by the range. **Narrowed again 2026-09-10** to
+  `<=4.0.0-rc.112`: `rc.113` renamed `SchemaGetter.transformOrFail`, so the
+  open release-candidate line let `verify:package` install a version every
+  entry point failed to import under -- the risk this paragraph names, arriving
+  within the line rather than at GA. Upstream is upgraded deliberately, with
   the consumer and the fixtures as acceptance; a project to insulate the
   library from Effect is refused unless breakage becomes repeated and costly.
 - **Hardening.** Targeted, after 2.1 has defined a realistic workload:

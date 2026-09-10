@@ -54,13 +54,13 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 
 | Peer | Range | Notes |
 |------|-------|-------|
-| `effect` | `>=4.0.0-rc.111 <4.0.0` | required; the release-candidate line this repository is tested against (`rc.112`). Effect 4 GA is admitted deliberately, when it has been tested, not by the range |
+| `effect` | `>=4.0.0-rc.111 <=4.0.0-rc.112` | required; capped at the release candidate this repository is tested against (`rc.112`). Release candidates break APIs between each other -- `rc.113` renamed `SchemaGetter.transformOrFail` -- so a later one, and Effect 4 GA, are admitted deliberately when tested, not by the range |
 | `@modelcontextprotocol/sdk` | `>=1.10.0 <2.0.0` | optional; only for `/mcp/v1` |
 | `callscript` | `>=0.1.0 <0.2.0` | optional; only for `/code/callscript` |
 | `@modelcontextprotocol/client` | `>=2.0.0 <3.0.0` | optional; only for `/mcp/v2` |
 | `@a2a-js/sdk` | `>=1.0.1 <2.0.0` | optional; only for `/a2a` |
 | `acorn` | `>=8.18.0 <9.0.0` | optional; only for `/code` |
-| `effect-cf` | `>=0.39.0 <0.40.0` | optional; only for `/cloudflare` |
+| `effect-cf` | `>=0.39.0 <0.40.0` | optional; only for `/cloudflare`. Its own peer range admits `@effect/sql-d1@4.0.0-rc.113`, which requires `effect@rc.113`: pin `@effect/sql-d1@4.0.0-rc.112` beside it, or npm refuses the install |
 | `@durable-streams/client` | `>=0.2.6 <0.3.0` | optional; only for `/durable-streams` |
 
 ```jsonc

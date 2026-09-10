@@ -1882,9 +1882,14 @@ still resolves -- here, if not in the list. Nothing here is next;
     included, which nothing here has been tested against. Narrowed to the
     release-candidate line (`>=4.0.0-rc.111 <4.0.0`), with the README row
     saying GA is admitted deliberately when tested, not by the range.
+    *(2026-09-10: narrowed again, to `<=4.0.0-rc.112`. `rc.113` renamed
+    `SchemaGetter.transformOrFail`, and the open release-candidate line let
+    `verify:package` install it: 30 entry points failed to import from the
+    tarball. Release candidates are not API-stable between each other, so the
+    cap is the tested one.)*
 
     ```text
-    verify: grep "\"effect\": \">=4.0.0-rc.111 <4.0.0\"" package.json
+    verify: grep "\"effect\": \">=4.0.0-rc.111 <=4.0.0-rc.112\"" package.json
     ```
 
 19-gateway. ~~**One `AgentServer`, a DO-backed mount and an in-process mount,

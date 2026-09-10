@@ -37,9 +37,28 @@ try {
       .pop()
   )
 
+  // The versions this repository was built and tested with, from its
+  // lockfile. Installing a peer by its *range* installs whatever is newest
+  // that day, which is a different question -- and on 2026-09-10 a
+  // question with a wrong answer: `effect@4.0.0-rc.113` renamed an API, and
+  // an optional peer's own peer (`effect-cf` -> `@effect/sql-d1`) pulled the
+  // whole Effect family forward to it whatever `effect`'s range said. So each
+  // peer is installed at its tested version, and the `effect` family is
+  // pinned there by `overrides` so no transitive peer can drag it forward. A
+  // peer the lockfile does not hold falls back to its range.
+  const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"))
+  const tested = (name) => lock.packages?.[`node_modules/${name}`]?.version
+  const effectFamily = Object.fromEntries(
+    Object.entries(lock.packages ?? {}).flatMap(([key, value]) => {
+      const name = key.startsWith("node_modules/") ? key.slice("node_modules/".length) : ""
+      return /^(effect|@effect\/[^/]+)$/.test(name) && typeof value.version === "string"
+        ? [[name, value.version]]
+        : []
+    })
+  )
   fs.writeFileSync(
     path.join(scratch, "package.json"),
-    JSON.stringify({ name: "consumer", type: "module", private: true }, null, 2)
+    JSON.stringify({ name: "consumer", type: "module", private: true, overrides: effectFamily }, null, 2)
   )
   // The real dependency tree, so a missing peer shows up here rather than for
   // a user.
@@ -56,7 +75,7 @@ try {
       "--no-fund",
       packed,
       ...Object.entries(manifest.peerDependencies).map(
-        ([name, range]) => `${name}@${range}`
+        ([name, range]) => `${name}@${tested(name) ?? range}`
       )
     ],
     scratch
