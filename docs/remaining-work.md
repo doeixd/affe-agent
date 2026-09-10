@@ -494,8 +494,12 @@ acceptance test for 105, 107 and 108.*
      it -- so the caller supplies the database and the harness names no
      driver. Still open: (b) the plan's other scenarios: the output tool,
      compaction fold and rollover, a subagent with a suspended child
-     elicitation, Code Mode with a suspending executor; (c) comparing events,
-     usage/`RunLedger` and claim state, not only history and counts.
+     elicitation, Code Mode with a suspending executor; (c) usage/`RunLedger`
+     and claim state. Events are compared now: `Observation.events` is the
+     session's delivery log as tags in order, shared by both processes, so a
+     recovery that re-announced, dropped or reordered an event fails even
+     when history agrees -- a delivery log that stops deduplicating replayed
+     emissions fails every cell, and passes every other check.
 
      ```text
      verify: exists test/DurableEquivalence.test.ts

@@ -127,6 +127,14 @@ export interface Observation {
    * were committed in is in `history`.
    */
   readonly effects: ReadonlyArray<string>
+  /**
+   * Every event the session's delivery log holds, as tags in delivery order
+   * (item 104). A crashed run's first process and its replacement share one
+   * log, and a replayed emission is deduplicated by its key, so a recovery
+   * that re-announced a turn, dropped a terminal event or reordered a tool's
+   * result shows here even when history and result agree.
+   */
+  readonly events: ReadonlyArray<string>
 }
 
 const SESSION = "durable-equivalence"
@@ -201,7 +209,7 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
       }).pipe(Layer.provideMerge(engine), Layer.provideMerge(model), Layer.provideMerge(failpoint))
     )
     const client = yield* Effect.service(AgentClient.AgentClient).pipe(Effect.provide(runtime))
-    return { client, recorder }
+    return { client, recorder, delivery: stores.delivery }
   })
 
 const recording = Effect.map(Ref.make<ReadonlyArray<string>>([]), (log) => ({
@@ -213,16 +221,21 @@ const observe = (
   history: Prompt.Prompt,
   result: { readonly status: string; readonly text: string; readonly turns: number; readonly value?: unknown },
   modelCalls: number,
-  effects: ReadonlyArray<string>
+  effects: ReadonlyArray<string>,
+  delivery: DeliveryLog.DeliveryLog
 ): Effect.Effect<Observation> =>
-  Effect.map(Effect.orDie(Schema.encodeEffect(PromptWire.Prompt)(history)), (encoded) => ({
+  Effect.zipWith(
+    Effect.orDie(Schema.encodeEffect(PromptWire.Prompt)(history)),
+    Effect.orDie(delivery.read(SESSION)),
+    (encoded, delivered) => ({
     history: encoded,
     status: result.status,
     text: result.text,
     turns: result.turns,
     value: result.value,
     modelCalls,
-    effects: [...effects].sort()
+    effects: [...effects].sort(),
+    events: delivered.map((envelope) => envelope.event._tag)
   }))
 
 /** The scenario, run once, straight through, in one process. The baseline. */
@@ -234,10 +247,10 @@ export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
     Effect.gen(function*() {
       const sql = yield* options.database
       const { effects, recorded } = yield* recording
-      const { client, recorder } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
+      const { client, delivery, recorder } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
       const session = yield* client.createSession({ sessionId: SESSION })
       const result = yield* session.prompt(scenario.prompt, { stream: scenario.stream ?? false })
-      return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded)
+      return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded, delivery)
     })
   )
 
@@ -293,7 +306,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       return yield* Effect.scoped(
         Effect.gen(function*() {
-          const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "second")
+          const { client, delivery, recorder } = yield* processOver(scenario, sql, effects, lock, "second")
           const session = yield* client.session(SESSION)
           // Retried: until the dead process's shard lock expires, the
           // submission is not this process's to finish. Not an agent failure,
@@ -314,7 +327,8 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
             yield* session.history,
             result,
             first.calls + secondCalls,
-            yield* recorded
+            yield* recorded,
+            delivery
           )
           return { observation, split: [first.calls, secondCalls] as const }
         })
