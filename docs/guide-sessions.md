@@ -663,6 +663,26 @@ transforms, loop, tool execution and failure policy. Models, durability,
 storage, transports and sandboxes remain Layers on the Effect side.
 
 
+## What a success means
+
+Several APIs hand work to something else and return. Their success is not
+all the same promise, and a `void` should never be read as a stronger one
+than it is (item 97). In rising order: **handed over** (in memory somewhere
+else), **persisted** (it survives a crash), **accepted** (the destination
+took it and started), **settled** (it finished, with its result).
+
+| API | Success means | So a crash after success... |
+|-----|---------------|-----------------------------|
+| `session.prompt`, `Connector.deliver`, `Subagent.tool`'s call | settled, with the result | ...changes nothing: it is over |
+| `session.submit`, `RemoteSession.submit` | accepted (a receipt at admission) | ...of the process loses the run, unless durable |
+| `DurableAgentClient.submit` | persisted and accepted, as one step; the same idempotency key rejoins | ...is recovered by another process |
+| `SessionInbox.enqueue` | persisted (idempotent on the item id) | ...leaves it in the inbox |
+| `SessionInbox.deliver` → `Delivered` | accepted, not settled | ...leaves the run to the session |
+| `Scheduling.dispatch` under `queued` | persisted to the `JobStore`, claimed at most once | ...before a worker claims it keeps it; after the claim loses it |
+| `Scheduling.dispatch` under `local` | handed over: a fibre in this process | ...loses it |
+| `RelayClient.send` | handed over to an online peer's queue | ...or a peer that drops before reading loses it |
+| `Connectors.serverLayer`'s HTTP 200 | handed over (received, not persisted) | ...before the run commits loses it; the platform will not redeliver |
+
 ## Snapshots
 
 A conversation is a value, so it can be stored and brought back:

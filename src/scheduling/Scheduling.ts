@@ -50,7 +50,11 @@ export interface Dispatched {
 /**
  * The destination for future agent work. A tool depends on this and calls
  * `dispatch`; the application's layer decides where the work runs. `dispatch`
- * returns once the work is enqueued, not when it completes.
+ * returns once the work is enqueued, not when it completes -- and what
+ * "enqueued" means is the layer's (item 97): under `local` it is a fibre in
+ * this process's memory, *not persisted*, so a crash loses it; under
+ * `queued` the job is persisted to the `JobStore` (and claimed at most
+ * once). Neither means it has run.
  */
 export class AgentDispatcher extends Context.Service<AgentDispatcher, {
   readonly dispatch: (job: Dispatched) => Effect.Effect<void>

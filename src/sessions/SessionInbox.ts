@@ -170,7 +170,9 @@ export interface Service {
    * own and can stop, and it keeps the reporting decision -- what to do with
    * an `Undeliverable` -- with the caller who has somewhere to put it.
    *
-   * Answers `Delivered` when a submission has been started, and
+   * Answers `Delivered` when a submission has been started -- accepted
+   * by the session, *not settled*: the run may still fail, and its result
+   * is the session's, not this answer's (item 97) -- and
    * `Undeliverable` when the target cannot ever receive it. A busy session is
    * neither: it fails the attempt so the queue schedules another, and only
    * surfaces as `SessionBusyError` once `maxAttempts` are spent.

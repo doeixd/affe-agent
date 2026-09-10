@@ -20,6 +20,16 @@ export type Handler = (envelope: Relay.Envelope) => Effect.Effect<void>
 export interface Service {
   /** This node's identity, as configured; the relay authenticates it independently. */
   readonly peer: Relay.PeerId
+  /**
+   * Hand an envelope to the destination peer's queue on the relay.
+   *
+   * Success means *handed over* (item 97): the peer was online and the
+   * envelope is in its in-memory queue. Not delivered, not processed, not
+   * persisted -- the relay never stores live traffic, so an offline peer is
+   * refused rather than queued for later, and a peer that drops before
+   * reading loses what was waiting. Acknowledge at the application level
+   * when that matters.
+   */
   readonly send: (
     outbound: Relay.Outbound
   ) => Effect.Effect<void, Relay.RelayError | RpcClientError.RpcClientError>

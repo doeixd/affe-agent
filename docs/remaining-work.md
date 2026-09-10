@@ -390,13 +390,21 @@ and pin the state it starts from.*
     verify: exists test/FailureDisposition.test.ts
     ```
 
-97. **Acknowledgement vocabulary (plan E5, §8).** Persisted /
-    DeliveryPending / Accepted / Running / Settled: document which one each
-    submit-like API's success means (audit table in the plan), retype the
-    ambiguous `void`s, and surface the incumbent claim when
-    `DurableAgentClient.submit` refuses with `AgentBusyError` rather than
-    dropping it. There is no background subagent mode; one added later must
-    adopt the vocabulary. After 95–96. Medium.
+97. **Acknowledgement vocabulary (plan E5, §8) -- documented 2026-09-10.**
+    `guide-sessions.md`'s "What a success means" table gives each
+    submit-like API the state its success guarantees -- handed over,
+    persisted, accepted, settled -- and what a crash after it costs; the
+    three ambiguous `void`s say it where they are declared
+    (`AgentDispatcher.dispatch`, `RelayClient.send`, `SessionInbox`'s
+    `Delivered`). The two rows that could lose work were items 95 and 96.
+    Open: surface the incumbent claim when `DurableAgentClient.submit`
+    refuses with `AgentBusyError` rather than dropping it (T8.2, A8.2;
+    another agent has that file open), and the per-API stop-the-destination
+    tests (A8.1). Medium.
+
+    ```text
+    verify: grep "## What a success means" docs/guide-sessions.md
+    ```
 
 99. **Budget topology, stated (plan E7, §9) -- the table landed
     2026-09-10.** `limits.md` has the per-source table: engine turns and
