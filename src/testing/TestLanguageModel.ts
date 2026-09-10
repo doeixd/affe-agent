@@ -291,8 +291,15 @@ export interface Options {
    * replacement answers the turn the conversation is actually at, and a
    * journalled turn is never answered twice by accident. `calls` still counts
    * calls.
+   *
+   * `"results"` picks by the tool results the prompt ends with: the turn
+   * after the one whose tool calls those results answer, or the first turn
+   * when the prompt carries no results. For a run whose context is
+   * *compacted*: compaction folds away the assistant messages `"history"`
+   * counts, but keeps the recent tail, and the last results are in it. Needs
+   * each tool call id in the script to be unique.
    */
-  readonly select?: "position" | "history" | undefined
+  readonly select?: "position" | "history" | "results" | undefined
 }
 
 export const make = (turns: ReadonlyArray<Turn>, options?: Options) =>
@@ -301,6 +308,18 @@ export const make = (turns: ReadonlyArray<Turn>, options?: Options) =>
     const offered = yield* Ref.make<Array<ReadonlyArray<string>>>([])
     const index = yield* Ref.make(0)
     const byHistory = options?.select === "history"
+    const byResults = options?.select === "results"
+    /** The turn after the one the prompt's latest tool results answer. */
+    const afterResults = (prompt: Prompt.Prompt): number => {
+      for (let m = prompt.content.length - 1; m >= 0; m--) {
+        const message = prompt.content[m]!
+        if (message.role !== "tool") continue
+        const answered = new Set(message.content.flatMap((part) => part.type === "tool-result" ? [part.id] : []))
+        const at = turns.findIndex((turn) => (turn.toolCalls ?? []).some((call) => answered.has(call.id)))
+        return at === -1 ? turns.length : at + 1
+      }
+      return 0
+    }
 
     /**
      * Advance the script and run this turn's hooks.
@@ -319,6 +338,8 @@ export const make = (turns: ReadonlyArray<Turn>, options?: Options) =>
         const called = yield* Ref.getAndUpdate(index, (n) => n + 1)
         const i = byHistory
           ? options.prompt.content.filter((message) => message.role === "assistant").length
+          : byResults
+          ? afterResults(options.prompt)
           : called
         const turn = turns[i]
         if (turn === undefined) {
