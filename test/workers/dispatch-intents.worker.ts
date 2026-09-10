@@ -1,6 +1,7 @@
 import { Config, Effect, Layer, Option } from "effect"
 import { WorkerConfig } from "effect-cf"
 import { Agent, AgentLoop } from "affe-agent"
+import { AgentSessionHost } from "affe-agent/client"
 import * as CloudflareHost from "affe-agent/cloudflare"
 import { TestLanguageModel } from "affe-agent/testing"
 import * as Failpoint from "../../src/internal/failpoint.js"
@@ -47,7 +48,12 @@ const host = CloudflareHost.make({
   agent,
   layer: Layer.merge(model, failpoint),
   // Fast enough for a test to see a re-fire; a deployment keeps the default.
-  retryFailedAfter: "200 millis"
+  retryFailedAfter: "200 millis",
+  // A demo: every caller is one principal, allowed everything. A deployment
+  // resolves the principal from its own authentication and narrows this --
+  // both are required, so neither is forgotten.
+  principal: { resolve: () => Effect.succeed("demo") },
+  authorization: AgentSessionHost.allowAll()
 })
 
 export const AgentSessionObject = host.SessionObject

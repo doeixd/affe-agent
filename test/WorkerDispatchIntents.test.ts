@@ -46,6 +46,7 @@ const bundleEntry = Effect.fn("WorkerDispatchIntents.bundle")(function* () {
       alias: {
         "affe-agent": path.join(process.cwd(), "src", "index.ts"),
         "affe-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts"),
+        "affe-agent/client": path.join(process.cwd(), "src", "client", "index.ts"),
         "affe-agent/testing": path.join(process.cwd(), "src", "testing", "index.ts")
       }
     })

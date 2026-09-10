@@ -603,23 +603,6 @@ acceptance test for 105, 107 and 108.*
      verify: grep "readonly next: Cursor | undefined" src/code/Catalog.ts
      ```
 
-110. **Operational defaults at network-facing boundaries (plan E18, §22)
-     -- the inventory and the table landed 2026-09-10.** Every defaulted
-     `Context.Reference` is safe, and `test/ReferenceInventory.test.ts` now
-     makes a new one be classified with its reason (found by parsing; broken
-     once). `limits.md` lists the option defaults that weaken something when
-     left out; `Agent.describe()` already reported `AllowAll` permission.
-     Open, waiting on Q8 because it is breaking: make the Cloudflare host's
-     and relay server's authorization required, as `AgentSessionHost`'s is.
-     Also found: the Cloudflare host's default principal is the raw
-     `authorization` header, a credential used as an id. A2A's in-memory task
-     store is not an option at all. Small.
-
-     ```text
-     verify: grep "options.authorization ?? AgentSessionHost.allowAll()" src/cloudflare/index.ts
-     verify: grep "options?.authorization ?? allowAll" src/relay/RelayServer.ts
-     ```
-
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
      104's oracle is its acceptance test.

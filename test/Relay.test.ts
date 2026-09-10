@@ -39,7 +39,7 @@ const relay = (options?: RelayServer.Options) =>
       path: "/relay",
       protocol: "websocket"
     }).pipe(
-      Layer.provide(RelayServer.layer(options)),
+      Layer.provide(RelayServer.layer({ authorization: RelayServer.allowAll, ...options })),
       Layer.provide(RelayServer.bearerTokens(tokens)),
       Layer.provide(RpcSerialization.layerNdjson)
     )

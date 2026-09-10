@@ -53,7 +53,7 @@ const startRelay = (lease?: Duration.Duration) =>
     path: "/relay",
     protocol: "websocket"
   }).pipe(
-    Layer.provide(RelayServer.layer(lease === undefined ? {} : { lease })),
+    Layer.provide(RelayServer.layer({ authorization: RelayServer.allowAll, ...(lease === undefined ? {} : { lease }) })),
     Layer.provide(RelayServer.bearerTokens(tokens)),
     Layer.provide(RpcSerialization.layerNdjson)
   )

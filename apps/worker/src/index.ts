@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { DurableObjectState } from "effect-cf"
 import { Agent, AgentLoop, Permission } from "affe-agent"
+import { AgentSessionHost } from "affe-agent/client"
 import * as CloudflareHost from "affe-agent/cloudflare"
 import { CodeTool } from "affe-agent/code"
 import type { CodeMode } from "affe-agent/code"
@@ -118,7 +119,12 @@ const host = CloudflareHost.make({
   layer: Layer.mergeAll(
     scriptedModel,
     Layer.effect(Executor, CloudflareHost.IsolateExecutor.executor())
-  )
+  ),
+  // A demo: every caller is one principal, allowed everything. A deployment
+  // resolves the principal from its own authentication and narrows this --
+  // both are required, so neither is forgotten.
+  principal: { resolve: () => Effect.succeed("demo") },
+  authorization: AgentSessionHost.allowAll()
 })
 
 /** Bound as `SESSIONS` in `wrangler.jsonc` / the Alchemy stack; `LOADER` is the Worker Loader. */

@@ -176,7 +176,7 @@ describe("relay credentials, against the relay itself", () => {
 
   /** The relay's real handlers, authenticating out of a credential store. */
   const relayWith = (credentials: RelayCredentials.Service) =>
-    RelayServer.layer().pipe(
+    RelayServer.layer({ authorization: RelayServer.allowAll }).pipe(
       Layer.provide(
         RelayCredentials.authenticator.pipe(
           Layer.provide(Layer.succeed(RelayCredentials.RelayCredentials, credentials))

@@ -25,7 +25,7 @@ const tokens = { "target-secret": TARGET, "caller-secret": CALLER }
 const as = (token: string) => ({ headers: { authorization: `Bearer ${token}` } })
 
 const relay = (lease: Duration.Duration) =>
-  RelayServer.layer({ lease }).pipe(Layer.provide(RelayServer.bearerTokens(tokens)))
+  RelayServer.layer({ authorization: RelayServer.allowAll, lease }).pipe(Layer.provide(RelayServer.bearerTokens(tokens)))
 
 /**
  * Wait until the relay has actually registered a peer.

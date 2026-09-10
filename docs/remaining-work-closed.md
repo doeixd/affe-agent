@@ -2268,3 +2268,21 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: grep "class SubagentDepthExceededError" src/subagent/Subagent.ts
      verify: grep "a ninth-level delegation is refused" test/SubagentAdmission.test.ts
      ```
+
+110. ~~**Operational defaults at network-facing boundaries (plan E18, §22).**~~
+     — landed 2026-09-10. The Cloudflare host's `principal` and
+     `authorization` and the relay server's `authorization` are required,
+     as `AgentSessionHost`'s are (Q8, decided with the owner's leave: pre-1.0
+     and unpublished, so the break costs callers one explicit line). The
+     Cloudflare host no longer defaults the principal to the raw
+     `authorization` header, a credential used as an id. Every defaulted
+     `Context.Reference` is classified in `test/ReferenceInventory.test.ts`
+     (broken once); `limits.md` lists the option defaults that still weaken
+     something, all in-process. A2A's in-memory task store is noted, not
+     changed: it is not an option at all.
+
+     ```text
+     verify: grep "readonly authorization: Authorization" src/relay/RelayServer.ts
+     verify: no-grep "options.authorization ?? AgentSessionHost.allowAll()" src/cloudflare/index.ts
+     verify: grep "readonly principal: AgentSessionHost.Options<string>\[\"principal\"\]" src/cloudflare/index.ts
+     ```

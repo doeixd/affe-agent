@@ -1113,8 +1113,11 @@ is distinguishable from "no matches".
 
 ## 22. E18 — Operational defaults audit
 
-**T22.2, T22.4 and T22.5 landed 2026-09-10; T22.1 waits on Q8, T22.3 is
-documented only.** `Agent.describe()` already reported `{ _tag: "AllowAll" }`,
+**Landed 2026-09-10 (item 110 closed); T22.3 is documented only.** T22.1
+after Q8 was left to judgement: the Cloudflare host's `principal` and
+`authorization` and the relay's `authorization` are required, and the
+compiler's refusal of every call site that omitted them is A22.1. T22.2,
+T22.4 and T22.5 below. `Agent.describe()` already reported `{ _tag: "AllowAll" }`,
 so T22.2 needed nothing. The table is in `limits.md`; the inventory is
 `test/ReferenceInventory.test.ts`. The audit missed one row: the Cloudflare
 host's default principal is the raw `authorization` header, so a credential
@@ -1215,4 +1218,5 @@ recovery cost matters**; E12's oracle is its acceptance test when it comes.
   changes (additive optional fields)? Leaning: refuse by default, with an
   explicit compatibility declaration per tool.
 * **Q8** E18: making Cloudflare/relay authorization required is a breaking
-  change to two entry points; acceptable pre-1.0?
+  change to two entry points; acceptable pre-1.0? **Decided 2026-09-10: yes**
+  (the owner left it to judgement), and the Cloudflare principal with it.

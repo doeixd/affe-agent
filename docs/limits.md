@@ -42,16 +42,17 @@ defaulted `Context.Reference` is of the harmless kind, and
 | Default | Where | What leaving it out means |
 |---------|-------|---------------------------|
 | `Permission.allowAll` | `Agent.make({ permission })`, `CodeMode` | every tool call runs; `Agent.describe()` reports `{ _tag: "AllowAll" }` |
-| host authorization `allowAll()` | `cloudflare` `Options.authorization` | **network-facing**: any caller may act on any session |
-| host principal = the `authorization` header, else `"anonymous"` | `cloudflare` `Options.principal` | callers are told apart only by the header's raw value -- a credential, used as the principal id |
-| relay authorization `allowAll` | `RelayServer.layer({ authorization })` | **network-facing**: any authenticated peer may reach any peer |
 | `InputChannel.memory` | `AgentSession.make` | queued input does not survive the process |
 | A2A `InMemoryTaskStore` | `AgentA2A` (not an option) | A2A task records do not survive the process |
 | OpenAI-compatible idempotency in memory | `OpenAiAgent` `idempotency.store` | a retried request after a restart runs again |
 | `Shell.current` → host `bash` | `shell/Shell.ts` | commands run on the host, unsandboxed |
 
-`AgentSessionHost` has no authorization default at all -- the shape the two
-network-facing rows above should have, and do not yet (plan §22, Q8).
+The network-facing boundaries have no such default at all: `AgentSessionHost`,
+the Cloudflare host (`principal` and `authorization`) and the relay server
+(`authorization`) require them, and `allowAll` is something a demo writes.
+The Cloudflare host and relay used to default to allow-everything, and the
+Cloudflare host to the raw `authorization` header as the caller's id
+(item 110).
 
 ## Three bounds that are not each other
 

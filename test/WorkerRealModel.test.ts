@@ -44,7 +44,8 @@ const bundleEntry = Effect.fn("WorkerRealModel.bundle")(function* () {
       external: ["cloudflare:*", "node:*"],
       alias: {
         "affe-agent": path.join(process.cwd(), "src", "index.ts"),
-        "affe-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts")
+        "affe-agent/cloudflare": path.join(process.cwd(), "src", "cloudflare", "index.ts"),
+        "affe-agent/client": path.join(process.cwd(), "src", "client", "index.ts")
       }
     })
   )

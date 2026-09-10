@@ -4,6 +4,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { WorkerConfig } from "effect-cf"
 import { Agent, AgentLoop } from "affe-agent"
+import { AgentSessionHost } from "affe-agent/client"
 import * as CloudflareHost from "affe-agent/cloudflare"
 
 /**
@@ -71,7 +72,15 @@ const anthropic = Layer.unwrap(
   })
 )
 
-const host = CloudflareHost.make({ agent, layer: anthropic })
+const host = CloudflareHost.make({
+  agent,
+  layer: anthropic,
+  // A demo: every caller is one principal, allowed everything. A deployment
+  // resolves the principal from its own authentication and narrows this --
+  // both are required, so neither is forgotten.
+  principal: { resolve: () => Effect.succeed("demo") },
+  authorization: AgentSessionHost.allowAll()
+})
 
 export const AgentSessionObject = host.SessionObject
 export default host.Worker

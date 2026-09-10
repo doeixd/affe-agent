@@ -88,12 +88,19 @@ export interface Options<Tools extends Record<string, Tool.Any>, E, R> {
   /** The Durable Object namespace binding the Worker routes to. Default `SESSIONS`. */
   readonly namespace?: string | undefined
   /**
-   * Who is calling, resolved per request. Default: the `authorization`
-   * header, or `anonymous`. A deployment fronts the Worker with real
-   * authentication and forwards its verdict here.
+   * Who is calling, resolved per request. Required, as on
+   * `AgentSessionHost`: a deployment fronts the Worker with real
+   * authentication and forwards its verdict here. There is no default -- the
+   * one there was used the raw `authorization` header as the caller's id, a
+   * credential doubling as a name (item 110).
    */
-  readonly principal?: AgentSessionHost.Options<string>["principal"] | undefined
-  readonly authorization?: AgentSessionHost.Options<string>["authorization"] | undefined
+  readonly principal: AgentSessionHost.Options<string>["principal"]
+  /**
+   * Which principal may do what, to which session. Required: the Worker is
+   * network-facing, and a host that forgot this used to allow everything.
+   * `AgentSessionHost.allowAll()` is the explicit opt-out, for demos.
+   */
+  readonly authorization: AgentSessionHost.Options<string>["authorization"]
   readonly maxSessions?: number | undefined
   readonly maxRequestsPerSession?: number | undefined
   readonly maxRetainedSubmissions?: number | undefined
@@ -455,7 +462,12 @@ export interface Host {
  * Build the host: the Durable Object class and the Worker class.
  *
  * ```ts
- * const host = CloudflareHost.make({ agent, layer: AnthropicModel })
+ * const host = CloudflareHost.make({
+ *   agent,
+ *   layer: AnthropicModel,
+ *   principal: { resolve: ({ headers }) => verifiedUser(headers) },
+ *   authorization: ownSessionsOnly
+ * })
  * export const AgentSessionObject = host.SessionObject
  * export default host.Worker
  * ```
@@ -481,10 +493,8 @@ export const make = <Tools extends Record<string, Tool.Any>, E, R>(options: Opti
     Effect.gen(function* () {
       const client = yield* AgentClient.AgentClient
       const host = AgentSessionHost.layer(Host, {
-        principal: options.principal ?? {
-          resolve: ({ headers }) => Effect.succeed(headers.authorization ?? "anonymous")
-        },
-        authorization: options.authorization ?? AgentSessionHost.allowAll(),
+        principal: options.principal,
+        authorization: options.authorization,
         maxSessions: options.maxSessions ?? 4,
         maxRequestsPerSession: options.maxRequestsPerSession ?? 64
       }).pipe(Layer.provide(Layer.succeed(AgentClient.AgentClient, client)))

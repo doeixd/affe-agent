@@ -61,8 +61,9 @@ export const bearerTokens = (
   })
 
 /**
- * The coarse routing rule. Default: any authenticated peer may reach any
- * other; a deployment narrows it (same account, explicit sharing) here.
+ * The coarse routing rule: which authenticated peer may reach which. A
+ * deployment narrows it (same account, explicit sharing) here. Required --
+ * the relay is network-facing -- with `allowAll` as the explicit opt-out.
  */
 export interface Authorization {
   readonly authorize: (options: {
@@ -75,7 +76,8 @@ export interface Authorization {
 export const allowAll: Authorization = { authorize: () => Effect.void }
 
 export interface Options {
-  readonly authorization?: Authorization | undefined
+  /** Required: see `Authorization`. It used to default to `allowAll` (item 110). */
+  readonly authorization: Authorization
   /**
    * How long a peer stays reachable without proving it is there. Default 60
    * seconds.
@@ -127,14 +129,14 @@ interface Entry {
  * "websocket", path })` over an HTTP server, with an `RpcSerialization`.
  */
 export const layer = (
-  options?: Options
+  options: Options
 ): Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof RelayProtocol.Protocol>>, never, RelayAuthenticator> =>
   RelayProtocol.Protocol.toLayer(
     Effect.gen(function* () {
       const authenticator = yield* RelayAuthenticator
-      const authorization = options?.authorization ?? allowAll
-      const capacity = options?.inboundCapacity ?? 1024
-      const lease = Duration.toMillis(options?.lease ?? Duration.seconds(60))
+      const authorization = options.authorization
+      const capacity = options.inboundCapacity ?? 1024
+      const lease = Duration.toMillis(options.lease ?? Duration.seconds(60))
       const peers = new Map<Relay.PeerId, Entry>()
 
       /**

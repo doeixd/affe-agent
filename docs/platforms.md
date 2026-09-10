@@ -11,7 +11,7 @@ own entry point, so importing `/sandbox` never pulls in `/sandbox/local`.
 | | Node.js | Cloudflare Workers |
 | --- | --- | --- |
 | **Requirement** | 22.5+, for the host entries only | workerd with `nodejs_compat`, compatibility date 2026-08-25 or later; proven through miniflare in CI |
-| **Entry** | `/sandbox/local`, `/durable` with `@effect/sql-sqlite-node`, `/cluster` | `/cloudflare` (`CloudflareHost.make({ agent, layer })` → the Durable Object class and the Worker), on `effect-cf`, an optional peer; [`apps/worker`](../apps/worker/src/index.ts) is it with the scripted model |
+| **Entry** | `/sandbox/local`, `/durable` with `@effect/sql-sqlite-node`, `/cluster` | `/cloudflare` (`CloudflareHost.make({ agent, layer, principal, authorization })` → the Durable Object class and the Worker), on `effect-cf`, an optional peer; [`apps/worker`](../apps/worker/src/index.ts) is it with the scripted model |
 | **Execution model** | a process you operate; `/cluster` for more than one | one Durable Object per session, the Worker routing by session id |
 | **History** | in memory; `/durable` rebuilds it from the journal, `/tree` persists it to a `NodeStore` | DO SQLite, written as each turn commits and restored when the object wakes |
 | **Work that survives the process** | `/durable`: model and tool calls are Workflow activities, so a resumed submission replays them instead of repeating them; `/cluster` reassigns a shard when its owner dies mid-activity | every committed turn and the conversation survive hibernation and death; the turn in flight and its submission do not — the DO equivalent of Node without `/durable` (see the file's header for why the workflow engine is not used there) |
