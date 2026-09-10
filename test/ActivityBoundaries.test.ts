@@ -75,6 +75,7 @@ const familyOf = (name: string): string => {
   // and is how this line came to be written.
   if (/(^|[/:])model-\d+$/.test(name)) return "model call"
   if (/permission-\d+-/.test(name)) return "permission decision"
+  if (/(^|[/:])permission-policy$/.test(name)) return "permission policy"
   if (/-drain-\d+$/.test(name)) return "channel drain"
   if (/\/finish$/.test(name)) return "session projection"
   if (/(^|[/:])execution-strategy$/.test(name)) return "execution strategy"
@@ -158,6 +159,7 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
         "execution strategy",
         "model call",
         "permission decision",
+        "permission policy",
         "tool call",
         "tool contracts",
         "tool start"
@@ -217,6 +219,7 @@ describe("SD3 -- activity boundaries are enumerated, not discovered", () => {
         "channel drain",
         "execution strategy",
         "model call",
+        "permission policy",
         "session projection",
         "tool contracts"
       ])

@@ -1217,9 +1217,12 @@ recovery cost matters**; E12's oracle is its acceptance test when it comes.
 
 ## 25. Open questions (Part II)
 
-* **Q6** E13's "stricter of captured and current" permission: is journalling
+* **Q6** ~~E13's "stricter of captured and current" permission: is journalling
   `Permission.describe` enough, or does a policy with closures need its own
-  capture form?
+  capture form?~~ Decided 2026-09-10: the description is journalled and,
+  where it carries enough, re-created (`Permission.fromDescription`) and
+  combined with the current policy; a policy with closures has no capture
+  form, so a changed one is refused rather than guessed at.
 * **Q7** ~~E15: refuse on any digest change, or allow declared-compatible
   changes (additive optional fields)?~~ Decided 2026-09-10 as leaned:
   refused by default; `ToolContracts.CompatibleWith` on a tool declares the

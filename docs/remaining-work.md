@@ -523,11 +523,16 @@ acceptance test for 105, 107 and 108.*
      `execution strategy` activity), so a run recovered by a process
      configured differently runs its tools as admitted --
      `test/DurableEquivalence.test.ts` crashes a `Sequential` run and
-     recovers it in a `Parallel` process. Still open: (a) I17.3, applying the
-     stricter of the captured and the current permission to an undecided call
-     on recovery -- needs a policy that can be re-created from data (Q6);
-     (b) capturing the host scheduling's description with the attempt and
-     refusing a recovery whose host would widen it.
+     recovers it in a `Parallel` process. I17.3 landed the same day (Q6
+     decided): a submission journals its permission policy's description,
+     and a recovered attempt's undecided calls run under the recorded and
+     the current policy combined conservatively -- the stricter of the two
+     -- by re-creating the recorded one (`Permission.fromDescription`; a
+     regexp's matching flags now survive its description). A changed policy
+     that cannot be re-created (`Custom`, a function matcher) is refused
+     with `PermissionPolicyChangedError`. Still open: (b) capturing the host
+     scheduling's description with the attempt and refusing a recovery
+     whose host would widen it.
 
      ```text
      verify: exists src/ToolScheduling.ts

@@ -151,6 +151,8 @@ describe("public API", () => {
       // A policy as data; every constructor supplies one (item 60h).
       "describe",
       "except",
+      // And back, where the description carries enough (item 105).
+      "fromDescription",
       "grantKey",
       "make",
       "projectionOf",

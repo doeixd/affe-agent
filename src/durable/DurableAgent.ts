@@ -1,4 +1,4 @@
-import { Cause, Config, Deferred, Duration, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Cause, Config, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Prompt } from "effect/unstable/ai"
@@ -8,6 +8,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentInput from "../AgentInput.js"
 import * as AgentSession from "../AgentSession.js"
+import * as Permission from "../Permission.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import * as Ids from "../internal/ids.js"
@@ -394,7 +395,12 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       ).pipe(Effect.asVoid)
 
       // Decisions are journalled like tool calls: see `DurablePermission`.
-      const durablePermission = yield* DurablePermission.wrap(agent.permission)
+      // Through a ref, set to the policy this attempt may use once
+      // `DurablePermission.effective` has decided it, below.
+      const admittedPolicy = yield* Ref.make(agent.permission)
+      const durablePermission = yield* DurablePermission.wrap(
+        DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission))
+      )
       const toolExecution = yield* capturedStrategy(agent.toolExecution, "")
       const durableAgent = {
         ...agent,
@@ -409,6 +415,8 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           // Before anything is replayed, and inside this block so a refusal
           // takes the ordinary failure path below: see `ToolContracts`.
           yield* ToolContracts.check(describedTools(toolkit.tools, agent), "")
+          // And the permission policy it was admitted under (item 105, Q6).
+          yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, ""))
           const session = yield* AgentSession.make(durableAgent, {
             channels,
             elicitation,

@@ -15,6 +15,7 @@ import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
+import * as Permission from "../Permission.js"
 import * as Ids from "../internal/ids.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as Elicitation from "../Elicitation.js"
@@ -684,9 +685,13 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       )
 
       // Decisions are journalled like tool calls: see `DurablePermission`.
-      const durablePermission = yield* DurablePermission.wrap(agent.permission, {
-        prefix: scopePrefix
-      })
+      // Through a ref, set to the policy this attempt may use once
+      // `DurablePermission.effective` has decided it, below.
+      const admittedPolicy = yield* Ref.make(agent.permission)
+      const durablePermission = yield* DurablePermission.wrap(
+        DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission)),
+        { prefix: scopePrefix }
+      )
       // As first run, not as this process is configured: see `capturedStrategy`.
       const toolExecution = yield* DurableAgent.capturedStrategy(agent.toolExecution, scopePrefix)
       const durableAgent = {
@@ -731,6 +736,8 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           // other -- its projection commits and the session is freed rather
           // than left claimed behind a body that failed before it began.
           yield* ToolContracts.check(describedTools(toolkit.tools, agent), scopePrefix)
+          // And the permission policy it was admitted under (item 105, Q6).
+          yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, scopePrefix))
           const session = yield* AgentSession.makeEngine(durableAgent, {
             channels,
             elicitation,

@@ -47,6 +47,7 @@
   "MissingCapabilityError",
   "NodeStoreConformanceFailure",
   "OpenAiError",
+  "PermissionPolicyChangedError",
   "SandboxConformanceFailure",
   "SessionBusyError",
   "SessionDirectoryConformanceFailure",

@@ -324,7 +324,14 @@ const describeMatcher = (matcher: Matcher | undefined): string | undefined =>
     ? matcher
     : typeof matcher === "function"
     ? "function"
-    : `regexp:${matcher.source}`
+    : matchingFlags(matcher) === ""
+    ? `regexp:${matcher.source}`
+    // Flags that change what matches are kept, so the description can be
+    // turned back into the same matcher (`fromDescription`); `g` and `y`
+    // change nothing here (see `stateless`) and are dropped.
+    : `regexp/${matchingFlags(matcher)}:${matcher.source}`
+
+const matchingFlags = (pattern: RegExp): string => pattern.flags.replace(/[gy]/g, "")
 
 const describeRule = (rule: Rule): RuleDescription => ({
   ...(rule.action === undefined ? {} : { action: describeMatcher(rule.action) }),
@@ -502,3 +509,63 @@ export const ApprovalDetail = Schema.Struct({
   via: Schema.optional(Schema.Array(Schema.String))
 })
 export type ApprovalDetail = typeof ApprovalDetail.Type
+
+/**
+ * A matcher back from its description, or `None` when it has no data form
+ * (a function). A literal string that happens to begin with `regexp:` is
+ * read as a pattern -- the description cannot tell them apart.
+ */
+const matcherFrom = (described: string | undefined): Option.Option<Matcher | undefined> => {
+  if (described === undefined) return Option.some(undefined)
+  if (described === "function") return Option.none()
+  const flagged = /^regexp\/([a-z]*):/.exec(described)
+  if (flagged !== null) return Option.some(new RegExp(described.slice(flagged[0].length), flagged[1]))
+  if (described.startsWith("regexp:")) return Option.some(new RegExp(described.slice("regexp:".length)))
+  return Option.some(described)
+}
+
+const ruleFrom = (described: RuleDescription): Option.Option<Rule> =>
+  Option.map(
+    Option.all([matcherFrom(described.action), matcherFrom(described.resource), matcherFrom(described.tool)]),
+    ([action, resource, tool]): Rule => ({
+      ...(action === undefined ? {} : { action }),
+      ...(resource === undefined ? {} : { resource }),
+      ...(tool === undefined ? {} : { tool }),
+      decision: described.decision
+    })
+  )
+
+const rulesFrom = (described: ReadonlyArray<RuleDescription>): Option.Option<ReadonlyArray<Rule>> =>
+  Option.all(described.map(ruleFrom))
+
+/**
+ * A policy re-created from its description, or `None` when the description
+ * does not carry enough to do it: a `Custom` policy, or a rule whose
+ * matcher is a function. What comes back decides every request as the
+ * described one did, with one deliberate exception: a `Remembered` policy
+ * returns *without* its grants, which were state rather than rules -- so the
+ * re-created one can only be stricter. For durable recovery (item 105), which
+ * needs the policy a run was admitted under after the process that held it
+ * is gone.
+ */
+export const fromDescription = (described: Description): Option.Option<Policy> => {
+  switch (described._tag) {
+    case "AllowAll":
+      return Option.some(allowAll)
+    case "AskAll":
+      return Option.some(askAll)
+    case "DenyAll":
+      return Option.some(denyAll)
+    case "Rules":
+      return Option.map(rulesFrom(described.rules), (list) => rules(list, { otherwise: described.otherwise }))
+    case "All":
+      return Option.map(Option.all(described.policies.map(fromDescription)), (policies) => all(...policies))
+    case "Except":
+      return Option.flatMap(fromDescription(described.base), (base) =>
+        Option.map(rulesFrom(described.exceptions), (exceptions) => except(base, exceptions)))
+    case "Remembered":
+      return fromDescription(described.inner)
+    case "Custom":
+      return Option.none()
+  }
+}
