@@ -150,6 +150,47 @@ const scenarios: ReadonlyArray<Scenario> = [
           Array.from({ length: 41 }, (_, i) => `question ${i}`)
         )))
   },
+  // What durability costs a run (item 100): the same two tool rounds and an
+  // answer, submitted through the durable client over a fresh SQLite file --
+  // journal, session store, channels and delivery log all real. The harness
+  // is imported inside, so a ref without it reports this unavailable.
+  {
+    name: "durable: two tool rounds over SQLite",
+    run: () =>
+      timed(async () => {
+        const { DurableEquivalence } = await import("../src/testing/index.js")
+        const { SqliteClient } = await import("@effect/sql-sqlite-node")
+        const NodeFs = await import("node:fs")
+        const NodeOs = await import("node:os")
+        const NodePath = await import("node:path")
+        const database = Effect.acquireRelease(
+          Effect.sync(() => NodePath.join(NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "bench-durable-")), "a.db")),
+          (file) =>
+            Effect.sync(() => {
+              try {
+                NodeFs.rmSync(NodePath.dirname(file), { recursive: true, force: true })
+              } catch {
+                // Still held open on Windows.
+              }
+            })
+        ).pipe(Effect.map((file) => SqliteClient.layer({ filename: file })))
+        const [tool] = toolsNamed(1)
+        const scenario = DurableEquivalence.scenario({
+          agent: (effects) =>
+            Agent.make({
+              tools: [Agent.tool(tool!, () => Effect.as(effects.record("x"), "ok"))],
+              loop: AgentLoop.bounded(4)
+            }),
+          turns: [
+            { toolCalls: [{ id: "r0", name: "tool_0", params: { id: "x" } }] },
+            { toolCalls: [{ id: "r1", name: "tool_0", params: { id: "y" } }] },
+            { text: "done" }
+          ],
+          prompt: "go"
+        })
+        await Effect.runPromise(DurableEquivalence.straight(scenario, { database }))
+      })
+  },
   // Item 93's question: is progressive exposure worth a discovery turn? The
   // timings are the scripted model's; the model-independent measures -- how
   // many requests, how many tools and schema bytes they carried -- are the

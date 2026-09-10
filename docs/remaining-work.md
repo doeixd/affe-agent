@@ -420,7 +420,10 @@ and pin the state it starts from.*
      its own lockfile with an older Effect RC, so some of the gap may be the
      dependencies, and v0.0.1's source cannot run against today's to
      separate them. Treated as the cost of the features, not a regression,
-     unless a scenario shows one. Still open: durable
+     unless a scenario shows one. A first durable scenario exists: two tool
+     rounds through the durable client over a fresh SQLite file (~0.7 s a
+     submission on this machine, mostly engine and schema start-up; refs
+     without the harness report it unavailable). Still open: more durable
      scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
      effect-uai native vs adapter, a live-model cost run for item 93, and
      characterising variance before any gate.
