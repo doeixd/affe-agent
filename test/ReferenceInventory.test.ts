@@ -85,7 +85,12 @@ const references = (): ReadonlyArray<string> => {
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node)) {
         const callee = ts.isCallExpression(node.expression) ? node.expression.expression : node.expression
-        if (callee.getText(source) === "Context.Reference") {
+        // By name, not by `Context.Reference` text: a renamed namespace or a
+        // destructured `Reference` import must not slip past.
+        const named = ts.isPropertyAccessExpression(callee)
+          ? callee.name.text === "Reference"
+          : ts.isIdentifier(callee) && callee.text === "Reference"
+        if (named) {
           let owner: ts.Node | undefined = node.parent
           while (owner !== undefined && !ts.isVariableDeclaration(owner)) owner = owner.parent
           found.push(`${at}:${owner !== undefined && ts.isIdentifier(owner.name) ? owner.name.text : "<anonymous>"}`)
