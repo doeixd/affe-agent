@@ -129,7 +129,16 @@ export const effective = <R>(
       execute: Effect.succeed(current)
     })
     if (recorded === current) return policy
-    const admitted = Permission.fromDescription(JSON.parse(recorded) as Permission.Description)
+    // Written by this function, so it parses; but a journal is data from
+    // another process and version, and one that does not re-create is the
+    // same "cannot compute stricter" as a Custom policy, not a defect.
+    const admitted = (() => {
+      try {
+        return Permission.fromDescription(JSON.parse(recorded) as Permission.Description)
+      } catch {
+        return Option.none<Permission.Policy>()
+      }
+    })()
     if (Option.isNone(admitted)) return yield* new PermissionPolicyChangedError({ recorded, current })
     return Permission.all<R>(admitted.value, policy)
   })
