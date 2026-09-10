@@ -721,7 +721,8 @@ headers). Not kernel architecture. Only on an adopter asking.
   static answer, which argues for the agent with a session-level narrowing.
 * **Q2** ~~Strengthen `Alone` (recommended) or add a second annotation?~~
   Strengthened, 2026-09-10 (§5).
-* **Q3** `failureMode: "return"` vs `FailRun` — which wins (§6, T6.1)?
+* **Q3** ~~`failureMode: "return"` vs `FailRun` — which wins (§6, T6.1)?~~
+  `"return"` wins, made visible in `describe`, 2026-09-10 (§6).
 * **Q4** Should a projected completion (E2) be able to fire on a
   provider-executed tool's result? Leaning no: the output schema should come
   from an application result the host controls.
