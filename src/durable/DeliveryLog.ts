@@ -90,7 +90,7 @@ export interface DeliveryLog {
 
   /**
    * What is recorded for the session above `after`, in sequence order: all
-   * of it, or the first `limit` (item 109). A page of exactly `limit` may
+   * of it, or the first `limit`, a positive integer (item 109). A page of exactly `limit` may
    * be followed by more -- read again `after` its last `sequence` until a
    * page comes back shorter. Without `limit` a long session's whole log is
    * loaded at once.
