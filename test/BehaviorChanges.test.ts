@@ -51,9 +51,30 @@ describe("behavior-change Git records", () => {
         writeFileSync(join(repo, file), "{}\n")
         git("add", file)
         git("commit", "-m", body === "" ? subject : `${subject}\n\n${body}`)
-        return { hash: git("rev-parse", "--short", "HEAD"), subject, trailers, files: [file] }
+        return { hash: git("rev-parse", "--short", "HEAD"), subject, trailers, measures: [], files: [file] }
       })
       assert.deepEqual(read(repo), expected)
+    })
+  })
+
+  it("reads a later measurement, and the changelog names the commit that made it", () => {
+    fixture((repo, git) => {
+      // A change whose fixture came a commit later, linked back by hash.
+      writeFileSync(join(repo, "src.ts"), "changed\n")
+      git("add", "src.ts")
+      git("commit", "-m", "change\n\nBehavior-Change: a caller sees this")
+      const changed = git("rev-parse", "--short", "HEAD")
+      mkdirSync(join(repo, "test/fixtures"), { recursive: true })
+      writeFileSync(join(repo, "test/fixtures/later.json"), "{}\n")
+      git("add", "test/fixtures/later.json")
+      git("commit", "-m", `measure\n\nBehavior-Change: recorded\nBehavior-Change-Measures: ${changed} the change above`)
+      const measuring = git("rev-parse", "--short", "HEAD")
+      const records: ReadonlyArray<{ readonly measures: ReadonlyArray<string> }> = read(repo)
+      assert.deepEqual(records.map((record) => record.measures), [[], [changed]])
+      const block = execFileSync(process.execPath, [generator], {
+        cwd: repo, encoding: "utf8", env: { ...process.env, BEHAVIOR_CHANGE_RANGE: "v0.0.1..HEAD" }
+      })
+      assert.include(block, `- a caller sees this (\`${changed}\`; measured later, in \`${measuring}\`)`)
     })
   })
 
