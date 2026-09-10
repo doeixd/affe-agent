@@ -388,17 +388,6 @@ and pin the state it starts from.*
     verify: exists test/FailureDisposition.test.ts
     ```
 
-96. **Queued scheduling has no at-least-once store.** `JobStore.claimDue`
-    is claim-and-take, documented at-most-once, and says an at-least-once
-    store would implement a visibility timeout behind the same interface;
-    none ships. Decide whether one should (a lease held by a live worker is
-    the plan's `DeliveryPending`), or leave it adopter-triggered and say so.
-    Small–medium.
-
-    ```text
-    verify: grep "Semantics are at-most-once" src/scheduling/Scheduling.ts
-    ```
-
 97. **Acknowledgement vocabulary (plan E5, §8).** Persisted /
     DeliveryPending / Accepted / Running / Settled: document which one each
     submit-like API's success means (audit table in the plan), retype the

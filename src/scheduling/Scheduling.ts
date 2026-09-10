@@ -131,11 +131,18 @@ export interface PersistedJob {
  * at most that many and leaves the rest queued: a worker with a concurrency
  * limit asks only for the slots it has free, so no job is taken that cannot
  * start (item 111). A store that ignores `limit` still works -- the worker
- * runs the excess as slots free, and logs that the store over-claimed. Semantics are at-most-once —
- * a worker that crashes after claiming but before running drops that job, which
- * matches `local`'s fire-and-forget stance (a lost run is not retried). A store
- * that needs at-least-once implements `claimDue` with a visibility timeout and
- * re-queues on non-completion, behind this same interface.
+ * runs the excess as slots free, and logs that the store over-claimed.
+ *
+ * Semantics are at-most-once — a worker that crashes after claiming but
+ * before running drops that job, which matches `local`'s fire-and-forget
+ * stance (a lost run is not retried). **At-least-once is not reachable behind
+ * this interface** (item 96): a visibility timeout needs to hear that a job
+ * finished, and `claimDue` hands jobs out without ever being told, so a store
+ * that re-queued on timeout would re-run every job, finished or not. It would
+ * take a completion signal -- the worker calling back once the run has
+ * committed -- which is an interface change, left until an adopter needs it.
+ * Until then, a job that must not be lost belongs in the durable engine
+ * (`ScheduledAgent`, a workflow), not here.
  */
 export interface JobStore {
   readonly enqueue: (job: PersistedJob) => Effect.Effect<void>

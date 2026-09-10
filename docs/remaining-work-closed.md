@@ -2336,3 +2336,18 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "The 200 means \"received\", not \"persisted\"." src/connectors/Connectors.ts
     verify: grep "That ack means received, not persisted." docs/guide-batteries.md
     ```
+
+96. ~~**Queued scheduling has no at-least-once store.**~~ — decided
+    2026-09-10: adopter-triggered, and the doc corrected. It had said an
+    at-least-once store could implement `claimDue` with a visibility timeout
+    "behind this same interface"; it cannot -- the interface never tells a
+    store that a job finished, so re-queuing on timeout would re-run every
+    job. It would take a completion signal from the worker after the run
+    commits, an interface change left until someone needs it; a job that
+    must not be lost belongs in the durable engine (`ScheduledAgent`, a
+    workflow).
+
+    ```text
+    verify: grep "At-least-once is not reachable behind" src/scheduling/Scheduling.ts
+    verify: no-grep "re-queues on non-completion, behind this same interface" src/scheduling/Scheduling.ts
+    ```
