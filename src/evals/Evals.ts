@@ -271,14 +271,14 @@ export const run = <Tools extends Record<string, Tool.Any>, E, R, TE, TR, Value 
               })).pipe(
               Effect.flatMap((response) => {
                 const passed = parseVerdict(response.text)
-                const input = response.usage.inputTokens.total ?? 0
-                const output = response.usage.outputTokens.total ?? 0
-                return record(
-                  `judge: ${rubric}`,
-                  passed,
-                  passed ? undefined : "the judge said FAIL",
-                  { inputTokens: input, outputTokens: output, totalTokens: input + output }
-                )
+                const input = response.usage.inputTokens.total
+                const output = response.usage.outputTokens.total
+                // Unknown stays unknown: a provider that reported nothing is
+                // not a judge that cost nothing.
+                const usage = input === undefined && output === undefined
+                  ? undefined
+                  : { inputTokens: input ?? 0, outputTokens: output ?? 0, totalTokens: (input ?? 0) + (output ?? 0) }
+                return record(`judge: ${rubric}`, passed, passed ? undefined : "the judge said FAIL", usage)
               }),
               Effect.catchCause((cause) => record(`judge: ${rubric}`, false, `the judge could not run: ${String(cause)}`))
             ))
