@@ -31,6 +31,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - AgentSession.Snapshot has a required version field (1), written by snapshot and by exports; snapshots without one still decode as version 1, and an unknown version is refused. (`4acc464`; unmeasured)
 - the default Memory.recall rendering adds a line when more memories matched than were shown; DeliveryLogConformance gains a paging case, so a log that ignores read limit now fails it. (`3783b93`; unmeasured)
 - Code Mode's per-call outcome can now be "uncertain" or "not-started" when a program is interrupted; consumers matching the three old values should handle both. (`a35673a`; unmeasured)
+- a durable non-idempotent tool call now journals a start marker activity; a submission whose process died inside (or just before) such a handler ends with DurableToolUnresolvedError instead of running the handler again. (`1a770eb`; unmeasured)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
