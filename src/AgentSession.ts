@@ -1110,8 +1110,17 @@ export const status = (session: AgentSession<any, any, any, any>): Effect.Effect
  * event bus, queued input and a captured environment — none of which are data,
  * and all of which belong to the process that created them. A snapshot is what
  * survives; the rest is rebuilt by `restore`.
+ *
+ * **Versioned** (item 108), because a snapshot is truth -- unlike a
+ * compaction checkpoint it cannot be discarded and rebuilt, so a shape change
+ * has to be recognised rather than misread. `version` is `1`; a snapshot
+ * written before the field existed decodes as `1`, and one from a version
+ * this code does not know fails to decode, loudly, instead of restoring a
+ * conversation it has half understood.
  */
+export const SnapshotVersion = 1
 export const Snapshot = Schema.Struct({
+  version: Schema.Literal(SnapshotVersion).pipe(Schema.withDecodingDefaultKey(Effect.succeed(SnapshotVersion))),
   sessionId: Schema.String,
   history: PromptWire.Prompt
 })
@@ -1165,7 +1174,7 @@ export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
     if (after.status !== "idle" || after.submissionCount !== before.submissionCount) {
       return yield* new AgentBusyError({ sessionId: self.id })
     }
-    return { sessionId: self.id, history } satisfies Snapshot
+    return { version: SnapshotVersion, sessionId: self.id, history } satisfies Snapshot
   })
 
 /**

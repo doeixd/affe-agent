@@ -577,9 +577,11 @@ acceptance test for 105, 107 and 108.*
      as `CompactionCheckpointDiscarded`, and rebuilt from history (an
      unreachable store still fails -- that is infrastructure). The prefix
      fingerprint is two 32-bit lanes plus the message count instead of one
-     FNV-1a lane; old checkpoints rebuild once. Open: the
-     truth/snapshot/checkpoint/index vocabulary in `guide-durable.md`, and a
-     version tag on `AgentSession.Snapshot`. Small.
+     FNV-1a lane; old checkpoints rebuild once. `AgentSession.Snapshot`
+     carries `version: 1`: an unversioned one decodes as 1, an unknown one is
+     refused rather than half-read. Open: the truth/snapshot/checkpoint/index
+     vocabulary in `guide-durable.md` (another agent has that file open).
+     Small.
 
      ```text
      verify: grep "CompactionCheckpointDiscarded" src/compaction/Compaction.ts

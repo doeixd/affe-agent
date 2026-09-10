@@ -10,6 +10,34 @@ import { TestLanguageModel } from "../src/testing/index.js"
  * scope, a fibre, an event bus, queued input, a captured environment — belongs
  * to the process that made it and is rebuilt by `restore`.
  */
+describe("snapshot versions (item 108)", () => {
+  const history = { content: [{ role: "user", content: [{ type: "text", text: "hello" }] }] }
+
+  it.effect("a snapshot is written as version 1", () =>
+    Effect.gen(function* () {
+      const encoded = yield* Schema.encodeUnknownEffect(AgentSession.Snapshot)({
+        version: AgentSession.SnapshotVersion,
+        sessionId: "s",
+        history: yield* Schema.decodeUnknownEffect(AgentSession.Snapshot.fields.history)(history)
+      })
+      assert.strictEqual(encoded.version, 1)
+    }))
+
+  it.effect("a snapshot written before versions existed decodes as version 1", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Schema.decodeUnknownEffect(AgentSession.Snapshot)({ sessionId: "old", history })
+      assert.strictEqual(snapshot.version, 1)
+      assert.strictEqual(snapshot.sessionId, "old")
+    }))
+
+  it.effect("a snapshot from a version this code does not know is refused, not half-read", () =>
+    Effect.gen(function* () {
+      const result = yield* Schema.decodeUnknownEffect(AgentSession.Snapshot)({ version: 2, sessionId: "new", history })
+        .pipe(Effect.result)
+      assert.strictEqual(result._tag, "Failure")
+    }))
+})
+
 describe("session snapshots", () => {
   it.effect("round-trips a conversation through its Schema", () =>
     Effect.gen(function* () {

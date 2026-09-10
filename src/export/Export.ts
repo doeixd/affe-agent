@@ -158,13 +158,15 @@ export class ExportError extends Schema.TaggedError<ExportError>()(
  * therefore diffable when they are committed as fixtures.
  */
 export const of = (
-  session: AgentSession.Snapshot,
+  // The conversation, not a whole `Snapshot`: the snapshot's own version is
+  // this module's to stamp, so a caller holding a history need not know it.
+  session: { readonly sessionId: string; readonly history: Prompt.Prompt },
   provenance: Provenance
 ): Effect.Effect<Export> =>
   Effect.map(DateTime.now, (now) => ({
     version: VERSION,
     exportedAt: DateTime.toEpochMillis(now),
-    session,
+    session: { version: AgentSession.SnapshotVersion, sessionId: session.sessionId, history: session.history },
     provenance
   }))
 
