@@ -355,9 +355,12 @@ and pin the state it starts from.*
     fit and saying `more`; the exposure bounds are rows in `limits.md`.
     Measured by 100's scenario: over 100 tools, eager sends 2 requests, 200
     tool entries and ~45 KB of schema; progressive 3, 17 and ~3.5 KB, for
-    one more model call. Still open: a `ToolExposureChanged` event (T3.9),
-    a `/tool-source` composition test (T3.7), and a live-model cost run
-    before the guide recommends progressive.
+    one more model call. Composes with `/tool-source`: thirty tools a
+    source declares as JSON Schema start unexposed, discovery finds one, and
+    its call reaches the source (T3.7). Still open: a `ToolExposureChanged`
+    event (T3.9 -- the discovery's own `ToolCallSucceeded` already carries
+    the new selection, so it may not be worth an event), and a live-model
+    cost run before the guide recommends progressive.
 
     ```text
     verify: exists src/ToolExposure.ts

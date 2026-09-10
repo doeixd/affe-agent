@@ -13,6 +13,7 @@ import * as Principal from "../src/Principal.js"
 import * as ToolExposure from "../src/ToolExposure.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
 import { DurableEquivalence } from "../src/testing/index.js"
+import { ToolSource } from "../src/toolSource/index.js"
 import { withSession } from "./helpers.js"
 
 /**
@@ -245,4 +246,48 @@ describe("progressive exposure under durability (item 93)", () => {
       assert.deepStrictEqual(recovered.split, [1, 2])
       assert.deepStrictEqual(recovered.observation, straight)
     }), 90_000)
+})
+
+describe("progressive exposure over a tool source (item 93, T3.7)", () => {
+  it.effect("tools a source discovers at runtime are exposed by discovery and called through the source", () =>
+    Effect.gen(function*() {
+      // What an MCP server or an OpenAPI spec produces: many tools, schemas as
+      // JSON Schema, known only when the source is read -- the case
+      // progressive exposure exists for.
+      const invoked = yield* Ref.make<ReadonlyArray<string>>([])
+      const source: ToolSource.ToolSource = {
+        id: "remote",
+        extract: Effect.succeed({
+          tools: Array.from({ length: 30 }, (_, i) => ({
+            name: `op_${i}`,
+            description: `remote operation number ${i}`,
+            input: { type: "object", properties: { id: { type: "string" } } }
+          })),
+          skipped: []
+        }),
+        invoke: (name) => Effect.as(Ref.update(invoked, (all) => [...all, name]), { ok: true })
+      }
+      // Bound before the agent is made, as an MCP toolkit usually is; the
+      // agent sees only what the source declared.
+      const toolkit = yield* ToolSource.bindDiscovered(source)
+      const agent = Agent.make({
+        toolkit,
+        toolExposure: ToolExposure.progressive({ maxTools: 6 }),
+        loop: AgentLoop.bounded(4)
+      })
+      const { recorder } = yield* withSession(
+        [
+          { toolCalls: [{ id: "d1", name: "discover_tools", params: { query: "remote operation 7" } }] },
+          { toolCalls: [{ id: "c1", name: "op_7", params: { id: "x" } }] },
+          { text: "done" }
+        ],
+        agent,
+        ({ session }) => AgentSession.prompt(session, "go")
+      )
+      const offered = yield* recorder.tools
+      assert.deepStrictEqual([...offered[0]!], ["discover_tools"])
+      assert.include(offered[1]!, "op_7")
+      assert.isAtMost(offered[1]!.length, 6)
+      assert.deepStrictEqual(yield* Ref.get(invoked), ["op_7"])
+    }))
 })
