@@ -1406,7 +1406,7 @@ export function controller<PE = never, PR = never, SE = never, SR = never>(
                 Effect.andThen(emit({
                   _tag: "CompactionCheckpointDiscarded",
                   sessionId,
-                  reason: `the stored checkpoint does not decode: ${String(error.message).slice(0, 300)}`
+                  reason: `the stored checkpoint does not decode: ${error.message.slice(0, 300)}`
                 })),
                 Effect.as(Option.none<Checkpoint>())
               ))
