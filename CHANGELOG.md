@@ -35,6 +35,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - ToolContracts is exported from affe-agent/durable, with CompatibleWith; ToolContractChangedError's message prints the full recorded digest and names the declaration. (`d730666`; measured by `test/fixtures/namespace-manifest.json`)
 - a recovered durable run's undecided permission calls now run under the stricter of the policy it was admitted with and the current one, or are refused if a changed policy cannot be re-created; a regexp matcher with matching flags now describes as regexp/<flags>:<source>. (`725551e`; measured by `test/fixtures/error-tags-manifest.json`)
 - a recovered durable attempt now runs its calls under the stricter of the host scheduling it was admitted under and the current host's, or is refused (ToolSchedulingChangedError) if a changed Serialize cannot be re-created. (`5e13679`; measured by `test/fixtures/error-tags-manifest.json`)
+- Agent.describe tool entries gain `source`; tools bound through ToolSource carry a ToolSourceId annotation, a new frozen namespace identifier. (`1455d5e`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
