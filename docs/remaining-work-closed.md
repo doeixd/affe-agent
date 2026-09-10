@@ -2396,3 +2396,19 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: grep "export const capturedScheduling" src/durable/DurableAgent.ts
      verify: grep "export const fromDescription" src/ToolScheduling.ts
      ```
+
+99. ~~**Budget topology, stated (plan E7, §9).**~~ — closed 2026-09-10.
+    `limits.md` has the per-source table: engine turns and (by default)
+    subagent turns are charged; compaction, branch and coding summaries and
+    eval judges report their usage in their own place; `inherit.budget:
+    false` keeps a child's usage in its session only. The "counted, not
+    capped" subagent default is kept, deliberately: a `Budget` is a counter
+    and its ceiling lives in the parent's loop combinator, so a child cannot
+    see the limit without `Budget` carrying ceilings -- a redesign no user
+    has asked for. A child that must stop caps its own loop with
+    `Budget.within`, on the same counter.
+
+    ```text
+    verify: grep "## Which model calls a \`Budget\` sees" docs/limits.md
+    verify: grep "is *counted*, not capped" src/subagent/Subagent.ts
+    ```

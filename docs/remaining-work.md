@@ -406,21 +406,6 @@ and pin the state it starts from.*
     verify: grep "## What a success means" docs/guide-sessions.md
     ```
 
-99. **Budget topology, stated (plan E7, §9) -- the table landed
-    2026-09-10.** `limits.md` has the per-source table: engine turns and
-    (by default) subagent turns are charged; compaction, branch and coding
-    summaries report usage in their own place, and so do eval judges now
-    (a judged `Check` carries its call's `usage`); `inherit.budget: false`
-    leaves a child's usage in its own session only. Every uncharged source
-    now reports what it spent. Open: revisit the "counted, not capped"
-    subagent default (a delegation can overshoot the parent by a whole
-    child run). Small.
-
-    ```text
-    verify: grep "is *counted*, not capped" src/subagent/Subagent.ts
-    verify: grep "## Which model calls a `Budget` sees" docs/limits.md
-    ```
-
 100. **Matched release→main benchmark suite (plan E8, §10) -- first slice
      landed 2026-09-10.** `npm run bench` (`scripts/bench.mjs` over
      `bench/run.ts`): base and head each in their own worktree -- the
