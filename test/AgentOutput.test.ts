@@ -3,11 +3,13 @@ import { Cause, Deferred, Effect, Exit, Option, Ref, Schema } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import type { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentOutput from "../src/AgentOutput.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as Permission from "../src/Permission.js"
 import * as ToolExecution from "../src/ToolExecution.js"
+import { AgentProbe } from "../src/testing/index.js"
 import * as FakeModel from "./FakeModel.js"
 
 const Quality = Schema.Struct({
@@ -113,20 +115,25 @@ describe("AgentOutput", () => {
   // after the fact, and there is no post-hoc decode step of this library's own
   // to regression-test.
 
-  it.effect("the last report wins when the model sends two", () =>
+  it.effect("two reports in one turn are both refused, and the model answers again", () =>
     Effect.gen(function*() {
-      const { result } = yield* run(
+      // It used to be a race, with whichever handler finished last kept. The
+      // output tool is `Alone` now (item 91), so neither answer is recorded:
+      // the harness does not pick between two answers on the model's behalf.
+      const { calls, result } = yield* run(
         [
           {
             toolCalls: [
               { id: "a", name: Output.toolName, params: { hasCallToAction: false, clarity: 1 } },
-              { id: "b", name: Output.toolName, params: report }
+              { id: "b", name: Output.toolName, params: { hasCallToAction: false, clarity: 2 } }
             ]
-          }
+          },
+          FakeModel.toolCall(Output.toolName, report)
         ],
         Agent.make({ output: Output, toolExecution: ToolExecution.Sequential })
       )
 
+      assert.strictEqual(calls, 2)
       assert.deepStrictEqual(
         result.value,
         Option.some({ hasCallToAction: true, clarity: 8 })
@@ -174,57 +181,15 @@ describe("AgentOutput", () => {
       )
     }))
 
-  it.effect("a value from a turn that never commits is not reported", () =>
-    Effect.gen(function*() {
-      // The output tool succeeds, then a second call in the same turn hangs
-      // and the run is interrupted. The turn rolls back: nothing enters
-      // history, so nothing may be reported as the answer either. Staging the
-      // value until the commit is the whole reason this passes.
-      const hanging = yield* Deferred.make<void>()
-      const Slow = Tool.make("slow", {
-        parameters: Schema.Struct({}),
-        success: Schema.String
-      })
-
-      const result = yield* Effect.scoped(
-        Effect.gen(function*() {
-          const { layer } = yield* FakeModel.layer([
-            {
-              toolCalls: [
-                { id: "a", name: Output.toolName, params: report },
-                { id: "b", name: "slow", params: {} }
-              ]
-            }
-          ])
-
-          return yield* Effect.gen(function*() {
-            const session = yield* AgentSession.make(
-              Agent.make({
-                output: Output,
-                // Sequential, so the output call is guaranteed to have run
-                // before the hanging one parks the turn.
-                toolExecution: ToolExecution.Sequential,
-                tools: [
-                  Agent.tool(Slow, () =>
-                    Effect.andThen(
-                      Deferred.succeed(hanging, undefined),
-                      Effect.never
-                    ))
-                ]
-              })
-            )
-            const receipt = yield* AgentSession.submit(session, "go")
-            yield* Deferred.await(hanging)
-            yield* AgentSession.interrupt(session)
-            return yield* AgentSession.awaitSubmission(session, receipt.submissionId)
-          }).pipe(Effect.provide(layer))
-        })
-      )
-
-      assert.strictEqual(result.status, "interrupted")
-      assert.strictEqual(result.turns, 0)
-      assert.isTrue(Option.isNone(result.value))
-    }))
+  // "A value from a turn that never commits is not reported" lived here: the
+  // answer ran, a sibling in the same turn hung, the run was interrupted, and
+  // the staged value had to roll back with the turn. Item 91 made that
+  // scenario unconstructible -- the answer is `Alone`, so a batch with a
+  // sibling runs neither -- and nothing else runs between a lone answer's
+  // handler and the commit. The staging (`pendingOutput`, set by the handler
+  // and read only at commit) stays, because a durable replay or a future
+  // post-execution step would reopen the window; the rejection is pinned by
+  // "an action beside the answer runs nothing" below.
 
   it.effect("replacing the loop keeps the contract's stop rule", () =>
     Effect.gen(function*() {
@@ -430,6 +395,183 @@ describe("AgentOutput", () => {
         result.value,
         Option.some({ hasCallToAction: true, clarity: 8 })
       )
+    }))
+})
+
+/**
+ * Item 91: the answer must be the only application call of its turn, and a
+ * batch that breaks that runs *nothing* -- not the answer, not its siblings.
+ */
+describe("AgentOutput, alone in its turn", () => {
+  const CreateInvoice = Tool.make("create_invoice", {
+    parameters: Schema.Struct({ amount: Schema.Number }),
+    success: Schema.String
+  })
+
+  /** An agent whose one action counts its runs, and whose policy counts its consultations. */
+  const setup = Effect.gen(function*() {
+    const created = yield* Ref.make(0)
+    const consulted = yield* Ref.make<ReadonlyArray<string>>([])
+    const agent = Agent.make({
+      output: Output,
+      tools: [
+        Agent.tool(CreateInvoice, ({ amount }) =>
+          Effect.as(Ref.update(created, (n) => n + 1), `invoice for ${amount}`))
+      ],
+      permission: Permission.make((request) =>
+        Effect.as(Ref.update(consulted, (names) => [...names, request.tool.name]), Permission.allow)
+      )
+    })
+    return { agent, created, consulted }
+  })
+
+  const actionAndAnswer: FakeModel.Turn = {
+    toolCalls: [
+      { id: "i1", name: "create_invoice", params: { amount: 5 } },
+      { id: "o1", name: Output.toolName, params: report }
+    ]
+  }
+
+  const failuresOf = (events: ReadonlyArray<AgentEvent.AgentEventEnvelope>) =>
+    events.flatMap((envelope) =>
+      AgentEvent.is("ToolCallFailed")(envelope)
+        ? [{ id: envelope.event.id, tag: envelope.event.failure.tag, returned: envelope.event.returnedToModel }]
+        : []
+    )
+
+  const runProbed = <Tools extends Record<string, Tool.Any>, Value>(
+    turns: ReadonlyArray<FakeModel.Turn>,
+    agent: Agent.AgentDefinition<Tools, never, never, LanguageModel.LanguageModel, Value>
+  ) =>
+    Effect.gen(function*() {
+      const { layer, recorder } = yield* FakeModel.layer(turns)
+      return yield* Effect.scoped(
+        Effect.gen(function*() {
+          const session = yield* AgentSession.make(agent)
+          const probe = yield* AgentProbe.make(session)
+          const result = yield* AgentSession.prompt<Tools, never, Value, Prompt.RawInput>(session, "go")
+          return { result, calls: yield* recorder.calls, events: yield* probe.events }
+        }).pipe(Effect.provide(layer))
+      )
+    })
+
+  it.effect("an action beside the answer runs nothing, and the model corrects itself", () =>
+    Effect.gen(function*() {
+      const { agent, created, consulted } = yield* setup
+      const { calls, events, result } = yield* runProbed(
+        [actionAndAnswer, FakeModel.toolCall(Output.toolName, report)],
+        agent
+      )
+
+      // Nothing from the rejected batch ran -- the side effect is the point.
+      assert.strictEqual(yield* Ref.get(created), 0)
+      // Both calls were refused, each told why, and both went back to the model.
+      assert.deepStrictEqual(failuresOf(events), [
+        { id: "i1", tag: "ToolBatchRejectedError", returned: true },
+        { id: "o1", tag: "ToolNotAloneError", returned: true }
+      ])
+      // The rejected answer was not recorded: it took the second turn's.
+      assert.strictEqual(calls, 2)
+      assert.strictEqual(result.turns, 2)
+      assert.deepStrictEqual(result.value, Option.some(report))
+      // Permission was asked only about the lone answer, never the rejected batch.
+      assert.deepStrictEqual(yield* Ref.get(consulted), [Output.toolName])
+    }))
+
+  it.effect("the refusals name the rule, so the model can act on them", () =>
+    Effect.gen(function*() {
+      const { agent } = yield* setup
+      const { events } = yield* runProbed(
+        [actionAndAnswer, FakeModel.toolCall(Output.toolName, report)],
+        agent
+      )
+      const messages = events.flatMap((envelope) =>
+        AgentEvent.is("ToolCallFailed")(envelope) ? [envelope.event.failure.message] : []
+      )
+      assert.include(messages[0]!, `${Output.toolName} must be the only call in its turn`)
+      assert.include(messages[1]!, "1 other call arrived with it, so none of them was run")
+    }))
+
+  it.effect("a call the provider already executed is not company", () =>
+    Effect.gen(function*() {
+      // #419's distinction: a provider-hosted call has settled and cannot be
+      // undone, so it is not part of the batch. Counting `toolCalls.length`
+      // would reject this answer; counting executable calls does not.
+      const { agent, created } = yield* setup
+      const { calls, events, result } = yield* runProbed(
+        [{
+          toolCalls: [
+            { id: "p1", name: "create_invoice", params: { amount: 5 }, providerExecuted: true },
+            { id: "o1", name: Output.toolName, params: report }
+          ]
+        }],
+        agent
+      )
+
+      assert.strictEqual(calls, 1)
+      assert.deepStrictEqual(failuresOf(events), [])
+      assert.deepStrictEqual(result.value, Option.some(report))
+      assert.strictEqual(yield* Ref.get(created), 0)
+    }))
+
+  it.effect("a model that keeps breaking the rule exhausts the loop rather than spinning", () =>
+    Effect.gen(function*() {
+      // The rejected calls are still calls: `maxToolCalls` counts them, so
+      // four rejected calls end the run at the ceiling with no answer and no
+      // side effect.
+      const { agent, created } = yield* setup
+      const { calls, result } = yield* runProbed(
+        [actionAndAnswer, actionAndAnswer, actionAndAnswer],
+        agent.pipe(Agent.withLoop(AgentLoop.maxToolCalls(4)))
+      )
+
+      assert.strictEqual(calls, 2)
+      assert.strictEqual(result.turns, 2)
+      assert.isTrue(Option.isNone(result.value))
+      assert.strictEqual(yield* Ref.get(created), 0)
+    }))
+
+  it.effect("a lone answer refused and returned to the model does not end the run", () =>
+    Effect.gen(function*() {
+      // The stop rule used to fire on the call's *presence*, so a denial the
+      // model was shown ended the run with no answer at all -- the model was
+      // told to try again and never asked. It stops on a committed value now.
+      const deniedOnce = yield* Ref.make(true)
+      const { calls, result } = yield* run(
+        [FakeModel.toolCall(Output.toolName, report), FakeModel.toolCall(Output.toolName, report)],
+        Agent.make({
+          output: Output,
+          toolDenialPolicy: ToolExecution.ReturnToModel,
+          permission: Permission.make(() =>
+            Effect.map(Ref.getAndSet(deniedOnce, false), (deny) => deny ? Permission.deny("not yet") : Permission.allow)
+          )
+        })
+      )
+
+      assert.strictEqual(calls, 2)
+      assert.deepStrictEqual(result.value, Option.some(report))
+    }))
+
+  it.effect("an answer alone still runs, and ordinary batches are untouched", () =>
+    Effect.gen(function*() {
+      const { agent, created } = yield* setup
+      const { calls, events, result } = yield* runProbed(
+        [
+          {
+            toolCalls: [
+              { id: "i1", name: "create_invoice", params: { amount: 1 } },
+              { id: "i2", name: "create_invoice", params: { amount: 2 } }
+            ]
+          },
+          FakeModel.toolCall(Output.toolName, report)
+        ],
+        agent
+      )
+
+      assert.strictEqual(yield* Ref.get(created), 2)
+      assert.deepStrictEqual(failuresOf(events), [])
+      assert.strictEqual(calls, 2)
+      assert.deepStrictEqual(result.value, Option.some(report))
     }))
 })
 

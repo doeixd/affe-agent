@@ -70,6 +70,18 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
    * simply not recognise it, which is the safe direction.
    */
   readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
+  /**
+   * Whether this turn committed a value for the agent's `AgentOutput`.
+   *
+   * Not the same as "the output tool is among `toolCalls`": a call to it can
+   * be refused -- denied under a `ReturnToModel` denial policy, or rejected
+   * because it shared its turn (`ToolExecution.Alone`) -- and then the model
+   * is expected to answer again, so a policy that stopped on the call's
+   * presence would end the run without the answer. Derived from the
+   * committed turn, so it is replay-stable like `turnIndex`. Always `false`
+   * for an agent without an output.
+   */
+  readonly outputReported: boolean
 }
 
 /**

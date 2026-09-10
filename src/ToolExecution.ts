@@ -7,6 +7,7 @@ import type { SubmissionId } from "./internal/ids.js"
 import {
   AgentToolProgressLimitError,
   ToolApprovalRequiredError,
+  ToolBatchRejectedError,
   ToolNotAloneError,
   ToolPermissionDeniedError
 } from "./Errors.js"
@@ -902,14 +903,24 @@ const executePerTool = <
 /**
  * Annotation: this tool must be the only call in its turn.
  *
- * For a tool whose result is a decision about the *next* turn -- the
- * compaction controller's `new_context` is the one in this repository --
- * a sibling in the same batch would run and then have its result folded
- * away with everything else, silently. So a call carrying this annotation
- * that arrives with siblings is not run: it gets a `ToolNotAloneError` as
- * its result, returned to the model whatever the failure policies say,
- * because it is the model's own recoverable mistake; the siblings run as
- * they would have. `false` by default. Set it with
+ * For a tool whose result is a decision about what happens *next* -- the
+ * run's typed answer (`AgentOutput`), the compaction controller's
+ * `new_context` -- a sibling in the same batch is a protocol violation: it
+ * would act in the same breath as "I am done" or "clear the window", and its
+ * result would be ignored or folded away. So a batch in which a call
+ * carrying this annotation has company is **rejected whole, before anything
+ * starts**: no handler runs and no permission is asked. The `Alone` call gets
+ * a `ToolNotAloneError` and each sibling a `ToolBatchRejectedError`, all
+ * returned to the model whatever the failure policies say, because it is the
+ * model's own recoverable mistake. The rejected calls still count as calls
+ * for the loop's ceilings, so a model that repeats the mistake exhausts
+ * rather than spins.
+ *
+ * "Company" means other *application* calls: a call the provider already
+ * executed has settled and is not in the batch (`AgentTurn` removes it before
+ * execution), so a provider-hosted search beside the answer is fine.
+ *
+ * `false` by default. Set it with
  * `Tool.make(...).annotate(ToolExecution.Alone, true)`.
  */
 export const Alone = Context.Reference<boolean>(Namespace.tag("ToolExecution/Alone"), {
@@ -924,15 +935,18 @@ const mustBeAlone = <Tools extends Record<string, Tool.Any>>(
   return tool !== undefined && Context.get(tool.annotations, Alone)
 }
 
-/** The refusal for an `Alone` tool with siblings: announced like any call, and always the model's to read. */
-const refuseNotAlone = <R>(
+/**
+ * The refusal for one call of a rejected batch: announced like any call, and
+ * always the model's to read. The `Alone` call is told it needed to be alone;
+ * a sibling is told which call made the batch invalid.
+ */
+const refuseBatchMember = <R>(
   call: { readonly id: string; readonly name: string; readonly params: unknown },
-  siblings: number,
+  error: ToolNotAloneError | ToolBatchRejectedError,
   context: TurnContext<R>
 ): Effect.Effect<Response.AnyPart> =>
   Effect.gen(function* () {
     const { correlation, session } = context
-    const error = new ToolNotAloneError({ toolName: call.name, toolCallId: call.id, siblings })
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "ToolCallStarted",
       id: call.id,
@@ -954,8 +968,9 @@ const refuseNotAlone = <R>(
  *
  * Under `FailRun` the first failure interrupts its siblings, which is ordinary
  * `Effect.all` semantics. Under `ReturnToModel` a typed failure is not an error
- * at all, so siblings always run to completion. A call annotated `Alone` that
- * arrives with siblings is refused without running; see `Alone`.
+ * at all, so siblings always run to completion. A batch in which a call
+ * annotated `Alone` has company is refused whole, nothing running; see
+ * `Alone`.
  */
 export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
@@ -980,23 +995,16 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
           concurrencyOption(context.agent.strategy)
         )
   if (calls.length < 2 || !calls.some((call) => mustBeAlone(handler, call))) return dispatch(calls)
-  // A call that must be alone, with company: refused without running, while
-  // the rest run as they would have. Results are reassembled in the calls'
-  // order, so the history reads as the model asked.
-  const refused = calls.filter((call) => mustBeAlone(handler, call))
-  const rest = calls.filter((call) => !mustBeAlone(handler, call))
-  return Effect.map(
-    Effect.all([
-      Effect.forEach(refused, (call) => refuseNotAlone(call, calls.length - 1, context)),
-      dispatch(rest)
-    ]),
-    ([refusals, results]) => {
-      // By position. Keying on the call id would also be correct, because
-      // `AgentTurn` refuses a response whose calls share an id before any of
-      // them runs; this is merely the form that does not depend on that.
-      let refusal = 0
-      let result = 0
-      return calls.map((call) => mustBeAlone(handler, call) ? refusals[refusal++]! : results[result++]!)
-    }
-  )
+  // A call that must be alone, with company: the whole batch is refused and
+  // nothing runs -- see `Alone`. One result per call, in the calls' order, so
+  // the history reads as the model asked.
+  const exclusive = calls.filter((call) => mustBeAlone(handler, call)).map((call) => call.name)
+  return Effect.forEach(calls, (call) =>
+    refuseBatchMember(
+      call,
+      mustBeAlone(handler, call)
+        ? new ToolNotAloneError({ toolName: call.name, toolCallId: call.id, siblings: calls.length - 1 })
+        : new ToolBatchRejectedError({ toolName: call.name, toolCallId: call.id, exclusive }),
+      context
+    ))
 }

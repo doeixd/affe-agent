@@ -404,7 +404,10 @@ const withOutputStop = <E, R>(
           Effect.map(loop.decide(state), (decision) =>
             // The answer has been given: stop, whatever the inner policy said
             // -- a `Final` turn after the output would only ask for it again.
-            state.toolCalls.some((call) => call.name === output.toolName)
+            // "Given" means committed, not merely called: a refused call
+            // (denied and returned to the model, or rejected for sharing its
+            // turn) leaves the model to answer again.
+            state.outputReported
               ? AgentLoop.stop("output reported")
               : decision
           ),

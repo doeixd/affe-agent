@@ -37,7 +37,8 @@ describe("pipeable declarative values", () => {
           toolCallsTotal: turnIndex,
           elapsed: Duration.zero,
           response: null as never,
-          toolCalls: [{ id: "t", name: "x" }] as never
+          toolCalls: [{ id: "t", name: "x" }] as never,
+          outputReported: false
         })
 
       // Tools outstanding, so `untilIdle` continues -- until the bound.

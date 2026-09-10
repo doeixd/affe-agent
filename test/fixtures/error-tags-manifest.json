@@ -53,6 +53,7 @@
   "SessionNotIndexed",
   "StorageError",
   "ToolApprovalRequiredError",
+  "ToolBatchRejectedError",
   "ToolNotAloneError",
   "ToolPermissionDeniedError",
   "ToolSourceExtractionError",

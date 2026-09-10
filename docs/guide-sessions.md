@@ -270,12 +270,17 @@ which reports the last projection the controller recorded for the calling
 session, so a model can see how much of its window is left. A limit the
 model cannot see is a limit it will hit.
 
-A tool whose result is a decision about the next turn can insist on being the
-only call in its turn: annotate it `ToolExecution.Alone`. A call carrying the
-annotation that arrives with siblings is not run and gets a `ToolNotAloneError`
-as its result, returned to the model whatever the failure policies say, while
-the siblings run under the agent's strategy. The compaction controller's
-`new_context` is the tool in this repository that does.
+A tool whose result is a decision about what happens next can insist on being
+the only call in its turn: annotate it `ToolExecution.Alone`. A batch in which
+such a call has company is **rejected whole, before anything starts** -- no
+handler runs and no permission is asked. The `Alone` call gets a
+`ToolNotAloneError`, each sibling a `ToolBatchRejectedError`, all returned to
+the model whatever the failure policies say, and the model tries again. The
+rejected calls still count toward `maxToolCalls`, so a model that repeats the
+mistake exhausts rather than spins. A call the provider already executed is
+not company: it has settled, so a provider-hosted search beside an answer is
+fine. Two tools here carry it: an `AgentOutput`'s reporting tool, so an action
+beside the answer never runs, and the compaction controller's `new_context`.
 
 ## Tool progress
 

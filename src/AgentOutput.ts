@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as WireValue from "./internal/wireValue.js"
+import * as ToolExecution from "./ToolExecution.js"
 
 /**
  * A typed value a submission is expected to end with.
@@ -104,7 +105,10 @@ export const make = <A, I>(
       // A string rather than void: a tool result is committed to history, and
       // an empty one reads to a later turn as a call that did nothing.
       success: Schema.String
-    })
+    // The answer ends the run, so an action beside it in the same response is
+    // a protocol violation rather than work to do first: the whole batch is
+    // rejected before any of it runs, and the model tries again.
+    }).annotate(ToolExecution.Alone, true)
   }
 }
 

@@ -54,6 +54,9 @@ describe("public API", () => {
       // `detailOf`, which fills in its `detail`, is deliberately internal.
       "StorageError",
       "ToolApprovalRequiredError",
+      // A call not run because an `Alone` tool shared its turn: the whole
+      // batch is rejected, and each sibling is told why.
+      "ToolBatchRejectedError",
       "ToolExecution",
       // An `Alone` tool that arrived with siblings: the model's mistake,
       // always returned to it, never a failed run.

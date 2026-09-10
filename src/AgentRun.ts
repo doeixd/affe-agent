@@ -149,7 +149,8 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
           toolCallsTotal,
           elapsed: Duration.millis(elapsedMillis),
           response: result.response,
-          toolCalls: result.toolCalls
+          toolCalls: result.toolCalls,
+          outputReported: Option.isSome(result.value)
         })
 
       if (decision._tag === "Final") {

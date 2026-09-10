@@ -319,13 +319,15 @@ describe("a fresh window as a compaction decision", () => {
     })
   )
 
-  it.effect("new_context beside another call is refused, the sibling runs, and the window does not move", () =>
+  it.effect("new_context beside another call rejects the whole batch, nothing runs, and the window does not move", () =>
     Effect.gen(function* () {
-      // Item 60d-ii. A sibling's result would be folded away with the window,
-      // silently, so the request is not run when it has company: it gets a
-      // `ToolNotAloneError` as its result, the ping runs, and the next turn
-      // still sees everything. The turn after that calls it alone, and the
-      // window moves then. Read from events and from the prompts the model saw.
+      // Item 60d-ii, tightened by item 91. A sibling's result would be folded
+      // away with the window, silently, so a batch in which the request has
+      // company is rejected whole: the request gets a `ToolNotAloneError`,
+      // the ping a `ToolBatchRejectedError`, and neither runs -- the ping's
+      // side effect is exactly what the rule exists to prevent. The next turn
+      // sees both refusals; the turn after calls it alone, and the window
+      // moves then. Read from events and the prompts the model saw.
       const compaction = yield* messageCounter()
       const agent = Agent.make({
         instructions: "Be terse.",
@@ -347,12 +349,13 @@ describe("a fresh window as a compaction decision", () => {
         })
       ).pipe(Effect.provide(layer))
 
-      // The refused call was announced like any other and returned to the model.
+      // Both refused calls were announced like any other and returned to the model.
       const failed = events.flatMap((envelope) => AgentEvent.is("ToolCallFailed")(envelope) ? [envelope.event] : [])
-      assert.deepStrictEqual(failed.map((event) => [event.id, event.returnedToModel]), [["n1", true]])
+      assert.deepStrictEqual(failed.map((event) => [event.id, event.returnedToModel]), [["n1", true], ["p1", true]])
       assert.include(failed[0]!.failure.message, "must be the only call in its turn")
+      assert.include(failed[1]!.failure.message, "new_context must be the only call in its turn")
       const succeeded = events.flatMap((envelope) => AgentEvent.is("ToolCallSucceeded")(envelope) ? [envelope.event.id] : [])
-      assert.deepStrictEqual(succeeded, ["p1", "n2"])
+      assert.deepStrictEqual(succeeded, ["n2"])
 
       const prompts = yield* recorder.prompts
       assert.strictEqual(prompts.length, 3)

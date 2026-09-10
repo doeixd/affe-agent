@@ -2177,7 +2177,33 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     calls share an id, which a row written to catch the supposed misfiling
     proved by hitting that refusal first. The four streaming-era commits in
     the same set had their code read in the two review passes.
+    *(2026-09-10: the reassembly is gone -- item 91 rejects the whole batch,
+    so a refused batch's results map over the calls in order and there is
+    nothing to reassemble. The pin moved to the comment that says so.)*
 
     ```text
-    verify: grep "refuses a response whose calls share an id" src/ToolExecution.ts
+    verify: grep "One result per call, in the calls' order" src/ToolExecution.ts
+    ```
+
+### Tool exposure, terminal work and failure routes — 2026-09-10
+
+91. ~~**Exclusive terminal batches (plan E1, §5).**~~ — landed 2026-09-10.
+    `ToolExecution.Alone` now rejects the whole application batch before
+    any handler or `Permission` runs: the `Alone` call gets a
+    `ToolNotAloneError`, each sibling a new `ToolBatchRejectedError`, all
+    returned to the model; provider-executed calls are not company. The
+    `AgentOutput` tool carries `Alone`, which retires the documented
+    two-answers race. Found on the way: the output stop rule fired on the
+    output call's *presence*, so a lone answer denied under a
+    `ReturnToModel` denial policy ended the run with no value; the loop now
+    stops on `AgentLoop.State.outputReported`, a committed value. The
+    `new_context` sibling no longer runs -- a behaviour change, trailered.
+    Tests: `test/AgentOutput.test.ts` "alone in its turn", both mutations
+    (siblings run again; stop on presence) caught.
+
+    ```text
+    verify: grep "}).annotate(ToolExecution.Alone, true)" src/AgentOutput.ts
+    verify: grep "ToolBatchRejectedError" src/Errors.ts
+    verify: grep "readonly outputReported: boolean" src/AgentLoop.ts
+    verify: no-grep "calls the tool twice in one turn" src/AgentTurn.ts
     ```

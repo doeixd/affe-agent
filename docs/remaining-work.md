@@ -340,23 +340,6 @@ the largest and wants 100's harness to be judged. The plan carries each
 item's invariants and acceptance tests; the entries here say what is open
 and pin the state it starts from.*
 
-91. **Exclusive terminal batches (plan E1, §5).** A response carrying
-    `create_invoice(...)` and the output tool runs `create_invoice` today:
-    the output tool is not `ToolExecution.Alone`, and `Alone` refuses only
-    the marked call while its siblings run -- so `new_context`'s sibling
-    side effects happen too, despite its doc. Strengthen `Alone` to reject
-    the whole *application* batch before any handler or `Permission` runs
-    (provider-executed calls excluded, as `AgentTurn`'s filter already
-    does), commit a failed result per call, count the attempt against the
-    budgets, and annotate the output tool. Resolves the documented
-    two-output-calls race. Behaviour change for `new_context`; record it.
-    Small.
-
-    ```text
-    verify: grep "annotate(ToolExecution.Alone, true)" src/compaction/Compaction.ts
-    verify: grep "calls the tool twice in one turn" src/AgentTurn.ts
-    ```
-
 92. **Completion from an ordinary tool result (plan E2, §4).**
     `AgentOutput.fromTool(Tool, project)`: a pure projection of a committed,
     successful result that completes the submission without another model

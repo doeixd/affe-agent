@@ -134,14 +134,12 @@ const withheld = <Tools extends Record<string, Tool.Any>>(): Effect.Effect<
  * The handler is the whole mechanism: it stages the decoded value and returns
  * a confirmation.
  *
- * A model that calls the tool twice in one turn leaves whichever handler
- * *finished* last, which under the default `ToolExecution.Parallel` is a race
- * rather than the later call in the response. Left as it is, deliberately:
- * rejecting the second call would make the output tool the one tool with its
- * own arity rule, and picking "the last one in the response" would decide on
- * the model's behalf which of two answers it meant. Neither is better than
- * saying plainly that a model asked for one answer and gave two, and that the
- * harness kept one of them.
+ * The tool is annotated `ToolExecution.Alone` (`AgentOutput.make`), so it is
+ * only ever handled as the sole application call of its turn: a response
+ * carrying two answers, or an answer beside an action, is rejected whole
+ * before anything runs, and the model tries again. That is the generic rule
+ * for a tool that decides what happens next, not an arity rule of this tool's
+ * own -- and it is why this handler never has to choose between two answers.
  *
  * The parameters arrive decoded: `Toolkit.handle` decodes against the tool's
  * parameter schema before calling this, so a value that does not fit the shape

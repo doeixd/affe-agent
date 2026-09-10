@@ -234,7 +234,8 @@ describe("AgentLoop.and / or over three decisions", () => {
       toolCallsTotal: 0,
       elapsed: Duration.zero,
       response,
-      toolCalls: []
+      toolCalls: [],
+      outputReported: false
     }
     return state
   })

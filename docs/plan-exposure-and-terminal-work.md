@@ -335,6 +335,14 @@ that value, `None` continues the run.
 
 ## 5. E1 — Exclusive batches for terminal tools
 
+**Landed 2026-09-10 (item 91, ledger).** `Alone` was strengthened rather than
+joined by a second annotation (Q2); siblings get `ToolBatchRejectedError`
+(T5.3). One thing the plan did not foresee: the output stop rule fired on the
+output call's *presence*, so a refused answer ended the run with no value. It
+now stops on `AgentLoop.State.outputReported`, a committed value. T5.6's
+provider-executed case is pinned by "a call the provider already executed is
+not company" in `test/AgentOutput.test.ts`.
+
 ### 5.1 The defect
 
 A response `create_invoice(...) + submit_final_answer(...)` today runs
@@ -681,7 +689,8 @@ headers). Not kernel architecture. Only on an adopter asking.
 * **Q1** Is visibility per agent or per session? Principal and delegation
   grants are per session, which argues for the session; `describe` wants a
   static answer, which argues for the agent with a session-level narrowing.
-* **Q2** Strengthen `Alone` (recommended) or add a second annotation?
+* **Q2** ~~Strengthen `Alone` (recommended) or add a second annotation?~~
+  Strengthened, 2026-09-10 (§5).
 * **Q3** `failureMode: "return"` vs `FailRun` — which wins (§6, T6.1)?
 * **Q4** Should a projected completion (E2) be able to fire on a
   provider-executed tool's result? Leaning no: the output schema should come
