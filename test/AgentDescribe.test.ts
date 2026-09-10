@@ -10,6 +10,7 @@ import * as AgentSession from "../src/AgentSession.js"
 import { Budget } from "../src/budget/index.js"
 import * as Permission from "../src/Permission.js"
 import { TestLanguageModel } from "../src/testing/index.js"
+import { ToolSource } from "../src/toolSource/index.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 
 /**
@@ -65,7 +66,8 @@ describe("Agent.describe", () => {
         alone: false,
         readonly: false,
         idempotent: false,
-        providerDefined: false
+        providerDefined: false,
+        source: Option.none()
       }]),
       loop: {
         _tag: "Custom",
@@ -202,4 +204,21 @@ describe("describe marks provider-defined tools (item 94)", () => {
       Option.some([["web_search", true], ["lookup", false]])
     )
   })
+})
+
+describe("describe names the source a tool was bound from (item 94)", () => {
+  it.effect("a discovered tool reads as its source's", () =>
+    Effect.gen(function*() {
+      const source: ToolSource.ToolSource = {
+        id: "billing-mcp",
+        extract: Effect.succeed({ tools: [{ name: "refund", input: { type: "object" } }], skipped: [] }),
+        invoke: () => Effect.succeed("ok")
+      }
+      // A hand-written tool's `source` is `None`: the first row above.
+      const agent = Agent.make({ toolkit: yield* ToolSource.bindDiscovered(source) })
+      assert.deepStrictEqual(
+        Option.map(Agent.describe(agent).tools, (tools) => tools.map((t) => [t.name, Option.getOrNull(t.source)])),
+        Option.some([["refund", "billing-mcp"]])
+      )
+    }))
 })

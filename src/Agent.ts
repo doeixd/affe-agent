@@ -18,6 +18,7 @@ import * as ContextTransform from "./ContextTransform.js"
 import * as InternalToolkit from "./internal/toolkit.js"
 import * as Permission from "./Permission.js"
 import * as ToolExecution from "./ToolExecution.js"
+import { ToolSourceId } from "./internal/toolSourceId.js"
 import * as ToolExposure from "./ToolExposure.js"
 
 /**
@@ -402,6 +403,8 @@ export interface DescribedTool {
   /** Effect AI's `Tool.Readonly` and `Tool.Idempotent` annotations. */
   readonly readonly: boolean
   readonly idempotent: boolean
+  /** The `ToolSource` it was bound from (an MCP server, an OpenAPI spec), if any. */
+  readonly source: Option.Option<string>
   /**
    * Defined by the provider (`Tool.providerDefined`: a hosted web search,
    * a code interpreter) rather than by this application. Such a tool may be
@@ -422,7 +425,8 @@ export const describe = (agent: Any): Description => ({
       alone: Context.get(tool.annotations, ToolExecution.Alone),
       readonly: Context.get(tool.annotations, Tool.Readonly),
       idempotent: Context.get(tool.annotations, Tool.Idempotent),
-      providerDefined: Tool.isProviderDefined(tool)
+      providerDefined: Tool.isProviderDefined(tool),
+      source: Context.getOption(tool.annotations, ToolSourceId)
     }))
   ),
   loop: agent.loop.description,

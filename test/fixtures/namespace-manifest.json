@@ -82,6 +82,7 @@
   "affe-agent/subagent/SubagentInterruptedError",
   "affe-agent/tool-source/Credentials/Bindings",
   "affe-agent/tool-source/Credentials/Provider",
+  "affe-agent/tool-source/ToolSourceId",
   "affe-agent/tree/NodeId",
   "affe-agent/tree/NodeMissing",
   "affe-agent/tree/NothingToCarry",

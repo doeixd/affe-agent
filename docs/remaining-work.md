@@ -382,8 +382,9 @@ and pin the state it starts from.*
     already says; a three-valued field would be the same fact twice across
     five consumers. Worth doing when a third disposition exists. Entries
     also say `providerDefined` (a hosted tool the provider may execute,
-    outside `Permission`). Open: the entry's source namespace, which needs
-    a tool source to annotate its tools first. Small.
+    outside `Permission`), and `source`: the `ToolSource` id a tool was
+    bound from (`bind` and `bindDiscovered` annotate it). Nothing else is
+    open; the deferred `failureHandling` field waits on a third disposition.
 
     ```text
     verify: grep "readonly failureMode: \"error\" | \"return\"" src/Agent.ts

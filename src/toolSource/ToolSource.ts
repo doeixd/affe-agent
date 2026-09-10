@@ -3,6 +3,7 @@ import type * as JsonSchema from "effect/JsonSchema"
 import { AiError, Tool, Toolkit } from "effect/unstable/ai"
 import * as McpToolkit from "../mcp/McpToolkit.js"
 import * as Permission from "../Permission.js"
+import { withSourceId } from "../internal/toolSourceId.js"
 
 /**
  * One tool as a source describes it — the dual-schema shape.
@@ -196,7 +197,7 @@ export const bind = <const Tools extends ReadonlyArray<Tool.Any>>(
 
     const byName = new Map(validExtractionTools.map((tool) => [tool.name, tool] as const))
     // `map` widens the tuple; each element keeps its own type, so the tuple does too.
-    const floored = tools.map((tool) => withSourceFloor(tool, byName.get(tool.name))) as unknown as Tools
+    const floored = tools.map((tool) => withSourceId(withSourceFloor(tool, byName.get(tool.name)), source.id)) as unknown as Tools
     const built = Toolkit.make(...floored)
 
     const handlers = Object.fromEntries(
@@ -313,7 +314,7 @@ export const bindDiscovered = (
       // Discovered tools carry no output contract; failure is `unknown` so any
       // source-reported failure can surface.
       const asksApproval = descriptor.annotations?.requiresApproval === true
-      const dynamic = Tool.dynamic(descriptor.name, {
+      const bare = Tool.dynamic(descriptor.name, {
         ...(descriptor.description === undefined
           ? {}
           : { description: descriptor.description }),
@@ -324,6 +325,8 @@ export const bindDiscovered = (
         // the call for policy; it never asked anything by itself.
         ...(asksApproval ? { needsApproval: true } : {})
       })
+      // Which source it came from, for `Agent.describe` (item 94).
+      const dynamic = withSourceId(bare, source.id)
       if (asksApproval) {
         // `Permission.annotate` keeps the tool's exact type; the dynamic tool is
         // already `unknown` parameters, so the annotation is structural.
