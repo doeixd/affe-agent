@@ -29,6 +29,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - subagent delegation is now refused past 8 levels by default (SubagentDepthExceededError); pass maxDepth to change it. (`a165708`; measured by `test/fixtures/namespace-manifest.json`)
 - CloudflareHost.make now requires principal and authorization, and RelayServer.layer requires authorization; the allow-everything defaults and the header-as-principal default are gone. (`9342c8e`; unmeasured)
 - AgentSession.Snapshot has a required version field (1), written by snapshot and by exports; snapshots without one still decode as version 1, and an unknown version is refused. (`4acc464`; unmeasured)
+- the default Memory.recall rendering adds a line when more memories matched than were shown; DeliveryLogConformance gains a paging case, so a log that ignores read limit now fails it. (`3783b93`; unmeasured)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
