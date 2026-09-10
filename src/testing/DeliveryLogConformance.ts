@@ -97,6 +97,20 @@ export const cases = <E>(options: Options<E>): ReadonlyArray<Case<E>> => {
         )
         yield* equal(name)(yield* log.read("missing"), [], "an unknown session")
       })),
+    make("reads in pages by limit, and a short page is the end (item 109)", (log) =>
+      Effect.gen(function* () {
+        const name = "reads in pages by limit, and a short page is the end (item 109)"
+        for (let i = 1; i <= 5; i++) yield* log.append("p", `k${i}`, envelope(i, { _tag: "RunStarted" }))
+        const pages: Array<ReadonlyArray<number>> = []
+        let after = 0
+        while (true) {
+          const page = yield* log.read("p", { after, limit: 2 })
+          pages.push(page.map((e) => e.sequence))
+          if (page.length < 2) break
+          after = page[page.length - 1]!.sequence
+        }
+        yield* equal(name)(pages, [[1, 2], [3, 4], [5]], "pages")
+      })),
 
     make("a replayed event is a duplicate; a disagreeing one is a conflict", (log) =>
       Effect.gen(function* () {

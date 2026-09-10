@@ -30,7 +30,7 @@ describe("DeliveryLogConformance", () => {
     Effect.gen(function* () {
       const report = yield* DeliveryLogConformance.run({ log: DeliveryLog.memoryLog })
       assert.deepStrictEqual(report.failed, [])
-      assert.strictEqual(report.passed.length, 4)
+      assert.strictEqual(report.passed.length, 5)
     })
   )
 

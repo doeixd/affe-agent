@@ -61,6 +61,13 @@ export interface MemoryEntry {
 /** What `recall` returns: the entries an adapter judged relevant, best first. */
 export interface MemoryRecall {
   readonly entries: ReadonlyArray<MemoryEntry>
+  /**
+   * Whether more entries matched than were returned (item 109): a short
+   * recall must not read as a complete one. `true` when the adapter cut the
+   * list at its limit, `false` when it returned every match, absent when the
+   * adapter cannot tell.
+   */
+  readonly truncated?: boolean | undefined
 }
 
 export interface MemoryShape {
@@ -120,8 +127,10 @@ export const layer = (options?: { readonly limit?: number }): Layer.Layer<Memory
               })
               .filter((candidate) => candidate.score > 0)
               .sort((a, b) => b.score - a.score)
-              .slice(0, limit)
-            return { entries: scored.map((candidate) => candidate.entry) }
+            return {
+              entries: scored.slice(0, limit).map((candidate) => candidate.entry),
+              truncated: scored.length > limit
+            }
           })
       }
     })
@@ -148,8 +157,13 @@ const systemMessage = (text: string): Prompt.Prompt =>
   Prompt.fromMessages([Prompt.systemMessage({ content: text })])
 
 const defaultRender = (recall: MemoryRecall): string =>
-  ["Relevant memories from earlier conversations:", ...recall.entries.map((entry) => `- ${entry.content}`)]
-    .join("\n")
+  [
+    "Relevant memories from earlier conversations:",
+    ...recall.entries.map((entry) => `- ${entry.content}`),
+    // Only a definite cut is announced: an adapter that cannot tell says
+    // nothing, rather than every recall claiming it might be partial.
+    ...(recall.truncated === true ? ["(More memories matched than are shown; these are the closest.)"] : [])
+  ].join("\n")
 
 /**
  * A `ContextTransform` that recalls memory for `scope` and injects it as a

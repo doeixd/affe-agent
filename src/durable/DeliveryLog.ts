@@ -88,10 +88,16 @@ export interface DeliveryLog {
     Scope.Scope
   >
 
-  /** Everything recorded for the session above `after`, in sequence order. */
+  /**
+   * What is recorded for the session above `after`, in sequence order: all
+   * of it, or the first `limit` (item 109). A page of exactly `limit` may
+   * be followed by more -- read again `after` its last `sequence` until a
+   * page comes back shorter. Without `limit` a long session's whole log is
+   * loaded at once.
+   */
   readonly read: (
     sessionId: string,
-    options?: { readonly after?: number | undefined }
+    options?: { readonly after?: number | undefined; readonly limit?: number | undefined }
   ) => Effect.Effect<ReadonlyArray<AgentEvent.AgentEventEnvelope>, StorageError>
 }
 
@@ -295,9 +301,10 @@ export const memoryLog: Effect.Effect<DeliveryLog> =
       read: (sessionId, options) =>
         Effect.map(Ref.get(sessions), (all) => {
           const after = options?.after ?? 0
-          return (all.get(sessionId) ?? [])
+          const found = (all.get(sessionId) ?? [])
             .map((entry) => entry.envelope)
             .filter((envelope) => envelope.sequence > after)
+          return options?.limit === undefined ? found : found.slice(0, options.limit)
         })
     }
   })
@@ -457,7 +464,9 @@ export const sqlLog = (
       read: (sessionId, options) =>
         sql<{
           readonly payload: string
-        }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${options?.after ?? 0} ORDER BY sequence`.pipe(
+        }>`SELECT payload FROM ${table} WHERE session_id = ${sessionId} AND sequence > ${options?.after ?? 0} ORDER BY sequence${
+          options?.limit === undefined ? sql`` : sql` LIMIT ${options.limit}`
+        }`.pipe(
           storage("read", sessionId),
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) => decodeEnvelope(row.payload, sessionId))

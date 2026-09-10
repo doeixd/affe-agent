@@ -236,7 +236,8 @@ export const make = (options: Options): Effect.Effect<DeliveryLog.DeliveryLog> =
       withSession(sessionId, (index) =>
         Effect.map(sync(sessionId, index), (synced) => {
           const after = readOptions?.after ?? 0
-          return synced.entries.filter((e) => e.sequence > after)
+          const found = synced.entries.filter((e) => e.sequence > after)
+          return readOptions?.limit === undefined ? found : found.slice(0, readOptions.limit)
         })
       )
 

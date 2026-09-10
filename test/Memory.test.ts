@@ -61,6 +61,41 @@ describe("Memory service (in-memory built-in)", () => {
       ])
     })
   )
+
+  it.effect("a recall cut at the limit says so; one that returned every match says that (item 109)", () =>
+    Effect.gen(function* () {
+      const { cut, whole } = yield* Effect.gen(function* () {
+        const memory = yield* Memory.Memory
+        for (let i = 0; i < 3; i++) yield* memory.remember("s", { content: `note ${i} about coffee` })
+        yield* memory.remember("s", { content: "a pot of green tea" })
+        return {
+          cut: yield* memory.recall("s", "coffee"),
+          whole: yield* memory.recall("s", "green tea")
+        }
+      }).pipe(Effect.provide(Memory.layer({ limit: 2 })))
+      assert.strictEqual(cut.entries.length, 2)
+      assert.isTrue(cut.truncated)
+      assert.isFalse(whole.truncated)
+    })
+  )
+
+  it.effect("the model is told when there were more memories than it was shown", () =>
+    Effect.gen(function* () {
+      const { layer, recorder } = yield* TestLanguageModel.script([TestLanguageModel.text("ok")])
+      yield* Effect.gen(function* () {
+        const memory = yield* Memory.Memory
+        for (let i = 0; i < 3; i++) yield* memory.remember("s", { content: `note ${i} about coffee` })
+        yield* Effect.scoped(
+          Effect.flatMap(
+            AgentSession.make(Agent.make({ contextTransform: Memory.recall("s"), loop: AgentLoop.bounded(1) })),
+            (session) => session.prompt("coffee")
+          )
+        )
+      }).pipe(Effect.provide(Layer.merge(Memory.layer({ limit: 2 }), layer)))
+      const [prompt] = yield* recorder.prompts
+      assert.include(JSON.stringify(prompt), "More memories matched than are shown")
+    })
+  )
 })
 
 describe("Memory.recall transform", () => {

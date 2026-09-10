@@ -1043,7 +1043,9 @@ A19.3 mutation: restore `decodeUnknownOption` → a test fails.
 
 ## 20. E16 — Checkpoints are disposable caches
 
-**T20.1 and T20.2 landed 2026-09-10 (item 108 stays open for T20.3–T20.4).**
+**T20.1, T20.2 and T20.4 landed 2026-09-10 (item 108 stays open for T20.3,
+the vocabulary in `guide-durable.md`).** T20.4: `Snapshot.version` is `1`;
+an unversioned snapshot decodes as 1 and an unknown version is refused.
 A checkpoint that does not decode is removed, reported as
 `CompactionCheckpointDiscarded` (a new `CompactionEvent` variant -- code that
 read `event.trigger` without narrowing on `_tag` now has to), and rebuilt
@@ -1074,7 +1076,10 @@ discarded.
 
 ## 21. E17 — Cursors over mutable sets; incomplete ≠ empty
 
-**`search_context` landed 2026-09-10 (item 109 stays open).** Newest first
+**Landed 2026-09-10 (item 109 closed).** `Memory.recall` gained
+`truncated` (optional, so an adapter that cannot tell stays compiling) and
+`DeliveryLog.read` a `limit`, where a full page may be followed by more.
+`search_context` first: Newest first
 rather than only a truncation flag: the continuity eval (§18) showed that the
 *most recent* statement is the one a question usually needs, so `more` plus a
 `before` canonical cursor pages the older ones. One case the plan missed: an

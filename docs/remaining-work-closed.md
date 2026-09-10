@@ -2286,3 +2286,21 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: no-grep "options.authorization ?? AgentSessionHost.allowAll()" src/cloudflare/index.ts
      verify: grep "readonly principal: AgentSessionHost.Options<string>\[\"principal\"\]" src/cloudflare/index.ts
      ```
+
+109. ~~**Cursors over mutable sets; incomplete ≠ empty (plan E17, §21).**~~ —
+     landed 2026-09-10. `search_context` searches newest first, pages older
+     with a `before` canonical-index cursor, reports `more` and an honest
+     `searched`, and skips its own echoes. `Catalog.search` (and Code Mode's
+     `search`) pages by a `(score, path)` key, so a tool-source refresh
+     between pages repeats and skips nothing. `Memory.recall` reports
+     `truncated`, and the default rendering tells the model when more
+     matched than it was shown. `DeliveryLog.read` takes a `limit`, honoured
+     by the memory, SQL and durable-streams logs, with a conformance row
+     that pages to a short final page. Every change mutation-checked.
+
+     ```text
+     verify: grep "more: Schema.Boolean" src/compaction/Compaction.ts
+     verify: grep "readonly next: Cursor | undefined" src/code/Catalog.ts
+     verify: grep "truncated: scored.length > limit" src/memory/Memory.ts
+     verify: grep "reads in pages by limit" src/testing/DeliveryLogConformance.ts
+     ```

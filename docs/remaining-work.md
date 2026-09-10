@@ -587,24 +587,6 @@ acceptance test for 105, 107 and 108.*
      verify: grep "CompactionCheckpointDiscarded" src/compaction/Compaction.ts
      ```
 
-109. **Cursors over mutable sets; incomplete ≠ empty (plan E17, §21) --
-     `search_context` landed 2026-09-10.** It returned the *first* three
-     matches in history order and stopped silently, so a value corrected on
-     its fourth mention was never found (the continuity eval pinned it). It
-     now searches newest first, pages older with a `before` canonical-index
-     cursor, reports `more` when the bound ended it and an honest
-     `searched`, and skips the evidence tools' own calls and results, which
-     only echo the phrase. `Catalog.search` (and Code Mode's `search` tool)
-     landed the same day: it pages by a `(score, path)` key rather than an
-     offset, so a tool-source refresh between pages repeats and skips nothing
-     -- done before 93 reuses it. Still open: `Memory.recall` returns a short
-     result that reads as complete; `DeliveryLog.read` has no limit at all.
-
-     ```text
-     verify: grep "more: Schema.Boolean" src/compaction/Compaction.ts
-     verify: grep "readonly next: Cursor | undefined" src/code/Catalog.ts
-     ```
-
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
      104's oracle is its acceptance test.
