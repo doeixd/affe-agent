@@ -20,7 +20,7 @@
  *
  * Part of `npm run check`. `plan-context-lessons.md` 2.5.
  */
-import { FIXTURES, isFixture, readBehaviorChanges, TRAILER } from "./lib/behavior-changes.mjs"
+import { FIXTURES, isFixture, readBehaviorChanges, TRAILER, TYPE_ONLY } from "./lib/behavior-changes.mjs"
 
 const BASELINE = "1c6b2bd"
 
@@ -42,14 +42,6 @@ const missing = commits.filter(
 const measuredLater = commits.filter((commit) => commit.files.some(isFixture)).flatMap((commit) => commit.measures)
 const measuredBy = (hash) => measuredLater.some((named) => hash.startsWith(named) || named.startsWith(hash))
 
-/**
- * Behaviour changes with nothing on a wire or in a journal to record: a
- * change to types, or to what a caller must pass. Each with its reason, so the
- * exception is reviewed rather than assumed.
- */
-const TYPE_ONLY = {
-  "9342c8e": "authorization and principal became required options of two entry points; no wire or journal bytes changed"
-}
 
 const unmeasured = commits.filter(
   (commit) =>

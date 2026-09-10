@@ -13,6 +13,15 @@ export const TRAILER = "Behavior-Change"
  * touch a fixture itself.
  */
 export const MEASURES = "Behavior-Change-Measures"
+
+/**
+ * Behaviour changes with nothing on a wire or in a journal to record: a
+ * change to types, or to what a caller must pass. Each with its reason, so the
+ * exception is reviewed rather than assumed.
+ */
+export const TYPE_ONLY = {
+  "9342c8e": "authorization and principal became required options of two entry points; no wire or journal bytes changed"
+}
 export const FIXTURES = "test/fixtures/"
 
 /** The README describes the convention; editing it changes no behaviour. */

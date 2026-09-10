@@ -26,7 +26,7 @@
  * At a release, tag, and the next block starts empty.
  */
 import { readFileSync, writeFileSync } from "node:fs"
-import { git, isFixture, readBehaviorChanges } from "./lib/behavior-changes.mjs"
+import { git, isFixture, readBehaviorChanges, TYPE_ONLY } from "./lib/behavior-changes.mjs"
 
 const CHANGELOG = "CHANGELOG.md"
 const START = "<!-- behavior-changes:start -->"
@@ -41,13 +41,25 @@ const fail = (message) => {
 const lastTag = () => git(["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"], fail).trim()
 const range = process.env.BEHAVIOR_CHANGE_RANGE ?? `${lastTag()}..HEAD`
 
-const lines = readBehaviorChanges(range, fail)
+const commits = readBehaviorChanges(range, fail)
+
+/** The later commit that measured `hash` (a `Behavior-Change-Measures:` trailer), if one did. */
+const measuredLaterBy = (hash) =>
+  commits.find((later) =>
+    later.files.some(isFixture) && later.measures.some((named) => hash.startsWith(named) || named.startsWith(hash)))
+
+const lines = commits
   .filter((commit) => commit.trailers.length > 0)
   .flatMap((commit) => {
     const fixtures = commit.files.filter(isFixture)
-    const measured = fixtures.length === 0
-      ? "unmeasured"
-      : `measured by ${fixtures.map((file) => `\`${file}\``).join(", ")}`
+    const later = measuredLaterBy(commit.hash)
+    const measured = fixtures.length > 0
+      ? `measured by ${fixtures.map((file) => `\`${file}\``).join(", ")}`
+      : later !== undefined
+      ? `measured later, in \`${later.hash}\``
+      : Object.keys(TYPE_ONLY).some((hash) => commit.hash.startsWith(hash))
+      ? "type-level only, nothing on a wire to measure"
+      : "unmeasured"
     return commit.trailers.map((sentence) => `- ${sentence} (\`${commit.hash}\`; ${measured})`)
   })
 
