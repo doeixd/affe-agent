@@ -428,6 +428,10 @@ export interface Options<R, LE = never> {
    * delegates onward -- to itself, say -- is refused at the limit with a
    * `SubagentDepthExceededError` rather than recursing until the bill stops
    * it. Default {@link defaultMaxDepth}.
+   *
+   * In-process only: the count lives in the fibre, so a delegation that
+   * crosses to another process (A2A, a remote `AgentClient`) starts that
+   * process at zero. Bound a cross-process cycle at that boundary.
    */
   readonly maxDepth?: number | undefined
   /**
