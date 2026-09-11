@@ -425,8 +425,13 @@ and pin the state it starts from.*
      submission on this machine, mostly engine and schema start-up; refs
      without the harness report it unavailable). Still open: more durable
      scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
-     effect-uai native vs adapter, a live-model cost run for item 93, and
-     characterising variance before any gate.
+     effect-uai native vs adapter, and a live-model cost run for item 93.
+     Variance is characterised (2026-09-11, HEAD against itself, 24 samples
+     a side, `docs/reports/bench-2026-09-11-a4cdcea7-a4cdcea7.json`): with
+     identical code, scenarios under ~5 ms moved their medians by up to
+     ~25% (one-turn 2.6 vs 2.1 ms, 64 chunks 4.7 vs 3.5 ms) and those of
+     20 ms and more by under ~5%. A gate on this machine would need
+     per-scenario thresholds above that, or only the larger scenarios.
 
      ```text
      verify: exists scripts/bench.mjs
