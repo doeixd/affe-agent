@@ -179,12 +179,14 @@ it now.)*
     remain tied to the pinned upstream server's capabilities; do not implement
     an authorization bypass to fill the prompt surface.
 
-86. **Client capability discovery: resolve the proposal.**
-    `plan-streaming-followups.md` §3 proposes construction-time streaming and
-    replay capabilities. Its later "every item shipped" claim does not cover
-    this proposal: the conformance suite still takes options. Decide the
-    dependency/host negotiation contract before changing the public interface.
-    The proposals to shrink `RemoteSession` and encode delegated envelopes
+86. ~~**Client capability discovery: resolve the proposal.**~~ **Declined
+    2026-09-11.** `plan-streaming-followups.md` §3 proposed construction-time
+    streaming and replay capabilities. The refusal at first use is typed, and
+    the conformance suite asserts both answers of each option, so a client
+    that mis-declares fails there; a record on `AgentClient.Service` would be
+    a permanent obligation on every custom client for a reader nobody has.
+    Reopens when a host must choose between clients at wiring time. The
+    proposals to shrink `RemoteSession` and encode delegated envelopes
     opaquely were rejected, not unfinished implementation.
 
     ```text

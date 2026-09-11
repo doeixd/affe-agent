@@ -50,9 +50,14 @@ deletion.
 
 ## 3. Refusals happen at first use
 
-**Still a proposal (audit 2026-09-08, live item 86).** This section was not
-implemented by the streaming series. Its dependency/host negotiation contract
-must be decided before introducing a capability record.
+**Declined 2026-09-11 (item 86).** The refusal at first use is typed and
+honest, and the conformance suite already asserts *both* answers of each
+option, so a client that declares a capability it lacks -- or lacks one it
+declares -- fails there rather than in production. A capability record
+would be a permanent addition to `AgentClient.Service` that every custom
+client must implement, for a reader nobody has. Reopens when a host must
+choose between clients at wiring time (an `AgentServer` picking a
+resumable mount, say); the record would then be that host's contract.
 
 A durable client with no log refuses `stream`; the HTTP client refuses
 `events({ after })`. Honest, and late: a deployment learns at the first
