@@ -416,6 +416,27 @@ describe("EffectUaiModel", () => {
       }))
 
     /**
+     * Item 89's prompt-cache metadata: what a provider says it read from and
+     * wrote to its cache, and the reasoning tokens, are what cost accounting
+     * and `/budget` read. They crossed already; now a row says so.
+     */
+    it.effect("cache reads, cache writes and reasoning tokens cross into usage", () =>
+      Effect.gen(function*() {
+        const usage = {
+          input_tokens: 1200,
+          output_tokens: 80,
+          input_tokens_details: { cached_tokens: 1000, cache_write_tokens: 150 },
+          output_tokens_details: { reasoning_tokens: 30 }
+        }
+        const { result } = yield* withModel([text("ok"), complete(turn([], "stop", usage))], () => generate())
+        const response = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(response, failureText(result))
+        assert.strictEqual(response.usage.inputTokens.cacheRead, 1000)
+        assert.strictEqual(response.usage.inputTokens.cacheWrite, 150)
+        assert.strictEqual(response.usage.outputTokens.reasoning, 30)
+      }))
+
+    /**
      * A refusal must not read as an ordinary answer. `content-filter` is the
      * only Effect AI finish reason that says the model declined rather than
      * finished, and the refusal text is preserved rather than dropped.

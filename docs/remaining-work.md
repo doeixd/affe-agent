@@ -215,9 +215,13 @@ it now.)*
     holds. The durable hop had no coverage before it: the existing replay test
     compares a history shape that renders reasoning as an empty detail.
     **Since:** Phase 2's streaming acceptance landed (`4bda60b`), and images
-    and citations cross (`86d1193`), provider options too (`81a1d6f`). What
-    Phase 3 still owes is the *other* continuation fields -- provider response
-    ids, prompt-cache metadata, provider-defined tool metadata -- and files.
+    and citations cross (`86d1193`), provider options too (`81a1d6f`).
+    Checked 2026-09-11: prompt-cache metadata crosses (cache reads and
+    writes, and reasoning tokens, into `usage`; now a row), and provider
+    response ids cannot -- effect-uai's `Turn` carries items, usage and a
+    stop reason and no response id, so there is nothing to map until
+    upstream adds one. What Phase 3 still owes: provider-defined tool
+    metadata, and files.
 
     Dynamic tools (a raw JSON schema rather than an Effect `Schema`) are
     tested since 2026-09-11: described to effect-uai by exactly the schema
