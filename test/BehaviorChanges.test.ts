@@ -34,6 +34,8 @@ const read = (repo: string) => JSON.parse(execFileSync(process.execPath, [
    console.log(JSON.stringify(readBehaviorChanges("v0.0.1..HEAD", (message) => { throw new Error(message) })))`
 ], { cwd: repo, encoding: "utf8" }))
 
+// Each row spawns a dozen git processes in a scratch repository: seconds
+// under a loaded full-suite run, so each has its own budget.
 describe("behavior-change Git records", () => {
   it("keeps zero, one, repeated and folded trailers separate from paths", () => {
     fixture((repo, git) => {
@@ -55,7 +57,7 @@ describe("behavior-change Git records", () => {
       })
       assert.deepEqual(read(repo), expected)
     })
-  })
+  }, 30_000)
 
   it("reads a later measurement, and the changelog names the commit that made it", () => {
     fixture((repo, git) => {
@@ -76,7 +78,7 @@ describe("behavior-change Git records", () => {
       })
       assert.include(block, `- a caller sees this (\`${changed}\`; measured later, in \`${measuring}\`)`)
     })
-  })
+  }, 30_000)
 
   it("publishes both changes and checks the regenerated block", () => {
     fixture((repo, git) => {
@@ -98,5 +100,5 @@ describe("behavior-change Git records", () => {
       run("--write")
       assert.include(run("--check"), "(2)")
     })
-  })
+  }, 30_000)
 })
