@@ -37,6 +37,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a recovered durable attempt now runs its calls under the stricter of the host scheduling it was admitted under and the current host's, or is refused (ToolSchedulingChangedError) if a changed Serialize cannot be re-created. (`5e13679`; measured by `test/fixtures/error-tags-manifest.json`)
 - Agent.describe tool entries gain `source`; tools bound through ToolSource carry a ToolSourceId annotation, a new frozen namespace identifier. (`1455d5e`; measured by `test/fixtures/namespace-manifest.json`)
 - the built-in control tools' contract digests are now frozen by fixture; changing one is a journal change that must declare compatibility or accept refused replays. (`33a3b4c`; measured by `test/fixtures/code-mode-outcomes.json`, `test/fixtures/compaction-checkpoint-discarded.json`, `test/fixtures/control-tool-digests.json`, `test/fixtures/memory-recall-truncated.json`, `test/fixtures/snapshot-unversioned.json`, `test/fixtures/tool-activity-names.json`)
+- a durable run that asks for an answer from inside a tool call (a subagent forwarding its child's approval, or a handler that asks) now fails with DurableElicitationInToolCallError instead of hanging. (`9a1b01c`; measured by `test/fixtures/error-tags-manifest.json`, `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
