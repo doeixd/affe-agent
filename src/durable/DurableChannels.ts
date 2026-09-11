@@ -49,6 +49,10 @@ export interface Store {
    * only runs once every earlier drain of the key has been journalled.
    * Without a claim, the rows are deleted, as before. A store that ignores
    * `claim` keeps that crash window.
+   *
+   * What it costs: a key's last batch stays in the store, claimed and
+   * invisible to `size` and the admission gate, until the key's next drain
+   * deletes it -- one batch per key, for a session that is never used again.
    */
   readonly takeAll: (
     key: string,
