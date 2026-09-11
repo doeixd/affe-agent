@@ -328,7 +328,10 @@ npm run verify:changelog       # CHANGELOG.md lists every such trailer since the
 npm test
 ```
 
-All of these must pass (`npm run check` runs them). `verify:remaining-work` is
+All of these must pass (`npm run check` runs them; on a machine short of
+memory, `npm run check:resume` runs the same steps one at a time and records
+each that passed for the current commit, so a run killed partway resumes
+instead of starting over). `verify:remaining-work` is
 how the live list stays live: an entry that makes a claim about the code
 carries a `verify:` line that falsifies it, and a stale claim fails the build
 rather than misdirecting the next reader. The two after it are how a wire or
