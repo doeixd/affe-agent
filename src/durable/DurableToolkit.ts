@@ -239,13 +239,18 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
          *
          * Retry-safe tools skip it: running them again is the point.
          *
-         * One consequence to know: the engine re-executes an activity that
-         * *suspended*, and that re-execution replays the marker, so a
-         * non-idempotent handler that suspended legitimately (a durable sleep,
-         * a child workflow) resumes as `Unresolved` too. A died handler and a
-         * suspended one look alike from here; telling them apart is part of
-         * item 113, and today's refusal of in-call elicitation keeps the
-         * common case -- an approval -- from reaching it.
+         * A handler cannot suspend the workflow, and this relies on it. The
+         * engine delivers a suspension inside an activity as an interrupt with
+         * the activity's `WorkflowInstance` marked `suspended`; the
+         * interruption branch below would journal that as `Unresolved` on the
+         * spot, and a re-execution would find the marker and do the same. What
+         * keeps it unreachable: a handler's requirements are `never`, so no
+         * handler can name `WorkflowEngine` to sleep or await a deferred, and
+         * the library's two elicitors refuse inside a call
+         * (`InsideToolActivity`). Durable handlers, if they come, need a
+         * marker that tells a suspended attempt from a dead one (item 113):
+         * one marker per attempt, and a durable note, written before the
+         * suspension is re-raised, that attempt k suspended.
          */
         let startedHere = true
         if (!retrySafe) {

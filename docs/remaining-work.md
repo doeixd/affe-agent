@@ -489,11 +489,20 @@ acceptance test for 105, 107 and 108.*
      verify: exists test/fixtures/admission-descriptions.json
      ```
 
-     Found in review, part of the same design: the engine re-executes an
-     activity that *suspended*, and that replays item 98's start marker, so
-     a non-idempotent handler that suspends legitimately (a durable sleep, a
-     child workflow) resumes as `Unresolved` today. Whatever resolves this
-     item must tell a suspended handler from a dead one.
+     Found in review, part of the same design: a suspension inside a
+     non-idempotent handler would be journalled `Unresolved`. Checked
+     2026-09-11, and worse than first written: the engine delivers it as an
+     interrupt with the activity's `WorkflowInstance` marked `suspended`, so
+     `DurableToolkit`'s interruption branch records `Unresolved` at the
+     suspension itself, before any re-execution replays item 98's start
+     marker. Latent, not live: a handler's requirements are `never`, so no
+     handler can name `WorkflowEngine` to sleep or await a deferred without
+     a cast, and the library's only in-call suspensions -- the two
+     elicitors -- are refused. Whatever lets a handler suspend must tell a
+     suspended attempt from a dead one. Sketched: a marker per attempt, and
+     a `DurableDeferred` completed before the suspension is re-raised saying
+     attempt k suspended; a re-execution walks k, runs the handler past a
+     suspended attempt, and refuses at one that simply stopped.
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
