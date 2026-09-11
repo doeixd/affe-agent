@@ -567,5 +567,23 @@ export const fromDescription = (described: Description): Option.Option<Policy> =
       return fromDescription(described.inner)
     case "Custom":
       return Option.none()
+    // A tag this version does not know -- a description recorded by a newer
+    // one -- has nothing to re-create from. The type says this is
+    // unreachable; a journal from another version is data, not a type.
+    default:
+      return Option.none()
+  }
+}
+
+/**
+ * `fromDescription` from a description as a journal recorded it (JSON), or
+ * `None` when it does not parse or does not re-create -- including a
+ * description written by a version that knows more tags than this one.
+ */
+export const fromRecorded = (recorded: string): Option.Option<Policy> => {
+  try {
+    return fromDescription(JSON.parse(recorded))
+  } catch {
+    return Option.none()
   }
 }

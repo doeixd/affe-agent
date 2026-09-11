@@ -297,7 +297,9 @@ export interface Options {
    * when the prompt carries no results. For a run whose context is
    * *compacted*: compaction folds away the assistant messages `"history"`
    * counts, but keeps the recent tail, and the last results are in it. Needs
-   * each tool call id in the script to be unique.
+   * each tool call id in the script to be unique, and one prompt: it reads
+   * the latest tool results anywhere in the prompt, so a second prompt with
+   * no tool round yet is answered as if it were the first.
    */
   readonly select?: "position" | "history" | "results" | undefined
 }

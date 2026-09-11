@@ -128,6 +128,15 @@ describe("Permission.fromDescription", () => {
     }
   })
 
+  it("a recorded description this version cannot read -- an unknown tag, or not JSON -- has no answer, not a crash", () => {
+    assert.isTrue(Option.isNone(Permission.fromRecorded(JSON.stringify({ _tag: "RateLimit", perMinute: 3 }))))
+    assert.isTrue(Option.isNone(Permission.fromRecorded("{not json")))
+    assert.isTrue(Option.isNone(ToolScheduling.fromRecorded(JSON.stringify({ _tag: "Weighted", weight: 2 }))))
+    assert.isTrue(Option.isNone(ToolScheduling.fromRecorded("")))
+    // And one it can read still reads.
+    assert.isTrue(Option.isSome(Permission.fromRecorded(JSON.stringify(Permission.describe(Permission.denyAll)))))
+  })
+
   it("has no answer for a function matcher or a custom policy", () => {
     assert.isTrue(Option.isNone(Permission.fromDescription(Permission.describe(
       Permission.rules([{ resource: (r) => r.length > 3, decision: Permission.deny() }], { otherwise: Permission.allow })

@@ -532,9 +532,12 @@ const encodeReauth = Schema.encodeSync(Schema.toCodecJson(ReauthDetail))
  * connection that is not coming back, and the second failure is the
  * honest answer.
  *
- * Under `/durable` the elicitor is a `DurableDeferred`, so the wait
- * survives the process -- which is the thing this design is *for*, and
- * the one thing a live-context sandbox cannot do.
+ * Under `/durable`, asked from outside a tool call, the elicitor is a
+ * `DurableDeferred`, so the wait survives the process. From *inside* a
+ * tool call -- which is where a tool's credential refresh usually runs --
+ * a durable elicitor refuses to wait (`DurableElicitationInToolCallError`,
+ * item 113), so a durable run's re-authorisation fails the call rather
+ * than suspending it.
  */
 export const withReauth = <A, E, R>(
   resolve: Effect.Effect<A, E | CredentialError, R>,

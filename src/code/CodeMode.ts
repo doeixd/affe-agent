@@ -106,10 +106,11 @@ export interface MakeOptions<Groups extends ToolGroups, R> {
    * an `Ask` throws into the program saying so: no elicitor means no way
    * to ask, and failing closed is the only honest answer.
    *
-   * **Not durable.** With a durable elicitor the workflow suspends and
-   * the program is re-executed from the top on resume; only journalled
-   * tool calls are replay-safe. Durable suspension of a *paused program*
-   * is explicitly out of scope.
+   * **Not durable.** A program runs inside one tool call, and a durable
+   * elicitor refuses to wait from inside a tool call
+   * (`DurableElicitationInToolCallError`, item 113): suspending the
+   * workflow mid-call cannot be resumed safely. Durable suspension of a
+   * *paused program* is explicitly out of scope.
    */
   readonly elicitor?: Elicitation.Elicitor | undefined
 }

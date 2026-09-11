@@ -20,8 +20,9 @@ export class DurableElicitationInToolCallError extends Schema.TaggedError<Durabl
   override get message() {
     return (
       "A durable run cannot wait for an answer from inside a tool call: the wait would suspend the workflow " +
-      "while the call is still running. Ask before or after the tool call, or give the delegated agent its own " +
-      "approval policy instead of inherit: { approval: \"parent\" }."
+      "while the call is still running. Ask before or after the tool call. For a delegation whose child's tool " +
+      "needs approval, drop needsApproval on the child's tool and gate it with the child's own Permission policy, " +
+      "or wrap the delegation in a parent tool that asks before it delegates."
     )
   }
 }

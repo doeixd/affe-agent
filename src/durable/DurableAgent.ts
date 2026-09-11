@@ -311,13 +311,7 @@ export const capturedScheduling = (
       execute: Effect.succeed(current)
     })
     if (recorded === current) return host
-    const admitted = (() => {
-      try {
-        return ToolScheduling.fromDescription(JSON.parse(recorded) as ToolScheduling.Description)
-      } catch {
-        return Option.none<ToolScheduling.ToolScheduling>()
-      }
-    })()
+    const admitted = ToolScheduling.fromRecorded(recorded)
     if (Option.isNone(admitted)) return yield* new ToolSchedulingChangedError({ recorded, current })
     return ToolScheduling.all(admitted.value, host)
   })

@@ -146,6 +146,9 @@ export const fromDescription = (described: Description): Option.Option<ToolSched
       return Option.map(Option.all(described.schedulings.map(fromDescription)), (schedulings) => all(...schedulings))
     case "Serialize":
       return Option.none()
+    // An unknown tag, recorded by a newer version: see Permission.fromDescription.
+    default:
+      return Option.none()
   }
 }
 
@@ -158,3 +161,12 @@ export const delegating = (ref: Ref.Ref<ToolScheduling>, description: Descriptio
   around: (call) => (run) => Effect.flatMap(Ref.get(ref), (scheduling) => scheduling.around(call)(run)),
   description
 })
+
+/** `fromDescription` from a recorded (JSON) description; `None` when it does not parse or re-create. */
+export const fromRecorded = (recorded: string): Option.Option<ToolScheduling> => {
+  try {
+    return fromDescription(JSON.parse(recorded))
+  } catch {
+    return Option.none()
+  }
+}

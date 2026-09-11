@@ -138,6 +138,12 @@ export interface Inherit {
    * real question to put to a person -- approve a tool call from an agent
    * they cannot see, named by a tool they did not choose -- which is why it
    * is opt-in and why the default is the loud refusal rather than this.
+   *
+   * **In-process only, for now.** Under `/durable` the delegation is one
+   * running tool call, and a durable wait from inside one would suspend the
+   * workflow mid-call; it is refused with `DurableElicitationInToolCallError`
+   * (item 113). A durable parent's child should gate its tools with its own
+   * `Permission` policy instead of `needsApproval`.
    */
   readonly approval?: "parent" | "refuse" | undefined
   /**

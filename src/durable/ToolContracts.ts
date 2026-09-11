@@ -125,23 +125,25 @@ export const check = (
   prefix: string
 ): Effect.Effect<void, ToolContractChangedError, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> =>
   Effect.gen(function*() {
-    const current: Record<string, string> = {}
-    const declared: Record<string, ReadonlyArray<string>> = {}
+    // Maps, not objects: a tool named `toString` or `constructor` must not
+    // read a prototype member as its digest.
+    const current = new Map<string, string>()
+    const declared = new Map<string, ReadonlyArray<string>>()
     for (const tool of tools) {
-      current[tool.name] = yield* digestOf(tool)
-      declared[tool.name] = Context.get(tool.annotations, CompatibleWith)
+      current.set(tool.name, yield* digestOf(tool))
+      declared.set(tool.name, Context.get(tool.annotations, CompatibleWith))
     }
     const recorded = yield* Activity.make({
       name: `${prefix}contract-digests`,
       success: Schema.Record(Schema.String, Schema.String),
-      execute: Effect.succeed(current)
+      execute: Effect.succeed(Object.fromEntries(current))
     })
-    const changed = Object.keys(recorded)
-      .sort()
-      .flatMap((name) =>
-        current[name] === recorded[name] || (declared[name] ?? []).includes(recorded[name]!)
+    const changed = Object.entries(recorded)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .flatMap(([name, digest]) =>
+        current.get(name) === digest || (declared.get(name) ?? []).includes(digest)
           ? []
-          : [{ name, recorded: recorded[name]!, current: current[name] ?? null }]
+          : [{ name, recorded: digest, current: current.get(name) ?? null }]
       )
     if (changed.length > 0) return yield* new ToolContractChangedError({ tools: changed })
   })

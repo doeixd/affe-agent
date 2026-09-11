@@ -210,6 +210,12 @@ interface Park {
   readonly location: string
   readonly occurrence: number
   readonly arrived: Deferred.Deferred<void>
+  /**
+   * Set once the `before` prompts have finished: until then no hit counts,
+   * so the crash lands in `prompt`'s submission as documented, and an
+   * earlier prompt reaching the same boundary does not park forever.
+   */
+  readonly armed: Ref.Ref<boolean>
 }
 
 /**
@@ -241,6 +247,7 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
         park === undefined || location !== park.location
           ? Effect.void
           : Effect.gen(function*() {
+            if (!(yield* Ref.get(park.armed))) return
             const count = yield* Ref.updateAndGet(reached, (n) => n + 1)
             if (count !== park.occurrence) return
             yield* Deferred.succeed(park.arrived, undefined)
@@ -353,6 +360,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const sql = yield* options.database
       const { effects, recorded } = yield* recording
       const arrived = yield* Deferred.make<void>()
+      const armed = yield* Ref.make(false)
       const occurrence = options.occurrence ?? 1
       const lock = options.lockExpiration ?? "1 second"
       const timeout = options.timeout ?? "20 seconds"
@@ -362,11 +370,13 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
           const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "first", {
             location: options.at,
             occurrence,
-            arrived
+            arrived,
+            armed
           })
           const session = yield* client.createSession({ sessionId: SESSION })
           yield* answering(session, scenario.answer)
           for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
+          yield* Ref.set(armed, true)
           const receipt = yield* session.submit(scenario.prompt, { stream: scenario.stream ?? false })
           yield* Deferred.await(arrived).pipe(
             Effect.timeoutOrElse({

@@ -153,6 +153,7 @@ describe("public API", () => {
       "except",
       // And back, where the description carries enough (item 105).
       "fromDescription",
+      "fromRecorded",
       "grantKey",
       "make",
       "projectionOf",

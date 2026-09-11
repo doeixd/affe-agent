@@ -70,7 +70,9 @@ export const readBehaviorChanges = (range, onFailure) => {
       // is the reason, for a reader.
       const measures = (measuresBlock ?? "").split("\n")
         .map((line) => line.trim().split(/\s/)[0] ?? "")
-        .filter((named) => named.length > 0)
+        // A commit hash, or nothing: a free-text value would otherwise be
+        // read as a hash prefix and exempt every commit it happens to start.
+        .filter((named) => /^[0-9a-f]{7,40}$/.test(named))
       const trailers = (trailerBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
       const files = (fileBlock ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
       return { hash, subject: subject ?? "", trailers, measures, files }
