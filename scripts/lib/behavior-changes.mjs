@@ -20,7 +20,8 @@ export const MEASURES = "Behavior-Change-Measures"
  * exception is reviewed rather than assumed.
  */
 export const TYPE_ONLY = {
-  "9342c8e": "authorization and principal became required options of two entry points; no wire or journal bytes changed"
+  "9342c8e": "authorization and principal became required options of two entry points; no wire or journal bytes changed",
+  "e30f31f": "AgentOutput.fromTool refuses a provider-defined tool when an agent is built; no wire or journal bytes changed"
 }
 export const FIXTURES = "test/fixtures/"
 

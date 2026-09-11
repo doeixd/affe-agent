@@ -39,6 +39,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - the built-in control tools' contract digests are now frozen by fixture; changing one is a journal change that must declare compatibility or accept refused replays. (`33a3b4c`; measured by `test/fixtures/code-mode-outcomes.json`, `test/fixtures/compaction-checkpoint-discarded.json`, `test/fixtures/control-tool-digests.json`, `test/fixtures/memory-recall-truncated.json`, `test/fixtures/snapshot-unversioned.json`, `test/fixtures/tool-activity-names.json`)
 - a durable run that asks for an answer from inside a tool call (a subagent forwarding its child's approval, or a handler that asks) now fails with DurableElicitationInToolCallError instead of hanging. (`9a1b01c`; measured by `test/fixtures/error-tags-manifest.json`, `test/fixtures/namespace-manifest.json`)
 - the journal's permission-policy and host-scheduling records are frozen by fixture; a regexp matcher with matching flags describes as regexp/<flags>:<source>. (`57106e8`; measured by `test/fixtures/admission-descriptions.json`)
+- AgentOutput.fromTool refuses a provider-defined tool, at compile time and with a TypeError at construction (`e30f31f`; type-level only, nothing on a wire to measure)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]

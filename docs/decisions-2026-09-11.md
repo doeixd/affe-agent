@@ -30,8 +30,8 @@ each way:
 | D4 | A key for the live runs? | Yes: a dedicated key with a spend cap. | **Waiting on the owner:** only a person can create it. |
 | D5 | What item 113 becomes | Keep the refusal. Child-workflow delegation is the design of record. General suspendable handlers are refused. | Recorded in item 113. |
 | Q1 | Visibility per agent or per session? | A rule on the agent, applied per caller. | Recorded in the plan's §13. |
-| Q4 | Projected completion from a provider-executed tool? | No. | Recorded; the construction-time refusal is to follow. |
-| Q5 | Does discovery count toward `maxToolCalls`? | Yes. | Recorded; the pinning test is to follow. |
+| Q4 | Projected completion from a provider-executed tool? | No. | Recorded; refused by `fromTool` in `e30f31f` (a type error, and a `TypeError` for a widened type). |
+| Q5 | Does discovery count toward `maxToolCalls`? | Yes. | Recorded; pinned by a test in `40da7c6`. |
 | — | Item 100's scenarios | Cold recovery against history length, and SQLite write contention, each with a threshold. | Recorded in item 100. |
 | — | The two conformance cases that still race | Document `stream` for observing your own submission; move both cases to a subscription attached before they prompt. | To follow. |
 | — | Items 102, 112, 97 T8.2 | Parked, each with a trigger. | Triggers recorded; T8.2's question left in `COLLABORATION.md`. |
@@ -181,14 +181,15 @@ speculation.
   contradicts it.
 * **Q4, projected completion from a provider-executed tool: no.** The
   answer's schema has to come from a result the host controls, and a
-  provider-executed result is shaped by the provider. **To follow:**
-  `AgentOutput.fromTool` should refuse a `Tool.providerDefined` tool at
-  construction, with a named error and a test.
+  provider-executed result is shaped by the provider. **Done in `e30f31f`:**
+  `AgentOutput.fromTool` refuses a `Tool.providerDefined` tool with a type
+  error (`ProviderDefinedToolCannotProject`), and with a `TypeError` at
+  construction for a tool whose type was widened to `Tool.Any`.
 * **Q5, discovery counts toward `maxToolCalls`: yes.** It is a tool call,
   and `pinned` is the escape hatch for an agent that can't afford the
   turn. It already holds: `discover_tools` is an ordinary call of the turn,
-  and `AgentRun` counts the turn's calls. **To follow:** a test that pins
-  it.
+  and `AgentRun` counts the turn's calls. **Pinned in `40da7c6`:** with
+  `maxToolCalls(1)`, a discovery-only turn ends the run.
 
 ## Item 100: which durable scenarios to add
 

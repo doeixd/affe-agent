@@ -731,14 +731,14 @@ headers). Not kernel architecture. Only on an adopter asking.
 * **Q4** ~~Should a projected completion (E2) be able to fire on a
   provider-executed tool's result?~~ Decided 2026-09-11 as leaned: no. The
   answer's schema must come from a result the host controls; a
-  provider-executed result is shaped by the provider. To be enforced by
-  `AgentOutput.fromTool` refusing a `Tool.providerDefined` tool at agent
-  construction.
+  provider-executed result is shaped by the provider. Enforced (`e30f31f`):
+  `AgentOutput.fromTool` refuses a `Tool.providerDefined` tool, by type and
+  at construction.
 * **Q5** ~~Does discovery itself count as a tool call for `maxToolCalls`?~~
   Decided 2026-09-11 as leaned: yes -- it is one -- with `pinned` as the
   escape hatch. It already holds (`discover_tools` is dispatched as an
-  ordinary call of the turn, and `AgentRun` counts the turn's calls); a test
-  is to pin it.
+  ordinary call of the turn, and `AgentRun` counts the turn's calls), pinned
+  by a test (`40da7c6`).
 
 ## 14. Refused
 
