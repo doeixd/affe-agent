@@ -608,8 +608,8 @@ one else was working on them.*
 *(122 duplicated item 90, which was written first and carries P1–P6's
 history; 90 holds it.)*
 
-123. **A ~12 s shard-lock stall when a replacement starts a moment later
-     (found 2026-09-11).** `test/DurableAgentClientSql.test.ts`'s R173 row
+123. ~~**A ~12 s shard-lock stall when a replacement starts a moment later**~~
+     (found 2026-09-11). `test/DurableAgentClientSql.test.ts`'s R173 row
      runs in about 1 s at HEAD. Add one statement to process B's start-up --
      a bare `SELECT 1` in `DurableChannels.sqlStoreWithTable`, touching no
      table -- and it takes 13 s, logging "Shard lock storage is unhealthy
@@ -621,6 +621,22 @@ history; 90 holds it.)*
      recovery. Next: find which timeout it is -- the runner's lock-storage
      health check is the first suspect -- and whether production's 35 s
      lock expiration makes it worse. Medium.
+
+     **Explained the same day, by reading `effect/unstable/cluster`'s
+     `Sharding.ts`; closed as a fixture artifact.** A runner refreshes its
+     shard locks with a deadline of `min(shardLockRefreshInterval,
+     shardLockExpiration / 3)`; a refresh that misses it -- its own retries
+     are five, 50 ms apart -- marks lock storage unhealthy, force-releases
+     every shard, and waits for a probe to succeed before acquiring again:
+     that is the stall and its log line. The durable test fixtures shorten
+     the timings so a takeover is quick (refresh 200 ms, expiration 1 s), so
+     the deadline is 200 ms -- less than the retry schedule -- and one busy
+     moment in the shared SQLite file misses it; process B's start-up shifts
+     where that moment falls. Production's defaults (10 s and 35 s) give a
+     10 s deadline, fifty times the margin. Not worth changing the fixtures:
+     a longer refresh would slow every takeover test to buy nothing but a
+     quieter log. Reopen if a deployment that shortens those timings reports
+     the error.
 
      ```text
      verify: grep "Item 123 is that stall" test/DurableAgentClientSql.test.ts
