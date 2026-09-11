@@ -574,8 +574,17 @@ one else was working on them.*
      ```
 
 117. **Relay operations ([plan-relay.txt](./plan-relay.txt), phases
-     13–16).** 13: a management `HttpApi` for peers, enrollment and status
-     -- medium, due before a relay is run for anyone but its owner.
+     13–16).** **13 done 2026-09-11, scoped to what only HTTP adds:**
+     `RelayAdmin.layer({ authorize })` mounts credential administration --
+     issue a peer's credential (the plaintext shown once), count what speaks
+     for a peer (never the secrets), revoke one (the token in the body, not
+     a URL a log would keep) -- behind a required operator check
+     (`RelayAdmin.operatorToken`, compared as digests). Not added: a peer
+     directory route, since any authenticated peer reads the directory
+     through the relay's `peers` call, and a status route, since the
+     counters go to whatever exporter a deployment runs
+     (`test/RelayAdmin.test.ts`: a minted credential authenticates and, once
+     revoked, does not; nobody but the operator reaches a route).
      **14 done 2026-09-11:** `RelayServer.layer` takes `sendRate` -- a token
      bucket per authenticated sender; past it, `send` fails with the new
      `RelayRateLimitedError` and its `retryAfterMs`, checked before
@@ -589,7 +598,7 @@ one else was working on them.*
      several relay nodes, parked until one node is not enough.
 
      ```text
-     verify: no-grep "HttpApi" src/relay/RelayServer.ts
+     verify: exists test/RelayAdmin.test.ts
      verify: grep "readonly sendRate?:" src/relay/RelayServer.ts
      verify: exists test/RelayOperations.test.ts
      ```

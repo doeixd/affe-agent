@@ -622,12 +622,14 @@ describe("durable and cluster surfaces", () => {
     const relay = await import("../src/relay/index.js")
     assert.deepStrictEqual(Object.keys(relay).sort(), [
       "Relay",
+      "RelayAdmin",
       "RelayClient",
       "RelayCredentials",
       "RelayProtocol",
       "RelayRpc",
       "RelayServer"
     ])
+    assert.deepStrictEqual(Object.keys(relay.RelayAdmin).sort(), ["layer", "operatorToken"])
     assert.deepStrictEqual(Object.keys(relay.RelayCredentials).sort(), [
       "RelayCredentials",
       "authenticator",
