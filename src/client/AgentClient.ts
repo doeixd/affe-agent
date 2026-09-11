@@ -379,6 +379,14 @@ export interface RemoteSession {
    * "where do I start?" -- and two entry points would only invite an adapter
    * to implement one of them.
    *
+   * **To observe a submission you are about to make, use `stream`.** Without
+   * `after`, this stream starts when it *attaches*, and over a transport that
+   * is a separate request with no signal for when that is: forked just
+   * before a `prompt`, it can attach after the submission has started, or
+   * even ended, and miss it (a conformance case timed out on exactly this,
+   * over HTTP). `stream` subscribes before admission. This is for watching
+   * a session you are not the one driving.
+   *
    * **`after` is a resumption, and an implementation that cannot honour it
    * must fail rather than quietly returning a live stream.** A caller
    * reconnecting from sequence 41 and silently handed events from 60 onward

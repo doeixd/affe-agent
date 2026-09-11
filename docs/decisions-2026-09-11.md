@@ -33,7 +33,7 @@ each way:
 | Q4 | Projected completion from a provider-executed tool? | No. | Recorded; refused by `fromTool` in `e30f31f` (a type error, and a `TypeError` for a widened type). |
 | Q5 | Does discovery count toward `maxToolCalls`? | Yes. | Recorded; pinned by a test in `40da7c6`. |
 | — | Item 100's scenarios | Cold recovery against history length, and SQLite write contention, each with a threshold. | Recorded in item 100. |
-| — | The two conformance cases that still race | Document `stream` for observing your own submission; the lifecycle case moves to `stream`. | Lifecycle case done (`4c5bd83`); the `events()` doc to follow. |
+| — | The two conformance cases that still race | Document `stream` for observing your own submission; the lifecycle case moves to `stream`. | Lifecycle case done (`4c5bd83`); `events()` points to `stream` in its doc. |
 | — | Items 102, 112, 97 T8.2 | Parked, each with a trigger. | Triggers recorded; T8.2's question left in `COLLABORATION.md`. |
 
 ---
