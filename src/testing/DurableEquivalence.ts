@@ -89,6 +89,19 @@ export interface Scenario<Tools extends Record<string, Tool.Any>, Value, Input> 
    * whose context is compacted (see `TestLanguageModel.Options.select`).
    */
   readonly select?: "history" | "results" | undefined
+  /**
+   * A model to use instead of the scripted `turns` -- one that answers from
+   * the prompt's content, so a takeover mid-run needs no cursor at all
+   * (`Continuity.referenceModel`). Model calls are then not counted: both
+   * observations report 0.
+   */
+  readonly model?: Layer.Layer<LanguageModel.LanguageModel> | undefined
+  /**
+   * Prompts run to completion, in order, before `prompt` -- the
+   * conversation a crash lands in the middle of. The crash is armed for
+   * `prompt`'s submission.
+   */
+  readonly before?: ReadonlyArray<string> | undefined
   readonly prompt: string
   readonly stream?: boolean | undefined
   /**
@@ -197,7 +210,9 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
       sessionStore: DurableSessionStore.sqlStoreWithTables(),
       delivery: DeliveryLog.sqlLogWithTable()
     }).pipe(Effect.provide(connection))
-    const { layer: model, recorder } = yield* TestLanguageModel.script(scenario.turns, { select: scenario.select ?? "history" })
+    const scripted = yield* TestLanguageModel.script(scenario.turns, { select: scenario.select ?? "history" })
+    const model = scenario.model ?? scripted.layer
+    const recorder = { calls: scenario.model === undefined ? scripted.recorder.calls : Effect.succeed(0) }
     const reached = yield* Ref.make(0)
     const failpoint = Layer.succeed(Failpoint, {
       hit: (location: string) =>
@@ -283,6 +298,7 @@ export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const { effects, recorded } = yield* recording
       const { client, delivery, recorder, sessionStore } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
       const session = yield* client.createSession({ sessionId: SESSION })
+      for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
       const result = yield* session.prompt(scenario.prompt, { stream: scenario.stream ?? false })
       return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded, delivery, sessionStore)
     })
@@ -326,6 +342,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
             arrived
           })
           const session = yield* client.createSession({ sessionId: SESSION })
+          for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
           const receipt = yield* session.submit(scenario.prompt, { stream: scenario.stream ?? false })
           yield* Deferred.await(arrived).pipe(
             Effect.timeoutOrElse({

@@ -1,6 +1,15 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Option } from "effect"
+import { SqliteClient } from "@effect/sql-sqlite-node"
+import * as NodeFs from "node:fs"
+import * as NodeOs from "node:os"
+import * as NodePath from "node:path"
+import * as Agent from "../src/Agent.js"
+import * as AgentLoop from "../src/AgentLoop.js"
+import { Compaction } from "../src/compaction/index.js"
 import { Continuity } from "../src/evals/index.js"
+import { turnFailpoints } from "../src/internal/turnFailpoints.js"
+import { DurableEquivalence } from "../src/testing/index.js"
 
 /**
  * Item 106's deterministic tier: the standard continuity scenario, run under
@@ -87,4 +96,56 @@ describe("continuity over a long lifetime (item 106)", () => {
       assert.isFalse(ask!.inView, "the statement should have been folded out of view")
       assert.isTrue(report.passed)
     }))
+})
+
+describe("continuity across a process killed mid-answer (item 106)", () => {
+  // A fact, enough routine talk that compaction folds it out of view, then a
+  // question; the process dies after the search that finds the fact has
+  // settled and before the answer. The replacement finishes the answer from
+  // the journal. The reference model answers from the prompt's content, so a
+  // takeover needs no script cursor.
+  const database = Effect.acquireRelease(
+    Effect.sync(() => NodePath.join(NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "continuity-")), "agent.db")),
+    (file) =>
+      Effect.sync(() => {
+        try {
+          NodeFs.rmSync(NodePath.dirname(file), { recursive: true, force: true })
+        } catch {
+          // Still held open on Windows.
+        }
+      })
+  ).pipe(Effect.map((file) => SqliteClient.layer({ filename: file })))
+
+  const scenario = DurableEquivalence.scenario({
+    agent: () => {
+      const compaction = Effect.runSync(Compaction.controller({
+        policy: Compaction.whenLongerThan(4, { retain: 2 }),
+        summarise: () => Effect.succeed(Continuity.foldedSummary)
+      }))
+      return Agent.make({
+        tools: [compaction.tools.searchContext, compaction.tools.readContext],
+        contextTransform: compaction.transform,
+        loop: AgentLoop.bounded(4)
+      })
+    },
+    turns: [],
+    model: Continuity.referenceModel,
+    before: [
+      "The staging database is called ember.",
+      ...Array.from({ length: 8 }, (_, i) => `Status note ${i}: routine progress, nothing new.`)
+    ],
+    prompt: "Question: What is the staging database called? (\"staging database\")"
+  })
+
+  it.live("the replacement answers from the fact the dead process found", () =>
+    Effect.gen(function*() {
+      const straight = yield* DurableEquivalence.straight(scenario, { database })
+      assert.include(straight.text, "ember", "the uninterrupted run did not find the folded fact")
+      const recovered = yield* DurableEquivalence.crashed(scenario, {
+        database,
+        at: turnFailpoints.qualified("after-tool-call")
+      })
+      assert.include(recovered.observation.text, "ember")
+      assert.deepStrictEqual(recovered.observation, straight)
+    }), 180_000)
 })

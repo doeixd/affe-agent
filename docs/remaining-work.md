@@ -499,9 +499,14 @@ acceptance test for 105, 107 and 108.*
      and the suite pins that. A second scenario, `correctionChain` (a value
      corrected twice across restarts; both older values count as stale),
      separates finding *a* mention from finding the one still true -- a
-     reference model answering from the oldest hit fails it. Still open:
-     kills *inside* a submission (combine with `DurableEquivalence`), and a
-     scheduled job for the live tier.
+     reference model answering from the oldest hit fails it. A kill
+     *inside* a submission is covered too: over the durable client, a fact
+     folded out of view by compaction, then a question whose process dies
+     after its search settles -- the replacement answers from the journal,
+     and the whole observation equals the run that never died
+     (`DurableEquivalence` gained `model`, for a content-driven model that
+     needs no script cursor, and `before`, for the conversation a crash
+     lands in). Still open: a scheduled job for the live tier.
 
      ```text
      verify: exists src/evals/Continuity.ts
