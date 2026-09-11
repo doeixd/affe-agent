@@ -160,6 +160,31 @@ const gated = Effect.map(Deferred.make<void>(), (gate) => ({
   turns: [{ text: "done", during: Deferred.await(gate) }] as const
 }))
 
+/**
+ * One submission's envelopes, through its terminal, and what `prompt` would
+ * have returned for it.
+ *
+ * Not `events()` forked before a `prompt`: on a client without a log that
+ * stream is live from when it attaches, over HTTP a separate request, and a
+ * `yieldNow` does not wait for it. A run that fails fast then publishes its
+ * terminal before anyone listens, and the collector waits out its timeout
+ * (seen on CI, Node 22). `stream` subscribes before admission; the outcome,
+ * failure included, is `awaitSubmission`'s.
+ */
+const observed = (name: string, session: AgentClient.RemoteSession, input: string) =>
+  Effect.gen(function* () {
+    const events = yield* Stream.runCollect(session.stream(input)).pipe(
+      Effect.timeout(Duration.seconds(10)),
+      Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
+    )
+    const submissionId = events.length === 0 ? Option.none() : events[0]!.submissionId
+    if (Option.isNone(submissionId)) {
+      return yield* Effect.fail(new Failure({ case: name, detail: "the stream's first envelope named no submission" }))
+    }
+    const exit = yield* Effect.exit(session.awaitSubmission(submissionId.value))
+    return { events, exit }
+  })
+
 /** Deltas observed through `events` for one prompt, asked-streaming or not. */
 const deltasFor = (
   options: Options,
@@ -1005,16 +1030,7 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           Effect.gen(function* () {
             const name = "a tool that dies fails the run everywhere, and is not shown to the model"
             const session = yield* client.createSession()
-            const collected = yield* Effect.forkChild(
-              Stream.runCollect(
-                Stream.takeUntil(
-                  session.events(),
-                  (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
-                )
-              )
-            )
-            yield* Effect.yieldNow
-            const exit = yield* Effect.exit(session.prompt("go"))
+            const { events, exit } = yield* observed(name, session, "go")
             yield* that(name)(Exit.isFailure(exit), "the prompt failed")
             if (Exit.isFailure(exit)) {
               const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
@@ -1023,10 +1039,6 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
                 yield* that(name)(error.isDefect, "reported as a defect")
               }
             }
-            const events = yield* Fiber.join(collected).pipe(
-              Effect.timeout(Duration.seconds(10)),
-              Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
-            )
             const tags = events.map((entry) => entry.event._tag)
             yield* equal(name)(tags[tags.length - 1], "SubmissionFailed", "the submission's terminal")
             const failed = events.flatMap((entry) => AgentEvent.is("ToolCallFailed")(entry) ? [entry.event] : [])
@@ -1058,22 +1070,10 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           Effect.gen(function* () {
             const name = "outcome matrix: a tool's expected failure is shown to the model under ReturnToModel, and the run completes"
             const session = yield* client.createSession()
-            const collected = yield* Effect.forkChild(
-              Stream.runCollect(
-                Stream.takeUntil(
-                  session.events(),
-                  (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
-                )
-              )
-            )
-            yield* Effect.yieldNow
-            const result = yield* session.prompt("go")
+            const { events, exit } = yield* observed(name, session, "go")
+            const result = yield* exit
             yield* equal(name)(result.status, "completed", "status")
             yield* equal(name)(result.text, "noted", "the model answered after seeing the failure")
-            const events = yield* Fiber.join(collected).pipe(
-              Effect.timeout(Duration.seconds(10)),
-              Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
-            )
             const failed = events.flatMap((entry) => AgentEvent.is("ToolCallFailed")(entry) ? [entry.event] : [])
             yield* equal(name)(failed.length, 1, "tool failures reported")
             yield* equal(name)(failed[0]!.returnedToModel, true, "returned to the model")
