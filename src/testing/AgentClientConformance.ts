@@ -179,7 +179,7 @@ const observed = (name: string, session: AgentClient.RemoteSession, input: strin
     )
     const submissionId = events.length === 0 ? Option.none() : events[0]!.submissionId
     if (Option.isNone(submissionId)) {
-      return yield* Effect.fail(new Failure({ case: name, detail: "the stream's first envelope named no submission" }))
+      return yield* new Failure({ case: name, detail: "the stream's first envelope named no submission" })
     }
     const exit = yield* Effect.exit(session.awaitSubmission(submissionId.value))
     return { events, exit }
