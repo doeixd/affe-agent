@@ -240,10 +240,9 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
          * Retry-safe tools skip it: running them again is the point.
          *
          * A handler cannot suspend the workflow, and this relies on it. The
-         * engine delivers a suspension inside an activity as an interrupt with
-         * the activity's `WorkflowInstance` marked `suspended`; the
-         * interruption branch below would journal that as `Unresolved` on the
-         * spot, and a re-execution would find the marker and do the same. What
+         * engine suspends by interrupting the fiber itself, which the branch
+         * below cannot catch, so the activity comes back `Suspended`; its
+         * re-execution would then find the marker and record `Unresolved`. What
          * keeps it unreachable: a handler's requirements are `never`, so no
          * handler can name `WorkflowEngine` to sleep or await a deferred, and
          * the library's two elicitors refuse inside a call

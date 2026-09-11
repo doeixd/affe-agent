@@ -489,13 +489,15 @@ acceptance test for 105, 107 and 108.*
      verify: exists test/fixtures/admission-descriptions.json
      ```
 
-     Found in review, part of the same design: a suspension inside a
-     non-idempotent handler would be journalled `Unresolved`. Checked
-     2026-09-11, and worse than first written: the engine delivers it as an
-     interrupt with the activity's `WorkflowInstance` marked `suspended`, so
-     `DurableToolkit`'s interruption branch records `Unresolved` at the
-     suspension itself, before any re-execution replays item 98's start
-     marker. Latent, not live: a handler's requirements are `never`, so no
+     Found in review, part of the same design: the engine re-executes an
+     activity that *suspended*, and that replays item 98's start marker, so
+     a non-idempotent handler that suspends legitimately (a durable sleep, a
+     child workflow) would resume as `Unresolved`. Probed 2026-09-11 with a
+     cast (a throwaway test, not kept): the suspension is a self-interrupt,
+     which `DurableToolkit`'s interruption branch cannot catch, so nothing
+     is journalled at the suspension -- and over `DurableEquivalence`'s
+     SQLite cluster a durable sleep inside a handler did not resume within
+     20 s, idempotent or not. Latent, not live: a handler's requirements are `never`, so no
      handler can name `WorkflowEngine` to sleep or await a deferred without
      a cast, and the library's only in-call suspensions -- the two
      elicitors -- are refused. Whatever lets a handler suspend must tell a
