@@ -9,6 +9,7 @@ import type { Tool } from "effect/unstable/ai"
 import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentInput from "../AgentInput.js"
+import type * as AgentProtocol from "./AgentProtocol.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Observation from "../internal/observation.js"
@@ -371,6 +372,16 @@ export interface RemoteSession {
   >
   readonly history: Effect.Effect<Prompt.Prompt, RemoteError>
   readonly status: Effect.Effect<AgentSession.Status, RemoteError>
+  /**
+   * A finite snapshot of retained events, when the backing can read one.
+   * `oldest` and `latest` describe the retained snapshot even when `after`
+   * selects no events. Hosts use this reader after authorization; sessions
+   * without it use the host's bounded live tail. A reader failure propagates
+   * rather than falling back to that potentially incomplete tail.
+   */
+  readonly eventLog?: ((options?: {
+    readonly after?: number | undefined
+  }) => Effect.Effect<AgentProtocol.EventLogResponse, RemoteError>) | undefined
   /**
    * The session's events, live or resumed.
    *

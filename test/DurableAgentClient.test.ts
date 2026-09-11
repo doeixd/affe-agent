@@ -1,4 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
+import { expectTypeOf } from "vitest"
+import * as NodeFs from "node:fs"
 import {
   Cause,
   Deferred,
@@ -23,7 +25,8 @@ import { breakingClaim, detail, failure, losingFinish } from "./storageFaults.js
 import * as AgentLoop from "../src/AgentLoop.js"
 import * as ContextTransform from "../src/ContextTransform.js"
 import * as ToolExecution from "../src/ToolExecution.js"
-import { AgentClient } from "../src/client/index.js"
+import { AgentClient, AgentProtocol } from "../src/client/index.js"
+import * as AgentSessionHost from "../src/client/internal/sessionHost.js"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
@@ -206,6 +209,124 @@ const auditedLog = (underlying: DeliveryLog.DeliveryLog) =>
 
 
 describe("DurableAgentClient (durability specifics)", () => {
+  it.live("a recreated host reads the durable event log beyond its live tail, with stable snapshot bounds", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(1) }), [{ text: "one" }, { text: "two" }])
+      yield* using(f.client, (client) => Effect.gen(function* () {
+        const session = yield* Effect.scoped(client.createSession({ sessionId: "finite-log" }))
+        if (session.eventLog === undefined) return yield* Effect.die("durable session has no finite reader")
+        const read = session.eventLog()
+        expectTypeOf(read).toEqualTypeOf<Effect.Effect<AgentProtocol.EventLogResponse, AgentClient.RemoteError>>()
+        assert.deepStrictEqual(yield* read, { events: [], latest: 0 })
+        yield* session.prompt("first")
+      }))
+      const before = yield* f.delivery.read("finite-log")
+      assert.isAbove(before.length, 1)
+
+      yield* Effect.gen(function* () {
+        const host = yield* AgentSessionHost.make({
+          authorization: AgentSessionHost.allowAll<void>(),
+          maxSessions: 2,
+          maxRequestsPerSession: 4,
+          maxRetainedEvents: 1
+        })
+        const sessionId = AgentProtocol.SessionId.make("finite-log")
+        yield* host.session(undefined, { sessionId })
+        // The host did not exist when these events were recorded.
+        const recovered = yield* host.eventLog(undefined, { sessionId })
+        assert.deepStrictEqual(recovered.events, before)
+        assert.strictEqual(recovered.oldest, before[0]?.sequence)
+        assert.strictEqual(recovered.latest, before[before.length - 1]?.sequence)
+
+        yield* host.prompt(undefined, {
+          sessionId,
+          requestId: AgentProtocol.RequestId.make("second"),
+          input: Prompt.make("second")
+        })
+        const recorded = yield* f.delivery.read("finite-log")
+        const whole = yield* host.eventLog(undefined, { sessionId })
+        assert.deepStrictEqual(whole.events, recorded)
+        const suffix = yield* host.eventLog(undefined, { sessionId, after: recovered.latest })
+        assert.deepStrictEqual(suffix.events, recorded.filter((event) => event.sequence > recovered.latest))
+        assert.strictEqual(suffix.oldest, whole.oldest)
+        assert.strictEqual(suffix.latest, whole.latest)
+        for (const after of [whole.latest, whole.latest + 100]) {
+          const empty = yield* host.eventLog(undefined, { sessionId, after })
+          assert.deepStrictEqual(empty, { events: [], oldest: whole.oldest, latest: whole.latest })
+        }
+      }).pipe(Effect.provide(f.another))
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("what a host created after the fact reads of one durable prompt (fixture)", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(1) }), [{ text: "one" }])
+      yield* using(f.client, (client) => Effect.gen(function* () {
+        const session = yield* Effect.scoped(client.createSession({ sessionId: "recorded-log" }))
+        yield* session.prompt("first")
+      }))
+      const read = yield* Effect.gen(function* () {
+        const host = yield* AgentSessionHost.make({
+          authorization: AgentSessionHost.allowAll<void>(),
+          maxSessions: 1,
+          maxRequestsPerSession: 1,
+          maxRetainedEvents: 1
+        })
+        const sessionId = AgentProtocol.SessionId.make("recorded-log")
+        yield* host.session(undefined, { sessionId })
+        return yield* host.eventLog(undefined, { sessionId })
+      }).pipe(Effect.provide(f.another))
+      // Before the durable reader, this host held a one-event tail from its
+      // own start and nothing earlier; now it reads the session's log whole.
+      const observed = { oldest: read.oldest, events: read.events.map((entry) => entry.event._tag) }
+      const recorded = JSON.parse(NodeFs.readFileSync("test/fixtures/durable-event-log.json", "utf8"))
+      assert.deepStrictEqual(observed, recorded)
+      assert.strictEqual(read.latest, read.events.length)
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("finite durable reads authorize before storage and never hide a storage failure with the host tail", () =>
+    Effect.gen(function* () {
+      const underlying = yield* DeliveryLog.memoryLog
+      const reads = yield* Ref.make(0)
+      const broken = yield* Ref.make(false)
+      const delivery: DeliveryLog.DeliveryLog = {
+        ...underlying,
+        read: (sessionId, options) => Effect.gen(function* () {
+          yield* Ref.update(reads, (count) => count + 1)
+          if (yield* Ref.get(broken)) return yield* failure("read")
+          return yield* underlying.read(sessionId, options)
+        })
+      }
+      const f = yield* fixture(Agent.make({ loop: AgentLoop.bounded(1) }), [], delivery)
+      yield* Effect.gen(function* () {
+        const host = yield* AgentSessionHost.make({
+          authorization: {
+            authorize: ({ principal, operation, sessionId }) => principal === "reader"
+              ? Effect.void
+              : Effect.fail(new AgentProtocol.AgentForbiddenError({ operation, sessionId }))
+          },
+          maxSessions: 2,
+          maxRequestsPerSession: 4
+        })
+        const sessionId = AgentProtocol.SessionId.make("empty-log")
+        yield* host.createSession("reader", { sessionId, requestId: AgentProtocol.RequestId.make("create") })
+        const empty = yield* host.eventLog("reader", { sessionId })
+        assert.deepStrictEqual(empty, { events: [], latest: 0 })
+        yield* Ref.set(reads, 0)
+        const forbidden = yield* Effect.flip(host.eventLog("stranger", { sessionId }))
+        assert.strictEqual(forbidden._tag, "AgentForbiddenError")
+        assert.strictEqual(yield* Ref.get(reads), 0)
+
+        yield* Ref.set(broken, true)
+        const failed = yield* Effect.flip(host.eventLog("reader", { sessionId }))
+        assert.strictEqual(failed._tag, "AgentTransportError")
+        if (failed._tag === "AgentTransportError") assert.include(failed.detail, "read")
+        assert.strictEqual(yield* Ref.get(reads), 1)
+      }).pipe(Effect.provide(f.client))
+    }).pipe(Effect.scoped)
+  )
+
   /**
    * Typed input, phase 2 (`docs/plan-effect-agent-comparison.md` §3.4): the
    * client validates the value at admission and journals it encoded; the
@@ -1813,4 +1934,3 @@ describe("a live durable stream is never re-run into the same fold", () => {
     }), 20_000
   )
 })
-

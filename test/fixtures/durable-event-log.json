@@ -1,0 +1,13 @@
+{
+  "oldest": 1,
+  "events": [
+    "SubmissionStarted",
+    "RunStarted",
+    "TurnStarted",
+    "ModelCallCompleted",
+    "MessageCompleted",
+    "TurnCompleted",
+    "RunCompleted",
+    "SubmissionCompleted"
+  ]
+}

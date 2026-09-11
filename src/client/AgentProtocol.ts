@@ -374,9 +374,10 @@ export const EventLogResponse = Schema.Struct({
   events: Schema.Array(AgentEventEnvelope),
   /**
    * The first sequence the host holds for this session; absent while it
-   * holds nothing. A session emits `SessionStarted` before a host can begin
-   * retaining it, so this is normally 2 -- stated here rather than left for
-   * the reader to infer from a first event that is not the first.
+   * holds nothing. With a bounded live tail, a session emits `SessionStarted`
+   * before a host can begin retaining it, so this is normally 2 -- stated rather than left for
+   * the reader to infer from a first event that is not the first. A backing
+   * with a finite reader reports the first event in its retained snapshot.
    */
   oldest: Schema.optional(Schema.Number),
   /** The newest sequence the host holds; what to pass as `after` next time. */

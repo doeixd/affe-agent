@@ -52,6 +52,8 @@ export interface Options<Principal> {
    * bus remembers nothing, so the host keeps the tail of what each hosted
    * session emitted, bounded, and refuses a read that would start before
    * what it still holds rather than answer with a gap.
+   * A session with `eventLog` supplies its own finite read instead; this bound
+   * still limits the host's live tail but does not truncate the backing log.
    */
   readonly maxRetainedEvents?: number | undefined
 }
@@ -1226,6 +1228,9 @@ export const make = <Principal>(
       const sessionId = Option.some(request.sessionId)
       yield* authorize(principal, "eventLog", sessionId)
       const hosted = yield* findSession(request.sessionId)
+      if (hosted.session.eventLog !== undefined) {
+        return yield* hosted.session.eventLog({ after: request.after })
+      }
       const { entries, dropped } = hosted.tail
       const after = request.after ?? 0
       const oldest = entries[0]?.sequence

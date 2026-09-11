@@ -595,8 +595,28 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
         { ...observationBound, sessionId }
       )
 
+    const retainedLog = options.delivery
     const self: AgentClient.RemoteSession = {
     id: sessionId,
+
+    eventLog: retainedLog === undefined ? undefined : Effect.fn("DurableAgentClient.eventLog")(
+      function* (eventOptions?: { readonly after?: number | undefined }) {
+        yield* Effect.annotateCurrentSpan("sessionId", sessionId)
+        const found = yield* options.sessionStore.get(sessionId)
+        if (Option.isNone(found)) return yield* noSuchSession(sessionId)
+        // One read keeps the bounds and selected events on the same snapshot.
+        // DeliveryLog currently exposes a whole-session read, not separate
+        // snapshot metadata; two reads could disagree across an append.
+        const entries = yield* retainedLog.read(sessionId)
+        const oldest = entries[0]?.sequence
+        return {
+          events: entries.filter((envelope) => envelope.sequence > (eventOptions?.after ?? 0)),
+          ...(oldest === undefined ? {} : { oldest }),
+          latest: entries[entries.length - 1]?.sequence ?? 0
+        }
+      },
+      storageAsTransport(sessionId)
+    ),
 
     prompt: (input, promptOptions) =>
       Effect.gen(function* () {
