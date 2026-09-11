@@ -55,6 +55,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "0 is exactly \"not delegated\"; only Subagent raises it, and the limit it feeds is Subagent's own"
   },
+  "src/internal/insideToolActivity.ts:InsideToolActivity": {
+    class: "no-feature",
+    why: "false is exactly \"not in a durable tool call\"; only DurableToolkit raises it, and it only refuses a wait"
+  },
   "src/internal/currentSession.ts:CurrentSessionId": {
     class: "no-feature",
     why: "outside a session: nothing session-scoped is reachable"

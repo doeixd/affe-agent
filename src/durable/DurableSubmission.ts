@@ -29,6 +29,7 @@ import * as DurablePermission from "./DurablePermission.js"
 import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
 import * as ToolContracts from "./ToolContracts.js"
+import { InsideToolActivity } from "../internal/insideToolActivity.js"
 import { describedTools } from "../internal/describedTools.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
 import { isStorageError, StorageError } from "../Errors.js"
@@ -286,6 +287,13 @@ export const projectedElicitation = (
             // difference from before is that it is now a considered choice
             // with a reason, not the default.
             Effect.gen(function* () {
+              // Not from inside a durable tool call: the wait would suspend
+              // the workflow while the call is running (item 113).
+              if (yield* InsideToolActivity) {
+                return yield* Effect.die(
+                  new DurableElicitation.DurableElicitationInToolCallError({ requestId: request.id })
+                )
+              }
               yield* Effect.orDie(
                 sessionStore.addPendingRequest(sessionId, request)
               )

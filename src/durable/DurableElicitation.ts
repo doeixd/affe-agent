@@ -3,6 +3,28 @@ import { DurableDeferred, WorkflowEngine } from "effect/unstable/workflow"
 import type { Workflow } from "effect/unstable/workflow"
 import * as Elicitation from "../Elicitation.js"
 import * as Namespace from "../internal/namespace.js"
+import { InsideToolActivity } from "../internal/insideToolActivity.js"
+
+/**
+ * Asked for from inside a durable tool call (item 113): a subagent forwarding
+ * its child's approval to the parent (`inherit.approval: "parent"`), or a
+ * tool handler that asks for itself. Waiting durably means suspending the
+ * workflow, and a tool call is a running activity -- suspending from inside
+ * one left the process starving its event loop until it died. Refused, by
+ * name, until what a suspension should do to a call in flight is decided.
+ */
+export class DurableElicitationInToolCallError extends Schema.TaggedError<DurableElicitationInToolCallError>()(
+  "DurableElicitationInToolCallError",
+  { requestId: Schema.String }
+) {
+  override get message() {
+    return (
+      "A durable run cannot wait for an answer from inside a tool call: the wait would suspend the workflow " +
+      "while the call is still running. Ask before or after the tool call, or give the delegated agent its own " +
+      "approval policy instead of inherit: { approval: \"parent\" }."
+    )
+  }
+}
 
 /**
  * A paused run that survives the process it paused in.
@@ -65,16 +87,21 @@ export const factory: Effect.Effect<
     make: () =>
       Effect.succeed<Elicitation.Elicitor>({
         elicit: (request, announce) =>
-          // Announced before awaiting, as the local elicitor is. The ordering
-          // is easier here — the deferred exists by name whether or not anyone
-          // is waiting on it, so an answer cannot arrive "too early" — but
-          // announcing after suspending would mean never announcing at all.
-          Effect.andThen(
-            announce,
-            DurableDeferred.await(deferredFor(request.id)).pipe(
+          Effect.gen(function* () {
+            // A defect, not an answer: nobody refused, the wait is impossible
+            // here (see `DurableElicitationInToolCallError`).
+            if (yield* InsideToolActivity) {
+              return yield* Effect.die(new DurableElicitationInToolCallError({ requestId: request.id }))
+            }
+            // Announced before awaiting, as the local elicitor is. The ordering
+            // is easier here — the deferred exists by name whether or not anyone
+            // is waiting on it, so an answer cannot arrive "too early" — but
+            // announcing after suspending would mean never announcing at all.
+            yield* announce
+            return yield* DurableDeferred.await(deferredFor(request.id)).pipe(
               Effect.provide(workflowContext)
             )
-          ),
+          }),
         respond: () =>
           // Answering happens from outside the workflow, through `respond`
           // below, because the token is derived from the execution rather than

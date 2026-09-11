@@ -503,8 +503,17 @@ acceptance test for 105, 107 and 108.*
      verify: exists src/testing/DurableEquivalence.ts
      ```
 
-113. **A durable delegation whose child forwards an approval hangs the
-     process (found 2026-09-11).** A durable parent with
+113. **A durable delegation whose child forwards an approval hung the
+     process (found 2026-09-11; refused by name since, the design open).**
+     Now: `DurableToolkit` marks a tool call's handler as running inside an
+     activity (`InsideToolActivity`), and both durable elicitors -- the
+     client's projected one and `DurableElicitation` -- die with
+     `DurableElicitationInToolCallError` there, whose message says to ask
+     before or after the call or give the child its own policy.
+     `test/DurableDelegationApproval.test.ts` fails in seconds where it used
+     to hang (the guard removed, it hangs again). Open: the real design --
+     what a suspension should do to a call in flight -- so a child's
+     approval can be forwarded durably. What was found: A durable parent with
      `Subagent.tool(..., { inherit: { approval: "parent" } })`, whose child
      calls a `needsApproval` tool: the straight run -- no crash -- never
      finishes. The event loop is starved from the start (no timer fires,

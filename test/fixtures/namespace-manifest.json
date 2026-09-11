@@ -40,6 +40,7 @@
   "affe-agent/internal/CurrentSessionId",
   "affe-agent/internal/DelegationDepth",
   "affe-agent/internal/Failpoint",
+  "affe-agent/internal/InsideToolActivity",
   "affe-agent/internal/ParentEvents",
   "affe-agent/memory/Memory",
   "affe-agent/plugins",

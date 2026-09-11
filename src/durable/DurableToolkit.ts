@@ -3,6 +3,7 @@ import * as AgentEvent from "../AgentEvent.js"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import { activityName, nextOccurrence, startMarkerName } from "../internal/toolActivity.js"
+import { InsideToolActivity } from "../internal/insideToolActivity.js"
 
 /**
  * Makes every tool call a durable `Activity`.
@@ -256,7 +257,10 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           success: outcomeSchema,
           execute: !startedHere ? Effect.succeed<Outcome>({ _tag: "Unresolved" }) : (
             toolkit.handle(name, params, toolCallId).pipe(
-              Effect.flatMap(Stream.runCollect)
+              Effect.flatMap(Stream.runCollect),
+              // So an elicitation from inside the handler knows it cannot
+              // suspend the workflow from here (`DurableElicitation`).
+              Effect.provideService(InsideToolActivity, true)
             ) as unknown as Effect.Effect<ReadonlyArray<HandlerResult>, unknown>
           ).pipe(
             Effect.map(

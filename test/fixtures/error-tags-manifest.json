@@ -37,6 +37,7 @@
   "DurableSessionStoreConformanceFailure",
   "DurableStreamError",
   "DurableToolFailure",
+  "DurableElicitationInToolCallError",
   "DurableToolUnresolvedError",
   "InboxError",
   "McpToolError",
