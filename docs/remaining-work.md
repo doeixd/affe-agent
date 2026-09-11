@@ -545,10 +545,24 @@ one else was working on them.*
      Step 6: the adapters and durable stores externalize at their own
      boundary, over a threshold. Step 7: the relay carries references, not
      bytes. They rode with umbrella item 26, which closed without them.
-     Before wiring either, specify in the plan who owns the threshold, the
-     access check and a blob's lifetime. Medium.
+     **Specified 2026-09-11** (the plan's step 6 note: threshold, access,
+     lifetime), **and its first slice built:** the durable session store's
+     history rows -- rewritten whole at every finish -- take
+     `blobs: { store, maxInlineBytes }` on `memoryStoreWith` and
+     `sqlStore(WithTables)`. A file over the threshold is written to the
+     blob store and the row holds a reference; every read resolves it back
+     to the exact inline encoding, so no caller, retry comparison or replay
+     sees a reference. The session-store conformance suite passes over both
+     blob-backed stores; a 4 KB image leaves a 4 KB-smaller row
+     (`test/fixtures/history-blob-row.json`) that reads back identical, and
+     a second store over the same database reads the same. Open: the
+     transports (a reference on a wire needs a fetch path the receiver is
+     authorised for), the delivery log's events, and step 7, the relay.
+     Medium.
 
      ```text
+     verify: grep "readonly blobs?: HistoryBlobs | undefined" src/durable/DurableSessionStore.ts
+     verify: exists test/fixtures/history-blob-row.json
      verify: no-grep "externalize" src/http/AgentHttp.ts
      verify: no-grep "BlobWire" src/relay/RelayRpc.ts
      ```

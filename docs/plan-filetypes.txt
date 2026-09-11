@@ -1050,3 +1050,40 @@ PromptWire codec -- pinned -- rather than handed a silently empty file.
 Not in this phase, recorded as such: step 6 (transports and durable
 stores calling externalize automatically at their own boundaries) and
 step 7 (relay) ride with the relay/bridge work in remaining-work item 26.
+
+Step 6, specified 2026-09-11 (remaining-work item 116), before any wiring:
+
+  WHERE FIRST. The durable session store's history rows. They carry every
+  inline file as base64 and are rewritten whole on every submission's
+  finish, so a session with one screenshot pays for it at every turn.
+  Transports come after: a reference sent over a wire needs a fetch path the
+  receiver is authorised for, which the store does not.
+
+  WHY INSIDE THE STORE, NOT A WRAPPER. History crosses DurableSessionStore's
+  interface in three shapes -- an encoded string on get/getOrCreate, strings
+  in a claim (the history and the claimed prompt), and a runtime Prompt on
+  finish, which the store encodes itself. A wrapper cannot externalise what
+  finish encodes internally, so the codec is where it goes: an option at
+  construction, `blobs: { store, maxInlineBytes }`, used by the store's own
+  encodeHistory and by its reads.
+
+  THRESHOLD. Owned by whoever constructs the store: it is a storage cost
+  decision. No default size is imposed; absent the option, rows are exactly
+  as today.
+
+  ACCESS. References never leave the store: it resolves on every read, so a
+  claim, a client, a replay and every hop see the same runtime prompt they
+  see now. The PromptWire codec already refuses an unresolved reference
+  loudly, which pins the rule.
+
+  LIFETIME. Blobs are the blob store's. They are content-addressed and
+  shared across sessions (the same screenshot stores once), so deleting a
+  session must not delete its blobs; no reference counting is added. An
+  application that needs removal owns it, with `BlobWire.references` to see
+  what a history carries.
+
+  ACCEPTANCE. A session store built with the option writes a history row
+  with a reference in place of a file over the threshold, reads it back
+  byte-identical, and a second process over the same stores reads the same
+  prompt; the row shrinks by the file's size; without the option the bytes
+  are unchanged (a fixture).

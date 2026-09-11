@@ -1,0 +1,27 @@
+{
+  "content": [
+    {
+      "options": {},
+      "role": "user",
+      "content": [
+        { "options": {}, "type": "text", "text": "what is in this screenshot?" },
+        {
+          "options": {},
+          "type": "file",
+          "mediaType": "image/png",
+          "fileName": "screen.png",
+          "data": {
+            "_tag": "Blob",
+            "ref": {
+              "id": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+              "mediaType": "image/png",
+              "byteLength": 4096,
+              "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+              "fileName": "screen.png"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -171,6 +171,22 @@ const DurableSupport = DurableAgentClient.layer("Support", Support, {
 program.pipe(Effect.provide(DurableSupport))
 ```
 
+A session's history row is rewritten whole at every finish, so a
+conversation carrying a large image pays for its base64 at every turn. Give
+the session store a blob store and a threshold, and files over it are stored
+once, by content, with the row holding a reference:
+
+```ts
+sessionStore: yield* DurableSessionStore.sqlStoreWithTables({
+  blobs: { store: yield* BlobStore.BlobStore, maxInlineBytes: 64 * 1024 }
+})
+```
+
+Every read resolves the reference back to the inline encoding, so nothing
+above the store changes. Blobs are shared across sessions (the same bytes
+store once), so deleting a session does not delete them; removal is the
+application's, with `BlobWire.references` to see what a history carries.
+
 Polling policy can stay explicit through the constructors above, or come from
 Effect `Config` through `DurableAgentClient.layerConfig`,
 `DeliveryLog.sqlLogConfig` / `sqlLogWithTableConfig`, and

@@ -2,6 +2,8 @@ import { Effect, Option, Ref, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { SqlClient } from "effect/unstable/sql"
 import * as Elicitation from "../Elicitation.js"
+import type * as BlobStore from "../blob/BlobStore.js"
+import * as BlobWire from "../blob/BlobWire.js"
 import * as PromptWire from "../PromptWire.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
@@ -349,6 +351,77 @@ export const decodeHistory = (
     )
   )
 
+/**
+ * Where a store puts the files in its history rows (item 116,
+ * `plan-filetypes.txt` step 6).
+ *
+ * A history row is rewritten whole at every finish, so a session with one
+ * large screenshot pays for its base64 at every turn. With this option, a
+ * file over `maxInlineBytes` is written to `store` and the row holds a
+ * content-addressed reference. The threshold is the constructor's: it is a
+ * storage cost decision.
+ *
+ * References never leave the store: every read resolves them back to the
+ * canonical inline encoding, byte-identical to a row written without the
+ * option -- which the durable client relies on, comparing a retry's encoded
+ * prompt to what is stored. Blobs outlive sessions: they are shared across
+ * them (the same bytes store once), so nothing here deletes one.
+ */
+export interface HistoryBlobs {
+  readonly store: BlobStore.BlobStoreService
+  readonly maxInlineBytes: number
+}
+
+/** A store's history codec: what it writes, and what it hands back on a read. */
+interface HistoryCodec {
+  readonly write: (history: Prompt.Prompt, sessionId: string) => Effect.Effect<string, StorageError>
+  readonly read: (stored: string, sessionId: string) => Effect.Effect<string, StorageError>
+}
+
+const historyCodec = (blobs: HistoryBlobs | undefined): HistoryCodec => {
+  if (blobs === undefined) {
+    return { write: (history) => encodeHistory(history), read: Effect.succeed }
+  }
+  const failed = (operation: string, sessionId: string) => (cause: unknown) =>
+    new StorageError({ operation, sessionId, detail: detailOf(cause) })
+  return {
+    write: (history, sessionId) =>
+      Schema.encodeEffect(PromptWire.Prompt)(history).pipe(
+        Effect.orDie,
+        Effect.flatMap((encoded) => BlobWire.externalize(encoded, blobs)),
+        Effect.map((externalized) => JSON.stringify(externalized)),
+        Effect.mapError(failed("externalizeHistory", sessionId))
+      ),
+    read: (stored, sessionId) =>
+      // A row with no reference is already the canonical inline form.
+      !stored.includes("\"Blob\"")
+        ? Effect.succeed(stored)
+        : Effect.try(() => JSON.parse(stored) as unknown).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
+          Effect.flatMap((json) => BlobWire.resolve(json, blobs.store)),
+          // Through the codec and back, not spliced: the result must be the
+          // exact string `encodeHistory` would have written inline.
+          Effect.flatMap(Schema.decodeUnknownEffect(PromptWire.Prompt)),
+          Effect.mapError(failed("resolveHistory", sessionId)),
+          Effect.flatMap(encodeHistory)
+        )
+  }
+}
+
+/** A record, with its history as a caller must see it. */
+const readRecordWith = (codec: HistoryCodec) => (record: SessionRecord): Effect.Effect<SessionRecord, StorageError> =>
+  Effect.map(codec.read(record.history, record.sessionId), (history) => ({ ...record, history }))
+
+/** A claim's outcome, with the history it carries as a caller must see it. */
+const claimRead = (
+  codec: HistoryCodec,
+  sessionId: string,
+  outcome: ClaimOutcome
+): Effect.Effect<ClaimOutcome, StorageError> =>
+  outcome._tag === "Claimed"
+    ? Effect.map(codec.read(outcome.history, sessionId), (history) => ({ ...outcome, history }))
+    : Effect.succeed(outcome)
+
 // -- Memory implementation ---------------------------------------------------------
 
 interface MemoryState {
@@ -381,22 +454,27 @@ const setSession = (
  * under a cluster. A SQL implementation backs the same interface with
  * transactions instead.
  */
-export const memoryStore: Effect.Effect<DurableSessionStore> =
+export const memoryStoreWith = (options?: {
+  /** Files in history rows over a threshold go to a blob store (item 116). */
+  readonly blobs?: HistoryBlobs | undefined
+}): Effect.Effect<DurableSessionStore> =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState)
+    const codec = historyCodec(options?.blobs)
+    const read = readRecordWith(codec)
 
     return {
       get: (sessionId) =>
-        Effect.map(
+        Effect.flatMap(
           Ref.get(state),
-          (all) => Option.fromNullishOr(all.sessions.get(sessionId))
+          (all) => Effect.transposeOption(Option.map(Option.fromNullishOr(all.sessions.get(sessionId)), read))
         ),
 
       getOrCreate: (sessionId, initialHistory) =>
         // Encoding happens *before* the transition: `Ref.modify` must stay a
         // pure step, and encoding is deterministic, so doing it first changes
         // nothing about atomicity.
-        Effect.flatMap(encodeHistory(initialHistory), (encoded) =>
+        Effect.flatMap(codec.write(initialHistory, sessionId), (encoded) =>
           Ref.modify(state, (all): [SessionRecord, MemoryState] => {
             const found = all.sessions.get(sessionId)
             if (found !== undefined) return [found, all]
@@ -409,7 +487,7 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
             }
             return [created, setSession(all, created)]
           })
-        ),
+        ).pipe(Effect.flatMap(read)),
 
       claim: (sessionId, submission) =>
         Effect.flatMap(encodeHistory(submission.prompt), (encoded) =>
@@ -457,7 +535,7 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
               { ...setSession(all, updated), pending, answered }
             ]
           })
-        ),
+        ).pipe(Effect.flatMap((outcome) => claimRead(codec, sessionId, outcome))),
 
       attachExecution: (sessionId, submissionId, executionId) =>
         Ref.update(state, (all) => {
@@ -477,7 +555,7 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
         }),
 
       finish: (sessionId, submissionId, history) =>
-        Effect.flatMap(encodeHistory(history), (encoded) =>
+        Effect.flatMap(codec.write(history, sessionId), (encoded) =>
           Ref.modify(state, (all): [boolean, MemoryState] => {
             const found = all.sessions.get(sessionId)
             if (
@@ -586,6 +664,9 @@ export const memoryStore: Effect.Effect<DurableSessionStore> =
     }
   })
 
+/** `memoryStoreWith()` with every file inline, as history always was. */
+export const memoryStore: Effect.Effect<DurableSessionStore> = memoryStoreWith()
+
 // -- SQL implementation --------------------------------------------------------------
 
 export const sqlSessionTable = Namespace.table("session")
@@ -690,9 +771,15 @@ export const sqlStore = (
   options?: {
     readonly sessionTable?: string | undefined
     readonly elicitationTable?: string | undefined
+    /** Files in history rows over a threshold go to a blob store (item 116). */
+    readonly blobs?: HistoryBlobs | undefined
   }
 ): Effect.Effect<DurableSessionStore, never, SqlClient.SqlClient> =>
   Effect.map(SqlClient.SqlClient, (sql) => {
+    // Externalised before a transaction and resolved after one: blob I/O
+    // does not belong inside a database transaction.
+    const codec = historyCodec(options?.blobs)
+    const resolved = readRecordWith(codec)
     const sessions = sql.literal(
       escapeIdentifier(options?.sessionTable ?? sqlSessionTable)
     )
@@ -741,10 +828,14 @@ export const sqlStore = (
       )
 
     return {
-      get: (sessionId) => readRecord(sessionId).pipe(storage("get", sessionId)),
+      get: (sessionId) =>
+        readRecord(sessionId).pipe(
+          storage("get", sessionId),
+          Effect.flatMap((found) => Effect.transposeOption(Option.map(found, resolved)))
+        ),
 
       getOrCreate: (sessionId, initialHistory) =>
-        Effect.flatMap(encodeHistory(initialHistory), (encoded) =>
+        Effect.flatMap(codec.write(initialHistory, sessionId), (encoded) =>
           sql
             .withTransaction(
               Effect.gen(function* () {
@@ -782,7 +873,7 @@ export const sqlStore = (
               })
             )
             .pipe(storage("getOrCreate", sessionId))
-        ),
+        ).pipe(Effect.flatMap(resolved)),
 
       claim: (sessionId, submission) =>
         Effect.flatMap(encodeHistory(submission.prompt), (encoded) =>
@@ -843,7 +934,7 @@ export const sqlStore = (
               })
             )
             .pipe(storage("claim", sessionId))
-        ),
+        ).pipe(Effect.flatMap((outcome) => claimRead(codec, sessionId, outcome))),
 
       attachExecution: (sessionId, submissionId, executionId) =>
         sql
@@ -870,7 +961,7 @@ export const sqlStore = (
           .pipe(storage("attachExecution", sessionId)),
 
       finish: (sessionId, submissionId, history) =>
-        Effect.flatMap(encodeHistory(history), (encoded) =>
+        Effect.flatMap(codec.write(history, sessionId), (encoded) =>
           sql
             .withTransaction(
               Effect.gen(function* () {
@@ -1037,6 +1128,8 @@ export const sqlStoreWithTables = (
   options?: {
     readonly sessionTable?: string | undefined
     readonly elicitationTable?: string | undefined
+    /** Files in history rows over a threshold go to a blob store (item 116). */
+    readonly blobs?: HistoryBlobs | undefined
   }
 ): Effect.Effect<DurableSessionStore, never, SqlClient.SqlClient> =>
   Effect.gen(function* () {

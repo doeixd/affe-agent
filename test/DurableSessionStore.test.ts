@@ -8,6 +8,7 @@ import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import type * as Elicitation from "../src/Elicitation.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import * as BlobStore from "../src/blob/BlobStore.js"
 import { DurableSessionStoreConformance, TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -75,6 +76,89 @@ const contract = (
 
 contract("memory", DurableSessionStore.memoryStore)
 contract("sqlite", sqlStore)
+// Item 116: the same contract with files going to a blob store. The suite's
+// histories carry no files, so these rows say only that the option changes
+// nothing a caller sees; the rows below put a file through it.
+contract("memory, history files to a blob store", Effect.flatMap(BlobStore.memory, (store) =>
+  DurableSessionStore.memoryStoreWith({ blobs: { store, maxInlineBytes: 1024 } })))
+contract("sqlite, history files to a blob store", Effect.gen(function* () {
+  const file = yield* tempDatabase
+  const sql = yield* Layer.build(SqliteClient.layer({ filename: file }))
+  const store = yield* BlobStore.memory
+  return yield* DurableSessionStore.sqlStoreWithTables({ blobs: { store, maxInlineBytes: 1024 } }).pipe(Effect.provide(sql))
+}))
+
+describe("history files in a blob store (item 116)", () => {
+  // 4 KB of deterministic bytes: over the threshold, so it leaves the row.
+  const bytes = Uint8Array.from({ length: 4096 }, (_, i) => i % 251)
+  const withImage = Prompt.make([{
+    role: "user",
+    content: [
+      { type: "text", text: "what is in this screenshot?" },
+      { type: "file", mediaType: "image/png", fileName: "screen.png", data: bytes }
+    ]
+  }])
+
+  it.effect("the row holds a reference, a read is the inline encoding, and a second store reads the same", () =>
+    Effect.gen(function* () {
+      const file = yield* tempDatabase
+      const blobs = { store: yield* BlobStore.memory, maxInlineBytes: 1024 }
+      const inline = yield* DurableSessionStore.encodeHistory(withImage)
+      const open = Effect.gen(function* () {
+        const sql = yield* Layer.build(SqliteClient.layer({ filename: file }))
+        const store = yield* DurableSessionStore.sqlStoreWithTables({ blobs }).pipe(Effect.provide(sql))
+        return { sql, store }
+      })
+
+      const first = yield* open
+      yield* first.store.getOrCreate("s", Prompt.make([]))
+      const claimed = yield* first.store.claim("s", { prompt: Prompt.make("go"), stream: false })
+      assert.strictEqual(claimed._tag, "Claimed")
+      if (claimed._tag !== "Claimed") return
+      assert.isTrue(yield* first.store.finish("s", claimed.claim.submissionId, withImage))
+
+      // What is on disk: a reference where the 4 KB were, and far smaller.
+      const row = yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        const rows = yield* sql<{ readonly history: string }>`SELECT history FROM ${sql.literal(DurableSessionStore.sqlSessionTable)} WHERE session_id = 's'`
+        return rows[0]!.history
+      }).pipe(Effect.provide(first.sql))
+      assert.include(row, "\"Blob\"")
+      assert.isBelow(row.length, inline.length - 4000)
+      assert.deepStrictEqual(JSON.parse(row), recordedRow())
+
+      // What a caller reads: exactly the inline encoding, so a retry's
+      // byte comparison and every decoder see what they always saw.
+      const read = yield* first.store.get("s")
+      assert.strictEqual(Option.getOrThrow(read).history, inline)
+
+      // Another store over the same database and blobs: the same history.
+      const second = yield* open
+      assert.strictEqual(Option.getOrThrow(yield* second.store.get("s")).history, inline)
+    }).pipe(Effect.scoped))
+
+  it.effect("a file at or under the threshold stays inline, and without the option nothing moves", () =>
+    Effect.gen(function* () {
+      const small = Prompt.make([{
+        role: "user",
+        content: [{ type: "file", mediaType: "image/png", data: bytes.slice(0, 512) }]
+      }])
+      const blobStore = yield* BlobStore.memory
+      for (const store of [
+        yield* DurableSessionStore.memoryStoreWith({ blobs: { store: blobStore, maxInlineBytes: 1024 } }),
+        yield* DurableSessionStore.memoryStore
+      ]) {
+        yield* store.getOrCreate("s", small)
+        assert.strictEqual(Option.getOrThrow(yield* store.get("s")).history, yield* DurableSessionStore.encodeHistory(small))
+      }
+      const withoutOption = yield* DurableSessionStore.memoryStore
+      yield* withoutOption.getOrCreate("big", withImage)
+      assert.notInclude(Option.getOrThrow(yield* withoutOption.get("big")).history, "\"Blob\"")
+    }))
+})
+
+/** The recorded shape of an externalised history row (`test/fixtures/history-blob-row.json`). */
+const recordedRow = (): unknown => JSON.parse(NodeFs.readFileSync("test/fixtures/history-blob-row.json", "utf8"))
 
 /**
  * The races SQLite cannot show us (R66).
