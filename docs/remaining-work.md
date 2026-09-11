@@ -507,17 +507,23 @@ plans are items 81, 82, 85 and 86 above -- written 2026-09-08, left
 uncommitted in the working tree, and landed 2026-09-11 once it was clear no
 one else was working on them.*
 
-114. **A2A bridges over the relay
-     ([plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt), step 5).**
-     Both bridges ship locally and the relay carries `AgentRpc` unchanged
-     (relay phase 9), so a Claude Code or OpenCode agent behind NAT should be
-     a transport choice, not a new bridge. Acceptance: a delegation to a
-     bridge across `RelayServer`, in a test. Medium.
+114. ~~**A2A bridges over the relay**~~ **DONE 2026-09-11**
+     ([plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt), step 5).
+     It needed no new code, which is the finding:
+     `test/A2ABridgeOverRelay.test.ts` runs, on a "desktop", an agent whose
+     tool is the Claude Code bridge (`AgentA2A.tool` over
+     `ClaudeCodeA2A.remote`, the CLI scripted through `Sandbox.execStream`),
+     served over the relay by `AgentRpc`; a "VPS" that knows only the
+     desktop's peer id prompts it through `RelayRpc.clientProtocol`, the
+     model delegates, and the CLI's answer comes back across the relay. The
+     OpenCode bridge is the same `RemoteAgent` to `AgentA2A.tool`, so the
+     composition holds for it unchanged. Not added: the bridge's own
+     `RemoteAgent` surface (tasks, cancel) carried across the relay directly
+     -- a caller delegates to an agent that holds the bridge. Reopens if a
+     caller needs that surface.
 
      ```text
-     verify: exists src/a2a/claudeCode.ts
-     verify: exists src/relay/RelayRpc.ts
-     verify: absent test/A2ABridgeOverRelay.test.ts
+     verify: exists test/A2ABridgeOverRelay.test.ts
      ```
 
 115. **`ClaudeCode.languageModel`, then a decision on OpenCode's
