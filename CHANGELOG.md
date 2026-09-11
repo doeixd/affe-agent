@@ -40,6 +40,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a durable run that asks for an answer from inside a tool call (a subagent forwarding its child's approval, or a handler that asks) now fails with DurableElicitationInToolCallError instead of hanging. (`9a1b01c`; measured by `test/fixtures/error-tags-manifest.json`, `test/fixtures/namespace-manifest.json`)
 - the journal's permission-policy and host-scheduling records are frozen by fixture; a regexp matcher with matching flags describes as regexp/<flags>:<source>. (`57106e8`; measured by `test/fixtures/admission-descriptions.json`)
 - AgentOutput.fromTool refuses a provider-defined tool, at compile time and with a TypeError at construction (`e30f31f`; type-level only, nothing on a wire to measure)
+- the durable channel table gains a nullable claimed_by column (sqlStoreWithTable migrates an older table; a self-managed table must add it), and a drain claims rows instead of deleting them (`9efd2c5`; measured by `test/fixtures/channel-input-table.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
