@@ -620,26 +620,29 @@ repeated here.*
      verify: absent src/sandbox/daytona.ts
      ```
 
-120. **Failpoints for the channels and the relay
-     ([plan-failure-paths.md](./plan-failure-paths.md) §3.2).** The design
+120. ~~**Failpoints for the channels and the relay**~~ **DONE 2026-09-11**
+     ([plan-failure-paths.md](./plan-failure-paths.md) §3.2). The design
      gave each subsystem its own closed set of failpoints. `DeliveryLog`,
-     the turn, compaction, the event bus and the Cloudflare dispatch have
-     them. **`DurableChannels` has one since 2026-09-11, and it found a
-     bug:** a drain's activity took its rows out of the SQL store in its own
-     transaction, and a process lost before the engine journalled the
-     activity left them gone -- the replacement's re-execution took again
-     from an empty store, and an accepted steer never reached the model
+     the turn, compaction, the event bus and the Cloudflare dispatch had
+     them. **`DurableChannels` has one now, and it found a bug:** a drain's
+     activity took its rows out of the SQL store in its own transaction,
+     and a process lost before the engine journalled the activity left them
+     gone -- the replacement's re-execution took again from an empty store,
+     and an accepted steer never reached the model
      (`test/DurableChannelsCrash.test.ts`; fails with the fix removed).
      Drains now claim rows instead of deleting them, and a re-execution
      under the same claim takes the same rows; the channel table gains a
      `claimed_by` column (`sqlStoreWithTable` adds it to an older table).
-     `RelayRpc` still has none, so "what if the process dies here" is still
-     answered by reading there. Small.
+     **`RelayRpc` gets none, deliberately:** a failpoint marks the window
+     between two durable writes, and `RelayRpc` has no durable write -- it
+     moves frames, and its teardown is covered by `test/Relay.test.ts`'s
+     tear-down-and-redial rows. A boundary no test could meaningfully crash
+     at would be the finding `Failpoints.covered` exists to report. What
+     reading it for this did find is item 124.
 
      ```text
      verify: grep "store.takeAll(key, claim)" src/durable/DurableChannels.ts
      verify: exists test/fixtures/channel-input-table.json
-     verify: no-grep "Failpoint" src/relay/RelayRpc.ts
      ```
 
 121. **TUI gaps ([plan-tui-port.md](./plan-tui-port.md), "Still not
@@ -677,6 +680,23 @@ repeated here.*
 
      ```text
      verify: grep "Item 123 is that stall" test/DurableAgentClientSql.test.ts
+     ```
+
+124. **A relay caller that dies before its `Eof` leaks a server client
+     (found reading `RelayRpc` for item 120, 2026-09-11).** The serving side
+     releases a (peer, channel) client on the caller's `Eof`, or when a send
+     to that caller fails with `RelayPeerOfflineError`. A caller process
+     that dies after settling its own requests and before its finalizer's
+     `Eof` -- or with a request whose handler has not yet sent anything --
+     is released by neither: the entry and `RpcServer`'s state for it stay
+     until the serving node restarts. Bounded by crashed callers, not by
+     traffic, so small; but a long-lived relay server accumulates them.
+     Proposed: the serving protocol sweeps its clients against
+     `RelayClient.peers` on an interval and releases those whose peer is
+     offline. Needs a test that can see the server's client set. Small.
+
+     ```text
+     verify: no-grep "peers" src/relay/RelayRpc.ts
      ```
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
