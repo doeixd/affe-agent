@@ -507,10 +507,12 @@ acceptance test for 105, 107 and 108.*
      process (found 2026-09-11).** A durable parent with
      `Subagent.tool(..., { inherit: { approval: "parent" } })`, whose child
      calls a `needsApproval` tool: the straight run -- no crash -- never
-     finishes. The event loop is blocked from the start (no timer fires; a
-     V8 tick profile is ~80% in `ntdll`, i.e. waiting in native code, not
-     spinning), and under vitest the worker's memory grows until it dies.
-     Not today's start marker: disabling it hangs the same way. The same
+     finishes. The event loop is starved from the start (no timer fires,
+     not even an `Effect.timeout`; a V8 tick profile is ~80% in `ntdll`,
+     most likely GC under growing memory), and under vitest the worker's
+     memory grows until it dies. Not SQLite: the in-memory engine
+     (`TestRunner`, memory stores) dies the same way. Not today's start
+     marker: disabling it hangs the same way. The same
      delegation without the approval completes, and a parent-level
      approval over the same harness completes. Suspected: the child's
      elicitation reaches the parent's *durable* elicitor, which awaits a
