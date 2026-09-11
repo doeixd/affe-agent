@@ -14,7 +14,7 @@ It incorporates the architectural review, Effect ecosystem review, and the first
 2. Model-facing context must be derived ephemerally per turn.
 3. The harness must disable Effect AI's automatic tool-call resolution so it can own tool execution semantics.
 4. Tool failure behavior is policy and must not be hard-coded prematurely.
-5. Streaming is intentionally deferred until partial-message commit semantics are defined.
+5. Streaming was deferred for v0.1; it now ships with observational deltas and atomic turn commits (§24).
 6. Steering is turn-boundary input, not implicit cancellation.
 7. Follow-ups extend the current externally observed submission lifecycle while internally creating subsequent runs.
 8. Live events are observational, not a durability mechanism.
@@ -208,7 +208,7 @@ Several v4 details bear directly on this design and were only discovered by buil
 
 **`Queue.takeAll` waits for at least one element.** The non-blocking drain is `Queue.clear`. Every steering and follow-up drain in this design is non-blocking by nature — the queue is usually empty — so `takeAll` would deadlock the turn loop. Use `Queue.clear`.
 
-**Tool handlers return a stream.** `Toolkit.WithHandler.handle` has type `Effect<Stream<HandlerResult>>`, so a tool may emit preliminary results before its final one. The harness collects the stream and commits only the final result. Surfacing preliminary results is a streaming concern and is deferred with the rest of streaming (§24).
+**Tool handlers return a stream.** `Toolkit.WithHandler.handle` has type `Effect<Stream<HandlerResult>>`, so a tool may emit preliminary results before its final one. The harness collects the stream and commits only the final result. Preliminary results are exposed as observational tool-progress events (§24).
 
 **`generateText` decodes response parts against the declared tools.** A tool call naming a tool the agent does not have therefore fails *inside the model call*, as a typed `AiError`, before the harness executes anything. This is stricter than the harness could be on its own, and it means such a failure never reaches the tool failure policy (§19).
 
@@ -1282,7 +1282,8 @@ No custom cancellation-token abstraction.
 
 ## v0.1 commit semantics
 
-Because streaming is deferred, interruption semantics are simple:
+The original v0.1 rule below also holds for streamed execution: partial
+assistant output is observational and the turn commits atomically (§24).
 
 - completed previous turns remain committed
 - current incomplete turn is not committed
@@ -1325,30 +1326,21 @@ a design obligation rather than something Effect handles for you automatically.
 
 ---
 
-# 24. Streaming — Explicitly Deferred
+# 24. Streaming — implemented after v0.1
 
-Do not implement `streamText` in v0.1.
+Streaming is request-scoped (`prompt(..., { stream: true })`), and
+`AgentSession.stream` exposes one submission's correlated envelopes. Provider
+parts are joined before the turn commits; text and argument deltas are
+observable but incomplete assistant messages and tool calls are not canonical.
+Preliminary tool results and delegated events are observable too.
 
-Do not emit `MessageDelta` yet.
+A stopped consumer releases its subscription; interruption of the submission
+is explicit. Normal stream exhaustion waits for session release. Durable replay
+re-expresses the recorded response rather than promising identical chunking.
 
-Reason:
-
-Streaming introduces unresolved commit semantics for partially generated assistant messages.
-
-Questions that must be answered before implementation:
-
-- If interrupted mid-stream, is partial assistant text committed?
-- Is partial text observable but noncanonical?
-- If a streamed tool call is incomplete, what is persisted?
-- If a provider emits malformed/incomplete tool-call chunks before interruption, what becomes canonical?
-- Should the event stream expose data that canonical history later omits?
-- Does replay need to reproduce partial output events?
-
-Current v0.1 rule:
-
-> assistant messages are committed atomically after non-streaming `generateText` completes.
-
-Once this is stable, add a dedicated streaming design phase.
+The v0.1 deferral is historical. The decisions and acceptance evidence are in
+[plan-streaming.md](./docs/plan-streaming.md) and
+[plan-streaming-followups.md](./docs/plan-streaming-followups.md).
 
 ---
 
@@ -2958,15 +2950,17 @@ toolkit is resolved once per turn regardless, and the entire cost is one
 as central to the design. If that reasoning is rejected, removing it is deleting
 that branch and narrowing `ToolkitInput` to `Toolkit.WithHandler`.
 
-## 46.6 Streaming — unchanged
+## 46.6 Streaming — implemented
 
-Explicitly post-v0.1. Nothing in the implementation weakened this: §24 stands,
-and §2.8 adds one more input to that design, since preliminary tool results
-arrive on the same stream mechanism that streaming will use.
+Implemented after v0.1, with the atomic commit rule preserved. See §24 and the
+streaming plans for preliminary tool results, argument deltas and replay.
 
 ---
 
 # 47. Post-v0.1 Streaming Design Phase
+
+**Historical design brief; completed.** §24 states the current contract. The
+questions below were inputs to the implemented streaming plans, not new work.
 
 Only begin after non-streaming invariants pass.
 

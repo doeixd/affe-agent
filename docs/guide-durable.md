@@ -6,6 +6,14 @@ and behind the `AgentClient` seam. Ships as the experimental subpaths
 [`examples/durable-resume.ts`](../examples/durable-resume.ts)
 (`npm run smoke:durable-resume`): four processes over one SQLite file.
 
+A `DurableAgentClient` configured with a `DeliveryLog` exposes an optional
+`RemoteSession.eventLog({ after })` finite read. Its `oldest` and `latest`
+describe the retained snapshot, including when no event is newer than the
+cursor. A shared `AgentSessionHost` uses that reader for its event-log resources
+after authorization. Recreating the host does not discard recorded events.
+Without a finite reader, the host serves its bounded live tail. A failed durable
+read returns `AgentTransportError` and does not fall back to that tail.
+
 The same `Agent` value, interpreted durably — no redefinition, no separate
 framework:
 

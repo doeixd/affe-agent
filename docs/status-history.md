@@ -5841,7 +5841,6 @@ fails to build is an empty 500 at session creation.
 Earlier the same day item 27's last two milestones, found unclaimed in the
 tree for two days, were adopted, reviewed (three casts removed) and landed.
 
-
 ## 2026-09-06 — CI setup and verification regressions (#82–#85)
 
 The main Actions job stopped at the TUI typecheck because root `npm ci` does
@@ -5860,3 +5859,30 @@ The exact SDK 1.10 alias is now in the root lockfile. Running the previously
 unreached compiler gate exposed unknown annotation extension fields in that
 SDK; the v1 adapter decodes them before returning typed hints. Malformed
 annotations fail with the existing transport error.
+
+## 2026-09-08 — backlog reconciliation and finite durable event reads
+
+The plan audit found two omitted product efforts and several integration tails
+outside the live ranking. Items 81–87 now distinguish implementation from
+proposals, external evidence and caller-triggered work. Completed historical
+sections (including 47/48) moved verbatim to the ledger. The docs index, root
+streaming contract and status now acknowledge shipped work; the live list no
+longer contradicts the owner's 2026-09-06 decision to continue feature work.
+The product plans point at the existing session directory/projection and keep
+the human-facing inbox distinct from background session input.
+
+Item 88 closes the MCP plan's finite durable-log gap. `RemoteSession.eventLog`
+is an optional backing read using the existing `EventLogResponse`; durable
+clients with a `DeliveryLog` provide it, and `AgentSessionHost` delegates after
+authorization and session lookup. All bounds and selected events come from one
+log snapshot. A missing reader retains the live-tail behavior; a failing reader
+propagates a typed transport error. No wire schema fields or journal format
+changed. The current storage API reads a whole session, so this remains linear
+in retained history; adding paging requires an explicit snapshot contract.
+
+The focused client/host/MCP resource suites passed 65 tests. Removing the host
+delegation failed the new recovery row with zero events instead of the eight
+recorded before hosting. The public reader's inferred success/error/requirement
+type is asserted: changing its expected error to `never` failed typecheck;
+both deliberate breaks were restored. The second new row proves authorization
+precedes storage and a storage failure cannot become a successful empty tail.

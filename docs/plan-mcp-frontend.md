@@ -7,7 +7,8 @@ or Claude Desktop.
 
 **Status: partially implemented.** The additive shared-host path, its full
 phase-2 control surface, status/respond and the elicitation bridge are built.
-Resources, progress and prompts remain.
+Resources and finite durable event reads ship. Progress, resource subscriptions
+and permission-aware skill prompts remain (live item 85).
 
 ### Implementation audit (2026-08-27)
 
@@ -611,10 +612,16 @@ MCP frontend registers the resources over them.
 The legacy `AgentMcp.layer` / `handlers` path was deleted on 2026-08-30 once
 its policy was decided -- refuse at capacity, never evict -- and the stdio
 fixture, the conformance suite and `examples/mcp.ts` moved to the host path.
-Still not done: the durable
-client does not yet serve `eventLog` from its `DeliveryLog` (the host's tail
-is what every backing gets today -- a durable-backed host could answer from
-the log with no bound, and should).
+**Closed 2026-09-08 (item 88):** a durable client with a delivery log supplies
+`RemoteSession.eventLog`; the host calls it after authorization and lookup.
+The response's events, oldest and latest come from one retained snapshot,
+including when the cursor selects nothing. A storage failure is a transport
+error, never an excuse to fall back to a shorter live tail. Sessions without
+a finite reader keep the existing bounded-tail behavior.
+
+The reader uses the log's existing whole-session `read`: obtaining separate
+bounds and suffixes would race an append. Pagination and snapshot-aware
+metadata are a future storage contract, not an arbitrary truncation here.
 
 Tests: `test/AgentSessionHostLog.test.ts` (enumeration; the finite read with a
 cursor; `oldest`/`latest`; the bound; refusal behind it, with the earliest

@@ -9,10 +9,11 @@ chronology lives in [status-history.md](./status-history.md)), `ROADMAP.md`
 tracks capability against the roadmap issues, and `AGENTS.md` holds the
 conventions — above all, that end-user code must never need a type cast.
 
-**Inside `docs/`, nothing is a record of what ships.** A plan marked *specified,
-not implemented* has not been built; a research note describes somebody else's
-code at a point in time. [remaining-work.md](./remaining-work.md) is the ranking
-that says what is actually next.
+**Plans record decisions; their historical paragraphs can outlive the work.**
+Status labels below were reconciled on 2026-09-08. Use `STATUS.md`, the closed
+ledger and the implementation together when checking what ships.
+[remaining-work.md](./remaining-work.md) tracks open implementation, proposals
+and work awaiting a caller or external evidence.
 
 ---
 
@@ -43,10 +44,10 @@ holds only the install, quickstart, seam map, package map and stability notes.
 | [decisions-2026-09-11.md](./decisions-2026-09-11.md) | The decisions open on 2026-09-11 and how each was settled, with the evidence at the time: pushing (and the standing rule for it), the merged branches and the stash (with their undo), a capped key for live runs, item 113's design of record, plan Q1/Q4/Q5, item 100's thresholds, and the trigger that reopens each parked item. |
 | [plan-context-lessons.md](./plan-context-lessons.md) | Six lessons from `danieljvdm/effect-agent#335` (durable context-window rollover), each mapped to a seam here: rollover as a compaction decision, the harness as interpreter, a context-remaining tool, bounded history tools, a behaviour-change trailer, failpoint coverage. Ranked and sequenced. |
 | [plan-exposure-and-terminal-work.md](./plan-exposure-and-terminal-work.md) | Proposal from `danieljvdm/effect-agent` #395–#424 (2026-09-08..10): progressive tool exposure behind a new visibility stage, completion from ordinary tool results, exclusive terminal batches, failure disposition, delivery-acknowledgement and budget-topology audits, a matched benchmark suite. Part II (#376–#391): exact-response durable recovery, a crash/no-crash equivalence oracle, host scheduling captured per attempt, a continuity evaluation, versioned durable tool contracts. Nothing started. |
-| [plan-next-milestone.md](./plan-next-milestone.md) | What to do when the list is empty of work one maintainer can do alone (2026-09-06, with a second reviewer): the next milestone is someone using the library again; a daily consumer, an observed newcomer, and a bounded promise review; what stops. |
-| [plan-streaming.md](./plan-streaming.md) | Streaming is already in the kernel as request-scoped execution with correlated observations; what was missing was consumption and coverage. P1 `AgentSession.stream` (shipped 2026-09-06), then tool-argument deltas, delegated events, measured retention, adapters; the rules a streaming design usually breaks. |
-| [plan-streaming-followups.md](./plan-streaming-followups.md) | What the streaming work suggested changing around it, eight proposals ranked, with a second reviewer's reordering: reification audit across replay first, bounded observation by bytes second, ordering proofs third; two proposals rejected. |
-| [plan-two-decisions.md](./plan-two-decisions.md) | Two questions for the owner, framed with options and a recommendation each: whether wire tags and persisted keys should derive from the package name (item 55), and whether a cut-short delegation should say so to its parent (item 50). |
+| [plan-next-milestone.md](./plan-next-milestone.md) | Usage and release work: a daily review consumer, an observed newcomer, public API review and journal compatibility. The owner declined its proposed feature freeze; these do not gate the implementation backlog. |
+| [plan-streaming.md](./plan-streaming.md) | Completed P1–P5: submission streams, argument deltas, delegated events, retention measurement and adapter coverage. |
+| [plan-streaming-followups.md](./plan-streaming-followups.md) | Streaming follow-ups: journal outcome fidelity, observation bounds, subscription ordering, lifecycle and A2A policy shipped. Client capability discovery remains a proposal (live item 86); nameless fragments await a provider reproduction. |
+| [plan-two-decisions.md](./plan-two-decisions.md) | Decisions shipped: freeze existing wire/storage identifiers, and report interrupted delegation as a typed failure carrying partial output. Also records the explicit triggers for parked work. |
 | [remaining-work-closed.md](./remaining-work-closed.md) | The ledger: every entry the live list has closed, verbatim, with its reasoning and its `verify:` lines still checked. Nothing in it is next. |
 | [transport.md](./transport.md) | Reference for how a session crosses a process boundary: the client seam and every transport over it. |
 
@@ -62,32 +63,26 @@ workerd through miniflare). Each file carries its own status line, and
 | document | what it is |
 | --- | --- |
 | [plan-primitives.md](./plan-primitives.md) | The strategic frame: the six ecosystem targets are three axes, which of them need new primitives, and reference implementations as acceptance criteria. **Read this first of the six.** |
-| [plan-mcp-frontend.md](./plan-mcp-frontend.md) | Growing `/mcp`'s outbound half from one blocking tool into a real frontend — start/await, elicitation, resources, cancellation. |
+| [plan-mcp-frontend.md](./plan-mcp-frontend.md) | Host tools, resources and finite durable-backed event reads ship. Skill prompts need permission-aware loading; progress and resource subscriptions remain constrained upstream. |
 | [research-code-mode.md](./research-code-mode.md) | Code mode — one `execute` tool over a confined interpreter — as opencode and executor each implement it, and how it would fit here. |
 | [research-tool-sources.md](./research-tool-sources.md) | Turning OpenAPI, GraphQL, MCP, WebMCP, CLIs and typed SDKs into tools: the source seam, three tiers of type safety, laziness, and auth. |
-| [plan-tool-credentials.md](./plan-tool-credentials.md) | The credential contract for tool sources (method / binding / provider, `Redacted` end to end, invariants), its shipped single-user slice, and the one kernel decision the multi-user half is blocked on. |
-| [plan-integrations.md](./plan-integrations.md) | Sandboxes, channels, stores and deployment providers — matching Flue's reach with a conformance suite and lifts instead of code generation. |
+| [plan-tool-credentials.md](./plan-tool-credentials.md) | Implemented credential methods, per-principal bindings, providers, refresh and reauthorization over CurrentPrincipal. |
+| [plan-integrations.md](./plan-integrations.md) | Conformance suites and sandbox lifts ship. One real remote provider remains the acceptance test of the small-adapter claim; richer channel events remain open. |
 | [plan-deployment.md](./plan-deployment.md) | Node, Durable Objects, Rivet actors, Alchemy, and how a public server fronts and delegates to any of them. |
 
 ## Plans — specified, not (or only partly) implemented
 
 | document | what it is |
 | --- | --- |
-| [plan-seams.md](./plan-seams.md) | Deciding what happens *between* the parts: the budget is wrong under replay, the delegation boundary is undecided (budget, approval and principal each cross or not by accident of mechanism), injected tools have no single definition, and pairs are untested by construction. Every item is backed by a test in the tree. |
-| [plan-failure-paths.md](./plan-failure-paths.md) | Making the failure paths provable: a read of `danieljvdm/effect-agent`'s source, which crashes durable passes at named points where we could not. Failpoints, tool retry safety, cancellation and resumption as contract rows, the relay's deferred half. 48a/48b/48d/48e/48f landed; the durable mailbox is withdrawn, with the walk-through. |
 | [plan-agent-product-control-plane.md](./plan-agent-product-control-plane.md) | Persistent named-agent product/control-plane architecture: `AgentSpec -> AgentDefinition`, organizations, projects/tasks, SessionDirectory + Needs You, browser/computer, connections/OAuth, automations, artifacts, knowledge, frontend, and an ordered build sequence over the existing kernel. |
 | [plan-workbench.md](./plan-workbench.md) | A fully open-source Open WebUI/bb-class workbench with Effect-native product/runtime/UI seams: `AgentClient` stays the execution contract, `AgentEvent` drives a UI-neutral projection, and React/assistant-ui/AG-UI are replaceable edge adapters. |
-| [plan-model-capabilities.md](./plan-model-capabilities.md) | The metadata upstream's `Model` omits — vision, window, cost — and what it unblocks in compaction and `/budget`; why cross-provider option normalization is a non-goal, and where prompt caching sits. M0 and M3 (prompt caching) done, M1 written but not exported, M2/M4/M5/M6 open — **and none of it is committed yet**. |
 | [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. **Phases 1–5 landed** (the `PromptWire` codec, `content` on results and events, media through A2A/OpenAI/AG-UI, and `/blob`); steps 6 (adapters externalizing automatically) and 7 (relay) remain. |
-| [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Pi's token-budget triggering, branch summarisation and manual compaction over `/compaction` and `/tree`. **Phases 1–14 landed**; only phase 15 (provider-overflow recovery) remains, deliberately parked. |
 | [plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt) | Two features: another agent *as a model*, and spawning Claude Code / OpenCode as A2A agents. **Steps 1–4 landed** — both bridges ship, share one permission decision, and are proven against the real Claude Code and OpenCode runtimes; `examples/ref-delegation.ts` is the reference. Steps 5–7 (relay, then the `LanguageModel` adapter) remain. |
-| [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md) | Whether two third-party Effect packages belong at our host boundary. Decides a category, not just two packages: `effect-cf` is read-and-mine, not adopt; `effect-webtransport` is a falsification test of the RPC seam, not a transport. One guardrail fix stands regardless. Nothing implemented. |
-| [plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) | What to take from [effect-agent.com](https://effect-agent.com/) — the other `effect-agent`, read 2026-09-01 — and what to leave. Finds a convergent turn model and six gaps: onboarding, run-policy completeness (`maxToolCalls`, `maxDuration`, a `Final` decision), shipped contracts, the Cloudflare host, typed input, rendered pages. Ranked in §2; items 36–45, now mostly in [remaining-work-closed.md](./remaining-work-closed.md). |
+| [plan-effect-cf-and-webtransport.md](./plan-effect-cf-and-webtransport.md) | effect-cf adopted at the Cloudflare host boundary by owner decision. WebTransport remains closed until a caller needs it. |
 | [plan-effect-uai-integration.md](./plan-effect-uai-integration.md) | Comparison with `betalyra/effect-uai` and a staged interoperability plan: borrow its compatibility/loss-accounting, provider-data, Toolkit ergonomics, recipes and workspace lessons; adapt effect-uai behind Effect AI's `LanguageModel.make` first; then reuse search/RAG/sandbox/browser capabilities; defer a deeper replaceable AI substrate until adapter evidence demands it. |
+| [plan-effect-uai-compatibility-contract.md](./plan-effect-uai-compatibility-contract.md) | Phase 0 of the plan above, done: the Effect AI <-> effect-uai translation contract read against `@effect-uai/core@0.14.0`. Conformance rows with an exact/degraded/unsupported policy each, a decided refusal mapping, and four findings that fix the adapter's shape -- the model id binds at construction, `generateText` must drain `streamTurn` because effect-uai's reasoning item has no text field, Effect AI's incremental-request fields have no counterpart, and non-image files are unsupported both ways. Item 89. |
 | [plan-run-stream-start.md](./plan-run-stream-start.md) | Take the best run-oriented ergonomics without flattening Affe's execution model: keep `Agent.run`; add scoped `Agent.start` with bounded process-local replay and one-shot `Agent.stream`; add a producer-side tool-progress byte ceiling, stable exhaustion classification/presets, and (only if missing) a raw operational recovered-tool-failure observer. |
-| [plan-input-default.md](./plan-input-default.md) | Every agent has an input and the prompt is the default: removes the `Input = never` conditional behind typed input, collapses the wire to one shape, then does the same for output. Specified 2026-09-02, not started; item 46. |
-| [plan-rfc-286-durable.md](./plan-rfc-286-durable.md) | What to take from their "any Workflow engine" RFC: retry safety declared on the tool (the one real gap), the verified resume-before-suspension race in the pinned engine, and dispatch intents for the Durable Object host. Specified 2026-09-02; item 47. |
-| [plan-relay.txt](./plan-relay.txt) | A secure addressable transport for services behind NAT, as an `RpcClient.Protocol`. Sixteen phases. |
+
 | [opencode-completion-plan.md](./opencode-completion-plan.md) · [effect-plan-2.txt](./effect-plan-2.txt) | A design brief for `SessionInbox` / `ProcessManager`; the second is the tree-annotated revision with the implementation order. **§27 `SessionProjection` landed 2026-09-01** as `/sessions`; the rest was ranked as items 26l–26p, all shipped and in [remaining-work-closed.md](./remaining-work-closed.md). |
 
 ## Plans — landed
@@ -97,6 +92,14 @@ Kept because they record *why*, not because there is work left in them. See
 
 | document | what it built |
 | --- | --- |
+| [plan-seams.md](./plan-seams.md) | Completed: replay-safe budgeting, delegation inheritance, injected-tool definitions, combination tests, Agent.Any and executable documentation claims. |
+| [plan-failure-paths.md](./plan-failure-paths.md) | Completed items 48a–48f: retry safety, failpoints, settlement verification, client conformance and relay lifecycle. Durable mailbox withdrawn. |
+| [plan-model-capabilities.md](./plan-model-capabilities.md) | Completed M0–M6: exported metadata, compaction budgets, caching, cost accounting, capability preflight and model-selection example. |
+| [plan-branching-and-compaction.md](./plan-branching-and-compaction.md) | Phases 1–14 and measured rollover/overflow handling ship. Provider-refusal recovery reopens only when adapters expose a structured overflow code. |
+| [plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) | Completed comparison actions: onboarding, loop limits, contracts, typed input, Cloudflare entry and isolate executor. Remaining live deployment evidence is item 19. |
+| [plan-input-default.md](./plan-input-default.md) | Completed: prompt/text defaults, typed wire input/output and guides. Duplicating default prompt input in journals was deliberately declined. |
+| [plan-rfc-286-durable.md](./plan-rfc-286-durable.md) | Completed: retry safety, the early-answer race test and Durable Object dispatch intents (item 47). |
+| [plan-relay.txt](./plan-relay.txt) | Relay implementation completed: authenticated routing, leases, reconnection, enrollment and RPC conformance. Bridge-specific integration evidence is live item 84. |
 | [plan-opencode-tools-port.md](./plan-opencode-tools-port.md) | `/coding` — opencode's tool engineering. |
 | [plan-pi-toolkit.md](./plan-pi-toolkit.md) | `/pi` — a second toolkit with Pi's contracts. |
 | [plan-shell-tool.md](./plan-shell-tool.md) | The `shell` tool: dialect-aware, resolved at construction, in both batteries. |

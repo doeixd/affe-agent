@@ -50,6 +50,10 @@ deletion.
 
 ## 3. Refusals happen at first use
 
+**Still a proposal (audit 2026-09-08, live item 86).** This section was not
+implemented by the streaming series. Its dependency/host negotiation contract
+must be decided before introducing a capability record.
+
 A durable client with no log refuses `stream`; the HTTP client refuses
 `events({ after })`. Honest, and late: a deployment learns at the first
 request. *Proposal:* a capability record on the client (`resumesEvents`,
@@ -169,7 +173,7 @@ row. Interruption's row is the existing "interrupts a run and reports it".
 
 ## Code review of the series (2026-09-07)
 
-With every item shipped, the code of every seam the series touched was
+With the accepted implementation items shipped, the code of every seam the series touched was
 read twice: by me, and by the second reviewer with the code inlined
 (`gpt-6-astra`, about 60 KB of source, the invariants stated, the existing
 rows listed). It found seven disagreements between the code and the

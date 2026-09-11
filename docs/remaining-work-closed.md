@@ -2190,6 +2190,232 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
     verify: grep "One result per call, in the calls' order" src/ToolExecution.ts
     ```
 
+## Historical live-list sections moved on 2026-09-08
+
+88. **Finite durable-backed host event reads — DONE 2026-09-08.**
+    A durable session with a delivery log supplies `RemoteSession.eventLog`;
+    the host uses it after authorization and lookup, including after host
+    recreation. Oldest/latest and cursor-selected events describe one snapshot.
+    Storage failure propagates; absent readers retain the bounded live tail.
+    The recovery row was broken once by removing delegation, and the inferred
+    public effect type was broken once by expecting an empty error channel.
+
+    ```text
+    verify: grep "readonly eventLog?:" src/client/AgentClient.ts
+    verify: grep "DurableAgentClient.eventLog" src/durable/DurableAgentClient.ts
+    verify: grep "return yield* hosted.session.eventLog" src/client/internal/sessionHost.ts
+    verify: grep "a recreated host reads the durable event log beyond its live tail" test/DurableAgentClient.test.ts
+    verify: exists test/fixtures/durable-event-log.json
+    ```
+
+    Written 2026-09-08 and left uncommitted; landed 2026-09-11 with a
+    recorded fixture of what a host created after the fact reads of one
+    durable prompt, which fails with the host's use of the reader disabled.
+
+Preserved verbatim below. Their open-sounding sentences describe their writing
+date; later closures and the live list determine current work.
+
+### Newly ranked — from the effect-agent.com comparison (2026-09-01)
+
+[plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) read
+the other `effect-agent` (danieljvdm's, the `effect-cf` author's) against
+what ships here and found a convergent turn model, a much broader surface on
+our side, and six gaps worth closing. Its §2 carries the full ranking with
+sizes; the items are repeated here so this list stays the one tracker.
+
+    **Closed 2026-09-04 by `plan-input-default.md` step 5.** `RemoteResult`
+    and `Outcome` had gained an opaque encoded `value` decoded at the edge with
+    the agent's output schema (`AgentClient.typedSession`, 48f); step 5 made
+    it uniform. Every agent has a `Value` -- its text unless it declares an
+    `AgentOutput` -- so every completed result carries one on the wire and in
+    the journal, an untyped agent's is its text, and a caller generic over
+    agents reads a value from all of them. `test/InputWire.test.ts` pins the
+    wire change as exactly the added field.
+
+47. ~~**What to take from their Workflow RFC**~~ **COMPLETE 2026-09-06**
+    (`plan-rfc-286-durable.md`, 2026-09-02): 47a shipped as 48a, 47b answered,
+    47c shipped. Kept until the next audit moves it to the ledger whole. A read of `danieljvdm/effect-agent#286` against `/durable`.
+    Their headline goal — any `WorkflowEngine` as a `Layer` — is where
+    `/durable` started, so most of the RFC is not a gap for us. Three items
+    are, ranked in the plan's §2:
+    - **47a.** ~~**Retry safety declared on the tool.**~~ **SHIPPED as 48a,
+      2026-09-03**, read from `Tool.Idempotent` rather than a field of our
+      own. The original framing, kept for the record: the one real correctness
+      gap. `DurableToolkit` wraps every handler as an `Activity`, and
+      upstream's `Activity` retries an *interrupted* effect up to ten times
+      (`retryOnInterrupt`, `Schedule.while(attempt <= 10 && hasInterrupts)`) —
+      so a tool interrupted mid-request reissues it, which nothing in our code
+      asked for. A tool should declare `retrySafe` where it already declares
+      `needsApproval`, defaulting to today's behaviour; a non-retry-safe tool
+      whose outcome is unresolved parks the submission the way an `Ask` does,
+      using `DurableDeferred` machinery we already have. Ranked above most of
+      what is left in this list.
+    - **47b.** ~~**The resume-before-suspension race.**~~ **Answered
+      2026-09-02: it does not reach us.** The race is real in the pinned
+      engine, and the indirection saves us. Pinned by "an answer that arrives
+      before the workflow suspends is not lost" in `test/Durable.test.ts`,
+      which answers an elicitation immediately after launch, while the run is
+      still in its first model call; broken once by deleting the answer, which
+      parks the submission and reports exactly that. Original scope: verified
+      present in the
+      pinned engine: `ClusterWorkflowEngine.resume` returns silently when the
+      execution has not yet recorded a `Suspended` reply
+      (`ClusterWorkflowEngine.ts:273`). We never call it directly and reach it
+      only through `DurableDeferred`, whose engine path looks more careful, so
+      the answer may be "we are fine" — but that is worth *testing* rather
+      than assuming. One test: answer an elicitation before the run awaits it.
+    - **47c. Dispatch intents for the Durable Object host.** ~~open~~
+      **SHIPPED 2026-09-06.** An intent row beside every dispatched alarm in
+      one native transaction; the run's settlement marks it `settled` in the
+      same SQL transaction as the history it settles; the alarm handler reads
+      the intent before doing anything. `test/WorkerDispatchIntents.test.ts`
+      kills the runtime at both boundaries on workerd and the job runs exactly
+      once. Host-local: `src/durable` did not change.
+
+48. ~~**Making the failure paths provable**~~ **COMPLETE 2026-09-06**
+    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03): 48a
+    through 48f all shipped, 48c last. Kept until the next audit moves it to
+    the ledger whole. A read of
+    their *source* rather than their RFC, plus the relay's own post-commit
+    review. The finding is not a missing feature: their durable tests can
+    crash a pass at a named point and ours cannot, so every "what if the
+    process dies here" question in `/durable`, `/cluster` and `/relay` is
+    currently answered by reading the code. This session is the example --
+    the relay review found two real defects and the test written for them
+    passes with the fix removed. Ranked in that plan's §2:
+    - **48a. Retry safety on the tool** -- ~~open~~ **SHIPPED 2026-09-03**
+      (`8c46e3a`). Read from `Tool.Idempotent` rather than a `retrySafe` field
+      of our own: the annotation already means exactly this, is emitted as the
+      MCP `idempotentHint`, and defaults to `false`, which is the safe default.
+      An interrupted non-idempotent handler journals `Unresolved` as a
+      *success* of the activity, which is what stops the reissue -- the cause
+      the retry schedule inspects no longer has interrupts -- and also stops a
+      replay from running it. Raised as `DurableToolUnresolvedError`.
+      Deliberately a behaviour change for every existing agent. The window it
+      does not close, stated in the code: a process that dies before the
+      engine persists that entry leaves the call unjournalled. At-most-once
+      for interruption, not for power loss.
+    - **48b. Failpoints** -- ~~open~~ **SHIPPED 2026-09-03** (`de132b4`).
+      `src/internal/failpoint.ts` is the seam, `src/testing/Failpoints.ts` the
+      half a test provides. `DeliveryLog.append` is instrumented in both
+      implementations with `before-commit` / `after-commit`, and the test that
+      matters crashes the SQL log after the commit: the row is there once, the
+      retry is a `Duplicate`, and the next event is 2 rather than 3, because a
+      crash must not burn an offset. Removing the boundary makes it fail.
+      Still to point it at, from this plan's §3.2: the model-call boundary in
+      `DurableSubmission`, and the relay's teardown.
+    - **48c. Never acknowledge on the engine's word** -- ~~open~~ **SHIPPED
+      2026-09-06.** `DurableAgentClient` reads the session record after the
+      workflow reports a submission settled: a record that still holds the
+      submission's claim is a disagreement, the caller gets a retryable
+      `AgentTransportError` naming it, and the claim -- the intent -- is
+      retained. `test/DurableAgentClient.test.ts` proves it with a store whose
+      `finish` reports success and writes nothing; broken once. `RelayRpc`'s
+      finalizer carries the comment tying it to the same rule. 47c gets the
+      discipline by construction when it lands.
+    - **48d. Cancellation belongs in `AgentClientConformance`** -- ~~open~~
+      **SHIPPED 2026-09-03** (`351b1e4`), with two corrections to this plan.
+      The row is about *interruption*, not teardown: an earlier draft closed
+      the client's scope, which tests the harness rather than the client,
+      because every harness builds its server or workflow engine into the
+      same layer -- and for durable that hangs uninterruptibly on an in-flight
+      activity, which is the engine behaving correctly. And it covers
+      **three** implementations, not five: in-process, HTTP and durable. RPC
+      and the relay do not run the contract, so **the row does not guard the
+      relay, the implementation that had the bug**. Its evidence is instead a
+      falsification in `ShippedConformance`, checked in both directions.
+    - **48f. An `AgentClient` over Effect RPC** -- ~~open~~ **SHIPPED
+      2026-09-03** (`3010a13`). `AgentRpc.agentClientFrom` /
+      `agentClientLayer`. RPC and the relay now run the contract, so it
+      covers five implementations rather than three, the relay's twenty rows
+      crossing two nodes and a real WebSocket.
+
+      Two findings on the way. The delta row stopped collecting when `prompt`
+      returned -- an in-process assumption, since over a wire the deltas
+      travel on a separate response -- so it now collects until
+      `SubmissionCompleted`. With that fixed HTTP passes the row it had opted
+      out of, so `observesStreamDeltas` is retired: its stated reason (SSE
+      connect latency) was wrong, and streaming deltas over HTTP had simply
+      never been tested.
+
+      **And a correction.** Reverting `RelayRpc.clientProtocol`'s in-flight
+      settling finalizer leaves all twenty rows green, and also leaves a
+      targeted teardown test green -- checked with a unary prompt and with a
+      streamed response open, which is the shape 26p's trace describes. That
+      finalizer is therefore defensive code whose necessity is **unproven**,
+      not the fix `2d65ccf` claimed it was. The likelier explanation is that
+      the other half of that commit -- taking the `events` subscription
+      before the prompt rather than after -- is what removed the hang.
+    - **48e. The relay's deferred half** -- **COMPLETE 2026-09-03**: lease
+      expiry (`a2288f2`), reconnection (`1663fd9`) and enrollment (`3b92ead`),
+      which puts a store behind the same `RelayAuthenticator` seam and keeps
+      only a SHA-256 of each token, so a reader of the table cannot become the
+      node. It forced a widening worth knowing about: `AuthenticatorService`
+      now carries `StorageError` beside `RelayUnauthorizedError`, because
+      unauthorized is *terminal* on the client, and reporting a database blip
+      as a bad credential would take a whole fleet offline over a transient.
+      The durable mailbox is **withdrawn** -- see the plan's §3.5, which walks
+      through why queueing a request for an offline peer delivers work to a
+      caller that was told an hour earlier it had failed. The relay also
+      cannot classify frames without parsing them, which is the property that
+      keeps it a transport. What survives of the idea is notification-only
+      delivery, opted into by the sender, and nothing currently needs it.
+
+      Reconnection was small because of two upstream facts worth not
+      re-deriving: `makeProtocolSocket` already retries its socket and clears
+      its error on open, so the RPC client heals; and it never replays
+      requests, so the long-lived `listen` stream stays dead and re-issuing it
+      is nearly the whole job. The relay holds no per-endpoint subscription
+      state, so handlers need no re-registration.
+
+      The rule that matters: **the reason for an ending decides whether to
+      retry.** A superseded connection must not come back, or two nodes
+      sharing an identity flap forever, each superseding the other; an
+      unauthorized one must not either. The initial connection is still not
+      retried, because a layer that hangs on a typo is worse than one that
+      fails. In-flight requests are settled on a drop, which is 48c's rule in
+      its second home and is forced rather than chosen -- the far end releases
+      its client when its send is refused, so the response is genuinely gone.
+
+      The lease is renewed by any traffic, not only `heartbeat`, and is
+      evaluated when the relay is already doing something rather than by a
+      reaper fibre -- whoever asks is the one who collects, so the answer a
+      caller gets and the state the relay holds cannot disagree. Both halves
+      had to land together: `RelayClient` heartbeated once at startup, so
+      expiry alone would have dropped every node that was merely quiet.
+
+    Recorded there so it is not re-derived: our submission idempotency key is
+    already identity-based rather than input-based, which is the property
+    their RFC is careful about; and their no-Activities, canonical-records
+    bet is deliberately *not* taken, because our `DeliveryLog` deduplicates
+    by semantic key precisely since we replay.
+
+### In flight (2026-09-01)
+
+Items 28 and 29 **landed while this section was being written** — `230745d`
+(`feat(output)`) and `efc3306` (`feat(code): CallScript behind the executor
+seam`). They are kept below, struck, rather than deleted, because the entry
+records what shipped and the next audit should not have to re-derive it.
+
+Items 27 and 30 are in the ledger.
+
+### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
+
+60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons
+    from the other `effect-agent`'s durable context-window rollover
+    (`danieljvdm/effect-agent#335`), each mapped to a seam we have. The plan
+    ranks and sequences them; the entries below are the slices, in the order
+    to work them, each pinned on its *open* state so the checker turns red
+    the moment one lands and its text has to move to the ledger.
+
+60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
+    re-proposes them: their fourteen-knob `AgentPolicy` object (our limits
+    and budget compose without one), working notes over memory ports (no
+    port asks for it yet), and a bot review with a cost ceiling.
+
+    **Design, from comparing the two** (the plan's §5): their coherence
+    without their centre.
+
 ### Tool exposure, terminal work and failure routes — 2026-09-10
 
 91. ~~**Exclusive terminal batches (plan E1, §5).**~~ — landed 2026-09-10.

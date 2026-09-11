@@ -4,6 +4,11 @@ Written 2026-09-01.
 
 **Status: specified, not implemented.**
 
+Audit 2026-09-08: W0–W9 are tracked as live item 81 and coordinated with the
+persistent-agent control plane (item 82). The existing `SessionProjection` and
+`SessionDirectory` are reusable execution views; product conversation identity
+and the browser presenter still belong to this application.
+
 This plan defines a polished, fully open-source web application around
 `affe-agent`: a general-purpose agent workbench in the product class
 of Open WebUI and bb, but with `affe-agent` as the execution kernel rather

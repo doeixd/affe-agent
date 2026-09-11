@@ -4,6 +4,12 @@ Written 2026-09-03.
 
 **Status: specified, not implemented.**
 
+Audit 2026-09-08: tracked as live item 82, coordinated with workbench item 81.
+Reuse the shipped `/sessions` directory (memory/SQL) and event projection in
+the product's Phase 1. `SessionInbox` supplies background input; it does not
+implement the human-facing Needs You projection. Product identities, agent
+revisions, resolver and web shell remain unbuilt in this checkout.
+
 This plan turns `affe-agent` into the execution substrate of a
 persistent AI-worker product in the product class of Grok Bot, Squad,
 Perplexity Computer and similar systems.

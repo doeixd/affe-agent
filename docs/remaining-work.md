@@ -67,10 +67,14 @@ means an entry closed since the split and not yet moved; move it. Item
 numbers are stable across the two files and are never reused, so a plan
 that cites "item 41" and finds no 41 here will find it in the ledger.
 
+Audit 2026-09-08: the product plans and omitted integration tails are now
+tracked below. Historical closed sections moved to the ledger. The recorded
+owner decision permits continued feature work.
+
 ## Ranked
 
-Ordered by user-visible value per unit of work. Each row says why it is still
-open, so the next pass does not have to re-derive it.
+Grouped by dependencies, implementation and usage evidence. Each row says why
+it is still open, so the next pass does not have to re-derive it.
 
 ### Larger, correctly parked
 
@@ -131,206 +135,120 @@ open, so the next pass does not have to re-derive it.
     budget; rendered prompts on a caller that needs runtime workspace, model
     or task values in its prompt. None is built speculatively.
     **`plan-primitives.md` steps 1–5 are complete.**
-### Newly ranked — from the effect-agent.com comparison (2026-09-01)
+### Product work restored to the tracker — 2026-09-08
 
-[plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) read
-the other `effect-agent` (danieljvdm's, the `effect-cf` author's) against
-what ships here and found a convergent turn model, a much broader surface on
-our side, and six gaps worth closing. Its §2 carries the full ranking with
-sizes; the items are repeated here so this list stays the one tracker.
+81. **Workbench W0–W9** ([plan-workbench.md](./plan-workbench.md)).
+    First W0: conversation identity/store, a directory over an existing
+    `AgentClient`, a pure conversation projection and scoped presenter, then
+    a plain browser client proving streaming, interruption, elicitation and
+    reconnect. W1 adds persistence; later milestones add complete chat,
+    workspace inspection, artifacts, agent configuration, connections,
+    knowledge/projects and distribution. Build outside the portable kernel.
+    No workbench app exists in this checkout; an external implementation must
+    be linked here before this entry can close.
 
-    **Closed 2026-09-04 by `plan-input-default.md` step 5.** `RemoteResult`
-    and `Outcome` had gained an opaque encoded `value` decoded at the edge with
-    the agent's output schema (`AgentClient.typedSession`, 48f); step 5 made
-    it uniform. Every agent has a `Value` -- its text unless it declares an
-    `AgentOutput` -- so every completed result carries one on the wire and in
-    the journal, an untyped agent's is its text, and a caller generic over
-    agents reads a value from all of them. `test/InputWire.test.ts` pins the
-    wire change as exactly the added field.
+    ```text
+    verify: absent apps/workbench
+    ```
 
-47. ~~**What to take from their Workflow RFC**~~ **COMPLETE 2026-09-06**
-    (`plan-rfc-286-durable.md`, 2026-09-02): 47a shipped as 48a, 47b answered,
-    47c shipped. Kept until the next audit moves it to the ledger whole. A read of `danieljvdm/effect-agent#286` against `/durable`.
-    Their headline goal — any `WorkflowEngine` as a `Layer` — is where
-    `/durable` started, so most of the RFC is not a gap for us. Three items
-    are, ranked in the plan's §2:
-    - **47a.** ~~**Retry safety declared on the tool.**~~ **SHIPPED as 48a,
-      2026-09-03**, read from `Tool.Idempotent` rather than a field of our
-      own. The original framing, kept for the record: the one real correctness
-      gap. `DurableToolkit` wraps every handler as an `Activity`, and
-      upstream's `Activity` retries an *interrupted* effect up to ten times
-      (`retryOnInterrupt`, `Schedule.while(attempt <= 10 && hasInterrupts)`) —
-      so a tool interrupted mid-request reissues it, which nothing in our code
-      asked for. A tool should declare `retrySafe` where it already declares
-      `needsApproval`, defaulting to today's behaviour; a non-retry-safe tool
-      whose outcome is unresolved parks the submission the way an `Ask` does,
-      using `DurableDeferred` machinery we already have. Ranked above most of
-      what is left in this list.
-    - **47b.** ~~**The resume-before-suspension race.**~~ **Answered
-      2026-09-02: it does not reach us.** The race is real in the pinned
-      engine, and the indirection saves us. Pinned by "an answer that arrives
-      before the workflow suspends is not lost" in `test/Durable.test.ts`,
-      which answers an elicitation immediately after launch, while the run is
-      still in its first model call; broken once by deleting the answer, which
-      parks the submission and reports exactly that. Original scope: verified
-      present in the
-      pinned engine: `ClusterWorkflowEngine.resume` returns silently when the
-      execution has not yet recorded a `Suspended` reply
-      (`ClusterWorkflowEngine.ts:273`). We never call it directly and reach it
-      only through `DurableDeferred`, whose engine path looks more careful, so
-      the answer may be "we are fine" — but that is worth *testing* rather
-      than assuming. One test: answer an elicitation before the run awaits it.
-    - **47c. Dispatch intents for the Durable Object host.** ~~open~~
-      **SHIPPED 2026-09-06.** An intent row beside every dispatched alarm in
-      one native transaction; the run's settlement marks it `settled` in the
-      same SQL transaction as the history it settles; the alarm handler reads
-      the intent before doing anything. `test/WorkerDispatchIntents.test.ts`
-      kills the runtime at both boundaries on workerd and the job runs exactly
-      once. Host-local: `src/durable` did not change.
+82. **Persistent-agent control plane, Phase 0–8**
+    ([plan-agent-product-control-plane.md](./plan-agent-product-control-plane.md)).
+    Coordinate with 81: first `AgentSpec`/`AgentRevision`, an in-memory
+    registry and a resolver through public APIs; revision N must keep running
+    unchanged after N+1 is created. Then product persistence, tasks/Needs You,
+    browser/computer, connections/OAuth, automation, artifacts and knowledge.
+    Reuse the existing session directory and projection. `SessionInbox` is
+    background input, not the product's human approval inbox. Neither product
+    plan justifies a second execution runtime.
 
-48. ~~**Making the failure paths provable**~~ **COMPLETE 2026-09-06**
-    ([plan-failure-paths.md](./plan-failure-paths.md), 2026-09-03): 48a
-    through 48f all shipped, 48c last. Kept until the next audit moves it to
-    the ledger whole. A read of
-    their *source* rather than their RFC, plus the relay's own post-commit
-    review. The finding is not a missing feature: their durable tests can
-    crash a pass at a named point and ours cannot, so every "what if the
-    process dies here" question in `/durable`, `/cluster` and `/relay` is
-    currently answered by reading the code. This session is the example --
-    the relay review found two real defects and the test written for them
-    passes with the fix removed. Ranked in that plan's §2:
-    - **48a. Retry safety on the tool** -- ~~open~~ **SHIPPED 2026-09-03**
-      (`8c46e3a`). Read from `Tool.Idempotent` rather than a `retrySafe` field
-      of our own: the annotation already means exactly this, is emitted as the
-      MCP `idempotentHint`, and defaults to `false`, which is the safe default.
-      An interrupted non-idempotent handler journals `Unresolved` as a
-      *success* of the activity, which is what stops the reissue -- the cause
-      the retry schedule inspects no longer has interrupts -- and also stops a
-      replay from running it. Raised as `DurableToolUnresolvedError`.
-      Deliberately a behaviour change for every existing agent. The window it
-      does not close, stated in the code: a process that dies before the
-      engine persists that entry leaves the call unjournalled. At-most-once
-      for interruption, not for power loss.
-    - **48b. Failpoints** -- ~~open~~ **SHIPPED 2026-09-03** (`de132b4`).
-      `src/internal/failpoint.ts` is the seam, `src/testing/Failpoints.ts` the
-      half a test provides. `DeliveryLog.append` is instrumented in both
-      implementations with `before-commit` / `after-commit`, and the test that
-      matters crashes the SQL log after the commit: the row is there once, the
-      retry is a `Duplicate`, and the next event is 2 rather than 3, because a
-      crash must not burn an offset. Removing the boundary makes it fail.
-      Still to point it at, from this plan's §3.2: the model-call boundary in
-      `DurableSubmission`, and the relay's teardown.
-    - **48c. Never acknowledge on the engine's word** -- ~~open~~ **SHIPPED
-      2026-09-06.** `DurableAgentClient` reads the session record after the
-      workflow reports a submission settled: a record that still holds the
-      submission's claim is a disagreement, the caller gets a retryable
-      `AgentTransportError` naming it, and the claim -- the intent -- is
-      retained. `test/DurableAgentClient.test.ts` proves it with a store whose
-      `finish` reports success and writes nothing; broken once. `RelayRpc`'s
-      finalizer carries the comment tying it to the same rule. 47c gets the
-      discipline by construction when it lands.
-    - **48d. Cancellation belongs in `AgentClientConformance`** -- ~~open~~
-      **SHIPPED 2026-09-03** (`351b1e4`), with two corrections to this plan.
-      The row is about *interruption*, not teardown: an earlier draft closed
-      the client's scope, which tests the harness rather than the client,
-      because every harness builds its server or workflow engine into the
-      same layer -- and for durable that hangs uninterruptibly on an in-flight
-      activity, which is the engine behaving correctly. And it covers
-      **three** implementations, not five: in-process, HTTP and durable. RPC
-      and the relay do not run the contract, so **the row does not guard the
-      relay, the implementation that had the bug**. Its evidence is instead a
-      falsification in `ShippedConformance`, checked in both directions.
-    - **48f. An `AgentClient` over Effect RPC** -- ~~open~~ **SHIPPED
-      2026-09-03** (`3010a13`). `AgentRpc.agentClientFrom` /
-      `agentClientLayer`. RPC and the relay now run the contract, so it
-      covers five implementations rather than three, the relay's twenty rows
-      crossing two nodes and a real WebSocket.
+    ```text
+    verify: exists src/sessions/SessionDirectory.ts
+    verify: exists src/sessions/SessionProjection.ts
+    verify: exists src/sessions/SessionInbox.ts
+    ```
 
-      Two findings on the way. The delta row stopped collecting when `prompt`
-      returned -- an in-process assumption, since over a wire the deltas
-      travel on a separate response -- so it now collects until
-      `SubmissionCompleted`. With that fixed HTTP passes the row it had opted
-      out of, so `observesStreamDeltas` is retired: its stated reason (SSE
-      connect latency) was wrong, and streaming deltas over HTTP had simply
-      never been tested.
+### Integration and design work recovered from plan tails — 2026-09-08
 
-      **And a correction.** Reverting `RelayRpc.clientProtocol`'s in-flight
-      settling finalizer leaves all twenty rows green, and also leaves a
-      targeted teardown test green -- checked with a unary prompt and with a
-      streamed response open, which is the shape 26p's trace describes. That
-      finalizer is therefore defensive code whose necessity is **unproven**,
-      not the fix `2d65ccf` claimed it was. The likelier explanation is that
-      the other half of that commit -- taking the `events` subscription
-      before the prompt rather than after -- is what removed the hang.
-    - **48e. The relay's deferred half** -- **COMPLETE 2026-09-03**: lease
-      expiry (`a2288f2`), reconnection (`1663fd9`) and enrollment (`3b92ead`),
-      which puts a store behind the same `RelayAuthenticator` seam and keeps
-      only a SHA-256 of each token, so a reader of the table cannot become the
-      node. It forced a widening worth knowing about: `AuthenticatorService`
-      now carries `StorageError` beside `RelayUnauthorizedError`, because
-      unauthorized is *terminal* on the client, and reporting a database blip
-      as a bad credential would take a whole fleet offline over a transient.
-      The durable mailbox is **withdrawn** -- see the plan's §3.5, which walks
-      through why queueing a request for an offline peer delivers work to a
-      caller that was told an hour earlier it had failed. The relay also
-      cannot classify frames without parsing them, which is the property that
-      keeps it a transport. What survives of the idea is notification-only
-      delivery, opted into by the sender, and nothing currently needs it.
+*(83 and 84 were written here on 2026-09-08 and never committed; the same
+work was ranked again on 2026-09-11 as items 116 and 114–115, which carry
+it now.)*
 
-      Reconnection was small because of two upstream facts worth not
-      re-deriving: `makeProtocolSocket` already retries its socket and clears
-      its error on open, so the RPC client heals; and it never replays
-      requests, so the long-lived `listen` stream stays dead and re-issuing it
-      is nearly the whole job. The relay holds no per-endpoint subscription
-      state, so handlers need no re-registration.
+85. **MCP frontend remainder.** Finite durable-backed reads landed as item 88
+    (ledger). Skills as prompts still need an authenticated permission-aware
+    load path. Resource subscriptions, progress and native HTTP elicitation
+    remain tied to the pinned upstream server's capabilities; do not implement
+    an authorization bypass to fill the prompt surface.
 
-      The rule that matters: **the reason for an ending decides whether to
-      retry.** A superseded connection must not come back, or two nodes
-      sharing an identity flap forever, each superseding the other; an
-      unauthorized one must not either. The initial connection is still not
-      retried, because a layer that hangs on a typo is worse than one that
-      fails. In-flight requests are settled on a drop, which is 48c's rule in
-      its second home and is forced rather than chosen -- the far end releases
-      its client when its send is refused, so the response is genuinely gone.
+86. **Client capability discovery: resolve the proposal.**
+    `plan-streaming-followups.md` §3 proposes construction-time streaming and
+    replay capabilities. Its later "every item shipped" claim does not cover
+    this proposal: the conformance suite still takes options. Decide the
+    dependency/host negotiation contract before changing the public interface.
+    The proposals to shrink `RemoteSession` and encode delegated envelopes
+    opaquely were rejected, not unfinished implementation.
 
-      The lease is renewed by any traffic, not only `heartbeat`, and is
-      evaluated when the relay is already doing something rather than by a
-      reaper fibre -- whoever asks is the one who collects, so the answer a
-      caller gets and the state the relay holds cannot disagree. Both halves
-      had to land together: `RelayClient` heartbeated once at startup, so
-      expiry alone would have dropped every node that was merely quiet.
+    ```text
+    verify: grep "readonly resumesEvents?: boolean" src/testing/AgentClientConformance.ts
+    verify: grep "readonly streamsSubmissions?: boolean" src/testing/AgentClientConformance.ts
+    ```
 
-    Recorded there so it is not re-derived: our submission idempotency key is
-    already identity-based rather than input-based, which is the property
-    their RFC is careful about; and their no-Activities, canonical-records
-    bet is deliberately *not* taken, because our `DeliveryLog` deduplicates
-    by semantic key precisely since we replay.
+87. **Description extensions, gated on a consumer.**
+    `plan-context-lessons.md` §5.2: compaction policy descriptions, a wire
+    schema for agent descriptions, and `describe_myself`. Loop/permission
+    descriptions and `Agent.describe` already ship. The wire form waits for
+    an actual CLI, host or product consumer.
 
-### In flight (2026-09-01)
+89. **effect-uai adapter: Phase 2 streaming acceptance, then the rest of Phase 3.**
+    Phases 0 and 1 landed 2026-09-08:
+    [plan-effect-uai-compatibility-contract.md](./plan-effect-uai-compatibility-contract.md)
+    is the contract, `src/effect-uai` the adapter (`affe-agent/effect-uai`,
+    `@effect-uai/core` an optional peer), `test/EffectUaiModel.test.ts` its
+    conformance rows, and `test/EffectUaiMockProvider.test.ts` the same rows
+    against effect-uai's own fixture, so the protocol reading is checked by
+    their code rather than only by ours.
 
-Items 28 and 29 **landed while this section was being written** — `230745d`
-(`feat(output)`) and `efc3306` (`feat(code): CallScript behind the executor
-seam`). They are kept below, struck, rather than deleted, because the entry
-records what shipped and the next audit should not have to re-derive it.
+    **Phase 3's gate is cleared for the reasoning signature.**
+    `test/ProviderContinuation.test.ts` audits response -> canonical history ->
+    `PromptWire` -> snapshot/restore -> durable replay -> next request, and it
+    holds. The durable hop had no coverage before it: the existing replay test
+    compares a history shape that renders reasoning as an empty detail.
+    **Since:** Phase 2's streaming acceptance landed (`4bda60b`), and images
+    and citations cross (`86d1193`), provider options too (`81a1d6f`). What
+    Phase 3 still owes is the *other* continuation fields -- provider response
+    ids, prompt-cache metadata, provider-defined tool metadata -- and files.
 
-Items 27 and 30 are in the ledger.
+    Dynamic tools (a raw JSON schema rather than an Effect `Schema`) go through
+    the same path and have no test. No network test against a real effect-uai
+    provider exists yet, and is the strongest remaining evidence gap.
 
-### Newly ranked — from `danieljvdm/effect-agent#335` (2026-09-05)
+    ```text
+    verify: exists test/ProviderContinuation.test.ts
+    ```
 
-60. **[plan-context-lessons.md](./plan-context-lessons.md)** -- six lessons
-    from the other `effect-agent`'s durable context-window rollover
-    (`danieljvdm/effect-agent#335`), each mapped to a seam we have. The plan
-    ranks and sequences them; the entries below are the slices, in the order
-    to work them, each pinned on its *open* state so the checker turns red
-    the moment one lands and its text has to move to the ledger.
+90. **`run`/`stream`/`start` plan: P7 only, and it is adopter-triggered.**
+    [plan-run-stream-start.md](./plan-run-stream-start.md) P1–P5 landed
+    2026-09-08: `Agent.start` with a bounded replay handle, `Agent.stream`,
+    the per-submission tool-progress budget, `AgentLoop.Exhaustion` on
+    `Result` and `RunCompleted`, and `onExhaustion`.
 
-60f. **Deliberately not taken**, recorded in the plan's §3 so nobody
-    re-proposes them: their fourteen-knob `AgentPolicy` object (our limits
-    and budget compose without one), working notes over memory ports (no
-    port asks for it yet), and a bot review with a cost ceiling.
+    **P6 was audited and deliberately not built.** §8.1 asks whether telemetry
+    can already receive a recovered tool failure's original `Cause` exactly
+    once per attempt without changing run semantics; it can, through
+    `Effect.tapCause` on the handler, joined to `ToolCallFailed` on the tool
+    call id for the correlation and disposition the handler cannot see. The
+    route is documented in `guide-batteries.md`, the combinator is in
+    `examples/observability.ts`, and `test/ToolFailureObservation.test.ts` is
+    the audit as tests so the decision fails loudly if it stops being true.
+    Reopen only if something needs a failure the harness raises *around* a
+    call -- a permission denial, an approval refusal, the progress ceiling --
+    which never enters the handler and so is not tapped.
 
-    **Design, from comparing the two** (the plan's §5): their coherence
-    without their centre.
+    P7 (`*Unknown` one-shot helpers) is convenience the plan itself ranks
+    last and gates on an adopter. Not built speculatively.
+
+    ```text
+    verify: exists test/ToolFailureObservation.test.ts
+    ```
 
 ### Tool exposure, terminal work and failure routes — 2026-09-10 — [plan-exposure-and-terminal-work.md](./plan-exposure-and-terminal-work.md)
 
@@ -377,7 +295,7 @@ and pin the state it starts from.*
     `Delivered`). The two rows that could lose work were items 95 and 96.
     Open: surface the incumbent claim when `DurableAgentClient.submit`
     refuses with `AgentBusyError` rather than dropping it (T8.2, A8.2;
-    another agent has that file open), and the per-API stop-the-destination
+    unblocked 2026-09-11), and the per-API stop-the-destination
     tests (A8.1). Medium.
 
     ```text
@@ -536,8 +454,9 @@ acceptance test for 105, 107 and 108.*
 *A sweep of every plan on 2026-09-11 found these phases open in their plans
 and on no list here; the owner asked that everything open be tracked in one
 place. The workbench, control-plane, MCP-frontend and streaming-follow-up
-plans are being ranked by another agent's uncommitted edits and are not
-repeated here.*
+plans are items 81, 82, 85 and 86 above -- written 2026-09-08, left
+uncommitted in the working tree, and landed 2026-09-11 once it was clear no
+one else was working on them.*
 
 114. **A2A bridges over the relay
      ([plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt), step 5).**
@@ -571,7 +490,8 @@ repeated here.*
      Step 6: the adapters and durable stores externalize at their own
      boundary, over a threshold. Step 7: the relay carries references, not
      bytes. They rode with umbrella item 26, which closed without them.
-     Medium.
+     Before wiring either, specify in the plan who owns the threshold, the
+     access check and a blob's lifetime. Medium.
 
      ```text
      verify: no-grep "externalize" src/http/AgentHttp.ts
@@ -599,7 +519,7 @@ repeated here.*
      decided only on the evidence the plan lists; the default is to stop at
      the adapter. 4 and 5 medium; 6 a decision. What phase 3 still owes
      (provider response ids, prompt-cache and provider-defined tool
-     metadata, files) is item 89, in another agent's uncommitted edits.
+     metadata, files) is item 89.
 
      ```text
      verify: exists src/effect-uai/EffectUaiModel.ts
@@ -655,14 +575,8 @@ repeated here.*
      verify: grep "No syntax highlighting" docs/plan-tui-port.md
      ```
 
-122. **`*Unknown` run helpers
-     ([plan-run-stream-start.md](./plan-run-stream-start.md), P7).**
-     `Agent.runUnknown`, `streamUnknown` and `startUnknown`, for input typed
-     `unknown`. Adopter-triggered, lowest priority.
-
-     ```text
-     verify: no-grep "runUnknown" src/Agent.ts
-     ```
+*(122 duplicated item 90, which was written first and carries P1–P6's
+history; 90 holds it.)*
 
 123. **A ~12 s shard-lock stall when a replacement starts a moment later
      (found 2026-09-11).** `test/DurableAgentClientSql.test.ts`'s R173 row
@@ -701,9 +615,9 @@ repeated here.*
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
-*Decided with a second reviewer when the list ran out of work one maintainer
-can do alone: the next milestone is one person choosing to use the library
-again. Feature expansion is frozen until these produce an observation.*
+*Available usage and release work. The owner declined the proposed feature
+freeze on 2026-09-06; these items do not gate the implementation backlog.
+User recruitment requires a person and explicit authorization for outreach.*
 
 63. **A daily consumer: the post-commit review assistant.** A separate
     consumer of the packed library that reviews a commit -- diff, the source
@@ -730,7 +644,7 @@ again. Feature expansion is frozen until these produce an observation.*
     verify: no-grep "Newcomer audit" docs/getting-started.md
     ```
 
-65. **The public promises, reviewed.** Forty-five subpaths inspected for the
+65. **The public promises, reviewed.** Every published subpath inspected for the
     caller's job, the dependency boundary, maturity and evidence of intended
     use; accidental exports and duplicate spellings go, optional batteries
     stay provisional. Timeboxed, and run after 63 has a caller to say which
@@ -768,5 +682,6 @@ again. Feature expansion is frozen until these produce an observation.*
   client is internal to its constructor. Ledger, item 71. Reopens when
   upstream exposes either.
 - **Anthropic example** has never been run live with a key.
-- **`ClusterMultiNode` on real time** (~15 s) — H7 would move it to
-  `TestClock`; cost only.
+- **`ClusterMultiNode` on real time** (~15 s) — real cluster liveness needs
+  real timers. A TestClock migration is not a valid fix; load headroom is a
+  fixture/runtime tradeoff, as recorded above.

@@ -115,7 +115,10 @@ sessions is safe by construction.
 
 **Transports.** `/client` is the protocol-neutral seam (`AgentClient`,
 `AgentSessionHost` with capacity, per-session request buckets, authorization,
-idempotent mutations, enumeration and a bounded event tail). Over it: HTTP +
+idempotent mutations, enumeration and finite event reads: the session's retained
+log when available, otherwise a bounded live tail). Durable reads survive host
+recreation, preserve snapshot bounds for empty cursor results, and propagate
+storage failures after authorization. Over it: HTTP +
 SSE (resumable from `Last-Event-ID` on a durable backing), Effect RPC (HTTP
 and WebSocket), AG-UI (official client, elicitation through interrupt input),
 A2A v1 (REST and JSON-RPC, official client, tasks, cancel, push configs, a
@@ -347,25 +350,23 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   cancel cannot interrupt the server.
 - **The Anthropic example** has never been run live with a key;
   **`ClusterMultiNode`** runs on real time (~15 s).
-- **Two decisions recorded, not made.** Whether a persisted key or a wire
-  tag should ever derive from the package name (every `affe-agent/...` tag
-  and `affe_*` table default does; item 55 says why it matters across two
-  versions). And whether an interrupted delegation should say so to its
-  parent rather than answer with what it had (item 50): a partial answer may
-  genuinely beat none, and nobody has complained.
 - **Threading and attachments** in channels wait on a decoder seam
   `/connectors` does not have.
 - **Effect Workflow inside a Durable Object** stalls at the first activity
   on workerd (upstream; minimal repro in the history). The DO host uses the
   platform's durability instead; `/durable` runs where its engine runs.
-- **The DO worker's model** is the scripted test model until a deployment
-  wires a real one; the Alchemy stack is written for the `/cloudflare` entry
-  (`nodejs_compat`, compatibility date 2026-08-25) but has not been run
-  against a real account -- this container has none, and the owner's
-  wrangler login is on their machine.
+- **Live deployment evidence.** The real-model Worker entry and Wrangler
+  quickstart ship with a workerd test substituting the provider. Its opt-in
+  live smoke and the Alchemy stack's deployment still lack a recorded run.
+- **Product applications.** The workbench and persistent-agent control plane
+  are specified but unbuilt in this checkout. Their session directory,
+  projection and background-input inbox foundations already ship.
 
-The larger parked work -- the reference gateway, code mode, filetypes
-phase 5, the bridge packages, compaction's overflow *trigger* (the
-rollover itself shipped as item 60d) -- is listed with its preconditions in
-[remaining-work.md](./docs/remaining-work.md#larger-correctly-parked); what
-it has finished is in [the ledger](./docs/remaining-work-closed.md).
+Wire/storage identifiers are frozen through `internal/namespace.ts`; an
+interrupted delegation returns `SubagentInterruptedError` carrying its partial
+answer. Both decisions shipped 2026-09-05. The reference gateway, code mode,
+blob store, A2A bridges and measured overflow handling also ship.
+
+Open implementation, usage evidence and caller-gated work are ranked separately
+in [remaining-work.md](./docs/remaining-work.md). Completed work is in
+[the ledger](./docs/remaining-work-closed.md).

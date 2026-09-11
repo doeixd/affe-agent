@@ -34,7 +34,7 @@ each way:
 | Q5 | Does discovery count toward `maxToolCalls`? | Yes. | Recorded; pinned by a test in `40da7c6`. |
 | — | Item 100's scenarios | Cold recovery against history length, and SQLite write contention, each with a threshold. | Recorded in item 100. |
 | — | The two conformance cases that still race | Document `stream` for observing your own submission; the lifecycle case moves to `stream`. | Lifecycle case done (`4c5bd83`); `events()` points to `stream` in its doc. |
-| — | Items 102, 112, 97 T8.2 | Parked, each with a trigger. | Triggers recorded; T8.2's question left in `COLLABORATION.md`. |
+| — | Items 102, 112, 97 T8.2 | Parked, each with a trigger. | Triggers recorded. T8.2 was unblocked the same day: its "other agent" was orphaned work, now landed. |
 
 ---
 
@@ -243,4 +243,4 @@ justified by two test cases.
 |---|---|
 | 102, the Cloudflare AI Gateway option | An adopter asks for it. |
 | 112, recovery snapshots | Item 100's cold-recovery scenario exceeds about 1 s at N = 1000. |
-| 97 T8.2, busy refusal in the durable client | The uncommitted edits to `src/durable/DurableAgentClient.ts` and `src/client/*` land or are abandoned. They have no claim in `COLLABORATION.md`, so a question was left there on 2026-09-11. If no one answers within a week (by 2026-09-18), the owner is asked whether the edits are abandoned. |
+| ~~97 T8.2, busy refusal in the durable client~~ | ~~The uncommitted edits to `src/durable/DurableAgentClient.ts` and `src/client/*` land or are abandoned.~~ **Reopened the same day.** The owner said there are no other agents: the edits were orphaned work of 2026-09-08 (a durable `eventLog` read from the `DeliveryLog`, item 88, and a backlog reorganisation). They were reviewed, tested and landed, so T8.2 is unblocked. |

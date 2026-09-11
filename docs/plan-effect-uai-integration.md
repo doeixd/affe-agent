@@ -6,8 +6,8 @@ is `src/effect-uai` (`133d14f`, phases 0–1); phase 2's acceptance is
 (`test/ProviderContinuation.test.ts`), images and citations cross
 (`86d1193`) and provider options survive (`81a1d6f`). Still owed by phase
 3: provider response ids, prompt-cache and provider-defined tool metadata,
-and files -- ranked as item 89 in another agent's uncommitted backlog edits
-of 2026-09-11. Phases 4–6 are item 118.
+and files -- item 89.
+Phases 4–6 are item 118.
 
 **Read:** 2026-09-08, against `doeixd/affe-agent` and `betalyra/effect-uai` main.
 

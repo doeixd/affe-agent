@@ -92,7 +92,8 @@ holds for issue #4's scope, but the **integration axis** — a `ToolSource` seam
 over OpenAPI/GraphQL/WebMCP/CLI sources, plus credential resolution per
 principal — is capability work by this document's own definition. The seam
 and the OpenAPI/GraphQL/MCP sources have since shipped as `/tool-source`;
-per-principal credential resolution has not. See
+per-principal credential resolution shipped with `CurrentPrincipal`, bindings,
+refresh and reauthorization. See
 [docs/research-tool-sources.md](./docs/research-tool-sources.md).
 The rest of the threads (MCP frontend, code mode, integrations, deployment) are
 adapters, batteries and entry points, and do fit "polish".
@@ -102,6 +103,7 @@ adapters, batteries and entry points, and do fit "polish".
 **Superseded.** The three steps that used to sit here — build `/observability`,
 then `/data`, then a first channel adapter — all shipped and are listed under
 *Done* above. The live ranking is
-[docs/remaining-work.md](./docs/remaining-work.md). #1 is closed; #4 is the
-only open issue and stays open as the tracker until its shipped items are
-marked off and it is closed.
+[docs/remaining-work.md](./docs/remaining-work.md). The repository ledger records
+both #1 and #4 closed. Product workbench/control-plane work and the remaining
+integration slices are tracked in the live list, separately from this completed
+capability roadmap.
