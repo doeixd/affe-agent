@@ -597,7 +597,9 @@ repeated here.*
      Toolkit import experiment, promoted only if its typed tier keeps the
      no-cast rule. 6: whether a deeper model substrate is justified,
      decided only on the evidence the plan lists; the default is to stop at
-     the adapter. 4 and 5 medium; 6 a decision.
+     the adapter. 4 and 5 medium; 6 a decision. What phase 3 still owes
+     (provider response ids, prompt-cache and provider-defined tool
+     metadata, files) is item 89, in another agent's uncommitted edits.
 
      ```text
      verify: exists src/effect-uai/EffectUaiModel.ts

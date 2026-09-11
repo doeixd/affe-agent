@@ -1,6 +1,13 @@
 # effect-uai comparison and interoperability plan
 
-**Status:** research + design proposal; **not implemented** unless a later status/ledger entry says otherwise.
+**Status (2026-09-11): phases 0–2 landed and phase 3 in part.** The adapter
+is `src/effect-uai` (`133d14f`, phases 0–1); phase 2's acceptance is
+`4bda60b`. Of phase 3, reasoning continuation is audited end to end
+(`test/ProviderContinuation.test.ts`), images and citations cross
+(`86d1193`) and provider options survive (`81a1d6f`). Still owed by phase
+3: provider response ids, prompt-cache and provider-defined tool metadata,
+and files -- ranked as item 89 in another agent's uncommitted backlog edits
+of 2026-09-11. Phases 4–6 are item 118.
 
 **Read:** 2026-09-08, against `doeixd/affe-agent` and `betalyra/effect-uai` main.
 

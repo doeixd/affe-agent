@@ -1,6 +1,6 @@
 # Plan: what to take from their Workflow RFC, and what to leave
 
-**Status: specified 2026-09-02; §3.2 answered and pinned the same day, §3.1 and §3.3 not started.** Written from a read of
+**Status: complete 2026-09-06.** §3.1 (retry safety on the tool) shipped as item 48a, §3.2 was answered and pinned 2026-09-02, and §3.3 (dispatch intents for the Durable Object host) shipped 2026-09-06 -- item 47. Written from a read of
 [danieljvdm/effect-agent#286](https://github.com/danieljvdm/effect-agent/issues/286),
 "RFC: Run agents with any Effect Workflow engine", opened the same day by the
 author of `effect-cf` — the same project

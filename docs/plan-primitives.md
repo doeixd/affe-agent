@@ -5,7 +5,11 @@ OpenRouter, Pi or Flue on top of this package is straightforward. This plan
 says which of those need new primitives, which need something that is not a
 primitive at all, and how we would know we had succeeded.
 
-**Status: in progress.** Step 1 landed 2026-08-27: the public-surface-only
+**Status (2026-09-11): steps 1–5 landed; step 6 in part.** Steps 3–5 landed
+2026-08-31 (`examples/ref-gateway.ts`, `affe-agent/presets`,
+`examples/ref-declarative.ts`); step 6's code-mode battery is `/code`, and
+its other batteries each wait for a caller (item 20). What follows is the
+record as it grew. Step 1 landed 2026-08-27: the public-surface-only
 `examples/ref-coding-agent.ts` runs in CI and exposed the missing Elicitation
 export, which is now fixed. Step 2 has its first slice: `/tool-source` provides
 the seam plus MCP, OpenAPI and GraphQL sources; credential/auth layers remain.

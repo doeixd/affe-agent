@@ -4,8 +4,12 @@ Written 2026-08-27. Where an agent built on this package can actually run, how a
 public server delegates work to it, and why the answer is entry points and
 Layers rather than a deployment system.
 
-**Status: in progress — §10 steps 1, 2, 3 and 5 have landed; 4, 6, 7 and 8
-remain.** Updated 2026-09-01.
+**Status (2026-09-11): §10 steps 1, 2, 3, 5 and 6 have landed** (step 6's
+gateway is exercised by `test/GatewayMounts.test.ts`); step 7, Rivet, is
+closed as adopter-triggered (`plan-two-decisions.md`); step 8 exists as
+`/relay`. Step 4 remains: a remote sandbox for the Worker is one exec
+function away and needs an account (items 19 and 119). Updated 2026-09-01,
+and again 2026-09-11.
 
 - **Step 1** (2026-08-27). The portable core typechecks for `workerd` without
   Node types, passes the portability scanner, and bundles for the

@@ -1,6 +1,9 @@
 # Plan: tool exposure, terminal work, and failure routes — lessons from `effect-agent`, 2026-09-08..10
 
-**Status: proposal, nothing started.** Written 2026-09-10 from a read of
+**Status (2026-09-11): mostly shipped.** What is open is tracked in
+`remaining-work.md` as items 93 (T3.9 and the live cost run), 97 (T8.2),
+100, 102, 112 and 113; the rest is in the ledger, and §13 and §25's
+questions are all decided. Written 2026-09-10 from a read of
 `danieljvdm/effect-agent` PRs #395, #397, #401, #405, #407, #413, #417–#419,
 #421, #423 and #424 (merged 2026-09-08..10). **Part II** (§15–§24), added
 the same day, folds in a deeper pass over #376, #378, #379, #380, #387,

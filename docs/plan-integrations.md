@@ -5,7 +5,12 @@ integration code. This plan works out what they actually built, what is worth
 keeping, and how to offer the same reach with typed, composable, testable
 providers and **no code generation at all**.
 
-**Status: specified, not implemented.**
+**Status (2026-09-11): partly built.** Of §11's sequence, steps 1–3 and 5
+exist -- `SandboxConformance` (`src/testing/SandboxConformance.ts`),
+`Sandbox.fromExec` and `Sandbox.fromOperations`, and `ChannelConformance`
+-- and step 6's non-Node entry point is the Worker (item 19). Step 4, a real
+remote provider, and step 7, tier 2, are item 119. The audit below is kept
+as written on 2026-08-27.
 
 ### Implementation audit (2026-08-27)
 
