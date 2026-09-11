@@ -427,9 +427,11 @@ and pin the state it starts from.*
      500 events appended to SQLite, then read after offset 0 whole and in
      pages of 100 -- ~8.5 ms either way, the appends (one transaction each,
      ~2 s) dominating the wall time, so the read is reported as `readMs`.
-     Still open: more durable scenarios (settlement replay, SQLite
-     contention),
-     effect-uai native vs adapter, and a live-model cost run for item 93.
+     The effect-uai adapter's cost: the 1024-chunk stream through a scripted
+     effect-uai provider and `EffectUaiModel` takes ~24 ms against ~17 ms
+     native -- ~7 µs a chunk, well above this size's ~5% noise. Still open:
+     more durable scenarios (settlement replay, SQLite contention), and a
+     live-model cost run for item 93.
      Variance is characterised (2026-09-11, HEAD against itself, 24 samples
      a side, `docs/reports/bench-2026-09-11-a4cdcea7-a4cdcea7.json`): with
      identical code, scenarios under ~5 ms moved their medians by up to

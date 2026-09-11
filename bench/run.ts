@@ -235,6 +235,39 @@ const scenarios: ReadonlyArray<Scenario> = [
         return { eventsRead: read.total, readMs: read.readMs }
       })
   })),
+  // The effect-uai adapter's cost (item 100): the "stream 1024 chunks" run,
+  // with the chunks coming from a scripted effect-uai provider through
+  // `EffectUaiModel` instead of from Effect AI's scripted model. Compare with
+  // that scenario. Imported inside, so a ref without the adapter reports this
+  // unavailable.
+  {
+    name: "stream 1024 chunks, through the effect-uai adapter",
+    run: () =>
+      timed(async () => {
+        const { Layer, Stream } = await import("effect")
+        const { IdGenerator } = await import("effect/unstable/ai")
+        const UaiLanguageModel = await import("@effect-uai/core/LanguageModel")
+        const EffectUaiModel = await import("../src/effect-uai/EffectUaiModel.js")
+        const events = [
+          ...Array.from({ length: 1024 }, () => ({ _tag: "TextDelta" as const, text: "x" })),
+          { _tag: "TurnComplete" as const, turn: { items: [], usage: {}, stop_reason: "stop" as const } }
+        ]
+        const streamTurn = () => Stream.fromIterable(events)
+        const provider = Layer.succeed(UaiLanguageModel.LanguageModel, {
+          streamTurn,
+          turn: UaiLanguageModel.turnFromStream(streamTurn)
+        })
+        const model = Layer.mergeAll(
+          EffectUaiModel.layer({ model: "bench" }).pipe(Layer.provide(provider)),
+          Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)
+        )
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.flatMap(AgentSession.make(Agent.make({})), (session) => session.prompt("go", { stream: true }))
+          ).pipe(Effect.provide(model))
+        )
+      })
+  },
   // Item 93's question: is progressive exposure worth a discovery turn? The
   // timings are the scripted model's; the model-independent measures -- how
   // many requests, how many tools and schema bytes they carried -- are the
