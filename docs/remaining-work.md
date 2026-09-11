@@ -369,7 +369,7 @@ and pin the state it starts from.*
      **Both built and measured 2026-09-11** (`bench/run.ts`, this machine):
      cold recovery -- a second process reading the session back -- took
      11 ms after 10 submissions, 16 ms after 100 and 24 ms after 1000
-     (opt-in, `BENCH_RECOVERY_LARGE=1`; its setup alone is ~8 minutes), so
+     (100 and 1000 opt-in, `BENCH_RECOVERY_LARGE=1`: minutes of setup), so
      **item 112 stays parked**: the threshold was ~1 s. The first prompt
      after recovery grows more (≈360 ms at 10 and 100, 750 ms at 1000),
      mostly the dead runner's shard lock but not only; worth a look if a

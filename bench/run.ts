@@ -309,8 +309,10 @@ const scenarios: ReadonlyArray<Scenario> = [
   // costs a replacement. `nextMs` is one more prompt after that, which also
   // waits out the first runner's shard lock (it outlives a closed runner;
   // see `test/DurableSql.test.ts`), so it is mostly that constant.
-  // 1000 only on request (BENCH_RECOVERY_LARGE=1): its setup alone takes minutes.
-  ...[10, 100, ...(process.env["BENCH_RECOVERY_LARGE"] === "1" ? [1000] : [])].map((submissions): Scenario => ({
+  // 100 and 1000 only on request (BENCH_RECOVERY_LARGE=1): their setup alone
+  // takes ~35 s and ~8 minutes a sample, and a default run samples each ten
+  // times per ref.
+  ...[10, ...(process.env["BENCH_RECOVERY_LARGE"] === "1" ? [100, 1000] : [])].map((submissions): Scenario => ({
     name: `durable: cold recovery after ${submissions} submissions`,
     run: () =>
       timed(async () => {
