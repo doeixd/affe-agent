@@ -4,6 +4,7 @@ import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
 import type { AgentDefinition } from "../Agent.js"
+import type * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
 import * as ToolScheduling from "../ToolScheduling.js"
 import { AgentClient } from "../client/index.js"
@@ -102,6 +103,12 @@ export interface Scenario<Tools extends Record<string, Tool.Any>, Value, Input> 
    * `prompt`'s submission.
    */
   readonly before?: ReadonlyArray<string> | undefined
+  /**
+   * How a person answers what the run asks (an approval, a question), in
+   * every process: each request the session reports pending is answered
+   * with this, as it appears. Without it, a run that asks waits forever.
+   */
+  readonly answer?: ((request: Elicitation.Request) => Elicitation.Response) | undefined
   readonly prompt: string
   readonly stream?: boolean | undefined
   /**
@@ -170,6 +177,21 @@ export interface Observation {
 }
 
 const SESSION = "durable-equivalence"
+
+/** Answer every pending request with `answer`, as it appears, for as long as the scope lives. */
+const answering = (
+  session: { readonly pending: Effect.Effect<ReadonlyArray<Elicitation.Request>, unknown>; readonly respond: (response: Elicitation.Response) => Effect.Effect<boolean, unknown> },
+  answer: ((request: Elicitation.Request) => Elicitation.Response) | undefined
+) =>
+  answer === undefined
+    ? Effect.void
+    : Effect.forkScoped(Effect.forever(
+      Effect.gen(function*() {
+        const pending = yield* Effect.orElseSucceed(session.pending, () => [])
+        for (const request of pending) yield* Effect.ignore(session.respond(answer(request)))
+        yield* Effect.sleep(Duration.millis(25))
+      })
+    ))
 const NAME = "DurableEquivalence"
 
 /** Runner identity needs `Crypto`; Web Crypto is on every runtime this library targets. */
@@ -298,6 +320,7 @@ export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const { effects, recorded } = yield* recording
       const { client, delivery, recorder, sessionStore } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
       const session = yield* client.createSession({ sessionId: SESSION })
+      yield* answering(session, scenario.answer)
       for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
       const result = yield* session.prompt(scenario.prompt, { stream: scenario.stream ?? false })
       return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded, delivery, sessionStore)
@@ -342,6 +365,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
             arrived
           })
           const session = yield* client.createSession({ sessionId: SESSION })
+          yield* answering(session, scenario.answer)
           for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
           const receipt = yield* session.submit(scenario.prompt, { stream: scenario.stream ?? false })
           yield* Deferred.await(arrived).pipe(
@@ -359,6 +383,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
         Effect.gen(function*() {
           const { client, delivery, recorder, sessionStore } = yield* processOver(scenario, sql, effects, lock, "second")
           const session = yield* client.session(SESSION)
+          yield* answering(session, scenario.answer)
           // Retried: until the dead process's shard lock expires, the
           // submission is not this process's to finish. Not an agent failure,
           // though -- a submission that *failed* is an outcome, and the caller

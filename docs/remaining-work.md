@@ -480,9 +480,11 @@ acceptance test for 105, 107 and 108.*
      `new_context`, and resumes from the handoff alone, crashed after the
      rollover's turn commits, recovers to the same run -- driven by a model
      that decides from the prompt's content, since after a rollover nothing a
-     script counts is left. Still open: (b) a subagent with a suspended
-     child elicitation -- the harness cannot answer an elicitation yet, and
-     needs to before this scenario means anything; Code Mode with a
+     script counts is left. A run that waits on an approval is a scenario:
+     the harness answers what the run asks in whichever process runs it
+     (`answer`), and a crash after the approved call recovers the same run.
+     Still open: (b) a subagent with a suspended child elicitation, which
+     found item 113 -- it hangs the process; Code Mode with a
      suspending executor is not a scenario to add, since `CodeMode` states a
      paused program is not durable (it re-executes from the top on resume);
      (c) usage/`RunLedger`.
@@ -499,6 +501,29 @@ acceptance test for 105, 107 and 108.*
      verify: exists test/DurableEquivalence.test.ts
      verify: grep "id: \"D8\"" scripts/falsify.mjs
      verify: exists src/testing/DurableEquivalence.ts
+     ```
+
+113. **A durable delegation whose child forwards an approval hangs the
+     process (found 2026-09-11).** A durable parent with
+     `Subagent.tool(..., { inherit: { approval: "parent" } })`, whose child
+     calls a `needsApproval` tool: the straight run -- no crash -- never
+     finishes. The event loop is blocked from the start (no timer fires; a
+     V8 tick profile is ~80% in `ntdll`, i.e. waiting in native code, not
+     spinning), and under vitest the worker's memory grows until it dies.
+     Not today's start marker: disabling it hangs the same way. The same
+     delegation without the approval completes, and a parent-level
+     approval over the same harness completes. Suspected: the child's
+     elicitation reaches the parent's *durable* elicitor, which awaits a
+     `DurableDeferred` -- suspending the workflow -- from inside the
+     parent's delegation tool call, itself a running activity; the in-process
+     path (`PermissionSubagent.test.ts`) is the only one tested. Needs a
+     decision as much as a fix: what should suspending a workflow mean for a
+     child running inside an activity? Repro: `DurableEquivalence.straight`
+     over SQLite with that agent and `answer: (r) => ({ id: r.id, granted:
+     true })`. Medium.
+
+     ```text
+     verify: grep "readonly answer?:" src/testing/DurableEquivalence.ts
      ```
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**

@@ -321,3 +321,36 @@ describe("a run that rolls its context over recovers to the same run (item 104, 
       assert.deepStrictEqual(recovered.observation, straight)
     }), 120_000)
 })
+
+describe("a run that waits on an approval recovers to the same run (item 104, b)", () => {
+  // The harness answers what the run asks, in whichever process is running
+  // it (`answer`). The approved call runs once, and a crash after it settles
+  // recovers to the uninterrupted run, the approval's own events included.
+  const Deploy = Tool.make("deploy", {
+    parameters: Schema.Struct({ env: Schema.String }),
+    success: Schema.String,
+    needsApproval: true
+  })
+  const approving = DurableEquivalence.scenario({
+    agent: (effects) =>
+      Agent.make({
+        tools: [Agent.tool(Deploy, ({ env }) => Effect.as(effects.record(env), `deployed ${env}`))],
+        loop: AgentLoop.bounded(3)
+      }),
+    turns: [{ toolCalls: [{ id: "d1", name: "deploy", params: { env: "staging" } }] }, { text: "deployed" }],
+    answer: (request) => ({ id: request.id, granted: true }),
+    prompt: "deploy staging"
+  })
+
+  it.live("a crash after the approved call settles recovers the same history, events and effects", () =>
+    Effect.gen(function*() {
+      const straight = yield* DurableEquivalence.straight(approving, { database })
+      assert.deepStrictEqual(straight.effects, ["staging"])
+      assert.include(straight.events, "ElicitationRequested")
+      const recovered = yield* DurableEquivalence.crashed(approving, {
+        database,
+        at: turnFailpoints.qualified("after-tool-call")
+      })
+      assert.deepStrictEqual(recovered.observation, straight)
+    }), 120_000)
+})
