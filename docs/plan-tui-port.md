@@ -554,10 +554,11 @@ pinning it here would be testing their widget.
 
 ### Still not implemented
 
-- **No scrolling inside the live region.** Finished entries go to the
-  terminal's own scrollback, so history is the terminal's to scroll; what is
-  not reachable is a tool body clipped at twelve lines while it is still in
-  flight. Expanding a clipped body would be worth more than scrolling.
+- **No scrolling inside the live region**, and none needed now: finished
+  entries go to the terminal's own scrollback, and a tool body clipped at
+  twelve lines while it is still in flight expands with **ctrl+o** (and clips
+  again with it), since 2026-09-11 -- the clipped line says so, and the
+  footer says how to collapse. Smoke asserts all three.
 - **No syntax highlighting**, for the reason above.
 - **No session switching across processes.** Landed for the live backend:
   `NodeStore.keyValue` + checkout pointer outside the workspace

@@ -6,7 +6,7 @@ import {
   writeSolidToScrollback
 } from "@opentui/solid"
 import type { Accessor } from "solid-js"
-import { createEffect, createMemo, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import * as Diff from "./diff.ts"
 import { marker, theme } from "./theme.ts"
 import { approvalOf, defaultViews, type ToolView } from "./tools.ts"
@@ -43,6 +43,16 @@ import { fit, widthPolicy } from "./width.ts"
 
 /** How many lines of a body to show before collapsing. */
 const BODY_LINES = 12
+
+/**
+ * Whether bodies in the live region show in full (item 121). Ctrl+O toggles
+ * it. The plan ranked this above scrolling: a tool body clipped at twelve
+ * lines while it runs was the one thing not reachable, since finished entries
+ * already go to the terminal's own scrollback in full.
+ */
+const [expanded, setExpanded] = createSignal(false)
+const bodyLimit = (): number => (expanded() ? Number.POSITIVE_INFINITY : BODY_LINES)
+const moreHint = (hidden: number, noun: string) => `  … ${hidden} more ${noun} · ctrl+o to expand`
 
 const clip = (text: string, limit = BODY_LINES): { lines: Array<string>; hidden: number } => {
   const lines = text.replace(/\n+$/, "").split("\n")
@@ -100,14 +110,14 @@ const diffMarker = (kind: Diff.Line["kind"]): string =>
   kind === "added" ? "+" : kind === "removed" ? "-" : " "
 
 const Lines = (props: { text: string; fg: ColorInput }) => {
-  const clipped = () => clip(props.text)
+  const clipped = () => clip(props.text, bodyLimit())
   return (
     <box flexDirection="column">
       <For each={clipped().lines}>
         {(line) => <text fg={props.fg}>{`  ${line}`}</text>}
       </For>
       <Show when={clipped().hidden > 0}>
-        <text fg={theme.block.muted}>{`  … ${clipped().hidden} more lines`}</text>
+        <text fg={theme.block.muted}>{moreHint(clipped().hidden, "lines")}</text>
       </Show>
     </box>
   )
@@ -150,16 +160,16 @@ const Snapshot = (props: { snapshot: ToolSnapshot }) => (
     <Match when={props.snapshot.kind === "listing" ? props.snapshot : undefined}>
       {(snapshot: Accessor<Extract<ToolSnapshot, { kind: "listing" }>>) => (
         <box flexDirection="column">
-          <For each={snapshot().items.slice(0, BODY_LINES)}>
+          <For each={snapshot().items.slice(0, bodyLimit())}>
             {(item) => (
               <text fg={item.directory ? theme.block.highlight : theme.block.text}>
                 {`  ${item.path}${item.directory ? "/" : ""}`}
               </text>
             )}
           </For>
-          <Show when={snapshot().items.length > BODY_LINES}>
+          <Show when={snapshot().items.length > bodyLimit()}>
             <text fg={theme.block.muted}>
-              {`  … ${snapshot().items.length - BODY_LINES} more`}
+              {moreHint(snapshot().items.length - BODY_LINES, "entries")}
             </text>
           </Show>
         </box>
@@ -500,6 +510,9 @@ export const App = (props: {
      */
     if (key.ctrl === true && name === "d") return props.quit()
     if (key.ctrl === true && name === "c") return props.handle.interrupt()
+    // A view toggle, so it works from every surface, an approval included:
+    // the body it expands may be the very thing being approved.
+    if (key.ctrl === true && name === "o") return void setExpanded((open) => !open)
 
     if (props.footer.type !== "prompt") return
 
@@ -642,6 +655,11 @@ export const App = (props: {
           <text fg={theme.footer.muted}>
             {`   ctrl+r rewind${props.rewind.taken === 0 ? "" : ` (${props.rewind.taken}×)`}`}
           </text>
+        </Show>
+        {/* Expanded, the "more lines" hint that named the key is gone, so
+            the way back has to be said somewhere. */}
+        <Show when={policy().hints && expanded()}>
+          <text fg={theme.footer.muted}>{"   ctrl+o collapse"}</text>
         </Show>
       </box>
 

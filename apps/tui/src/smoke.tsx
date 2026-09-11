@@ -910,6 +910,38 @@ keyRender.mockInput.pressKey("c", { ctrl: true })
 await keyRender.flush()
 
 /**
+ * Item 121: ctrl+o shows a running tool's body past its twelve lines, and
+ * ctrl+o again clips it. A renderer of its own, tall enough to show twenty
+ * lines, with a tool still running so its entry stays in the live region.
+ */
+const expandRun = makeStore()
+const expandRender = await testRender(
+  () => (
+    <App entries={expandRun.entries} status={expandRun.status()} handle={keyHandle} commitSettled={expandRun.commitSettled}
+      settledCount={expandRun.settledCount} footer={expandRun.footer()} rewind={expandRun.rewind()} backend={expandRun.backend()}
+      dismiss={() => expandRun.sink.setPalette(undefined)} openPalette={() => expandRun.sink.setPalette(keyHandle.commands)}
+      quit={() => {}} />
+  ),
+  { width: 80, height: 40 }
+)
+expandRun.sink.append({
+  id: "long-running",
+  kind: "tool",
+  title: "read big.txt",
+  status: "running",
+  streaming: true,
+  body: { type: "text", content: Array.from({ length: 20 }, (_, index) => `body line ${index + 1}`).join("\n") }
+})
+await expandRender.flush()
+const clippedFrame = expandRender.captureCharFrame()
+expandRender.mockInput.pressKey("o", { ctrl: true })
+await expandRender.flush()
+const expandedFrame = expandRender.captureCharFrame()
+expandRender.mockInput.pressKey("o", { ctrl: true })
+await expandRender.flush()
+const reclippedFrame = expandRender.captureCharFrame()
+
+/**
  * `/` is tested on the *main* renderer, not the one above.
  *
  * A printable key goes to whichever focused input owns the keyboard, and with
@@ -1572,6 +1604,13 @@ checks.push(
   // Bound in the renderer rather than left to SIGINT, which a raw-mode
   // terminal need not deliver.
   ["ctrl+c interrupts from the keyboard", interruptRequests === 1],
+  // Item 121: a running body clipped at twelve lines says how to see the rest,
+  // ctrl+o shows all twenty and says how to go back, and ctrl+o clips again.
+  ["a clipped running body names ctrl+o",
+    clippedFrame.includes("body line 12") && !clippedFrame.includes("body line 20") && clippedFrame.includes("ctrl+o to expand")],
+  ["ctrl+o shows the whole body, and how to collapse it",
+    expandedFrame.includes("body line 20") && expandedFrame.includes("ctrl+o collapse")],
+  ["ctrl+o again clips it", !reclippedFrame.includes("body line 20") && reclippedFrame.includes("ctrl+o to expand")],
   // R100
   ["it names the library version, not the app",
     scriptedProvenance.harnessVersion === VERSION],

@@ -666,13 +666,17 @@ one else was working on them.*
      ```
 
 121. **TUI gaps ([plan-tui-port.md](./plan-tui-port.md), "Still not
-     implemented").** Expanding a tool body clipped at twelve lines while it
-     runs (worth more than scrolling), syntax highlighting, and switching
-     workspaces in one TUI. Each small; each waits for use to say it
-     matters.
+     implemented").** Expanding a running tool body clipped at twelve lines
+     -- the one the plan ranked first -- **done 2026-09-11**: ctrl+o toggles
+     every live body between clipped and whole, the clipped line names the
+     key and the footer names the way back; `smoke:tui` checks all three
+     and fails with the binding removed. Left: syntax highlighting, and
+     switching workspaces in one TUI. Each small; each waits for use to say
+     it matters.
 
      ```text
      verify: grep "No syntax highlighting" docs/plan-tui-port.md
+     verify: grep "ctrl+o to expand" apps/tui/src/App.tsx
      ```
 
 *(122 duplicated item 90, which was written first and carries P1–P6's
