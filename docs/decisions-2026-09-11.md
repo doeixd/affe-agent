@@ -33,7 +33,7 @@ each way:
 | Q4 | Projected completion from a provider-executed tool? | No. | Recorded; refused by `fromTool` in `e30f31f` (a type error, and a `TypeError` for a widened type). |
 | Q5 | Does discovery count toward `maxToolCalls`? | Yes. | Recorded; pinned by a test in `40da7c6`. |
 | — | Item 100's scenarios | Cold recovery against history length, and SQLite write contention, each with a threshold. | Recorded in item 100. |
-| — | The two conformance cases that still race | Document `stream` for observing your own submission; move both cases to a subscription attached before they prompt. | To follow. |
+| — | The two conformance cases that still race | Document `stream` for observing your own submission; the lifecycle case moves to `stream`. | Lifecycle case done (`4c5bd83`); the `events()` doc to follow. |
 | — | Items 102, 112, 97 T8.2 | Parked, each with a trigger. | Triggers recorded; T8.2's question left in `COLLABORATION.md`. |
 
 ---
@@ -218,9 +218,15 @@ race is rare, but it is a real consumer's race and not just a test's.
 * `events()`'s documentation will say: to observe your own submission, use
   `stream`, which subscribes before admission. `events()` is for watching a
   session you are not driving.
-* Both cases move to a subscription that is attached before they prompt: a
+* ~~Both cases move to a subscription that is attached before they prompt: a
   client that can resume uses `events({ after })`, and the others drain a
-  first `stream` submission.
+  first `stream` submission.~~ Corrected the same day: draining a first
+  submission does not make a *later* live `events()` attach in time. The
+  lifecycle-order case, which timed out in the clean check of `6fac365`,
+  now takes its envelopes from `stream` (`4c5bd83`). A client that refuses
+  `stream` keeps the old path, bounded by a named timeout. The deltas case
+  is left as it is: it tests what an `events()` subscriber receives, and
+  only a readiness signal would close its race.
 * A scoped `subscribe` on the client seam is held back until an adopter
   needs something `stream` doesn't give.
 
