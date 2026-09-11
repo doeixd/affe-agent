@@ -42,6 +42,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - AgentOutput.fromTool refuses a provider-defined tool, at compile time and with a TypeError at construction (`e30f31f`; type-level only, nothing on a wire to measure)
 - the durable channel table gains a nullable claimed_by column (sqlStoreWithTable migrates an older table; a self-managed table must add it), and a drain claims rows instead of deleting them (`9efd2c5`; measured by `test/fixtures/channel-input-table.json`)
 - a host's eventLog for a durable session with a delivery log reads the whole log (oldest is its first event) instead of the host's bounded tail (`470a6c0`; measured by `test/fixtures/durable-event-log.json`)
+- AgentBusyError carries the incumbent's submissionId when the refusing side knows it, on every client (`1436537`; measured by `test/fixtures/busy-error.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
