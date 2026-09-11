@@ -531,6 +531,124 @@ acceptance test for 105, 107 and 108.*
      104's oracle is its acceptance test. The trigger, decided 2026-09-11:
      cold recovery past ~1 s at 1000 settled submissions (item 100).
 
+### Open plan phases that were not on this list — added 2026-09-11
+
+*A sweep of every plan on 2026-09-11 found these phases open in their plans
+and on no list here; the owner asked that everything open be tracked in one
+place. The workbench, control-plane, MCP-frontend and streaming-follow-up
+plans are being ranked by another agent's uncommitted edits and are not
+repeated here.*
+
+114. **A2A bridges over the relay
+     ([plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt), step 5).**
+     Both bridges ship locally and the relay carries `AgentRpc` unchanged
+     (relay phase 9), so a Claude Code or OpenCode agent behind NAT should be
+     a transport choice, not a new bridge. Acceptance: a delegation to a
+     bridge across `RelayServer`, in a test. Medium.
+
+     ```text
+     verify: exists src/a2a/claudeCode.ts
+     verify: exists src/relay/RelayRpc.ts
+     verify: absent test/A2ABridgeOverRelay.test.ts
+     ```
+
+115. **`ClaudeCode.languageModel`, then a decision on OpenCode's
+     ([plan-a2a-layers-bridges.txt](./plan-a2a-layers-bridges.txt), steps
+     6–7).** An experiment first: can Claude Code be held to one response,
+     without acting on its own, and implement `LanguageModel` faithfully?
+     Only then decide whether `OpenCode.languageModel` is worth shipping --
+     the plan leans no, as OpenCode is plainly an agent. Medium.
+
+     ```text
+     verify: no-grep "languageModel" src/a2a/claudeCode.ts
+     verify: no-grep "languageModel" src/a2a/openCode.ts
+     ```
+
+116. **Media externalized at the boundaries
+     ([plan-filetypes.txt](./plan-filetypes.txt), steps 6–7).**
+     `BlobWire.externalize` exists and nothing outside `src/blob` calls it:
+     transports and durable stores still inline an oversized file part.
+     Step 6: the adapters and durable stores externalize at their own
+     boundary, over a threshold. Step 7: the relay carries references, not
+     bytes. They rode with umbrella item 26, which closed without them.
+     Medium.
+
+     ```text
+     verify: no-grep "externalize" src/http/AgentHttp.ts
+     verify: no-grep "BlobWire" src/relay/RelayRpc.ts
+     ```
+
+117. **Relay operations ([plan-relay.txt](./plan-relay.txt), phases
+     13–16).** 13: a management `HttpApi` for peers, enrollment and status.
+     14: audit, metrics and rate limits. Both medium, and both due before a
+     relay is run for anyone but its owner. 15: an E2EE spike, optional.
+     16: several relay nodes, parked until one node is not enough.
+
+     ```text
+     verify: no-grep "HttpApi" src/relay/RelayServer.ts
+     verify: no-grep "Metric" src/relay/RelayServer.ts
+     ```
+
+118. **effect-uai past the model adapter
+     ([plan-effect-uai-integration.md](./plan-effect-uai-integration.md),
+     phases 4–6).** Phases 0–3 shipped (`src/effect-uai`). 4: non-model
+     capability adapters -- web search and read first, then embeddings,
+     then a sandbox -- each passing the Affe seam's own conformance. 5: a
+     Toolkit import experiment, promoted only if its typed tier keeps the
+     no-cast rule. 6: whether a deeper model substrate is justified,
+     decided only on the evidence the plan lists; the default is to stop at
+     the adapter. 4 and 5 medium; 6 a decision.
+
+     ```text
+     verify: exists src/effect-uai/EffectUaiModel.ts
+     verify: no-grep "Toolkit" src/effect-uai/index.ts
+     ```
+
+119. **A real remote sandbox provider, then tier 2
+     ([plan-integrations.md](./plan-integrations.md), steps 4 and 7).** E2B
+     or Daytona through `Sandbox.fromOperations`, passing
+     `SandboxConformance` in CI, which measures the residue against Flue's
+     ~250-line Daytona adapter. Needs a provider account. Step 7, the
+     declarative REST tier, comes after the tool-source request binder
+     exists, and only for a provider whose surface is genuinely REST.
+     Medium; blocked on an account.
+
+     ```text
+     verify: absent src/sandbox/e2b.ts
+     verify: absent src/sandbox/daytona.ts
+     ```
+
+120. **Failpoints for the channels and the relay
+     ([plan-failure-paths.md](./plan-failure-paths.md) §3.2).** The design
+     gave each subsystem its own closed set of failpoints. `DeliveryLog`,
+     the turn, compaction, the event bus and the Cloudflare dispatch have
+     them. `DurableChannels` and `RelayRpc` do not, so "what if the process
+     dies here" is still answered by reading there. Small.
+
+     ```text
+     verify: no-grep "Failpoint" src/durable/DurableChannels.ts
+     verify: no-grep "Failpoint" src/relay/RelayRpc.ts
+     ```
+
+121. **TUI gaps ([plan-tui-port.md](./plan-tui-port.md), "Still not
+     implemented").** Expanding a tool body clipped at twelve lines while it
+     runs (worth more than scrolling), syntax highlighting, and switching
+     workspaces in one TUI. Each small; each waits for use to say it
+     matters.
+
+     ```text
+     verify: grep "No syntax highlighting" docs/plan-tui-port.md
+     ```
+
+122. **`*Unknown` run helpers
+     ([plan-run-stream-start.md](./plan-run-stream-start.md), P7).**
+     `Agent.runUnknown`, `streamUnknown` and `startUnknown`, for input typed
+     `unknown`. Adopter-triggered, lowest priority.
+
+     ```text
+     verify: no-grep "runUnknown" src/Agent.ts
+     ```
+
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
 *Decided with a second reviewer when the list ran out of work one maintainer
