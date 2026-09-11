@@ -275,10 +275,15 @@ and pin the state it starts from.*
     tool entries and ~45 KB of schema; progressive 3, 17 and ~3.5 KB, for
     one more model call. Composes with `/tool-source`: thirty tools a
     source declares as JSON Schema start unexposed, discovery finds one, and
-    its call reaches the source (T3.7). Still open: a `ToolExposureChanged`
-    event (T3.9 -- the discovery's own `ToolCallSucceeded` already carries
-    the new selection, so it may not be worth an event), and a live-model
-    cost run before the guide recommends progressive.
+    its call reaches the source (T3.7). T3.9, a `ToolExposureChanged`
+    event, **declined 2026-09-11**: the selection is a function of history
+    (`ToolExposure.selectionFrom`), and the discovery's own
+    `ToolCallSucceeded` carries its `Discovery` -- found, selected, and the
+    query -- which is exactly "why a tool appeared". An event would journal
+    the same state twice and give every consumer of the tolerant event
+    union one more variant. Reopens if exposure ever changes by something
+    other than discovery. Still open: a live-model cost run before the
+    guide recommends progressive, which waits on a key the owner declined.
 
     ```text
     verify: exists src/ToolExposure.ts

@@ -1,7 +1,7 @@
 # Plan: tool exposure, terminal work, and failure routes — lessons from `effect-agent`, 2026-09-08..10
 
 **Status (2026-09-11): mostly shipped.** What is open is tracked in
-`remaining-work.md` as items 93 (T3.9 and the live cost run), 97 (T8.2),
+`remaining-work.md` as items 93 (the live cost run), 97 (A8.1),
 100, 102, 112 and 113; the rest is in the ledger, and §13 and §25's
 questions are all decided. Written 2026-09-10 from a read of
 `danieljvdm/effect-agent` PRs #395, #397, #401, #405, #407, #413, #417–#419,
@@ -228,8 +228,11 @@ Agent.make({
   entering `exposed` unless pinned.
 * **T3.8 Describe.** `Agent.describe()` reports exposure mode, pinned,
   bounds; for a declared toolkit, the eligible count.
-* **T3.9 Events.** A `ToolExposureChanged { exposed: names, reason }` event
-  at the batch boundary, so a UI and a trace can show why a tool appeared.
+* ~~**T3.9 Events.** A `ToolExposureChanged { exposed: names, reason }` event
+  at the batch boundary, so a UI and a trace can show why a tool appeared.~~
+  Declined 2026-09-11: the discovery's `ToolCallSucceeded` already carries
+  its `Discovery` (found, selected, the query), and the selection is a
+  function of history (`ToolExposure.selectionFrom`); see item 93.
 * **T3.10 Docs.** `guide-batteries.md` section; `limits.md` rows for the four
   bounds.
 
