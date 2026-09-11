@@ -431,7 +431,15 @@ and pin the state it starts from.*
      effect-uai provider and `EffectUaiModel` takes ~24 ms against ~17 ms
      native -- ~7 µs a chunk, well above this size's ~5% noise. Still open:
      more durable scenarios (settlement replay, SQLite contention), and a
-     live-model cost run for item 93.
+     live-model cost run for item 93. **Decided 2026-09-11**
+     ([decisions-2026-09-11.md](./decisions-2026-09-11.md)): the two
+     scenarios are cold recovery against history length -- N = 10, 100,
+     1000 settled submissions on SQLite, a fresh process timed until the
+     session accepts its next submission; past ~1 s at N = 1000, item 112
+     is unparked -- and write contention -- one, two and four processes on
+     different sessions in one file; any `SQLITE_BUSY` reaching a caller is
+     a bug with its own item, not a row. The live run waits on a capped key
+     (D4 there).
      Variance is characterised (2026-09-11, HEAD against itself, 24 samples
      a side, `docs/reports/bench-2026-09-11-a4cdcea7-a4cdcea7.json`): with
      identical code, scenarios under ~5 ms moved their medians by up to
@@ -508,9 +516,20 @@ acceptance test for 105, 107 and 108.*
      re-execution walks k, runs the handler past a suspended attempt, and
      refuses at one that simply stopped.
 
+     **Decided 2026-09-11** ([decisions-2026-09-11.md](./decisions-2026-09-11.md),
+     D5): the refusal stays; the design of record, built when an adopter
+     needs forwarded approval across a durable delegation, is delegation as
+     a *child workflow* -- the delegating tool starts the child's durable
+     submission instead of running the child in its handler, so the
+     child's approval parks the child and the engine suspends the parent
+     behind it. General suspendable handlers (and the per-attempt marker
+     sketched above) are refused: they would hand engine semantics to every
+     tool author to serve one pattern the child workflow serves alone.
+
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
-     104's oracle is its acceptance test.
+     104's oracle is its acceptance test. The trigger, decided 2026-09-11:
+     cold recovery past ~1 s at 1000 settled submissions (item 100).
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 

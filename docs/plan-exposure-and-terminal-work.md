@@ -716,19 +716,29 @@ headers). Not kernel architecture. Only on an adopter asking.
 
 ## 13. Open questions
 
-* **Q1** Is visibility per agent or per session? Principal and delegation
+* **Q1** ~~Is visibility per agent or per session? Principal and delegation
   grants are per session, which argues for the session; `describe` wants a
-  static answer, which argues for the agent with a session-level narrowing.
+  static answer, which argues for the agent with a session-level narrowing.~~
+  Decided 2026-09-11: a rule declared on the agent, applied per caller --
+  what the code already does (`ToolExposure.Visible` is `(tool, principal)`,
+  read from `CurrentPrincipal` each turn). `describe` answers statically what
+  exists; visibility narrows it per caller
+  ([decisions-2026-09-11.md](./decisions-2026-09-11.md)).
 * **Q2** ~~Strengthen `Alone` (recommended) or add a second annotation?~~
   Strengthened, 2026-09-10 (§5).
 * **Q3** ~~`failureMode: "return"` vs `FailRun` — which wins (§6, T6.1)?~~
   `"return"` wins, made visible in `describe`, 2026-09-10 (§6).
-* **Q4** Should a projected completion (E2) be able to fire on a
-  provider-executed tool's result? Leaning no: the output schema should come
-  from an application result the host controls.
-* **Q5** Does discovery itself count as a tool call for `maxToolCalls`?
-  Leaning yes — it is one — with `pinned` as the escape hatch for agents that
-  cannot afford the turn.
+* **Q4** ~~Should a projected completion (E2) be able to fire on a
+  provider-executed tool's result?~~ Decided 2026-09-11 as leaned: no. The
+  answer's schema must come from a result the host controls; a
+  provider-executed result is shaped by the provider. To be enforced by
+  `AgentOutput.fromTool` refusing a `Tool.providerDefined` tool at agent
+  construction.
+* **Q5** ~~Does discovery itself count as a tool call for `maxToolCalls`?~~
+  Decided 2026-09-11 as leaned: yes -- it is one -- with `pinned` as the
+  escape hatch. It already holds (`discover_tools` is dispatched as an
+  ordinary call of the turn, and `AgentRun` counts the turn's calls); a test
+  is to pin it.
 
 ## 14. Refused
 
