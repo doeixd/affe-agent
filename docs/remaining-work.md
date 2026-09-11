@@ -465,7 +465,11 @@ acceptance test for 105, 107 and 108.*
      follow one (`select: "results"`: counting assistant messages lost its
      place when compaction folded them, and every tool ran twice): crashed
      after its second turn, it recovers to the same history, events and
-     effects. Still open: (b) the plan's other scenarios: rollover, a subagent with a suspended child
+     effects. So is a rollover: a run that looks something up, calls
+     `new_context`, and resumes from the handoff alone, crashed after the
+     rollover's turn commits, recovers to the same run -- driven by a model
+     that decides from the prompt's content, since after a rollover nothing a
+     script counts is left. Still open: (b) the plan's other scenarios: a subagent with a suspended child
      elicitation, Code Mode with a suspending executor; (c) usage/`RunLedger`.
      Claim state is compared now (`Observation.session`: status,
      submission count, whether a claim is still held -- a recovery that

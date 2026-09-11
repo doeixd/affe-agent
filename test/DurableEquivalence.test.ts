@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Effect, Ref, Schema } from "effect"
-import { Tool } from "effect/unstable/ai"
+import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { IdGenerator, LanguageModel, Tool } from "effect/unstable/ai"
+import type { Prompt, Response } from "effect/unstable/ai"
 import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
@@ -245,6 +246,74 @@ describe("a run that compacts as it goes recovers to the same run (item 104, b)"
       const straight = yield* DurableEquivalence.straight(compacting, { database })
       assert.deepStrictEqual(straight.effects, ["one", "three", "two"])
       const recovered = yield* DurableEquivalence.crashed(compacting, {
+        database,
+        at: turnFailpoints.qualified("after-commit"),
+        occurrence: 2
+      })
+      assert.deepStrictEqual(recovered.observation, straight)
+    }), 120_000)
+})
+
+describe("a run that rolls its context over recovers to the same run (item 104, b)", () => {
+  // After `new_context` the prompt is the handoff and nothing before it, so a
+  // script picked by position, assistant count or tool results would lose its
+  // place. This model decides from what the prompt says, as a real one does.
+  const finish: Response.FinishPartEncoded = {
+    type: "finish",
+    reason: "stop",
+    usage: {
+      inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 0, text: 0, reasoning: 0 }
+    }
+  }
+  const call = (id: string, name: string, params: unknown): ReadonlyArray<Response.PartEncoded> =>
+    [{ type: "tool-call", id, name, params }, finish]
+  const respond = (prompt: Prompt.Prompt): ReadonlyArray<Response.PartEncoded> => {
+    const text = JSON.stringify(prompt.content)
+    const answered = (id: string) => prompt.content.some((m) =>
+      m.role === "tool" && m.content.some((p) => p.type === "tool-result" && p.id === id))
+    if (answered("b")) return [{ type: "text", text: "both looked up" }, finish]
+    if (text.includes("resume: look up b")) return call("b", "lookup", { of: "b" })
+    if (answered("a")) return call("roll", "new_context", { handoff: "resume: look up b" })
+    return call("a", "lookup", { of: "a" })
+  }
+  const model = Layer.effect(
+    LanguageModel.LanguageModel,
+    LanguageModel.make({
+      generateText: (options) => Effect.succeed([...respond(options.prompt)]),
+      streamText: (options) => Stream.fromIterable(respond(options.prompt).flatMap((part): Array<Response.StreamPartEncoded> =>
+        part.type === "text"
+          ? [{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: part.text }, { type: "text-end", id: "t" }]
+          : part.type === "finish" || part.type === "tool-call" ? [part] : []))
+    })
+  ).pipe(Layer.provideMerge(Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)))
+
+  const rolling = DurableEquivalence.scenario({
+    agent: (effects) => {
+      const compaction = Effect.runSync(Compaction.controller({
+        policy: Compaction.whenLongerThan(1000),
+        summarise: () => Effect.succeed("unused")
+      }))
+      return Agent.make({
+        contextTransform: compaction.transform,
+        tools: [
+          compaction.tools.newContext,
+          Agent.tool(Lookup, ({ of }) => Effect.as(effects.record(of), `${of}: ok`))
+        ],
+        loop: AgentLoop.bounded(6)
+      })
+    },
+    turns: [],
+    model,
+    prompt: "look up a, then roll over, then look up b"
+  })
+
+  it.live("a crash after the rollover's turn commits recovers the same history, events and effects", () =>
+    Effect.gen(function*() {
+      const straight = yield* DurableEquivalence.straight(rolling, { database })
+      assert.deepStrictEqual(straight.effects, ["a", "b"])
+      assert.strictEqual(straight.text, "both looked up")
+      const recovered = yield* DurableEquivalence.crashed(rolling, {
         database,
         at: turnFailpoints.qualified("after-commit"),
         occurrence: 2
