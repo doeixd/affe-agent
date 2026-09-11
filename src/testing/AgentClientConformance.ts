@@ -171,12 +171,26 @@ const gated = Effect.map(Deferred.make<void>(), (gate) => ({
  * (seen on CI, Node 22). `stream` subscribes before admission; the outcome,
  * failure included, is `awaitSubmission`'s.
  */
-const observed = (name: string, session: AgentClient.RemoteSession, input: string) =>
+const observed = (options: Options, name: string, session: AgentClient.RemoteSession, input: string) =>
   Effect.gen(function* () {
-    const events = yield* Stream.runCollect(session.stream(input)).pipe(
-      Effect.timeout(Duration.seconds(10)),
-      Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
-    )
+    const terminal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(
+        Effect.timeout(Duration.seconds(10)),
+        Effect.catchTag("TimeoutError", () => Effect.fail(new Failure({ case: name, detail: "the submission never reached a terminal event" })))
+      )
+    // A client that refuses `stream` has only the racing path: the case can
+    // still fail on it by timing out, which the timeout names.
+    if (options.streamsSubmissions === false) {
+      const collected = yield* Effect.forkChild(Stream.runCollect(Stream.takeUntil(
+        session.events(),
+        (entry) => entry.event._tag.startsWith("Submission") && entry.event._tag !== "SubmissionStarted"
+      )))
+      yield* Effect.yieldNow
+      const exit = yield* Effect.exit(session.prompt(input))
+      const events = yield* terminal(Fiber.join(collected))
+      return { events, exit }
+    }
+    const events = yield* terminal(Stream.runCollect(session.stream(input)))
     const submissionId = events.length === 0 ? Option.none() : events[0]!.submissionId
     if (Option.isNone(submissionId)) {
       return yield* new Failure({ case: name, detail: "the stream's first envelope named no submission" })
@@ -924,12 +938,9 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           Effect.gen(function* () {
             const name = "emits lifecycle events in order"
             const session = yield* client.createSession()
-            const collected = yield* Effect.forkChild(Stream.runCollect(Stream.take(session.events(), 3)))
-            yield* Effect.yieldNow
-            yield* session.prompt("go")
-            const events = yield* Fiber.join(collected)
+            const { events } = yield* observed(options, name, session, "go")
             yield* equal(name)(
-              events.map((entry) => entry.event._tag),
+              events.slice(0, 3).map((entry) => entry.event._tag),
               ["SubmissionStarted", "RunStarted", "TurnStarted"],
               "the first three events"
             )
@@ -1030,7 +1041,7 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           Effect.gen(function* () {
             const name = "a tool that dies fails the run everywhere, and is not shown to the model"
             const session = yield* client.createSession()
-            const { events, exit } = yield* observed(name, session, "go")
+            const { events, exit } = yield* observed(options, name, session, "go")
             yield* that(name)(Exit.isFailure(exit), "the prompt failed")
             if (Exit.isFailure(exit)) {
               const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
@@ -1070,7 +1081,7 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
           Effect.gen(function* () {
             const name = "outcome matrix: a tool's expected failure is shown to the model under ReturnToModel, and the run completes"
             const session = yield* client.createSession()
-            const { events, exit } = yield* observed(name, session, "go")
+            const { events, exit } = yield* observed(options, name, session, "go")
             const result = yield* exit
             yield* equal(name)(result.status, "completed", "status")
             yield* equal(name)(result.text, "noted", "the model answered after seeing the failure")
