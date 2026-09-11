@@ -248,8 +248,9 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
          * the library's two elicitors refuse inside a call
          * (`InsideToolActivity`). Durable handlers, if they come, need a
          * marker that tells a suspended attempt from a dead one (item 113):
-         * one marker per attempt, and a durable note, written before the
-         * suspension is re-raised, that attempt k suspended.
+         * one marker per attempt, and a durable note that attempt k
+         * suspended, written by an interrupt finalizer -- the self-interrupt
+         * cannot be caught, but finalizers still run.
          */
         let startedHere = true
         if (!retrySafe) {

@@ -497,14 +497,16 @@ acceptance test for 105, 107 and 108.*
      which `DurableToolkit`'s interruption branch cannot catch, so nothing
      is journalled at the suspension -- and over `DurableEquivalence`'s
      SQLite cluster a durable sleep inside a handler did not resume within
-     20 s, idempotent or not. Latent, not live: a handler's requirements are `never`, so no
-     handler can name `WorkflowEngine` to sleep or await a deferred without
-     a cast, and the library's only in-call suspensions -- the two
-     elicitors -- are refused. Whatever lets a handler suspend must tell a
-     suspended attempt from a dead one. Sketched: a marker per attempt, and
-     a `DurableDeferred` completed before the suspension is re-raised saying
-     attempt k suspended; a re-execution walks k, runs the handler past a
-     suspended attempt, and refuses at one that simply stopped.
+     20 s, idempotent or not. Latent, not live: a handler's requirements
+     are `never`, so no handler can name `WorkflowEngine` to sleep or await
+     a deferred without a cast, and the library's only in-call suspensions
+     -- the two elicitors -- are refused. Whatever lets a handler suspend
+     must tell a suspended attempt from a dead one. Sketched: a marker per
+     attempt, and a `DurableDeferred` saying attempt k suspended, completed
+     from an interrupt finalizer that sees the activity's instance marked
+     `suspended` (a self-interrupt cannot be caught, but finalizers run); a
+     re-execution walks k, runs the handler past a suspended attempt, and
+     refuses at one that simply stopped.
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
