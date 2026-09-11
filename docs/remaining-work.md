@@ -574,14 +574,24 @@ one else was working on them.*
      ```
 
 117. **Relay operations ([plan-relay.txt](./plan-relay.txt), phases
-     13–16).** 13: a management `HttpApi` for peers, enrollment and status.
-     14: audit, metrics and rate limits. Both medium, and both due before a
-     relay is run for anyone but its owner. 15: an E2EE spike, optional.
-     16: several relay nodes, parked until one node is not enough.
+     13–16).** 13: a management `HttpApi` for peers, enrollment and status
+     -- medium, due before a relay is run for anyone but its owner.
+     **14 done 2026-09-11:** `RelayServer.layer` takes `sendRate` -- a token
+     bucket per authenticated sender; past it, `send` fails with the new
+     `RelayRateLimitedError` and its `retryAfterMs`, checked before
+     authorization so a flood of forbidden sends is limited too -- and
+     `audit`, told of every connection and every refused send with its
+     reason (unauthenticated, rate-limited, forbidden, offline); its own
+     failure is logged, never the sender's. `RelayServer.metrics` counts
+     sends by outcome and connections opened. Both options are absent by
+     default, so an existing relay behaves as before
+     (`test/RelayOperations.test.ts`). 15: an E2EE spike, optional. 16:
+     several relay nodes, parked until one node is not enough.
 
      ```text
      verify: no-grep "HttpApi" src/relay/RelayServer.ts
-     verify: no-grep "Metric" src/relay/RelayServer.ts
+     verify: grep "readonly sendRate?:" src/relay/RelayServer.ts
+     verify: exists test/RelayOperations.test.ts
      ```
 
 118. **effect-uai past the model adapter

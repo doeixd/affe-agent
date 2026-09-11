@@ -57,6 +57,7 @@
   "affe-agent/relay/RelayClient",
   "affe-agent/relay/RelayCredentials",
   "affe-agent/relay/RelayForbiddenError",
+  "affe-agent/relay/RelayRateLimitedError",
   "affe-agent/relay/RelayLeaseExpiredError",
   "affe-agent/relay/RelayPeerOfflineError",
   "affe-agent/relay/RelaySupersededError",

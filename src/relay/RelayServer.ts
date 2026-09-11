@@ -1,4 +1,4 @@
-import { Clock, Context, Duration, Effect, Layer, Option, Queue, Stream } from "effect"
+import { Clock, Context, Duration, Effect, Layer, Metric, Option, Queue, Stream } from "effect"
 import type { Headers } from "effect/unstable/http"
 import type { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { StorageError } from "../Errors.js"
@@ -111,7 +111,42 @@ export interface Options {
    * growing the relay's memory. Default 1024.
    */
   readonly inboundCapacity?: number | undefined
+  /**
+   * Each sender's send rate (item 117, relay phase 14): a token bucket per
+   * authenticated peer, refilled at `perSecond` and holding at most `burst`
+   * (default `perSecond`). A send past it fails with `RelayRateLimitedError`
+   * and its `retryAfterMs`, rather than being dropped or slowing everyone
+   * else's traffic behind it. Absent: unlimited, as before.
+   */
+  readonly sendRate?: { readonly perSecond: number; readonly burst?: number | undefined } | undefined
+  /**
+   * Told about every connection and every refused send, for an audit trail.
+   * Its own failure is logged and never becomes the sender's.
+   */
+  readonly audit?: ((event: AuditEvent) => Effect.Effect<void>) | undefined
 }
+
+/** What the relay reports to `Options.audit`. */
+export type AuditEvent =
+  | { readonly _tag: "Connected"; readonly peer: Relay.PeerId; readonly at: number }
+  | {
+    readonly _tag: "Refused"
+    readonly reason: "unauthenticated" | "rate-limited" | "forbidden" | "offline"
+    /** Absent when the sender could not be authenticated. */
+    readonly from: Option.Option<Relay.PeerId>
+    readonly to: Relay.PeerId
+    readonly endpoint: Relay.EndpointId
+    readonly at: number
+  }
+
+/**
+ * Sends by outcome (`delivered`, `unauthenticated`, `rate-limited`,
+ * `forbidden`, `offline`) and connections opened: what an operator watches.
+ */
+export const metrics = {
+  sends: Metric.counter("relay_sends", { description: "Relay sends, by outcome", incremental: true }),
+  connections: Metric.counter("relay_connections", { description: "Relay connections opened", incremental: true })
+} as const
 
 interface Connection {
   readonly queue: Queue.Queue<Relay.Envelope, Relay.ConnectionEnded>
@@ -138,6 +173,43 @@ export const layer = (
       const capacity = options.inboundCapacity ?? 1024
       const lease = Duration.toMillis(options.lease ?? Duration.seconds(60))
       const peers = new Map<Relay.PeerId, Entry>()
+      const rate = options.sendRate
+      if (rate !== undefined && !(rate.perSecond > 0 && (rate.burst === undefined || rate.burst >= 1))) {
+        return yield* Effect.die(new RangeError("RelayServer: sendRate needs perSecond > 0 and burst >= 1"))
+      }
+      const buckets = new Map<Relay.PeerId, { readonly tokens: number; readonly at: number }>()
+
+      /** `None` if the send is admitted; otherwise how long until one would be. */
+      const admit = (peer: Relay.PeerId, now: number): Option.Option<number> => {
+        if (rate === undefined) return Option.none()
+        const burst = rate.burst ?? rate.perSecond
+        const held = buckets.get(peer) ?? { tokens: burst, at: now }
+        const tokens = Math.min(burst, held.tokens + ((now - held.at) * rate.perSecond) / 1000)
+        if (tokens >= 1) {
+          buckets.set(peer, { tokens: tokens - 1, at: now })
+          return Option.none()
+        }
+        buckets.set(peer, { tokens, at: now })
+        return Option.some(Math.ceil(((1 - tokens) * 1000) / rate.perSecond))
+      }
+
+      const report = (event: AuditEvent): Effect.Effect<void> =>
+        options.audit === undefined
+          ? Effect.void
+          : options.audit(event).pipe(Effect.catchCause((cause) => Effect.logWarning("relay: the audit hook failed", cause)))
+
+      const outcome = (name: string) => Metric.update(Metric.withAttributes(metrics.sends, { outcome: name }), 1)
+
+      const refused = (
+        reason: Extract<AuditEvent, { _tag: "Refused" }>["reason"],
+        from: Option.Option<Relay.PeerId>,
+        outbound: Relay.Outbound,
+        at: number
+      ) =>
+        Effect.andThen(
+          outcome(reason),
+          report({ _tag: "Refused", reason, from, to: outbound.to, endpoint: outbound.endpoint, at })
+        )
 
       /**
        * Whether this peer is reachable *now*, expiring it if not.
@@ -178,6 +250,8 @@ export const layer = (
         }
         const connection: Connection = { queue, connectedAt: now }
         peers.set(peer, { connection: Option.some(connection), lastSeenAt: now })
+        yield* Metric.update(metrics.connections, 1)
+        yield* report({ _tag: "Connected", peer, at: now })
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const current = peers.get(peer)
@@ -193,11 +267,26 @@ export const layer = (
       })
 
       const send = Effect.fn("RelayServer.send")(function* (outbound: Relay.Outbound, headers: Headers.Headers) {
-        const from = yield* authenticator.authenticate(headers)
+        const arrived = yield* Clock.currentTimeMillis
+        const from = yield* authenticator.authenticate(headers).pipe(
+          Effect.tapError((error) =>
+            error._tag === Namespace.tag("relay/RelayUnauthorizedError")
+              ? refused("unauthenticated", Option.none(), outbound, arrived)
+              : Effect.void
+          )
+        )
         yield* Effect.annotateCurrentSpan("relay.from", from)
         yield* Effect.annotateCurrentSpan("relay.to", outbound.to)
         yield* Effect.annotateCurrentSpan("relay.endpoint", outbound.endpoint)
-        yield* authorization.authorize({ from, to: outbound.to, endpoint: outbound.endpoint })
+        // Before authorization, so a flood of forbidden sends is limited too.
+        const wait = admit(from, arrived)
+        if (Option.isSome(wait)) {
+          yield* refused("rate-limited", Option.some(from), outbound, arrived)
+          return yield* new Relay.RelayRateLimitedError({ peer: from, retryAfterMs: wait.value })
+        }
+        yield* authorization.authorize({ from, to: outbound.to, endpoint: outbound.endpoint }).pipe(
+          Effect.tapError(() => refused("forbidden", Option.some(from), outbound, arrived))
+        )
         touch(from, yield* Clock.currentTimeMillis)
         const now = yield* Clock.currentTimeMillis
         const target = peers.get(outbound.to)
@@ -207,6 +296,7 @@ export const layer = (
           ? Option.none<Connection>()
           : yield* live(outbound.to, target, now)
         if (Option.isNone(reachable)) {
+          yield* refused("offline", Option.some(from), outbound, arrived)
           return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
         }
         const envelope: Relay.Envelope = {
@@ -218,8 +308,10 @@ export const layer = (
         }
         const accepted = yield* Queue.offer(reachable.value.queue, envelope)
         if (!accepted) {
+          yield* refused("offline", Option.some(from), outbound, arrived)
           return yield* new Relay.RelayPeerOfflineError({ peer: outbound.to })
         }
+        yield* outcome("delivered")
       })
 
       const heartbeat = Effect.fn("RelayServer.heartbeat")(function* (headers: Headers.Headers) {

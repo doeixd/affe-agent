@@ -140,6 +140,22 @@ export class RelayForbiddenError extends Schema.TaggedError<RelayForbiddenError>
   }
 }
 
+/**
+ * The sender went over the relay's send rate (item 117, relay phase 14).
+ *
+ * A typed refusal, not a silent drop and not backpressure: one peer flooding
+ * the relay would otherwise slow every peer's traffic behind it. `retryAfterMs`
+ * is when the next send would be admitted.
+ */
+export class RelayRateLimitedError extends Schema.TaggedError<RelayRateLimitedError>()(
+  Namespace.tag("relay/RelayRateLimitedError"),
+  { peer: PeerId, retryAfterMs: Schema.Number }
+) {
+  override get message() {
+    return `relay rate-limited ${this.peer}; retry after ${this.retryAfterMs} ms`
+  }
+}
+
 /** Every error the relay's own protocol can answer with. */
 export const RelayError = Schema.Union([
   RelayUnauthorizedError,
@@ -147,6 +163,7 @@ export const RelayError = Schema.Union([
   RelaySupersededError,
   RelayLeaseExpiredError,
   RelayForbiddenError,
+  RelayRateLimitedError,
   // An authenticator with a store behind it can fail to ask its question.
   // Typed rather than a defect, because the caller's correct response is to
   // try again, and a defect does not say that.

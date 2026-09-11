@@ -640,7 +640,8 @@ describe("durable and cluster surfaces", () => {
       "RelayAuthenticator",
       "allowAll",
       "bearerTokens",
-      "layer"
+      "layer",
+      "metrics"
     ])
   })
 
