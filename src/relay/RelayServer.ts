@@ -121,7 +121,10 @@ export interface Options {
   readonly sendRate?: { readonly perSecond: number; readonly burst?: number | undefined } | undefined
   /**
    * Told about every connection and every refused send, for an audit trail.
-   * Its own failure is logged and never becomes the sender's.
+   * Its own failure is logged and never becomes the sender's. Called inline,
+   * so the trail is in order and a refusal is recorded before its sender
+   * hears of it -- which also means a slow hook delays that reply: hand the
+   * event to a queue if writing it is slow.
    */
   readonly audit?: ((event: AuditEvent) => Effect.Effect<void>) | undefined
 }
