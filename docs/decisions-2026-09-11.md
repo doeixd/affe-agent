@@ -8,8 +8,8 @@ time.
 The owner delegated all of them ("use good judgement to answer the open
 decisions"). The agent decided each one on the evidence below. Where a
 decision needed an action, the action was taken and is recorded with the
-hashes needed to undo it. Only one decision needs something the agent
-cannot do itself: creating an API key (D4).
+hashes needed to undo it. The one decision that needed the owner's hands,
+creating an API key (D4), the owner then declined.
 
 The decisions were resolved in three different ways, and the reason for
 each way:
@@ -27,7 +27,7 @@ each way:
 | D1 | Push `main`? Push on request, or as a standing rule? | Push. Standing rule: push once the full check passes in a clean worktree. | Pushed after the check passed. |
 | D2 | Delete the merged remote branches? | Yes. | Deleted; tips recorded below. |
 | D3 | Drop the 2026-08-24 stash? | Yes, keeping a copy. | Tagged, patch saved, dropped. |
-| D4 | A key for the live runs? | Yes: a dedicated key with a spend cap. | **Waiting on the owner:** only a person can create it. |
+| D4 | A key for the live runs? | Recommended a dedicated, capped key; **the owner skipped it.** | No key; the live measurements stay open. |
 | D5 | What item 113 becomes | Keep the refusal. Child-workflow delegation is the design of record. General suspendable handlers are refused. | Recorded in item 113. |
 | Q1 | Visibility per agent or per session? | A rule on the agent, applied per caller. | Recorded in the plan's §13. |
 | Q4 | Projected completion from a provider-executed tool? | No. | Recorded; refused by `fromTool` in `e30f31f` (a type error, and a `TypeError` for a widened type). |
@@ -129,10 +129,13 @@ option) would settle item 93 but leave the weekly run with nothing. The cap
 bounds the risk of a stored secret: both runs together should cost a few
 dollars a week.
 
-**Waiting on the owner.** Creating a key and a spend limit needs a person
-signed in to the Console. After that, one command:
-`gh secret set ANTHROPIC_API_KEY`. Then trigger the workflow once by hand,
-and run item 93's cost scenario.
+**Overruled by the owner, the same day: skipped** ("skip that"). No key is
+created. What that leaves: item 93's input-token saving stays a claim
+measured only against the scripted model, so the guide does not yet
+recommend progressive exposure on cost grounds; `continuity-live` keeps
+skipping itself; and item 100's live-cost half stays open. None of it
+blocks other work. To reopen: create the key with a cap and run
+`gh secret set ANTHROPIC_API_KEY`; the workflow picks it up unchanged.
 
 ## D5. Item 113: durable delegation with a forwarded approval
 
