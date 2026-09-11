@@ -192,6 +192,10 @@ export const make = <A, I>(
  * - **Checked against the output schema**, as a model-reported value is; one
  *   that does not encode is a defect in the projector (the model cannot fix
  *   it).
+ * - **Not a provider-defined tool.** Its result is shaped by the provider,
+ *   and an answer must come from a result the host controls: refused by type
+ *   (`ProviderDefinedToolCannotProject`), and with a `TypeError` where a
+ *   widened type let it through.
  * - **First in the response wins** when several projecting tools succeed in
  *   one turn; a value the model reported through the output tool wins over
  *   all of them (it cannot share a turn with them anyway -- it is `Alone`).
