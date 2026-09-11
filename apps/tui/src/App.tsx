@@ -84,19 +84,20 @@ interface Clipped {
 
 const diffOf = (
   before: string | undefined,
-  after: string | undefined
+  after: string | undefined,
+  limit = DIFF_LINES
 ): Clipped => {
   if (before === undefined && after === undefined) {
     return { lines: [], hidden: 0, note: undefined }
   }
   const diff = Diff.of(before ?? "", after ?? "")
-  const hidden = Math.max(0, diff.lines.length - DIFF_LINES)
+  const hidden = Math.max(0, diff.lines.length - limit)
   const note = diff.summarised
     ? "too large to line up"
     : diff.newlineChange === undefined
     ? undefined
     : `no newline at end of file (${diff.newlineChange})`
-  return { lines: diff.lines.slice(0, DIFF_LINES), hidden, note }
+  return { lines: diff.lines.slice(0, limit), hidden, note }
 }
 
 const diffColour = (kind: Diff.Line["kind"]): ColorInput =>
@@ -135,7 +136,8 @@ const ChangeBody = (props: {
   before: string | undefined
   after: string | undefined
 }) => {
-  const clipped = createMemo(() => diffOf(props.before, props.after))
+  // Ctrl+O expands a diff as it does any other body.
+  const clipped = createMemo(() => diffOf(props.before, props.after, expanded() ? Number.POSITIVE_INFINITY : DIFF_LINES))
   return (
     <box flexDirection="column">
       <For each={clipped().lines}>
@@ -146,7 +148,7 @@ const ChangeBody = (props: {
         )}
       </For>
       <Show when={clipped().hidden > 0}>
-        <text fg={theme.block.muted}>{`  … ${clipped().hidden} more lines`}</text>
+        <text fg={theme.block.muted}>{moreHint(clipped().hidden, "lines")}</text>
       </Show>
       <Show when={clipped().note !== undefined}>
         <text fg={theme.block.muted}>{`  ${clipped().note}`}</text>
