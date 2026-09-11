@@ -200,7 +200,7 @@ it now.)*
     descriptions and `Agent.describe` already ship. The wire form waits for
     an actual CLI, host or product consumer.
 
-89. **effect-uai adapter: Phase 2 streaming acceptance, then the rest of Phase 3.**
+89. ~~**effect-uai adapter: Phase 2 streaming acceptance, then the rest of Phase 3.**~~ **DONE 2026-09-11, as far as effect-uai allows.**
     Phases 0 and 1 landed 2026-09-08:
     [plan-effect-uai-compatibility-contract.md](./plan-effect-uai-compatibility-contract.md)
     is the contract, `src/effect-uai` the adapter (`affe-agent/effect-uai`,
@@ -220,14 +220,20 @@ it now.)*
     writes, and reasoning tokens, into `usage`; now a row), and provider
     response ids cannot -- effect-uai's `Turn` carries items, usage and a
     stop reason and no response id, so there is nothing to map until
-    upstream adds one. What Phase 3 still owes: provider-defined tool
-    metadata, and files.
+    upstream adds one. The last two are the same kind of answer: effect-uai's
+    input content is `input_text` and `input_image` only, so a non-image
+    file has nowhere to go and its refusal (pinned) is correct, not owed;
+    and provider-defined tools are refused on purpose (pinned), because a
+    provider executing a tool would bypass Affe's tool execution, so there
+    is no metadata to carry. Reopens when upstream adds a file input or a
+    response id.
 
     Dynamic tools (a raw JSON schema rather than an Effect `Schema`) are
     tested since 2026-09-11: described to effect-uai by exactly the schema
     given, and a call arrives with its arguments parsed. No network test
     against a real effect-uai provider exists yet, and is the strongest
-    remaining evidence gap.
+    remaining evidence gap; it needs a provider key, which the owner
+    declined for now (decisions-2026-09-11 D4).
 
     ```text
     verify: exists test/ProviderContinuation.test.ts

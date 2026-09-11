@@ -1,12 +1,14 @@
 # effect-uai comparison and interoperability plan
 
-**Status (2026-09-11): phases 0–2 landed and phase 3 in part.** The adapter
-is `src/effect-uai` (`133d14f`, phases 0–1); phase 2's acceptance is
-`4bda60b`. Of phase 3, reasoning continuation is audited end to end
-(`test/ProviderContinuation.test.ts`), images and citations cross
-(`86d1193`) and provider options survive (`81a1d6f`). Still owed by phase
-3: provider response ids, prompt-cache and provider-defined tool metadata,
-and files -- item 89.
+**Status (2026-09-11): phases 0–3 landed, 3 as far as effect-uai allows.**
+The adapter is `src/effect-uai` (`133d14f`, phases 0–1); phase 2's
+acceptance is `4bda60b`. Of phase 3, reasoning continuation is audited end
+to end (`test/ProviderContinuation.test.ts`), images and citations cross
+(`86d1193`), provider options survive (`81a1d6f`), and cache and reasoning
+token counts reach usage. What cannot cross is upstream's to add: a response
+id (effect-uai's `Turn` has none) and non-image files (its input content is
+text and images only); provider-defined tools are refused on purpose, since
+they would bypass Affe's tool execution (item 89).
 Phases 4–6 are item 118.
 
 **Read:** 2026-09-08, against `doeixd/affe-agent` and `betalyra/effect-uai` main.
