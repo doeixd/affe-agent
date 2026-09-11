@@ -250,4 +250,65 @@ describe("Connectors.serverLayer", () => {
       assert.deepStrictEqual(answered, Option.some("served answer"))
     }).pipe(Effect.scoped)
   )
+
+  it.live("a 200 is received, not persisted: a server lost before the run commits loses the delivery (item 97, A8.1)", () =>
+    Effect.gen(function* () {
+      // `guide-sessions.md`'s table, last row: the 200 means the request was
+      // received and a run forked, nothing more, so a process lost before
+      // that run commits loses the delivery -- no reply, and the platform
+      // will not redeliver. What is asserted is the documented loss: if this
+      // ever starts surviving, the guide's "handed over" is what to change.
+      const replied = yield* Deferred.make<string>()
+      const started = yield* Deferred.make<void>()
+      const { layer: model } = yield* TestLanguageModel.script([{ hang: true, started }])
+      const host = AgentSessionHost.layer(Host, {
+        authorization: { authorize: () => Effect.void },
+        principal: { resolve: ({ headers }) => Effect.succeed(headers.authorization ?? "anonymous") },
+        maxSessions: 10,
+        maxRequestsPerSession: 16
+      }).pipe(
+        Layer.provide(AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(2) }))),
+        Layer.provide(model)
+      )
+      const app = Connectors.serverLayer({
+        host: Host,
+        path: "/hook",
+        decode: (request) =>
+          HttpIncomingMessage.schemaBodyJson(Body)(request).pipe(
+            Effect.map((body) =>
+              Connectors.delivered({
+                conversation: body.conversation ?? "C",
+                text: body.text ?? "",
+                deliveryId: body.deliveryId ?? "d",
+                headers: request.headers
+              }))
+          ),
+        reply: (result) => Deferred.succeed(replied, result.text).pipe(Effect.asVoid)
+      }).pipe(Layer.provide(host))
+
+      const status = yield* Effect.scoped(Effect.gen(function* () {
+        const built = yield* Layer.build(
+          HttpRouter.serve(app, { disableLogger: true, disableListenLog: true }).pipe(
+            Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, disablePreemptiveShutdown: true }))
+          )
+        )
+        const address = HttpServer.formatAddress(
+          (yield* Effect.service(HttpServer.HttpServer).pipe(Effect.provide(built))).address
+        )
+        const response = yield* Effect.promise(() =>
+          fetch(`${address}/hook`, {
+            method: "POST",
+            headers: { authorization: "user-a", "content-type": "application/json" },
+            body: JSON.stringify({ kind: "deliver", conversation: "C1", text: "hi", deliveryId: "d1" })
+          }))
+        // The run has begun, not committed: the model is parked.
+        yield* Deferred.await(started)
+        return response.status
+      }))
+      // The server's process is gone.
+      assert.strictEqual(status, 200)
+      const answered = yield* Deferred.await(replied).pipe(Effect.timeoutOption("500 millis"))
+      assert.isTrue(Option.isNone(answered), "a delivery acked with 200 survived the server that received it")
+    })
+  )
 })

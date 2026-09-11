@@ -280,6 +280,34 @@ describe("Scheduling.queued (queue-backed, durable when the store is)", () => {
       }).pipe(Effect.provide(model), Effect.scoped)
     })
   )
+
+  it.live("a worker that dies after claiming a job loses it: claimed at most once (item 97, A8.1)", () =>
+    Effect.gen(function* () {
+      // `guide-sessions.md`'s table, the second half of the `queued` row: a
+      // crash *after* a worker's claim loses the job, because the claim takes
+      // it. What is asserted is the documented loss -- if this ever starts
+      // redelivering, the guide's "at most once" is the thing to change.
+      const store = yield* Scheduling.memoryStore
+      yield* Scheduling.dispatch({ input: "go" }).pipe(Effect.provide(Scheduling.queued(store)))
+
+      const claimedAndStarted = yield* Deferred.make<void>()
+      const { layer: dying } = yield* TestLanguageModel.script([{ hang: true, started: claimedAndStarted }])
+      yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(Scheduling.worker(Simple, store, { pollInterval: "1 millis" }))
+        yield* Deferred.await(claimedAndStarted)
+      }).pipe(Effect.provide(dying), Effect.scoped)
+      // Worker A is gone, mid-job.
+
+      const reached = yield* Deferred.make<void>()
+      const { layer: fresh } = yield* TestLanguageModel.script([{ text: "done", started: reached }])
+      const redelivered = yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(Scheduling.worker(Simple, store, { pollInterval: "1 millis" }))
+        return yield* Deferred.await(reached).pipe(Effect.timeoutOption("500 millis"))
+      }).pipe(Effect.provide(fresh), Effect.scoped)
+      assert.isTrue(Option.isNone(redelivered), "a second worker ran the job a dead worker had claimed")
+      assert.deepStrictEqual(yield* store.claimDue(Number.MAX_SAFE_INTEGER), [])
+    })
+  )
 })
 
 describe("Scheduling.worker resilience", () => {

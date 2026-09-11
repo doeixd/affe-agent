@@ -293,7 +293,7 @@ and pin the state it starts from.*
     verify: grep "readonly maxSchemaBytes: Option.Option<number>" src/ToolExposure.ts
     ```
 
-97. **Acknowledgement vocabulary (plan E5, §8) -- documented 2026-09-10.**
+97. ~~**Acknowledgement vocabulary (plan E5, §8)**~~ **DONE 2026-09-11** (documented 2026-09-10).
     `guide-sessions.md`'s "What a success means" table gives each
     submit-like API the state its success guarantees -- handed over,
     persisted, accepted, settled -- and what a crash after it costs; the
@@ -307,8 +307,20 @@ and pin the state it starts from.*
     incumbent instead of retrying blind (a conformance case; the durable
     row fails with the id removed; `test/fixtures/busy-error.json`). A8.2,
     two concurrent submits under one key, is `DurableAgentClient.test.ts`'s
-    concurrent `req-1` row. Open: the per-API stop-the-destination tests
-    (A8.1). Medium.
+    concurrent `req-1` row. **A8.1 done 2026-09-11:** each row of the table
+    now has a test that loses the destination after success and asserts what
+    the row says survives -- or, for the "handed over" rows, that it is
+    lost, so the guide cannot quietly promise more than happens:
+    `SessionInbox.enqueue` (persisted: a fresh inbox delivers it once),
+    `deliver`'s `Delivered` (accepted, not settled: not redelivered),
+    `queued` dispatch after a worker's claim (lost, at most once), a
+    connector's 200 (received, not persisted: no reply), and
+    `RelayClient.send` (handed over: a dropped target's queue is gone).
+    Already covered: `DurableAgentClient.submit` (`DurableEquivalence`'s
+    crash rows submit, kill the process and finish in another), `queued`
+    before the claim, and `local` dispatch. `prompt`'s "settled" is every
+    `prompt` test, and an in-process `submit` dying with its process is what
+    in-memory means.
 
     ```text
     verify: grep "## What a success means" docs/guide-sessions.md

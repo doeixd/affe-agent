@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Layer, Option, Schedule } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
@@ -145,4 +145,75 @@ describe("SessionInbox", () => {
         assert.strictEqual(outcome.item.sessionId, "never-created")
       }).pipe(Effect.provide(layer))
     }))
+
+  it.live("an enqueued item outlives the process that took it, and is delivered once (item 97, A8.1)", () =>
+    Effect.gen(function* () {
+      // `guide-sessions.md`'s table: `enqueue` succeeds once the item is
+      // persisted, so a crash after it leaves the item in the inbox. The
+      // queue's store is the durable part and outlives both processes; the
+      // inbox, the queue service and the client are the process, rebuilt.
+      const store = yield* Layer.build(PersistedQueue.layerStoreMemory)
+      const process = (turns: ReadonlyArray<Parameters<typeof TestLanguageModel.script>[0][number]>) =>
+        Effect.map(TestLanguageModel.script(turns), ({ layer: model }) =>
+          Layer.mergeAll(
+            AgentClient.layer(Agent.make({})).pipe(Layer.provide(model)),
+            PersistedQueue.layer.pipe(Layer.provide(Layer.succeedContext(store)))
+          ))
+
+      yield* Effect.scoped(Effect.gen(function* () {
+        const inbox = yield* SessionInbox.make()
+        yield* inbox.enqueue(item())
+        // ...and the process is gone before anything delivered it.
+      })).pipe(Effect.provide(yield* process([])))
+
+      yield* Effect.scoped(Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        const session = yield* client.createSession({ sessionId: "s1" })
+        const inbox = yield* SessionInbox.make()
+        const outcome = yield* inbox.deliver
+        assert.strictEqual(outcome._tag, "Delivered")
+        assert.strictEqual(outcome.item.id, item().id)
+        yield* until(session.status, (status) => status === "idle")
+        assert.deepStrictEqual(TestLanguageModel.userTexts(yield* session.history), ["the build finished"])
+      })).pipe(Effect.provide(yield* process([TestLanguageModel.text("noted")])))
+    }).pipe(Effect.scoped))
 })
+
+describe("SessionInbox: what Delivered promises (item 97, A8.1)", () => {
+  it.live("Delivered is accepted, not settled: the item is consumed, and a lost run is not redelivered", () =>
+    Effect.gen(function* () {
+      // `guide-sessions.md`'s table: `deliver`'s `Delivered` means the session
+      // accepted a submission, not that it finished. The item leaves the
+      // inbox at that moment, so a run lost afterwards is the session's to
+      // report, not the inbox's to retry. Asserted as documented: if this ever
+      // redelivers, the guide's "accepted, not settled" is what to change.
+      const store = yield* Layer.build(PersistedQueue.layerStoreMemory)
+      const queue = PersistedQueue.layer.pipe(Layer.provide(Layer.succeedContext(store)))
+      const started = yield* Deferred.make<void>()
+      const { layer: parked } = yield* TestLanguageModel.script([{ hang: true, started }])
+
+      const delivered = yield* Effect.scoped(Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        yield* client.createSession({ sessionId: "s1" })
+        const inbox = yield* SessionInbox.make()
+        yield* inbox.enqueue(item())
+        const outcome = yield* inbox.deliver
+        yield* Deferred.await(started)
+        return outcome._tag
+        // The session's process goes, mid-run.
+      })).pipe(Effect.provide(Layer.mergeAll(AgentClient.layer(Agent.make({})).pipe(Layer.provide(parked)), queue)))
+      assert.strictEqual(delivered, "Delivered")
+
+      const { layer: fresh } = yield* TestLanguageModel.script([TestLanguageModel.text("noted")])
+      const again = yield* Effect.scoped(Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        yield* client.createSession({ sessionId: "s1" })
+        const inbox = yield* SessionInbox.make()
+        return yield* inbox.deliver.pipe(Effect.timeoutOption("500 millis"))
+      })).pipe(Effect.provide(Layer.mergeAll(AgentClient.layer(Agent.make({})).pipe(Layer.provide(fresh)), queue)))
+      assert.isTrue(Option.isNone(again), "the inbox redelivered an item it had already reported Delivered")
+    }).pipe(Effect.scoped))
+})
+
+const until = <A, E>(observation: Effect.Effect<A, E>, done: (value: A) => boolean) =>
+  Effect.repeat(observation, { until: done, schedule: Schedule.spaced("10 millis") })

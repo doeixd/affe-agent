@@ -146,4 +146,39 @@ describe("relay leases", () => {
     }).pipe(Effect.provide(relay(Duration.millis(150)))),
     20_000
   )
+
+  it.live("a successful send is handed over, not delivered: a target that drops before reading loses it (item 97, A8.1)", () =>
+    Effect.gen(function* () {
+      // `guide-sessions.md`'s table: `RelayClient.send` succeeds once the
+      // envelope is in an online peer's queue. The first envelope is read and
+      // the target stops there; the second waits, unread, in its queue. The
+      // target drops, comes back, and the second is gone -- the documented
+      // loss. If a reconnect ever redelivers it, the guide's "handed over" is
+      // what to change.
+      const client = yield* RpcTest.makeClient(RelayProtocol.Protocol)
+      let read = 0
+      const first = yield* Effect.forkChild(
+        Effect.exit(Stream.runDrain(client.listen({}, as("target-secret")).pipe(
+          Stream.tap(() => Effect.sync(() => { read++ })),
+          // Read one, then stop reading: a node wedged, or about to die.
+          Stream.mapEffect(() => Effect.never)
+        )))
+      )
+      yield* awaitOnline(client.peers({}, as("caller-secret")), TARGET)
+      yield* client.send(envelopeFor(TARGET), as("caller-secret"))
+      yield* client.send(envelopeFor(TARGET), as("caller-secret"))
+      yield* Effect.sleep("100 millis")
+      assert.strictEqual(read, 1, "the target read the first envelope and stopped")
+
+      // The target drops, and a new connection takes its place.
+      yield* Fiber.interrupt(first)
+      const second = yield* Effect.forkChild(
+        Stream.runCollect(client.listen({}, as("target-secret")).pipe(Stream.take(1)))
+      )
+      yield* awaitOnline(client.peers({}, as("caller-secret")), TARGET)
+      const redelivered = yield* Fiber.join(second).pipe(Effect.timeoutOption("500 millis"))
+      assert.isTrue(Option.isNone(redelivered), "an envelope queued for a dropped connection reached its replacement")
+    }).pipe(Effect.provide(relay(Duration.seconds(10)))),
+    20_000
+  )
 })
