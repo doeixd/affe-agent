@@ -6,6 +6,7 @@ import type { SqlClient } from "effect/unstable/sql"
 import type { AgentDefinition } from "../Agent.js"
 import type * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
+import * as RunLedger from "../RunLedger.js"
 import * as ToolScheduling from "../ToolScheduling.js"
 import { AgentClient } from "../client/index.js"
 import * as DeliveryLog from "../durable/DeliveryLog.js"
@@ -174,6 +175,16 @@ export interface Observation {
    * session out of its next prompt.
    */
   readonly session: { readonly status: string; readonly submissionCount: number; readonly claimed: boolean }
+  /**
+   * What the finishing process's `RunLedger` recorded (item 104): turns and
+   * tokens, as a `Budget` in that process would have charged them. A
+   * replacement re-runs the submission from the top, replaying journalled
+   * turns, so its ledger re-derives the whole run -- and a replay that
+   * re-expressed a response with its usage lost would bill differently from
+   * the run that never crashed. (Not the delivered events: a replayed
+   * emission is deduplicated, so they keep the dead process's numbers.)
+   */
+  readonly usage: { readonly turns: number; readonly inputTokens: number; readonly outputTokens: number }
 }
 
 const SESSION = "durable-equivalence"
@@ -273,6 +284,9 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
         Layer.provideMerge(engine),
         Layer.provideMerge(model),
         Layer.provideMerge(failpoint),
+        // A ledger per process: what this process's engine records of the
+        // turns it runs or replays.
+        Layer.provideMerge(RunLedger.fresh()),
         Layer.provideMerge(
           scenario.hostScheduling === undefined
             ? Layer.empty
@@ -281,7 +295,8 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
       )
     )
     const client = yield* Effect.service(AgentClient.AgentClient).pipe(Effect.provide(runtime))
-    return { client, recorder, delivery: stores.delivery, sessionStore: stores.sessionStore }
+    const ledger = Effect.flatMap(Effect.service(RunLedger.RunLedger), (l) => l.totals).pipe(Effect.provide(runtime))
+    return { client, recorder, delivery: stores.delivery, sessionStore: stores.sessionStore, ledger }
   })
 
 const recording = Effect.map(Ref.make<ReadonlyArray<string>>([]), (log) => ({
@@ -295,13 +310,15 @@ const observe = (
   modelCalls: number,
   effects: ReadonlyArray<string>,
   delivery: DeliveryLog.DeliveryLog,
-  sessionStore: DurableSessionStore.DurableSessionStore
+  sessionStore: DurableSessionStore.DurableSessionStore,
+  runLedger: Effect.Effect<RunLedger.Totals>
 ): Effect.Effect<Observation> =>
   Effect.all([
     Effect.orDie(Schema.encodeEffect(PromptWire.Prompt)(history)),
     Effect.orDie(delivery.read(SESSION)),
-    Effect.orDie(sessionStore.get(SESSION))
-  ]).pipe(Effect.map(([encoded, delivered, record]) => ({
+    Effect.orDie(sessionStore.get(SESSION)),
+    runLedger
+  ]).pipe(Effect.map(([encoded, delivered, record, ledger]) => ({
     history: encoded,
     status: result.status,
     text: result.text,
@@ -310,6 +327,7 @@ const observe = (
     modelCalls,
     effects: [...effects].sort(),
     events: delivered.map((envelope) => envelope.event._tag),
+    usage: { turns: ledger.turns, inputTokens: ledger.inputTokens, outputTokens: ledger.outputTokens },
     session: Option.match(record, {
       onNone: () => ({ status: "missing", submissionCount: 0, claimed: false }),
       onSome: (r) => ({ status: r.status, submissionCount: r.submissionCount, claimed: Option.isSome(r.claim) })
@@ -325,12 +343,12 @@ export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
     Effect.gen(function*() {
       const sql = yield* options.database
       const { effects, recorded } = yield* recording
-      const { client, delivery, recorder, sessionStore } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
+      const { client, delivery, ledger, recorder, sessionStore } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
       const session = yield* client.createSession({ sessionId: SESSION })
       yield* answering(session, scenario.answer)
       for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
       const result = yield* session.prompt(scenario.prompt, { stream: scenario.stream ?? false })
-      return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded, delivery, sessionStore)
+      return yield* observe(yield* session.history, result, yield* recorder.calls, yield* recorded, delivery, sessionStore, ledger)
     })
   )
 
@@ -391,7 +409,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       return yield* Effect.scoped(
         Effect.gen(function*() {
-          const { client, delivery, recorder, sessionStore } = yield* processOver(scenario, sql, effects, lock, "second")
+          const { client, delivery, ledger, recorder, sessionStore } = yield* processOver(scenario, sql, effects, lock, "second")
           const session = yield* client.session(SESSION)
           yield* answering(session, scenario.answer)
           // Retried: until the dead process's shard lock expires, the
@@ -415,7 +433,8 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
             first.calls + secondCalls,
             yield* recorded,
             delivery,
-            sessionStore
+            sessionStore,
+            ledger
           )
           return { observation, split: [first.calls, secondCalls] as const }
         })

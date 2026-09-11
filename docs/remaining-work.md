@@ -454,55 +454,6 @@ oracle), 105 (host scheduling and authority capture), 106 (continuity
 evaluation). Work order: 91 and 103 first, then 104, whose oracle is the
 acceptance test for 105, 107 and 108.*
 
-104. **Crash/no-crash canonical equivalence oracle (plan E12, §16) --
-     first slice landed 2026-09-10.** In-turn failpoints exist
-     (`internal/turnFailpoints.ts`: after the model response, after each tool
-     call settles, before and after the commit), and
-     `test/DurableEquivalence.test.ts` crashes a real process at each one --
-     parked at the boundary, scope closed, a second process over the same
-     SQLite file takes the shard over -- and asserts the recovered run equals
-     the uninterrupted one: encoded canonical history, result, model calls
-     split exactly between the two processes, and each tool run once. Batch
-     and streamed; two cells in `npm test`, the whole matrix under
-     `AFFE_EQUIVALENCE=full`, which `verify:durability`'s new D8 row sets.
-     The harness ships as `affe-agent/testing`'s `DurableEquivalence` and
-     speaks only Effect's `SqlClient` -- the journal (`SingleRunner` with SQL
-     runner storage), channels, session store and delivery log all run over
-     it -- so the caller supplies the database and the harness names no
-     driver. The output tool is a scenario now: a run that answers through
-     it recovers the same value, events and model calls from every in-turn
-     boundary (one cell by default, all under `AFFE_EQUIVALENCE=full`).
-     A compacting run is a scenario too, once the harness's model could
-     follow one (`select: "results"`: counting assistant messages lost its
-     place when compaction folded them, and every tool ran twice): crashed
-     after its second turn, it recovers to the same history, events and
-     effects. So is a rollover: a run that looks something up, calls
-     `new_context`, and resumes from the handoff alone, crashed after the
-     rollover's turn commits, recovers to the same run -- driven by a model
-     that decides from the prompt's content, since after a rollover nothing a
-     script counts is left. A run that waits on an approval is a scenario:
-     the harness answers what the run asks in whichever process runs it
-     (`answer`), and a crash after the approved call recovers the same run.
-     Still open: (b) a subagent with a suspended child elicitation, which
-     found item 113 -- it hangs the process; Code Mode with a
-     suspending executor is not a scenario to add, since `CodeMode` states a
-     paused program is not durable (it re-executes from the top on resume);
-     (c) usage/`RunLedger`.
-     Claim state is compared now (`Observation.session`: status,
-     submission count, whether a claim is still held -- a recovery that
-     left the session claimed would lock out its next prompt), and so are
-     events: `Observation.events` is the
-     session's delivery log as tags in order, shared by both processes, so a
-     recovery that re-announced, dropped or reordered an event fails even
-     when history agrees -- a delivery log that stops deduplicating replayed
-     emissions fails every cell, and passes every other check.
-
-     ```text
-     verify: exists test/DurableEquivalence.test.ts
-     verify: grep "id: \"D8\"" scripts/falsify.mjs
-     verify: exists src/testing/DurableEquivalence.ts
-     ```
-
 113. **A durable delegation whose child forwards an approval hung the
      process (found 2026-09-11; refused by name since, the design open).**
      Now: `DurableToolkit` marks a tool call's handler as running inside an

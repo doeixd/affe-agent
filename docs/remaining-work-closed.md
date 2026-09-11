@@ -2508,3 +2508,26 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: exists src/evals/Continuity.ts
      verify: grep "eval:continuity" package.json
      ```
+
+104. ~~**Crash/no-crash canonical equivalence oracle (plan E12, §16).**~~ —
+     landed 2026-09-10/11. `affe-agent/testing`'s `DurableEquivalence`
+     crashes a real process at each in-turn boundary (or any failpoint), has a
+     second process over the same SQLite file take the shard over, and
+     asserts the recovered run equals the uninterrupted one: encoded
+     canonical history, result and value, model calls split between the
+     processes, effects, the delivered events, the session record left
+     behind (status, submissions, claim), and the finishing process's
+     `RunLedger` -- a streamed replay that lost a response's usage bills
+     180 tokens where the run billed 300, and is caught. Scenarios: two
+     tools in one response (batch and streamed, full matrix under
+     `AFFE_EQUIVALENCE=full` and `verify:durability`'s D8), the output
+     tool, compaction folding, a rollover, an approval, a content-driven
+     model, prompts before the crash. The one planned scenario not built --
+     a subagent with a suspended child elicitation -- found item 113 and
+     waits on it.
+
+     ```text
+     verify: exists src/testing/DurableEquivalence.ts
+     verify: grep "readonly usage: { readonly turns: number" src/testing/DurableEquivalence.ts
+     verify: grep "id: \"D8\"" scripts/falsify.mjs
+     ```

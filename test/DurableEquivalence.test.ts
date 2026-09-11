@@ -54,9 +54,11 @@ const scenario = (stream: boolean) => DurableEquivalence.scenario({
       toolCalls: [
         { id: "l1", name: "lookup", params: { of: "orders" } },
         { id: "l2", name: "lookup", params: { of: "refunds" } }
-      ]
+      ],
+      // Real numbers, so the usage comparison is not zero against zero.
+      usage: { input: 120, output: 30 }
     },
-    { text: "Three orders, one refund." }
+    { text: "Three orders, one refund.", usage: { input: 180, output: 12 } }
   ],
   prompt: "how many orders and refunds?",
   stream
@@ -173,6 +175,8 @@ describe("durable recovery is indistinguishable from never having crashed (item 
           // And it left the session as a finished one: idle, one submission,
           // no claim held -- what the recovered run must also leave.
           assert.deepStrictEqual(straight.session, { status: "idle", submissionCount: 1, claimed: false })
+          // Both turns recorded, once each, with what their model calls billed.
+          assert.deepStrictEqual(straight.usage, { turns: 2, inputTokens: 300, outputTokens: 42 })
           // The crash was real, and the replacement did only what was left.
           assert.deepStrictEqual(recovered.split, split, "model calls made by the first and second process")
 
