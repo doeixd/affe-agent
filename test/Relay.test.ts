@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope, Stream, SubscriptionRef } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
-import { RpcClient, RpcSerialization, RpcServer } from "effect/unstable/rpc"
+import { Rpc, RpcClient, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
 import { NodeHttpServer } from "@effect/platform-node"
 import { createServer } from "node:http"
@@ -278,6 +278,63 @@ describe("Relay", () => {
       assert.strictEqual(failure._tag, "affe-agent/relay/RelayUnauthorizedError")
     }).pipe(Effect.scoped)
   )
+
+  /**
+   * Item 124: a caller that dies before its `Eof`, with a request whose
+   * handler has sent nothing, used to hold its server client -- and the
+   * handler -- until the serving node restarted. Released on `Eof` or on a
+   * failed send, and it produced neither. The sweep asks the directory.
+   *
+   * Observed through the handler: releasing a client interrupts what it had
+   * in flight. The caller's relay connection is closed *before* its RPC
+   * client, so the client's `Eof` has no connection left to go out on --
+   * which is the dying process.
+   */
+  const Wait = Rpc.make("Wait", { success: Schema.Void })
+  const WaitGroup = RpcGroup.make(Wait)
+  const WaitEndpoint = RelayRpc.endpoint("affe-agent/test/wait", WaitGroup)
+
+  const abandoned = (sweepInterval: Duration.Input) =>
+    Effect.gen(function* () {
+      const url = yield* relay()
+      const released = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const handlers = WaitGroup.toLayer({
+        Wait: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(released, undefined))
+          )
+      })
+      yield* Layer.build(
+        RelayRpc.serve(WaitEndpoint, { sweepInterval }).pipe(
+          Layer.provide(handlers),
+          Layer.provideMerge(node(url, TARGET, "desktop-secret"))
+        )
+      )
+      const connection = yield* Scope.make()
+      const dial = yield* Scope.make()
+      const caller = yield* Layer.buildWithScope(node(url, CALLER, "vps-secret"), connection)
+      const protocol = yield* Layer.buildWithScope(RelayRpc.clientProtocol({ peer: TARGET, endpoint: WaitEndpoint }), dial).pipe(
+        Effect.provide(caller)
+      )
+      const client = yield* RpcClient.make(WaitGroup).pipe(Effect.provide(protocol), Scope.provide(dial))
+      yield* Effect.forkChild(client.Wait())
+      yield* Deferred.await(started)
+      // The process dies: its connection goes, and its RPC client's finalizer
+      // -- the one that would send `Eof` -- never runs, as it would not in a
+      // process that stopped. (`dial` is left open, not closed: closing it
+      // runs that finalizer.)
+      yield* Scope.close(connection, Exit.void)
+      return yield* Deferred.await(released).pipe(Effect.timeoutOption(Duration.seconds(3)))
+    }).pipe(Effect.scoped)
+
+  it.live("a caller that dies before its Eof is released by the sweep, and its handler with it (item 124)", () =>
+    Effect.gen(function* () {
+      assert.isTrue(Option.isSome(yield* abandoned(Duration.millis(200))), "the sweep released the dead caller's client")
+      // The control: a sweep that never comes in time is the old behaviour.
+      assert.isTrue(Option.isNone(yield* abandoned(Duration.hours(1))), "released without the sweep")
+    }), 30_000)
 })
 
 // --- Type assertions ---------------------------------------------------------

@@ -626,8 +626,8 @@ history; 90 holds it.)*
      verify: grep "Item 123 is that stall" test/DurableAgentClientSql.test.ts
      ```
 
-124. **A relay caller that dies before its `Eof` leaks a server client
-     (found reading `RelayRpc` for item 120, 2026-09-11).** The serving side
+124. ~~**A relay caller that dies before its `Eof` leaks a server client**~~
+     (found reading `RelayRpc` for item 120, 2026-09-11). The serving side
      releases a (peer, channel) client on the caller's `Eof`, or when a send
      to that caller fails with `RelayPeerOfflineError`. A caller process
      that dies after settling its own requests and before its finalizer's
@@ -635,12 +635,18 @@ history; 90 holds it.)*
      is released by neither: the entry and `RpcServer`'s state for it stay
      until the serving node restarts. Bounded by crashed callers, not by
      traffic, so small; but a long-lived relay server accumulates them.
-     Proposed: the serving protocol sweeps its clients against
-     `RelayClient.peers` on an interval and releases those whose peer is
-     offline. Needs a test that can see the server's client set. Small.
+     **Done 2026-09-11:** `RelayRpc.serve` sweeps its clients against
+     `RelayClient.peers` (`sweepInterval`, default 30 s) and releases one
+     only when its peer is listed `offline` -- a peer missing from the
+     listing is kept, and a listing that fails releases nothing. Seen
+     through the handler, since releasing a client interrupts what it had in
+     flight: `test/Relay.test.ts` kills a caller before its `Eof` and the
+     handler is interrupted; with a one-hour sweep it is not (the old
+     behaviour), and with the release disabled the row fails.
 
      ```text
-     verify: no-grep "peers" src/relay/RelayRpc.ts
+     verify: grep "const listed = yield* relay.peers" src/relay/RelayRpc.ts
+     verify: grep "released by the sweep" test/Relay.test.ts
      ```
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)

@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Queue, Schema, Stream, SubscriptionRef } from "effect"
+import { Duration, Effect, Layer, Option, Queue, Schedule, Schema, Stream, SubscriptionRef } from "effect"
 import type { Rpc, RpcGroup, RpcMessage } from "effect/unstable/rpc"
 import { RpcClient, RpcClientError, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import * as Relay from "./Relay.js"
@@ -291,13 +291,27 @@ export const clientProtocol = <Rpcs extends Rpc.Any>(
  */
 export const serve = <Rpcs extends Rpc.Any>(
   target: Endpoint<Rpcs>,
-  options?: { readonly concurrency?: number | "unbounded" | undefined }
+  options?: {
+    readonly concurrency?: number | "unbounded" | undefined
+    /**
+     * How often clients whose caller has gone offline are released (item
+     * 124). A client is released on its caller's `Eof`, or when a send to it
+     * fails; a caller that dies before its `Eof`, with nothing in flight,
+     * triggers neither, and would hold its client until this node restarts.
+     * The sweep asks the relay's directory and releases only a client whose
+     * peer is listed `offline`. Default 30 seconds.
+     */
+    readonly sweepInterval?: Duration.Input | undefined
+  }
 ): Layer.Layer<never, never, RelayClient | Rpc.ToHandler<Rpcs> | Rpc.Middleware<Rpcs> | Rpc.ServicesServer<Rpcs>> =>
   RpcServer.layer(target.group, { concurrency: options?.concurrency ?? "unbounded" }).pipe(
-    Layer.provide(serverProtocol(target))
+    Layer.provide(serverProtocol(target, options?.sweepInterval ?? Duration.seconds(30)))
   )
 
-const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Layer<RpcServer.Protocol, never, RelayClient> =>
+const serverProtocol = <Rpcs extends Rpc.Any>(
+  target: Endpoint<Rpcs>,
+  sweepInterval: Duration.Input
+): Layer.Layer<RpcServer.Protocol, never, RelayClient> =>
   Layer.effect(
     RpcServer.Protocol,
     RpcServer.Protocol.make((writeRequest) =>
@@ -335,6 +349,23 @@ const serverProtocol = <Rpcs extends Rpc.Any>(target: Endpoint<Rpcs>): Layer.Lay
           ids.delete(client.id)
           return Effect.asVoid(Queue.offer(disconnects, client.id))
         }
+
+        // The directory's word, not a guess: a peer missing from the listing
+        // is kept, and a listing that fails (the relay is unreachable from
+        // here) releases nothing -- an unreachable relay says nothing about
+        // the caller.
+        yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            const listed = yield* relay.peers
+            const offline = new Set(listed.flatMap((peer) => (peer.status === "offline" ? [peer.id] : [])))
+            for (const client of [...byId.values()]) {
+              if (offline.has(client.from)) yield* release(client)
+            }
+          }).pipe(
+            Effect.ignore,
+            Effect.repeat(Schedule.spaced(sweepInterval))
+          )
+        )
 
         yield* relay.subscribe(target.id, (envelope) =>
           decodeClientFrame(envelope.frame).pipe(
