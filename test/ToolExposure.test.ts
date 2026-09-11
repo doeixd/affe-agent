@@ -104,6 +104,28 @@ describe("progressive tool exposure (item 93)", () => {
       assert.isTrue(failed[0]!.returnedToModel)
     }))
 
+  it.effect("discovery is a tool call: it counts toward maxToolCalls (plan Q5)", () =>
+    Effect.gen(function*() {
+      const ran = yield* Ref.make<ReadonlyArray<string>>([])
+      const agent = Agent.make({
+        tools: catalog.map((tool) => Agent.tool(tool, () => Effect.as(Ref.update(ran, (all) => [...all, tool.name]), "ok"))),
+        toolExposure: ToolExposure.progressive({ maxTools: 6 }),
+        loop: AgentLoop.maxToolCalls(1)
+      })
+      const { recorder } = yield* withSession(
+        [
+          { toolCalls: [{ id: "d1", name: "discover_tools", params: { query: "routine operation 7" } }] },
+          { toolCalls: [{ id: "t1", name: "tool_7", params: {} }] },
+          { text: "done" }
+        ],
+        agent,
+        ({ session }) => AgentSession.prompt(session, "go")
+      )
+      // Had discovery been free, the second turn would have run `tool_7`.
+      assert.strictEqual((yield* recorder.tools).length, 1, "model requests in the run")
+      assert.deepStrictEqual(yield* Ref.get(ran), [])
+    }))
+
   it.effect("an admin sees the pinned billing tool: visibility is decided per caller", () =>
     Effect.gen(function*() {
       const { agent } = yield* setup(progressive)
