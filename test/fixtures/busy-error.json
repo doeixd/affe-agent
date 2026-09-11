@@ -1,0 +1,4 @@
+{
+  "before": { "_tag": "AgentBusyError", "sessionId": "s" },
+  "after": { "_tag": "AgentBusyError", "sessionId": "s", "submissionId": "s:submission-1" }
+}

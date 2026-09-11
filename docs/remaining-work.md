@@ -293,13 +293,20 @@ and pin the state it starts from.*
     three ambiguous `void`s say it where they are declared
     (`AgentDispatcher.dispatch`, `RelayClient.send`, `SessionInbox`'s
     `Delivered`). The two rows that could lose work were items 95 and 96.
-    Open: surface the incumbent claim when `DurableAgentClient.submit`
-    refuses with `AgentBusyError` rather than dropping it (T8.2, A8.2;
-    unblocked 2026-09-11), and the per-API stop-the-destination
-    tests (A8.1). Medium.
+    **T8.2 done 2026-09-11:** `AgentBusyError` names the submission that
+    holds the session (`submissionId`, optional on the wire), on every
+    client -- the durable one from the incumbent claim, which it used to
+    drop -- so a caller refused without an idempotency key awaits the
+    incumbent instead of retrying blind (a conformance case; the durable
+    row fails with the id removed; `test/fixtures/busy-error.json`). A8.2,
+    two concurrent submits under one key, is `DurableAgentClient.test.ts`'s
+    concurrent `req-1` row. Open: the per-API stop-the-destination tests
+    (A8.1). Medium.
 
     ```text
     verify: grep "## What a success means" docs/guide-sessions.md
+    verify: grep "submissionId: Ids.submissionId(outcome.claim.submissionId)" src/durable/DurableAgentClient.ts
+    verify: exists test/fixtures/busy-error.json
     ```
 
 100. **Matched release→main benchmark suite (plan E8, §10) -- first slice

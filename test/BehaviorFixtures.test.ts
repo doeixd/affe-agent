@@ -7,6 +7,8 @@ import * as AgentLoop from "../src/AgentLoop.js"
 import * as AgentSession from "../src/AgentSession.js"
 import { CodeTool } from "../src/code/index.js"
 import { Compaction } from "../src/compaction/index.js"
+import { AgentBusyError } from "../src/Errors.js"
+import * as Ids from "../src/internal/ids.js"
 import { activityName, startMarkerName } from "../src/internal/toolActivity.js"
 import { Memory } from "../src/memory/index.js"
 import * as Permission from "../src/Permission.js"
@@ -57,6 +59,20 @@ describe("behaviour-change fixtures recorded after the change", () => {
         read("compaction-checkpoint-discarded.json")
       )
       assert.strictEqual(event._tag, "CompactionCheckpointDiscarded")
+    }))
+
+  it.effect("a busy refusal names its incumbent, and one from before it did still decodes (item 97, T8.2)", () =>
+    Effect.gen(function*() {
+      const recorded = Schema.decodeUnknownSync(Schema.Struct({ before: Schema.Unknown, after: Schema.Unknown }))(
+        read("busy-error.json")
+      )
+      const json = Schema.toCodecJson(AgentBusyError)
+      const older = yield* Schema.decodeUnknownEffect(json)(recorded.before)
+      assert.strictEqual(older.submissionId, undefined)
+      const now = yield* Schema.encodeEffect(json)(
+        new AgentBusyError({ sessionId: Ids.sessionId("s"), submissionId: Ids.submissionId("s:submission-1") })
+      )
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(now)), recorded.after)
     }))
 
   it("a non-idempotent call's journal names: the start marker and the call (1a770eb)", () => {

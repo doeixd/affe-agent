@@ -31,7 +31,7 @@ import * as History from "./internal/history.js"
 import * as Ids from "./internal/ids.js"
 import * as PromptText from "./internal/promptText.js"
 import * as Limits from "./internal/limits.js"
-import type { SubmissionId } from "./internal/ids.js"
+import type { SessionId, SubmissionId } from "./internal/ids.js"
 import type { Session, SessionState, Status, SubmissionProgress } from "./internal/state.js"
 import * as Telemetry from "./internal/telemetry.js"
 import * as Namespace from "./internal/namespace.js"
@@ -536,8 +536,15 @@ export type SubmitError = AgentBusyError | AgentClosedError
 
 type Claim =
   | { readonly _tag: "Claimed"; readonly submissionId: SubmissionId }
-  | { readonly _tag: "Busy" }
+  | { readonly _tag: "Busy"; readonly incumbent: Option.Option<SubmissionId> }
   | { readonly _tag: "Closed" }
+
+/** A refusal naming the submission that holds the session, when there is one (item 97, T8.2). */
+const busy = (sessionId: SessionId, incumbent: Option.Option<SubmissionId>): AgentBusyError =>
+  new AgentBusyError(Option.match(incumbent, {
+    onNone: () => ({ sessionId }),
+    onSome: (submissionId) => ({ sessionId, submissionId })
+  }))
 
 /**
  * Atomically take an idle session and allocate its submission id.
@@ -549,7 +556,7 @@ type Claim =
 const claim = (self: Session<any>): Effect.Effect<Claim> =>
   SubscriptionRef.modify(self.state, (s): [Claim, SessionState] => {
     if (s.status === "closed") return [{ _tag: "Closed" }, s]
-    if (s.status === "running") return [{ _tag: "Busy" }, s]
+    if (s.status === "running") return [{ _tag: "Busy", incumbent: s.activeSubmissionId }, s]
     const count = s.submissionCount + 1
     const submissionId = Ids.submissionId(self.submissionName(count))
     return [
@@ -763,7 +770,7 @@ export const submit = Effect.fn("AgentSession.submit")(function* <
       return yield* new AgentClosedError({ sessionId: self.id })
     }
     if (started._tag === "Busy") {
-      return yield* new AgentBusyError({ sessionId: self.id })
+      return yield* busy(self.id, started.incumbent)
     }
     return { submissionId: started.submissionId } satisfies SubmissionReceipt
   })
@@ -796,7 +803,7 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
       return yield* new AgentClosedError({ sessionId: self.id })
     }
     if (started._tag === "Busy") {
-      return yield* new AgentBusyError({ sessionId: self.id })
+      return yield* busy(self.id, started.incumbent)
     }
     const { fiber, submissionId } = started
     // Explicit `Value`: `settle`'s default is `string`, and through the
@@ -1150,7 +1157,7 @@ export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
       return yield* new AgentClosedError({ sessionId: self.id })
     }
     if (before.status !== "idle") {
-      return yield* new AgentBusyError({ sessionId: self.id })
+      return yield* busy(self.id, before.activeSubmissionId)
     }
     const history = yield* historyOf(self)
     /**
@@ -1177,7 +1184,7 @@ export const snapshot = Effect.fn("AgentSession.snapshot")(function* (
       return yield* new AgentClosedError({ sessionId: self.id })
     }
     if (after.status !== "idle" || after.submissionCount !== before.submissionCount) {
-      return yield* new AgentBusyError({ sessionId: self.id })
+      return yield* busy(self.id, after.activeSubmissionId)
     }
     return { version: SnapshotVersion, sessionId: self.id, history } satisfies Snapshot
   })

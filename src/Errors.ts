@@ -18,10 +18,23 @@ import { SessionId, SubmissionId } from "./internal/ids.js"
  */
 export class AgentBusyError extends Schema.TaggedError<AgentBusyError>()(
   "AgentBusyError",
-  { sessionId: SessionId }
+  {
+    sessionId: SessionId,
+    /**
+     * The submission that holds the session, when the refusing side knows it
+     * (item 97, T8.2). A caller refused by another attempt can
+     * `awaitSubmission` it rather than retry blind -- which, for a request
+     * sent without an idempotency key, is how a retry after a lost
+     * acknowledgement finds out its first attempt was the one that got in.
+     * Optional: an older encoding without it still decodes.
+     */
+    submissionId: Schema.optional(SubmissionId)
+  }
 ) {
   override get message() {
-    return `Session ${this.sessionId} is already running a submission`
+    return this.submissionId === undefined
+      ? `Session ${this.sessionId} is already running a submission`
+      : `Session ${this.sessionId} is already running submission ${this.submissionId}`
   }
 }
 

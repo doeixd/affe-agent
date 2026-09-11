@@ -683,6 +683,12 @@ took it and started), **settled** (it finished, with its result).
 | `RelayClient.send` | handed over to an online peer's queue | ...or a peer that drops before reading loses it |
 | `Connectors.serverLayer`'s HTTP 200 | handed over (received, not persisted) | ...before the run commits loses it; the platform will not redeliver |
 
+A retry after an ambiguous failure, sent without an idempotency key, may
+find its own first attempt holding the session. It is refused with an
+`AgentBusyError` whose `submissionId` names the submission holding it, on
+every client, and `awaitSubmission(error.submissionId)` then answers with
+that submission's outcome instead of running the work twice.
+
 ## Snapshots
 
 A conversation is a value, so it can be stored and brought back:

@@ -330,6 +330,37 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
         )
       })),
 
+    /**
+     * Item 97, T8.2: a refusal names the incumbent. A caller that sent no
+     * idempotency key, and was refused, cannot otherwise tell whether the
+     * submission holding the session is its own first attempt; with the id it
+     * awaits that submission instead of retrying blind.
+     */
+    make("a refused prompt names the submission holding the session, and awaiting it answers",
+      Effect.gen(function* () {
+        const name = "a refused prompt names the submission holding the session, and awaiting it answers"
+        const { gate, turns } = yield* gated
+        yield* withClient(
+          options,
+          { agent: Agent.make({ loop: AgentLoop.bounded(1) }), turns },
+          (client) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const session = yield* client.createSession()
+                const receipt = yield* session.submit("go")
+                const refused = yield* failureOf(name)(session.prompt("again"))
+                yield* equal(name)(refused._tag, "AgentBusyError", "the second prompt's error")
+                if (refused._tag === "AgentBusyError") {
+                  yield* equal(name)(refused.submissionId, receipt.submissionId, "the incumbent it names")
+                  yield* Deferred.succeed(gate, void 0)
+                  const answered = yield* session.awaitSubmission(refused.submissionId ?? "")
+                  yield* equal(name)(answered.text, "done", "the incumbent's answer")
+                }
+              })
+            )
+        )
+      })),
+
     make("the same idempotency key and input is the same submission; a different input is a conflict",
       Effect.gen(function* () {
         const name = "the same idempotency key and input is the same submission; a different input is a conflict"

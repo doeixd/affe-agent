@@ -463,8 +463,11 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
               return yield* noSuchSession(sessionId)
             }
             if (outcome._tag === "Busy") {
+              // The incumbent, surfaced rather than dropped (item 97, T8.2):
+              // a refused caller can await it instead of retrying blind.
               return yield* new AgentBusyError({
-                sessionId: Ids.sessionId(sessionId)
+                sessionId: Ids.sessionId(sessionId),
+                submissionId: Ids.submissionId(outcome.claim.submissionId)
               })
             }
             // History as of the claim — the transcript the previous
