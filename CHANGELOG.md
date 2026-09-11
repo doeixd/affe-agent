@@ -43,6 +43,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - the durable channel table gains a nullable claimed_by column (sqlStoreWithTable migrates an older table; a self-managed table must add it), and a drain claims rows instead of deleting them (`9efd2c5`; measured by `test/fixtures/channel-input-table.json`)
 - a host's eventLog for a durable session with a delivery log reads the whole log (oldest is its first event) instead of the host's bounded tail (`470a6c0`; measured by `test/fixtures/durable-event-log.json`)
 - AgentBusyError carries the incumbent's submissionId when the refusing side knows it, on every client (`1436537`; measured by `test/fixtures/busy-error.json`)
+- a durable session store constructed with blobs writes history files over maxInlineBytes as content-addressed blob references (rows without the option are unchanged) (`7092a8e`; measured by `test/fixtures/history-blob-row.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
