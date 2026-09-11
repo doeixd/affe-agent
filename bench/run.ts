@@ -98,6 +98,72 @@ const schemaBytes = (offered: ReadonlyArray<ReadonlyArray<string>>, tools: Reado
   return offered.reduce((sum, names) => sum + names.reduce((s, name) => s + (byName.get(name) ?? 0), 0), 0)
 }
 
+const round = (ms: number) => Math.round(ms * 10) / 10
+
+/**
+ * A fresh SQLite file, and a way to open a durable "process" over it: its own
+ * connection, stores, runner and client, for the enclosing scope. Imported
+ * inside, as the other durable scenarios are, so an older ref without these
+ * modules reports the scenario unavailable.
+ */
+const durableWorkspace = async (prefix: string) => {
+  const { AgentClient } = await import("../src/client/index.js")
+  const DurableAgentClient = await import("../src/durable/DurableAgentClient.js")
+  const DurableChannels = await import("../src/durable/DurableChannels.js")
+  const DurableSessionStore = await import("../src/durable/DurableSessionStore.js")
+  const DeliveryLog = await import("../src/durable/DeliveryLog.js")
+  const { SqliteClient } = await import("@effect/sql-sqlite-node")
+  const { ClusterWorkflowEngine, SingleRunner } = await import("effect/unstable/cluster")
+  const { Crypto, Duration, Layer } = await import("effect")
+  const NodeFs = await import("node:fs")
+  const NodeOs = await import("node:os")
+  const NodePath = await import("node:path")
+  const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), prefix))
+  const file = NodePath.join(dir, "a.db")
+  const crypto = Layer.succeed(
+    Crypto.Crypto,
+    Crypto.make({
+      randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
+      digest: (algorithm, data) =>
+        Effect.promise(async () => new Uint8Array(await globalThis.crypto.subtle.digest(algorithm, data.slice().buffer)))
+    })
+  )
+  const agent = Agent.make({ loop: AgentLoop.bounded(1) })
+  const openProcess = (turns: ReadonlyArray<TestLanguageModel.Turn>) =>
+    Effect.gen(function*() {
+      const connection = yield* Layer.build(SqliteClient.layer({ filename: file }))
+      const stores = yield* Effect.all({
+        store: DurableChannels.sqlStoreWithTable(),
+        sessionStore: DurableSessionStore.sqlStoreWithTables(),
+        delivery: DeliveryLog.sqlLogWithTable()
+      }).pipe(Effect.provide(connection))
+      const { layer: model } = yield* TestLanguageModel.script(turns)
+      const engine = ClusterWorkflowEngine.layer.pipe(
+        Layer.provide(
+          SingleRunner.layer({
+            runnerStorage: "sql",
+            shardingConfig: { shardLockExpiration: Duration.seconds(1), shardLockRefreshInterval: Duration.millis(200) }
+          }).pipe(Layer.provide(Layer.succeedContext(connection)), Layer.provide(crypto))
+        )
+      )
+      const runtime = yield* Layer.build(
+        DurableAgentClient.layer("BenchDurable", agent, { ...stores, pollInterval: Duration.millis(20) }).pipe(
+          Layer.provideMerge(engine),
+          Layer.provideMerge(model)
+        )
+      )
+      return yield* Effect.service(AgentClient.AgentClient).pipe(Effect.provide(runtime))
+    })
+  const remove = () => {
+    try {
+      NodeFs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Still held open on Windows.
+    }
+  }
+  return { openProcess, remove }
+}
+
 const scenarios: ReadonlyArray<Scenario> = [
   {
     name: "one-turn run",
@@ -233,6 +299,85 @@ const scenarios: ReadonlyArray<Scenario> = [
           // Still held open on Windows.
         }
         return { eventsRead: read.total, readMs: read.readMs }
+      })
+  })),
+  // Cold recovery against history length (item 100's first decided scenario;
+  // its threshold reopens item 112): N one-turn submissions settled through
+  // the durable client over a fresh SQLite file, that process closed, then a
+  // second process over the same file. `recoveryMs` is from building the
+  // second client until the session reads back idle -- what history length
+  // costs a replacement. `nextMs` is one more prompt after that, which also
+  // waits out the first runner's shard lock (it outlives a closed runner;
+  // see `test/DurableSql.test.ts`), so it is mostly that constant.
+  // 1000 only on request (BENCH_RECOVERY_LARGE=1): its setup alone takes minutes.
+  ...[10, 100, ...(process.env["BENCH_RECOVERY_LARGE"] === "1" ? [1000] : [])].map((submissions): Scenario => ({
+    name: `durable: cold recovery after ${submissions} submissions`,
+    run: () =>
+      timed(async () => {
+        const { openProcess, remove } = await durableWorkspace("bench-recovery-")
+        await Effect.runPromise(Effect.scoped(Effect.gen(function*() {
+          const client = yield* openProcess(Array.from({ length: submissions }, (_, i) => ({ text: `answer ${i}` })))
+          const session = yield* client.createSession({ sessionId: "recovered" })
+          for (let i = 0; i < submissions; i++) yield* session.prompt(`question ${i}`)
+        })))
+        const measured = await Effect.runPromise(Effect.scoped(Effect.gen(function*() {
+          const started = performance.now()
+          const client = yield* openProcess([{ text: "after recovery" }])
+          const session = yield* client.session("recovered")
+          yield* session.status
+          const recoveredAt = performance.now()
+          yield* session.prompt("one more")
+          return { recoveryMs: recoveredAt - started, nextMs: performance.now() - recoveredAt }
+        })))
+        remove()
+        return { submissions, recoveryMs: round(measured.recoveryMs), nextMs: round(measured.nextMs) }
+      })
+  })),
+  // Write contention (item 100's second decided scenario): 1, 2 and 4
+  // sessions submitting at once -- five prompts each -- through one durable
+  // client over one SQLite file. Not separate processes: `SingleRunner`s
+  // sharing a file contend for shard locks rather than forwarding, and
+  // multi-process deployment is the HTTP-runner cluster. Here every
+  // session's journal, session record, channel drains and delivery log land
+  // in the same file. Any `SQLITE_BUSY` a caller sees is a bug, not a
+  // number: `busyErrors` must stay 0.
+  ...[1, 2, 4].map((sessions): Scenario => ({
+    name: `durable: ${sessions} sessions submitting at once over SQLite`,
+    run: () =>
+      timed(async () => {
+        const { openProcess, remove } = await durableWorkspace("bench-contention-")
+        const each = 5
+        const measured = await Effect.runPromise(Effect.scoped(Effect.gen(function*() {
+          const client = yield* openProcess(Array.from({ length: sessions * each }, (_, i) => ({ text: `answer ${i}` })))
+          const started = performance.now()
+          const errors = yield* Effect.forEach(
+            Array.from({ length: sessions }, (_, s) => s),
+            (s) =>
+              Effect.gen(function*() {
+                const session = yield* client.createSession({ sessionId: `writer-${s}` })
+                let failed: ReadonlyArray<string> = []
+                for (let i = 0; i < each; i++) {
+                  const exit = yield* Effect.exit(session.prompt(`question ${i}`))
+                  if (exit._tag === "Failure") failed = [...failed, String(exit.cause)]
+                }
+                return failed
+              }),
+            { concurrency: "unbounded" }
+          )
+          const all = errors.flat()
+          return {
+            ms: performance.now() - started,
+            failed: all.length,
+            busy: all.filter((error) => /SQLITE_BUSY|database is locked/i.test(error)).length
+          }
+        })))
+        remove()
+        return {
+          sessions,
+          submissionsPerSec: round((sessions * each) / (measured.ms / 1000)),
+          failed: measured.failed,
+          busyErrors: measured.busy
+        }
       })
   })),
   // The effect-uai adapter's cost (item 100): the "stream 1024 chunks" run,

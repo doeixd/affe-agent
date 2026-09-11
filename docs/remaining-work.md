@@ -364,7 +364,29 @@ and pin the state it starts from.*
      is unparked -- and write contention -- one, two and four processes on
      different sessions in one file; any `SQLITE_BUSY` reaching a caller is
      a bug with its own item, not a row. The live run waits on a capped key
-     (D4 there).
+     (D4 there), which the owner declined.
+
+     **Both built and measured 2026-09-11** (`bench/run.ts`, this machine):
+     cold recovery -- a second process reading the session back -- took
+     11 ms after 10 submissions, 16 ms after 100 and 24 ms after 1000
+     (opt-in, `BENCH_RECOVERY_LARGE=1`; its setup alone is ~8 minutes), so
+     **item 112 stays parked**: the threshold was ~1 s. The first prompt
+     after recovery grows more (≈360 ms at 10 and 100, 750 ms at 1000),
+     mostly the dead runner's shard lock but not only; worth a look if a
+     session of thousands of submissions ever matters. Contention became
+     *sessions*, not processes: `SingleRunner`s sharing a file contend for
+     shard locks rather than forwarding, and multi-process is the
+     HTTP-runner cluster. One, two and four sessions submitting at once
+     through one client and file: 2.1, 2.7 and 2.7 submissions a second,
+     no failures, no `SQLITE_BUSY` -- the file serialises the writes, and
+     past two sessions concurrency buys nothing. A second run the same day
+     agreed (13, 12 and 25 ms; 2.3, 2.5 and 2.8 a second). Left: a
+     settlement-replay scenario, and the live cost run.
+
+     ```text
+     verify: grep "durable: cold recovery after" bench/run.ts
+     verify: grep "sessions submitting at once over SQLite" bench/run.ts
+     ```
      Variance is characterised (2026-09-11, HEAD against itself, 24 samples
      a side, `docs/reports/bench-2026-09-11-a4cdcea7-a4cdcea7.json`): with
      identical code, scenarios under ~5 ms moved their medians by up to
@@ -454,7 +476,8 @@ acceptance test for 105, 107 and 108.*
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
      104's oracle is its acceptance test. The trigger, decided 2026-09-11:
-     cold recovery past ~1 s at 1000 settled submissions (item 100).
+     cold recovery past ~1 s at 1000 settled submissions (item 100). Measured
+     the same day: 24 ms. Stays parked.
 
 ### Open plan phases that were not on this list — added 2026-09-11
 

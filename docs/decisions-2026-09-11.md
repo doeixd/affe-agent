@@ -242,5 +242,5 @@ justified by two test cases.
 | Item | Reopened when |
 |---|---|
 | 102, the Cloudflare AI Gateway option | An adopter asks for it. |
-| 112, recovery snapshots | Item 100's cold-recovery scenario exceeds about 1 s at N = 1000. |
+| 112, recovery snapshots | Item 100's cold-recovery scenario exceeds about 1 s at N = 1000. Measured 2026-09-11: 24 ms, so it stays parked. |
 | ~~97 T8.2, busy refusal in the durable client~~ | ~~The uncommitted edits to `src/durable/DurableAgentClient.ts` and `src/client/*` land or are abandoned.~~ **Reopened the same day.** The owner said there are no other agents: the edits were orphaned work of 2026-09-08 (a durable `eventLog` read from the `DeliveryLog`, item 88, and a backlog reorganisation). They were reviewed, tested and landed, so T8.2 is unblocked. |
