@@ -245,6 +245,44 @@ describe("EffectUaiModel", () => {
       }))
 
     /**
+     * Item 89: a dynamic tool -- its parameters a raw JSON Schema, as an MCP
+     * source hands over, not an Effect `Schema` -- goes through the same path
+     * and had no test. The model must be shown exactly the schema given, and
+     * a call to it must arrive with its arguments parsed.
+     */
+    it.effect("a tool with a raw JSON Schema is described by that schema, and its call's arguments arrive parsed", () =>
+      Effect.gen(function*() {
+        const parameters = {
+          type: "object",
+          properties: { path: { type: "string" }, depth: { type: "integer" } },
+          required: ["path"]
+        }
+        const listing = Tool.dynamic("list_files", { description: "list files under a path", parameters })
+        const { recorder, result } = yield* withModel(
+          [
+            { _tag: "ToolCallStart", call_id: "call-d", name: "list_files" },
+            { _tag: "ToolCallArgsDelta", call_id: "call-d", delta: "{\"path\":\"src\",\"depth\":2}" },
+            complete(
+              turn(
+                [{ type: "function_call", call_id: "call-d", name: "list_files", arguments: "{\"path\":\"src\",\"depth\":2}" }],
+                "tool_calls"
+              )
+            )
+          ],
+          () => generateWithTools(Toolkit.make(listing))
+        )
+        const response = Exit.isSuccess(result) ? result.value : undefined
+        assert.isDefined(response, failureText(result))
+        const described = only(yield* recorder.requests).tools?.["list_files"]
+        assert.isDefined(described)
+        assert.strictEqual(described.description, "list files under a path")
+        assert.deepStrictEqual(described.inputSchema["~standard"].jsonSchema.input({ target: "draft-07" }), parameters)
+        const call = only(response.toolCalls)
+        assert.strictEqual(call.name, "list_files")
+        assert.deepStrictEqual(call.params, { path: "src", depth: 2 })
+      }))
+
+    /**
      * The streaming path, pinned separately.
      *
      * Effect AI assembles a tool call from the streamed `tool-params-*`

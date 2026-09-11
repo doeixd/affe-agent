@@ -219,9 +219,11 @@ it now.)*
     Phase 3 still owes is the *other* continuation fields -- provider response
     ids, prompt-cache metadata, provider-defined tool metadata -- and files.
 
-    Dynamic tools (a raw JSON schema rather than an Effect `Schema`) go through
-    the same path and have no test. No network test against a real effect-uai
-    provider exists yet, and is the strongest remaining evidence gap.
+    Dynamic tools (a raw JSON schema rather than an Effect `Schema`) are
+    tested since 2026-09-11: described to effect-uai by exactly the schema
+    given, and a call arrives with its arguments parsed. No network test
+    against a real effect-uai provider exists yet, and is the strongest
+    remaining evidence gap.
 
     ```text
     verify: exists test/ProviderContinuation.test.ts
