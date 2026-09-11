@@ -110,6 +110,13 @@ export class PermissionPolicyChangedError extends Schema.TaggedError<PermissionP
  * Compares what policies say they are: a change *inside* a function matcher,
  * or a `Custom` policy's rules under the same name, is not seen -- give a
  * custom policy a name that changes when its rules do.
+ *
+ * Two consequences of combining, stated rather than discovered: a
+ * `Remembered` policy re-creates *without* its grants (they were state, not
+ * rules), so after a policy change an "always allow" answered during the
+ * recovered attempt allows once -- the re-created side asks again. And the
+ * durable agent's permission keeps reporting the running policy's
+ * description (`delegating`), not the combination.
  */
 export const effective = <R>(
   policy: Permission.Policy<R>,

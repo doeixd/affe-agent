@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { readFileSync } from "node:fs"
 import * as Agent from "../src/Agent.js"
@@ -9,6 +9,8 @@ import { CodeTool } from "../src/code/index.js"
 import { Compaction } from "../src/compaction/index.js"
 import { activityName, startMarkerName } from "../src/internal/toolActivity.js"
 import { Memory } from "../src/memory/index.js"
+import * as Permission from "../src/Permission.js"
+import * as ToolScheduling from "../src/ToolScheduling.js"
 import { TestLanguageModel } from "../src/testing/index.js"
 
 /**
@@ -80,4 +82,43 @@ describe("behaviour-change fixtures recorded after the change", () => {
       const system = prompt!.content.filter((m) => m.role === "system").map((m) => m.content)
       assert.deepStrictEqual({ systemMessages: system }, read("memory-recall-truncated.json"))
     }))
+
+  it("what a durable run records of its permission policy and host scheduling, and reads back (725551e, 5e13679)", () => {
+    const recorded = Schema.decodeUnknownSync(Schema.Struct({
+      permissionPolicy: Schema.String,
+      hostScheduling: Schema.String,
+      hostSchedulingSerialized: Schema.String
+    }))(read("admission-descriptions.json"))
+    const policy = Permission.except(
+      Permission.rules([{ resource: /secret/i, decision: Permission.deny("no") }, { tool: "read", decision: Permission.allow }], {
+        otherwise: Permission.ask()
+      }),
+      [{ action: "write", resource: /^\/workspace\//, decision: Permission.allow }]
+    )
+    // The description format is the journal's: a flagged pattern keeps its
+    // flags (`regexp/i:`), a flagless one reads as before.
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(Permission.describe(policy))), JSON.parse(recorded.permissionPolicy))
+    // And what was recorded re-creates to the same decisions.
+    const again = Permission.fromRecorded(recorded.permissionPolicy)
+    assert.isTrue(Option.isSome(again))
+    const request = (tool: string, action: string, resource: string): Permission.Request => ({
+      sessionId: "s", toolCallId: "c", tool: { name: tool, params: {} }, action, resource, intrinsicApproval: false, messages: []
+    })
+    if (Option.isSome(again)) {
+      for (const [tool, action, resource] of [["read", "tool", "SECRET.md"], ["read", "tool", "notes"], ["x", "write", "/workspace/a"], ["x", "tool", "y"]] as const) {
+        assert.strictEqual(
+          Effect.runSync(again.value.evaluate(request(tool, action, resource)))._tag,
+          Effect.runSync(policy.evaluate(request(tool, action, resource)))._tag,
+          `${tool} ${action} ${resource}`
+        )
+      }
+    }
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(ToolScheduling.all(ToolScheduling.maxConcurrent(2), ToolScheduling.unconstrained).description)),
+      JSON.parse(recorded.hostScheduling)
+    )
+    assert.isTrue(Option.isSome(ToolScheduling.fromRecorded(recorded.hostScheduling)))
+    // A serialization keys by a function: recorded, but not re-creatable.
+    assert.isTrue(Option.isNone(ToolScheduling.fromRecorded(recorded.hostSchedulingSerialized)))
+  })
 })

@@ -535,7 +535,14 @@ acceptance test for 105, 107 and 108.*
 
      ```text
      verify: grep "readonly answer?:" src/testing/DurableEquivalence.ts
+     verify: exists test/fixtures/admission-descriptions.json
      ```
+
+     Found in review, part of the same design: the engine re-executes an
+     activity that *suspended*, and that replays item 98's start marker, so
+     a non-idempotent handler that suspends legitimately (a durable sleep, a
+     child workflow) resumes as `Unresolved` today. Whatever resolves this
+     item must tell a suspended handler from a dead one.
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;

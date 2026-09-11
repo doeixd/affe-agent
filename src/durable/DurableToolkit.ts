@@ -238,6 +238,14 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
          * calls write it fresh and behave as they always did.
          *
          * Retry-safe tools skip it: running them again is the point.
+         *
+         * One consequence to know: the engine re-executes an activity that
+         * *suspended*, and that re-execution replays the marker, so a
+         * non-idempotent handler that suspended legitimately (a durable sleep,
+         * a child workflow) resumes as `Unresolved` too. A died handler and a
+         * suspended one look alike from here; telling them apart is part of
+         * item 113, and today's refusal of in-call elicitation keeps the
+         * common case -- an approval -- from reaching it.
          */
         let startedHere = true
         if (!retrySafe) {

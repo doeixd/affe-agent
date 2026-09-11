@@ -1,0 +1,5 @@
+{
+  "permissionPolicy": "{\"_tag\":\"Except\",\"base\":{\"_tag\":\"Rules\",\"rules\":[{\"resource\":\"regexp/i:secret\",\"decision\":{\"_tag\":\"Deny\",\"reason\":\"no\"}},{\"tool\":\"read\",\"decision\":{\"_tag\":\"Allow\"}}],\"otherwise\":{\"_tag\":\"Ask\"}},\"exceptions\":[{\"action\":\"write\",\"resource\":\"regexp:^\\\\/workspace\\\\/\",\"decision\":{\"_tag\":\"Allow\"}}]}",
+  "hostScheduling": "{\"_tag\":\"All\",\"schedulings\":[{\"_tag\":\"MaxConcurrent\",\"max\":2},{\"_tag\":\"Unconstrained\"}]}",
+  "hostSchedulingSerialized": "{\"_tag\":\"Serialize\",\"name\":\"files\"}"
+}
