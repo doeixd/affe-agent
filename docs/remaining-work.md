@@ -423,8 +423,12 @@ and pin the state it starts from.*
      unless a scenario shows one. A first durable scenario exists: two tool
      rounds through the durable client over a fresh SQLite file (~0.7 s a
      submission on this machine, mostly engine and schema start-up; refs
-     without the harness report it unavailable). Still open: more durable
-     scenarios (settlement replay, DeliveryLog catch-up, SQLite contention),
+     without the harness report it unavailable). DeliveryLog catch-up too:
+     500 events appended to SQLite, then read after offset 0 whole and in
+     pages of 100 -- ~8.5 ms either way, the appends (one transaction each,
+     ~2 s) dominating the wall time, so the read is reported as `readMs`.
+     Still open: more durable scenarios (settlement replay, SQLite
+     contention),
      effect-uai native vs adapter, and a live-model cost run for item 93.
      Variance is characterised (2026-09-11, HEAD against itself, 24 samples
      a side, `docs/reports/bench-2026-09-11-a4cdcea7-a4cdcea7.json`): with

@@ -191,6 +191,50 @@ const scenarios: ReadonlyArray<Scenario> = [
         await Effect.runPromise(DurableEquivalence.straight(scenario, { database }))
       })
   },
+  // What a reconnecting client pays (item 100): 500 events appended to a
+  // SQLite delivery log, then read back after offset 0 -- whole, and in
+  // pages of 100 by the `limit` item 109 added (a ref without it reads the
+  // whole log on the first page, and the loop ends there). The appends
+  // dominate the wall time; `readMs` is the catch-up alone.
+  ...(["whole", "paged"] as const).map((mode): Scenario => ({
+    name: `durable: append 500 events, then catch up ${mode}`,
+    run: () =>
+      timed(async () => {
+        const DeliveryLog = await import("../src/durable/DeliveryLog.js")
+        const { DeliveryLogConformance } = await import("../src/testing/index.js")
+        const { SqliteClient } = await import("@effect/sql-sqlite-node")
+        const NodeFs = await import("node:fs")
+        const NodeOs = await import("node:os")
+        const NodePath = await import("node:path")
+        const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "bench-log-"))
+        const read = await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function*() {
+              const log = yield* DeliveryLog.sqlLogWithTable()
+              for (let i = 1; i <= 500; i++) {
+                yield* log.append("s", `k${i}`, DeliveryLogConformance.envelope(i, { _tag: "RunStarted" }))
+              }
+              const started = performance.now()
+              let after = 0
+              let total = 0
+              while (true) {
+                const page = mode === "whole" ? yield* log.read("s", { after }) : yield* log.read("s", { after, limit: 100 })
+                total += page.length
+                if (mode === "whole" || page.length < 100) break
+                after = page[page.length - 1]!.sequence
+              }
+              return { total, readMs: Math.round((performance.now() - started) * 10) / 10 }
+            })
+          ).pipe(Effect.provide(SqliteClient.layer({ filename: NodePath.join(dir, "log.db") })))
+        )
+        try {
+          NodeFs.rmSync(dir, { recursive: true, force: true })
+        } catch {
+          // Still held open on Windows.
+        }
+        return { eventsRead: read.total, readMs: read.readMs }
+      })
+  })),
   // Item 93's question: is progressive exposure worth a discovery turn? The
   // timings are the scripted model's; the model-independent measures -- how
   // many requests, how many tools and schema bytes they carried -- are the
