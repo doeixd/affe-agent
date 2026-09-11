@@ -81,6 +81,19 @@ export interface ProjectionDoesNotMatchOutput<Returned, Expected> {
 }
 
 /**
+ * What `fromTool` reports, as a type error, for a provider-defined tool (plan
+ * Q4): its result is shaped by the provider, and an answer must come from a
+ * result the host controls.
+ */
+export interface ProviderDefinedToolCannotProject<Name> {
+  readonly "a provider-defined tool cannot complete the submission": Name
+}
+
+type Projectable<T extends Tool.Any> = T extends { readonly [Tool.ProviderDefinedTypeId]: unknown }
+  ? ProviderDefinedToolCannotProject<T["name"]>
+  : unknown
+
+/**
  * One tool whose successful result can complete the submission. The types are
  * checked where `fromTool` builds it; here the input is erased, because an
  * output holds projections for many tools.
@@ -195,12 +208,12 @@ export const fromTool: {
    * must never do.
    */
   <T extends Tool.Any, R>(
-    tool: T,
+    tool: T & Projectable<T>,
     project: (input: ProjectionInput<T>) => Option.Option<R>
   ): <A, I>(self: AgentOutput<A, I> & ([R] extends [A] ? unknown : ProjectionDoesNotMatchOutput<R, A>)) => AgentOutput<A, I>
   <A, I, T extends Tool.Any>(
     self: AgentOutput<A, I>,
-    tool: T,
+    tool: T & Projectable<T>,
     project: (input: ProjectionInput<T>) => Option.Option<A>
   ): AgentOutput<A, I>
 } = dual(
@@ -209,19 +222,34 @@ export const fromTool: {
     self: AgentOutput<A, I>,
     tool: T,
     project: (input: ProjectionInput<T>) => Option.Option<A>
-  ): AgentOutput<A, I> => ({
-    ...self,
-    projections: [
-      ...self.projections,
-      {
-        tool,
-        // Erased for storage; `AgentTurn` decodes `params` and `result` with
-        // this same tool's schemas before calling it.
-        project: project as (input: { readonly params: unknown; readonly result: unknown }) => Option.Option<A>
-      }
-    ]
-  })
+  ): AgentOutput<A, I> => {
+    // The type refuses it; this catches a tool whose type was widened to
+    // `Tool.Any` on the way in.
+    if (Tool.isProviderDefined(tool)) {
+      throw new TypeError(
+        `AgentOutput.fromTool: "${tool.name}" is provider-defined; its result is shaped by the provider, so it cannot complete the submission`
+      )
+    }
+    return projecting(self, tool, project)
+  }
 )
+
+const projecting = <A, I, T extends Tool.Any>(
+  self: AgentOutput<A, I>,
+  tool: T,
+  project: (input: ProjectionInput<T>) => Option.Option<A>
+): AgentOutput<A, I> => ({
+  ...self,
+  projections: [
+    ...self.projections,
+    {
+      tool,
+      // Erased for storage; `AgentTurn` decodes `params` and `result` with
+      // this same tool's schemas before calling it.
+      project: project as (input: { readonly params: unknown; readonly result: unknown }) => Option.Option<A>
+    }
+  ]
+})
 
 /**
  * The value, in the shape a wire can carry.

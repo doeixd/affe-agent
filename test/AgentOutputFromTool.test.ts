@@ -204,3 +204,28 @@ export const _wrongShape = AgentOutput.make(Created).pipe(
   // @ts-expect-error -- `url` is missing, so this is not a `Created`
   AgentOutput.fromTool(CreateProject, ({ result }) => Option.some({ projectId: result.id }))
 )
+
+describe("a provider-defined tool cannot complete the submission (plan Q4)", () => {
+  const WebSearch = Tool.providerDefined({
+    id: "example.web_search",
+    customName: "web_search",
+    providerName: "web_search"
+  })
+
+  it("refused where it is written: a type error, and a throw if it gets past one", () => {
+    assert.throws(
+      () =>
+        AgentOutput.make(Schema.String).pipe(
+          // @ts-expect-error -- a provider shapes this result, not the host
+          AgentOutput.fromTool(WebSearch(), () => Option.some("found"))
+        ),
+      TypeError,
+      "provider-defined"
+    )
+  })
+
+  it("refused when its type was widened to Tool.Any on the way in", () => {
+    const erased: Tool.Any = WebSearch()
+    assert.throws(() => AgentOutput.make(Schema.String).pipe(AgentOutput.fromTool(erased, () => Option.some("found"))), TypeError, "web_search")
+  })
+})
