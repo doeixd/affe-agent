@@ -1,0 +1,9 @@
+{
+  "table": "affe_channel_input",
+  "columns": [
+    { "name": "id", "type": "INTEGER", "notnull": 0, "pk": 1 },
+    { "name": "channel_key", "type": "TEXT", "notnull": 1, "pk": 0 },
+    { "name": "value", "type": "TEXT", "notnull": 1, "pk": 0 },
+    { "name": "claimed_by", "type": "TEXT", "notnull": 0, "pk": 0 }
+  ]
+}

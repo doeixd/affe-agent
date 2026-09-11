@@ -624,11 +624,21 @@ repeated here.*
      ([plan-failure-paths.md](./plan-failure-paths.md) §3.2).** The design
      gave each subsystem its own closed set of failpoints. `DeliveryLog`,
      the turn, compaction, the event bus and the Cloudflare dispatch have
-     them. `DurableChannels` and `RelayRpc` do not, so "what if the process
-     dies here" is still answered by reading there. Small.
+     them. **`DurableChannels` has one since 2026-09-11, and it found a
+     bug:** a drain's activity took its rows out of the SQL store in its own
+     transaction, and a process lost before the engine journalled the
+     activity left them gone -- the replacement's re-execution took again
+     from an empty store, and an accepted steer never reached the model
+     (`test/DurableChannelsCrash.test.ts`; fails with the fix removed).
+     Drains now claim rows instead of deleting them, and a re-execution
+     under the same claim takes the same rows; the channel table gains a
+     `claimed_by` column (`sqlStoreWithTable` adds it to an older table).
+     `RelayRpc` still has none, so "what if the process dies here" is still
+     answered by reading there. Small.
 
      ```text
-     verify: no-grep "Failpoint" src/durable/DurableChannels.ts
+     verify: grep "store.takeAll(key, claim)" src/durable/DurableChannels.ts
+     verify: exists test/fixtures/channel-input-table.json
      verify: no-grep "Failpoint" src/relay/RelayRpc.ts
      ```
 
@@ -649,6 +659,24 @@ repeated here.*
 
      ```text
      verify: no-grep "runUnknown" src/Agent.ts
+     ```
+
+123. **A ~12 s shard-lock stall when a replacement starts a moment later
+     (found 2026-09-11).** `test/DurableAgentClientSql.test.ts`'s R173 row
+     runs in about 1 s at HEAD. Add one statement to process B's start-up --
+     a bare `SELECT 1` in `DurableChannels.sqlStoreWithTable`, touching no
+     table -- and it takes 13 s, logging "Shard lock storage is unhealthy
+     TimeoutError". So the takeover has a timing window that turns a
+     sub-second recovery into one bounded by some ~10 s timeout, not by the
+     1 s lock expiration the test configures. Found because R173 was the
+     one row there without its own budget; it now has its siblings' 30 s,
+     which hides the stall from the suite but not from a user waiting on a
+     recovery. Next: find which timeout it is -- the runner's lock-storage
+     health check is the first suspect -- and whether production's 35 s
+     lock expiration makes it worse. Medium.
+
+     ```text
+     verify: grep "Item 123 is that stall" test/DurableAgentClientSql.test.ts
      ```
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)

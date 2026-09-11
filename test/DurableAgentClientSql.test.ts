@@ -492,7 +492,12 @@ describe("DurableAgentClient on SQL storage", () => {
         const answer = yield* session.prompt("again")
         assert.strictEqual(answer.text, "second")
       }).pipe(Effect.scoped)
-    })
+    }),
+    // Its siblings' budget. It had vitest's 5 s default and ran in about 1 s,
+    // but one extra statement anywhere in process B's start-up -- measured
+    // with a bare `SELECT 1` at HEAD -- shifts the takeover into a ~12 s
+    // "Shard lock storage is unhealthy" stall. Item 123 is that stall.
+    30_000
   )
 
 })

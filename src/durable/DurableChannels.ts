@@ -6,6 +6,7 @@ import type * as InputChannel from "../InputChannel.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import * as PromptWire from "../PromptWire.js"
 import { detailOf } from "../internal/detail.js"
+import * as Failpoint from "../internal/failpoint.js"
 import { escapeIdentifier } from "../internal/sqlIdentifier.js"
 import * as Namespace from "../internal/namespace.js"
 
@@ -36,8 +37,22 @@ import * as Namespace from "../internal/namespace.js"
  */
 export interface Store {
   readonly offer: (key: string, input: string) => Effect.Effect<void, StorageError>
+  /**
+   * Take what the key holds, oldest first.
+   *
+   * With a `claim`, the rows are claimed rather than deleted, and a second
+   * take under the same claim returns them again: a drain is an activity, and
+   * an activity whose process died after the take but before the engine
+   * journalled it runs again -- under the same claim -- and must get the same
+   * rows, not an empty store (item 120; measured: the steer was lost). Rows
+   * claimed under any *other* claim for the key are deleted, since a drain
+   * only runs once every earlier drain of the key has been journalled.
+   * Without a claim, the rows are deleted, as before. A store that ignores
+   * `claim` keeps that crash window.
+   */
   readonly takeAll: (
-    key: string
+    key: string,
+    claim?: string
   ) => Effect.Effect<ReadonlyArray<string>, StorageError>
   readonly size: (key: string) => Effect.Effect<number, StorageError>
   /**
@@ -75,37 +90,52 @@ export interface Store {
  * `sqlStore` for anything beyond a single process.
  */
 export const memoryStore: Effect.Effect<Store> = Effect.map(
-  Ref.make(new Map<string, Array<string>>()),
-  (ref): Store => ({
-    offer: (key, input) =>
-      Ref.update(ref, (map) => {
-        const next = new Map(map)
-        next.set(key, [...(next.get(key) ?? []), input])
-        return next
-      }),
-    takeAll: (key) =>
-      Ref.modify(ref, (map) => {
-        const pending = map.get(key) ?? []
-        if (pending.length === 0) return [pending, map]
-        const next = new Map(map)
-        next.set(key, [])
-        return [pending, next]
-      }),
-    size: (key) => Ref.get(ref).pipe(Effect.map((m) => (m.get(key) ?? []).length)),
-    // Both keys live in one map behind one `Ref`, so the check and the insert
-    // are a single `modify`: no other writer can observe or interleave with
-    // the gap between them.
-    offerIfOpen: (key, input, gateKey) =>
-      Ref.modify(ref, (map) => {
-        if ((map.get(gateKey) ?? []).length === 0) return [false, map]
-        const next = new Map(map)
-        next.set(key, [...(next.get(key) ?? []), input])
-        return [true, next]
-      })
-  })
+  Ref.make(new Map<string, ReadonlyArray<Row>>()),
+  (ref): Store => {
+    const unclaimed = (rows: ReadonlyArray<Row>) => rows.filter((row) => row.claim === undefined)
+    return {
+      offer: (key, input) =>
+        Ref.update(ref, (map) => new Map(map).set(key, [...(map.get(key) ?? []), { value: input }])),
+      // In one process a crash loses the map anyway; claims matter here for
+      // the in-process re-execution -- an interrupted drain `Activity.make`
+      // retries -- which would otherwise find its rows already gone.
+      takeAll: (key, claim) =>
+        Ref.modify(ref, (map) => {
+          const rows = map.get(key) ?? []
+          if (claim === undefined) {
+            const pending = unclaimed(rows)
+            return [pending.map((row) => row.value), new Map(map).set(key, rows.filter((row) => row.claim !== undefined))]
+          }
+          const taken = rows.filter((row) => row.claim === undefined || row.claim === claim)
+          const kept = taken.map((row): Row => ({ value: row.value, claim }))
+          return [taken.map((row) => row.value), new Map(map).set(key, kept)]
+        }),
+      size: (key) => Ref.get(ref).pipe(Effect.map((m) => unclaimed(m.get(key) ?? []).length)),
+      // Both keys live in one map behind one `Ref`, so the check and the insert
+      // are a single `modify`: no other writer can observe or interleave with
+      // the gap between them.
+      offerIfOpen: (key, input, gateKey) =>
+        Ref.modify(ref, (map) => {
+          if (unclaimed(map.get(gateKey) ?? []).length === 0) return [false, map]
+          return [true, new Map(map).set(key, [...(map.get(key) ?? []), { value: input }])]
+        })
+    }
+  }
 )
 
+/** A stored input, and the drain that claimed it, if one has. */
+interface Row {
+  readonly value: string
+  readonly claim?: string | undefined
+}
+
 const inputs = Schema.Array(Schema.String)
+
+/**
+ * The crash window a drain has: after the store gave up its rows and before
+ * the engine journalled the activity that took them (item 120).
+ */
+export const failpoints = Failpoint.group("DurableChannels", ["after-take"])
 
 /**
  * Where a session publishes whether it is accepting out-of-band input.
@@ -334,14 +364,18 @@ export const factory = (
               ? Effect.succeed([])
               : Effect.orDie(Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(drainIndex, (n) => n + 1)
+              const activity = `${options?.prefix ?? ""}${name}-drain-${index}`
+              // Stable across processes and attempts, and unique to this
+              // drain: a re-execution after a crash takes the same rows.
+              const claim = `${instance.executionId}/${activity}`
               const encoded = yield* Activity.make({
-                name: `${options?.prefix ?? ""}${name}-drain-${index}`,
+                name: activity,
                 success: inputs,
                 // A store failure here is declared, not a defect: the drain is
                 // journalled, so it crosses as a value and a resumed run sees
                 // what the original saw.
                 error: StorageError,
-                execute: store.takeAll(key)
+                execute: Effect.tap(store.takeAll(key, claim), () => failpoints.hit("after-take"))
               }).pipe(Effect.provide(workflowContext))
 
               // Decoding after the activity keeps the journalled value in its
@@ -375,9 +409,12 @@ export const sqlStoreTable = Namespace.table("channel_input")
 /**
  * Build a SQL-backed store over an existing table.
  *
- * The table needs an auto-incrementing `id`, a `channel_key` text column, and a
- * `value` text column. `id` is what preserves FIFO order, which callers depend
- * on: follow-ups run in the order they were queued.
+ * The table needs an auto-incrementing `id`, a `channel_key` text column, a
+ * `value` text column, and a nullable `claimed_by` text column, which a drain
+ * sets on the rows it takes so that a re-execution after a crash takes them
+ * again (item 120; `sqlStoreWithTable` adds it to an older table). `id` is
+ * what preserves FIFO order, which callers depend on: follow-ups run in the
+ * order they were queued.
  */
 export const sqlStore = (
   options?: { readonly table?: string | undefined }
@@ -406,31 +443,53 @@ export const sqlStore = (
           // is a typed error on every `offer` in the library.
           storage("offer", key)
         ),
-      takeAll: (key) =>
+      takeAll: (key, claim) =>
         // One transaction, because a drain that read rows and then deleted them
         // separately would lose anything offered in between — and losing
         // accepted input is exactly what this module exists to prevent.
         sql
           .withTransaction(
             Effect.gen(function* () {
+              if (claim === undefined) {
+                const rows = yield* sql<{
+                  readonly id: number
+                  readonly value: string
+                }>`SELECT id, value FROM ${table} WHERE channel_key = ${key} AND claimed_by IS NULL ORDER BY id`
+                if (rows.length > 0) {
+                  yield* sql`DELETE FROM ${table} WHERE ${sql.in("id", rows.map((row) => row.id))}`
+                }
+                return rows.map((row) => row.value)
+              }
+              // Claimed, not deleted: a re-execution of this drain after a
+              // crash takes the same rows (see `Store.takeAll`). Rows an
+              // earlier drain claimed are journalled by now, so they go.
+              //
+              // Read first, and write only what changes: most drains find
+              // nothing, and a statement that writes -- even a DELETE of no
+              // rows -- takes SQLite's write lock, which the runner's shard
+              // lock refresh then waits on (measured: a 0.9 s test took 13 s).
               const rows = yield* sql<{
                 readonly id: number
                 readonly value: string
-              }>`SELECT id, value FROM ${table} WHERE channel_key = ${key} ORDER BY id`
-              if (rows.length > 0) {
-                yield* sql`DELETE FROM ${table} WHERE ${sql.in(
-                  "id",
-                  rows.map((row) => row.id)
-                )}`
+                readonly claimed_by: string | null
+              }>`SELECT id, value, claimed_by FROM ${table} WHERE channel_key = ${key} ORDER BY id`
+              const stale = rows.filter((row) => row.claimed_by !== null && row.claimed_by !== claim)
+              const taken = rows.filter((row) => row.claimed_by === null || row.claimed_by === claim)
+              const unclaimed = taken.filter((row) => row.claimed_by === null)
+              if (stale.length > 0) {
+                yield* sql`DELETE FROM ${table} WHERE ${sql.in("id", stale.map((row) => row.id))}`
               }
-              return rows.map((row) => row.value)
+              if (unclaimed.length > 0) {
+                yield* sql`UPDATE ${table} SET claimed_by = ${claim} WHERE ${sql.in("id", unclaimed.map((row) => row.id))}`
+              }
+              return taken.map((row) => row.value)
             })
           )
           .pipe(storage("takeAll", key)),
       size: (key) =>
         sql<{
           readonly count: number
-        }>`SELECT COUNT(*) AS count FROM ${table} WHERE channel_key = ${key}`.pipe(
+        }>`SELECT COUNT(*) AS count FROM ${table} WHERE channel_key = ${key} AND claimed_by IS NULL`.pipe(
           Effect.map((rows) => Number(rows[0]?.count ?? 0)),
           storage("size", key)
         ),
@@ -442,7 +501,7 @@ export const sqlStore = (
           .withTransaction(
             Effect.gen(function* () {
               const open = yield* sql<{ readonly id: number }>`
-                SELECT id FROM ${table} WHERE channel_key = ${gateKey} LIMIT 1
+                SELECT id FROM ${table} WHERE channel_key = ${gateKey} AND claimed_by IS NULL LIMIT 1
               `
               if (open.length === 0) return false
               yield* sql`INSERT INTO ${table} ${sql.insert(
@@ -455,6 +514,17 @@ export const sqlStore = (
     }
   })
 
+/** An error's message and every nested cause's: the driver's reason sits two deep in a `SqlError`. */
+const causeChain = (error: unknown): ReadonlyArray<string> => {
+  const messages: Array<string> = []
+  let current: unknown = error
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    messages.push(current.message)
+    current = current.cause
+  }
+  return messages
+}
+
 /** As `sqlStore`, but creates the table first if it is not there. */
 export const sqlStoreWithTable = (
   options?: { readonly table?: string | undefined }
@@ -465,8 +535,18 @@ export const sqlStoreWithTable = (
     yield* sql`CREATE TABLE IF NOT EXISTS ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       channel_key TEXT NOT NULL,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      claimed_by TEXT
     )`.pipe(Effect.orDie)
+    // A table created before drains claimed their rows (item 120) gains the
+    // column; `CREATE TABLE IF NOT EXISTS` leaves an existing table as it was.
+    // Added unconditionally, and "duplicate column" means it is already there.
+    // Not probed first: measured, a `PRAGMA table_info` or a `SELECT ...
+    // LIMIT 0` probe here made a two-process test wait twelve seconds on the
+    // runner's shard lock, where a failing `ALTER` fails before it locks.
+    yield* sql`ALTER TABLE ${table} ADD COLUMN claimed_by TEXT`.pipe(
+      Effect.catch((error) => causeChain(error).some((message) => /duplicate column/i.test(message)) ? Effect.void : Effect.die(error))
+    )
     yield* sql`CREATE INDEX IF NOT EXISTS ${sql.literal(
       `${escapeIdentifier(options?.table ?? sqlStoreTable)}_key`
     )} ON ${table} (channel_key, id)`.pipe(Effect.orDie)
