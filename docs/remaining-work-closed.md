@@ -2475,3 +2475,36 @@ review-unfollowed. ~~**The commits no review followed.**~~ **DONE 2026-09-07**
      verify: exists test/fixtures/tool-activity-names.json
      verify: exists test/fixtures/memory-recall-truncated.json
      ```
+
+106. ~~**Long-lifetime continuity evaluation (plan E14, §18).**~~ — landed
+     2026-09-10. `affe-agent/evals`'s `Continuity`: a scenario as
+     data (statements, corrections, restarts, questions with ground truth), a
+     model-agnostic runner that folds repeatedly with a content-free summary and
+     restarts the session between submissions (snapshot, scope closed,
+     restore), and programmatic scoring -- the answer is right and not stale,
+     the statement was out of the prompt the model was sent, and a
+     `search_context` hit pointed at the canonical message that stated it. A
+     deterministic reference model runs the standard scenario in `npm test`
+     (`test/Continuity.test.ts`: 12+ folds, 3 restarts, all three questions
+     pass; a no-fold control fails; breaking search over folded history fails
+     it); `npm run eval:continuity` runs it against a real model and writes a
+     report -- **not yet run from this machine** (no key). Since 109 made
+     search newest-first, a correction that is the fourth mention is found,
+     and the suite pins that. A second scenario, `correctionChain` (a value
+     corrected twice across restarts; both older values count as stale),
+     separates finding *a* mention from finding the one still true -- a
+     reference model answering from the oldest hit fails it. A kill
+     *inside* a submission is covered too: over the durable client, a fact
+     folded out of view by compaction, then a question whose process dies
+     after its search settles -- the replacement answers from the journal,
+     and the whole observation equals the run that never died
+     (`DurableEquivalence` gained `model`, for a content-driven model that
+     needs no script cursor, and `before`, for the conversation a crash
+     lands in). The live tier is scheduled: `.github/workflows/continuity-live.yml`,
+     weekly and on demand, skipped unless the repository has an
+     `ANTHROPIC_API_KEY` secret -- so it has still never run.
+
+     ```text
+     verify: exists src/evals/Continuity.ts
+     verify: grep "eval:continuity" package.json
+     ```

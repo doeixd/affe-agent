@@ -482,37 +482,6 @@ acceptance test for 105, 107 and 108.*
      verify: exists src/testing/DurableEquivalence.ts
      ```
 
-106. **Long-lifetime continuity evaluation (plan E14, §18) -- first slice
-     landed 2026-09-10.** `affe-agent/evals`'s `Continuity`: a scenario as
-     data (statements, corrections, restarts, questions with ground truth), a
-     model-agnostic runner that folds repeatedly with a content-free summary and
-     restarts the session between submissions (snapshot, scope closed,
-     restore), and programmatic scoring -- the answer is right and not stale,
-     the statement was out of the prompt the model was sent, and a
-     `search_context` hit pointed at the canonical message that stated it. A
-     deterministic reference model runs the standard scenario in `npm test`
-     (`test/Continuity.test.ts`: 12+ folds, 3 restarts, all three questions
-     pass; a no-fold control fails; breaking search over folded history fails
-     it); `npm run eval:continuity` runs it against a real model and writes a
-     report -- **not yet run from this machine** (no key). Since 109 made
-     search newest-first, a correction that is the fourth mention is found,
-     and the suite pins that. A second scenario, `correctionChain` (a value
-     corrected twice across restarts; both older values count as stale),
-     separates finding *a* mention from finding the one still true -- a
-     reference model answering from the oldest hit fails it. A kill
-     *inside* a submission is covered too: over the durable client, a fact
-     folded out of view by compaction, then a question whose process dies
-     after its search settles -- the replacement answers from the journal,
-     and the whole observation equals the run that never died
-     (`DurableEquivalence` gained `model`, for a content-driven model that
-     needs no script cursor, and `before`, for the conversation a crash
-     lands in). Still open: a scheduled job for the live tier.
-
-     ```text
-     verify: exists src/evals/Continuity.ts
-     verify: grep "eval:continuity" package.json
-     ```
-
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
      104's oracle is its acceptance test.

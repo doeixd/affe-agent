@@ -1,0 +1,50 @@
+name: Continuity (live model)
+
+# The live tier of item 106's continuity evaluation: the same scenario the
+# suite runs under the deterministic reference model, against a real one.
+# Weekly and on demand -- never on push: it costs money and a real model's
+# answer is not a merge gate. Skips itself unless the repository has an
+# ANTHROPIC_API_KEY secret, so a fork or a repository without one does
+# nothing.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model id (AFFE_EVAL_MODEL)"
+        required: false
+        default: ""
+
+jobs:
+  continuity:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      AFFE_EVAL_MODEL: ${{ github.event.inputs.model || 'claude-sonnet-5' }}
+    steps:
+      - name: Skip without a key
+        if: env.ANTHROPIC_API_KEY == ''
+        run: echo "No ANTHROPIC_API_KEY secret; the live continuity evaluation did not run."
+
+      - uses: actions/checkout@v4
+        if: env.ANTHROPIC_API_KEY != ''
+
+      - uses: actions/setup-node@v4
+        if: env.ANTHROPIC_API_KEY != ''
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+        if: env.ANTHROPIC_API_KEY != ''
+
+      - run: npm run eval:continuity
+        if: env.ANTHROPIC_API_KEY != ''
+
+      - uses: actions/upload-artifact@v4
+        if: always() && env.ANTHROPIC_API_KEY != ''
+        with:
+          name: continuity-report
+          path: docs/reports/continuity-*.json
