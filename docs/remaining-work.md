@@ -466,8 +466,11 @@ acceptance test for 105, 107 and 108.*
      place when compaction folded them, and every tool ran twice): crashed
      after its second turn, it recovers to the same history, events and
      effects. Still open: (b) the plan's other scenarios: rollover, a subagent with a suspended child
-     elicitation, Code Mode with a suspending executor; (c) usage/`RunLedger`
-     and claim state. Events are compared now: `Observation.events` is the
+     elicitation, Code Mode with a suspending executor; (c) usage/`RunLedger`.
+     Claim state is compared now (`Observation.session`: status,
+     submission count, whether a claim is still held -- a recovery that
+     left the session claimed would lock out its next prompt), and so are
+     events: `Observation.events` is the
      session's delivery log as tags in order, shared by both processes, so a
      recovery that re-announced, dropped or reordered an event fails even
      when history agrees -- a delivery log that stops deduplicating replayed

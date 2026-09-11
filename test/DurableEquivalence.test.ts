@@ -169,6 +169,9 @@ describe("durable recovery is indistinguishable from never having crashed (item 
           // Not vacuous: the uninterrupted run did real work on both sides.
           assert.strictEqual(straight.modelCalls, 2)
           assert.deepStrictEqual(straight.effects, ["orders", "refunds"])
+          // And it left the session as a finished one: idle, one submission,
+          // no claim held -- what the recovered run must also leave.
+          assert.deepStrictEqual(straight.session, { status: "idle", submissionCount: 1, claimed: false })
           // The crash was real, and the replacement did only what was left.
           assert.deepStrictEqual(recovered.split, split, "model calls made by the first and second process")
 
