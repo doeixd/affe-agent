@@ -34,6 +34,7 @@ export class RevisionResolutionError extends Schema.TaggedError<RevisionResoluti
       "unknown-revision",
       "unknown-model",
       "unknown-capability",
+      "conflicting-capability",
       "unknown-skill",
       "permission-not-recreatable"
     ]),
@@ -58,7 +59,7 @@ export class AgentResolver extends Context.Service<AgentResolver, Service>()("wo
 const bindAll = <A>(
   table: Readonly<Record<string, A>>,
   refs: ReadonlyArray<{ readonly id: string }>
-): Either<ReadonlyArray<A>, string> => {
+): Binding<ReadonlyArray<A>> => {
   const bound: Array<A> = []
   for (const ref of refs) {
     const entry = table[ref.id]
@@ -68,7 +69,21 @@ const bindAll = <A>(
   return { _tag: "Bound", value: bound }
 }
 
-type Either<A, Ref> = { readonly _tag: "Bound"; readonly value: A } | { readonly _tag: "Missing"; readonly ref: Ref }
+type Binding<A> = { readonly _tag: "Bound"; readonly value: A } | { readonly _tag: "Missing"; readonly ref: string }
+
+/**
+ * The first tool name two capabilities both bind, if any. Lowering bound
+ * tools keys handlers by name, so a second `build` would silently replace
+ * the first; a revision that asks for both is refused instead.
+ */
+const firstConflict = (tools: ReadonlyArray<Agent.BoundTool<Tool.Any>>): Option.Option<string> => {
+  const seen = new Set<string>()
+  for (const { tool } of tools) {
+    if (seen.has(tool.name)) return Option.some(tool.name)
+    seen.add(tool.name)
+  }
+  return Option.none()
+}
 
 export const layer: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindings> = Layer.effect(
   AgentResolver,
@@ -89,6 +104,9 @@ export const layer: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindi
 
       const capabilities = bindAll(bindings.capabilities, revision.capabilities)
       if (capabilities._tag === "Missing") return yield* refused("unknown-capability", capabilities.ref)
+      const tools = capabilities.value.flat()
+      const conflict = firstConflict(tools)
+      if (Option.isSome(conflict)) return yield* refused("conflicting-capability", conflict.value)
 
       const skills = bindAll(bindings.skills, revision.skills)
       if (skills._tag === "Missing") return yield* refused("unknown-skill", skills.ref)
@@ -98,7 +116,7 @@ export const layer: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindi
 
       const agent = Agent.make({
         instructions: revision.instructions,
-        tools: capabilities.value.flat(),
+        tools,
         loop: AgentLoop.bounded(revision.maxTurns),
         permission: permission.value
       })

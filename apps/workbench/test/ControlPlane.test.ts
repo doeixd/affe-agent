@@ -48,7 +48,11 @@ const harness = Effect.fn("harness")(function*(
   const { layer: model, recorder } = yield* TestLanguageModel.script(turns(registry))
   const bindings = Layer.succeed(AgentResolver.AgentBindings, {
     models: { scripted: model },
-    capabilities: { builder: [Agent.tool(Build, () => Ref.update(builds, (n) => n + 1).pipe(Effect.as("built")))] },
+    capabilities: {
+      builder: [Agent.tool(Build, () => Ref.update(builds, (n) => n + 1).pipe(Effect.as("built")))],
+      // A second capability binding a tool of the same name.
+      rebuilder: [Agent.tool(Build, () => Effect.succeed("rebuilt"))]
+    },
     skills: { style: Skills.skill({ id: "style", name: "House style", description: "How we write.", body: "Be terse." }) }
   })
   const resolverContext = yield* Layer.build(
@@ -156,6 +160,10 @@ describe("control plane phase 0", () => {
       assert.deepStrictEqual(yield* refusal({ capabilities: [{ id: "builder" }, { id: "rocket" }] }), [
         "unknown-capability",
         "rocket"
+      ])
+      assert.deepStrictEqual(yield* refusal({ capabilities: [{ id: "builder" }, { id: "rebuilder" }] }), [
+        "conflicting-capability",
+        "build"
       ])
       assert.deepStrictEqual(yield* refusal({ skills: [{ id: "poetry" }] }), ["unknown-skill", "poetry"])
       assert.deepStrictEqual(yield* refusal({ permission: { recorded: "not json" } }), [
