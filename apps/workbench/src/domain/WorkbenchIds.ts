@@ -17,3 +17,11 @@ export type AgentProfileId = typeof AgentProfileId.Type
 
 export const WorkspaceId = Schema.String.pipe(Schema.brand("workbench/WorkspaceId"))
 export type WorkspaceId = typeof WorkspaceId.Type
+
+/** A named agent, across all its revisions (control plane §6). */
+export const AgentId = Schema.String.pipe(Schema.brand("workbench/AgentId"))
+export type AgentId = typeof AgentId.Type
+
+/** One immutable configuration of an agent. */
+export const AgentRevisionId = Schema.String.pipe(Schema.brand("workbench/AgentRevisionId"))
+export type AgentRevisionId = typeof AgentRevisionId.Type

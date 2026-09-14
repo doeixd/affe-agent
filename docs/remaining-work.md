@@ -168,8 +168,18 @@ it is still open, so the next pass does not have to re-derive it.
     Reuse the existing session directory and projection. `SessionInbox` is
     background input, not the product's human approval inbox. Neither product
     plan justifies a second execution runtime.
+    Phase 0 is in `apps/workbench` beside item 81 (2026-09-14): `AgentSpec`
+    and immutable `AgentRevision`s as data, an in-memory `AgentRegistry`, and
+    an `AgentResolver` that binds a revision's model, capability, skill and
+    recorded-permission references into an `AgentClient.Service` using public
+    combinators only. Tested: two revisions both resolve with their own
+    configuration, an edit made mid-run leaves the run on its revision, the
+    recorded policy is enforced, and an unbound reference is refused by name.
+    It needed no kernel change. Still open: `AgentDirectory` resolving through
+    it, persistence (Phase 1) and everything after.
 
     ```text
+    verify: exists apps/workbench/src/runtime/AgentResolver.ts
     verify: exists src/sessions/SessionDirectory.ts
     verify: exists src/sessions/SessionProjection.ts
     verify: exists src/sessions/SessionInbox.ts
