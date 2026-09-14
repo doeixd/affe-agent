@@ -1,0 +1,7 @@
+{
+  // The root config's `paths` map every published `affe-agent` subpath and
+  // nothing else, so the workbench can reach exactly what a third party can.
+  "extends": "../../tsconfig.json",
+  "include": ["src", "test"],
+  "exclude": []
+}

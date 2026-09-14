@@ -144,11 +144,19 @@ it is still open, so the next pass does not have to re-derive it.
     reconnect. W1 adds persistence; later milestones add complete chat,
     workspace inspection, artifacts, agent configuration, connections,
     knowledge/projects and distribution. Build outside the portable kernel.
-    No workbench app exists in this checkout; an external implementation must
-    be linked here before this entry can close.
+    W0's UI-independent half is in `apps/workbench` (2026-09-14): branded
+    ids, in-memory `ConversationStore`/`AgentCatalog`, a single-agent
+    `AgentDirectory`, `ConversationSessions`, `ConversationProjection` and a
+    scoped `ConversationPresenter`, tested through the in-process client for
+    streaming, reasoning, tool progress, interruption, elicitation and
+    reopen-from-history, with a boundary test for acceptance 8. It imports
+    only published `affe-agent` subpaths. Still open for W0: the browser
+    transport, the plain React page, and resumed-event reconnect against a
+    backend with a delivery log.
 
     ```text
-    verify: absent apps/workbench
+    verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts
+    verify: grep "test:workbench" package.json
     ```
 
 82. **Persistent-agent control plane, Phase 0–8**

@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config"
+import { configDefaults, defineConfig } from "vitest/config"
 
 /**
  * The suite must not assume it owns the machine.
@@ -46,6 +46,8 @@ import { defineConfig } from "vitest/config"
  */
 export default defineConfig({
   test: {
-    maxWorkers: 8
+    maxWorkers: 8,
+    // Its own config resolves `affe-agent` to source; `npm run test:workbench`.
+    exclude: [...configDefaults.exclude, "apps/workbench/**"]
   }
 })
