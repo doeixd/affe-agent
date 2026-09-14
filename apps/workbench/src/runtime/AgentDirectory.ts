@@ -7,11 +7,14 @@
 import { Context, Duration, Effect, Layer, RcMap } from "effect"
 import type { AgentClient } from "affe-agent/client"
 import type { AgentRevisionId } from "../domain/WorkbenchIds.js"
+import type { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
 import { AgentResolver } from "./AgentResolver.js"
 import type { RevisionResolutionError } from "./AgentResolver.js"
 
 export interface Service {
-  readonly client: (id: AgentRevisionId) => Effect.Effect<AgentClient.Service, RevisionResolutionError>
+  readonly client: (
+    id: AgentRevisionId
+  ) => Effect.Effect<AgentClient.Service, RevisionResolutionError | WorkbenchStorageError>
 }
 
 export class AgentDirectory extends Context.Service<AgentDirectory, Service>()("workbench/AgentDirectory") {}

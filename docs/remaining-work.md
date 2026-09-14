@@ -179,8 +179,11 @@ it is still open, so the next pass does not have to re-derive it.
     configuration, an edit made mid-run leaves the run on its revision, the
     recorded policy is enforced, and an unbound reference is refused by name.
     It needed no kernel change. The workbench's conversations now run on it,
-    pinned to their revision. Still open: persistence (Phase 1) and
-    everything after.
+    pinned to their revision. Phase 1 has begun: SQL `AgentRegistry` and
+    `ConversationStore` beside the memory ones, one contract for both, and
+    the §6 acceptance tested -- an agent defined as data survives a restart
+    and runs the same revision. Still open in Phase 1: organizations and
+    membership, SessionDirectory wiring, the web shell, and auth.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

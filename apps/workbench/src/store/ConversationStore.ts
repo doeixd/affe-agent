@@ -5,8 +5,10 @@
  * which the session owns, and not execution, which `AgentClient` owns.
  */
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import * as Conversation from "../domain/Conversation.js"
 import { ConversationId } from "../domain/WorkbenchIds.js"
+import { failedAs, WorkbenchStorageError } from "./WorkbenchStorageError.js"
 
 export class ConversationNotFoundError extends Schema.TaggedError<ConversationNotFoundError>()(
   "ConversationNotFoundError",
@@ -19,21 +21,39 @@ export class ConversationExistsError extends Schema.TaggedError<ConversationExis
 ) {}
 
 export interface Service {
-  readonly create: (record: Conversation.New) => Effect.Effect<Conversation.Record, ConversationExistsError>
-  readonly get: (id: ConversationId) => Effect.Effect<Option.Option<Conversation.Record>>
-  readonly list: (query: Conversation.Query) => Effect.Effect<ReadonlyArray<Conversation.Record>>
+  readonly create: (
+    record: Conversation.New
+  ) => Effect.Effect<Conversation.Record, ConversationExistsError | WorkbenchStorageError>
+  readonly get: (id: ConversationId) => Effect.Effect<Option.Option<Conversation.Record>, WorkbenchStorageError>
+  /** Newest first, as a conversation list is read. */
+  readonly list: (query: Conversation.Query) => Effect.Effect<ReadonlyArray<Conversation.Record>, WorkbenchStorageError>
   readonly update: (
     id: ConversationId,
     patch: Conversation.Patch
-  ) => Effect.Effect<Conversation.Record, ConversationNotFoundError>
-  readonly remove: (id: ConversationId) => Effect.Effect<void>
+  ) => Effect.Effect<Conversation.Record, ConversationNotFoundError | WorkbenchStorageError>
+  readonly remove: (id: ConversationId) => Effect.Effect<void, WorkbenchStorageError>
 }
 
 export class ConversationStore extends Context.Service<ConversationStore, Service>()(
   "workbench/ConversationStore"
 ) {}
 
-/** Newest first, as a conversation list is read. */
+const stamped = (input: Conversation.New, now: DateTime.Utc): Conversation.Record => ({
+  ...input,
+  archived: false,
+  createdAt: now,
+  updatedAt: now
+})
+
+const patched = (current: Conversation.Record, patch: Conversation.Patch, now: DateTime.Utc): Conversation.Record => ({
+  ...current,
+  title: patch.title ?? current.title,
+  archived: patch.archived ?? current.archived,
+  updatedAt: now
+})
+
+// -- Memory -----------------------------------------------------------------------------
+
 const byUpdatedDesc = (a: Conversation.Record, b: Conversation.Record) =>
   DateTime.toEpochMillis(b.updatedAt) - DateTime.toEpochMillis(a.updatedAt)
 
@@ -43,8 +63,7 @@ export const memory: Layer.Layer<ConversationStore> = Layer.effect(
     const records = yield* Ref.make(new Map<ConversationId, Conversation.Record>())
 
     const create = Effect.fn("ConversationStore.create")(function*(input: Conversation.New) {
-      const now = yield* DateTime.now
-      const record: Conversation.Record = { ...input, archived: false, createdAt: now, updatedAt: now }
+      const record = stamped(input, yield* DateTime.now)
       const inserted = yield* Ref.modify(records, (map) =>
         map.has(input.id) ? [false, map] : [true, new Map(map).set(input.id, record)]
       )
@@ -59,12 +78,7 @@ export const memory: Layer.Layer<ConversationStore> = Layer.effect(
       const updated = yield* Ref.modify(records, (map) => {
         const current = map.get(id)
         if (current === undefined) return [Option.none(), map]
-        const next: Conversation.Record = {
-          ...current,
-          title: patch.title ?? current.title,
-          archived: patch.archived ?? current.archived,
-          updatedAt: now
-        }
+        const next = patched(current, patch, now)
         return [Option.some(next), new Map(map).set(id, next)]
       })
       return yield* Option.match(updated, {
@@ -93,3 +107,111 @@ export const memory: Layer.Layer<ConversationStore> = Layer.effect(
     })
   })
 )
+
+// -- SQL --------------------------------------------------------------------------------
+
+const RecordJson = Schema.toCodecJson(Conversation.Record)
+
+const encodeRecord = (record: Conversation.Record) =>
+  Effect.orDie(Effect.map(Schema.encodeEffect(RecordJson)(record), (encoded) => JSON.stringify(encoded)))
+
+const decodeRecord = (text: string) =>
+  Effect.try({ try: (): unknown => JSON.parse(text), catch: failedAs("decodeConversation") }).pipe(
+    Effect.flatMap((json) => Effect.mapError(Schema.decodeUnknownEffect(RecordJson)(json), failedAs("decodeConversation")))
+  )
+
+interface BodyRow {
+  readonly body: string
+}
+
+/**
+ * A store over an existing table (`sqlWithTable` creates it). The body is the
+ * record's JSON encoding; `owner_id`, `archived` and `updated_at` sit beside
+ * it so a conversation list is one indexed query.
+ */
+export const sql: Effect.Effect<Service, never, SqlClient.SqlClient> = Effect.gen(function*() {
+  const client = yield* SqlClient.SqlClient
+
+  const get = (id: ConversationId) =>
+    client<BodyRow>`SELECT body FROM workbench_conversations WHERE id = ${id}`.pipe(
+      Effect.mapError(failedAs("ConversationStore.get")),
+      Effect.flatMap((rows) =>
+        rows[0] === undefined
+          ? Effect.succeed(Option.none<Conversation.Record>())
+          : Effect.map(decodeRecord(rows[0].body), Option.some)
+      )
+    )
+
+  const create = Effect.fn("ConversationStore.create")(function*(input: Conversation.New) {
+    const record = stamped(input, yield* DateTime.now)
+    const body = yield* encodeRecord(record)
+    // Insert-if-absent in the statement, then read back whether this call
+    // was the one that inserted: a read-then-insert races into a uniqueness
+    // violation under concurrency.
+    const inserted = yield* client.withTransaction(Effect.gen(function*() {
+      const [before] = yield* client<{ readonly n: number | bigint }>`SELECT COUNT(*) AS n FROM workbench_conversations WHERE id = ${input.id}`
+      if (Number(before?.n ?? 0) > 0) return false
+      yield* client`INSERT INTO workbench_conversations (id, owner_id, archived, updated_at, body) VALUES (${record.id}, ${record.ownerId}, 0, ${DateTime.toEpochMillis(record.updatedAt)}, ${body})`
+      return true
+    })).pipe(Effect.mapError(failedAs("ConversationStore.create")))
+    if (!inserted) {
+      return yield* new ConversationExistsError({ conversationId: input.id })
+    }
+    return record
+  })
+
+  const update = Effect.fn("ConversationStore.update")(function*(id: ConversationId, patch: Conversation.Patch) {
+    const now = yield* DateTime.now
+    return yield* client.withTransaction(Effect.gen(function*() {
+      const current = yield* get(id)
+      if (Option.isNone(current)) {
+        return yield* new ConversationNotFoundError({ conversationId: id })
+      }
+      const next = patched(current.value, patch, now)
+      const body = yield* encodeRecord(next)
+      yield* client`UPDATE workbench_conversations SET body = ${body}, archived = ${next.archived ? 1 : 0}, updated_at = ${DateTime.toEpochMillis(now)} WHERE id = ${id}`
+      return next
+    })).pipe(Effect.catchTag("SqlError", (cause) => Effect.fail(failedAs("ConversationStore.update")(cause))))
+  })
+
+  return ConversationStore.of({
+    create,
+    get,
+    list: (query) =>
+      (query.includeArchived === true
+        ? client<BodyRow>`SELECT body FROM workbench_conversations WHERE owner_id = ${query.ownerId} ORDER BY updated_at DESC, id`
+        : client<BodyRow>`SELECT body FROM workbench_conversations WHERE owner_id = ${query.ownerId} AND archived = 0 ORDER BY updated_at DESC, id`
+      ).pipe(
+        Effect.mapError(failedAs("ConversationStore.list")),
+        Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeRecord(row.body)))
+      ),
+    update,
+    remove: (id) =>
+      client`DELETE FROM workbench_conversations WHERE id = ${id}`.pipe(
+        Effect.asVoid,
+        Effect.mapError(failedAs("ConversationStore.remove"))
+      )
+  })
+})
+
+/** As `sql`, creating the table and its listing index first if absent. */
+export const sqlWithTable: Effect.Effect<Service, never, SqlClient.SqlClient> = Effect.gen(function*() {
+  const client = yield* SqlClient.SqlClient
+  yield* client`CREATE TABLE IF NOT EXISTS workbench_conversations (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    archived INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    body TEXT NOT NULL
+  )`.pipe(Effect.orDie)
+  yield* client`CREATE INDEX IF NOT EXISTS workbench_conversations_listing ON workbench_conversations (owner_id, archived, updated_at)`
+    .pipe(Effect.orDie)
+  return yield* sql
+})
+
+export const layerSql: Layer.Layer<ConversationStore, never, SqlClient.SqlClient> = Layer.effect(
+  ConversationStore,
+  sqlWithTable
+)
+
+export { WorkbenchStorageError }

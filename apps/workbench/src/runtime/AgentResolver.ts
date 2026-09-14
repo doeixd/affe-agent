@@ -16,6 +16,7 @@ import { Skills } from "affe-agent/skills"
 import type { AgentRevision } from "../domain/AgentRevision.js"
 import { AgentRevisionId } from "../domain/WorkbenchIds.js"
 import { AgentRegistry } from "../store/AgentRegistry.js"
+import type { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
 
 /** What a deployment registers for revisions to name. */
 export interface Bindings {
@@ -50,7 +51,9 @@ export interface ResolvedAgent {
 
 export interface Service {
   /** Scoped: the client's sessions and the model wiring live as long as the scope. */
-  readonly resolve: (id: AgentRevisionId) => Effect.Effect<ResolvedAgent, RevisionResolutionError, Scope.Scope>
+  readonly resolve: (
+    id: AgentRevisionId
+  ) => Effect.Effect<ResolvedAgent, RevisionResolutionError | WorkbenchStorageError, Scope.Scope>
 }
 
 export class AgentResolver extends Context.Service<AgentResolver, Service>()("workbench/AgentResolver") {}

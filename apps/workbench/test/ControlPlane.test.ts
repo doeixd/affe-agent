@@ -16,11 +16,17 @@ import { AgentRevisionId, UserId } from "../src/domain/WorkbenchIds.js"
 import * as AgentDirectory from "../src/runtime/AgentDirectory.js"
 import * as AgentResolver from "../src/runtime/AgentResolver.js"
 import * as AgentRegistry from "../src/store/AgentRegistry.js"
+import type { WorkbenchStorageError } from "../src/store/WorkbenchStorageError.js"
 
 const owner = UserId.make("ada")
 const Build = Tool.make("build", { parameters: Schema.Struct({}), success: Schema.String })
 
 const recorded = (policy: Permission.Policy) => ({ recorded: JSON.stringify(Permission.describe(policy)) })
+
+/** The resolution refusal an effect fails with; a storage failure is not one, and ends the test. */
+const refusalOf = <A, R>(
+  effect: Effect.Effect<A, AgentResolver.RevisionResolutionError | WorkbenchStorageError, R>
+) => effect.pipe(Effect.catchTag("WorkbenchStorageError", Effect.die), Effect.flip)
 
 const input = (overrides: Partial<RevisionInput> = {}): RevisionInput => ({
   instructions: "You are revision one.",
@@ -84,7 +90,7 @@ describe("agent directory", () => {
         revision: input({ capabilities: [] })
       })
 
-      const refused = yield* Effect.flip(directory.client(revision.id))
+      const refused = yield* refusalOf(directory.client(revision.id))
       assert.strictEqual(refused.reason, "unknown-model")
 
       models["scripted"] = model
@@ -125,14 +131,14 @@ describe("control plane phase 0", () => {
         {
           toolCalls: [{ id: "b1", name: "build", params: {} }],
           // Runs while the first model call is in flight.
-          during: Effect.gen(function*() {
+          during: Effect.orDie(Effect.gen(function*() {
             const [spec] = yield* registry.list(owner)
             if (spec === undefined) return yield* Effect.die("no agent to revise")
             const next = yield* Effect.orDie(
               registry.revise(spec.id, input({ instructions: "You are revision two.", capabilities: [] }), owner)
             )
             yield* Ref.set(created, Option.some(next.id))
-          })
+          }))
         },
         TestLanguageModel.text("done")
       ])
@@ -185,7 +191,7 @@ describe("control plane phase 0", () => {
       const refusal = (overrides: Partial<RevisionInput>) =>
         Effect.gen(function*() {
           const { revision } = yield* registry.create({ ownerId: owner, name: "Broken", revision: input(overrides) })
-          const error = yield* Effect.flip(resolver.resolve(revision.id))
+          const error = yield* refusalOf(resolver.resolve(revision.id))
           return [error.reason, error.ref]
         })
 
@@ -203,7 +209,7 @@ describe("control plane phase 0", () => {
         "permission-not-recreatable",
         undefined
       ])
-      const missing = yield* Effect.flip(resolver.resolve(AgentRevisionId.make("nobody@1")))
+      const missing = yield* refusalOf(resolver.resolve(AgentRevisionId.make("nobody@1")))
       assert.strictEqual(missing.reason, "unknown-revision")
     })))
 })
