@@ -237,6 +237,33 @@ race is rare, but it is a real consumer's race and not just a test's.
 says to use it. Adding a new seam method is a permanent cost, and it isn't
 justified by two test cases.
 
+## D6. A conversation keeps the agent revision it was created on (2026-09-14)
+
+Items 81 and 82 each named the agent a conversation talks to: the workbench
+plan an `AgentProfile` in an `AgentCatalog`, the control plane an `AgentSpec`
+with immutable `AgentRevision`s in an `AgentRegistry`. They are one thing,
+and joining them forced the question of which revision a conversation runs.
+
+**Decision.** The control plane's model wins; `AgentProfile` and
+`AgentCatalog` are gone. A conversation records `agentId` and the
+`agentRevisionId` that was active when it was created, and every later
+`open` runs that revision. Editing an agent changes what *new* conversations
+get. Moving an existing conversation onto a newer revision, if a product
+wants it, is an explicit act that rewrites the record, not a side effect of
+the edit.
+
+**Why.** The control plane already requires that a run can say exactly
+which configuration it used and that creating revision N+1 cannot reach into
+a run on N; a conversation that silently changed instructions between two
+prompts would break the same promise one level up, and would make a
+transcript unreproducible. Following the latest revision stays available as
+a deliberate upgrade, while the reverse -- recovering what a conversation
+ran on after it drifted -- would not be.
+
+**Consequence.** `AgentDirectory` resolves by revision and holds one client
+per revision for its own lifetime, because an in-process client reopens only
+the sessions it created.
+
 ## Parked items and what reopens them
 
 | Item | Reopened when |

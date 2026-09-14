@@ -145,8 +145,10 @@ it is still open, so the next pass does not have to re-derive it.
     workspace inspection, artifacts, agent configuration, connections,
     knowledge/projects and distribution. Build outside the portable kernel.
     W0's UI-independent half is in `apps/workbench` (2026-09-14): branded
-    ids, in-memory `ConversationStore`/`AgentCatalog`, a single-agent
-    `AgentDirectory`, `ConversationSessions`, `ConversationProjection` and a
+    ids, an in-memory `ConversationStore`, an `AgentDirectory` over item 82's
+    resolver (a conversation keeps the revision it was created on,
+    decisions-2026-09-11.md D6), `ConversationSessions`,
+    `ConversationProjection` and a
     scoped `ConversationPresenter`, tested through the in-process client for
     streaming, reasoning, tool progress, interruption, elicitation and
     reopen-from-history, with a boundary test for acceptance 8. It imports
@@ -175,8 +177,9 @@ it is still open, so the next pass does not have to re-derive it.
     combinators only. Tested: two revisions both resolve with their own
     configuration, an edit made mid-run leaves the run on its revision, the
     recorded policy is enforced, and an unbound reference is refused by name.
-    It needed no kernel change. Still open: `AgentDirectory` resolving through
-    it, persistence (Phase 1) and everything after.
+    It needed no kernel change. The workbench's conversations now run on it,
+    pinned to their revision. Still open: persistence (Phase 1) and
+    everything after.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

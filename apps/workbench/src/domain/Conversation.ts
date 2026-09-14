@@ -1,17 +1,23 @@
 /**
- * Product metadata about a conversation and the agent it talks to.
+ * Product metadata about a conversation and the agent revision it talks to.
  *
  * Deliberately not the conversation itself: canonical history belongs to the
  * session, reached through `AgentClient`. A record joins product identity to
  * that session by its stable id and nothing more.
  */
 import { Schema } from "effect"
-import { AgentProfileId, ConversationId, UserId, WorkspaceId } from "./WorkbenchIds.js"
+import { AgentId, AgentRevisionId, ConversationId, UserId, WorkspaceId } from "./WorkbenchIds.js"
 
 export const Record = Schema.Struct({
   id: ConversationId,
   ownerId: UserId,
-  agentProfileId: AgentProfileId,
+  agentId: AgentId,
+  /**
+   * The revision the conversation was created on, and keeps running on.
+   * Editing the agent changes what *new* conversations get; an existing one
+   * reopens exactly as it was configured (decisions-2026-09-11.md, D6).
+   */
+  agentRevisionId: AgentRevisionId,
   /** The kernel session this conversation is. Stable, so opening it again reaches the same one. */
   sessionId: Schema.String,
   workspaceId: Schema.Option(WorkspaceId),
@@ -23,7 +29,7 @@ export const Record = Schema.Struct({
 export type Record = typeof Record.Type
 
 /** What a caller supplies; the store stamps the rest. */
-export type New = Pick<Record, "id" | "ownerId" | "agentProfileId" | "sessionId" | "workspaceId" | "title">
+export type New = Pick<Record, "id" | "ownerId" | "agentId" | "agentRevisionId" | "sessionId" | "workspaceId" | "title">
 
 export interface Patch {
   readonly title?: string | undefined
@@ -34,16 +40,3 @@ export interface Query {
   readonly ownerId: UserId
   readonly includeArchived?: boolean | undefined
 }
-
-/**
- * A stored agent configuration: declarative data, never a serialized
- * `AgentDefinition`. W0 carries only what a directory needs to tell profiles
- * apart; models, tools and policies arrive with W4.
- */
-export const AgentProfile = Schema.Struct({
-  id: AgentProfileId,
-  ownerId: UserId,
-  name: Schema.String,
-  instructions: Schema.String
-})
-export type AgentProfile = typeof AgentProfile.Type
