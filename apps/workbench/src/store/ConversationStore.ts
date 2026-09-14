@@ -145,16 +145,16 @@ export const sql: Effect.Effect<Service, never, SqlClient.SqlClient> = Effect.ge
   const create = Effect.fn("ConversationStore.create")(function*(input: Conversation.New) {
     const record = stamped(input, yield* DateTime.now)
     const body = yield* encodeRecord(record)
-    // Insert-if-absent in the statement, then read back whether this call
-    // was the one that inserted: a read-then-insert races into a uniqueness
-    // violation under concurrency.
-    const inserted = yield* client.withTransaction(Effect.gen(function*() {
-      const [before] = yield* client<{ readonly n: number | bigint }>`SELECT COUNT(*) AS n FROM workbench_conversations WHERE id = ${input.id}`
-      if (Number(before?.n ?? 0) > 0) return false
-      yield* client`INSERT INTO workbench_conversations (id, owner_id, archived, updated_at, body) VALUES (${record.id}, ${record.ownerId}, 0, ${DateTime.toEpochMillis(record.updatedAt)}, ${body})`
-      return true
-    })).pipe(Effect.mapError(failedAs("ConversationStore.create")))
-    if (!inserted) {
+    // Insert-if-absent in the statement, then read back whose row it is: a
+    // count-then-insert lets two concurrent creates both see nothing, and the
+    // loser would fail on the primary key as storage rather than as
+    // `ConversationExistsError`. A body identical to ours is ours -- or an
+    // indistinguishable twin written in the same millisecond.
+    const stored = yield* client`INSERT INTO workbench_conversations (id, owner_id, archived, updated_at, body) SELECT ${record.id}, ${record.ownerId}, 0, ${DateTime.toEpochMillis(record.updatedAt)}, ${body} WHERE NOT EXISTS (SELECT 1 FROM workbench_conversations WHERE id = ${record.id})`.pipe(
+      Effect.andThen(client<BodyRow>`SELECT body FROM workbench_conversations WHERE id = ${record.id}`),
+      Effect.mapError(failedAs("ConversationStore.create"))
+    )
+    if (stored[0]?.body !== body) {
       return yield* new ConversationExistsError({ conversationId: input.id })
     }
     return record

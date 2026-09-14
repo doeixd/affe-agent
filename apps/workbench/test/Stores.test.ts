@@ -12,6 +12,7 @@ import { Context, Effect, Layer, Option } from "effect"
 import type { Scope } from "effect"
 import { Permission } from "affe-agent"
 import { TestLanguageModel } from "affe-agent/testing"
+import { SqlClient } from "effect/unstable/sql"
 import type { RevisionInput } from "../src/domain/AgentRevision.js"
 import { AgentId, AgentRevisionId, ConversationId, UserId } from "../src/domain/WorkbenchIds.js"
 import * as AgentResolver from "../src/runtime/AgentResolver.js"
@@ -140,6 +141,25 @@ for (const [name, backend] of backends) {
 }
 
 describe("workbench persistence", () => {
+  it.effect("a row that no longer decodes is a storage failure, not a crash or a missing row", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const file = yield* tempFile
+      const context = yield* Layer.build(
+        Layer.mergeAll(AgentRegistry.layerSql, ConversationStore.layerSql).pipe(Layer.provideMerge(sqlite(file)))
+      )
+      const client = Context.get(context, SqlClient.SqlClient)
+      const registry = Context.get(context, AgentRegistry.AgentRegistry)
+      const store = Context.get(context, ConversationStore.ConversationStore)
+
+      yield* client`INSERT INTO workbench_agents (id, owner_id, body) VALUES ('broken', 'ada', '{"id":')`
+      yield* client`INSERT INTO workbench_conversations (id, owner_id, archived, updated_at, body) VALUES ('broken', 'ada', 0, 0, '{"title": 7}')`
+
+      const agent = yield* Effect.flip(registry.get(AgentId.make("broken")))
+      assert.deepStrictEqual([agent._tag, agent.operation], ["WorkbenchStorageError", "decodeSpec"])
+      const listed = yield* Effect.flip(store.list({ ownerId: ada }))
+      assert.deepStrictEqual([listed._tag, listed.operation], ["WorkbenchStorageError", "decodeConversation"])
+    })))
+
   it.live("an agent defined as data survives a restart and runs the same revision", () =>
     Effect.scoped(Effect.gen(function*() {
       const file = yield* tempFile
