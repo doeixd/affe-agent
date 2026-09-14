@@ -104,6 +104,20 @@ describe("ConversationPage", () => {
     }
   })
 
+  it("a command the session refuses is shown, not swallowed", async () => {
+    const runtime = await openPage([{ text: "never", hang: true }])
+    try {
+      // Two sends before the view has heard the first one start: the second
+      // reaches a busy session and is refused before it becomes a run, which
+      // no event will ever report.
+      send("first")
+      send("second")
+      expect((await screen.findByRole("alert")).textContent).toMatch(/AgentBusyError/)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it("Stop interrupts the running submission", async () => {
     const started = await Effect.runPromise(Deferred.make<void>())
     const runtime = await openPage([{ text: "never", hang: true, started }])

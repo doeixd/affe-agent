@@ -45,15 +45,20 @@ const Activity = ({ activity }: { readonly activity: ActivityView }) =>
 export const ConversationPage = ({ conversationId, runtime }: ConversationPageProps) => {
   const state = useConversation(runtime, conversationId)
   const [draft, setDraft] = useState("")
+  const [commandError, setCommandError] = useState(Option.none<string>())
 
   if (state._tag === "Loading") return <p>Opening…</p>
   if (state._tag === "Failed") return <p role="alert">Could not open this conversation ({state.error._tag}).</p>
 
   const { conversation, session, view } = state
-  // A failed command shows up where it belongs: the session reports the
-  // submission's outcome, and the view already renders it.
-  const run = (command: Effect.Effect<unknown, unknown>) => {
-    void runtime.runPromise(Effect.ignore(command))
+  // A run that fails is reported by the session and rendered from the view.
+  // A command refused before it became a run -- a busy session, a dropped
+  // connection -- is not, so its error is kept here to show.
+  const run = (command: Effect.Effect<unknown, { readonly _tag: string }>) => {
+    setCommandError(Option.none())
+    void runtime.runPromise(
+      command.pipe(Effect.catch((error) => Effect.sync(() => setCommandError(Option.some(error._tag)))))
+    )
   }
 
   return (
@@ -93,6 +98,10 @@ export const ConversationPage = ({ conversationId, runtime }: ConversationPagePr
           Stop
         </button>
       </form>
+      {Option.match(commandError, {
+        onNone: () => null,
+        onSome: (tag) => <p role="alert">The last command was refused ({tag}).</p>
+      })}
       <p aria-label="Status">
         {view.status}
         {Option.match(view.outcome, { onNone: () => "", onSome: (outcome) => ` (last: ${outcome})` })}
