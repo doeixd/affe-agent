@@ -36,7 +36,12 @@ export const layer: Layer.Layer<AgentDirectory, never, AgentResolver> = Layer.ef
     return AgentDirectory.of({
       // The reference is released at once; the infinite idle time is what
       // keeps the client, until the directory's own scope closes.
-      client: (id) => Effect.scoped(RcMap.get(clients, id))
+      // RcMap keeps a failed lookup like a successful one, and with no idle
+      // expiry it would keep it forever, so a failure is dropped explicitly.
+      client: (id) =>
+        Effect.scoped(RcMap.get(clients, id)).pipe(
+          Effect.tapError(() => RcMap.invalidate(clients, id))
+        )
     })
   })
 )

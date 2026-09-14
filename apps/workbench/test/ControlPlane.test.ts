@@ -6,13 +6,14 @@
  */
 import { assert, describe, it } from "@effect/vitest"
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
-import type { Prompt } from "effect/unstable/ai"
+import type { LanguageModel, Prompt } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import { Agent, Permission } from "affe-agent"
 import { Skills } from "affe-agent/skills"
 import { TestLanguageModel } from "affe-agent/testing"
 import type { RevisionInput } from "../src/domain/AgentRevision.js"
 import { AgentRevisionId, UserId } from "../src/domain/WorkbenchIds.js"
+import * as AgentDirectory from "../src/runtime/AgentDirectory.js"
 import * as AgentResolver from "../src/runtime/AgentResolver.js"
 import * as AgentRegistry from "../src/store/AgentRegistry.js"
 
@@ -59,6 +60,38 @@ const harness = Effect.fn("harness")(function*(
     AgentResolver.layer.pipe(Layer.provide(bindings), Layer.provide(Layer.succeedContext(registryContext)))
   )
   return { registry, resolver: Context.get(resolverContext, AgentResolver.AgentResolver), recorder, builds }
+})
+
+describe("agent directory", () => {
+  it.effect("a revision that failed to resolve resolves once its binding exists", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const { layer: model } = yield* TestLanguageModel.script([TestLanguageModel.text("ok")])
+      // Registered late, as a deployment might after the first request.
+      const models: Record<string, Layer.Layer<LanguageModel.LanguageModel>> = {}
+      const bindings = Layer.succeed(AgentResolver.AgentBindings, { models, capabilities: {}, skills: {} })
+      const context = yield* Layer.build(
+        AgentDirectory.layer.pipe(
+          Layer.provideMerge(AgentResolver.layer),
+          Layer.provideMerge(AgentRegistry.memory),
+          Layer.provide(bindings)
+        )
+      )
+      const registry = Context.get(context, AgentRegistry.AgentRegistry)
+      const directory = Context.get(context, AgentDirectory.AgentDirectory)
+      const { revision } = yield* registry.create({
+        ownerId: owner,
+        name: "Late",
+        revision: input({ capabilities: [] })
+      })
+
+      const refused = yield* Effect.flip(directory.client(revision.id))
+      assert.strictEqual(refused.reason, "unknown-model")
+
+      models["scripted"] = model
+      const client = yield* directory.client(revision.id)
+      const result = yield* Effect.scoped(Effect.flatMap(client.createSession(), (session) => session.prompt("hi")))
+      assert.strictEqual(result.text, "ok")
+    })))
 })
 
 describe("control plane phase 0", () => {
