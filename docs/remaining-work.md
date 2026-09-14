@@ -761,8 +761,23 @@ User recruitment requires a person and explicit authorization for outreach.*
     review of the next real commit beside the current one. In parallel,
     five Effect users invited to a specific trial. Medium.
 
+    **First slice built 2026-09-14:** `examples/review-assistant.ts`, from
+    `affe-agent/*` only. Given a commit (default `HEAD`), it takes the diff
+    through the sandbox (`git show`, not the shell tool the model is
+    refused), reads source and tests read-only over the real repository,
+    and records a typed review whose every finding carries its file, line
+    and quoted evidence; `--challenge "..."` re-examines in the same
+    session; Ctrl+C interrupts the run. A live review appends a line to
+    `.review-log.jsonl` -- the measure's raw data. With no key (and in
+    `npm run check`, via `--scripted`) the same path runs over the scripted
+    model and asserts the challenge revised the review. **Open: the
+    observable** -- a live review of the next real commit beside the
+    current one -- which needs an `ANTHROPIC_API_KEY` the owner has not
+    provided; the five-user trial needs a person.
+
     ```text
-    verify: absent examples/review-assistant.ts
+    verify: exists examples/review-assistant.ts
+    verify: grep "smoke:review-assistant" package.json
     ```
 
 64. **Observe a newcomer before touching the docs.** Someone who has never
