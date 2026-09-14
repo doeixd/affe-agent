@@ -154,8 +154,13 @@ it is still open, so the next pass does not have to re-derive it.
     reopen-from-history, with a boundary test for acceptance 8. It imports
     only published `affe-agent` subpaths. Reconnect is tested over the
     durable client: a presenter opened later resumes after the delivery
-    log's latest sequence and follows the next submission. Still open for
-    W0: the browser transport and the plain React page.
+    log's latest sequence and follows the next submission. The browser half
+    landed too: a `useConversation` hook and a plain `ConversationPage`
+    (rendered in happy-dom: streaming, tool progress, approve, stop),
+    `AgentDirectory.http` over `AgentHttp`, a localStorage conversation
+    store, a Vite entry (`workbench:dev` beside `workbench:server`), and
+    `smoke:workbench`, which drives the page's transport over a real socket.
+    W0 is complete; W1 onward is open.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

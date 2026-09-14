@@ -26,3 +26,4 @@ nul.d.ts
 .env
 .check-progress.json
 .review-log.jsonl
+apps/workbench/dist

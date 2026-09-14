@@ -43,6 +43,16 @@ type Stores = AgentRegistry.AgentRegistry | ConversationStore.ConversationStore
 const backends: ReadonlyArray<readonly [string, Effect.Effect<Layer.Layer<Stores>, never, Scope.Scope>]> = [
   ["memory", Effect.succeed(Layer.mergeAll(AgentRegistry.memory, ConversationStore.memory))],
   [
+    "storage",
+    Effect.sync(() => {
+      const items = new Map<string, string>()
+      return Layer.mergeAll(
+        AgentRegistry.memory,
+        ConversationStore.fromStorage({ getItem: (key) => items.get(key) ?? null, setItem: (key, value) => items.set(key, value) })
+      )
+    })
+  ],
+  [
     "sqlite",
     Effect.map(tempFile, (file) =>
       Layer.mergeAll(AgentRegistry.layerSql, ConversationStore.layerSql).pipe(Layer.provide(sqlite(file))))

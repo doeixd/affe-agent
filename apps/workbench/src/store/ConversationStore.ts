@@ -214,4 +214,86 @@ export const layerSql: Layer.Layer<ConversationStore, never, SqlClient.SqlClient
   sqlWithTable
 )
 
+// -- Key-value storage (a browser's localStorage) -----------------------------------------
+
+export interface KeyValue {
+  readonly getItem: (key: string) => string | null
+  readonly setItem: (key: string, value: string) => void
+}
+
+const RecordsJson = Schema.toCodecJson(Schema.Array(Conversation.Record))
+
+/**
+ * A store over one key of a key-value storage, so a refreshed page still has
+ * its conversations. Every operation reads and rewrites the whole list: fine
+ * for one person's conversations in one tab. Two tabs writing at once can
+ * lose one tab's change; that is what the SQL store behind a server is for.
+ */
+export const fromStorage = (
+  storage: KeyValue,
+  key: string = "workbench/conversations"
+): Layer.Layer<ConversationStore> =>
+  Layer.succeed(
+    ConversationStore,
+    ConversationStore.of((() => {
+      const load = Effect.try({ try: () => storage.getItem(key), catch: failedAs("ConversationStore.load") }).pipe(
+        Effect.flatMap((text) =>
+          text === null
+            ? Effect.succeed<ReadonlyArray<Conversation.Record>>([])
+            : Effect.try({ try: (): unknown => JSON.parse(text), catch: failedAs("decodeConversations") }).pipe(
+              Effect.flatMap((json) =>
+                Effect.mapError(Schema.decodeUnknownEffect(RecordsJson)(json), failedAs("decodeConversations"))
+              )
+            )
+        )
+      )
+      const save = (records: ReadonlyArray<Conversation.Record>) =>
+        Effect.orDie(Schema.encodeEffect(RecordsJson)(records)).pipe(
+          Effect.flatMap((encoded) =>
+            Effect.try({
+              try: () => storage.setItem(key, JSON.stringify(encoded)),
+              catch: failedAs("ConversationStore.save")
+            })
+          )
+        )
+
+      const create = Effect.fn("ConversationStore.create")(function*(input: Conversation.New) {
+        const records = yield* load
+        if (records.some((record) => record.id === input.id)) {
+          return yield* new ConversationExistsError({ conversationId: input.id })
+        }
+        const record = stamped(input, yield* DateTime.now)
+        yield* save([...records, record])
+        return record
+      })
+
+      const update = Effect.fn("ConversationStore.update")(function*(id: ConversationId, patch: Conversation.Patch) {
+        const records = yield* load
+        const current = records.find((record) => record.id === id)
+        if (current === undefined) {
+          return yield* new ConversationNotFoundError({ conversationId: id })
+        }
+        const next = patched(current, patch, yield* DateTime.now)
+        yield* save(records.map((record) => (record.id === id ? next : record)))
+        return next
+      })
+
+      return {
+        create,
+        get: (id: ConversationId) =>
+          Effect.map(load, (records) => Option.fromNullishOr(records.find((record) => record.id === id))),
+        list: (query: Conversation.Query) =>
+          Effect.map(load, (records) =>
+            records
+              .filter((record) =>
+                record.ownerId === query.ownerId && (query.includeArchived === true || !record.archived)
+              )
+              .sort(byUpdatedDesc)),
+        update,
+        remove: (id: ConversationId) =>
+          Effect.flatMap(load, (records) => save(records.filter((record) => record.id !== id)))
+      }
+    })())
+  )
+
 export { WorkbenchStorageError }

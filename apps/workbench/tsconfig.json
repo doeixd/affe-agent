@@ -2,6 +2,10 @@
   // The root config's `paths` map every published `affe-agent` subpath and
   // nothing else, so the workbench can reach exactly what a third party can.
   "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
+  },
   "include": ["src", "test"],
   "exclude": []
 }
