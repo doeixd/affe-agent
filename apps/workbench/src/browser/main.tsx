@@ -37,26 +37,18 @@ const selectedFromHash = (): Option.Option<ConversationId> => {
   return id === "" ? Option.none() : Option.some(ConversationId.make(id))
 }
 
-const listConversations = runtime.runPromise(
-  Effect.gen(function*() {
-    const store = yield* ConversationStore.ConversationStore
-    return yield* store.list({ ownerId: owner })
-  }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
-)
+/** An unreachable server shows an empty list; opening a conversation reports its own failure. */
+const listConversations = Effect.gen(function*() {
+  const store = yield* ConversationStore.ConversationStore
+  return yield* store.list({ ownerId: owner })
+}).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
 
 const App = ({ agentId }: { readonly agentId: AgentId }) => {
   const [selected, setSelected] = useState(selectedFromHash)
   const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
 
   const refresh = () => {
-    void listConversations.then(() =>
-      runtime.runPromise(
-        Effect.gen(function*() {
-          const store = yield* ConversationStore.ConversationStore
-          return yield* store.list({ ownerId: owner })
-        }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
-      )
-    ).then(setConversations)
+    void runtime.runPromise(listConversations).then(setConversations)
   }
 
   useEffect(() => {
