@@ -1087,3 +1087,32 @@ Step 6, specified 2026-09-11 (remaining-work item 116), before any wiring:
   byte-identical, and a second process over the same stores reads the same
   prompt; the row shrinks by the file's size; without the option the bytes
   are unchanged (a fixture).
+
+Step 6 for the transports, specified 2026-09-14 (remaining-work item 116),
+not built -- it adds a protocol operation, and no caller has asked:
+
+  WHAT MOVES. A host opted in (`transportBlobs: { store, maxInlineBytes }`)
+  answers history and event reads with references in place of oversized
+  inline bytes. Absent the option, every response is exactly as today.
+
+  HOW A RECEIVER FETCHES. A session-scoped route, not a global one:
+  `GET /sessions/:id/blobs/:blobId` over HTTP, and the same operation on
+  `AgentRpc` (which is what step 7, the relay, then carries unchanged). The
+  client resolves a reference through it only when the bytes are wanted.
+
+  ACCESS. A blob is readable exactly when its session is: the route is
+  authorised as a read of that session (the host's existing
+  principal/operation/session check), and it serves only a blob id that
+  session's history actually references (`BlobWire.references` over the
+  stored history). No signed URLs, no blob-to-session index, no second
+  permission model -- and a caller cannot fetch another session's blob by
+  guessing its content hash, because the reference check is per session.
+
+  LIFETIME. Unchanged from the store slice: blobs are the blob store's,
+  shared across sessions, never deleted by a session's end.
+
+  ACCEPTANCE. Over HTTP and RPC: a history read with the option carries a
+  reference and is smaller by the file; the client's resolved prompt is
+  byte-identical to an unopted read; a principal authorised on session A
+  cannot fetch a blob only session B references (403), even with its id;
+  without the option, responses are unchanged (a fixture).

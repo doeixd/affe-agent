@@ -567,10 +567,17 @@ one else was working on them.*
      sees a reference. The session-store conformance suite passes over both
      blob-backed stores; a 4 KB image leaves a 4 KB-smaller row
      (`test/fixtures/history-blob-row.json`) that reads back identical, and
-     a second store over the same database reads the same. Open: the
-     transports (a reference on a wire needs a fetch path the receiver is
-     authorised for), the delivery log's events, and step 7, the relay.
-     Medium.
+     a second store over the same database reads the same. **The transport
+     half specified 2026-09-14** (the plan's second step-6 note): a host
+     opted in answers history and event reads with references, and a
+     receiver fetches through a session-scoped route
+     (`GET /sessions/:id/blobs/:blobId`, and the same `AgentRpc` operation,
+     which the relay then carries), authorised as a read of that session
+     and served only for a blob that session's history references -- so a
+     guessed hash from another session is refused, with no signed URLs and
+     no second permission model. Not built: it adds a protocol operation,
+     and waits for a caller whose transcripts carry files large enough to
+     matter. Medium.
 
      ```text
      verify: grep "readonly blobs?: HistoryBlobs | undefined" src/durable/DurableSessionStore.ts
