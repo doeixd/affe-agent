@@ -148,6 +148,24 @@ describe("workbench W0", () => {
       })).pipe(Effect.provide(layer))
     }))
 
+  it.effect("creating again under the same conversation id opens the first, not a second", () =>
+    Effect.gen(function*() {
+      const layer = yield* workbench([])
+      yield* Effect.scoped(Effect.gen(function*() {
+        const sessions = yield* ConversationSessions.ConversationSessions
+        const input = {
+          ownerId: owner,
+          agentProfileId: profile.id,
+          title: "Retried",
+          conversationId: ConversationId.make("retried")
+        }
+        const first = yield* sessions.create(input)
+        const again = yield* sessions.create(input)
+        assert.deepStrictEqual(again.conversation, first.conversation)
+        assert.strictEqual(again.session.id, first.session.id)
+      })).pipe(Effect.provide(layer))
+    }))
+
   it.effect("a conversation for a profile the catalog does not know is refused, and not recorded", () =>
     Effect.gen(function*() {
       const layer = yield* workbench([])

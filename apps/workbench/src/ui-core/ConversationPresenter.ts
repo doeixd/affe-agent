@@ -5,7 +5,7 @@
  * `presenter.session.prompt/steer/interrupt/respond` directly; the presenter
  * only turns what the session reports into a `ConversationView`.
  */
-import { Effect, Option, Stream, SubscriptionRef } from "effect"
+import { Cause, Effect, Option, Stream, SubscriptionRef } from "effect"
 import type { Scope } from "effect"
 import type { AgentClient } from "affe-agent/client"
 import type * as Conversation from "../domain/Conversation.js"
@@ -64,9 +64,14 @@ export const fromOpen = Effect.fn("ConversationPresenter.fromOpen")(function*(op
         )
       )
     ),
-    // A presenter whose stream failed must not keep showing a live
-    // conversation as if it were still following it.
-    Effect.tapCause((cause) => Effect.logWarning("conversation presenter stopped following its session", cause)),
+    // Closing the presenter's scope interrupts this fiber, which is the
+    // normal end and not worth a word. Anything else means the view has
+    // stopped following its session and is now a snapshot.
+    Effect.tapCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.void
+        : Effect.logWarning("conversation presenter stopped following its session", cause)
+    ),
     Effect.forkScoped({ startImmediately: true })
   )
 

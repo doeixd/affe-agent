@@ -27,9 +27,10 @@ export interface CreateInput {
   readonly title: string
   readonly workspaceId?: WorkspaceId | undefined
   /**
-   * Supply it to make a retry the same conversation: the session id derives
-   * from it, so a retry after a lost acknowledgement reaches the session the
-   * first attempt made instead of orphaning it.
+   * Supply it to make a retry the same conversation. A retry after the record
+   * was written opens that conversation rather than failing; one after only
+   * the session was made asks for the same session id again, which a durable
+   * client can answer.
    */
   readonly conversationId?: ConversationId | undefined
 }
@@ -69,6 +70,11 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
     // names, which a retry under the same `conversationId` reaches again.
     const create = Effect.fn("ConversationSessions.create")(function*(input: CreateInput) {
       const id = input.conversationId ?? ConversationId.make(globalThis.crypto.randomUUID())
+      const existing = yield* store.get(id)
+      if (Option.isSome(existing)) {
+        const client = yield* directory.client(existing.value.agentProfileId)
+        return { conversation: existing.value, session: yield* client.session(existing.value.sessionId) }
+      }
       const client = yield* directory.client(input.agentProfileId)
       const session = yield* client.createSession({ sessionId: sessionIdOf(id) })
       const conversation = yield* store.create({
