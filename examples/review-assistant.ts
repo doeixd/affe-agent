@@ -7,8 +7,10 @@
  * Given a commit and review instructions, it inspects the diff, reads the
  * source and tests it needs, and records a review whose every finding carries
  * its evidence -- the file, the line, and the code the claim rests on. The
- * maintainer can challenge a finding in the same session, and the reviewer
- * re-examines rather than restarts. Ctrl+C interrupts a bad investigation.
+ * maintainer reads the review, challenges a finding at the prompt, and the
+ * reviewer re-examines in the same session rather than restarting -- as many
+ * times as it takes; an empty line accepts. Ctrl+C interrupts a bad
+ * investigation.
  *
  * Built only from `affe-agent/*`, as `examples/pr-review.ts` is -- this is that
  * reviewer made real: a real repository instead of a seeded one, a real diff,
@@ -18,6 +20,7 @@
  *
  *     # live, against this repository's HEAD (needs ANTHROPIC_API_KEY)
  *     npx tsx examples/review-assistant.ts HEAD
+ *     # or with the challenges scripted, in order, instead of typed
  *     npx tsx examples/review-assistant.ts HEAD --challenge "finding 2 is wrong: the lock is taken in the caller"
  *
  *     # with no key, the same program over the scripted model and a seeded workspace
@@ -28,6 +31,7 @@
  * everything else -- writes, the shell -- is refused.
  */
 import { appendFileSync } from "node:fs"
+import { createInterface } from "node:readline/promises"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { Config, Console, Effect, Fiber, Layer, Option, Redacted, Schema } from "effect"
 import type { Scope } from "effect"
@@ -151,26 +155,57 @@ const render = (label: string, value: Option.Option<Review>): string =>
 
 interface Outcome {
   readonly review: Option.Option<Review>
-  readonly challenged: boolean
+  readonly challenges: number
   readonly turns: number
 }
 
-const reviewCommit = <E, R>(
+/**
+ * One review, then as many challenges as `nextChallenge` yields, in one
+ * session. A challenge is read *after* the review it concerns is shown --
+ * challenging a review nobody has seen is not challenging it.
+ */
+const reviewCommit = <E, R, CE, CR>(
   agent: ReturnType<typeof reviewerOver>["agent"],
-  options: { readonly ref: string; readonly diff: Effect.Effect<string, E, R>; readonly challenge: Option.Option<string> }
+  options: {
+    readonly ref: string
+    readonly diff: Effect.Effect<string, E, R>
+    /** The next challenge to the review just shown, or `None` when the maintainer is done. */
+    readonly nextChallenge: Effect.Effect<Option.Option<string>, CE, CR>
+  }
 ) =>
   Effect.gen(function* () {
     const diff = yield* options.diff
     const session = yield* AgentSession.make(agent)
     const first = yield* session.prompt(promptFor(options.ref, diff))
     yield* Console.log(render("review", first.value))
-    if (Option.isNone(options.challenge)) {
-      return { review: first.value, challenged: false, turns: first.turns } satisfies Outcome
+    let outcome: Outcome = { review: first.value, challenges: 0, turns: first.turns }
+    while (true) {
+      const challenge = yield* options.nextChallenge
+      if (Option.isNone(challenge)) return outcome
+      const revised = yield* session.prompt(challengeFor(challenge.value))
+      yield* Console.log(render("after the challenge", revised.value))
+      outcome = { review: revised.value, challenges: outcome.challenges + 1, turns: outcome.turns + revised.turns }
     }
-    const second = yield* session.prompt(challengeFor(options.challenge.value))
-    yield* Console.log(render("after the challenge", second.value))
-    return { review: second.value, challenged: true, turns: first.turns + second.turns } satisfies Outcome
   })
+
+/**
+ * Challenges typed at the terminal, one per line, until an empty line. In
+ * the scripted path the challenges are a fixed list instead.
+ */
+const fromTerminal = Effect.acquireRelease(
+  Effect.sync(() => createInterface({ input: process.stdin, output: process.stdout })),
+  (lines) => Effect.sync(() => lines.close())
+).pipe(
+  Effect.map((lines) =>
+    Effect.promise(() => lines.question("\nchallenge a finding (enter to accept the review): ")).pipe(
+      Effect.map((answer) => (answer.trim() === "" ? Option.none<string>() : Option.some(answer.trim())))
+    )
+  )
+)
+
+const fromList = (challenges: ReadonlyArray<string>) =>
+  Effect.map(Effect.sync(() => [...challenges]), (queue) =>
+    Effect.sync(() => Option.fromNullishOr(queue.shift())))
 
 // ---------------------------------------------------------------------------
 // Live: this repository, the commit named on the command line, a real model.
@@ -195,7 +230,7 @@ const gitShow = (ref: string) =>
     return shown.stdout
   })
 
-const live = (apiKey: Redacted.Redacted<string>, ref: string, challenge: Option.Option<string>) =>
+const live = (apiKey: Redacted.Redacted<string>, ref: string, challenges: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const reviewer = reviewerOver(LocalSandbox.layer({ workspaceRoot: process.cwd() }))
     const model = AnthropicLanguageModel.layer({ model: "claude-sonnet-5" }).pipe(
@@ -203,7 +238,10 @@ const live = (apiKey: Redacted.Redacted<string>, ref: string, challenge: Option.
       Layer.provide(FetchHttpClient.layer)
     )
     const started = Date.now()
-    const outcome = yield* reviewCommit(reviewer.agent, { ref, diff: gitShow(ref), challenge }).pipe(
+    // Challenges given on the command line are for scripting; otherwise the
+    // maintainer reads the review and types a challenge, or accepts it.
+    const nextChallenge = challenges.length > 0 ? yield* fromList(challenges) : yield* fromTerminal
+    const outcome = yield* reviewCommit(reviewer.agent, { ref, diff: gitShow(ref), nextChallenge }).pipe(
       Effect.provide(Layer.mergeAll(reviewer.workspace, model, Budget.layer))
     )
     // The measure: one line per review, so "does the maintainer keep using
@@ -217,11 +255,12 @@ const live = (apiKey: Redacted.Redacted<string>, ref: string, challenge: Option.
         model: "claude-sonnet-5",
         verdict: Option.match(outcome.review, { onNone: () => "none", onSome: (review) => review.verdict }),
         findings: Option.match(outcome.review, { onNone: () => [], onSome: (review) => review.findings.map((f) => f.severity) }),
-        challenged: outcome.challenged,
+        challenges: outcome.challenges,
         turns: outcome.turns,
         ms: Date.now() - started
       })}\n`
     )
+    yield* Console.log("logged to .review-log.jsonl")
   })
 
 // ---------------------------------------------------------------------------
@@ -282,12 +321,12 @@ const scripted = Effect.gen(function* () {
   const outcome = yield* reviewCommit(reviewer.agent, {
     ref: "seeded",
     diff: Effect.succeed(SEEDED_DIFF),
-    challenge: Option.some("finding 2 repeats finding 1")
+    nextChallenge: yield* fromList(["finding 2 repeats finding 1"])
   }).pipe(Effect.provide(Layer.mergeAll(reviewer.workspace, model, Budget.layer)))
   // The scripted run is the CI check that the whole path holds: a review,
   // a challenge, and a revised review that withdrew what it said it withdrew.
   const findings = Option.match(outcome.review, { onNone: () => -1, onSome: (review) => review.findings.length })
-  if (!outcome.challenged || findings !== 1) {
+  if (outcome.challenges !== 1 || findings !== 1) {
     return yield* Effect.die(new Error(`the scripted review did not revise as scripted (findings: ${findings})`))
   }
 })
@@ -297,15 +336,17 @@ const scripted = Effect.gen(function* () {
 export const main = Effect.gen(function* () {
   const apiKey = yield* Config.option(Config.redacted("ANTHROPIC_API_KEY"))
   const args = process.argv.slice(2)
-  const at = args.indexOf("--challenge")
-  const challenge = at === -1 ? Option.none<string>() : Option.fromNullishOr(args[at + 1])
-  const ref = args.find((arg, index) => !arg.startsWith("--") && index !== at + 1) ?? "HEAD"
+  // Every `--challenge "..."` given, in order; each value's index is skipped
+  // when looking for the commit.
+  const challengeAt = args.flatMap((arg, index) => (arg === "--challenge" && args[index + 1] !== undefined ? [index + 1] : []))
+  const challenges = challengeAt.map((index) => args[index] ?? "")
+  const ref = args.find((arg, index) => !arg.startsWith("--") && !challengeAt.includes(index)) ?? "HEAD"
   // `--scripted` forces the scripted path even with a key present, so the
   // smoke run in `npm run check` can never spend money on someone's machine.
   if (args.includes("--scripted")) return yield* scripted
   return yield* Option.match(apiKey, {
     onNone: () => Effect.andThen(Console.log("no ANTHROPIC_API_KEY: running the scripted review"), scripted),
-    onSome: (key) => live(key, ref, challenge)
+    onSome: (key) => live(key, ref, challenges)
   })
 })
 
