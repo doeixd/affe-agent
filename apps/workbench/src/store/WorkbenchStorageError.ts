@@ -8,7 +8,7 @@ import { Schema } from "effect"
 export class WorkbenchStorageError extends Schema.TaggedError<WorkbenchStorageError>()("WorkbenchStorageError", {
   operation: Schema.String,
   detail: Schema.String
-}) {}
+}, { httpApiStatus: 503 }) {}
 
 export const detailOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : typeof cause === "string" ? cause : JSON.stringify(cause) ?? String(cause)

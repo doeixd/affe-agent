@@ -56,7 +56,9 @@ export const ConversationPage = ({ conversationId, runtime }: ConversationPagePr
   // connection -- is not, so its error is kept here to show.
   const run = (command: Effect.Effect<unknown, { readonly _tag: string }>) => {
     setCommandError(Option.none())
-    void runtime.runPromise(
+    // Forked, not awaited: a command interrupted by Stop or by the runtime
+    // closing is not an error to report, and a promise would reject with it.
+    runtime.runFork(
       command.pipe(Effect.catch((error) => Effect.sync(() => setCommandError(Option.some(error._tag)))))
     )
   }

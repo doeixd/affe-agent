@@ -1,7 +1,8 @@
 /**
- * The W0 page in a browser: conversations kept in localStorage, the agent
- * reached over `AgentHttp` on this origin (the Vite dev server proxies
- * `/sessions` to `npm run workbench:server`).
+ * The workbench page in a browser (W1): conversations and agents live in the
+ * server's product database, reached over `WorkbenchApi`; the agent is reached
+ * over `AgentHttp`. Both on this origin -- the Vite dev server proxies them to
+ * `npm run workbench:server` -- so a reload continues the same conversation.
  */
 import { Effect, Layer, ManagedRuntime, Option } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
@@ -15,53 +16,46 @@ import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
+import * as HttpStores from "../store/http.js"
 
+/** The server's single local owner, until auth arrives. */
 const owner = UserId.make("local")
+const baseUrl = window.location.origin
 
 const runtime = ManagedRuntime.make(
   ConversationSessions.layer.pipe(
-    Layer.provideMerge(AgentDirectory.http({ baseUrl: window.location.origin })),
-    Layer.provideMerge(Layer.mergeAll(ConversationStore.fromStorage(window.localStorage), AgentRegistry.memory)),
+    Layer.provideMerge(AgentDirectory.http({ baseUrl })),
+    Layer.provideMerge(
+      Layer.mergeAll(HttpStores.conversationStore({ baseUrl }), HttpStores.agentRegistry({ baseUrl }))
+    ),
     Layer.provide(FetchHttpClient.layer)
   )
 )
-
-/**
- * The agent's configuration lives on the server that runs it; this entry
- * only names it, so a new conversation has an agent to record.
- */
-const serverAgent = runtime.runPromise(Effect.gen(function*() {
-  const registry = yield* AgentRegistry.AgentRegistry
-  const { spec } = yield* registry.create({
-    ownerId: owner,
-    name: "Server agent",
-    revision: {
-      instructions: "Configured on the server.",
-      modelPolicy: { profile: "server" },
-      capabilities: [],
-      skills: [],
-      permission: { recorded: "{\"_tag\":\"AllowAll\"}" },
-      maxTurns: 8
-    }
-  })
-  return spec.id
-}))
 
 const selectedFromHash = (): Option.Option<ConversationId> => {
   const id = decodeURIComponent(window.location.hash.slice(1))
   return id === "" ? Option.none() : Option.some(ConversationId.make(id))
 }
 
+const listConversations = runtime.runPromise(
+  Effect.gen(function*() {
+    const store = yield* ConversationStore.ConversationStore
+    return yield* store.list({ ownerId: owner })
+  }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
+)
+
 const App = ({ agentId }: { readonly agentId: AgentId }) => {
   const [selected, setSelected] = useState(selectedFromHash)
   const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
 
   const refresh = () => {
-    void runtime.runPromise(
-      Effect.gen(function*() {
-        const store = yield* ConversationStore.ConversationStore
-        return yield* store.list({ ownerId: owner })
-      }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
+    void listConversations.then(() =>
+      runtime.runPromise(
+        Effect.gen(function*() {
+          const store = yield* ConversationStore.ConversationStore
+          return yield* store.list({ ownerId: owner })
+        }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
+      )
     ).then(setConversations)
   }
 
@@ -109,5 +103,10 @@ const App = ({ agentId }: { readonly agentId: AgentId }) => {
 
 const root = document.getElementById("root")
 if (root !== null) {
-  void serverAgent.then((agentId) => createRoot(root).render(<App agentId={agentId} />))
+  void runtime.runPromise(Effect.gen(function*() {
+    const registry = yield* AgentRegistry.AgentRegistry
+    const [agent] = yield* registry.list(owner)
+    if (agent === undefined) return yield* Effect.die("the server has no agent registered")
+    return agent.id
+  })).then((agentId) => createRoot(root).render(<App agentId={agentId} />))
 }

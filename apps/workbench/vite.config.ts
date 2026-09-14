@@ -10,5 +10,9 @@ import { affeAgentAliases } from "./aliases.ts"
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   resolve: { alias: affeAgentAliases },
-  server: { proxy: { "/sessions": "http://localhost:8787" } }
+  server: {
+    proxy: Object.fromEntries(
+      ["/sessions", "/conversations", "/agents", "/revisions"].map((path) => [path, "http://localhost:8787"])
+    )
+  }
 })

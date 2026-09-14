@@ -49,7 +49,7 @@ NodeRuntime.runMain(
     Effect.provide(
       Layer.mergeAll(
         AgentHttp.agentClientLayer({ baseUrl: `http://localhost:${port}` }).pipe(Layer.provide(FetchHttpClient.layer)),
-        serve(port)
+        serve({ port, database: ":memory:" })
       )
     )
   )

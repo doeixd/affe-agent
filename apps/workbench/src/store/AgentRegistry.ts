@@ -3,22 +3,25 @@
  */
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { AgentRevision, AgentSpec } from "../domain/AgentRevision.js"
+import { AgentRevision, AgentSpec, RevisionInput as RevisionInputSchema } from "../domain/AgentRevision.js"
 import type { RevisionInput } from "../domain/AgentRevision.js"
-import { AgentId, AgentRevisionId } from "../domain/WorkbenchIds.js"
+import { AgentId, AgentRevisionId, UserId as UserIdSchema } from "../domain/WorkbenchIds.js"
 import type { UserId } from "../domain/WorkbenchIds.js"
 import { failedAs, WorkbenchStorageError } from "./WorkbenchStorageError.js"
 
 export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()("AgentNotFoundError", {
   agentId: AgentId
-}) {}
+}, { httpApiStatus: 404 }) {}
 
-export interface NewAgent {
-  readonly ownerId: UserId
-  readonly name: string
-  readonly description?: string | undefined
-  readonly revision: RevisionInput
-}
+export const NewAgent = Schema.Struct({
+  ownerId: UserIdSchema,
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  revision: RevisionInputSchema
+})
+export type NewAgent = typeof NewAgent.Type
+
+export const Created = Schema.Struct({ spec: AgentSpec, revision: AgentRevision })
 
 export interface Created {
   readonly spec: AgentSpec

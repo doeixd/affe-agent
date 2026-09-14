@@ -160,7 +160,13 @@ it is still open, so the next pass does not have to re-derive it.
     `AgentDirectory.http` over `AgentHttp`, a localStorage conversation
     store, a Vite entry (`workbench:dev` beside `workbench:server`), and
     `smoke:workbench`, which drives the page's transport over a real socket.
-    W0 is complete; W1 onward is open.
+    W0 is complete. W1's product shell landed (2026-09-14): `WorkbenchApi`
+    serves conversations and agents from the server's SQLite database
+    (product records only; execution stays on `AgentHttp`), the browser
+    composes `ConversationSessions` from HTTP-backed stores, and the
+    acceptance -- reload and continue the exact same conversation -- is
+    tested against a real server with a second, fresh client stack. Still
+    open in W1: model configuration and settings UI; W2 onward is open.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

@@ -1,7 +1,11 @@
 /**
- * `npm run workbench:server`: the agent the W0 page talks to, on :8787
- * (`WORKBENCH_PORT` to change it). Run `npm run workbench:dev` beside it.
+ * `npm run workbench:server`: the agent and the product database the W1 page
+ * talks to, on :8787 (`WORKBENCH_PORT`), with conversations kept in
+ * `.workbench/workbench.db` (`WORKBENCH_DB`). Run `npm run workbench:dev`
+ * beside it.
  */
+import { mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 import { NodeRuntime } from "@effect/platform-node"
 import { Config, Effect, Layer } from "effect"
 import { serve } from "./app.js"
@@ -9,6 +13,8 @@ import { serve } from "./app.js"
 NodeRuntime.runMain(
   Effect.gen(function*() {
     const port = yield* Config.int("WORKBENCH_PORT").pipe(Config.withDefault(8787))
-    return yield* Layer.launch(serve(port))
+    const database = yield* Config.string("WORKBENCH_DB").pipe(Config.withDefault(".workbench/workbench.db"))
+    yield* Effect.sync(() => mkdirSync(dirname(database), { recursive: true }))
+    return yield* Layer.launch(serve({ port, database }))
   })
 )

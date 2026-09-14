@@ -12,12 +12,14 @@ import { failedAs, WorkbenchStorageError } from "./WorkbenchStorageError.js"
 
 export class ConversationNotFoundError extends Schema.TaggedError<ConversationNotFoundError>()(
   "ConversationNotFoundError",
-  { conversationId: ConversationId }
+  { conversationId: ConversationId },
+  { httpApiStatus: 404 }
 ) {}
 
 export class ConversationExistsError extends Schema.TaggedError<ConversationExistsError>()(
   "ConversationExistsError",
-  { conversationId: ConversationId }
+  { conversationId: ConversationId },
+  { httpApiStatus: 409 }
 ) {}
 
 export interface Service {

@@ -29,12 +29,22 @@ export const Record = Schema.Struct({
 export type Record = typeof Record.Type
 
 /** What a caller supplies; the store stamps the rest. */
-export type New = Pick<Record, "id" | "ownerId" | "agentId" | "agentRevisionId" | "sessionId" | "workspaceId" | "title">
+export const New = Schema.Struct({
+  id: ConversationId,
+  ownerId: UserId,
+  agentId: AgentId,
+  agentRevisionId: AgentRevisionId,
+  sessionId: Schema.String,
+  workspaceId: Schema.Option(WorkspaceId),
+  title: Schema.String
+})
+export type New = typeof New.Type
 
-export interface Patch {
-  readonly title?: string | undefined
-  readonly archived?: boolean | undefined
-}
+export const Patch = Schema.Struct({
+  title: Schema.optional(Schema.String),
+  archived: Schema.optional(Schema.Boolean)
+})
+export type Patch = typeof Patch.Type
 
 export interface Query {
   readonly ownerId: UserId
