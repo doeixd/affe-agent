@@ -152,9 +152,10 @@ it is still open, so the next pass does not have to re-derive it.
     scoped `ConversationPresenter`, tested through the in-process client for
     streaming, reasoning, tool progress, interruption, elicitation and
     reopen-from-history, with a boundary test for acceptance 8. It imports
-    only published `affe-agent` subpaths. Still open for W0: the browser
-    transport, the plain React page, and resumed-event reconnect against a
-    backend with a delivery log.
+    only published `affe-agent` subpaths. Reconnect is tested over the
+    durable client: a presenter opened later resumes after the delivery
+    log's latest sequence and follows the next submission. Still open for
+    W0: the browser transport and the plain React page.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts
