@@ -18,6 +18,7 @@ import * as AgentSession from "../AgentSession.js"
 import * as Permission from "../Permission.js"
 import * as ToolScheduling from "../ToolScheduling.js"
 import * as Ids from "../internal/ids.js"
+import * as Telemetry from "../internal/telemetry.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
 import * as Elicitation from "../Elicitation.js"
 import * as DurableAgent from "./DurableAgent.js"
@@ -581,15 +582,18 @@ const succeededOutcome = (
     })
   )
 
-/** Map an agent failure onto the wire-safe outcome. */
+/** Map an agent failure onto the wire-safe outcome, logging the cause it loses. */
 const failedOutcome = (
-  submissionId: string,
+  payload: { readonly sessionId: string; readonly submissionId: string },
   cause: Cause.Cause<unknown>
-): Outcome => ({
-  _tag: "Failed",
-  submissionId,
-  failure: DurableAgent.durableFailure(cause)
-})
+): Effect.Effect<Outcome> =>
+  Effect.map(
+    DurableAgent.loggedFailure(cause, {
+      [Telemetry.attributeNames.session]: payload.sessionId,
+      [Telemetry.attributeNames.submission]: payload.submissionId
+    }),
+    (failure): Outcome => ({ _tag: "Failed", submissionId: payload.submissionId, failure })
+  )
 
 /**
  * Define the per-submission workflow for an agent.
@@ -884,14 +888,14 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
             : Effect.flatMap(Ref.get(historyAtEnd), (history) =>
                 finishProjection(options.sessionStore, options.store, payload, history).pipe(
                   Effect.andThen(flushTerminal),
-                  Effect.as(
+                  Effect.andThen(
                     // A store that could not be reached is not the agent
                     // failing: it crosses as infrastructure, so the client
                     // does not report an agent failure the agent never
                     // produced, for a fault the next attempt may not see.
                     isInfrastructure(cause)
-                      ? infrastructureOutcome(payload.submissionId, cause)
-                      : failedOutcome(payload.submissionId, cause)
+                      ? Effect.succeed(infrastructureOutcome(payload.submissionId, cause))
+                      : failedOutcome(payload, cause)
                   )
                 )
               )

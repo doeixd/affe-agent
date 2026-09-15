@@ -24,6 +24,7 @@ import * as DurableToolkit from "./DurableToolkit.js"
 import * as ToolContracts from "./ToolContracts.js"
 import { describedTools } from "../internal/describedTools.js"
 import * as Schedules from "../internal/schedules.js"
+import * as Telemetry from "../internal/telemetry.js"
 import type { StorageError } from "../Errors.js"
 
 /**
@@ -192,6 +193,33 @@ export const durableFailure = (cause: Cause.Cause<unknown>): DurableAgentFailure
 }
 
 /**
+ * `durableFailure`, with the whole cause logged first.
+ *
+ * The projection keeps a tag, a message and whether it was a defect, and once
+ * it is journalled that is all that survives: a defect's stack is gone the
+ * moment the outcome is recorded, and nothing else in the durable path logs
+ * it. So it is logged here, once, while the cause is still live. A cause
+ * that already carries a projection crossed a journal and was logged where it
+ * was projected, so it passes through without a second line.
+ */
+export const loggedFailure = (
+  cause: Cause.Cause<unknown>,
+  annotations: Readonly<Record<string, string>>
+): Effect.Effect<DurableAgentFailure> => {
+  const failure = durableFailure(cause)
+  const carried = Cause.findErrorOption(cause)
+  if (Option.isSome(carried) && carried.value === failure) return Effect.succeed(failure)
+  return Effect.logError("durable: a submission failed", Cause.pretty(cause)).pipe(
+    Effect.annotateLogs({
+      ...annotations,
+      "agent.failure.tag": failure.tag,
+      "agent.failure.defect": failure.isDefect
+    }),
+    Effect.as(failure)
+  )
+}
+
+/**
  * An agent's declared input, with an Effect-valued renderer run as an
  * activity so a replay reads the rendering back from the journal rather
  * than rendering again -- the rule the model and the tools live by. A pure
@@ -221,7 +249,7 @@ export const durableInput = (
             Effect.map(Prompt.make),
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterrupts(cause),
-              (cause) => Effect.fail(durableFailure(cause))
+              (cause) => Effect.flatMap(loggedFailure(cause, { "agent.durable.activity": `${prefix}render` }), Effect.fail)
             )
           )
         })
@@ -576,7 +604,10 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
                   ? Effect.fail(interruptedFailure())
                   : instance.interrupted || Cause.hasInterruptsOnly(cause)
                     ? Effect.failCause(cause)
-                    : Effect.fail(durableFailure(cause))
+                    : Effect.flatMap(
+                        loggedFailure(cause, { [Telemetry.attributeNames.session]: payload.sessionId }),
+                        Effect.fail
+                      )
               )
         ),
         Effect.flatMap((text) =>
