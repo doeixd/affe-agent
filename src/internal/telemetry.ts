@@ -52,7 +52,25 @@ export const attributeNames = {
   modelOutputTokens: "ai.model.usage.output_tokens",
   modelTotalTokens: "ai.model.usage.total_tokens",
   streaming: "agent.streaming",
-  durable: "agent.durable"
+  durable: "agent.durable",
+  /**
+   * OpenTelemetry's GenAI semantic conventions, beside our own keys rather than
+   * instead of them. GenAI dashboards group by these names -- a run is
+   * `invoke_agent`, a turn's model call is `chat` -- and without them a trace
+   * of this library shows up as nothing an agent dashboard recognises. The
+   * span names stay the engine's own (`AgentRun.execute`): renaming them would
+   * break every existing trace query for a convention that lives in attributes.
+   */
+  genAiOperation: "gen_ai.operation.name",
+  genAiConversation: "gen_ai.conversation.id",
+  genAiInputTokens: "gen_ai.usage.input_tokens",
+  genAiOutputTokens: "gen_ai.usage.output_tokens"
+} as const
+
+/** The `gen_ai.operation.name` values this library's spans carry. */
+export const genAiOperations = {
+  run: "invoke_agent",
+  turn: "chat"
 } as const
 
 export type AttributeNames = typeof attributeNames
@@ -102,7 +120,9 @@ export const annotateRun = (
   Effect.annotateCurrentSpan({
     [attributeNames.session]: sessionId,
     [attributeNames.submission]: submissionId,
-    [attributeNames.run]: runId
+    [attributeNames.run]: runId,
+    [attributeNames.genAiOperation]: genAiOperations.run,
+    [attributeNames.genAiConversation]: sessionId
   })
 
 /**
@@ -119,7 +139,22 @@ export const annotateTurn = (
   Effect.annotateCurrentSpan({
     [attributeNames.session]: sessionId,
     [attributeNames.run]: runId,
-    [attributeNames.turn]: turn
+    [attributeNames.turn]: turn,
+    [attributeNames.genAiOperation]: genAiOperations.turn,
+    [attributeNames.genAiConversation]: sessionId
+  })
+
+/**
+ * Annotate the current span with a turn's token usage, once the model has
+ * answered. Numbers, as `agent.turn.index` is: a backend sums them.
+ */
+export const annotateUsage = (
+  inputTokens: number,
+  outputTokens: number
+): Effect.Effect<void> =>
+  Effect.annotateCurrentSpan({
+    [attributeNames.genAiInputTokens]: inputTokens,
+    [attributeNames.genAiOutputTokens]: outputTokens
   })
 
 /** Annotate the current span with the tool call it is executing. */

@@ -167,6 +167,15 @@ describe("tracing", () => {
       assert.strictEqual(tool.attributes[names.toolName], "echo")
       assert.strictEqual(tool.attributes[names.toolCallId], "t1")
 
+      // GenAI conventions, so an agent dashboard groups a run as an agent
+      // invocation and a turn as a chat call, both under the conversation.
+      assert.strictEqual(run.attributes[names.genAiOperation], "invoke_agent")
+      assert.strictEqual(turn.attributes[names.genAiOperation], "chat")
+      assert.strictEqual(run.attributes[names.genAiConversation], run.attributes[names.session])
+      assert.strictEqual(turn.attributes[names.genAiConversation], run.attributes[names.session])
+      // The tool span is neither; it must not inherit a name meant for another.
+      assert.isUndefined(tool.attributes[names.genAiOperation])
+
       // The old bare keys are gone -- leaving both would let a dashboard keep
       // working while the join stayed broken, which is the worst outcome.
       assert.isUndefined(run.attributes["runId"])

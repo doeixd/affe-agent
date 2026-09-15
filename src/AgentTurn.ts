@@ -584,6 +584,7 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
     const outputTokens = response.usage.outputTokens.total ?? 0
     const reportedTotal = Reflect.get(response.usage, "totalTokens")
     const totalTokens = typeof reportedTotal === "number" && Number.isSafeInteger(reportedTotal) && reportedTotal >= 0 ? reportedTotal : inputTokens + outputTokens
+    yield* Telemetry.annotateUsage(inputTokens, outputTokens)
     yield* EventBus.emit(session.bus, correlation, {
       _tag: "ModelCallCompleted",
       usage: {
