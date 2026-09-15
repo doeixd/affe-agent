@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema, Semaphore } from "effect"
+import { Effect, Layer, Option, Ref, Schema, Semaphore } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -13,6 +13,7 @@ import { DelegationDepth } from "../internal/delegationDepth.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
 import * as Namespace from "../internal/namespace.js"
+import * as Telemetry from "../internal/telemetry.js"
 
 /**
  * Subagents: ergonomics for the pattern the library already
@@ -232,6 +233,38 @@ const budgetFor = (inherit: Inherit | undefined): Effect.Effect<Layer.Layer<Budg
         onSome: (ambient) => Layer.succeed(Budget.Budget, ambient)
       })
     )
+
+/**
+ * The child's `Budget`, counting what the child spends as it is charged.
+ *
+ * The engine charges every turn to the `Budget` in context, so wrapping the one
+ * the child runs under sees exactly the child's turns -- whichever `budgetFor`
+ * chose, the parent's or a throwaway. `report` puts the count on the current
+ * span, which inside a handler is the parent's tool call: the delegation's
+ * spend is on record even when no `Budget` is capping anyone, and even when the
+ * child failed or was cut short, since the tokens were spent either way.
+ */
+const countedBudget = (inherit: Inherit | undefined) =>
+  Effect.gen(function* () {
+    const tally = yield* Ref.make({ tokens: 0, cost: 0 })
+    const base = yield* budgetFor(inherit)
+    const layer = Layer.effect(
+      Budget.Budget,
+      Effect.map(Budget.Budget, (budget): Budget.Budget["Service"] => ({
+        ...budget,
+        spend: (tokens, key) =>
+          Effect.andThen(Ref.update(tally, (t) => ({ ...t, tokens: t.tokens + tokens })), budget.spend(tokens, key)),
+        spendCost: (amount, key) =>
+          Effect.andThen(Ref.update(tally, (t) => ({ ...t, cost: t.cost + amount })), budget.spendCost(amount, key))
+      }))
+    ).pipe(Layer.provide(base))
+    const report = Effect.flatMap(Ref.get(tally), ({ tokens, cost }) =>
+      Effect.annotateCurrentSpan({
+        [Telemetry.attributeNames.delegatedTokens]: tokens,
+        ...(cost > 0 ? { [Telemetry.attributeNames.delegatedCost]: cost } : {})
+      }))
+    return { layer, report }
+  })
 
 /**
  * What the parent model receives from a delegation: the child's `Value`.
@@ -584,13 +617,14 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
   })
 
   const run = (params: unknown) =>
-    admit(Effect.flatMap(budgetFor(options.inherit), (budget) =>
+    admit(Effect.flatMap(countedBudget(options.inherit), ({ layer, report }) =>
       askChild(name, agent, options.inherit, params).pipe(
         // The child's `LanguageModel | R` is discharged here and only here, so
         // the tool carries no requirement of its own and parent and child never
         // share a context. The budget is the one exception, by decision: see
         // `Inherit.budget`.
-        Effect.provide(Layer.merge(options.provide, budget))
+        Effect.provide(Layer.merge(options.provide, layer)),
+        Effect.ensuring(report)
       )))
 
   const handler: Agent.Handler<typeof definition> = (params) =>
@@ -653,13 +687,14 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     })
 
     const run = (params: unknown) =>
-      admit(Effect.flatMap(budgetFor(options.inherit), (budget) =>
+      admit(Effect.flatMap(countedBudget(options.inherit), ({ layer, report }) =>
         askChild(name, agent, options.inherit, params).pipe(
           // The already-built services, not the layer: this is the whole
           // difference from `tool`. The child's `LanguageModel | R` is still
           // discharged here and only here, so parent and child share no
           // context -- the budget excepted, by decision (`Inherit.budget`).
-          Effect.provide(Layer.merge(Layer.succeedContext(services), budget))
+          Effect.provide(Layer.merge(Layer.succeedContext(services), layer)),
+          Effect.ensuring(report)
         )))
 
     const handler: Agent.Handler<typeof definition> = (params) =>

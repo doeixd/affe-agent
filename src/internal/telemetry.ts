@@ -64,7 +64,15 @@ export const attributeNames = {
   genAiOperation: "gen_ai.operation.name",
   genAiConversation: "gen_ai.conversation.id",
   genAiInputTokens: "gen_ai.usage.input_tokens",
-  genAiOutputTokens: "gen_ai.usage.output_tokens"
+  genAiOutputTokens: "gen_ai.usage.output_tokens",
+  /**
+   * What a delegation's child spent, on the parent's tool span: the tokens
+   * always, the cost when a capability table priced it. Counted whether or not
+   * the parent has a `Budget` -- a host billing on tokens must see a child's
+   * spend without having to cap it.
+   */
+  delegatedTokens: "agent.delegation.tokens",
+  delegatedCost: "agent.delegation.cost"
 } as const
 
 /** The `gen_ai.operation.name` values this library's spans carry. */
