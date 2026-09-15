@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import * as WebFetch from "./WebFetch.js"
 import * as Namespace from "../internal/namespace.js"
 
@@ -76,23 +76,52 @@ export class WebCaptureAuthenticationError extends
 export class WebCaptureRateLimitedError extends
   Schema.TaggedError<WebCaptureRateLimitedError>()(
     Namespace.tag("web/WebCaptureRateLimitedError"),
-    { url: Schema.String }
+    {
+      url: Schema.String,
+      /** How long the provider asked to wait (`retry-after`), when it said. */
+      retryAfterMillis: Schema.Option(Schema.Number),
+      /** The provider's request id (`cf-ray`), for its support; never shown to a model. */
+      rayId: Schema.Option(Schema.String)
+    }
   ) {
   override get message() {
-    return `Web capture of ${this.url} was rate limited`
+    const wait = Option.match(this.retryAfterMillis, {
+      onNone: () => "",
+      onSome: (millis) => `; retry after ${millis}ms`
+    })
+    return `Web capture of ${this.url} was rate limited${wait}${rayNote(this.rayId)}`
   }
 }
 
-/** The provider answered with a status that has no capture-domain meaning, or reported failure. */
+/**
+ * The provider answered with a status that has no capture-domain meaning, or
+ * reported failure.
+ *
+ * `status` is the provider API's status, not the destination page's. `detail`
+ * is this library's wording, never the provider's error text: that text can
+ * quote the model-selected page, so it is recognised against an exact grammar
+ * or dropped, and only the provider's numeric error codes are kept.
+ */
 export class WebCaptureResponseError extends
   Schema.TaggedError<WebCaptureResponseError>()(
     Namespace.tag("web/WebCaptureResponseError"),
-    { url: Schema.String, status: Schema.Number, detail: Schema.String }
+    {
+      url: Schema.String,
+      status: Schema.Number,
+      detail: Schema.String,
+      /** The renderer's own navigation limit, when the provider reported hitting it. */
+      navigationTimeoutMillis: Schema.Option(Schema.Number),
+      /** The provider's request id (`cf-ray`), for its support; never shown to a model. */
+      rayId: Schema.Option(Schema.String)
+    }
   ) {
   override get message() {
-    return `Web capture of ${this.url} failed with HTTP ${this.status}: ${this.detail}`
+    return `Web capture of ${this.url} failed with HTTP ${this.status}: ${this.detail}${rayNote(this.rayId)}`
   }
 }
+
+const rayNote = (rayId: Option.Option<string>): string =>
+  Option.match(rayId, { onNone: () => "", onSome: (id) => ` (cf-ray ${id})` })
 
 export class WebCaptureDecodeError extends
   Schema.TaggedError<WebCaptureDecodeError>()(

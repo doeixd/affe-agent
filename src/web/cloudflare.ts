@@ -1,4 +1,4 @@
-import { Config, Duration, Effect, Layer, Redacted, Schema, Semaphore } from "effect"
+import { Clock, Config, Duration, Effect, Layer, Option, Redacted, Schema, Semaphore } from "effect"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/unstable/http"
 import * as Body from "./internal/body.js"
 import * as Target from "./internal/target.js"
@@ -36,15 +36,87 @@ export interface Options {
   readonly apiToken: Redacted.Redacted<string>
 }
 
+/** One entry of the provider's `errors`; either half may be missing. */
+const ProviderError = Schema.Struct({
+  code: Schema.optional(Schema.Number),
+  message: Schema.optional(Schema.String)
+})
+type ProviderError = typeof ProviderError.Type
+
 const Envelope = <A, I>(result: Schema.Codec<A, I>) =>
   Schema.Struct({
     success: Schema.Boolean,
     result: Schema.optional(result),
-    errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String })))
+    errors: Schema.optional(Schema.Array(ProviderError))
   })
 
 const decodeMarkdown = Schema.decodeEffect(Schema.fromJsonString(Envelope(Schema.String)))
 const decodeLinks = Schema.decodeEffect(Schema.fromJsonString(Envelope(Schema.Array(Schema.String))))
+const decodeErrors = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ errors: Schema.optional(Schema.Array(ProviderError)) }))
+)
+
+/** Read from an error response only for its codes; the provider's error envelope is small. */
+const MAX_ERROR_BODY_BYTES = 16 * 1024
+/** The most provider codes a failure repeats. */
+const MAX_CODES = 8
+/** The longest `retry-after` honoured: a day. Past it the header is noise, not a plan. */
+const MAX_RETRY_AFTER_MILLIS = 86_400_000
+
+/**
+ * Browser Rendering's "the page did not finish loading" error. Recognised by
+ * code *and* exact wording, and nothing else of the provider's text is used:
+ * a navigation timeout is reported as the renderer's limit rather than as an
+ * HTTP status that reads like the destination's.
+ */
+const NAVIGATION_TIMEOUT_CODE = 6002
+const NAVIGATION_TIMEOUT = /^Navigation timeout of ([1-9][0-9]{0,5}) ms exceeded$/
+
+/** A `cf-ray` id is hex with an optional data-centre suffix; anything else is not repeated. */
+const RAY_ID = /^[0-9a-f]{8,32}(?:-[A-Za-z]{3,4})?$/
+
+const rayIdOf = (response: HttpClientResponse.HttpClientResponse): Option.Option<string> => {
+  const value = response.headers["cf-ray"]
+  return value !== undefined && RAY_ID.test(value) ? Option.some(value) : Option.none()
+}
+
+/** `retry-after` as delta-seconds or an HTTP date, on Effect's clock. */
+const retryAfterMillis = (value: string | undefined): Effect.Effect<Option.Option<number>> =>
+  Effect.map(Clock.currentTimeMillis, (now) => {
+    if (value === undefined) return Option.none()
+    const trimmed = value.trim()
+    const millis = /^[0-9]{1,9}$/.test(trimmed) ? Number(trimmed) * 1000 : Date.parse(trimmed) - now
+    return Number.isFinite(millis) ? Option.some(Math.min(Math.max(millis, 0), MAX_RETRY_AFTER_MILLIS)) : Option.none()
+  })
+
+const responseError = (
+  url: string,
+  response: HttpClientResponse.HttpClientResponse,
+  errors: ReadonlyArray<ProviderError>,
+  fallback: string
+): WebCapture.WebCaptureResponseError => {
+  const navigationTimeoutMillis = Option.fromUndefinedOr(
+    errors.flatMap((error) => {
+      if (error.code !== NAVIGATION_TIMEOUT_CODE || error.message === undefined) return []
+      const match = NAVIGATION_TIMEOUT.exec(error.message)
+      return match === null ? [] : [Number(match[1])]
+    })[0]
+  )
+  const codes = errors
+    .flatMap((error) => (error.code !== undefined && Number.isSafeInteger(error.code) ? [error.code] : []))
+    .slice(0, MAX_CODES)
+  const detail = Option.match(navigationTimeoutMillis, {
+    onSome: (millis) => `the provider's page navigation timed out after ${millis}ms`,
+    onNone: () => (codes.length === 0 ? fallback : `${fallback} (provider codes ${codes.join(", ")})`)
+  })
+  return new WebCapture.WebCaptureResponseError({
+    url,
+    status: response.status,
+    detail,
+    navigationTimeoutMillis,
+    rayId: rayIdOf(response)
+  })
+}
 
 const withRedactedHeaders = Effect.updateService(
   Headers.CurrentRedactedNames,
@@ -82,7 +154,7 @@ export const make = Effect.fn("CloudflareWebCapture.make")(function* (options: O
   const call = <A>(
     endpoint: "markdown" | "links",
     url: URL,
-    decode: (text: string) => Effect.Effect<{ readonly success: boolean; readonly result?: A | undefined; readonly errors?: ReadonlyArray<{ readonly message: string }> | undefined }, unknown>
+    decode: (text: string) => Effect.Effect<{ readonly success: boolean; readonly result?: A | undefined; readonly errors?: ReadonlyArray<ProviderError> | undefined }, unknown>
   ): Effect.Effect<A, WebCapture.WebCaptureError> =>
     Effect.gen(function* () {
       const target = WebCapture.diagnosticTarget(url)
@@ -111,11 +183,26 @@ export const make = Effect.fn("CloudflareWebCapture.make")(function* (options: O
       }
       if (response.status === 429) {
         yield* Body.release(response)
-        return yield* new WebCapture.WebCaptureRateLimitedError({ url: target })
+        return yield* new WebCapture.WebCaptureRateLimitedError({
+          url: target,
+          retryAfterMillis: yield* retryAfterMillis(response.headers["retry-after"]),
+          rayId: rayIdOf(response)
+        })
       }
       if (response.status < 200 || response.status >= 300) {
-        yield* Body.release(response)
-        return yield* new WebCapture.WebCaptureResponseError({ url: target, status: response.status, detail: `HTTP ${response.status}` })
+        // Read, bounded, for the provider's codes: a navigation timeout
+        // arrives this way, and releasing the body unread reported it as a
+        // bare status. A body that is too large or unreadable has no codes.
+        const errors = yield* Body.readBounded<null>(response, {
+          maxBytes: MAX_ERROR_BODY_BYTES,
+          tooLarge: () => null,
+          transport: () => null
+        }).pipe(
+          Effect.flatMap((bytes) => decodeErrors(new TextDecoder().decode(bytes))),
+          Effect.map((envelope) => envelope.errors ?? []),
+          Effect.orElseSucceed((): ReadonlyArray<ProviderError> => [])
+        )
+        return yield* responseError(target, response, errors, `HTTP ${response.status}`)
       }
       const bytes = yield* readBody(response, url)
       const text = new TextDecoder().decode(bytes)
@@ -126,8 +213,7 @@ export const make = Effect.fn("CloudflareWebCapture.make")(function* (options: O
         Effect.mapError(() => new WebCapture.WebCaptureDecodeError({ url: target, detail: "the provider envelope did not decode" }))
       )
       if (!envelope.success || envelope.result === undefined) {
-        const detail = envelope.errors?.map((e) => e.message).join("; ") ?? "the provider reported failure"
-        return yield* new WebCapture.WebCaptureResponseError({ url: target, status: response.status, detail })
+        return yield* responseError(target, response, envelope.errors ?? [], "the provider reported failure")
       }
       return envelope.result
     })

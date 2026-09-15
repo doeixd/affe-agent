@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import * as WebCapture from "../web/WebCapture.js"
 
 /**
@@ -22,7 +22,9 @@ export const layer = (
           new WebCapture.WebCaptureResponseError({
             url: WebCapture.diagnosticTarget(url),
             status: 404,
-            detail: "no such scripted page"
+            detail: "no such scripted page",
+            navigationTimeoutMillis: Option.none(),
+            rayId: Option.none()
           })
         )
         : Effect.succeed({ ...page, links: [...page.links] })

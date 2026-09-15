@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import * as Permission from "../Permission.js"
@@ -233,9 +233,20 @@ const captureFailure = (error: WebCapture.WebCaptureError): string => {
     case Namespace.tag("web/WebCaptureAuthenticationError"):
       return "Web capture is misconfigured or unauthorized. Do not retry; use web_fetch."
     case Namespace.tag("web/WebCaptureRateLimitedError"):
-      return "Web capture quota is temporarily exhausted. Retry later or use web_fetch."
+      return Option.match(error.retryAfterMillis, {
+        onNone: () => "Web capture quota is temporarily exhausted. Retry later or use web_fetch.",
+        onSome: (millis) =>
+          `Web capture quota is temporarily exhausted; the provider asked for ${Math.ceil(millis / 1000)}s. ` +
+          "Retry after that or use web_fetch."
+      })
     case Namespace.tag("web/WebCaptureResponseError"):
-      return `Web capture failed with HTTP ${error.status}. Use another source or web_fetch.`
+      return Option.match(error.navigationTimeoutMillis, {
+        // The provider's API status, not the page's: a rendering that timed
+        // out is not a page that answered 422.
+        onSome: (millis) =>
+          `Web capture timed out loading the page after ${millis}ms. Retry once, or use another source or web_fetch.`,
+        onNone: () => `Web capture failed with HTTP ${error.status}. Use another source or web_fetch.`
+      })
     case Namespace.tag("web/WebCaptureDecodeError"):
       return "Web capture returned an unreadable response. Use another source."
     case Namespace.tag("web/WebCaptureResponseTooLargeError"):

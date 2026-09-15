@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Duration, Effect, Fiber, Layer, Redacted, Ref } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Option, Redacted, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import * as Agent from "../src/Agent.js"
@@ -114,15 +114,76 @@ describe("Cloudflare web capture provider", () => {
     })
   )
 
-  it.effect("a provider-reported failure is a response error carrying the provider's message", () =>
+  it.effect("a provider-reported failure keeps its codes and drops its text", () =>
     Effect.gen(function* () {
+      // The provider's message can quote the rendered page, so it is exactly
+      // what must not reach an error that gets logged.
+      const quoted = "render failed near 'account 4417 balance'"
       const client = HttpClient.make((request) =>
-        Effect.succeed(response(request, JSON.stringify({ success: false, errors: [{ message: "render failed: navigation timeout" }] }), { status: 200 })))
+        Effect.succeed(response(
+          request,
+          JSON.stringify({ success: false, errors: [{ code: 1001, message: quoted }, { message: "no code" }] }),
+          { status: 200, headers: { "cf-ray": "8f1e2d3c4b5a6978-IAD" } }
+        )))
       const error = yield* Effect.flip(captureWith(client, "https://example.com/"))
       assert.strictEqual(error._tag, "affe-agent/web/WebCaptureResponseError")
       if (error._tag === "affe-agent/web/WebCaptureResponseError") {
-        assert.include(error.detail, "navigation timeout")
+        assert.strictEqual(error.detail, "the provider reported failure (provider codes 1001)")
+        assert.deepStrictEqual(error.navigationTimeoutMillis, Option.none())
+        assert.deepStrictEqual(error.rayId, Option.some("8f1e2d3c4b5a6978-IAD"))
+        assert.notInclude(error.message, "4417")
       }
+    })
+  )
+
+  it.effect("a navigation timeout on an error status is reported as the renderer's limit", () =>
+    Effect.gen(function* () {
+      const body = (message: string, code = 6002) => JSON.stringify({ success: false, errors: [{ code, message }] })
+      const withBody = (text: string) =>
+        HttpClient.make((request) => Effect.succeed(response(request, text, { status: 422 })))
+
+      const timedOut = yield* Effect.flip(captureWith(withBody(body("Navigation timeout of 30000 ms exceeded")), "https://example.com/"))
+      assert.strictEqual(timedOut._tag, "affe-agent/web/WebCaptureResponseError")
+      if (timedOut._tag === "affe-agent/web/WebCaptureResponseError") {
+        assert.strictEqual(timedOut.status, 422)
+        assert.deepStrictEqual(timedOut.navigationTimeoutMillis, Option.some(30000))
+        assert.strictEqual(timedOut.detail, "the provider's page navigation timed out after 30000ms")
+      }
+
+      // Recognised by code and exact wording together; near misses are codes only.
+      for (const near of [
+        body("Navigation timeout of 30000 ms exceeded; see https://page.example/secret"),
+        body("Navigation timeout of 30000 ms exceeded", 6003),
+        "not json at all"
+      ]) {
+        const error = yield* Effect.flip(captureWith(withBody(near), "https://example.com/"))
+        assert.strictEqual(error._tag, "affe-agent/web/WebCaptureResponseError")
+        if (error._tag === "affe-agent/web/WebCaptureResponseError") {
+          assert.deepStrictEqual(error.navigationTimeoutMillis, Option.none(), near)
+          assert.notInclude(error.message, "secret")
+        }
+      }
+    })
+  )
+
+  it.effect("a rate limit carries the provider's retry-after, as seconds or a date", () =>
+    Effect.gen(function* () {
+      const limited = (retryAfter: string) =>
+        HttpClient.make((request) =>
+          Effect.succeed(response(request, "", { status: 429, headers: { "retry-after": retryAfter, "cf-ray": "not a ray id!" } })))
+      const retryOf = (retryAfter: string) =>
+        Effect.flip(captureWith(limited(retryAfter), "https://example.com/")).pipe(
+          Effect.map((error) => error._tag === "affe-agent/web/WebCaptureRateLimitedError" ? error : undefined)
+        )
+
+      const seconds = yield* retryOf("7")
+      assert.deepStrictEqual(seconds?.retryAfterMillis, Option.some(7000))
+      // A header that is not a ray id is not repeated.
+      assert.deepStrictEqual(seconds?.rayId, Option.none())
+      // The test clock stands at the epoch, so this date is ten seconds out.
+      assert.deepStrictEqual((yield* retryOf("Thu, 01 Jan 1970 00:00:10 GMT"))?.retryAfterMillis, Option.some(10_000))
+      assert.deepStrictEqual((yield* retryOf("soon"))?.retryAfterMillis, Option.none())
+      assert.deepStrictEqual((yield* retryOf("999999999"))?.retryAfterMillis, Option.some(86_400_000))
     })
   )
 
@@ -186,6 +247,50 @@ describe("Cloudflare web capture provider", () => {
       const transcript = JSON.stringify(history)
       assert.include(transcript, "BEGIN UNTRUSTED WEB CONTENT FROM https://example.com/")
       assert.include(transcript, "Web capture failed with HTTP 404")
+    })
+  )
+
+  it.effect("the web_capture tool tells the model a navigation timeout and a retry wait, not a status", () =>
+    Effect.gen(function* () {
+      const slow = new WebCapture.WebCaptureResponseError({
+        url: "https://example.com",
+        status: 422,
+        detail: "the provider's page navigation timed out after 30000ms",
+        navigationTimeoutMillis: Option.some(30000),
+        rayId: Option.some("8f1e2d3c4b5a6978-IAD")
+      })
+      const busy = new WebCapture.WebCaptureRateLimitedError({
+        url: "https://example.com",
+        retryAfterMillis: Option.some(7000),
+        rayId: Option.none()
+      })
+      const pages = WebCapture.layer({
+        capture: (url) => Effect.fail(url.pathname === "/busy" ? busy : slow)
+      })
+      const { layer: model } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "c1", name: "web_capture", params: { url: "https://example.com/slow" } }] },
+        { toolCalls: [{ id: "c2", name: "web_capture", params: { url: "https://example.com/busy" } }] },
+        TestLanguageModel.text("done")
+      ])
+      const agent = Agent.make({
+        toolkit: WebToolkit.renderedToolkit(),
+        permission: Permission.allowAll,
+        loop: AgentLoop.bounded(4)
+      })
+      const history = yield* Effect.gen(function* () {
+        const session = yield* AgentSession.make(agent)
+        yield* session.prompt("go")
+        return yield* session.history
+      }).pipe(
+        Effect.provide(Layer.mergeAll(model, pages, WebCrawl.layer.pipe(Layer.provide(pages)))),
+        Effect.scoped
+      )
+      const transcript = JSON.stringify(history)
+      assert.include(transcript, "Web capture timed out loading the page after 30000ms")
+      assert.notInclude(transcript, "HTTP 422")
+      assert.include(transcript, "the provider asked for 7s")
+      // The ray id is for the operator, not the model.
+      assert.notInclude(transcript, "8f1e2d3c4b5a6978")
     })
   )
 })
