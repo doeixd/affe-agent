@@ -1,25 +1,65 @@
 /**
- * `WorkbenchApi` served over the store services. The handlers add nothing:
- * whichever `ConversationStore` and `AgentRegistry` the server is given --
- * SQL in a deployment -- is what a remote caller reaches.
+ * `WorkbenchApi` over the store services, as the person asking.
+ *
+ * The stores are shared by everyone; ownership is enforced here. Another
+ * owner's records answer exactly as missing ones do, so a guessed id learns
+ * nothing about whether it exists.
  */
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import type { AgentId, UserId } from "../domain/WorkbenchIds.js"
+import { CurrentUser, ForeignOwnerError } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
-import { AgentRegistry } from "../store/AgentRegistry.js"
-import { ConversationStore } from "../store/ConversationStore.js"
+import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
+import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
+
+const ownedBy = <A extends { readonly ownerId: UserId }>(found: Option.Option<A>, user: UserId): Option.Option<A> =>
+  Option.filter(found, (record) => record.ownerId === user)
+
+const me = HttpApiBuilder.group(WorkbenchApi, "me", (handlers) => handlers.handle("get", () => CurrentUser))
 
 const conversations = HttpApiBuilder.group(
   WorkbenchApi,
   "conversations",
   Effect.fn(function*(handlers) {
     const store = yield* ConversationStore
+    const registry = yield* AgentRegistry
+
+    const ownConversation = Effect.fn("conversations.own")(function*(id: Parameters<typeof store.get>[0]) {
+      const user = yield* CurrentUser
+      return ownedBy(yield* store.get(id), user)
+    })
+
     return handlers.handleAll({
-      list: ({ query }) => store.list(query),
-      get: ({ params }) => store.get(params.id),
-      create: ({ payload }) => store.create(payload),
-      update: ({ params, payload }) => store.update(params.id, payload),
-      remove: ({ params }) => store.remove(params.id)
+      list: Effect.fn(function*({ query }) {
+        const user = yield* CurrentUser
+        return yield* store.list({ ownerId: user, includeArchived: query.includeArchived })
+      }),
+      get: ({ params }) => ownConversation(params.id),
+      create: Effect.fn(function*({ payload }) {
+        const user = yield* CurrentUser
+        if (payload.ownerId !== user) {
+          return yield* new ForeignOwnerError({ ownerId: payload.ownerId })
+        }
+        // The conversation must run one of this person's agents, on a revision of that agent.
+        const agent = ownedBy(yield* registry.get(payload.agentId), user)
+        const revision = yield* registry.revision(payload.agentRevisionId)
+        if (Option.isNone(agent) || Option.isNone(revision) || revision.value.agentId !== payload.agentId) {
+          return yield* new AgentNotFoundError({ agentId: payload.agentId })
+        }
+        return yield* store.create(payload)
+      }),
+      update: Effect.fn(function*({ params, payload }) {
+        if (Option.isNone(yield* ownConversation(params.id))) {
+          return yield* new ConversationNotFoundError({ conversationId: params.id })
+        }
+        return yield* store.update(params.id, payload)
+      }),
+      remove: Effect.fn(function*({ params }) {
+        if (Option.isSome(yield* ownConversation(params.id))) {
+          yield* store.remove(params.id)
+        }
+      })
     })
   })
 )
@@ -29,16 +69,48 @@ const agents = HttpApiBuilder.group(
   "agents",
   Effect.fn(function*(handlers) {
     const registry = yield* AgentRegistry
+
+    const ownAgent = Effect.fn("agents.own")(function*(id: AgentId) {
+      const user = yield* CurrentUser
+      return ownedBy(yield* registry.get(id), user)
+    })
+
+    const requireOwnAgent = Effect.fn("agents.requireOwn")(function*(id: AgentId) {
+      if (Option.isNone(yield* ownAgent(id))) {
+        return yield* new AgentNotFoundError({ agentId: id })
+      }
+    })
+
     return handlers.handleAll({
-      list: ({ query }) => registry.list(query.ownerId),
-      get: ({ params }) => registry.get(params.id),
-      revisions: ({ params }) => registry.revisions(params.id),
-      revision: ({ params }) => registry.revision(params.id),
-      create: ({ payload }) => registry.create(payload),
-      revise: ({ params, payload }) => registry.revise(params.id, payload.input, payload.by),
-      archive: ({ params }) => registry.archive(params.id)
+      list: Effect.fn(function*() {
+        return yield* registry.list(yield* CurrentUser)
+      }),
+      get: ({ params }) => ownAgent(params.id),
+      revisions: Effect.fn(function*({ params }) {
+        return Option.isSome(yield* ownAgent(params.id)) ? yield* registry.revisions(params.id) : []
+      }),
+      revision: Effect.fn(function*({ params }) {
+        const revision = yield* registry.revision(params.id)
+        if (Option.isNone(revision)) return revision
+        return Option.isSome(yield* ownAgent(revision.value.agentId)) ? revision : Option.none()
+      }),
+      create: Effect.fn(function*({ payload }) {
+        const user = yield* CurrentUser
+        if (payload.ownerId !== user) {
+          return yield* new ForeignOwnerError({ ownerId: payload.ownerId })
+        }
+        return yield* registry.create(payload)
+      }),
+      revise: Effect.fn(function*({ params, payload }) {
+        yield* requireOwnAgent(params.id)
+        return yield* registry.revise(params.id, payload, yield* CurrentUser)
+      }),
+      archive: Effect.fn(function*({ params }) {
+        yield* requireOwnAgent(params.id)
+        yield* registry.archive(params.id)
+      })
     })
   })
 )
 
-export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(Layer.provide([conversations, agents]))
+export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(Layer.provide([me, conversations, agents]))

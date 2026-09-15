@@ -1,6 +1,6 @@
 /**
  * The workbench server: one agent over `AgentHttp`, and the product database
- * over `WorkbenchApi`, on one port.
+ * over `WorkbenchApi`, on one port, both behind the same bearer tokens.
  *
  * The model is scripted so the page runs with no key: the first prompt runs a
  * tool that reports progress, the next asks for approval before its tool
@@ -17,13 +17,11 @@ import { AgentClient, AgentSessionHost } from "affe-agent/client"
 import * as Elicitation from "affe-agent/elicitation"
 import { AgentHttp } from "affe-agent/http"
 import { TestLanguageModel } from "affe-agent/testing"
-import { UserId } from "../domain/WorkbenchIds.js"
+import type { UserId } from "../domain/WorkbenchIds.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
+import { authenticated, hostOptions, Tokens } from "./Authentication.js"
 import { routes as productRoutes } from "./ProductHandlers.js"
-
-/** Until auth arrives, every request is this one person's. */
-export const localOwner = UserId.make("local")
 
 const Build = Tool.make("build", { parameters: Schema.Struct({}), success: Schema.String })
 const Delete = Tool.make("deleteEverything", { parameters: Schema.Struct({}), success: Schema.String })
@@ -54,34 +52,37 @@ const turns: ReadonlyArray<TestLanguageModel.Turn> = Array.from({ length: 60 }, 
   TestLanguageModel.text(approvedReply)
 ]).flat()
 
-const Host = AgentSessionHost.Tag<string>("workbench/server")
+const Host = AgentSessionHost.Tag<UserId>("workbench/server")
 
-const host = AgentSessionHost.layer(Host, {
-  principal: { resolve: () => Effect.succeed("local") },
-  authorization: AgentSessionHost.allowAll(),
-  maxSessions: 64,
-  maxRequestsPerSession: 1024
-}).pipe(
+const host = Layer.unwrap(Effect.gen(function*() {
+  const known = yield* Tokens
+  const store = yield* ConversationStore.ConversationStore
+  return AgentSessionHost.layer(Host, { ...hostOptions(known, store), maxSessions: 64, maxRequestsPerSession: 1024 })
+})).pipe(
   Layer.provide(AgentClient.layer(agent, { elicitation: Elicitation.memory })),
   Layer.provide(Layer.unwrap(Effect.map(TestLanguageModel.script(turns), ({ layer }) => layer)))
 )
 
-/** The served agent, named in the registry once, so conversations have an agent to record. */
-const seedAgent = Layer.effectDiscard(Effect.gen(function*() {
+/** The served agent, named in each person's registry once, so their conversations have an agent to record. */
+const seedAgents = Layer.effectDiscard(Effect.gen(function*() {
   const registry = yield* AgentRegistry.AgentRegistry
-  if ((yield* registry.list(localOwner)).length > 0) return
-  yield* registry.create({
-    ownerId: localOwner,
-    name: "Workbench agent",
-    revision: {
-      instructions: "A scripted agent for the workbench page.",
-      modelPolicy: { profile: "scripted" },
-      capabilities: [{ id: "build" }, { id: "deleteEverything" }],
-      skills: [],
-      permission: { recorded: JSON.stringify(Permission.describe(Permission.allowAll)) },
-      maxTurns: 4
-    }
-  })
+  const people = new Set((yield* Tokens).values())
+  yield* Effect.forEach(people, (ownerId) =>
+    Effect.gen(function*() {
+      if ((yield* registry.list(ownerId)).length > 0) return
+      yield* registry.create({
+        ownerId,
+        name: "Workbench agent",
+        revision: {
+          instructions: "A scripted agent for the workbench page.",
+          modelPolicy: { profile: "scripted" },
+          capabilities: [{ id: "build" }, { id: "deleteEverything" }],
+          skills: [],
+          permission: { recorded: JSON.stringify(Permission.describe(Permission.allowAll)) },
+          maxTurns: 4
+        }
+      })
+    }))
 }).pipe(Effect.orDie))
 
 /** The product stores over a SQLite file (`:memory:` for a throwaway one). */
@@ -94,8 +95,8 @@ export const serve = (options: { readonly port: number; readonly database: strin
   HttpRouter.serve(
     Layer.mergeAll(
       AgentHttp.serverLayer({ host: Host }).pipe(Layer.provide(host)),
-      productRoutes,
-      seedAgent
+      productRoutes.pipe(Layer.provide(authenticated)),
+      seedAgents
     ).pipe(Layer.provide(stores(options.database))),
     { disableLogger: true }
   ).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: options.port })))

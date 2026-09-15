@@ -63,8 +63,16 @@ export class ConversationSessions extends Context.Service<ConversationSessions, 
   "workbench/ConversationSessions"
 ) {}
 
+const sessionPrefix = "conversation-"
+
 /** One conversation is one session, so the session is named after it. */
-export const sessionIdOf = (id: ConversationId): string => `conversation-${id}`
+export const sessionIdOf = (id: ConversationId): string => `${sessionPrefix}${id}`
+
+/** The conversation a session is, when it is one: how a host authorizes a session by its conversation's owner. */
+export const conversationIdOf = (sessionId: string): Option.Option<ConversationId> =>
+  sessionId.startsWith(sessionPrefix) && sessionId.length > sessionPrefix.length
+    ? Option.some(ConversationId.make(sessionId.slice(sessionPrefix.length)))
+    : Option.none()
 
 export const layer: Layer.Layer<ConversationSessions, never, ConversationStore | AgentRegistry | AgentDirectory> =
   Layer.effect(

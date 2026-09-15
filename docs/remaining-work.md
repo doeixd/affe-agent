@@ -193,8 +193,14 @@ it is still open, so the next pass does not have to re-derive it.
     pinned to their revision. Phase 1 has begun: SQL `AgentRegistry` and
     `ConversationStore` beside the memory ones, one contract for both, and
     the §6 acceptance tested -- an agent defined as data survives a restart
-    and runs the same revision. Still open in Phase 1: organizations and
-    membership, SessionDirectory wiring, the web shell, and auth.
+    and runs the same revision. Auth landed with the workbench shell
+    (2026-09-15): bearer tokens (`WORKBENCH_TOKENS`, default the one local
+    person) resolve once into the user every product route acts as and the
+    principal `AgentSessionHost` authorizes, and a session is authorized by
+    its conversation's owner; tested that one person cannot list, open,
+    prompt or change another's conversation over either API. Still open in
+    Phase 1: organizations and membership, SessionDirectory wiring, and real
+    identity (login) in place of configured tokens.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

@@ -32,11 +32,15 @@ export class AgentDirectory extends Context.Service<AgentDirectory, Service>()("
  */
 export const http = (options: {
   readonly baseUrl: string
+  /** Sent as a bearer token; the server resolves it to the principal its host authorizes. */
+  readonly token: string
 }): Layer.Layer<AgentDirectory, never, HttpClient.HttpClient> =>
   Layer.effect(
     AgentDirectory,
     Effect.gen(function*() {
-      const built = yield* Layer.build(AgentHttp.agentClientLayer(options))
+      const built = yield* Layer.build(
+        AgentHttp.agentClientLayer({ baseUrl: options.baseUrl, headers: { authorization: `Bearer ${options.token}` } })
+      )
       const client = Context.get(built, AgentClientService.AgentClient)
       return AgentDirectory.of({ client: () => Effect.succeed(client) })
     })

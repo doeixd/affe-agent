@@ -4,6 +4,9 @@
  * Product records only: conversations and agents. Prompting, events,
  * interruption and approvals stay on `AgentHttp` and the framework's own
  * schemas, so nothing here duplicates `AgentProtocol`.
+ *
+ * Every route is authenticated, and acts as the person asking: no request
+ * chooses whose records it reads.
  */
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
@@ -13,10 +16,15 @@ import { AgentId, AgentRevisionId, ConversationId, UserId } from "../domain/Work
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
 import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
+import { Authenticated, ForeignOwnerError } from "./Authentication.js"
+
+export class MeGroup extends HttpApiGroup.make("me").add(
+  HttpApiEndpoint.get("get", "/me", { success: UserId })
+).middleware(Authenticated) {}
 
 export class ConversationsGroup extends HttpApiGroup.make("conversations").add(
   HttpApiEndpoint.get("list", "/conversations", {
-    query: { ownerId: UserId, includeArchived: Schema.optional(Schema.Boolean) },
+    query: { includeArchived: Schema.optional(Schema.Boolean) },
     success: Schema.Array(Conversation.Record),
     error: WorkbenchStorageError
   }),
@@ -28,7 +36,7 @@ export class ConversationsGroup extends HttpApiGroup.make("conversations").add(
   HttpApiEndpoint.post("create", "/conversations", {
     payload: Conversation.New,
     success: Conversation.Record,
-    error: [ConversationExistsError, WorkbenchStorageError]
+    error: [ConversationExistsError, AgentNotFoundError, ForeignOwnerError, WorkbenchStorageError]
   }),
   HttpApiEndpoint.patch("update", "/conversations/:id", {
     params: { id: ConversationId },
@@ -40,11 +48,10 @@ export class ConversationsGroup extends HttpApiGroup.make("conversations").add(
     params: { id: ConversationId },
     error: WorkbenchStorageError
   })
-) {}
+).middleware(Authenticated) {}
 
 export class AgentsGroup extends HttpApiGroup.make("agents").add(
   HttpApiEndpoint.get("list", "/agents", {
-    query: { ownerId: UserId },
     success: Schema.Array(AgentSpec),
     error: WorkbenchStorageError
   }),
@@ -66,11 +73,11 @@ export class AgentsGroup extends HttpApiGroup.make("agents").add(
   HttpApiEndpoint.post("create", "/agents", {
     payload: NewAgent,
     success: Created,
-    error: WorkbenchStorageError
+    error: [ForeignOwnerError, WorkbenchStorageError]
   }),
   HttpApiEndpoint.post("revise", "/agents/:id/revisions", {
     params: { id: AgentId },
-    payload: Schema.Struct({ input: RevisionInput, by: UserId }),
+    payload: RevisionInput,
     success: AgentRevision,
     error: [AgentNotFoundError, WorkbenchStorageError]
   }),
@@ -78,6 +85,8 @@ export class AgentsGroup extends HttpApiGroup.make("agents").add(
     params: { id: AgentId },
     error: [AgentNotFoundError, WorkbenchStorageError]
   })
-) {}
+).middleware(Authenticated) {}
 
-export class WorkbenchApi extends HttpApi.make("workbench").add(ConversationsGroup).add(AgentsGroup) {}
+export class WorkbenchApi
+  extends HttpApi.make("workbench").add(MeGroup).add(ConversationsGroup).add(AgentsGroup)
+{}
