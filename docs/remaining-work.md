@@ -170,8 +170,11 @@ it is still open, so the next pass does not have to re-derive it.
     sends each session to the resolved client of its conversation's pinned
     revision, against the deployment's model and capability bindings, and
     conversation records are written before their sessions (a missing
-    session is made on open). Still open in W1: a model catalog and the
-    settings UI to edit agents; W2 onward is open.
+    session is made on open). Known gap: the server's agent clients are
+    in-process, so a server restart loses session history, and opening a
+    conversation afterwards makes a fresh session under the same id rather
+    than failing -- the durable client closes this. Still open in W1: a
+    model catalog and the settings UI to edit agents; W2 onward is open.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

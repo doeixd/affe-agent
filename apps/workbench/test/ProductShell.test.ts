@@ -128,12 +128,21 @@ describe("workbench product shell (W1)", () => {
         revision: { ...firstRevision, capabilities: [] }
       })
 
+      // The tool-less agent first, while the script's next turn is the build
+      // call: routed to the wrong agent it would run the tool and succeed,
+      // and this would fail at once rather than on a later scripted turn.
       const withTools = yield* page.sessions.create({ ownerId: ada, agentId: seeded.id, title: "With tools" })
-      assert.strictEqual((yield* withTools.session.prompt("build it")).text, buildReply)
-
       const withoutTools = yield* page.sessions.create({ ownerId: ada, agentId: toolless.id, title: "Without" })
       const refused = yield* Effect.flip(withoutTools.session.prompt("build it"))
       assert.strictEqual(refused._tag, "AgentExecutionError", "the tool-less agent cannot run the tool the model called")
+
+      // Its own instructions and nothing else: none of the other run's messages.
+      const history = yield* withTools.session.history
+      assert.deepStrictEqual(
+        history.content.map((message) => message.role),
+        ["system"],
+        "the tool-using conversation is untouched by the other's run"
+      )
     })), 60_000)
 
   it.live("typed refusals cross the product API as themselves", () =>
