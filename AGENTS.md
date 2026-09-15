@@ -352,13 +352,20 @@ rather than leaving it.
 If you ever have an issue or suggestion with the design of the project, please
 let me know.
 
-There may be other agents working in this project. Try your best to work around
-each other. If you need to communicate, leave messages in
-[COLLABORATION.md](./COLLABORATION.md) — claim what you are touching, and delete
-your entry when the work lands, because a stale claim is worse than no claim.
+Other agents work in this project at the same time as you (confirmed by the
+owner, 2026-09-15). Uncommitted edits you did not make are another agent's work
+in progress, not orphaned: leave them alone -- do not stage, commit, revert,
+reformat or "finish" them -- and commit only the files you changed yourself.
+Try your best to work around each other. If you need to communicate, leave
+messages in [COLLABORATION.md](./COLLABORATION.md) — claim what you are
+touching, and delete your entry when the work lands, because a stale claim is
+worse than no claim.
 
-Three habits follow from that, because the working tree may hold someone else's
+Habits that follow from that, because the working tree holds someone else's
 unfinished work:
+
+* **check `git status` before every commit**, and stage only the paths you
+  edited in this task;
 
 * **stage your own paths** — `git add <specific files>`, never `git add -A`;
 * **do not use `git stash` to get a clean baseline.** It moves everyone's
