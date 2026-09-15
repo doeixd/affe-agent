@@ -69,13 +69,11 @@ const bearerOf = (headers: Headers.Headers): Option.Option<string> =>
  * The host's principal and authorization over the same tokens. Closed by
  * default: an operation is allowed only by one of the rules below.
  *
- * - Creating a session is allowed to any authenticated person: its id is only
- *   claimed, and the conversation record written after it is what binds it to
- *   an owner.
- * - An operation on a session is allowed when the session is a conversation's
- *   and that conversation is the principal's. A session no conversation names
- *   is refused.
- * - Any other operation addressed to the host rather than a session --
+ * - An operation on a session -- making it included -- is allowed when the
+ *   session is a conversation's and that conversation is the principal's. A
+ *   session no conversation names is refused, so no one can claim the session
+ *   id of a conversation they do not own.
+ * - Any operation addressed to the host rather than a session --
  *   `listSessions` today, whatever the protocol adds tomorrow -- is refused:
  *   one person enumerating everyone's sessions is the leak this exists to stop.
  *
@@ -94,7 +92,6 @@ export const hostOptions = (
   },
   authorization: {
     authorize: ({ operation, principal, sessionId }) => {
-      if (operation === "createSession") return Effect.void
       const forbidden = new AgentProtocol.AgentForbiddenError({ operation, sessionId })
       if (Option.isNone(sessionId)) return Effect.fail(forbidden)
       return Option.match(conversationIdOf(sessionId.value), {

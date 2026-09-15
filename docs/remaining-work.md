@@ -165,8 +165,13 @@ it is still open, so the next pass does not have to re-derive it.
     (product records only; execution stays on `AgentHttp`), the browser
     composes `ConversationSessions` from HTTP-backed stores, and the
     acceptance -- reload and continue the exact same conversation -- is
-    tested against a real server with a second, fresh client stack. Still
-    open in W1: model configuration and settings UI; W2 onward is open.
+    tested against a real server with a second, fresh client stack. Agent
+    configuration now takes effect on the server: a routing `AgentClient`
+    sends each session to the resolved client of its conversation's pinned
+    revision, against the deployment's model and capability bindings, and
+    conversation records are written before their sessions (a missing
+    session is made on open). Still open in W1: a model catalog and the
+    settings UI to edit agents; W2 onward is open.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

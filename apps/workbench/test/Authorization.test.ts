@@ -40,12 +40,19 @@ const policy = Effect.gen(function*() {
 })
 
 describe("workbench host authorization", () => {
-  it.effect("an operation addressed to the host, not a session, is refused -- except creating one", () =>
+  it.effect("an operation addressed to the host, not a session, is refused", () =>
     Effect.scoped(Effect.gen(function*() {
       const { decide } = yield* policy
       assert.strictEqual(yield* decide(grace, "listSessions"), "forbidden")
-      assert.strictEqual(yield* decide(grace, "createSession"), "allowed")
-      assert.strictEqual(yield* decide(grace, "createSession", "conversation-new"), "allowed")
+      assert.strictEqual(yield* decide(grace, "createSession"), "forbidden")
+    })))
+
+  it.effect("making a session is the conversation owner's, so no one claims another's session id", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const { adasSession, decide } = yield* policy
+      assert.strictEqual(yield* decide(ada, "createSession", adasSession), "allowed")
+      assert.strictEqual(yield* decide(grace, "createSession", adasSession), "forbidden")
+      assert.strictEqual(yield* decide(grace, "createSession", "conversation-unrecorded"), "forbidden")
     })))
 
   it.effect("an operation on a session is the conversation owner's alone", () =>

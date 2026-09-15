@@ -152,6 +152,38 @@ describe("workbench W0", () => {
       }).pipe(Effect.provide(layer))
     }))
 
+  it.effect("a conversation whose session was never made gets one when it is opened", () =>
+    Effect.gen(function*() {
+      const { layer } = yield* workbench([TestLanguageModel.text("made late")])
+      yield* Effect.gen(function*() {
+        const store = yield* ConversationStore.ConversationStore
+        const registry = yield* AgentRegistry.AgentRegistry
+        const sessions = yield* ConversationSessions.ConversationSessions
+        const agentId = yield* defineAgent
+        const spec = yield* registry.get(agentId)
+        if (Option.isNone(spec)) return yield* Effect.die("the agent was not recorded")
+
+        // As a create that stopped after writing the record.
+        const id = ConversationId.make("stranded")
+        yield* store.create({
+          id,
+          ownerId: owner,
+          agentId,
+          agentRevisionId: spec.value.activeRevisionId,
+          sessionId: ConversationSessions.sessionIdOf(id),
+          workspaceId: Option.none(),
+          title: "Stranded"
+        })
+
+        const opened = yield* sessions.open(id)
+        assert.strictEqual(opened.session.id, ConversationSessions.sessionIdOf(id))
+        assert.strictEqual((yield* opened.session.prompt("hello")).text, "made late")
+        // And opening again reaches that same session rather than another.
+        const again = yield* sessions.open(id)
+        assert.strictEqual((yield* again.session.history).content.length, (yield* opened.session.history).content.length)
+      }).pipe(Effect.provide(layer))
+    }))
+
   it.effect("a paused run is answered through the session, and the question closes", () =>
     Effect.gen(function*() {
       const { layer } = yield* workbench([

@@ -29,6 +29,7 @@ import * as HttpStores from "../src/store/http.js"
 const reloadPort = 8796
 const refusalPort = 8795
 const ownershipPort = 8794
+const routingPort = 8793
 
 const ada = UserId.make("ada")
 const grace = UserId.make("grace")
@@ -110,6 +111,29 @@ describe("workbench product shell (W1)", () => {
         const renamed = yield* page.store.update(started.id, { title: "Renamed" })
         assert.strictEqual(renamed.title, "Renamed")
       }))
+    })), 60_000)
+
+  it.live("each conversation runs its own agent's configuration on the server", () =>
+    Effect.scoped(Effect.gen(function*() {
+      yield* Layer.build(serve({ port: routingPort, database: ":memory:" }).pipe(Layer.provide(people)))
+      const page = yield* load(routingPort, "ada-token")
+      const seeded = yield* agentOf(page.registry, ada)
+
+      // A second agent, allowed no tools: the scripted model's tool call is refused.
+      const [firstRevision] = yield* page.registry.revisions(seeded.id)
+      if (firstRevision === undefined) return yield* Effect.die("the seeded agent has no revision")
+      const { spec: toolless } = yield* page.registry.create({
+        ownerId: ada,
+        name: "No tools",
+        revision: { ...firstRevision, capabilities: [] }
+      })
+
+      const withTools = yield* page.sessions.create({ ownerId: ada, agentId: seeded.id, title: "With tools" })
+      assert.strictEqual((yield* withTools.session.prompt("build it")).text, buildReply)
+
+      const withoutTools = yield* page.sessions.create({ ownerId: ada, agentId: toolless.id, title: "Without" })
+      const refused = yield* Effect.flip(withoutTools.session.prompt("build it"))
+      assert.strictEqual(refused._tag, "AgentExecutionError", "the tool-less agent cannot run the tool the model called")
     })), 60_000)
 
   it.live("typed refusals cross the product API as themselves", () =>

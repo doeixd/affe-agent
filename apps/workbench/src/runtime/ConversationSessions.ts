@@ -83,19 +83,37 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
       const directory = yield* AgentDirectory
       const lifetime = yield* Effect.scope
 
+      /**
+       * The conversation's session, made if it does not exist yet.
+       *
+       * A record can outlive the attempt that was to make its session -- the
+       * session call failed, or the process stopped between the two -- so
+       * reaching a conversation is also what finishes creating it. Two callers
+       * racing to make it meet at the one that won. The session belongs to the
+       * conversation, not to the call: it lives as long as this service.
+       */
+      const sessionOf = (conversation: Conversation.Record) =>
+        Effect.flatMap(directory.client(conversation.agentRevisionId), (client) =>
+          client.session(conversation.sessionId).pipe(
+            Effect.catchTag("AgentSessionNotFoundError", () =>
+              client.createSession({ sessionId: conversation.sessionId }).pipe(
+                Scope.provide(lifetime),
+                Effect.catchTag("AgentSessionAlreadyExistsError", () => client.session(conversation.sessionId))
+              ))
+          ))
+
       const open = Effect.fn("ConversationSessions.open")(function*(id: ConversationId) {
         const found = yield* store.get(id)
         if (Option.isNone(found)) {
           return yield* new ConversationNotFoundError({ conversationId: id })
         }
-        const client = yield* directory.client(found.value.agentRevisionId)
-        const session = yield* client.session(found.value.sessionId)
-        return { conversation: found.value, session }
+        return { conversation: found.value, session: yield* sessionOf(found.value) }
       })
 
-      // Session first, record second. The other order would publish a record
-      // whose session may never exist; this order can leave a session no record
-      // names, which a retry under the same `conversationId` reaches again.
+      // Record first, session second. A server routing sessions to agents
+      // finds a session's agent through its conversation, so the record must
+      // exist when the session is made; a record whose session never got made
+      // gets it on the next open, so neither order of failure strands anything.
       const create = Effect.fn("ConversationSessions.create")(function*(input: CreateInput) {
         const id = input.conversationId ?? ConversationId.make(globalThis.crypto.randomUUID())
         if (Option.isSome(yield* store.get(id))) {
@@ -105,21 +123,16 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
         if (Option.isNone(agent)) {
           return yield* new AgentNotFoundError({ agentId: input.agentId })
         }
-        const revisionId = agent.value.activeRevisionId
-        const client = yield* directory.client(revisionId)
-        // The session belongs to the conversation, not to this call: it lives
-        // as long as this service, which is what lets `open` find it again.
-        const session = yield* client.createSession({ sessionId: sessionIdOf(id) }).pipe(Scope.provide(lifetime))
         const conversation = yield* store.create({
           id,
           ownerId: input.ownerId,
           agentId: input.agentId,
-          agentRevisionId: revisionId,
-          sessionId: session.id,
+          agentRevisionId: agent.value.activeRevisionId,
+          sessionId: sessionIdOf(id),
           workspaceId: Option.fromNullishOr(input.workspaceId),
           title: input.title
         })
-        return { conversation, session }
+        return { conversation, session: yield* sessionOf(conversation) }
       })
 
       return ConversationSessions.of({ create, open })
