@@ -66,14 +66,20 @@ const bearerOf = (headers: Headers.Headers): Option.Option<string> =>
     value.startsWith("Bearer ") ? Option.some(value.slice("Bearer ".length)) : Option.none())
 
 /**
- * The host's principal and authorization over the same tokens.
+ * The host's principal and authorization over the same tokens. Closed by
+ * default: an operation is allowed only by one of the rules below.
  *
- * A session operation is allowed when the session is a conversation's and
- * that conversation is the principal's. Creating a session is allowed to any
- * authenticated person: its id is only claimed, and the conversation record
- * written after it is what binds it to an owner. A session no conversation
- * names is refused. A store that cannot answer fails the request rather than
- * letting it through.
+ * - Creating a session is allowed to any authenticated person: its id is only
+ *   claimed, and the conversation record written after it is what binds it to
+ *   an owner.
+ * - An operation on a session is allowed when the session is a conversation's
+ *   and that conversation is the principal's. A session no conversation names
+ *   is refused.
+ * - Any other operation addressed to the host rather than a session --
+ *   `listSessions` today, whatever the protocol adds tomorrow -- is refused:
+ *   one person enumerating everyone's sessions is the leak this exists to stop.
+ *
+ * A store that cannot answer fails the request rather than letting it through.
  */
 export const hostOptions = (
   known: ReadonlyMap<string, UserId>,
@@ -88,8 +94,9 @@ export const hostOptions = (
   },
   authorization: {
     authorize: ({ operation, principal, sessionId }) => {
-      if (operation === "createSession" || Option.isNone(sessionId)) return Effect.void
+      if (operation === "createSession") return Effect.void
       const forbidden = new AgentProtocol.AgentForbiddenError({ operation, sessionId })
+      if (Option.isNone(sessionId)) return Effect.fail(forbidden)
       return Option.match(conversationIdOf(sessionId.value), {
         onNone: () => Effect.fail(forbidden),
         onSome: (conversationId) =>
