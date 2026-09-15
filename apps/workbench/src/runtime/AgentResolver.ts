@@ -58,6 +58,35 @@ export interface Service {
 
 export class AgentResolver extends Context.Service<AgentResolver, Service>()("workbench/AgentResolver") {}
 
+/**
+ * How a resolved agent becomes a client: the one choice between an agent
+ * whose sessions live in this process and one whose sessions survive it.
+ * The agent is the same either way; durability is the interpreter's.
+ */
+export interface ClientFactory {
+  readonly make: <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
+    /** Stable per revision: a durable client names its workflow with it. */
+    name: string,
+    agent: Agent.AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>
+  ) => Layer.Layer<AgentClient.AgentClient, never, LanguageModel.LanguageModel | R>
+}
+
+export class AgentClientFactory extends Context.Service<AgentClientFactory, ClientFactory>()(
+  "workbench/AgentClientFactory"
+) {}
+
+/** Sessions in this process, gone with it. */
+export const inProcess: Layer.Layer<AgentClientFactory> = Layer.succeed(AgentClientFactory, {
+  make: <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
+    _name: string,
+    agent: Agent.AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>
+  ): Layer.Layer<AgentClient.AgentClient, never, LanguageModel.LanguageModel | R> =>
+    AgentClient.layer(agent, { elicitation: Elicitation.memory })
+})
+
+/** A name a workflow engine accepts, derived from a revision id. */
+export const clientNameOf = (id: AgentRevisionId): string => `workbench-${id.replace(/[^A-Za-z0-9]+/g, "-")}`
+
 /** Every entry of `refs` bound in `table`, or the first that is not. */
 const bindAll = <A>(
   table: Readonly<Record<string, A>>,
@@ -88,11 +117,12 @@ const firstConflict = (tools: ReadonlyArray<Agent.BoundTool<Tool.Any>>): Option.
   return Option.none()
 }
 
-export const layer: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindings> = Layer.effect(
+export const layerWith: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindings | AgentClientFactory> = Layer.effect(
   AgentResolver,
   Effect.gen(function*() {
     const registry = yield* AgentRegistry
     const bindings = yield* AgentBindings
+    const factory = yield* AgentClientFactory
 
     const resolve = Effect.fn("AgentResolver.resolve")(function*(id: AgentRevisionId) {
       const refused = (reason: RevisionResolutionError["reason"], ref?: string) =>
@@ -123,15 +153,19 @@ export const layer: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindi
         loop: AgentLoop.bounded(revision.maxTurns),
         permission: permission.value
       })
+      const name = clientNameOf(id)
       const client = skills.value.length === 0
-        ? AgentClient.layer(agent, { elicitation: Elicitation.memory })
-        : AgentClient.layer(Skills.install(agent), { elicitation: Elicitation.memory }).pipe(
-          Layer.provide(Skills.layer(skills.value))
-        )
+        ? factory.make(name, agent)
+        : factory.make(name, Skills.install(agent)).pipe(Layer.provide(Skills.layer(skills.value)))
       const built = yield* Layer.build(client.pipe(Layer.provide(model)))
       return { revision, client: Context.get(built, AgentClient.AgentClient) }
     })
 
     return AgentResolver.of({ resolve })
   })
+)
+
+/** The resolver with in-process clients. */
+export const layer: Layer.Layer<AgentResolver, never, AgentRegistry | AgentBindings> = layerWith.pipe(
+  Layer.provide(inProcess)
 )

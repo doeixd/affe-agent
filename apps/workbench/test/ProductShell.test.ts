@@ -11,7 +11,7 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Fiber, Layer, Option } from "effect"
+import { Context, Duration, Effect, Fiber, Layer, Option } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AgentId, ConversationId, UserId } from "../src/domain/WorkbenchIds.js"
 import * as AgentDirectory from "../src/runtime/AgentDirectory.js"
@@ -30,6 +30,8 @@ const reloadPort = 8796
 const refusalPort = 8795
 const ownershipPort = 8794
 const routingPort = 8793
+const restartPort = 8792
+const restartedPort = 8791
 
 const ada = UserId.make("ada")
 const grace = UserId.make("grace")
@@ -112,6 +114,45 @@ describe("workbench product shell (W1)", () => {
         assert.strictEqual(renamed.title, "Renamed")
       }))
     })), 60_000)
+
+  it.live("a restarted server reopens a conversation with its history, and it continues", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const database = yield* tempDatabase
+      // Short shard locks, so the second server need not wait out the first.
+      // The second listens on another port: what restarts is the process and
+      // its memory, and a client's pooled keep-alive connection to the old
+      // socket would otherwise fail the first request for a reason that has
+      // nothing to do with durability.
+      const server = (port: number) =>
+        serve({
+          port,
+          database,
+          durability: { shardLockExpiration: Duration.seconds(1), shardLockRefreshInterval: Duration.millis(200) }
+        }).pipe(Layer.provide(people))
+
+      const started = yield* Effect.scoped(Effect.gen(function*() {
+        yield* Layer.build(server(restartPort))
+        const page = yield* load(restartPort, "ada-token")
+        const agent = yield* agentOf(page.registry, ada)
+        const { conversation, session } = yield* page.sessions.create({ ownerId: ada, agentId: agent.id, title: "Survives" })
+        assert.strictEqual((yield* session.prompt("build it")).text, buildReply)
+        return conversation
+      }))
+
+      // The first server is gone, and every session it held in memory with it.
+      yield* Layer.build(server(restartedPort))
+      const page = yield* load(restartedPort, "ada-token")
+      const { session } = yield* page.sessions.open(started.id)
+      const texts = (yield* session.history).content.flatMap((message) =>
+        message.role === "assistant"
+          ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+          : []
+      )
+      assert.include(texts, buildReply, "the reopened conversation keeps the exchange the first server ran")
+
+      // And carries on: the new server's script starts again at its build step.
+      assert.strictEqual((yield* session.prompt("build again")).text, buildReply)
+    })), 120_000)
 
   it.live("each conversation runs its own agent's configuration on the server", () =>
     Effect.scoped(Effect.gen(function*() {

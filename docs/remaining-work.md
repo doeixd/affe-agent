@@ -170,10 +170,12 @@ it is still open, so the next pass does not have to re-derive it.
     sends each session to the resolved client of its conversation's pinned
     revision, against the deployment's model and capability bindings, and
     conversation records are written before their sessions (a missing
-    session is made on open). Known gap: the server's agent clients are
-    in-process, so a server restart loses session history, and opening a
-    conversation afterwards makes a fresh session under the same id rather
-    than failing -- the durable client closes this. Still open in W1: a
+    session is made on open). The server's agent clients are durable
+    (2026-09-15): `AgentResolver` takes an `AgentClientFactory`, and the
+    server's builds `DurableAgentClient` over SQL channels, session store and
+    delivery log with a single-runner workflow engine, on the same SQLite
+    file as the product records -- tested that a restarted server reopens a
+    conversation with its history and continues it. Still open in W1: a
     model catalog and the settings UI to edit agents; W2 onward is open.
 
     ```text
