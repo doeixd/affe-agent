@@ -540,6 +540,9 @@ describe("durable and cluster surfaces", () => {
     // Two matchers, and the surface says so. A longer list here would be the
     // first step towards looking like a secret scanner.
     assert.deepStrictEqual(Object.keys(redaction.Redaction).sort(), [
+      // What `deep` writes for a reference back to an ancestor, so a caller
+      // can recognise it rather than match a string.
+      "CYCLE",
       "asHook",
       "asSpanHook",
       "bearerTokens",
