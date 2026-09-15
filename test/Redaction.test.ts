@@ -101,9 +101,29 @@ describe("Redaction", () => {
       string,
       unknown
     >
-    assert.strictEqual(out.secret, "[redacted]")
-    // The revisited node is handed back as it was, rather than recursed into.
-    assert.strictEqual(out["self"], self)
+    // The back-reference is a marker, not the original: handing `self` back
+    // put the raw secret one property down from the redacted copy.
+    assert.deepStrictEqual(out, { secret: "[redacted]", self: Redaction.CYCLE })
+    assert.notInclude(JSON.stringify(out), SECRET)
+  })
+
+  it("a value shared by two fields is redacted at both", () => {
+    // Shared is not cyclic. A visited-set redacted the first place and returned
+    // the second as the original.
+    const credentials = { token: SECRET }
+    const out = Redaction.deep(
+      { primary: credentials, fallback: credentials, list: [credentials, credentials] },
+      Redaction.make(Redaction.literal(SECRET))
+    )
+    const redacted = { token: "[redacted]" }
+    assert.deepStrictEqual(out, { primary: redacted, fallback: redacted, list: [redacted, redacted] })
+  })
+
+  it("a cycle through an array is cut, and its siblings still redacted", () => {
+    const list: Array<unknown> = [SECRET]
+    list.push({ back: list, note: SECRET })
+    const out = Redaction.deep(list, Redaction.make(Redaction.literal(SECRET)))
+    assert.deepStrictEqual(out, ["[redacted]", { back: Redaction.CYCLE, note: "[redacted]" }])
   })
 
   it("passes a Date, a class instance and a Map through untouched", () => {

@@ -146,25 +146,37 @@ const isPlainObject = (value: object): boolean => {
   return prototype === Object.prototype || prototype === null
 }
 
+/** What `deep` writes in place of a reference back to one of its own ancestors. */
+export const CYCLE = "[cycle]"
+
 export const deep = (
   value: unknown,
   redaction: Redaction,
   options?: { readonly keys?: boolean | undefined }
 ): unknown => {
-  const seen = new WeakSet<object>()
+  // The ancestors of the node being walked, not every node ever visited. A
+  // visited-set hands back a value that appears twice -- shared, not cyclic --
+  // unredacted at its second place, and a cycle's back-reference as the raw
+  // original, secrets and all. A value reached again along its own path is a
+  // cycle and becomes `CYCLE`; one reached along another path is walked again.
+  const ancestors = new Set<object>()
   const walk = (current: unknown): unknown => {
     if (typeof current === "string") return redaction.redact(current)
     if (current === null || typeof current !== "object") return current
-    if (seen.has(current)) return current
-    seen.add(current)
-    if (Array.isArray(current)) return current.map(walk)
-    if (!isPlainObject(current)) return current
-    return Object.fromEntries(
-      Object.entries(current).map(([key, nested]) => [
-        options?.keys === true ? redaction.redact(key) : key,
-        walk(nested)
-      ])
-    )
+    if (ancestors.has(current)) return CYCLE
+    if (!Array.isArray(current) && !isPlainObject(current)) return current
+    ancestors.add(current)
+    try {
+      if (Array.isArray(current)) return current.map(walk)
+      return Object.fromEntries(
+        Object.entries(current).map(([key, nested]) => [
+          options?.keys === true ? redaction.redact(key) : key,
+          walk(nested)
+        ])
+      )
+    } finally {
+      ancestors.delete(current)
+    }
   }
   return walk(value)
 }
