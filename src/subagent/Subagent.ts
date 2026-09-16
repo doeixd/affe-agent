@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Ref, Schema, Semaphore } from "effect"
+import { Effect, Layer, Option, Schema, Semaphore } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -239,30 +239,37 @@ const budgetFor = (inherit: Inherit | undefined): Effect.Effect<Layer.Layer<Budg
  *
  * The engine charges every turn to the `Budget` in context, so wrapping the one
  * the child runs under sees exactly the child's turns -- whichever `budgetFor`
- * chose, the parent's or a throwaway. `report` puts the count on the current
- * span, which inside a handler is the parent's tool call: the delegation's
- * spend is on record even when no `Budget` is capping anyone, and even when the
- * child failed or was cut short, since the tokens were spent either way.
+ * chose, the parent's or a throwaway. The count is published to the captured
+ * parent tool span as each charge arrives. Toolkit handlers run in child
+ * fibers: on interruption their finalizers can run after that span ends, so
+ * waiting until the delegation finishes would lose the exported attributes.
  */
 const countedBudget = (inherit: Inherit | undefined) =>
   Effect.gen(function* () {
-    const tally = yield* Ref.make({ tokens: 0, cost: 0 })
+    // A private meter uses the same occurrence deduplication as the charged
+    // budget. Replaying a charge must not inflate the delegation's trace.
+    const tally = yield* Effect.provide(Budget.Budget, Budget.fresh())
     const base = yield* budgetFor(inherit)
+    const parentSpan = yield* Effect.option(Effect.currentSpan)
+    const report = Option.match(parentSpan, {
+      onNone: () => Effect.void,
+      onSome: (span) => Effect.flatMap(Effect.all({ tokens: tally.spent, cost: tally.costSpent }), ({ tokens, cost }) =>
+        Effect.annotateCurrentSpan({
+          [Telemetry.attributeNames.delegatedTokens]: tokens,
+          ...(cost > 0 ? { [Telemetry.attributeNames.delegatedCost]: cost } : {})
+        })).pipe(Effect.withParentSpan(span))
+    })
+    yield* report
     const layer = Layer.effect(
       Budget.Budget,
       Effect.map(Budget.Budget, (budget): Budget.Budget["Service"] => ({
         ...budget,
         spend: (tokens, key) =>
-          Effect.andThen(Ref.update(tally, (t) => ({ ...t, tokens: t.tokens + tokens })), budget.spend(tokens, key)),
+          Effect.andThen(tally.spend(tokens, key), budget.spend(tokens, key)).pipe(Effect.ensuring(report)),
         spendCost: (amount, key) =>
-          Effect.andThen(Ref.update(tally, (t) => ({ ...t, cost: t.cost + amount })), budget.spendCost(amount, key))
+          Effect.andThen(tally.spendCost(amount, key), budget.spendCost(amount, key)).pipe(Effect.ensuring(report))
       }))
     ).pipe(Layer.provide(base))
-    const report = Effect.flatMap(Ref.get(tally), ({ tokens, cost }) =>
-      Effect.annotateCurrentSpan({
-        [Telemetry.attributeNames.delegatedTokens]: tokens,
-        ...(cost > 0 ? { [Telemetry.attributeNames.delegatedCost]: cost } : {})
-      }))
     return { layer, report }
   })
 

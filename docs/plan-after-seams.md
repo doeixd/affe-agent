@@ -120,6 +120,24 @@ plan's own status header says what each still owes.
 
 ### 2.4 The engine records usage; the loop only decides
 
+**Correction, 2026-09-16: charge the response before executing tools.**
+The design below placed accounting after a completed turn. That conflicts
+with accounting for actual model spend: a model response followed by a tool
+failure or interruption has already spent tokens, but never completes its
+turn. A two-million-token response followed by a failing tool recorded zero.
+`AgentTurn` now charges each completed response before executing tools, with
+the response-to-charge handoff protected from interruption. The model call
+itself remains interruptible. The existing occurrence key deduplicates the
+later charge from `RunLedger.record` and any durable replay.
+
+The ledger continues to describe committed turns; budgets describe known
+model spend, including uncommitted turns. A call that supplies no completed
+response supplies no usage to charge. This preserves the ledger's agreement
+with loop state without pretending a failed turn was committed. Delegation
+meters use the same idempotent budget implementation and publish charges
+while the parent tool span is live; toolkit child-fiber finalizers may run
+after that span ends during interruption.
+
 **Evidence.** `Budget.within` charges *and* decides, so a child's spend was
 charged to nobody (item 52), the fix is a charge-only combinator wrapped
 around the child by `Subagent`, and item 56 (limits across a delegation)

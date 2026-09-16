@@ -2,6 +2,7 @@ import { Cause, Effect, ExecutionPlan, Option, Ref, Schema, Stream } from "effec
 import { LanguageModel, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai"
 import { AiError } from "effect/unstable/ai"
 import * as Catalog from "./code/Catalog.js"
+import * as Budget from "./budget/Budget.js"
 import { CurrentPrincipal } from "./Principal.js"
 import * as ToolExposure from "./ToolExposure.js"
 import * as AgentEvent from "./AgentEvent.js"
@@ -566,9 +567,9 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
 
     yield* EventBus.emit(session.bus, correlation, { _tag: "TurnStarted" })
 
-    const response = options.stream === true
-      ? yield* streamResponse(session, correlation, context, handler, exposed)
-      : yield* withPlan(
+    const modelResponse = options.stream === true
+      ? streamResponse(session, correlation, context, handler, exposed)
+      : withPlan(
           session,
           LanguageModel.generateText({
             prompt: context,
@@ -579,6 +580,16 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
             ...choiceFor(exposed)
           })
         )
+
+    // Usage is spent once the model answers, even if a later tool fails or
+    // is interrupted. Keep the call interruptible, then record its completed
+    // response before interruption can skip the charge. The committed-turn
+    // ledger reuses this occurrence, so its later charge is idempotent.
+    const response = yield* Effect.uninterruptibleMask((restore) =>
+      restore(modelResponse).pipe(
+        Effect.tap((response) => Budget.record({ runId, turnIndex: turn, response }))
+      )
+    )
 
     const inputTokens = response.usage.inputTokens.total ?? 0
     const outputTokens = response.usage.outputTokens.total ?? 0

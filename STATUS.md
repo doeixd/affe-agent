@@ -99,10 +99,13 @@ schema, `AgentClient.typed` for the caller; journalled by the durable client
 and rendered in the workflow); run policy on the loop seam -- `maxTurns`,
 `maxToolCalls`, `maxDuration`, `limits`, `withFinalTurn` -- with the stop's
 reason on `RunCompleted`, the result and every client; a `RunLedger` the
-engine writes after every turn -- session, run, turn, tool calls, tokens,
-cost, elapsed, keyed so a replay is one entry -- and charges the `Budget`
-from, so `within` and `cost` are pure decisions and a delegated child's
-spend reaches its parent's counter under the child's own session id; every
+engine writes after every committed turn -- session, run, turn, tool calls,
+tokens, cost, elapsed, keyed so a replay is one entry. The `Budget` is charged
+when the model answers, so tool failure or interruption cannot erase known
+spend; the ledger's later charge is idempotent. `within` and `cost` are pure
+decisions. Delegation traces deduplicate charges and publish usage before
+interruption can close the parent tool span; a child's inherited budget
+charges its parent's counter under the child's own session id. Every
 loop and permission policy carrying a description of itself, and
 `Agent.describe` deriving the whole agent as data from them; a tool able to
 insist on being the only call in its turn (`ToolExecution.Alone`); and a decided

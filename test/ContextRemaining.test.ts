@@ -103,11 +103,10 @@ describe("the model can see its own window", () => {
     })
   )
 
-  it.effect("with a budget in context: the run's spend through the previous turn", () =>
+  it.effect("with a budget in context: spend includes the response requesting the tool", () =>
     Effect.gen(function* () {
-      // `Budget.record` runs after a turn's tools, so what a tool sees is the
-      // spend up to the turn before it. Turn one spends 100; the tool runs in
-      // turn two and sees exactly that.
+      // The completed model response is charged before tools execute. Turn
+      // one spends 100; turn two's response spends 7, so its tool sees 107.
       const compaction = yield* Compaction.controller({
         policy: Compaction.whenLongerThan(50, { retain: 4 }),
         summarise: () => Effect.succeed("summary")
@@ -124,7 +123,7 @@ describe("the model can see its own window", () => {
         { text: "done" }
       ]).pipe(Effect.provide(Budget.layer))
       assert.isDefined(status)
-      assert.strictEqual(status!.spentTokens, 100, "the budget's total through the previous turn")
+      assert.strictEqual(status!.spentTokens, 107, "the budget includes the current model response")
       assert.strictEqual(status!.spentCost, 0)
       // Three messages by then: instructions, the prompt, and turn one's exchange folded into history.
       assert.isAbove(status!.canonicalMessages, 2)

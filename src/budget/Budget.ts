@@ -20,19 +20,18 @@ import * as Namespace from "../internal/namespace.js"
  *   spend in a `Ref`. Because it is a Layer you provide, the *scope* is yours:
  *   one `Budget.layer` per session caps each conversation independently; one
  *   shared layer caps a whole application against a single pool.
- * - **`within`** -- wraps an inner loop with a token ceiling: it records every
- *   turn's usage against the `Budget` and then either stops (ceiling reached) or
- *   defers to the inner policy. Use it as the outermost loop:
+ * - **`within`** -- wraps an inner loop with a token ceiling: it reads the
+ *   `Budget` and either stops (ceiling reached) or defers to the inner policy.
+ *   Use it as the outermost loop:
  *   `Budget.within(50_000, AgentLoop.untilIdle())`.
  *
  * The check runs *after* each turn, so the turn that crosses the ceiling is the
  * last one and no further turn is started -- fail-closed on spend, without ever
  * interrupting a turn mid-flight.
  *
- * `within` wraps rather than composes with `AgentLoop.and` on purpose: `and`
- * short-circuits on the first `Stop`, so a bare budget policy placed after
- * `untilIdle` would miss the usage of the very turn that ends the run. Wrapping
- * makes the recording unconditional and independent of composition order.
+ * The engine records completed model usage independently of loop decisions.
+ * `within` checks the ceiling before the inner policy, so a reached ceiling
+ * supplies the stop reason even when the inner policy would also stop.
  */
 
 /** Named once, so `RunCompleted.stopReason` says which ceiling it was. */
@@ -220,11 +219,10 @@ const make = (maxSessions: number): Effect.Effect<Budget["Service"]> =>
   })
 
 /**
- * Wrap `inner` with a token ceiling: record each turn's usage against the
- * ambient `Budget`, then stop the run if the cumulative total has reached
- * `limit`, otherwise defer to `inner`.
+ * Wrap `inner` with a token ceiling: read the ambient `Budget`, then stop
+ * the run if the cumulative total has reached `limit`, otherwise defer to `inner`.
  *
- * Because recording happens before the ceiling is checked and before `inner`
+ * Because the engine records usage before the ceiling is checked and before `inner`
  * runs, every turn is counted regardless of what `inner` decides -- so a budget
  * shared across a submission's follow-up runs (or across sessions, if you
  * provide one layer) caps the whole conversation, not just a single run.
@@ -254,7 +252,7 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
 /**
  * Record one turn against the ambient `Budget`, if there is one.
  *
- * **Called by the engine after every turn, before the loop is asked.** Not
+ * **Called by the engine when a model response completes, before tools run.** Not
  * by a loop combinator: a loop is per session, so a combinator that both
  * recorded and decided charged only the turns of the session it wrapped, and a
  * delegated child -- a session of its own, running under the parent's context -- was
@@ -264,10 +262,11 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
  * other reason, and `within` and `cost` are what the docs already said a
  * loop combinator is: a pure function of state.
  *
- * Idempotent per turn through the occurrence key, so a replayed turn costs
- * what it cost the first time. Nothing is recorded without a `Budget` in
- * context, and a session that never provides one pays one context read per
- * turn.
+ * A later tool failure or interruption does not undo this spend. A model
+ * call that ends without a complete response supplies no usage to record.
+ * The committed-turn ledger may repeat the charge: it is idempotent through
+ * the occurrence key, so a replayed turn costs what it cost the first time.
+ * Nothing is recorded without a `Budget` in context.
  *
  * Tokens are always recorded. Cost is recorded when a `ModelCapabilities` in
  * context prices the model, and **not otherwise** -- the opposite of
@@ -301,9 +300,8 @@ export const record = (state: {
   })
 
 /**
- * Wrap `inner` with a **money** ceiling: price each turn from the model's own
- * row, record it against the ambient `Budget`, then stop the run if the
- * cumulative cost has reached `limit`.
+ * Wrap `inner` with a **money** ceiling: require a price for the current model,
+ * then stop the run if the ambient `Budget`'s cumulative cost has reached `limit`.
  *
  * The same combinator as `within` and the same fail-closed timing -- the turn
  * that crosses the ceiling is the last one, and no further turn is started, so

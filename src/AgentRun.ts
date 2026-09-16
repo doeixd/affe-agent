@@ -119,12 +119,11 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
         value: Option.isSome(result.value) ? result.value : p.value
       }))
 
-      // Every turn is recorded -- to the ambient `RunLedger` and against the
-      // ambient `Budget`, if either is in context -- before the loop is asked
-      // and whether or not it will be: the final turn's tokens count too. The
-      // one recording call the engine makes; see `RunLedger` for what is
-      // recorded and `Budget.record` for why it is here and not in a loop
-      // combinator. `elapsed` is read once and shared with the loop's state,
+      // Every committed turn is recorded to the ambient `RunLedger` before
+      // the loop is asked, including the final turn. Its budget charge uses
+      // the same occurrence AgentTurn charged when the model answered and
+      // is therefore a no-op. `elapsed` is read once and shared with the
+      // loop's state,
       // so the ledger and the state cannot disagree about the same turn.
       const elapsedMillis = (yield* Clock.currentTimeMillis) - startedAt
       yield* RunLedger.record({

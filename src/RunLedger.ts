@@ -35,9 +35,10 @@ import * as Namespace from "./internal/namespace.js"
  *
  * Optional, like `Budget`: nothing is recorded without a `RunLedger` in
  * context, and the engine pays one context read per turn without one. The
- * `Budget` is charged by the same write (`record` is the one thing the
- * engine calls), so a session under a budget and a ledger records each turn
- * once to both.
+ * `Budget` is charged when the model answers, before tools execute, because
+ * a failed or interrupted tool does not refund model usage. This ledger
+ * records committed turns. `record` also charges the budget using the same
+ * occurrence, preserving its standalone contract without double charging.
  *
  * Bounded by session, like compaction's caches: entries are
  * kept per session and the least recently written session is evicted past
@@ -192,10 +193,11 @@ export const fresh = (options?: Options): Layer.Layer<RunLedger> =>
   )
 
 /**
- * What the engine calls after every turn, before the loop is asked: write
+ * What the engine calls after every committed turn, before the loop is asked: write
  * the turn to the ambient `RunLedger`, if any, and charge the ambient
- * `Budget`, if any. The one recording call the engine makes, so a fact is
- * never recorded to one and not the other.
+ * `Budget`, if any. The engine has already charged the completed model
+ * response; its occurrence key makes this second charge a no-op. Failed
+ * turns retain their budget charge without acquiring a ledger entry.
  */
 export const record = (turn: {
   readonly sessionId: string

@@ -521,13 +521,17 @@ under `/durable`, because a resumed submission measures its own elapsed time.
 Turn and tool-call bounds are derived from journalled facts and are.
 
 The facts every bound decides over are also recorded, for anything to read
-back. Provide `RunLedger.layer` and the engine writes one entry per turn --
-session, run, turn, tool calls, tokens, cost when a capability table prices
+back. Provide `RunLedger.layer` and the engine writes one entry per committed
+turn -- session, run, turn, tool calls, tokens, cost when a capability table prices
 the model, elapsed -- keyed so a replayed turn is one entry; `run(runId)` and
-`totals` add them up. The same write charges a `Budget` in context, so the
-engine records once and every seam reads: a delegated child's turns land under
-the child's session id, and a compaction writes nothing here. The ledger holds
-facts and decides nothing; the loop state a bound is handed is the same facts,
+`totals` add them up. A `Budget` in context is charged when the model response
+completes, before tools run. A later tool failure or interruption retains that
+spend without adding a ledger entry. The ledger repeats the charge with the
+same occurrence key, so it is counted once. Tools reading the budget, including
+`context_remaining`, see the current response's spend. A delegated child's turns land under
+the child's session id, and a compaction writes nothing here. The accounting
+decision is recorded in [the seam plan](plan-after-seams.md#24-the-engine-records-usage-the-loop-only-decides).
+The ledger holds facts and decides nothing; the loop state a bound is handed is the same facts,
 held equal by test. Both the ledger and the budget are bounded by session:
 past `maxSessions` (1024 unless `fresh({ maxSessions })` says otherwise) the
 least recently written session is evicted -- the ledger's entries and keys
@@ -758,4 +762,3 @@ AgentSession.prompt
 
 Export is ordinary application wiring — Effect v4 ships an OTLP exporter, so no
 OpenTelemetry SDK is required. See [`examples/tracing.ts`](../examples/tracing.ts).
-

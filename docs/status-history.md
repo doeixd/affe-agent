@@ -5937,3 +5937,36 @@ already-shipped workbench shell and durable conversations as unbuilt.
 Full `npm run check` passed with Git's POSIX utilities first on PATH: 2,589
 core tests, 50 workbench tests, zero Effect diagnostics, all 16 mutation
 checks, package verification and every smoke command.
+
+## 2026-09-16 — recent-commit review: usage on failed turns and delegation traces
+
+Model usage was charged only after the whole turn committed. A completed
+model response followed by a failing or interrupted tool therefore spent
+tokens without charging the budget. The engine now charges the completed
+response before tools execute, protecting that handoff from interruption
+while leaving the model call interruptible. Token and money charges retain
+their occurrence keys, so the later ledger write and durable replay do not
+double charge. The ledger still records only committed turns. The accounting
+plan records why that differs from its original placement after a turn.
+
+The delegation meter also counted duplicate occurrences that the underlying
+budget correctly ignored. It now uses a private instance of the same
+idempotent budget implementation. Each charge publishes usage to the captured
+parent tool span: during interruption that span can close before the toolkit
+handler's finalizer runs, so reporting only from the finalizer lost usage in
+the exported trace.
+
+Regression tests reproduced zero spend after tool failure or interruption,
+duplicate token and money totals in delegation traces, and missing trace
+attributes when a child was interrupted. Coverage includes batch and streamed
+model calls, both delegation APIs, and interruption before any response.
+All 40 focused tests pass, including existing ledger replay and trace checks.
+The full suite also identified an assertion of the old accounting boundary:
+`context_remaining` now includes the completed response that requested the
+tool, so its regression expects 107 tokens (100 prior plus 7 current), not 100.
+
+All repository checks passed with Git's POSIX utilities first on PATH:
+typechecks and builds, zero Effect diagnostics, portability, documentation
+and workerd checks, 2,601 core tests, 50 workbench tests, all 16 mutation
+checks, packed-package verification and every smoke command. After updating
+the old expectation, the test suite and all subsequent check steps were rerun.
