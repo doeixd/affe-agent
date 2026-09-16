@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Layer, Option, Schedule } from "effect"
+import { Cause, Deferred, Effect, Layer, Option, Ref, Schedule } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import { AgentClosedError } from "../src/Errors.js"
+import { SessionId } from "../src/internal/ids.js"
 import { AgentClient } from "../src/client/index.js"
 import * as SessionInbox from "../src/sessions/SessionInbox.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -32,6 +34,112 @@ const harness = (turns: ReadonlyArray<Parameters<typeof TestLanguageModel.script
     ))
 
 describe("SessionInbox", () => {
+  for (const stage of ["lookup", "status", "submit"]) {
+    it.effect(`a transient ${stage} failure leaves the item available for delivery`, () =>
+      Effect.gen(function* () {
+        const layer = yield* harness([TestLanguageModel.text("noted")])
+        yield* Effect.gen(function* () {
+          const client = yield* AgentClient.AgentClient
+          yield* client.createSession({ sessionId: "s1" })
+          const attempts = yield* Ref.make(0)
+          const failOnce = Effect.gen(function* () {
+            if ((yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1) {
+              return yield* new AgentClient.AgentTransportError({ sessionId: "s1", detail: "connection lost" })
+            }
+          })
+          const unreliable = AgentClient.AgentClient.of({
+            ...client,
+            session: (id) => Effect.gen(function* () {
+              if (stage === "lookup") yield* failOnce
+              const session = yield* client.session(id)
+              return {
+                ...session,
+                status: stage === "status" ? Effect.andThen(failOnce, session.status) : session.status,
+                submit: (input, options) => stage === "submit"
+                  ? Effect.andThen(failOnce, session.submit(input, options))
+                  : session.submit(input, options)
+              } satisfies AgentClient.RemoteSession
+            })
+          })
+          const inbox = yield* SessionInbox.make({ maxAttempts: 2 }).pipe(
+            Effect.provideService(AgentClient.AgentClient, unreliable)
+          )
+          yield* inbox.enqueue(item())
+          const first = yield* Effect.exit(inbox.deliver)
+          assert.strictEqual(first._tag, "Failure", "a transient outage must not consume the item")
+          if (first._tag === "Failure") {
+            assert.strictEqual(Cause.squash(first.cause) instanceof SessionInbox.InboxError, true)
+          }
+          const second = yield* inbox.deliver
+          assert.strictEqual(second._tag, "Delivered")
+          assert.strictEqual(second.item.id, item().id)
+          assert.strictEqual(yield* Ref.get(attempts), 2)
+        }).pipe(Effect.scoped, Effect.provide(layer))
+      }))
+  }
+
+  it.effect("a lookup defect is preserved and does not acknowledge the item", () =>
+    Effect.gen(function* () {
+      const layer = yield* harness([TestLanguageModel.text("noted")])
+      yield* Effect.gen(function* () {
+        const client = yield* AgentClient.AgentClient
+        yield* client.createSession({ sessionId: "s1" })
+        const attempts = yield* Ref.make(0)
+        const defect = new Error("broken client")
+        const inbox = yield* SessionInbox.make({ maxAttempts: 2 }).pipe(
+          Effect.provideService(AgentClient.AgentClient, {
+            ...client,
+            session: (id) => Effect.gen(function* () {
+              if ((yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1) {
+                return yield* Effect.die(defect)
+              }
+              return yield* client.session(id)
+            })
+          })
+        )
+        yield* inbox.enqueue(item())
+        const first = yield* Effect.exit(inbox.deliver)
+        assert.strictEqual(first._tag, "Failure")
+        if (first._tag === "Failure") {
+          assert.isTrue(Cause.hasDies(first.cause))
+          assert.strictEqual(Cause.squash(first.cause), defect)
+        }
+        assert.strictEqual((yield* inbox.deliver)._tag, "Delivered")
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }))
+
+  for (const stage of ["status", "submit"]) {
+    for (const error of [
+      new AgentClient.AgentSessionNotFoundError({ sessionId: "s1" }),
+      new AgentClosedError({ sessionId: SessionId.make("s1") })
+    ]) {
+      it.effect(`${error._tag} during ${stage} consumes and reports the item`, () =>
+        Effect.gen(function* () {
+          const layer = yield* harness([])
+          yield* Effect.gen(function* () {
+            const client = yield* AgentClient.AgentClient
+            yield* client.createSession({ sessionId: "s1" })
+            const inbox = yield* SessionInbox.make().pipe(
+              Effect.provideService(AgentClient.AgentClient, {
+                ...client,
+                session: (id) => Effect.map(client.session(id), (session) => ({
+                  ...session,
+                  status: stage === "status" ? Effect.fail(error) : session.status,
+                  submit: (input, options) => stage === "submit" ? Effect.fail(error) : session.submit(input, options)
+                }))
+              })
+            )
+            yield* inbox.enqueue(item())
+            yield* inbox.enqueue(item({ id: "next", sessionId: "missing" }))
+            const first = yield* inbox.deliver
+            const second = yield* inbox.deliver
+            assert.deepStrictEqual([first._tag, second._tag], ["Undeliverable", "Undeliverable"])
+            assert.deepStrictEqual([first.item.id, second.item.id], [item().id, "next"])
+          }).pipe(Effect.scoped, Effect.provide(layer))
+        }))
+    }
+  }
+
   it.effect("a completion observed twice pings the session once", () =>
     Effect.gen(function* () {
       // The property the whole design rests on: a producer that can only

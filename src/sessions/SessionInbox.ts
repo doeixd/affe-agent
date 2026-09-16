@@ -1,4 +1,4 @@
-import { Cause, Effect, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 import * as AgentClient from "../client/AgentClient.js"
 import * as PromptWire from "../PromptWire.js"
@@ -107,9 +107,8 @@ export class SessionBusyError extends Schema.TaggedError<SessionBusyError>()("Se
    * The item that could not be delivered.
    *
    * Carried because of where this error ends up: `PersistedQueue.take`
-   * surfaces it only once the attempts are spent, by which point the item is
-   * out of the queue and this is the last thing holding it. Without it there
-   * is nothing to hand `onUndeliverable` but an id.
+   * surfaces each failed attempt, including the last one, when the item is
+   * out of the queue and this is the last thing holding it.
    */
   item: Item
 }) {
@@ -139,14 +138,13 @@ export interface Options {
    */
   readonly name?: string | undefined
   /**
-   * How many times a *transient* failure is retried before the item is given
-   * up on. Default 10, which is `PersistedQueue`'s own default.
+   * Maximum failed delivery attempts before the item is given up on.
+   * Default 10, which is `PersistedQueue`'s own default.
    *
-   * This is the *wait*, and it is the queue's rather than ours on purpose. A
-   * busy session fails its delivery immediately and the queue schedules the
-   * next attempt; polling inside the delivery instead would duplicate that
-   * machinery and hold a queue slot while doing nothing. Raise it for
-   * conversations that stay busy for a long time.
+   * A busy session fails its delivery immediately and the queue retains the
+   * item for a subsequent `deliver` call. The caller controls when to retry;
+   * polling inside the delivery would hold a queue slot while doing nothing.
+   * Raise it for conversations that stay busy for a long time.
    */
   readonly maxAttempts?: number | undefined
 }
@@ -166,16 +164,16 @@ export interface Service {
    * a forked loop over this could not be torn down cleanly in a test, and
    * shipping a shutdown path nothing exercises is how the rest of this
    * module's bugs were found. The loop a caller wants is
-   * `Effect.forever(Effect.flatMap(inbox.deliver, report))`, three lines they
-   * own and can stop, and it keeps the reporting decision -- what to do with
-   * an `Undeliverable` -- with the caller who has somewhere to put it.
+   * an effect that handles each delivery's outcome or failure and repeats
+   * with the caller's retry schedule. This keeps the reporting decision --
+   * what to do with an `Undeliverable` -- with the caller.
    *
    * Answers `Delivered` when a submission has been started -- accepted
    * by the session, *not settled*: the run may still fail, and its result
    * is the session's, not this answer's (item 97) -- and
    * `Undeliverable` when the target cannot ever receive it. A busy session is
-   * neither: it fails the attempt so the queue schedules another, and only
-   * surfaces as `SessionBusyError` once `maxAttempts` are spent.
+   * neither: each busy attempt fails with `SessionBusyError`, and the queue
+   * retains the item for another `deliver` call until `maxAttempts` are spent.
    */
   readonly deliver: Effect.Effect<Outcome, InboxError | SessionBusyError>
 }
@@ -198,6 +196,12 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
     new InboxError({ operation, detail: String(cause) })
 
   const undeliverable = (item: Item, reason: string): Outcome => ({ _tag: "Undeliverable", item, reason })
+  // Keep permanent session errors recognizable until the whole delivery is
+  // classified: a session can disappear between lookup, status and submit.
+  const remoteFailure = (operation: string) => (error: AgentClient.RemoteError) =>
+    error._tag === "AgentSessionNotFoundError" || error._tag === "AgentClosedError"
+      ? error
+      : fail(operation)(error)
 
   const enqueue: Service["enqueue"] = (item) =>
     queue.offer(item, { id: item.id }).pipe(
@@ -206,7 +210,7 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
     )
 
   /**
-   * One delivery: wait for the session to be idle, then submit under the
+   * One delivery: check that the session is idle, then submit under the
    * item's own id.
    *
    * `submit` rather than `prompt` because the inbox's job ends when the work
@@ -215,24 +219,18 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
    */
   const deliverItem = (item: Item) =>
     Effect.gen(function*() {
-      // An absent session is permanent as far as this item is concerned:
-      // the id was wrong, or the session is long gone. Consumed and
-      // reported, not retried.
-      const found = yield* Effect.exit(client.session(item.sessionId))
-      if (found._tag === "Failure") {
-        return undeliverable(
-          item,
-          `session ${item.sessionId} could not be reached: ${Cause.pretty(found.cause)}`
-        )
-      }
-      const session = found.value
+      // Only a missing or closed session is known to be undeliverable. A
+      // transport failure leaves the item queued; defects and interruption
+      // retain their original cause instead of acknowledging the item.
+      const session = yield* client.session(item.sessionId).pipe(
+        Effect.mapError(remoteFailure(`session ${item.sessionId}`))
+      )
       // Busy means "not now", and saying so immediately is the whole
       // interaction with the queue: the attempt fails, the item stays
-      // queued, and the queue decides when to try again. Waiting here
-      // instead would hold a slot open doing nothing and reimplement the
-      // backoff the queue already has.
+      // queued for the caller's next delivery attempt. Waiting here
+      // instead would hold a slot open while the session is busy.
       const settled = yield* session.status.pipe(
-        Effect.mapError(fail(`status ${item.sessionId}`)),
+        Effect.mapError(remoteFailure(`status ${item.sessionId}`)),
         Effect.flatMap((status) =>
           status === "running"
             ? Effect.fail(new SessionBusyError({ sessionId: item.sessionId, item }))
@@ -248,14 +246,18 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
       // crash between the submit and the queue's acknowledgement is the same
       // request rather than a second one.
       //
-      // A submit that fails here is left transient on purpose: the session
-      // was idle a moment ago, so the likeliest cause is another submission
-      // winning the race, and that is worth another attempt.
+      // A competing submission or transport failure is worth another
+      // attempt. A session that closed or disappeared is terminal instead.
       yield* session.submit(item.input, { idempotencyKey: item.id }).pipe(
-        Effect.mapError(fail(`submit ${item.id}`))
+        Effect.mapError(remoteFailure(`submit ${item.id}`))
       )
       return { _tag: "Delivered", item } as const
-    })
+    }).pipe(
+      Effect.catchTags({
+        AgentSessionNotFoundError: (error) => Effect.succeed(undeliverable(item, error.message)),
+        AgentClosedError: (error) => Effect.succeed(undeliverable(item, error.message))
+      })
+    )
 
   const deliver: Service["deliver"] = queue.take((item) => deliverItem(item), { maxAttempts }).pipe(
     Effect.mapError((error) =>
@@ -267,4 +269,3 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
 
   return { enqueue, deliver } satisfies Service
 })
-

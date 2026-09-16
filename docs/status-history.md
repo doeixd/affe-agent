@@ -5886,3 +5886,23 @@ recorded before hosting. The public reader's inferred success/error/requirement
 type is asserted: changing its expected error to `never` failed typecheck;
 both deliberate breaks were restored. The second new row proves authorization
 precedes storage and a storage failure cannot become a successful empty tail.
+
+## 2026-09-16 — session inbox delivery failure classification
+
+`SessionInbox` consumed queued input when session lookup failed because it
+converted every failed exit, including transport failures and defects, into
+`Undeliverable`. Lookup now preserves defects and returns transport failures
+as `InboxError`, so the queue retains the item within its attempt limit.
+Missing and closed sessions produce `Undeliverable` at lookup, status and
+submission; previously a session disappearing after lookup exhausted retries
+instead of reporting the permanent failure.
+
+Eight regression cases cover transport failures at all three steps, lookup
+defects, and both permanent errors at status and submission. Six failed on the
+original implementation; all 14 inbox tests and root typechecking pass with
+the fix. No public signatures, wire schemas or persisted identifiers changed.
+
+The API comments now describe the queue's actual attempt contract: a failed
+`deliver` returns immediately and retains the item until the attempt limit;
+the caller invokes the next delivery and controls its timing. The queue does
+not internally repeat `deliver` until attempts are exhausted.

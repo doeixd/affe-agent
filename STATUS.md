@@ -360,7 +360,9 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   live smoke and the Alchemy stack's deployment still lack a recorded run.
 - **Product applications.** The workbench and persistent-agent control plane
   are specified but unbuilt in this checkout. Their session directory,
-  projection and background-input inbox foundations already ship.
+  projection and background-input inbox foundations already ship. Inbox
+  delivery retains input after transport failures, preserves defects, and
+  reports missing or closed sessions at lookup, status or submission.
 
 Wire/storage identifiers are frozen through `internal/namespace.ts`; an
 interrupted delegation returns `SubagentInterruptedError` carrying its partial
