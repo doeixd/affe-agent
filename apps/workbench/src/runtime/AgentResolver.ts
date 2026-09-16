@@ -94,7 +94,7 @@ const bindAll = <A>(
 ): Binding<ReadonlyArray<A>> => {
   const bound: Array<A> = []
   for (const ref of refs) {
-    const entry = table[ref.id]
+    const entry = Object.hasOwn(table, ref.id) ? table[ref.id] : undefined
     if (entry === undefined) return { _tag: "Missing", ref: ref.id }
     bound.push(entry)
   }
@@ -132,7 +132,9 @@ export const layerWith: Layer.Layer<AgentResolver, never, AgentRegistry | AgentB
       if (Option.isNone(found)) return yield* refused("unknown-revision")
       const revision = found.value
 
-      const model = bindings.models[revision.modelPolicy.profile]
+      const model = Object.hasOwn(bindings.models, revision.modelPolicy.profile)
+        ? bindings.models[revision.modelPolicy.profile]
+        : undefined
       if (model === undefined) return yield* refused("unknown-model", revision.modelPolicy.profile)
 
       const capabilities = bindAll(bindings.capabilities, revision.capabilities)

@@ -5906,3 +5906,34 @@ The API comments now describe the queue's actual attempt contract: a failed
 `deliver` returns immediately and retains the item until the attempt limit;
 the caller invokes the next delivery and controls its timing. The queue does
 not internally repeat `deliver` until attempts are exhausted.
+
+## 2026-09-16 — recent-commit review: bindings and capture diagnostics
+
+The workbench resolver read binding records through their prototype chain.
+Names such as `constructor`, `toString` and `__proto__` reached runtime code
+as model layers, tools or skills and caused defects instead of the declared
+`RevisionResolutionError`. Model, capability and skill lookups now require
+own properties. Explicit bindings with those same names still work.
+
+Cloudflare failure envelopes with `result: null` failed the success-payload
+schema before their error codes, navigation timeout and request id could be
+read. The wire decoder now accepts the null placeholder and reports the
+provider failure through `WebCaptureResponseError`. Numeric `Retry-After`
+values no longer fall through to date parsing after nine digits: leading
+zeroes keep their numeric meaning, and oversized values, including numeric
+overflow, retain the documented one-day cap.
+
+The expanded tests were run against f2722f6 in an isolated worktree: all nine
+prototype-reference cases and both Cloudflare regressions failed. Explicit
+bindings with prototype names passed on both implementations. Focused suites
+pass with the fixes (16 workbench control-plane tests and 11 capture tests).
+
+The durability review also found an overstated server comment: revision
+clients register workflow handlers lazily, so startup alone does not resume
+every unfinished conversation. The server comment, current status and live
+work list now state that limitation. The status no longer describes the
+already-shipped workbench shell and durable conversations as unbuilt.
+
+Full `npm run check` passed with Git's POSIX utilities first on PATH: 2,589
+core tests, 50 workbench tests, zero Effect diagnostics, all 16 mutation
+checks, package verification and every smoke command.

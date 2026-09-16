@@ -166,6 +166,22 @@ describe("Cloudflare web capture provider", () => {
     })
   )
 
+  it.effect("a failure envelope with a null result retains its diagnostics", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make((request) => Effect.succeed(response(request, JSON.stringify({
+        success: false,
+        result: null,
+        errors: [{ code: 6002, message: "Navigation timeout of 30000 ms exceeded" }]
+      }), { headers: { "cf-ray": "8f1e2d3c4b5a6978-IAD" } })))
+      const error = yield* Effect.flip(captureWith(client, "https://example.com/"))
+      assert.strictEqual(error._tag, "affe-agent/web/WebCaptureResponseError")
+      if (error._tag === "affe-agent/web/WebCaptureResponseError") {
+        assert.deepStrictEqual(error.navigationTimeoutMillis, Option.some(30_000))
+        assert.deepStrictEqual(error.rayId, Option.some("8f1e2d3c4b5a6978-IAD"))
+      }
+    })
+  )
+
   it.effect("a rate limit carries the provider's retry-after, as seconds or a date", () =>
     Effect.gen(function* () {
       const limited = (retryAfter: string) =>
@@ -184,6 +200,9 @@ describe("Cloudflare web capture provider", () => {
       assert.deepStrictEqual((yield* retryOf("Thu, 01 Jan 1970 00:00:10 GMT"))?.retryAfterMillis, Option.some(10_000))
       assert.deepStrictEqual((yield* retryOf("soon"))?.retryAfterMillis, Option.none())
       assert.deepStrictEqual((yield* retryOf("999999999"))?.retryAfterMillis, Option.some(86_400_000))
+      assert.deepStrictEqual((yield* retryOf("0000000007"))?.retryAfterMillis, Option.some(7000))
+      assert.deepStrictEqual((yield* retryOf("1000000000"))?.retryAfterMillis, Option.some(86_400_000))
+      assert.deepStrictEqual((yield* retryOf("9".repeat(400)))?.retryAfterMillis, Option.some(86_400_000))
     })
   )
 

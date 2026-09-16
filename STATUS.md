@@ -286,7 +286,8 @@ conformance suite); `/plugins`; `/tree` (sessions as a tree: branch, lanes,
 divergence, activation); `/web` (+ Brave search, HTTP fetch, and since
 2026-09-01 rendered-page capture over Cloudflare Browser Rendering's REST
 API with a portable bounded crawler over it, sharing the fetch provider's
-target guard); `/openai`
+target guard; failure envelopes retain diagnostics with a null result, and
+numeric retry delays are clamped without being interpreted as dates); `/openai`
 (OpenAI-compatible responses); `/sessions` (`SessionProjection`: a session's
 events folded into what is true now -- lifecycle, counts, accumulated usage,
 tool outcomes, what is still open -- pure, so a gap is repaired by re-folding
@@ -358,9 +359,13 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
 - **Live deployment evidence.** The real-model Worker entry and Wrangler
   quickstart ship with a workerd test substituting the provider. Its opt-in
   live smoke and the Alchemy stack's deployment still lack a recorded run.
-- **Product applications.** The workbench and persistent-agent control plane
-  are specified but unbuilt in this checkout. Their session directory,
-  projection and background-input inbox foundations already ship. Inbox
+- **Product applications.** Workbench W0 and the W1 product shell ship with
+  authenticated, revision-routed durable conversations. Binding resolution
+  accepts only explicitly registered model, capability and skill names.
+  Revision workflow handlers register on first access after restart;
+  unattended startup recovery is not implemented. The model catalog,
+  settings UI and later workbench/control-plane phases remain open. Their
+  session directory, projection and background-input inbox foundations ship. Inbox
   delivery retains input after transport failures, preserves defects, and
   reports missing or closed sessions at lookup, status or submission.
 

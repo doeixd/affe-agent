@@ -175,7 +175,9 @@ it is still open, so the next pass does not have to re-derive it.
     server's builds `DurableAgentClient` over SQL channels, session store and
     delivery log with a single-runner workflow engine, on the same SQLite
     file as the product records -- tested that a restarted server reopens a
-    conversation with its history and continues it. Still open in W1: a
+    conversation with its history and continues it. Workflow handlers register
+    on first access to a revision after restart; unattended recovery without
+    reopening a conversation is not implemented. Still open in W1: a
     model catalog and the settings UI to edit agents; W2 onward is open.
 
     ```text

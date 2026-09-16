@@ -8,8 +8,9 @@
  * the revision it was created on (decisions D6), routed by `RoutingClient`.
  *
  * Their sessions are durable, on the same SQLite file as the product records:
- * a restarted server reopens a conversation with its history, and a
- * submission a stopped server left mid-flight is finished by the next one.
+ * a restarted server reopens a conversation with its history. Revision
+ * clients register their workflow handlers on first access after restart;
+ * server startup alone does not resume every unfinished conversation.
  *
  * The `scripted` model needs no key: the first prompt runs a tool that
  * reports progress, the next asks for approval before its tool runs, and the

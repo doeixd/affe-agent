@@ -46,7 +46,7 @@ type ProviderError = typeof ProviderError.Type
 const Envelope = <A, I>(result: Schema.Codec<A, I>) =>
   Schema.Struct({
     success: Schema.Boolean,
-    result: Schema.optional(result),
+    result: Schema.optional(Schema.NullOr(result)),
     errors: Schema.optional(Schema.Array(ProviderError))
   })
 
@@ -85,7 +85,12 @@ const retryAfterMillis = (value: string | undefined): Effect.Effect<Option.Optio
   Effect.map(Clock.currentTimeMillis, (now) => {
     if (value === undefined) return Option.none()
     const trimmed = value.trim()
-    const millis = /^[0-9]{1,9}$/.test(trimmed) ? Number(trimmed) * 1000 : Date.parse(trimmed) - now
+    // Delta-seconds may have leading zeroes or exceed Number's range. Clamp
+    // them before checking finiteness; neither is a reason to parse a date.
+    if (/^[0-9]+$/.test(trimmed)) {
+      return Option.some(Math.min(Number(trimmed) * 1000, MAX_RETRY_AFTER_MILLIS))
+    }
+    const millis = Date.parse(trimmed) - now
     return Number.isFinite(millis) ? Option.some(Math.min(Math.max(millis, 0), MAX_RETRY_AFTER_MILLIS)) : Option.none()
   })
 
@@ -154,7 +159,7 @@ export const make = Effect.fn("CloudflareWebCapture.make")(function* (options: O
   const call = <A>(
     endpoint: "markdown" | "links",
     url: URL,
-    decode: (text: string) => Effect.Effect<{ readonly success: boolean; readonly result?: A | undefined; readonly errors?: ReadonlyArray<ProviderError> | undefined }, unknown>
+    decode: (text: string) => Effect.Effect<{ readonly success: boolean; readonly result?: A | null | undefined; readonly errors?: ReadonlyArray<ProviderError> | undefined }, unknown>
   ): Effect.Effect<A, WebCapture.WebCaptureError> =>
     Effect.gen(function* () {
       const target = WebCapture.diagnosticTarget(url)
@@ -212,7 +217,7 @@ export const make = Effect.fn("CloudflareWebCapture.make")(function* (options: O
         // an error message that gets logged.
         Effect.mapError(() => new WebCapture.WebCaptureDecodeError({ url: target, detail: "the provider envelope did not decode" }))
       )
-      if (!envelope.success || envelope.result === undefined) {
+      if (!envelope.success || envelope.result === undefined || envelope.result === null) {
         return yield* responseError(target, response, envelope.errors ?? [], "the provider reported failure")
       }
       return envelope.result

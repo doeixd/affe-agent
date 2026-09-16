@@ -101,6 +101,51 @@ describe("agent directory", () => {
 })
 
 describe("control plane phase 0", () => {
+  for (const name of ["constructor", "toString", "__proto__"]) {
+    for (const [revisionInput, reason] of [
+      [input({ modelPolicy: { profile: name } }), "unknown-model"],
+      [input({ capabilities: [{ id: name }] }), "unknown-capability"],
+      [input({ skills: [{ id: name }] }), "unknown-skill"]
+    ] as const) {
+      it.effect(`prototype property ${name} returns ${reason}`, () =>
+        Effect.scoped(Effect.gen(function*() {
+          const { registry, resolver } = yield* harness(() => [])
+          const { revision } = yield* registry.create({ ownerId: owner, name: "Invalid binding", revision: revisionInput })
+          const error = yield* refusalOf(resolver.resolve(revision.id))
+          assert.strictEqual(error.reason, reason)
+          assert.strictEqual(error.ref, name)
+        })))
+    }
+  }
+
+  it.effect("explicit bindings may use names also present on Object.prototype", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const { layer: model, recorder } = yield* TestLanguageModel.script([TestLanguageModel.text("ok")])
+      const bindings = Layer.succeed(AgentResolver.AgentBindings, {
+        models: { constructor: model },
+        capabilities: { ["__proto__"]: [Agent.tool(Build, () => Effect.succeed("built"))] },
+        skills: { toString: Skills.skill({ id: "style", name: "Style", description: "Writing style.", body: "Be terse." }) }
+      })
+      const context = yield* Layer.build(AgentResolver.layer.pipe(
+        Layer.provideMerge(AgentRegistry.memory),
+        Layer.provide(bindings)
+      ))
+      const registry = Context.get(context, AgentRegistry.AgentRegistry)
+      const resolver = Context.get(context, AgentResolver.AgentResolver)
+      const { revision } = yield* registry.create({
+        ownerId: owner,
+        name: "Explicit bindings",
+        revision: input({
+          modelPolicy: { profile: "constructor" },
+          capabilities: [{ id: "__proto__" }],
+          skills: [{ id: "toString" }]
+        })
+      })
+      const { client } = yield* resolver.resolve(revision.id)
+      assert.strictEqual((yield* (yield* client.createSession()).prompt("hello")).text, "ok")
+      assert.deepStrictEqual(yield* recorder.tools, [["build", "load_skill"]])
+    })))
+
   it.effect("two revisions of one agent both resolve, each running its own configuration", () =>
     Effect.scoped(Effect.gen(function*() {
       const { recorder, registry, resolver } = yield* harness(() => [
