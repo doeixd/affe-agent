@@ -6,9 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+<!-- behavior-changes:start -->
+### Behaviour changes
+
+_None since v0.1.0._
+<!-- behavior-changes:end -->
+
 ## [0.1.0] - 2026-09-17
 
-<!-- behavior-changes:start -->
 ### Behaviour changes
 
 - a persisted compaction checkpoint may now be a rollover (`kind: "rollover"`) as well as a summary; summaries decode as before. (`c30de48`; measured by `test/fixtures/compaction-checkpoint.json`)
@@ -48,7 +53,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a durable session store constructed with blobs writes history files over maxInlineBytes as content-addressed blob references (rows without the option are unchanged) (`7092a8e`; measured by `test/fixtures/history-blob-row.json`)
 - a relay configured with sendRate refuses a sender over its rate with RelayRateLimitedError, a new member of the relay's wire error union (`f6e49b9`; measured by `test/fixtures/namespace-manifest.json`)
 - the five frozen control-tool digests moved (struct JSON Schemas now render additionalProperties: true under Effect rc.115), so durable replays recorded under the old digests are refused by name (`02dc9fd`; measured by `test/fixtures/control-tool-digests.json`)
-<!-- behavior-changes:end -->
 
 ## [0.0.1]
 
