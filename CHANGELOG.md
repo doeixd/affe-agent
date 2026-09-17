@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-17
+
 <!-- behavior-changes:start -->
 ### Behaviour changes
 
@@ -45,6 +47,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - AgentBusyError carries the incumbent's submissionId when the refusing side knows it, on every client (`1436537`; measured by `test/fixtures/busy-error.json`)
 - a durable session store constructed with blobs writes history files over maxInlineBytes as content-addressed blob references (rows without the option are unchanged) (`7092a8e`; measured by `test/fixtures/history-blob-row.json`)
 - a relay configured with sendRate refuses a sender over its rate with RelayRateLimitedError, a new member of the relay's wire error union (`f6e49b9`; measured by `test/fixtures/namespace-manifest.json`)
+- the five frozen control-tool digests moved (struct JSON Schemas now render additionalProperties: true under Effect rc.115), so durable replays recorded under the old digests are refused by name (`02dc9fd`; measured by `test/fixtures/control-tool-digests.json`)
 <!-- behavior-changes:end -->
 
 ## [0.0.1]
@@ -141,4 +144,5 @@ context transform, or a layer, and end-user code needs no type casts.
 - **Every published entry point is import-verified** from the packed tarball by
   `npm run verify:package` (28 entries).
 
+[0.1.0]: https://github.com/doeixd/affe-agent/releases/tag/v0.1.0
 [0.0.1]: https://github.com/doeixd/affe-agent/releases/tag/v0.0.1
