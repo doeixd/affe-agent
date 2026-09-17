@@ -103,7 +103,10 @@ export interface Service {
    *
    * For an operator forcing a rebuild, not for ordinary release. Existing
    * holders keep the sandbox they already have -- their scopes still own what
-   * they were handed -- but the next `acquire` builds a fresh one.
+   * they were handed -- but the next `acquire` builds a fresh one. An
+   * invalidated workspace is released when its last holder goes rather than
+   * idling: it is unkeyed, so no later acquire can share it, and the idle
+   * window would only delay its cleanup.
    */
   readonly invalidate: (workspace: Workspace) => Effect.Effect<void>
 }

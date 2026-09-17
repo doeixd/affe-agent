@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Duration, Effect, Schedule, Schema } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 import * as AgentClient from "../client/AgentClient.js"
 import * as PromptWire from "../PromptWire.js"
@@ -187,11 +187,17 @@ export interface Service {
  */
 export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) {
   const client = yield* AgentClient.AgentClient
+  const maxAttempts = options?.maxAttempts ?? 10
   const queue = yield* PersistedQueue.make({
     name: options?.name ?? Namespace.tag("session-inbox"),
-    schema: Item
+    schema: Item,
+    maxAttempts,
+    // A failed delivery is visible to the next `deliver` immediately: the
+    // caller paces retries (see `Service.deliver`), so a queue-level backoff
+    // would only add a delay the design explicitly avoided -- and under a
+    // test clock that delay never elapses at all.
+    retrySchedule: Schedule.spaced(Duration.zero)
   })
-  const maxAttempts = options?.maxAttempts ?? 10
   const fail = (operation: string) => (cause: unknown) =>
     new InboxError({ operation, detail: String(cause) })
 
@@ -259,7 +265,7 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
       })
     )
 
-  const deliver: Service["deliver"] = queue.take((item) => deliverItem(item), { maxAttempts }).pipe(
+  const deliver: Service["deliver"] = queue.take((item) => deliverItem(item)).pipe(
     Effect.mapError((error) =>
       error instanceof InboxError || error instanceof SessionBusyError
         ? error

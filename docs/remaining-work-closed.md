@@ -1886,10 +1886,17 @@ still resolves -- here, if not in the list. Nothing here is next;
     `SchemaGetter.transformOrFail`, and the open release-candidate line let
     `verify:package` install it: 30 entry points failed to import from the
     tarball. Release candidates are not API-stable between each other, so the
-    cap is the tested one.)*
+    cap is the tested one. 2026-09-17: raised to `<=4.0.0-rc.115` with the
+    upgrade, which also moved `vitest` to 5, `@types/node` to 22, vendored
+    `fast-check` directly (`effect/testing` no longer exports it), and renamed
+    at every call site: `transformOrFail` to `transformEffect`, the boolean
+    tool-parameters mode to `"encoded"` (the harness holds encoded params;
+    `AgentLoop.State`'s own docs already said so), `LanguageModel.Service` to
+    `LanguageModel.LanguageModel`, and the `Config`/CLI constructors to their
+    capitalized forms.)*
 
     ```text
-    verify: grep "\"effect\": \">=4.0.0-rc.111 <=4.0.0-rc.112\"" package.json
+    verify: grep "\"effect\": \">=4.0.0-rc.111 <=4.0.0-rc.115\"" package.json
     ```
 
 19-gateway. ~~**One `AgentServer`, a DO-backed mount and an in-process mount,

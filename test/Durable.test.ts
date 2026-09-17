@@ -275,7 +275,7 @@ describe("durable submissions", () => {
             generateText: ((options: any) =>
               Ref.update(modelCalls, (n) => n + 1).pipe(
                 Effect.andThen(inner.generateText(options))
-              )) as LanguageModel.Service["generateText"]
+              )) as LanguageModel.LanguageModel["generateText"]
           }
         })
       ).pipe(Layer.provide(baseModel))

@@ -206,7 +206,7 @@ export const record = (turn: {
   readonly turnIndex: number
   readonly toolCalls: number
   readonly elapsedMillis: number
-  readonly response: LanguageModel.GenerateTextResponse<any, true>
+  readonly response: LanguageModel.GenerateTextResponse<any, "encoded">
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
     yield* Budget.record(turn)

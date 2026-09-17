@@ -25,8 +25,8 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
    * `toolCalls` are the calls the harness must execute — provider-executed
    * calls are excluded, since nothing is owed for them.
    */
-  readonly response: LanguageModel.GenerateTextResponse<Tools, true>
-  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
+  readonly response: LanguageModel.GenerateTextResponse<Tools, "encoded">
+  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, "encoded">>
   readonly text: string
   /**
    * The value the output tool recorded during this turn, if it was called.
@@ -412,7 +412,7 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
   context: Prompt.Prompt,
   handler: Toolkit.WithHandler<Tools>,
   exposed: Option.Option<ReadonlySet<string>>
-): Effect.Effect<LanguageModel.GenerateTextResponse<Tools, true>, any, any> =>
+): Effect.Effect<LanguageModel.GenerateTextResponse<Tools, "encoded">, any, any> =>
   Effect.gen(function* () {
     // Uninterruptible, so the open always precedes the close the finalizer
     // below owes: an interrupt landing while this emit waited on the bus
@@ -432,7 +432,7 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
         })
       ),
       () => Accumulator.empty<Tools>(),
-      (state, part: Response.StreamPart<Tools, true>) => {
+      (state, part: Response.StreamPart<Tools, "encoded">) => {
         const next = Accumulator.step(state, part)
         if (next._tag === "Failed") {
           // A typed failure, not a defect. The same condition on the batch
@@ -480,7 +480,7 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
       _tag: "MessageStreamCompleted"
     })
 
-    return new LanguageModel.GenerateTextResponse<Tools, true>([
+    return new LanguageModel.GenerateTextResponse<Tools, "encoded">([
       ...Accumulator.finish(final)
     ])
   }).pipe(

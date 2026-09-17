@@ -141,7 +141,7 @@ adds the read-only `/inventory` projection.
 [`examples/agent-server-auth.ts`](../examples/agent-server-auth.ts) is the full
 compiling example: one bearer-authenticated support mount and one
 cookie-authenticated admin mount, with separate role authorization and
-`Config.redacted` credentials. Authentication failures retain the protocol's
+`Config.Redacted` credentials. Authentication failures retain the protocol's
 typed 401 and authenticated principals crossing a mount's policy receive its
 typed 403.
 

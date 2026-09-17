@@ -167,12 +167,12 @@ const SupportHost = AgentSessionHost.Tag<Principal>("example/server/support-host
 const AdminHost = AgentSessionHost.Tag<Principal>("example/server/admin-host")
 
 const credentials = Config.all({
-  supportToken: Config.redacted("SUPPORT_AGENT_TOKEN"),
-  adminSession: Config.redacted("ADMIN_AGENT_SESSION")
+  supportToken: Config.Redacted("SUPPORT_AGENT_TOKEN"),
+  adminSession: Config.Redacted("ADMIN_AGENT_SESSION")
 })
 
 const model = AnthropicLanguageModel.layer({ model: "claude-sonnet-4-5" }).pipe(
-  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") })),
+  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.Redacted("ANTHROPIC_API_KEY") })),
   Layer.provide(FetchHttpClient.layer)
 )
 

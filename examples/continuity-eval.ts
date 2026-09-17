@@ -23,11 +23,11 @@ import { Continuity } from "../src/evals/index.js"
  */
 
 const program = Effect.gen(function*() {
-  const model = yield* Config.string("AFFE_EVAL_MODEL").pipe(Config.withDefault("claude-sonnet-5"))
+  const model = yield* Config.String("AFFE_EVAL_MODEL").pipe(Config.withDefault("claude-sonnet-5"))
   const report = yield* Continuity.run(Continuity.standard).pipe(
     Effect.provide(
       AnthropicLanguageModel.layer({ model }).pipe(
-        Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") })),
+        Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.Redacted("ANTHROPIC_API_KEY") })),
         Layer.provide(FetchHttpClient.layer)
       )
     )

@@ -41,7 +41,7 @@ const CanonicalPath = Schema.String.pipe(
   Schema.decodeTo(
     Schema.String,
     {
-      decode: SchemaGetter.transformOrFail((raw: string) =>
+      decode: SchemaGetter.transformEffect((raw: string) =>
         Canonicalizer.use((service) =>
           Effect.flatMap(
             Ref.update(service.decodes, (n) => n + 1),

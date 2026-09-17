@@ -155,11 +155,10 @@
     "id": "WM-ttl-default",
     "mechanism": "the documented default idle window",
     "verdict": "bites",
-    "failed": 2,
+    "failed": 1,
     "missing": [],
     "names": [
-      "test/WorkspaceManager.test.ts > WorkspaceManager > the default idle window is the documented one",
-      "test/WorkspaceManager.test.ts > WorkspaceManager > `invalidate` rebuilds without revoking from a live holder"
+      "test/WorkspaceManager.test.ts > WorkspaceManager > the default idle window is the documented one"
     ]
   },
   {

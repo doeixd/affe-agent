@@ -307,7 +307,7 @@ export const layerConfig = (options?: {
   Layer.effect(
     WebSearch.WebSearch,
     Effect.flatMap(
-      options?.apiKey ?? Config.redacted("BRAVE_SEARCH_API_KEY"),
+      options?.apiKey ?? Config.Redacted("BRAVE_SEARCH_API_KEY"),
       (apiKey) => make({ apiKey })
     )
   )

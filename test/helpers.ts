@@ -42,7 +42,7 @@ export const EchoToolkit = Toolkit.make(Echo)
  *
  * Spelled out because `AgentSession` is invariant in `Tools`: a session built
  * from this toolkit is not assignable to `AgentSession<{}>`. That is honest —
- * a submission's `Result` holds a `GenerateTextResponse<Tools, true>`, which
+ * a submission's `Result` holds a `GenerateTextResponse<Tools, "encoded">`, which
  * Effect AI makes invariant — and naming the type is better than widening to
  * `any` to paper over it.
  */

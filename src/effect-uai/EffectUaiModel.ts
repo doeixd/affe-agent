@@ -955,7 +955,7 @@ const uaiError = (method: string) => (error: UaiAiError.AiError): AiError.AiErro
  */
 export const make = (
   options: Options
-): Effect.Effect<LanguageModel.Service, never, UaiLanguageModel.LanguageModel> =>
+): Effect.Effect<LanguageModel.LanguageModel, never, UaiLanguageModel.LanguageModel> =>
   Effect.gen(function*() {
     const uai = yield* UaiLanguageModel.LanguageModel
     const onDegraded = options.onDegraded ?? Compatibility.logDegradation

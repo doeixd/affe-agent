@@ -212,23 +212,23 @@ const encodeMessage = (
  */
 export const Part = Schema.Json.pipe(
   Schema.decodeTo(PartType, {
-    decode: SchemaGetter.transformOrFail(decodeSinglePart),
-    encode: SchemaGetter.transformOrFail(encodeSinglePart)
+    decode: SchemaGetter.transformEffect(decodeSinglePart),
+    encode: SchemaGetter.transformEffect(encodeSinglePart)
   })
 )
 
 /** A JSON-safe codec whose decoded type is exactly `Prompt.Message`. */
 export const Message = Schema.Json.pipe(
   Schema.decodeTo(Schema.toType(AiPrompt.Message), {
-    decode: SchemaGetter.transformOrFail(decodeMessage),
-    encode: SchemaGetter.transformOrFail(encodeMessage)
+    decode: SchemaGetter.transformEffect(decodeMessage),
+    encode: SchemaGetter.transformEffect(encodeMessage)
   })
 )
 
 /** A JSON-safe codec whose decoded type is exactly `Prompt.Prompt`. */
 export const Prompt = Schema.Json.pipe(
   Schema.decodeTo(Schema.toType(AiPrompt.Prompt), {
-    decode: SchemaGetter.transformOrFail(decodePromptValue),
-    encode: SchemaGetter.transformOrFail(encodePromptValue)
+    decode: SchemaGetter.transformEffect(decodePromptValue),
+    encode: SchemaGetter.transformEffect(encodePromptValue)
   })
 )

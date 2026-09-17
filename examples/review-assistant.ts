@@ -334,7 +334,7 @@ const scripted = Effect.gen(function* () {
 // ---------------------------------------------------------------------------
 
 export const main = Effect.gen(function* () {
-  const apiKey = yield* Config.option(Config.redacted("ANTHROPIC_API_KEY"))
+  const apiKey = yield* Config.option(Config.Redacted("ANTHROPIC_API_KEY"))
   const args = process.argv.slice(2)
   // Every `--challenge "..."` given, in order; each value's index is skipped
   // when looking for the commit.

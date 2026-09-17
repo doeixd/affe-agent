@@ -76,7 +76,7 @@ const SessionTypeId: unique symbol = Symbol.for(Namespace.tag("AgentSession"))
  *
  * Deliberately no `out` variance annotations. The phantom field previously
  * declared `Tools` covariant, but it is not: a submission's `Result` carries a
- * `GenerateTextResponse<Tools, true>`, which Effect AI makes invariant in
+ * `GenerateTextResponse<Tools, "encoded">`, which Effect AI makes invariant in
  * `Tools`. Declaring covariance over a phantom asserted something the type
  * never had; stating nothing lets the compiler infer what is actually true.
  */

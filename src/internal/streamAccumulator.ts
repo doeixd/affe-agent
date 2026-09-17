@@ -58,7 +58,7 @@ interface Open {
 }
 
 /** The part an open chunk becomes once it closes. */
-const closedPart = <Tools extends Record<string, Tool.Any>>(chunk: Open): Response.Part<Tools, true> =>
+const closedPart = <Tools extends Record<string, Tool.Any>>(chunk: Open): Response.Part<Tools, "encoded"> =>
   chunk.kind === "text"
     ? Response.makePart("text", { text: chunk.text, metadata: chunk.metadata })
     : Response.makePart("reasoning", { text: chunk.text, metadata: chunk.metadata })
@@ -92,7 +92,7 @@ export interface ToolCallDelta {
  * buffer.
  */
 export interface State<Tools extends Record<string, Tool.Any>> {
-  readonly parts: ReadonlyArray<Response.Part<Tools, true>>
+  readonly parts: ReadonlyArray<Response.Part<Tools, "encoded">>
   readonly open: ReadonlyMap<string, Open>
   /** Argument streams announced and not yet ended, by the provider's id, to their tool name. */
   readonly openToolCalls: ReadonlyMap<string, string>
@@ -162,7 +162,7 @@ const cont = <Tools extends Record<string, Tool.Any>>(
  */
 export const step = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>,
-  part: Response.StreamPart<Tools, true>
+  part: Response.StreamPart<Tools, "encoded">
 ): Step<Tools> => {
   switch (part.type) {
     case "text-start":
@@ -231,7 +231,7 @@ export const step = <Tools extends Record<string, Tool.Any>>(
 /** Chunks still open, as the parts they would have become. */
 const flushOpen = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>
-): ReadonlyArray<Response.Part<Tools, true>> =>
+): ReadonlyArray<Response.Part<Tools, "encoded">> =>
   Array.from(state.open.values()).map((chunk) => closedPart<Tools>(chunk))
 
 /**
@@ -243,7 +243,7 @@ const flushOpen = <Tools extends Record<string, Tool.Any>>(
  */
 export const finish = <Tools extends Record<string, Tool.Any>>(
   state: State<Tools>
-): ReadonlyArray<Response.Part<Tools, true>> => {
+): ReadonlyArray<Response.Part<Tools, "encoded">> => {
   // The fallback for a stream that ended with no finish part at all; a stream
   // that did finish has already flushed.
   if (state.open.size === 0) return state.parts

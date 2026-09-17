@@ -22,7 +22,7 @@ const Researcher = Agent.make({
 // A cheaper model for the child. The lead never sees this layer; the child
 // never sees the lead's. That is what keeps the two conversations apart.
 const childModel = AnthropicLanguageModel.layer({ model: "claude-haiku-4-5" }).pipe(
-  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") })),
+  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.Redacted("ANTHROPIC_API_KEY") })),
   Layer.provide(FetchHttpClient.layer)
 )
 
@@ -44,7 +44,7 @@ const program = Effect.scoped(
 
 // The lead's model is chosen here; the child's was chosen at `provide` above.
 const leadModel = AnthropicLanguageModel.layer({ model: "claude-sonnet-4-5" }).pipe(
-  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") })),
+  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.Redacted("ANTHROPIC_API_KEY") })),
   Layer.provide(FetchHttpClient.layer)
 )
 

@@ -42,31 +42,31 @@ const asJson = (value: unknown, json: boolean): string =>
  */
 const encodedPrompt = Schema.encodeEffect(PromptWire.Prompt)
 
-const url = Flag.string("url").pipe(
+const url = Flag.String("url").pipe(
   Flag.withDescription("Agent HTTP server base URL"),
   Flag.withFallbackConfig(
-    Config.string("EFFECT_AGENT_URL").pipe(
+    Config.String("EFFECT_AGENT_URL").pipe(
       Config.withDefault("http://127.0.0.1:3000")
     )
   )
 )
 
-const token = Flag.redacted("token").pipe(
+const token = Flag.Redacted("token").pipe(
   Flag.withDescription("Bearer token (or EFFECT_AGENT_TOKEN)"),
-  Flag.withFallbackConfig(Config.redacted("EFFECT_AGENT_TOKEN")),
+  Flag.withFallbackConfig(Config.Redacted("EFFECT_AGENT_TOKEN")),
   Flag.optional
 )
 
-const json = Flag.boolean("json").pipe(
+const json = Flag.Boolean("json").pipe(
   Flag.withDescription("Print machine-readable JSON"),
   Flag.withDefault(false)
 )
 
-const sessionId = Argument.string("session-id").pipe(
+const sessionId = Argument.String("session-id").pipe(
   Argument.withDescription("Session to address")
 )
 
-const input = Argument.string("input").pipe(
+const input = Argument.String("input").pipe(
   Argument.withDescription("Prompt or out-of-band input"),
   Argument.variadic({ min: 1 })
 )
@@ -86,7 +86,7 @@ export const make = <E, R>(connect: Connect<E, R>) => {
   const create = Command.make(
     "create",
     {
-      id: Flag.string("id").pipe(
+      id: Flag.String("id").pipe(
         Flag.withDescription("Requested session id"),
         Flag.optional
       )
@@ -208,11 +208,11 @@ export const make = <E, R>(connect: Connect<E, R>) => {
     "respond",
     {
       sessionId,
-      requestId: Argument.string("request-id").pipe(
+      requestId: Argument.String("request-id").pipe(
         Argument.withDescription("Pending elicitation request id")
       ),
-      decision: Argument.choice("decision", ["allow", "deny"]),
-      value: Flag.string("value").pipe(
+      decision: Argument.Literals("decision", ["allow", "deny"]),
+      value: Flag.String("value").pipe(
         Flag.withDescription("Optional string response value"),
         Flag.optional
       )

@@ -14,8 +14,8 @@ import { tokensFromConfig } from "./Authentication.js"
 
 NodeRuntime.runMain(
   Effect.gen(function*() {
-    const port = yield* Config.int("WORKBENCH_PORT").pipe(Config.withDefault(8787))
-    const database = yield* Config.string("WORKBENCH_DB").pipe(Config.withDefault(".workbench/workbench.db"))
+    const port = yield* Config.Int("WORKBENCH_PORT").pipe(Config.withDefault(8787))
+    const database = yield* Config.String("WORKBENCH_DB").pipe(Config.withDefault(".workbench/workbench.db"))
     yield* Effect.sync(() => mkdirSync(dirname(database), { recursive: true }))
     return yield* Layer.launch(serve({ port, database }).pipe(Layer.provide(tokensFromConfig)))
   })

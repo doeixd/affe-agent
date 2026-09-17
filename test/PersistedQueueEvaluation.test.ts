@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Ref, Schedule, Schema } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 
 const MemoryPersistedQueue = PersistedQueue.layer.pipe(
@@ -28,14 +28,19 @@ describe("PersistedQueue scheduling evaluation", () => {
     Effect.gen(function* () {
       const queue = yield* PersistedQueue.make({
         name: "evaluation/retry",
-        schema: Schema.String
+        schema: Schema.String,
+        // The subject here is attempt counting, not delays: a backoff sleep
+        // would never elapse under the test clock.
+        retrySchedule: Schedule.spaced(Duration.zero)
       })
       yield* queue.offer("work", { id: "retry-id" })
 
       yield* Effect.flip(queue.take(() => Effect.fail("try again")))
       const metadata = yield* queue.take((value, item) => Effect.succeed({ value, attempts: item.attempts }))
 
-      assert.deepStrictEqual(metadata, { value: "work", attempts: 1 })
+      // Attempts are 1-based: claiming counts, so the first claim is attempt
+      // 1 and the retry after one failure is attempt 2.
+      assert.deepStrictEqual(metadata, { value: "work", attempts: 2 })
     }).pipe(Effect.provide(MemoryPersistedQueue))
   )
 
@@ -56,7 +61,9 @@ describe("PersistedQueue scheduling evaluation", () => {
       yield* Fiber.interrupt(taking)
 
       yield* queue.take((_value, metadata) => Ref.set(attempts, metadata.attempts))
-      assert.strictEqual(yield* Ref.get(attempts), 0)
+      // An interruption releases the claim without consuming it, so the next
+      // take is attempt 1 -- where a failure would have made it attempt 2.
+      assert.strictEqual(yield* Ref.get(attempts), 1)
     }).pipe(Effect.provide(MemoryPersistedQueue))
   )
 })

@@ -203,7 +203,7 @@ export const fromConfig: Layer.Layer<Provider> = Layer.succeed(Provider, {
   get: (handle) =>
     // `option` turns an absent key into `None`; anything else -- a source
     // that cannot be read, a value that fails its schema -- stays a failure.
-    Config.option(Config.redacted(handle)).pipe(
+    Config.option(Config.Redacted(handle)).pipe(
       Effect.mapError((error) =>
         new CredentialError({ handle, reason: "unreadable", detail: error.message, reauthRequired: false }))
     )

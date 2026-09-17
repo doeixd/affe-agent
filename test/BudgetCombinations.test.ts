@@ -195,10 +195,10 @@ describe("a budget and a resume", () => {
       ])
       const model = Layer.effect(
         LanguageModel.LanguageModel,
-        Effect.map(LanguageModel.LanguageModel, (inner): LanguageModel.Service => ({
+        Effect.map(LanguageModel.LanguageModel, (inner): LanguageModel.LanguageModel => ({
           ...inner,
-          generateText: ((o: Parameters<LanguageModel.Service["generateText"]>[0]) =>
-            Effect.andThen(Ref.update(modelCalls, (n) => n + 1), inner.generateText(o))) as LanguageModel.Service["generateText"]
+          generateText: ((o: Parameters<LanguageModel.LanguageModel["generateText"]>[0]) =>
+            Effect.andThen(Ref.update(modelCalls, (n) => n + 1), inner.generateText(o))) as LanguageModel.LanguageModel["generateText"]
         }))
       ).pipe(Layer.provide(baseModel))
 

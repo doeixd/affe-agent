@@ -502,11 +502,11 @@ export const counting = (
         generateText: ((options: never) =>
           Ref.update(calls, (n) => n + 1).pipe(
             Effect.andThen(inner.generateText(options))
-          )) as unknown as LanguageModel.Service["generateText"],
+          )) as unknown as LanguageModel.LanguageModel["generateText"],
         streamText: ((options: never) =>
           Stream.unwrap(
             Ref.update(calls, (n) => n + 1).pipe(Effect.as(inner.streamText(options)))
-          )) as unknown as LanguageModel.Service["streamText"]
+          )) as unknown as LanguageModel.LanguageModel["streamText"]
       }
     })
   ).pipe(Layer.provide(base))
@@ -557,7 +557,7 @@ export const failingAfter = (
         // keeps it, documented and inventoried.
         generateText: ((callOptions: never) =>
           Effect.andThen(gate, inner.generateText(callOptions))) as unknown as
-            LanguageModel.Service["generateText"],
+            LanguageModel.LanguageModel["generateText"],
         // Both entry points, so a streamed run sees the same provider. The
         // gate runs before any part is emitted, which is the case an
         // `ExecutionPlan` can still fall back from -- once a stream has
@@ -565,7 +565,7 @@ export const failingAfter = (
         streamText: ((callOptions: never) =>
           Stream.unwrap(
             Effect.as(gate, inner.streamText(callOptions))
-          )) as unknown as LanguageModel.Service["streamText"]
+          )) as unknown as LanguageModel.LanguageModel["streamText"]
       }
     })
   ).pipe(Layer.provide(base))
@@ -604,13 +604,13 @@ export const flaky = (
         generateText: ((callOptions: never) =>
           Effect.andThen(gate, inner.generateText(callOptions)).pipe(
             Effect.retry(Schedule.recurs(options.retries))
-          )) as unknown as LanguageModel.Service["generateText"],
+          )) as unknown as LanguageModel.LanguageModel["generateText"],
         streamText: ((callOptions: never) =>
           Stream.unwrap(
             Effect.as(gate, inner.streamText(callOptions)).pipe(
               Effect.retry(Schedule.recurs(options.retries))
             )
-          )) as unknown as LanguageModel.Service["streamText"]
+          )) as unknown as LanguageModel.LanguageModel["streamText"]
       }
     })
   ).pipe(Layer.provide(base))

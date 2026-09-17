@@ -5970,3 +5970,76 @@ typechecks and builds, zero Effect diagnostics, portability, documentation
 and workerd checks, 2,601 core tests, 50 workbench tests, all 16 mutation
 checks, packed-package verification and every smoke command. After updating
 the old expectation, the test suite and all subsequent check steps were rerun.
+
+## 2026-09-17 — Effect rc.112 to rc.115 (the pending half of the 2026-09-15 entry)
+
+The prior entry's code work had landed (durable failure logging, GenAI trace
+attributes, delegation spend); the `package.json` / lockfile upgrade had not,
+and the owner confirmed no agent was still working, so it was finished here:
+`effect` and the `@effect/*` dev dependencies to `4.0.0-rc.115`, the peer cap
+to `<=4.0.0-rc.115`, `vitest` to 5 (required by `@effect/vitest`), and
+`@types/node` to 22 (required by vitest 5). `fast-check` is a direct
+dev dependency now: `effect/testing` no longer exports it.
+
+Release candidates are not API-stable between each other, and this one proved
+it again. The renames, all found by the typechecker rather than designed:
+`SchemaGetter.transformOrFail` to `transformEffect` (the rename the 2026-09-10
+cap was placed for); the boolean tool-parameters mode to its literals, where
+every `, true>` in `src/` became `"encoded"`, not `"decoded"` --
+`AgentLoop.State`'s own docs say the harness holds encoded params (the
+handler decodes), and `test/EncodedParams.test.ts` pinned it: the first draft
+wrote `"decoded"`, compiled, and that test failed, which is exactly what it
+is for; `LanguageModel.Service` to `LanguageModel.LanguageModel` (in `src/`
+prose and the casts inventory's reason with it); the `Config` and CLI
+constructors to their capitalized forms, and `Argument.choice` to
+`Argument.Literals`; `PersistedQueue`'s `maxAttempts` from `take` to
+construction.
+
+Two tests needed more than a rename. `AgentLoop.test.ts` built its filler
+state from a toolkit-less `generateText`, which now returns a `"decoded"`
+response -- dishonest for a state that holds `"encoded"`: it rebuilds the
+response from the same content, which carries no parameters without tools.
+`AgentRpc.test.ts`'s hand-rolled `WebSocketConstructor` now takes the new
+options union and passes only a string protocol list to the DOM constructor;
+`ClusterMultiNode.test.ts` imports `fast-check` directly, with no call-site
+changes.
+
+The suite then found four real behaviour changes underneath the renames,
+each fixed and each pinned:
+
+- **Response file parts are no longer dropped upstream** -- rc.113+
+  `Prompt.fromResponseParts` converts them, as base64 strings. The kernel's
+  `fromResponseParts` re-attached its own raw-byte copies, so every file
+  appeared twice (`MessageContent`, the clients' "files included" contract
+  row, and the shipped conformance with them). The wrapper now strips
+  upstream's file parts and re-attaches its own, so canonical history still
+  holds raw bytes.
+- **`RcMap` no longer idles invalidated entries** -- releasing the last
+  holder of an invalidated key closes it at once instead of honouring the
+  idle window. `WorkspaceManager`'s test pinned the old behaviour and now
+  pins the new one: invalidated entries release with their last holder,
+  and a reacquire proves the replacement survived (the old idle fiber
+  could evict it -- the rc.112 `release` removed the key unconditionally
+  at expiry). The idle window still applies to every entry something can
+  look up.
+- **`PersistedQueue` attempts are 1-based, and retries wait out a schedule**
+  (default exponential from 1 second). The attempt expectations moved, and
+  `SessionInbox` passes an immediate schedule: the module's contract is
+  caller-paced retries, and a queue-level backoff would add a delay the
+  design explicitly avoided -- under a test clock that delay never elapses,
+  which is how the inbox's transient-failure rows hung.
+- **Struct JSON Schemas render `additionalProperties: true`**, moving all
+  five frozen control-tool digests. The schemas themselves are unchanged,
+  so old journals still decode -- but the tool cannot declare that: the
+  compatibility annotation lives in `durable/`, which kernel code cannot
+  import, so the fixture was re-frozen accepting that replays recorded
+  under the old digests are refused by name (the changelog carries the
+  trailer).
+
+`test/SandboxDerive.test.ts`'s missing-path row fails here on both
+versions -- the pristine rc.112 baseline worktree fails identically, so it
+is this machine's `stat.exe` spelling, not the upgrade -- and was left
+alone. The README install table, the peer-range ledger entry (with its
+`verify:` line), and `STATUS.md` name `rc.115` now. All six typechecks and
+all five Effect-diagnostic projects are clean; portability and the doc-claim
+gates pass.

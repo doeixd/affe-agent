@@ -57,7 +57,7 @@ export interface SubmissionProgress<
   readonly runs: number
   readonly turns: number
   readonly text: string
-  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, "encoded">>
   /**
    * The value the model reported through the agent's output tool, if it has
    * one and has called it. See `AgentOutput`.

@@ -88,7 +88,7 @@ const utf8 = new TextEncoder()
  * length-mismatched signature are all just `false`).
  *
  * ```ts
- * const verify = Slack.verifier({ signingSecret: Config.redacted("SLACK_SIGNING_SECRET") })
+ * const verify = Slack.verifier({ signingSecret: Config.Redacted("SLACK_SIGNING_SECRET") })
  * // in a connector's decode:
  * if (!(yield* verify({ signature, timestamp, body }))) {
  *   return Connectors.respondWith(HttpServerResponse.empty({ status: 401 }))

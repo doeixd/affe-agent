@@ -36,7 +36,7 @@ import * as ModelCapabilities from "../src/model/ModelCapabilities.js"
 // ---------------------------------------------------------------------------
 
 const client = AnthropicClient.layerConfig({
-  apiKey: Config.redacted("ANTHROPIC_API_KEY")
+  apiKey: Config.Redacted("ANTHROPIC_API_KEY")
 }).pipe(Layer.provide(FetchHttpClient.layer))
 
 /** Cheap and fast. */

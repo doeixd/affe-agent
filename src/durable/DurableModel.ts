@@ -88,9 +88,9 @@ export const reraise = (
  * stream part, so it passes through as the value it is.
  */
 const streamPartsFor = <Tools extends Record<string, Tool.Any>>(
-  parts: ReadonlyArray<Response.Part<Tools, true>>
-): Array<Response.StreamPart<Tools, true>> => {
-  const out: Array<Response.StreamPart<Tools, true>> = []
+  parts: ReadonlyArray<Response.Part<Tools, "encoded">>
+): Array<Response.StreamPart<Tools, "encoded">> => {
+  const out: Array<Response.StreamPart<Tools, "encoded">> = []
   let chunk = 0
   for (const part of parts) {
     if (part.type === "text") {
@@ -181,7 +181,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       ...described.map((tool) => tool.setParameters(Schema.toEncoded(tool.parametersSchema)))
     )
     const encodedPartSchema = Response.Part(encodedToolkit) as Schema.Codec<
-      Response.Part<Tools, true>,
+      Response.Part<Tools, "encoded">,
       Response.PartEncoded,
       (typeof livePartSchema)["DecodingServices"],
       (typeof livePartSchema)["EncodingServices"]
@@ -203,7 +203,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
     const durableGenerate = (
       options: any,
       /** On a first run, every provider stream part as it arrives. Absent on the batch path. */
-      tap?: (part: Response.StreamPart<Tools, true>) => void
+      tap?: (part: Response.StreamPart<Tools, "encoded">) => void
     ) =>
         Effect.gen(function* () {
           const index = yield* Ref.getAndUpdate(callIndex, (n) => n + 1)
@@ -245,7 +245,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
                   // are delivered live on the first run and never twice.
                   Stream.runFoldEffect(
                     underlying.streamText(options) as Stream.Stream<
-                      Response.StreamPart<Tools, true>,
+                      Response.StreamPart<Tools, "encoded">,
                       unknown
                     >,
                     () => Accumulator.empty<Tools>(),
@@ -293,10 +293,10 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           return yield* reraise(outcome as ModelOutcome)
         })
 
-    const service: LanguageModel.Service = {
+    const service: LanguageModel.LanguageModel = {
       ...underlying,
       generateText:
-        durableGenerate as unknown as LanguageModel.Service["generateText"],
+        durableGenerate as unknown as LanguageModel.LanguageModel["generateText"],
       // Streaming under durability, defined rather than refused.
       //
       // WORKFLOW_CLUSTER_PLAN separates three things that are easy to
@@ -318,7 +318,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
       // What is guaranteed either way is that a streamed durable submission
       // commits exactly the history a batched one does.
       streamText: ((options: any) =>
-        Stream.callback<Response.StreamPart<Tools, true>, unknown>((queue) =>
+        Stream.callback<Response.StreamPart<Tools, "encoded">, unknown>((queue) =>
           Effect.gen(function* () {
             let live = false
             // Runs in the callback's own fibre while the consumer reads.
@@ -337,12 +337,12 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
               // journalled response, as the parts that would have produced it.
               Queue.offerAllUnsafe(
                 queue,
-                streamPartsFor(exit.value.content as ReadonlyArray<Response.Part<Tools, true>>)
+                streamPartsFor(exit.value.content as ReadonlyArray<Response.Part<Tools, "encoded">>)
               )
             }
             Queue.endUnsafe(queue)
           })
-        )) as unknown as LanguageModel.Service["streamText"]
+        )) as unknown as LanguageModel.LanguageModel["streamText"]
     }
 
     return Layer.succeed(LanguageModel.LanguageModel, service)

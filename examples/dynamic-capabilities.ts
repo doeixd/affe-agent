@@ -50,7 +50,7 @@ const Assistant = Agent.make({
 })
 
 const model = AnthropicLanguageModel.layer({ model: "claude-sonnet-4-5" }).pipe(
-  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") })),
+  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.Redacted("ANTHROPIC_API_KEY") })),
   Layer.provide(FetchHttpClient.layer)
 )
 

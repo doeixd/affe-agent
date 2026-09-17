@@ -31,7 +31,7 @@ const model = Layer.unwrap(
 const failpoint = Layer.unwrap(
   Effect.gen(function* () {
     const provider = yield* WorkerConfig.provider
-    const armed = yield* Config.option(Config.string("AFFE_FAILPOINT")).parse(provider)
+    const armed = yield* Config.option(Config.String("AFFE_FAILPOINT")).parse(provider)
     let fired = false
     return Layer.succeed(Failpoint.Failpoint, {
       hit: (location) =>

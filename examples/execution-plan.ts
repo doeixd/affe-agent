@@ -22,7 +22,7 @@ import * as AgentSession from "../src/AgentSession.js"
  * every step is a `Layer` providing a `LanguageModel`, whatever builds it.
  */
 const anthropic = AnthropicClient.layerConfig({
-  apiKey: Config.redacted("ANTHROPIC_API_KEY")
+  apiKey: Config.Redacted("ANTHROPIC_API_KEY")
 }).pipe(Layer.provide(FetchHttpClient.layer))
 
 const primary = AnthropicLanguageModel.layer({

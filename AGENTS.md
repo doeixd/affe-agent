@@ -64,7 +64,7 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   nothing but an erasure restores the tuple the elements never left;
 * **wrapping a service whose method types are closed** — `DurableModel` (4),
   `DurableToolkit` (3) and `TestLanguageModel` (6). Each replaces a method on a
-  `LanguageModel.Service` or a `Toolkit.WithHandler` with one that journals,
+  `LanguageModel.LanguageModel` or a `Toolkit.WithHandler` with one that journals,
   counts or replays around it. The value is the original's behaviour plus a
   wrapper; the type cannot say so, because Effect AI's service methods are
   declared with concrete signatures rather than a mappable shape. Confined to

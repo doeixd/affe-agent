@@ -37,7 +37,7 @@ export const parseTokens = (raw: string): Effect.Effect<ReadonlyMap<string, User
 export const tokensFromConfig: Layer.Layer<Tokens, Config.ConfigError | MalformedTokensError> = Layer.effect(
   Tokens,
   Effect.gen(function*() {
-    const raw = yield* Config.string("WORKBENCH_TOKENS").pipe(Config.withDefault("local=local"))
+    const raw = yield* Config.String("WORKBENCH_TOKENS").pipe(Config.withDefault("local=local"))
     return yield* parseTokens(raw)
   })
 )

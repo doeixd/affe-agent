@@ -494,7 +494,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
   R
 >(
   handler: Toolkit.WithHandler<Tools>,
-  call: Response.ToolCallParts<Tools, true>,
+  call: Response.ToolCallParts<Tools, "encoded">,
   context: TurnContext<R>
 ) {
     const { agent, correlation, messages, session } = context
@@ -838,7 +838,7 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
  */
 const executeSettled = <Tools extends Record<string, Tool.Any>, R>(
   handler: Toolkit.WithHandler<Tools>,
-  call: Response.ToolCallParts<Tools, true>,
+  call: Response.ToolCallParts<Tools, "encoded">,
   context: TurnContext<R>
 ) =>
   Effect.flatMap(ToolScheduling.Current, (scheduling) =>
@@ -862,7 +862,7 @@ const executePerTool = <
   R
 >(
   handler: Toolkit.WithHandler<Tools>,
-  calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
+  calls: ReadonlyArray<Response.ToolCallParts<Tools, "encoded">>,
   context: TurnContext<R>,
   strategy: Extract<Strategy, { readonly _tag: "PerTool" }>
 ): Effect.Effect<
@@ -883,7 +883,7 @@ const executePerTool = <
       string,
       Array<{
         readonly index: number
-        readonly call: Response.ToolCallParts<Tools, true>
+        readonly call: Response.ToolCallParts<Tools, "encoded">
       }>
     >()
     for (let index = 0; index < calls.length; index++) {
@@ -957,7 +957,7 @@ export const Alone = Context.Reference<boolean>(Namespace.tag("ToolExecution/Alo
 
 const mustBeAlone = <Tools extends Record<string, Tool.Any>>(
   handler: Toolkit.WithHandler<Tools>,
-  call: Response.ToolCallParts<Tools, true>
+  call: Response.ToolCallParts<Tools, "encoded">
 ): boolean => {
   const tool = handler.tools[call.name as keyof Tools]
   return tool !== undefined && Context.get(tool.annotations, Alone)
@@ -1002,7 +1002,7 @@ const refuseBatchMember = <R>(
  */
 export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   handler: Toolkit.WithHandler<Tools>,
-  calls: ReadonlyArray<Response.ToolCallParts<Tools, true>>,
+  calls: ReadonlyArray<Response.ToolCallParts<Tools, "encoded">>,
   context: TurnContext<R>
 ): Effect.Effect<
   ReadonlyArray<Response.AnyPart>,
@@ -1010,7 +1010,7 @@ export const execute = <Tools extends Record<string, Tool.Any>, R = never>(
   Tool.HandlerServices<Tools[keyof Tools]> | R
 > => {
   const dispatch = (
-    batch: ReadonlyArray<Response.ToolCallParts<Tools, true>>
+    batch: ReadonlyArray<Response.ToolCallParts<Tools, "encoded">>
   ): Effect.Effect<
     ReadonlyArray<Response.AnyPart>,
     Tool.HandlerError<Tools[keyof Tools]> | RaisedError,

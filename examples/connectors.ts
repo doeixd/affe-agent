@@ -42,7 +42,7 @@ const verify = (signingSecret: Redacted.Redacted<string>) => Slack.verifier({ si
 
 const decode = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    const signingSecret = yield* Config.redacted("SLACK_SIGNING_SECRET")
+    const signingSecret = yield* Config.Redacted("SLACK_SIGNING_SECRET")
     // Verify against the *raw* body Slack signed, before parsing anything.
     const raw = yield* request.text
     const ok = yield* verify(signingSecret)({

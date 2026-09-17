@@ -54,21 +54,21 @@ at the `effect/unstable/ai` boundary, not a clean failure.
 
 | Peer | Range | Notes |
 |------|-------|-------|
-| `effect` | `>=4.0.0-rc.111 <=4.0.0-rc.112` | required; capped at the release candidate this repository is tested against (`rc.112`). Release candidates break APIs between each other -- `rc.113` renamed `SchemaGetter.transformOrFail` -- so a later one, and Effect 4 GA, are admitted deliberately when tested, not by the range |
+| `effect` | `>=4.0.0-rc.111 <=4.0.0-rc.115` | required; capped at the release candidate this repository is tested against (`rc.115`). Release candidates break APIs between each other -- `rc.113` renamed `SchemaGetter.transformOrFail` to `transformEffect`, replaced the boolean tool-parameters mode with `"encoded"` / `"opaque"` / `"decoded"`, renamed `LanguageModel.Service` to `LanguageModel.LanguageModel`, and capitalized the `Config` and CLI constructors -- so a later one, and Effect 4 GA, are admitted deliberately when tested, not by the range |
 | `@modelcontextprotocol/sdk` | `>=1.10.0 <2.0.0` | optional; only for `/mcp/v1` |
 | `callscript` | `>=0.1.0 <0.2.0` | optional; only for `/code/callscript` |
 | `@modelcontextprotocol/client` | `>=2.0.0 <3.0.0` | optional; only for `/mcp/v2` |
 | `@a2a-js/sdk` | `>=1.0.1 <2.0.0` | optional; only for `/a2a` |
 | `acorn` | `>=8.18.0 <9.0.0` | optional; only for `/code` |
-| `effect-cf` | `>=0.39.0 <0.40.0` | optional; only for `/cloudflare`. Its own peer range admits `@effect/sql-d1@4.0.0-rc.113`, which requires `effect@rc.113`: pin `@effect/sql-d1@4.0.0-rc.112` beside it, or npm refuses the install |
+| `effect-cf` | `>=0.39.0 <0.40.0` | optional; only for `/cloudflare`. Its own peer range admits `@effect/sql-d1@4.0.0-rc.115`, which requires `effect@rc.115`: pin `@effect/sql-d1@4.0.0-rc.115` beside it, or npm refuses the install |
 | `@durable-streams/client` | `>=0.2.6 <0.3.0` | optional; only for `/durable-streams` |
 
 ```jsonc
 // package.json — exact, not caret ranges, until Effect 4 is GA
 "dependencies": {
   "affe-agent": "0.0.1",
-  "effect": "4.0.0-rc.112",
-  "@effect/ai-anthropic": "4.0.0-rc.112"
+  "effect": "4.0.0-rc.115",
+  "@effect/ai-anthropic": "4.0.0-rc.115"
 }
 ```
 

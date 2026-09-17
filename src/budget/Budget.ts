@@ -40,7 +40,7 @@ const costStop = AgentLoop.exhausted("cost", "cost budget")
 
 /** Total tokens in one model response, both directions. */
 const tokensOf = (
-  response: LanguageModel.GenerateTextResponse<any, true>
+  response: LanguageModel.GenerateTextResponse<any, "encoded">
 ): number => (response.usage.inputTokens.total ?? 0) + (response.usage.outputTokens.total ?? 0)
 
 /**
@@ -281,7 +281,7 @@ export const within = <E, R, Tools extends Record<string, Tool.Any>>(
 export const record = (state: {
   readonly runId: string
   readonly turnIndex: number
-  readonly response: LanguageModel.GenerateTextResponse<any, true>
+  readonly response: LanguageModel.GenerateTextResponse<any, "encoded">
 }): Effect.Effect<void> =>
   Effect.flatMap(Effect.serviceOption(Budget), (budget) => {
     if (Option.isNone(budget)) return Effect.void

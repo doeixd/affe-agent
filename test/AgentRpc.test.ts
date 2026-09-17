@@ -670,7 +670,8 @@ describe("AgentRpc", () => {
       const opened = { current: Option.none<globalThis.WebSocket>() }
       const webSocketConstructor = Layer.succeed(
         Socket.WebSocketConstructor,
-        (url, protocols) => {
+        (url, options) => {
+          const protocols = typeof options === "string" || Array.isArray(options) ? options : undefined
           const webSocket = new globalThis.WebSocket(url, protocols)
           opened.current = Option.some(webSocket)
           return webSocket

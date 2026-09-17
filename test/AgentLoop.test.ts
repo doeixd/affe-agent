@@ -222,10 +222,13 @@ describe("AgentLoop.and / or over three decisions", () => {
    */
   const state = Effect.gen(function* () {
     const { layer } = yield* TestLanguageModel.script([TestLanguageModel.text("x")])
-    const response = yield* LanguageModel.generateText({
+    const generated = yield* LanguageModel.generateText({
       prompt: "x",
       disableToolCallResolution: true
     }).pipe(Effect.provide(layer))
+    // No tools, so the parts carry no parameters in either mode: the same
+    // content reads as the encoded response the state holds.
+    const response = new LanguageModel.GenerateTextResponse<{}, "encoded">([...generated.content])
     const state: AgentLoop.State<{}> = {
       sessionId: Ids.sessionId("s"),
       submissionId: Ids.submissionId("sub"),

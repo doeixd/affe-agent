@@ -15,7 +15,7 @@ const Search = Tool.make("search", {
 })
 type Tools = { readonly search: typeof Search }
 
-const run = (parts: ReadonlyArray<Response.StreamPart<Tools, true>>) => {
+const run = (parts: ReadonlyArray<Response.StreamPart<Tools, "encoded">>) => {
   let state = Accumulator.empty<Tools>()
   const deltas: Array<Accumulator.Delta> = []
   const fragments: Array<Accumulator.ToolCallDelta> = []
@@ -29,14 +29,14 @@ const run = (parts: ReadonlyArray<Response.StreamPart<Tools, true>>) => {
   return { parts: Accumulator.finish(state), deltas, fragments }
 }
 
-const textOf = (parts: ReadonlyArray<Response.Part<Tools, true>> | undefined) =>
+const textOf = (parts: ReadonlyArray<Response.Part<Tools, "encoded">> | undefined) =>
   (parts ?? []).flatMap((part) => (part.type === "text" ? [part.text] : []))
 
 /** Item 103: provider metadata on a streamed chunk reaches the assembled part. */
 describe("stream accumulator: provider metadata", () => {
   const signature = { anthropic: { info: { type: "thinking", signature: "sig-1" } } } as const
 
-  const metadataOf = (parts: ReadonlyArray<Response.Part<Tools, true>> | undefined, type: "text" | "reasoning") =>
+  const metadataOf = (parts: ReadonlyArray<Response.Part<Tools, "encoded">> | undefined, type: "text" | "reasoning") =>
     (parts ?? []).flatMap((part) => (part.type === type ? [part.metadata] : []))
 
   it("keeps a signature Anthropic sends on an empty reasoning delta", () => {

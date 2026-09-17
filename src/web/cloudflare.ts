@@ -266,8 +266,8 @@ export const layerConfig: Layer.Layer<WebCapture.WebCapture, Config.ConfigError,
   Layer.unwrap(
     Effect.map(
       Effect.all({
-        accountId: Config.string("CLOUDFLARE_ACCOUNT_ID"),
-        apiToken: Config.redacted("CLOUDFLARE_API_TOKEN")
+        accountId: Config.String("CLOUDFLARE_ACCOUNT_ID"),
+        apiToken: Config.Redacted("CLOUDFLARE_API_TOKEN")
       }),
       layer
     )

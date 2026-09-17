@@ -29,7 +29,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 | durability | `npm run verify:durability` | D1–D7 bite when broken; D4b survives by construction |
 | smoke | `smoke:ref-coding`, `smoke:cli`, `smoke:tui` | the reference coding agent, the CLI and the TUI run end to end |
 
-Built on **Effect v4 (`effect@4.0.0-rc.112`)**; the AI modules are the in-tree
+Built on **Effect v4 (`effect@4.0.0-rc.115`)**; the AI modules are the in-tree
 `effect/unstable/ai`. Node 22.5+ only for the host entries.
 
 One caveat on the tests gate, **diagnosed 2026-09-01** (it previously read

@@ -56,9 +56,9 @@ const anthropic = Layer.unwrap(
   Effect.gen(function* () {
     const provider = yield* WorkerConfig.provider
     const settings = Config.all({
-      apiKey: Config.redacted("ANTHROPIC_API_KEY"),
-      model: Config.string("ANTHROPIC_MODEL").pipe(Config.withDefault("claude-haiku-4-5")),
-      apiUrl: Config.option(Config.string("ANTHROPIC_BASE_URL"))
+      apiKey: Config.Redacted("ANTHROPIC_API_KEY"),
+      model: Config.String("ANTHROPIC_MODEL").pipe(Config.withDefault("claude-haiku-4-5")),
+      apiUrl: Config.option(Config.String("ANTHROPIC_BASE_URL"))
     })
     const { apiKey, apiUrl, model } = yield* settings.parse(provider)
     const client = Option.match(apiUrl, {

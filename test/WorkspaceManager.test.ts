@@ -217,15 +217,24 @@ describe("WorkspaceManager", () => {
         // from under the holder.
         assert.strictEqual(yield* Ref.get(built), 2)
 
-        // An invalidated entry still honours the idle window on its way out --
-        // it is unkeyed, not force-closed. Checked rather than assumed: the
-        // first version of this comment claimed immediate release and was
-        // wrong.
+        // An invalidated entry is unkeyed, so once its last holder goes
+        // nothing can share it again: it is released rather than idled.
+        // This used to assert the idle window was honoured here, and that
+        // was true -- until Effect's `RcMap` stopped idling unkeyed entries
+        // (rc.115; the old idle fiber could even evict the replacement, which
+        // the reacquire below would catch). The window still applies to every
+        // entry something can look up.
         yield* first.release
-        assert.strictEqual(yield* Ref.get(built), 2)
+        assert.strictEqual(yield* Ref.get(built), 1)
         yield* TestClock.adjust("31 seconds")
         assert.strictEqual(yield* Ref.get(built), 1)
 
+        // The replacement survived the window the old entry would have
+        // idled through: no stale fiber evicted it.
+        const third = yield* holder(manager, ws("forced"))
+        assert.strictEqual(third.sandbox, second.sandbox)
+
+        yield* third.release
         yield* second.release
       })))
 

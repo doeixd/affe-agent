@@ -41,7 +41,7 @@ import { Budget } from "../src/budget/index.js"
  * would not, whatever the "OpenAI-compatible" label promises.
  */
 const openrouter = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENROUTER_API_KEY"),
+  apiKey: Config.Redacted("OPENROUTER_API_KEY"),
   apiUrl: Config.succeed("https://openrouter.ai/api/v1"),
   /**
    * The one gateway-specific thing, and it is optional: OpenRouter attributes

@@ -46,7 +46,7 @@ const AnthropicLayer = AnthropicLanguageModel.layer({
   Layer.provide(
     // Read from the environment; the key never appears in the agent or session.
     AnthropicClient.layerConfig({
-      apiKey: Config.redacted("ANTHROPIC_API_KEY")
+      apiKey: Config.Redacted("ANTHROPIC_API_KEY")
     })
   ),
   Layer.provide(FetchHttpClient.layer)

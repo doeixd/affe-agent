@@ -84,7 +84,7 @@ const program = Effect.scoped(
 // the agent never mentions any of it. Swap any single layer -- a real memory
 // backend, an in-memory sandbox for tests -- and nothing above changes.
 const model = AnthropicLanguageModel.layer({ model: "claude-sonnet-4-5" }).pipe(
-  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") })),
+  Layer.provide(AnthropicClient.layerConfig({ apiKey: Config.Redacted("ANTHROPIC_API_KEY") })),
   Layer.provide(FetchHttpClient.layer)
 )
 

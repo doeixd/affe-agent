@@ -598,7 +598,7 @@ export const AgentEventTolerant: Schema.Codec<
   Schema.decodeTo(
     Schema.toType(Schema.Union([AgentEvent, UnknownEvent])),
     {
-      decode: SchemaGetter.transformOrFail((value: unknown) =>
+      decode: SchemaGetter.transformEffect((value: unknown) =>
         decodeKnownEvent(value).pipe(
           Effect.catch((error) => {
             const tag = tagOf(value)
@@ -620,7 +620,7 @@ export const AgentEventTolerant: Schema.Codec<
           })
         )
       ),
-      encode: SchemaGetter.transformOrFail((event) =>
+      encode: SchemaGetter.transformEffect((event) =>
         event._tag === "UnknownEvent"
           ? Effect.succeed(event.payload)
           : encodeKnownEvent(event).pipe(

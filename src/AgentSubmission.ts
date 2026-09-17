@@ -91,7 +91,7 @@ export interface Result<Tools extends Record<string, Tool.Any>, Value = string> 
    */
   readonly exhaustion: Option.Option<AgentLoop.Exhaustion>
   /** The final model response, so usage and finish reason are not discarded. */
-  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, "encoded">>
   /**
    * The submission's value: the final text for an agent with no declared
    * output, or the typed value the model reported for one that declares an
@@ -141,7 +141,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     let runs = 0
     let turns = 0
     let text = ""
-    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
+    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, "encoded">> =
       Option.none()
     let stopReason: Option.Option<string> = Option.none()
     let exhaustion: Option.Option<AgentLoop.Exhaustion> = Option.none()

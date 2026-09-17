@@ -41,11 +41,11 @@ const counting = (calls: Ref.Ref<number>, inner: Layer.Layer<LanguageModel.Langu
     LanguageModel.LanguageModel,
     Effect.map(LanguageModel.LanguageModel, (model) => ({
       ...model,
-      generateText: ((options: Parameters<LanguageModel.Service["generateText"]>[0]) =>
+      generateText: ((options: Parameters<LanguageModel.LanguageModel["generateText"]>[0]) =>
         Effect.andThen(
           Ref.update(calls, (n) => n + 1),
           model.generateText(options)
-        )) as LanguageModel.Service["generateText"]
+        )) as LanguageModel.LanguageModel["generateText"]
     }))
   ).pipe(Layer.provide(inner))
 
@@ -163,13 +163,13 @@ describe("a subagent under durability", () => {
       const childCalls = yield* Ref.make(0)
       const childModel = Layer.effect(
         LanguageModel.LanguageModel,
-        Effect.map(LanguageModel.LanguageModel, (model): LanguageModel.Service => ({
+        Effect.map(LanguageModel.LanguageModel, (model): LanguageModel.LanguageModel => ({
           ...model,
           generateText: (() =>
             Effect.flatMap(
               Ref.update(childCalls, (n) => n + 1),
               () => Effect.interrupt
-            )) as LanguageModel.Service["generateText"]
+            )) as LanguageModel.LanguageModel["generateText"]
         }))
       ).pipe(Layer.provide((yield* FakeModel.layer([{ text: "unused" }])).layer))
 

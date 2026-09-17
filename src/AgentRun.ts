@@ -18,7 +18,7 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
   readonly runId: RunId
   readonly turns: number
   readonly text: string
-  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>>
+  readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, "encoded">>
   /** Steering accepted after this run's stopping decision needs a later run. */
   readonly steeringContinuation: boolean
   /** The reason the loop gave for stopping, when it gave one. */
@@ -74,7 +74,7 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
     let turn = 0
     let toolCallsTotal = 0
     let text = ""
-    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, true>> =
+    let response: Option.Option<LanguageModel.GenerateTextResponse<Tools, "encoded">> =
       Option.none()
     let steeringContinuation = false
     let stopReason: Option.Option<string> = Option.none()

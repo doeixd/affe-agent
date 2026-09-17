@@ -55,7 +55,7 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
    * coincide, but for a transformed schema they do not, so a policy reading
    * `params` must be typed for what is actually there.
    */
-  readonly response: LanguageModel.GenerateTextResponse<Tools, true>
+  readonly response: LanguageModel.GenerateTextResponse<Tools, "encoded">
   /**
    * The calls this harness must execute.
    *
@@ -69,7 +69,7 @@ export interface State<Tools extends Record<string, Tool.Any> = Record<string, T
    * `call.name` should expect it; a policy matching on the record's keys will
    * simply not recognise it, which is the safe direction.
    */
-  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, true>>
+  readonly toolCalls: ReadonlyArray<Response.ToolCallParts<Tools, "encoded">>
   /**
    * Whether this turn committed a value for the agent's `AgentOutput`.
    *

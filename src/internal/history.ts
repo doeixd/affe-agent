@@ -27,20 +27,29 @@ export const systemMessage = (text: string): Prompt.Prompt =>
  * `Prompt.fromResponseParts` is typed for a concrete toolkit; the engine works
  * with erased tool types, so the cast is absorbed here rather than by callers.
  *
- * It also has no case for a `file` part -- Effect AI rc.111 converts text,
- * reasoning, tool calls and tool results, and silently drops a file the
- * model returned. That made canonical history lie about multimodal output:
- * an image the model produced was not in the transcript at all. So the files
- * are re-attached here, in the order the model produced them, after the
- * assistant message's other parts (the conversion has already interleaved
- * those, and a file's exact position among them is not something a provider
- * defines). A response that was *only* files becomes an assistant message of
- * files rather than nothing.
+ * It also converts a `file` part -- since rc.113 -- but as a base64 string,
+ * while canonical history holds the raw bytes (files cross every boundary
+ * intact, never re-encoded). So upstream's file parts are stripped here and
+ * the files re-attached below from the response, in the order the model
+ * produced them, after the assistant message's other parts (the conversion
+ * has already interleaved those, and a file's exact position among them is
+ * not something a provider defines). A response that was *only* files becomes
+ * an assistant message of files rather than nothing.
  */
 export const fromResponseParts = (
   parts: ReadonlyArray<Response.AnyPart>
 ): Prompt.Prompt => {
-  const prompt = Prompt.fromResponseParts(parts)
+  const converted = Prompt.fromResponseParts(parts)
+  const prompt = Prompt.fromMessages(
+    converted.content.map((message) =>
+      message.role === "assistant"
+        ? Prompt.assistantMessage({
+          content: message.content.filter((part) => part.type !== "file"),
+          options: message.options
+        })
+        : message
+    )
+  )
   const files = parts.flatMap((part) => part.type === "file" ? [filePart(part)] : [])
   if (files.length === 0) return prompt
   const messages = [...prompt.content]

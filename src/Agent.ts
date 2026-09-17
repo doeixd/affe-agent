@@ -191,7 +191,7 @@ export interface Config<
      * appears in the loop surface.
      *
      * `AgentLoop.State` is invariant in `Tools` — it carries a
-     * `GenerateTextResponse<Tools, true>`, which Effect AI makes invariant — so
+     * `GenerateTextResponse<Tools, "encoded">`, which Effect AI makes invariant — so
      * a policy written for one tool record is not assignable to another. That
      * would make `AgentLoop.bounded(20)` unusable with any agent that has
      * tools, even though it never looks at them.
