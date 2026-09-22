@@ -16,6 +16,7 @@ import * as ConversationStore from "../src/store/ConversationStore.js"
 const ada = UserId.make("ada")
 const grace = UserId.make("grace")
 const known = new Map([["ada-token", ada], ["grace-token", grace]])
+const resolve = (token: string) => Effect.succeed(Option.fromNullishOr(known.get(token)))
 /** The server's own principal: never a token's. */
 const indexer = UserId.make("indexer")
 
@@ -31,7 +32,7 @@ const policy = Effect.gen(function*() {
     workspaceId: Option.none(),
     title: "Ada's"
   })
-  const options = hostOptions(known, store, { indexer })
+  const options = hostOptions(resolve, store, { indexer })
   const decide = (principal: UserId, operation: AgentProtocol.Operation, sessionId?: string) =>
     options.authorization.authorize({
       principal,
@@ -81,7 +82,7 @@ describe("workbench host authorization", () => {
       assert.strictEqual(yield* decide(indexer, "prompt", adasSession), "forbidden")
       // And without an indexer configured, nobody has it.
       const context = yield* Layer.build(ConversationStore.memory)
-      const closed = hostOptions(known, Context.get(context, ConversationStore.ConversationStore))
+      const closed = hostOptions(resolve, Context.get(context, ConversationStore.ConversationStore))
       const refused = yield* Effect.flip(closed.authorization.authorize({ principal: indexer, operation: "hostEvents", sessionId: Option.none() }))
       assert.strictEqual(refused._tag, "AgentForbiddenError")
     })))

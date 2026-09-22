@@ -2,17 +2,21 @@
 
 Written 2026-09-03.
 
-**Status: Phase 0 built; Phase 1 partly built; Phases 2–8 not started.**
+**Status: Phases 0 and 1 built; Phases 2–8 not started.**
 The live entry is [remaining-work.md](./remaining-work.md) item 82.
 
 Audit 2026-09-22 against `apps/workbench/src`: Phase 0 (branded ids,
 `AgentRevision` with `ModelPolicy` / capabilities / skills / permission
 policy, in-memory registry, resolver built only from public `affe-agent`
-surfaces) is built and tested in `test/ControlPlane.test.ts`. Of Phase 1,
-the SQL registry and conversation store, bearer-token principals, owner
-authorization, the §10 session index over the kernel's `SessionDirectory`
-and §5 organizations and membership with role-based agent access (both
-2026-09-22) are built. A real login is not. Of the commit sequence
+surfaces) is built and tested in `test/ControlPlane.test.ts`. Phase 1 is
+built: the SQL registry and conversation store, bearer-token principals,
+owner authorization, and -- all on 2026-09-22 -- the §10 session index
+over the kernel's `SessionDirectory`, §5 organizations and membership with
+role-based agent access, and real identity (password accounts, issued
+tokens with a TTL, logout and password change ending them; configured
+tokens kept beside them for the local profile and bootstrap). Not built
+from Phase 1's list: the agent list/detail and activity *pages* beyond
+the chat page, which item 81 tracks as the settings UI. Of the commit sequence
 in §59, commit 1 landed `AgentSpec` / `AgentRevision` and, on 2026-09-22,
 `Organization` / `Membership` (no `Project`, `Task`, `TaskAttempt` schemas
 yet), commit 4

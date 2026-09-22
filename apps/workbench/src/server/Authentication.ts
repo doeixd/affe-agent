@@ -14,8 +14,25 @@ import { UserId } from "../domain/WorkbenchIds.js"
 import { Authenticated, CurrentUser, Unauthorized } from "../protocol/Authentication.js"
 import { conversationIdOf } from "../runtime/ConversationSessions.js"
 import type { ConversationStore } from "../store/ConversationStore.js"
+import type { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
 
+/** Configured tokens: `WORKBENCH_TOKENS`, or a test's map. */
 export class Tokens extends Context.Service<Tokens, ReadonlyMap<string, UserId>>()("workbench/Tokens") {}
+
+/**
+ * Whose a bearer token is. The one question both APIs ask of a request;
+ * `Identity.tokenResolver` answers it from the configured tokens and the
+ * issued ones together. A store that cannot answer fails the request.
+ */
+export type Resolve = (token: string) => Effect.Effect<Option.Option<UserId>, WorkbenchStorageError>
+
+export class TokenResolver extends Context.Service<TokenResolver, Resolve>()("workbench/TokenResolver") {}
+
+/** Configured tokens alone, for a host without issued sessions. */
+export const staticTokens: Layer.Layer<TokenResolver, never, Tokens> = Layer.effect(
+  TokenResolver,
+  Effect.map(Tokens, (known) => TokenResolver.of((token) => Effect.succeed(Option.fromNullishOr(known.get(token)))))
+)
 
 export class MalformedTokensError extends Schema.TaggedError<MalformedTokensError>()("MalformedTokensError", {
   entry: Schema.String
@@ -46,17 +63,21 @@ export const tokens = (entries: Readonly<Record<string, string>>): Layer.Layer<T
   Layer.succeed(Tokens, new Map(Object.entries(entries).map(([token, user]) => [token, UserId.make(user)])))
 
 /** The product routes' middleware: a known token becomes `CurrentUser`. */
-export const authenticated: Layer.Layer<Authenticated, never, Tokens> = Layer.effect(
+export const authenticated: Layer.Layer<Authenticated, never, TokenResolver> = Layer.effect(
   Authenticated,
   Effect.gen(function*() {
-    const known = yield* Tokens
+    const resolve = yield* TokenResolver
     return Authenticated.of({
-      bearer: (httpEffect, { credential }) => {
-        const user = known.get(Redacted.value(credential))
-        return user === undefined
-          ? Effect.fail(new Unauthorized({ detail: "unknown bearer token" }))
-          : Effect.provideService(httpEffect, CurrentUser, user)
-      }
+      bearer: (httpEffect, { credential }) =>
+        Effect.gen(function*() {
+          const user = yield* resolve(Redacted.value(credential)).pipe(
+            Effect.mapError((error) => new Unauthorized({ detail: `could not resolve the token: ${error.detail}` }))
+          )
+          if (Option.isNone(user)) {
+            return yield* new Unauthorized({ detail: "unknown bearer token" })
+          }
+          return yield* Effect.provideService(httpEffect, CurrentUser, user.value)
+        })
     })
   })
 )
@@ -83,16 +104,22 @@ const bearerOf = (headers: Headers.Headers): Option.Option<string> =>
  * A store that cannot answer fails the request rather than letting it through.
  */
 export const hostOptions = (
-  known: ReadonlyMap<string, UserId>,
+  resolve: Resolve,
   store: ConversationStore["Service"],
   options?: { readonly indexer?: UserId | undefined }
 ): Pick<AgentSessionHost.Options<UserId>, "principal" | "authorization" | "subject"> => ({
   principal: {
-    resolve: ({ headers, operation }) =>
-      Option.match(Option.flatMap(bearerOf(headers), (token) => Option.fromNullishOr(known.get(token))), {
-        onNone: () => Effect.fail(new AgentProtocol.AgentUnauthorizedError({ operation })),
-        onSome: Effect.succeed
+    resolve: ({ headers, operation }) => {
+      const unauthorized = new AgentProtocol.AgentUnauthorizedError({ operation })
+      return Option.match(bearerOf(headers), {
+        onNone: () => Effect.fail(unauthorized),
+        onSome: (token) =>
+          resolve(token).pipe(
+            Effect.mapError(() => unauthorized),
+            Effect.flatMap(Option.match({ onNone: () => Effect.fail(unauthorized), onSome: Effect.succeed }))
+          )
       })
+    }
   },
   authorization: {
     authorize: ({ operation, principal, sessionId }) => {

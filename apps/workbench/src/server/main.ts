@@ -1,9 +1,11 @@
 /**
  * `npm run workbench:server`: the agent and the product database the page
  * talks to, on :8787 (`WORKBENCH_PORT`), with conversations kept in
- * `.workbench/workbench.db` (`WORKBENCH_DB`). People are bearer tokens,
- * `WORKBENCH_TOKENS=token=user,...`, defaulting to the single local person
- * `local=local`. Run `npm run workbench:dev` beside it.
+ * `.workbench/workbench.db` (`WORKBENCH_DB`). Configured bearer tokens,
+ * `WORKBENCH_TOKENS=token=user,...`, default to the single local person
+ * `local=local`; beside them, accounts made through the API sign in with a
+ * password and carry the token that earns. Run `npm run workbench:dev`
+ * beside it.
  */
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"

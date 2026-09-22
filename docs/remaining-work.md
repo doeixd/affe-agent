@@ -240,8 +240,27 @@ it is still open, so the next pass does not have to re-derive it.
     HTTP store beside the others. Tested for every role combination, both
     store backends, an old agent row, and end to end over a server with
     three people; breaking manage-equals-use or the last-owner rule fails
-    the named tests. Still open in Phase 1: real identity (login) in place
-    of configured tokens.
+    the named tests. Real identity landed last, the same day: a person is
+    someone who knows a password (PBKDF2 under a fresh salt, in
+    `IdentityStore`, memory and SQL) and a bearer token is one the server
+    issued to them and has not ended -- 32 random bytes the holder keeps
+    and the store knows by digest, with a TTL (`serve({ identity })`,
+    default 30 days). `POST /login` is the one route a stranger may call;
+    accounts are made by a signed-in caller (`POST /users`), a password
+    change (`PUT /me/password`) ends every token it had opened, and
+    `POST /logout` ends the one named. Configured `WORKBENCH_TOKENS` keep
+    working beside issued ones -- the local deployment is the same code
+    path, and how the first account gets made; open sign-up is a
+    deployment decision left unmade. One `TokenResolver` answers both
+    `WorkbenchApi` and `AgentSessionHost`. The browser shows a sign-in
+    form for a token the server does not know, and a sign-out button.
+    Tested on both backends (wrong password and no account are one
+    refusal, expiry under the test clock, revocation on logout and on
+    password change, nothing secret in a row) and over a server (the
+    issued token prompts the agent; logout and password change end it;
+    the configured token survives). **Phase 1 is complete.** Open in Phase
+    1's neighbourhood: the model catalog and settings UI (item 81), and
+    everything from Phase 2 on.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

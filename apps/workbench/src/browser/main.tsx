@@ -5,15 +5,17 @@
  * `npm run workbench:server` -- so a reload continues the same conversation.
  *
  * The bearer token is read from localStorage (`workbench/token`) and defaults
- * to the local server's `local`; who it belongs to is asked of the server.
+ * to the local server's `local`; who it belongs to is asked of the server. A
+ * token the server does not know shows the sign-in form, and a password
+ * earns a new one.
  */
 import { Effect, Layer, ManagedRuntime, Option } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type * as Conversation from "../domain/Conversation.js"
-import { ConversationId } from "../domain/WorkbenchIds.js"
-import type { AgentId, UserId } from "../domain/WorkbenchIds.js"
+import { ConversationId, UserId } from "../domain/WorkbenchIds.js"
+import type { AgentId } from "../domain/WorkbenchIds.js"
 import { ConversationPage } from "../react/ConversationPage.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
@@ -89,7 +91,21 @@ const App = ({ agentId, owner }: Identity) => {
   return (
     <div style={{ display: "flex", gap: "2rem", fontFamily: "system-ui", padding: "1rem" }}>
       <nav aria-label="Conversations">
-        <p>Signed in as {owner}</p>
+        <p>
+          Signed in as {owner}{" "}
+          <button
+            type="button"
+            onClick={() => {
+              // A configured token cannot be ended server-side; forgetting it is enough either way.
+              void runtime.runPromise(HttpStores.logout(server)).finally(() => {
+                writeToken(null)
+                window.location.reload()
+              })
+            }}
+          >
+            Sign out
+          </button>
+        </p>
         <button type="button" onClick={create}>New conversation</button>
         <ul>
           {conversations.map((conversation) => (
@@ -107,6 +123,54 @@ const App = ({ agentId, owner }: Identity) => {
   )
 }
 
+const writeToken = (token: string | null) => {
+  try {
+    if (token === null) window.localStorage.removeItem("workbench/token")
+    else window.localStorage.setItem("workbench/token", token)
+  } catch {
+    // Nothing to keep it in: the next load asks again.
+  }
+}
+
+/** Shown when the server does not know this browser's token: a password earns one. */
+const Login = () => {
+  const [userId, setUserId] = useState("")
+  const [password, setPassword] = useState("")
+  const [failure, setFailure] = useState<string | null>(null)
+
+  const submit = (event: { preventDefault: () => void }) => {
+    event.preventDefault()
+    void runtime.runPromise(HttpStores.login(server, UserId.make(userId), password)).then(
+      (issued) => {
+        writeToken(issued.token)
+        window.location.reload()
+      },
+      (error: unknown) => setFailure(error instanceof Error ? error.message : String(error))
+    )
+  }
+
+  return (
+    <form onSubmit={submit} style={{ fontFamily: "system-ui", padding: "1rem", display: "grid", gap: "0.5rem", maxWidth: "20rem" }}>
+      <h1>Sign in</h1>
+      <label>
+        User <input name="userId" value={userId} onChange={(event) => setUserId(event.target.value)} autoComplete="username" />
+      </label>
+      <label>
+        Password{" "}
+        <input
+          name="password"
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoComplete="current-password"
+        />
+      </label>
+      <button type="submit">Sign in</button>
+      {failure === null ? null : <p role="alert">That user and password were not accepted.</p>}
+    </form>
+  )
+}
+
 const root = document.getElementById("root")
 if (root !== null) {
   void runtime.runPromise(Effect.gen(function*() {
@@ -117,6 +181,6 @@ if (root !== null) {
     return { owner, agentId: agent.id }
   })).then(
     (identity) => createRoot(root).render(<App {...identity} />),
-    () => createRoot(root).render(<p role="alert">The server did not accept this browser's token.</p>)
+    () => createRoot(root).render(<Login />)
   )
 }

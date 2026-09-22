@@ -19,7 +19,16 @@ import { ConversationExistsError, ConversationNotFoundError } from "../store/Con
 import { LastOwnerError, OrganizationNotFoundError } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
-import { Authenticated, ForeignOwnerError, InsufficientRoleError } from "./Authentication.js"
+import {
+  Authenticated,
+  ForeignOwnerError,
+  InsufficientRoleError,
+  InvalidCredentialsError,
+  Issued,
+  Login,
+  Password,
+  UserExistsError
+} from "./Authentication.js"
 
 export class MeGroup extends HttpApiGroup.make("me").add(
   HttpApiEndpoint.get("get", "/me", { success: UserId })
@@ -138,10 +147,42 @@ export class OrganizationsGroup extends HttpApiGroup.make("organizations").add(
   })
 ).middleware(Authenticated) {}
 
+/** The one route a stranger may call: proving a password earns a token. */
+export class LoginGroup extends HttpApiGroup.make("login").add(
+  HttpApiEndpoint.post("login", "/login", {
+    payload: Login,
+    success: Issued,
+    error: [InvalidCredentialsError, WorkbenchStorageError]
+  })
+) {}
+
+/**
+ * Accounts. Registering takes a signed-in caller -- the configured local
+ * token is how the first account is made; open sign-up is a deployment
+ * decision this does not make. A password change ends every session it had
+ * opened; logging out ends the one token named.
+ */
+export class AccountGroup extends HttpApiGroup.make("account").add(
+  HttpApiEndpoint.post("register", "/users", {
+    payload: Login,
+    error: [UserExistsError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.put("setPassword", "/me/password", {
+    payload: Schema.Struct({ password: Password }),
+    error: WorkbenchStorageError
+  }),
+  HttpApiEndpoint.post("logout", "/logout", {
+    payload: Schema.Struct({ token: Schema.String }),
+    error: WorkbenchStorageError
+  })
+).middleware(Authenticated) {}
+
 export class WorkbenchApi extends HttpApi.make("workbench")
   .add(MeGroup)
   .add(ConversationsGroup)
   .add(AgentsGroup)
   .add(SessionsGroup)
   .add(OrganizationsGroup)
+  .add(LoginGroup)
+  .add(AccountGroup)
 {}

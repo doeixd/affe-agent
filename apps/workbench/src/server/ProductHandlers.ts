@@ -17,6 +17,7 @@ import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
 import { OrganizationNotFoundError, OrganizationStore } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
+import { Identity } from "./Identity.js"
 
 const ownedBy = <A extends { readonly ownerId: UserId }>(found: Option.Option<A>, user: UserId): Option.Option<A> =>
   Option.filter(found, (record) => record.ownerId === user)
@@ -227,6 +228,30 @@ const organizationsGroup = HttpApiBuilder.group(
   })
 )
 
+const login = HttpApiBuilder.group(
+  WorkbenchApi,
+  "login",
+  Effect.fn(function*(handlers) {
+    const identity = yield* Identity
+    return handlers.handle("login", ({ payload }) => identity.login(payload.userId, payload.password))
+  })
+)
+
+const account = HttpApiBuilder.group(
+  WorkbenchApi,
+  "account",
+  Effect.fn(function*(handlers) {
+    const identity = yield* Identity
+    return handlers.handleAll({
+      register: ({ payload }) => identity.register(payload.userId, payload.password),
+      setPassword: Effect.fn(function*({ payload }) {
+        yield* identity.setPassword(yield* CurrentUser, payload.password)
+      }),
+      logout: ({ payload }) => identity.logout(payload.token)
+    })
+  })
+)
+
 export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(
-  Layer.provide([me, conversations, agents, sessions, organizationsGroup])
+  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account])
 )

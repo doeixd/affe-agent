@@ -34,9 +34,12 @@ import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
+import * as IdentityStore from "../store/IdentityStore.js"
 import * as OrganizationStore from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
-import { authenticated, hostOptions, Tokens } from "./Authentication.js"
+import { authenticated, hostOptions, TokenResolver } from "./Authentication.js"
+import { Tokens } from "./Authentication.js"
+import * as Identity from "./Identity.js"
 import { routes as productRoutes } from "./ProductHandlers.js"
 import * as RoutingClient from "./RoutingClient.js"
 
@@ -140,11 +143,11 @@ class Indexer extends Context.Service<Indexer, UserId>()("workbench/Indexer") {}
 const indexer = Layer.sync(Indexer, () => UserId.make(`indexer:${globalThis.crypto.randomUUID()}`))
 
 const host = Layer.unwrap(Effect.gen(function*() {
-  const known = yield* Tokens
+  const resolve = yield* TokenResolver
   const store = yield* ConversationStore.ConversationStore
   const indexer = yield* Indexer
   return AgentSessionHost.layer(Host, {
-    ...hostOptions(known, store, { indexer }),
+    ...hostOptions(resolve, store, { indexer }),
     maxSessions: 64,
     maxRequestsPerSession: 1024
   })
@@ -193,6 +196,8 @@ export const serve = (options: {
   /** A SQLite file for product records and durable sessions alike (`:memory:` for a throwaway one). */
   readonly database: string
   readonly durability?: Durability | undefined
+  /** How long a login's token works. */
+  readonly identity?: Identity.Options | undefined
 }) =>
   HttpRouter.serve(
     Layer.mergeAll(
@@ -202,6 +207,8 @@ export const serve = (options: {
       followSessions
     ).pipe(
       Layer.provide(host),
+      Layer.provideMerge(Identity.tokenResolver),
+      Layer.provideMerge(Identity.layer(options.identity)),
       Layer.provideMerge(AgentDirectory.layer),
       Layer.provideMerge(AgentResolver.layerWith),
       Layer.provideMerge(
@@ -209,6 +216,7 @@ export const serve = (options: {
           AgentRegistry.layerSql,
           ConversationStore.layerSql,
           OrganizationStore.layerSql,
+          IdentityStore.layerSql,
           SessionIndex.layerSql,
           durableClients(options.durability)
         )

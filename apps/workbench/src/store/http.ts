@@ -12,11 +12,12 @@
  * response that does not decode, a token the server does not know -- is the
  * store being unreachable, and is named as `WorkbenchStorageError`.
  */
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import { Option } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import type { ConversationId, UserId } from "../domain/WorkbenchIds.js"
+import type { InvalidCredentialsError, Issued, UserExistsError } from "../protocol/Authentication.js"
 import { bearer } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentRegistry } from "./AgentRegistry.js"
@@ -37,6 +38,8 @@ const client = (options: Options) =>
   }).pipe(Effect.provide(bearer(options.token)))
 
 type Kept =
+  | "InvalidCredentialsError"
+  | "UserExistsError"
   | "ConversationExistsError"
   | "ConversationNotFoundError"
   | "AgentNotFoundError"
@@ -45,6 +48,8 @@ type Kept =
   | "WorkbenchStorageError"
 
 const kept: ReadonlySet<string> = new Set<Kept>([
+  "InvalidCredentialsError",
+  "UserExistsError",
   "ConversationExistsError",
   "ConversationNotFoundError",
   "AgentNotFoundError",
@@ -61,6 +66,33 @@ const transport = (operation: string) =>
     (error): error is Exclude<E, { readonly _tag: Kept }> => !kept.has(error._tag),
     (error) => Effect.fail(failedAs(operation)(error))
   )
+
+/** Prove a password, and get the token every other request carries. The one call made without one. */
+export const login = (
+  server: { readonly baseUrl: string },
+  userId: UserId,
+  password: string
+): Effect.Effect<Issued, InvalidCredentialsError | WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client({ baseUrl: server.baseUrl, token: "" }), (api) =>
+    api.login.login({ payload: { userId, password: Redacted.make(password) } })).pipe(transport("login"))
+
+/** End this token. */
+export const logout = (options: Options): Effect.Effect<void, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.account.logout({ payload: { token: options.token } })).pipe(transport("logout"))
+
+/** Make an account, as a signed-in person. */
+export const register = (
+  options: Options,
+  userId: UserId,
+  password: string
+): Effect.Effect<void, UserExistsError | WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.account.register({ payload: { userId, password: Redacted.make(password) } }))
+    .pipe(transport("register"))
+
+/** Change the caller's own password; every token it had is ended. */
+export const setPassword = (options: Options, password: string): Effect.Effect<void, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.account.setPassword({ payload: { password: Redacted.make(password) } }))
+    .pipe(transport("setPassword"))
 
 /** Who the server says the token belongs to. */
 export const currentUser = (options: Options): Effect.Effect<UserId, WorkbenchStorageError, HttpClient.HttpClient> =>
