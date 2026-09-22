@@ -383,9 +383,14 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   authenticated, revision-routed durable conversations. Binding resolution
   accepts only explicitly registered model, capability and skill names.
   Revision workflow handlers register on first access after restart;
-  unattended startup recovery is not implemented. The model catalog,
-  settings UI and later workbench/control-plane phases remain open. Their
-  session directory, projection and background-input inbox foundations ship. Inbox
+  unattended startup recovery is not implemented. Control plane Phase 1 is
+  complete (2026-09-22): a session index over the kernel's directory says
+  which of a person's sessions are running, organizations share agents
+  with members under owner/admin/member rules decided in one pure module,
+  and identity is real -- password accounts, issued tokens with a TTL,
+  ended by logout or a password change, with configured tokens kept for
+  the local profile. The model catalog, the settings UI and every page
+  beyond chat, and control-plane Phases 2 onward remain open. Inbox
   delivery retains input after transport failures, preserves defects, and
   reports missing or closed sessions at lookup, status or submission.
 

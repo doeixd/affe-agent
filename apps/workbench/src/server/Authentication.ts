@@ -70,8 +70,11 @@ export const authenticated: Layer.Layer<Authenticated, never, TokenResolver> = L
     return Authenticated.of({
       bearer: (httpEffect, { credential }) =>
         Effect.gen(function*() {
+          // A store that cannot answer is logged here and refused there: its
+          // detail is the operator's, not the caller's.
           const user = yield* resolve(Redacted.value(credential)).pipe(
-            Effect.mapError((error) => new Unauthorized({ detail: `could not resolve the token: ${error.detail}` }))
+            Effect.tapError((error) => Effect.logError("workbench: could not resolve a bearer token", error)),
+            Effect.mapError(() => new Unauthorized({ detail: "could not resolve the token" }))
           )
           if (Option.isNone(user)) {
             return yield* new Unauthorized({ detail: "unknown bearer token" })

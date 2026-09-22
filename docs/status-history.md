@@ -6074,3 +6074,34 @@ records what was corrected, docs only:
   ships" (both had been exported and tested for three weeks without a line
   here), the workbench gates, and regenerated numbers: 2601 tests in 251
   files, lint at 0 warnings (the chained-`provide` warning is gone).
+
+## 2026-09-22 — control plane Phase 1 completed
+
+Three commits, each with its own break-once run, closed the three items
+`remaining-work.md` 82 still listed open. The kernel needed no change.
+
+* **Session index** (`8d180f2`). The kernel's `SessionDirectory` becomes a
+  product service; the server follows `hostEvents` under an indexer
+  principal minted per process, the one host-wide operation the policy
+  grants and to nobody a token can name. A conversation is indexed under
+  its owner's namespace at creation, naming its agent and revision. Over a
+  real server, a session blocked on an approval is listed as running for
+  its owner and no one else. Removing the follower fails the test.
+* **Organizations** (`bdc7d32`). `Organization` / `Membership` and a store
+  whose invariants are its own (creator is first owner; the last owner is
+  neither demoted nor removed). `AgentSpec.organizationId`, decoded as
+  `None` for rows written before it -- tested against a body from
+  2026-09-15. `Access` holds every rule the handlers decide by. Three
+  people over a server: a member runs the shared agent in a conversation
+  of their own, an admin manages it short of ownership, a stranger sees
+  nothing, and ownership is handed on. Two mutations, each caught by the
+  named tests.
+* **Identity** (`62f25c0`). Password accounts (PBKDF2, fresh salt), issued
+  tokens known to the store by digest, a TTL, logout and password change
+  ending them; one `TokenResolver` for both APIs, configured tokens kept
+  beside issued ones. Expiry is tested under the test clock. Breaking the
+  password comparison fails five tests.
+
+The review of `62f25c0` took the storage error's detail out of the 401 it
+had been echoed in, and simplified the sign-in form's refusal to a
+boolean. Workbench: 12 files, 75 tests.

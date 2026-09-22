@@ -136,7 +136,7 @@ const writeToken = (token: string | null) => {
 const Login = () => {
   const [userId, setUserId] = useState("")
   const [password, setPassword] = useState("")
-  const [failure, setFailure] = useState<string | null>(null)
+  const [refused, setRefused] = useState(false)
 
   const submit = (event: { preventDefault: () => void }) => {
     event.preventDefault()
@@ -145,7 +145,7 @@ const Login = () => {
         writeToken(issued.token)
         window.location.reload()
       },
-      (error: unknown) => setFailure(error instanceof Error ? error.message : String(error))
+      () => setRefused(true)
     )
   }
 
@@ -166,7 +166,7 @@ const Login = () => {
         />
       </label>
       <button type="submit">Sign in</button>
-      {failure === null ? null : <p role="alert">That user and password were not accepted.</p>}
+      {refused ? <p role="alert">That user and password were not accepted.</p> : null}
     </form>
   )
 }
