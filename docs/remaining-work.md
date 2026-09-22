@@ -217,9 +217,18 @@ it is still open, so the next pass does not have to re-derive it.
     person) resolve once into the user every product route acts as and the
     principal `AgentSessionHost` authorizes, and a session is authorized by
     its conversation's owner; tested that one person cannot list, open,
-    prompt or change another's conversation over either API. Still open in
-    Phase 1: organizations and membership, SessionDirectory wiring, and real
-    identity (login) in place of configured tokens.
+    prompt or change another's conversation over either API. The session
+    index landed 2026-09-22 (§10): the server keeps a kernel
+    `SessionDirectory` current from `hostEvents` under its own indexer
+    principal, the one host-wide operation the authorization policy grants
+    and to no one else; a conversation is indexed under its owner's
+    namespace at creation, naming its agent and revision as attributes; and
+    `WorkbenchApi` answers one conversation's session summary and the
+    caller's running sessions (`apps/workbench/src/store/SessionIndex.ts`).
+    Tested over a real server that a session blocked on an approval is
+    listed as running, only for its owner, and that removing the follower
+    fails the test. Still open in Phase 1: organizations and membership, and
+    real identity (login) in place of configured tokens.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

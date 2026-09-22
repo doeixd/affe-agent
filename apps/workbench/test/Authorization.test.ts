@@ -16,6 +16,8 @@ import * as ConversationStore from "../src/store/ConversationStore.js"
 const ada = UserId.make("ada")
 const grace = UserId.make("grace")
 const known = new Map([["ada-token", ada], ["grace-token", grace]])
+/** The server's own principal: never a token's. */
+const indexer = UserId.make("indexer")
 
 const policy = Effect.gen(function*() {
   const context = yield* Layer.build(ConversationStore.memory)
@@ -29,7 +31,7 @@ const policy = Effect.gen(function*() {
     workspaceId: Option.none(),
     title: "Ada's"
   })
-  const options = hostOptions(known, store)
+  const options = hostOptions(known, store, { indexer })
   const decide = (principal: UserId, operation: AgentProtocol.Operation, sessionId?: string) =>
     options.authorization.authorize({
       principal,
@@ -65,6 +67,23 @@ describe("workbench host authorization", () => {
       // A session no conversation names, or one named for a conversation that does not exist.
       assert.strictEqual(yield* decide(ada, "history", "session-1"), "forbidden")
       assert.strictEqual(yield* decide(ada, "history", "conversation-missing"), "forbidden")
+    })))
+
+  it.effect("host-wide events are the indexer's alone, and the indexer has nothing else", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const { adasSession, decide } = yield* policy
+      assert.strictEqual(yield* decide(indexer, "hostEvents"), "allowed")
+      assert.strictEqual(yield* decide(ada, "hostEvents"), "forbidden")
+      assert.strictEqual(yield* decide(grace, "hostEvents"), "forbidden")
+      // The exception is one operation, not a role: the indexer reads no session and lists none.
+      assert.strictEqual(yield* decide(indexer, "listSessions"), "forbidden")
+      assert.strictEqual(yield* decide(indexer, "history", adasSession), "forbidden")
+      assert.strictEqual(yield* decide(indexer, "prompt", adasSession), "forbidden")
+      // And without an indexer configured, nobody has it.
+      const context = yield* Layer.build(ConversationStore.memory)
+      const closed = hostOptions(known, Context.get(context, ConversationStore.ConversationStore))
+      const refused = yield* Effect.flip(closed.authorization.authorize({ principal: indexer, operation: "hostEvents", sessionId: Option.none() }))
+      assert.strictEqual(refused._tag, "AgentForbiddenError")
     })))
 
   it.effect("the principal is the token's person, and no token is no one", () =>

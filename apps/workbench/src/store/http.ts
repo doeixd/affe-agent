@@ -13,13 +13,15 @@
  * store being unreachable, and is named as `WorkbenchStorageError`.
  */
 import { Effect, Layer } from "effect"
+import type { Option } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
-import type { UserId } from "../domain/WorkbenchIds.js"
+import type { ConversationId, UserId } from "../domain/WorkbenchIds.js"
 import { bearer } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentRegistry } from "./AgentRegistry.js"
 import { ConversationStore } from "./ConversationStore.js"
+import type * as SessionIndex from "./SessionIndex.js"
 import { failedAs } from "./WorkbenchStorageError.js"
 import type { WorkbenchStorageError } from "./WorkbenchStorageError.js"
 
@@ -54,6 +56,19 @@ const transport = (operation: string) =>
 /** Who the server says the token belongs to. */
 export const currentUser = (options: Options): Effect.Effect<UserId, WorkbenchStorageError, HttpClient.HttpClient> =>
   Effect.flatMap(client(options), (api) => api.me.get()).pipe(transport("currentUser"))
+
+/** The index's view of one conversation's session: `None` until it is indexed, or when it is not the caller's. */
+export const sessionSummary = (
+  options: Options,
+  id: ConversationId
+): Effect.Effect<Option.Option<SessionIndex.Summary>, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.sessions.summary({ params: { id } })).pipe(transport("sessionSummary"))
+
+/** Every session of the caller's that is running work now. */
+export const activeSessions = (
+  options: Options
+): Effect.Effect<ReadonlyArray<SessionIndex.Summary>, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.sessions.active()).pipe(transport("activeSessions"))
 
 export const conversationStore = (options: Options): Layer.Layer<ConversationStore, never, HttpClient.HttpClient> =>
   Layer.effect(

@@ -76,12 +76,16 @@ const bearerOf = (headers: Headers.Headers): Option.Option<string> =>
  * - Any operation addressed to the host rather than a session --
  *   `listSessions` today, whatever the protocol adds tomorrow -- is refused:
  *   one person enumerating everyone's sessions is the leak this exists to stop.
+ *   The one exception is `hostEvents` for the `indexer`, the server's own
+ *   principal that keeps the session index current. It is never in `known`,
+ *   so no request can resolve to it.
  *
  * A store that cannot answer fails the request rather than letting it through.
  */
 export const hostOptions = (
   known: ReadonlyMap<string, UserId>,
-  store: ConversationStore["Service"]
+  store: ConversationStore["Service"],
+  options?: { readonly indexer?: UserId | undefined }
 ): Pick<AgentSessionHost.Options<UserId>, "principal" | "authorization" | "subject"> => ({
   principal: {
     resolve: ({ headers, operation }) =>
@@ -93,6 +97,9 @@ export const hostOptions = (
   authorization: {
     authorize: ({ operation, principal, sessionId }) => {
       const forbidden = new AgentProtocol.AgentForbiddenError({ operation, sessionId })
+      if (operation === "hostEvents" && options?.indexer !== undefined && principal === options.indexer) {
+        return Effect.void
+      }
       if (Option.isNone(sessionId)) return Effect.fail(forbidden)
       return Option.match(conversationIdOf(sessionId.value), {
         onNone: () => Effect.fail(forbidden),

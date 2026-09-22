@@ -9,12 +9,13 @@ Audit 2026-09-22 against `apps/workbench/src`: Phase 0 (branded ids,
 `AgentRevision` with `ModelPolicy` / capabilities / skills / permission
 policy, in-memory registry, resolver built only from public `affe-agent`
 surfaces) is built and tested in `test/ControlPlane.test.ts`. Of Phase 1,
-the SQL registry and conversation store, bearer-token principals and owner
-authorization are built. Organizations and membership, a real login, and
-wiring `SessionDirectory` into the product are not. Of the commit sequence
+the SQL registry and conversation store, bearer-token principals, owner
+authorization and the §10 session index over the kernel's `SessionDirectory`
+(2026-09-22) are built. Organizations and membership and a real login are
+not. Of the commit sequence
 in §59, commit 1 landed only `AgentSpec` / `AgentRevision` (no
 `Organization`, `Project`, `Task`, `TaskAttempt` schemas yet), commit 4
-landed the SQL stores but not the directory, and commit 5 landed open-chat
+landed the SQL stores and, on 2026-09-22, the directory, and commit 5 landed open-chat
 and in-chat approval but not agent creation from the web, tasks, an
 activity view or the Inbox.
 

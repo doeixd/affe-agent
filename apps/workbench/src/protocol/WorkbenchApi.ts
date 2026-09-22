@@ -15,6 +15,7 @@ import * as Conversation from "../domain/Conversation.js"
 import { AgentId, AgentRevisionId, ConversationId, UserId } from "../domain/WorkbenchIds.js"
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
+import * as SessionIndex from "../store/SessionIndex.js"
 import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
 import { Authenticated, ForeignOwnerError } from "./Authentication.js"
 
@@ -87,6 +88,23 @@ export class AgentsGroup extends HttpApiGroup.make("agents").add(
   })
 ).middleware(Authenticated) {}
 
+/**
+ * What the session index knows (control plane §10): one conversation's
+ * session, or every session of the caller's that is running work now. Read
+ * models only; the session itself is still reached over `AgentHttp`.
+ */
+export class SessionsGroup extends HttpApiGroup.make("sessions").add(
+  HttpApiEndpoint.get("summary", "/conversations/:id/session", {
+    params: { id: ConversationId },
+    success: Schema.Option(SessionIndex.Summary),
+    error: WorkbenchStorageError
+  }),
+  HttpApiEndpoint.get("active", "/sessions/active", {
+    success: Schema.Array(SessionIndex.Summary),
+    error: WorkbenchStorageError
+  })
+).middleware(Authenticated) {}
+
 export class WorkbenchApi
-  extends HttpApi.make("workbench").add(MeGroup).add(ConversationsGroup).add(AgentsGroup)
+  extends HttpApi.make("workbench").add(MeGroup).add(ConversationsGroup).add(AgentsGroup).add(SessionsGroup)
 {}

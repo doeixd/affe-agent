@@ -19,7 +19,8 @@
 import { createServer } from "node:http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Crypto, Duration, Effect, Layer, Schema } from "effect"
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect"
+import { SessionDirectory } from "affe-agent/sessions"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { HttpRouter } from "effect/unstable/http"
 import { Tool } from "effect/unstable/ai"
@@ -28,11 +29,12 @@ import { AgentSessionHost } from "affe-agent/client"
 import { DeliveryLog, DurableAgentClient, DurableChannels, DurableSessionStore } from "affe-agent/durable"
 import { AgentHttp } from "affe-agent/http"
 import { TestLanguageModel } from "affe-agent/testing"
-import type { UserId } from "../domain/WorkbenchIds.js"
+import { UserId } from "../domain/WorkbenchIds.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
+import * as SessionIndex from "../store/SessionIndex.js"
 import { authenticated, hostOptions, Tokens } from "./Authentication.js"
 import { routes as productRoutes } from "./ProductHandlers.js"
 import * as RoutingClient from "./RoutingClient.js"
@@ -129,11 +131,39 @@ const durableClients = (durability: Durability | undefined) =>
 
 const Host = AgentSessionHost.Tag<UserId>("workbench/server")
 
+/**
+ * The server's own principal, for the one host-wide operation the index
+ * needs. Fresh per process and never a token's, so no request resolves to it.
+ */
+class Indexer extends Context.Service<Indexer, UserId>()("workbench/Indexer") {}
+const indexer = Layer.sync(Indexer, () => UserId.make(`indexer:${globalThis.crypto.randomUUID()}`))
+
 const host = Layer.unwrap(Effect.gen(function*() {
   const known = yield* Tokens
   const store = yield* ConversationStore.ConversationStore
-  return AgentSessionHost.layer(Host, { ...hostOptions(known, store), maxSessions: 64, maxRequestsPerSession: 1024 })
+  const indexer = yield* Indexer
+  return AgentSessionHost.layer(Host, {
+    ...hostOptions(known, store, { indexer }),
+    maxSessions: 64,
+    maxRequestsPerSession: 1024
+  })
 })).pipe(Layer.provide(RoutingClient.layer))
+
+/**
+ * Keep the session index current from the host's events, for as long as the
+ * server runs. A directory that cannot be written ends the follower and is
+ * logged; the sessions themselves are unaffected, which is the point of an
+ * index that is not an execution authority.
+ */
+const followSessions = Layer.effectDiscard(Effect.gen(function*() {
+  const hostService = yield* Host
+  const index = yield* SessionIndex.SessionIndex
+  const events = yield* hostService.hostEvents(yield* Indexer).pipe(Effect.orDie)
+  yield* SessionDirectory.follow(index, events).pipe(
+    Effect.tapError((error) => Effect.logError("workbench: the session index stopped following", error)),
+    Effect.forkScoped
+  )
+}))
 
 /** Each person starts with one agent, so their first conversation has something to run. */
 const seedAgents = Layer.effectDiscard(Effect.gen(function*() {
@@ -165,13 +195,18 @@ export const serve = (options: {
 }) =>
   HttpRouter.serve(
     Layer.mergeAll(
-      AgentHttp.serverLayer({ host: Host }).pipe(Layer.provide(host)),
+      AgentHttp.serverLayer({ host: Host }),
       productRoutes.pipe(Layer.provide(authenticated)),
-      seedAgents
+      seedAgents,
+      followSessions
     ).pipe(
+      Layer.provide(host),
       Layer.provideMerge(AgentDirectory.layer),
       Layer.provideMerge(AgentResolver.layerWith),
-      Layer.provideMerge(Layer.mergeAll(AgentRegistry.layerSql, ConversationStore.layerSql, durableClients(options.durability))),
+      Layer.provideMerge(
+        Layer.mergeAll(AgentRegistry.layerSql, ConversationStore.layerSql, SessionIndex.layerSql, durableClients(options.durability))
+      ),
+      Layer.provide(indexer),
       Layer.provide(bindings),
       // One connection for everything: SQLite serializes writers anyway, and
       // a second client over the same file would contend for its lock.

@@ -12,6 +12,7 @@ import { CurrentUser, ForeignOwnerError } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
+import * as SessionIndex from "../store/SessionIndex.js"
 
 const ownedBy = <A extends { readonly ownerId: UserId }>(found: Option.Option<A>, user: UserId): Option.Option<A> =>
   Option.filter(found, (record) => record.ownerId === user)
@@ -24,6 +25,7 @@ const conversations = HttpApiBuilder.group(
   Effect.fn(function*(handlers) {
     const store = yield* ConversationStore
     const registry = yield* AgentRegistry
+    const index = yield* SessionIndex.SessionIndex
 
     const ownConversation = Effect.fn("conversations.own")(function*(id: Parameters<typeof store.get>[0]) {
       const user = yield* CurrentUser
@@ -47,7 +49,11 @@ const conversations = HttpApiBuilder.group(
         if (Option.isNone(agent) || Option.isNone(revision) || revision.value.agentId !== payload.agentId) {
           return yield* new AgentNotFoundError({ agentId: payload.agentId })
         }
-        return yield* store.create(payload)
+        const created = yield* store.create(payload)
+        // Indexed under its owner from the start, so it is listed before its
+        // first event and its agent is known without a join.
+        yield* SessionIndex.index(index, created)
+        return created
       }),
       update: Effect.fn(function*({ params, payload }) {
         if (Option.isNone(yield* ownConversation(params.id))) {
@@ -113,4 +119,24 @@ const agents = HttpApiBuilder.group(
   })
 )
 
-export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(Layer.provide([me, conversations, agents]))
+const sessions = HttpApiBuilder.group(
+  WorkbenchApi,
+  "sessions",
+  Effect.fn(function*(handlers) {
+    const store = yield* ConversationStore
+    const index = yield* SessionIndex.SessionIndex
+
+    return handlers.handleAll({
+      summary: Effect.fn(function*({ params }) {
+        const user = yield* CurrentUser
+        const conversation = ownedBy(yield* store.get(params.id), user)
+        return Option.isNone(conversation) ? Option.none() : yield* SessionIndex.summary(index, conversation.value)
+      }),
+      active: Effect.fn(function*() {
+        return yield* SessionIndex.active(index, yield* CurrentUser)
+      })
+    })
+  })
+)
+
+export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(Layer.provide([me, conversations, agents, sessions]))
