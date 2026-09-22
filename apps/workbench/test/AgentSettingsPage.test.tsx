@@ -5,7 +5,7 @@
  * on the page is what the next conversation runs.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { Effect, Layer, ManagedRuntime, Option } from "effect"
+import { Context, Effect, Layer, ManagedRuntime, Option } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 import { Permission } from "affe-agent"
 import { TestLanguageModel } from "affe-agent/testing"
@@ -14,6 +14,7 @@ import { AgentSettingsPage } from "../src/react/AgentSettingsPage.js"
 import * as AgentResolver from "../src/runtime/AgentResolver.js"
 import * as Catalog from "../src/runtime/Catalog.js"
 import * as AgentRegistry from "../src/store/AgentRegistry.js"
+import { WorkbenchStorageError } from "../src/store/WorkbenchStorageError.js"
 
 const owner = UserId.make("ada")
 
@@ -128,6 +129,29 @@ describe("agent settings page", () => {
     expect(revisions[1]?.permission).toEqual(policy)
     const current = await runtime.runPromise(registry.get(spec.id))
     expect(Option.map(current, (found) => found.activeRevisionId)).toEqual(Option.some(revisions[1]?.id))
+  })
+
+  it("a save the store refuses is said, and the draft is kept", async () => {
+    const { layer: fast } = await Effect.runPromise(TestLanguageModel.script([TestLanguageModel.text("ok")]))
+    const bindings = Layer.succeed(AgentResolver.AgentBindings, { models: { fast }, capabilities: {}, skills: {} })
+    const refusing = Layer.effect(
+      AgentRegistry.AgentRegistry,
+      Effect.map(Layer.build(AgentRegistry.memory), (context) => ({
+        ...Context.get(context, AgentRegistry.AgentRegistry),
+        create: () => Effect.fail(new WorkbenchStorageError({ operation: "create", detail: "disk full" }))
+      }))
+    )
+    const runtime = ManagedRuntime.make(Layer.mergeAll(Catalog.layer, refusing).pipe(Layer.provide(bindings)))
+    render(<AgentSettingsPage runtime={runtime} owner={owner} agentId={Option.none()} />)
+    await screen.findByRole("heading", { name: "New agent" })
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Doomed" } })
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Try." } })
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+    await screen.findByRole("alert")
+    expect(screen.getByRole("alert").textContent).toContain("Could not save")
+    expect(screen.getByLabelText("Name")).toHaveProperty("value", "Doomed")
+    expect(screen.getByLabelText("Instructions")).toHaveProperty("value", "Try.")
+    expect(screen.queryByRole("status")).toBeNull()
   })
 
   it("an agent that does not exist says so", async () => {

@@ -107,6 +107,7 @@ const Choices = ({ chosen, legend, names, onChange }: {
 export const AgentSettingsPage = ({ agentId, onSaved, owner, runtime }: AgentSettingsPageProps) => {
   const [state, setState] = useState<State>({ _tag: "Loading" })
   const [saving, setSaving] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(Option.none<string>())
 
   useEffect(() => {
     setState({ _tag: "Loading" })
@@ -134,6 +135,7 @@ export const AgentSettingsPage = ({ agentId, onSaved, owner, runtime }: AgentSet
 
   const save = () => {
     setSaving(true)
+    setSaveFailed(Option.none())
     const input: RevisionInput = {
       instructions: draft.instructions,
       modelPolicy: { profile: draft.model },
@@ -169,7 +171,8 @@ export const AgentSettingsPage = ({ agentId, onSaved, owner, runtime }: AgentSet
         })
         onSaved?.(spec, revision)
       } else {
-        setState({ ...state, saved: Option.none() })
+        // The draft is kept: what was typed is not lost to a store that could not take it.
+        setSaveFailed(Option.some(exit.cause.toString()))
       }
     })
   }
@@ -224,6 +227,7 @@ export const AgentSettingsPage = ({ agentId, onSaved, owner, runtime }: AgentSet
       </label>
       <div>
         <button type="submit" disabled={cannotSave}>{isNew ? "Create" : "Save as new revision"}</button>
+        {Option.isSome(saveFailed) ? <p role="alert">Could not save; the draft is kept. Try again.</p> : null}
         {Option.match(state.saved, {
           onNone: () => Option.match(loaded.revision, { onNone: () => null, onSome: (r) => <span> Revision {r.revision} is active.</span> }),
           onSome: (r) => <span role="status"> Saved revision {r.revision}.</span>
