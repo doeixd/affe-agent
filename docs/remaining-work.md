@@ -182,10 +182,19 @@ it is still open, so the next pass does not have to re-derive it.
     file as the product records -- tested that a restarted server reopens a
     conversation with its history and continues it. Workflow handlers register
     on first access to a revision after restart; unattended recovery without
-    reopening a conversation is not implemented. Still open in W1: a
-    model catalog, the settings UI to edit agents, and any UI for creating,
-    renaming, archiving or deleting (the API supports all four; the browser
-    opens the owner's first agent); W2 onward is open.
+    reopening a conversation is not implemented. The model catalog and the
+    settings UI landed 2026-09-22: `Catalog` (`runtime/Catalog.ts`) names
+    the model profiles, capabilities and skills the deployment binds, read
+    from `AgentBindings` on the server and over `GET /catalog` in the
+    browser, so a form can only offer what the resolver will accept; and
+    `AgentSettingsPage` creates an agent or saves a new revision from a
+    form whose choices are that catalog (the policy is carried over; a new
+    agent starts permissive). The browser routes `#agents/new` and
+    `#agents/<id>` to it. Tested in happy-dom (create, revise with the old
+    revision kept, unknown agent) and over a server; emptying the catalog
+    fails the page tests. **W1 is complete.** Still no UI for renaming,
+    archiving or deleting a conversation, or archiving an agent (the API
+    supports all); W2 onward is open.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

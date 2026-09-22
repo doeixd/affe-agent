@@ -32,6 +32,7 @@ import { TestLanguageModel } from "affe-agent/testing"
 import { UserId } from "../domain/WorkbenchIds.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
+import * as Catalog from "../runtime/Catalog.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
 import * as IdentityStore from "../store/IdentityStore.js"
@@ -210,6 +211,7 @@ export const serve = (options: {
       Layer.provideMerge(Identity.tokenResolver),
       Layer.provideMerge(Identity.layer(options.identity)),
       Layer.provideMerge(AgentDirectory.layer),
+      Layer.provideMerge(Catalog.layer),
       Layer.provideMerge(AgentResolver.layerWith),
       Layer.provideMerge(
         Layer.mergeAll(

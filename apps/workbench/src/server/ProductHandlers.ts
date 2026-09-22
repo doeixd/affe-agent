@@ -12,6 +12,7 @@ import * as Access from "../domain/Access.js"
 import type { AgentSpec } from "../domain/AgentRevision.js"
 import type { AgentId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
 import { CurrentUser, ForeignOwnerError, InsufficientRoleError } from "../protocol/Authentication.js"
+import { Catalog } from "../runtime/Catalog.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
@@ -252,6 +253,15 @@ const account = HttpApiBuilder.group(
   })
 )
 
+const catalog = HttpApiBuilder.group(
+  WorkbenchApi,
+  "catalog",
+  Effect.fn(function*(handlers) {
+    const read = yield* Catalog
+    return handlers.handle("get", () => read)
+  })
+)
+
 export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(
-  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account])
+  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog])
 )

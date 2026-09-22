@@ -14,6 +14,7 @@ import { AgentRevision, AgentSpec, RevisionInput } from "../domain/AgentRevision
 import * as Conversation from "../domain/Conversation.js"
 import * as Organization from "../domain/Organization.js"
 import { AgentId, AgentRevisionId, ConversationId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
+import * as Catalog from "../runtime/Catalog.js"
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
 import { LastOwnerError, OrganizationNotFoundError } from "../store/OrganizationStore.js"
@@ -177,6 +178,11 @@ export class AccountGroup extends HttpApiGroup.make("account").add(
   })
 ).middleware(Authenticated) {}
 
+/** What a revision may name on this deployment: the settings page's choices. */
+export class CatalogGroup extends HttpApiGroup.make("catalog").add(
+  HttpApiEndpoint.get("get", "/catalog", { success: Catalog.View, error: WorkbenchStorageError })
+).middleware(Authenticated) {}
+
 export class WorkbenchApi extends HttpApi.make("workbench")
   .add(MeGroup)
   .add(ConversationsGroup)
@@ -185,4 +191,5 @@ export class WorkbenchApi extends HttpApi.make("workbench")
   .add(OrganizationsGroup)
   .add(LoginGroup)
   .add(AccountGroup)
+  .add(CatalogGroup)
 {}

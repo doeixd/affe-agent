@@ -14,8 +14,8 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type * as Conversation from "../domain/Conversation.js"
-import { ConversationId, UserId } from "../domain/WorkbenchIds.js"
-import type { AgentId } from "../domain/WorkbenchIds.js"
+import { AgentId, ConversationId, UserId } from "../domain/WorkbenchIds.js"
+import { AgentSettingsPage } from "../react/AgentSettingsPage.js"
 import { ConversationPage } from "../react/ConversationPage.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
@@ -36,14 +36,28 @@ const server = { baseUrl: window.location.origin, token: readToken() }
 const runtime = ManagedRuntime.make(
   ConversationSessions.layer.pipe(
     Layer.provideMerge(AgentDirectory.http(server)),
-    Layer.provideMerge(Layer.mergeAll(HttpStores.conversationStore(server), HttpStores.agentRegistry(server))),
+    Layer.provideMerge(
+      Layer.mergeAll(HttpStores.conversationStore(server), HttpStores.agentRegistry(server), HttpStores.catalog(server))
+    ),
     Layer.provideMerge(FetchHttpClient.layer)
   )
 )
 
-const selectedFromHash = (): Option.Option<ConversationId> => {
-  const id = decodeURIComponent(window.location.hash.slice(1))
-  return id === "" ? Option.none() : Option.some(ConversationId.make(id))
+/**
+ * The hash is the page: `#<conversation>` opens one, `#agents/new` and
+ * `#agents/<id>` are the settings for a new or an existing agent.
+ */
+type Route =
+  | { readonly _tag: "Home" }
+  | { readonly _tag: "Conversation"; readonly id: ConversationId }
+  | { readonly _tag: "Agent"; readonly id: Option.Option<AgentId> }
+
+const routeFromHash = (): Route => {
+  const hash = decodeURIComponent(window.location.hash.slice(1))
+  if (hash === "") return { _tag: "Home" }
+  if (hash === "agents/new") return { _tag: "Agent", id: Option.none() }
+  if (hash.startsWith("agents/")) return { _tag: "Agent", id: Option.some(AgentId.make(hash.slice("agents/".length))) }
+  return { _tag: "Conversation", id: ConversationId.make(hash) }
 }
 
 interface Identity {
@@ -59,7 +73,7 @@ const listConversations = (owner: UserId) =>
   }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
 
 const App = ({ agentId, owner }: Identity) => {
-  const [selected, setSelected] = useState(selectedFromHash)
+  const [route, setRoute] = useState(routeFromHash)
   const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
 
   const refresh = () => {
@@ -68,7 +82,7 @@ const App = ({ agentId, owner }: Identity) => {
 
   useEffect(() => {
     refresh()
-    const onHash = () => setSelected(selectedFromHash())
+    const onHash = () => setRoute(routeFromHash())
     window.addEventListener("hashchange", onHash)
     return () => window.removeEventListener("hashchange", onHash)
   }, [])
@@ -106,6 +120,9 @@ const App = ({ agentId, owner }: Identity) => {
             Sign out
           </button>
         </p>
+        <p>
+          <a href={`#agents/${encodeURIComponent(agentId)}`}>Agent settings</a> · <a href="#agents/new">New agent</a>
+        </p>
         <button type="button" onClick={create}>New conversation</button>
         <ul>
           {conversations.map((conversation) => (
@@ -115,10 +132,21 @@ const App = ({ agentId, owner }: Identity) => {
           ))}
         </ul>
       </nav>
-      {Option.match(selected, {
-        onNone: () => <p>Start or pick a conversation.</p>,
-        onSome: (id) => <ConversationPage key={id} runtime={runtime} conversationId={id} />
-      })}
+      {route._tag === "Home"
+        ? <p>Start or pick a conversation.</p>
+        : route._tag === "Conversation"
+        ? <ConversationPage key={route.id} runtime={runtime} conversationId={route.id} />
+        : (
+          <AgentSettingsPage
+            key={Option.getOrElse(route.id, () => "new")}
+            runtime={runtime}
+            owner={owner}
+            agentId={route.id}
+            onSaved={(spec) => {
+              window.location.hash = `agents/${encodeURIComponent(spec.id)}`
+            }}
+          />
+        )}
     </div>
   )
 }

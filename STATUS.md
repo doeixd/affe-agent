@@ -389,8 +389,10 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   with members under owner/admin/member rules decided in one pure module,
   and identity is real -- password accounts, issued tokens with a TTL,
   ended by logout or a password change, with configured tokens kept for
-  the local profile. The model catalog, the settings UI and every page
-  beyond chat, and control-plane Phases 2 onward remain open. Inbox
+  the local profile. Workbench W1 is complete the same day: a catalog of
+  what the deployment binds, and a settings page that creates an agent or
+  saves a new revision from it. Every page beyond chat and settings, W2
+  onward, and control-plane Phases 2 onward remain open. Inbox
   delivery retains input after transport failures, preserves defects, and
   reports missing or closed sessions at lookup, status or submission.
 

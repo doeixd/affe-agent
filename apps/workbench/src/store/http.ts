@@ -20,6 +20,7 @@ import type { ConversationId, UserId } from "../domain/WorkbenchIds.js"
 import type { InvalidCredentialsError, Issued, UserExistsError } from "../protocol/Authentication.js"
 import { bearer } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
+import { Catalog } from "../runtime/Catalog.js"
 import { AgentRegistry } from "./AgentRegistry.js"
 import { ConversationStore } from "./ConversationStore.js"
 import { OrganizationStore } from "./OrganizationStore.js"
@@ -93,6 +94,13 @@ export const register = (
 export const setPassword = (options: Options, password: string): Effect.Effect<void, WorkbenchStorageError, HttpClient.HttpClient> =>
   Effect.flatMap(client(options), (api) => api.account.setPassword({ payload: { password: Redacted.make(password) } }))
     .pipe(transport("setPassword"))
+
+/** The deployment's catalog, read once per page load. */
+export const catalog = (options: Options): Layer.Layer<Catalog, never, HttpClient.HttpClient> =>
+  Layer.effect(
+    Catalog,
+    Effect.map(client(options), (api) => api.catalog.get().pipe(transport("catalog")))
+  )
 
 /** Who the server says the token belongs to. */
 export const currentUser = (options: Options): Effect.Effect<UserId, WorkbenchStorageError, HttpClient.HttpClient> =>
