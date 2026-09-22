@@ -8,7 +8,7 @@
 import { Context, Schema } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
 import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi"
-import { UserId } from "../domain/WorkbenchIds.js"
+import { OrganizationId, UserId } from "../domain/WorkbenchIds.js"
 
 export class CurrentUser extends Context.Service<CurrentUser, UserId>()("workbench/CurrentUser") {}
 
@@ -22,6 +22,13 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
 export class ForeignOwnerError extends Schema.TaggedError<ForeignOwnerError>()(
   "ForeignOwnerError",
   { ownerId: UserId },
+  { httpApiStatus: 403 }
+) {}
+
+/** A membership change the caller's role in the organization does not allow. */
+export class InsufficientRoleError extends Schema.TaggedError<InsufficientRoleError>()(
+  "InsufficientRoleError",
+  { organizationId: OrganizationId, detail: Schema.String },
   { httpApiStatus: 403 }
 ) {}
 

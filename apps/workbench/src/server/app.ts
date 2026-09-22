@@ -34,6 +34,7 @@ import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
+import * as OrganizationStore from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { authenticated, hostOptions, Tokens } from "./Authentication.js"
 import { routes as productRoutes } from "./ProductHandlers.js"
@@ -204,7 +205,13 @@ export const serve = (options: {
       Layer.provideMerge(AgentDirectory.layer),
       Layer.provideMerge(AgentResolver.layerWith),
       Layer.provideMerge(
-        Layer.mergeAll(AgentRegistry.layerSql, ConversationStore.layerSql, SessionIndex.layerSql, durableClients(options.durability))
+        Layer.mergeAll(
+          AgentRegistry.layerSql,
+          ConversationStore.layerSql,
+          OrganizationStore.layerSql,
+          SessionIndex.layerSql,
+          durableClients(options.durability)
+        )
       ),
       Layer.provide(indexer),
       Layer.provide(bindings),

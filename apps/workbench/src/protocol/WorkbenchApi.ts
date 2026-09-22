@@ -12,12 +12,14 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { AgentRevision, AgentSpec, RevisionInput } from "../domain/AgentRevision.js"
 import * as Conversation from "../domain/Conversation.js"
-import { AgentId, AgentRevisionId, ConversationId, UserId } from "../domain/WorkbenchIds.js"
+import * as Organization from "../domain/Organization.js"
+import { AgentId, AgentRevisionId, ConversationId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
+import { LastOwnerError, OrganizationNotFoundError } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
-import { Authenticated, ForeignOwnerError } from "./Authentication.js"
+import { Authenticated, ForeignOwnerError, InsufficientRoleError } from "./Authentication.js"
 
 export class MeGroup extends HttpApiGroup.make("me").add(
   HttpApiEndpoint.get("get", "/me", { success: UserId })
@@ -74,7 +76,7 @@ export class AgentsGroup extends HttpApiGroup.make("agents").add(
   HttpApiEndpoint.post("create", "/agents", {
     payload: NewAgent,
     success: Created,
-    error: [ForeignOwnerError, WorkbenchStorageError]
+    error: [ForeignOwnerError, OrganizationNotFoundError, WorkbenchStorageError]
   }),
   HttpApiEndpoint.post("revise", "/agents/:id/revisions", {
     params: { id: AgentId },
@@ -105,6 +107,41 @@ export class SessionsGroup extends HttpApiGroup.make("sessions").add(
   })
 ).middleware(Authenticated) {}
 
-export class WorkbenchApi
-  extends HttpApi.make("workbench").add(MeGroup).add(ConversationsGroup).add(AgentsGroup).add(SessionsGroup)
+/**
+ * Organizations and membership (control plane §5). An organization the
+ * caller is not in answers as missing, like every other record.
+ */
+export class OrganizationsGroup extends HttpApiGroup.make("organizations").add(
+  HttpApiEndpoint.get("list", "/organizations", {
+    success: Schema.Array(Organization.Joined),
+    error: WorkbenchStorageError
+  }),
+  HttpApiEndpoint.post("create", "/organizations", {
+    payload: Organization.New,
+    success: Organization.Organization,
+    error: WorkbenchStorageError
+  }),
+  HttpApiEndpoint.get("members", "/organizations/:id/members", {
+    params: { id: OrganizationId },
+    success: Schema.Array(Organization.Membership),
+    error: [OrganizationNotFoundError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.put("setMember", "/organizations/:id/members/:userId", {
+    params: { id: OrganizationId, userId: UserId },
+    payload: Schema.Struct({ role: Organization.Role }),
+    success: Organization.Membership,
+    error: [OrganizationNotFoundError, InsufficientRoleError, LastOwnerError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.delete("removeMember", "/organizations/:id/members/:userId", {
+    params: { id: OrganizationId, userId: UserId },
+    error: [OrganizationNotFoundError, InsufficientRoleError, LastOwnerError, WorkbenchStorageError]
+  })
+).middleware(Authenticated) {}
+
+export class WorkbenchApi extends HttpApi.make("workbench")
+  .add(MeGroup)
+  .add(ConversationsGroup)
+  .add(AgentsGroup)
+  .add(SessionsGroup)
+  .add(OrganizationsGroup)
 {}

@@ -227,8 +227,21 @@ it is still open, so the next pass does not have to re-derive it.
     caller's running sessions (`apps/workbench/src/store/SessionIndex.ts`).
     Tested over a real server that a session blocked on an approval is
     listed as running, only for its owner, and that removing the follower
-    fails the test. Still open in Phase 1: organizations and membership, and
-    real identity (login) in place of configured tokens.
+    fails the test. Organizations and membership landed the same day (§5):
+    an `OrganizationStore` (memory and SQL) whose invariants are its own --
+    the creator is the first owner and the last owner can be neither
+    demoted nor removed; an agent optionally shared with one organization
+    (`AgentSpec.organizationId`, decoded as `None` for rows written before
+    it); and `Access`, the pure rules every handler decides by: a member
+    uses a shared agent and runs it in a conversation of their own, an
+    admin or owner also revises, archives and creates in the organization,
+    only an owner grants or takes ownership, and nobody else learns the
+    agent exists. Routes for organizations and members on `WorkbenchApi`,
+    HTTP store beside the others. Tested for every role combination, both
+    store backends, an old agent row, and end to end over a server with
+    three people; breaking manage-equals-use or the last-owner rule fails
+    the named tests. Still open in Phase 1: real identity (login) in place
+    of configured tokens.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

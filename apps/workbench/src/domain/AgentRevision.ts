@@ -6,8 +6,8 @@
  * reach into a run already going. Every capability is a reference resolved at
  * run time by `AgentResolver`, never code stored in a row.
  */
-import { Schema } from "effect"
-import { AgentId, AgentRevisionId, UserId } from "./WorkbenchIds.js"
+import { Effect, Option, Schema } from "effect"
+import { AgentId, AgentRevisionId, OrganizationId, UserId } from "./WorkbenchIds.js"
 
 /** Which model profile a revision runs on; the resolver binds the name. */
 export const ModelPolicy = Schema.Struct({ profile: Schema.String })
@@ -57,6 +57,12 @@ export type AgentRevision = typeof AgentRevision.Type
 export const AgentSpec = Schema.Struct({
   id: AgentId,
   ownerId: UserId,
+  /**
+   * The organization whose members may use it, if it is not the owner's
+   * alone (control plane §5; who may do what is `Access`). Decoded as
+   * `None` when the key is absent: agents were written before it existed.
+   */
+  organizationId: Schema.Option(OrganizationId).pipe(Schema.withDecodingDefaultKey(Effect.succeed(Option.none()))),
   name: Schema.String,
   description: Schema.Option(Schema.String),
   /** What a new session runs. A session already running keeps its own. */

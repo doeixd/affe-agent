@@ -25,3 +25,7 @@ export type AgentId = typeof AgentId.Type
 /** One immutable configuration of an agent. */
 export const AgentRevisionId = Schema.String.pipe(Schema.brand("workbench/AgentRevisionId"))
 export type AgentRevisionId = typeof AgentRevisionId.Type
+
+/** The SaaS/product tenant (control plane §5). Not `Sandbox.Workspace`, and not `WorkspaceId`. */
+export const OrganizationId = Schema.String.pipe(Schema.brand("workbench/OrganizationId"))
+export type OrganizationId = typeof OrganizationId.Type

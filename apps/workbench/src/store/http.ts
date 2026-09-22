@@ -13,7 +13,7 @@
  * store being unreachable, and is named as `WorkbenchStorageError`.
  */
 import { Effect, Layer } from "effect"
-import type { Option } from "effect"
+import { Option } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import type { ConversationId, UserId } from "../domain/WorkbenchIds.js"
@@ -21,6 +21,7 @@ import { bearer } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentRegistry } from "./AgentRegistry.js"
 import { ConversationStore } from "./ConversationStore.js"
+import { OrganizationStore } from "./OrganizationStore.js"
 import type * as SessionIndex from "./SessionIndex.js"
 import { failedAs } from "./WorkbenchStorageError.js"
 import type { WorkbenchStorageError } from "./WorkbenchStorageError.js"
@@ -35,12 +36,20 @@ const client = (options: Options) =>
     transformClient: HttpClient.mapRequest(HttpClientRequest.prependUrl(options.baseUrl))
   }).pipe(Effect.provide(bearer(options.token)))
 
-type Kept = "ConversationExistsError" | "ConversationNotFoundError" | "AgentNotFoundError" | "WorkbenchStorageError"
+type Kept =
+  | "ConversationExistsError"
+  | "ConversationNotFoundError"
+  | "AgentNotFoundError"
+  | "OrganizationNotFoundError"
+  | "LastOwnerError"
+  | "WorkbenchStorageError"
 
 const kept: ReadonlySet<string> = new Set<Kept>([
   "ConversationExistsError",
   "ConversationNotFoundError",
   "AgentNotFoundError",
+  "OrganizationNotFoundError",
+  "LastOwnerError",
   "WorkbenchStorageError"
 ])
 
@@ -100,13 +109,65 @@ export const agentRegistry = (options: Options): Layer.Layer<AgentRegistry, neve
     AgentRegistry,
     Effect.map(client(options), (api) =>
       AgentRegistry.of({
+        // The server lists everything the caller may use: their own and their organizations'.
         list: () => api.agents.list().pipe(transport("AgentRegistry.list")),
+        listShared: (organizations) =>
+          api.agents.list().pipe(
+            Effect.map((agents) =>
+              agents.filter((agent) =>
+                Option.isSome(agent.organizationId) && organizations.includes(agent.organizationId.value))),
+            transport("AgentRegistry.listShared")
+          ),
         get: (id) => api.agents.get({ params: { id } }).pipe(transport("AgentRegistry.get")),
         revisions: (id) => api.agents.revisions({ params: { id } }).pipe(transport("AgentRegistry.revisions")),
         revision: (id) => api.agents.revision({ params: { id } }).pipe(transport("AgentRegistry.revision")),
-        create: (input) => api.agents.create({ payload: input }).pipe(transport("AgentRegistry.create")),
+        // An organization the caller may not create in answers as missing, which a registry cannot say.
+        create: (input) =>
+          api.agents.create({ payload: input }).pipe(
+            Effect.catchTag("OrganizationNotFoundError", (error) => Effect.fail(failedAs("AgentRegistry.create")(error))),
+            transport("AgentRegistry.create")
+          ),
         // The server records the caller as the author, whoever `by` names.
         revise: (id, input) => api.agents.revise({ params: { id }, payload: input }).pipe(transport("AgentRegistry.revise")),
         archive: (id) => api.agents.archive({ params: { id } }).pipe(transport("AgentRegistry.archive"))
+      }))
+  )
+
+export const organizationStore = (options: Options): Layer.Layer<OrganizationStore, never, HttpClient.HttpClient> =>
+  Layer.effect(
+    OrganizationStore,
+    Effect.map(client(options), (api) =>
+      OrganizationStore.of({
+        // The caller is the owner, whoever `by` names.
+        create: (name) => api.organizations.create({ payload: { name } }).pipe(transport("OrganizationStore.create")),
+        get: (id) =>
+          api.organizations.list().pipe(
+            Effect.map((joined) =>
+              Option.map(Option.fromNullishOr(joined.find((j) => j.organization.id === id)), (j) => j.organization)),
+            transport("OrganizationStore.get")
+          ),
+        listFor: () => api.organizations.list().pipe(transport("OrganizationStore.listFor")),
+        members: (id) =>
+          api.organizations.members({ params: { id } }).pipe(
+            Effect.catchTag("OrganizationNotFoundError", () => Effect.succeed([])),
+            transport("OrganizationStore.members")
+          ),
+        role: (id, user) =>
+          api.organizations.members({ params: { id } }).pipe(
+            Effect.map((members) => Option.map(Option.fromNullishOr(members.find((m) => m.userId === user)), (m) => m.role)),
+            Effect.catchTag("OrganizationNotFoundError", () => Effect.succeed(Option.none())),
+            transport("OrganizationStore.role")
+          ),
+        // A role the caller may not grant is refused by the server; a store has no word for it.
+        setMember: (id, user, role) =>
+          api.organizations.setMember({ params: { id, userId: user }, payload: { role } }).pipe(
+            Effect.catchTag("InsufficientRoleError", (error) => Effect.fail(failedAs("OrganizationStore.setMember")(error))),
+            transport("OrganizationStore.setMember")
+          ),
+        removeMember: (id, user) =>
+          api.organizations.removeMember({ params: { id, userId: user } }).pipe(
+            Effect.catchTag("InsufficientRoleError", (error) => Effect.fail(failedAs("OrganizationStore.removeMember")(error))),
+            transport("OrganizationStore.removeMember")
+          )
       }))
   )

@@ -1,21 +1,31 @@
 /**
  * `WorkbenchApi` over the store services, as the person asking.
  *
- * The stores are shared by everyone; ownership is enforced here. Another
- * owner's records answer exactly as missing ones do, so a guessed id learns
+ * The stores are shared by everyone; access is decided here, by `Access`
+ * for agents and by ownership for everything personal. A record the caller
+ * may not see answers exactly as a missing one does, so a guessed id learns
  * nothing about whether it exists.
  */
 import { Effect, Layer, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import type { AgentId, UserId } from "../domain/WorkbenchIds.js"
-import { CurrentUser, ForeignOwnerError } from "../protocol/Authentication.js"
+import * as Access from "../domain/Access.js"
+import type { AgentSpec } from "../domain/AgentRevision.js"
+import type { AgentId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
+import { CurrentUser, ForeignOwnerError, InsufficientRoleError } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
+import { OrganizationNotFoundError, OrganizationStore } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 
 const ownedBy = <A extends { readonly ownerId: UserId }>(found: Option.Option<A>, user: UserId): Option.Option<A> =>
   Option.filter(found, (record) => record.ownerId === user)
+
+/** The caller's roles, by organization: what every agent decision is made against. */
+const rolesOf = Effect.fn("rolesOf")(function*(organizations: OrganizationStore["Service"], user: UserId) {
+  const joined = yield* organizations.listFor(user)
+  return new Map(joined.map((entry) => [entry.organization.id, entry.role])) as Access.Roles
+})
 
 const me = HttpApiBuilder.group(WorkbenchApi, "me", (handlers) => handlers.handle("get", () => CurrentUser))
 
@@ -25,6 +35,7 @@ const conversations = HttpApiBuilder.group(
   Effect.fn(function*(handlers) {
     const store = yield* ConversationStore
     const registry = yield* AgentRegistry
+    const organizations = yield* OrganizationStore
     const index = yield* SessionIndex.SessionIndex
 
     const ownConversation = Effect.fn("conversations.own")(function*(id: Parameters<typeof store.get>[0]) {
@@ -43,10 +54,14 @@ const conversations = HttpApiBuilder.group(
         if (payload.ownerId !== user) {
           return yield* new ForeignOwnerError({ ownerId: payload.ownerId })
         }
-        // The conversation must run one of this person's agents, on a revision of that agent.
-        const agent = ownedBy(yield* registry.get(payload.agentId), user)
+        // The conversation must run an agent this person may use, on a revision of that agent.
+        const agent = yield* registry.get(payload.agentId)
         const revision = yield* registry.revision(payload.agentRevisionId)
-        if (Option.isNone(agent) || Option.isNone(revision) || revision.value.agentId !== payload.agentId) {
+        const roles = yield* rolesOf(organizations, user)
+        if (
+          Option.isNone(agent) || !Access.canUse(agent.value, user, roles) ||
+          Option.isNone(revision) || revision.value.agentId !== payload.agentId
+        ) {
           return yield* new AgentNotFoundError({ agentId: payload.agentId })
         }
         const created = yield* store.create(payload)
@@ -75,44 +90,64 @@ const agents = HttpApiBuilder.group(
   "agents",
   Effect.fn(function*(handlers) {
     const registry = yield* AgentRegistry
+    const organizations = yield* OrganizationStore
 
-    const ownAgent = Effect.fn("agents.own")(function*(id: AgentId) {
+    /** The agent, if the caller may see and run it. */
+    const usable = Effect.fn("agents.usable")(function*(id: AgentId) {
       const user = yield* CurrentUser
-      return ownedBy(yield* registry.get(id), user)
+      const found = yield* registry.get(id)
+      if (Option.isNone(found)) return found
+      const roles = yield* rolesOf(organizations, user)
+      return Option.filter(found, (agent) => Access.canUse(agent, user, roles))
     })
 
-    const requireOwnAgent = Effect.fn("agents.requireOwn")(function*(id: AgentId) {
-      if (Option.isNone(yield* ownAgent(id))) {
+    /** The agent, if the caller may change it; otherwise as missing. */
+    const manageable = Effect.fn("agents.manageable")(function*(id: AgentId) {
+      const user = yield* CurrentUser
+      const found = yield* registry.get(id)
+      if (Option.isNone(found) || !Access.canManage(found.value, user, yield* rolesOf(organizations, user))) {
         return yield* new AgentNotFoundError({ agentId: id })
       }
+      return found.value
     })
 
     return handlers.handleAll({
       list: Effect.fn(function*() {
-        return yield* registry.list(yield* CurrentUser)
+        const user = yield* CurrentUser
+        const roles = yield* rolesOf(organizations, user)
+        const own = yield* registry.list(user)
+        const shared = yield* registry.listShared([...roles.keys()])
+        const seen = new Set(own.map((agent) => agent.id))
+        return [...own, ...shared.filter((agent) => !seen.has(agent.id))].sort((a, b) => a.id.localeCompare(b.id))
       }),
-      get: ({ params }) => ownAgent(params.id),
+      get: ({ params }) => usable(params.id),
       revisions: Effect.fn(function*({ params }) {
-        return Option.isSome(yield* ownAgent(params.id)) ? yield* registry.revisions(params.id) : []
+        return Option.isSome(yield* usable(params.id)) ? yield* registry.revisions(params.id) : []
       }),
       revision: Effect.fn(function*({ params }) {
         const revision = yield* registry.revision(params.id)
         if (Option.isNone(revision)) return revision
-        return Option.isSome(yield* ownAgent(revision.value.agentId)) ? revision : Option.none()
+        return Option.isSome(yield* usable(revision.value.agentId)) ? revision : Option.none()
       }),
       create: Effect.fn(function*({ payload }) {
         const user = yield* CurrentUser
         if (payload.ownerId !== user) {
           return yield* new ForeignOwnerError({ ownerId: payload.ownerId })
         }
+        if (payload.organizationId !== undefined) {
+          const roles = yield* rolesOf(organizations, user)
+          if (!Access.canCreateIn(payload.organizationId, roles)) {
+            return yield* new OrganizationNotFoundError({ organizationId: payload.organizationId })
+          }
+        }
         return yield* registry.create(payload)
       }),
       revise: Effect.fn(function*({ params, payload }) {
-        yield* requireOwnAgent(params.id)
+        yield* manageable(params.id)
         return yield* registry.revise(params.id, payload, yield* CurrentUser)
       }),
       archive: Effect.fn(function*({ params }) {
-        yield* requireOwnAgent(params.id)
+        yield* manageable(params.id)
         yield* registry.archive(params.id)
       })
     })
@@ -139,4 +174,59 @@ const sessions = HttpApiBuilder.group(
   })
 )
 
-export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(Layer.provide([me, conversations, agents, sessions]))
+const organizationsGroup = HttpApiBuilder.group(
+  WorkbenchApi,
+  "organizations",
+  Effect.fn(function*(handlers) {
+    const organizations = yield* OrganizationStore
+
+    /** The caller's role in the organization; not a member is not a member of anything by that id. */
+    const myRole = Effect.fn("organizations.myRole")(function*(id: OrganizationId) {
+      const role = yield* organizations.role(id, yield* CurrentUser)
+      if (Option.isNone(role)) {
+        return yield* new OrganizationNotFoundError({ organizationId: id })
+      }
+      return role
+    })
+
+    return handlers.handleAll({
+      list: Effect.fn(function*() {
+        return yield* organizations.listFor(yield* CurrentUser)
+      }),
+      create: Effect.fn(function*({ payload }) {
+        return yield* organizations.create(payload.name, yield* CurrentUser)
+      }),
+      members: Effect.fn(function*({ params }) {
+        yield* myRole(params.id)
+        return yield* organizations.members(params.id)
+      }),
+      setMember: Effect.fn(function*({ params, payload }) {
+        const actor = yield* myRole(params.id)
+        const current = yield* organizations.role(params.id, params.userId)
+        if (!Access.canSetRole(actor, current, payload.role)) {
+          return yield* new InsufficientRoleError({
+            organizationId: params.id,
+            detail: `a ${actor} may not make ${params.userId} ${payload.role}`
+          })
+        }
+        return yield* organizations.setMember(params.id, params.userId, payload.role)
+      }),
+      removeMember: Effect.fn(function*({ params }) {
+        const actor = yield* myRole(params.id)
+        const target = yield* organizations.role(params.id, params.userId)
+        if (Option.isNone(target)) return
+        if (!Access.canRemove(actor, target.value)) {
+          return yield* new InsufficientRoleError({
+            organizationId: params.id,
+            detail: `a ${actor} may not remove ${params.userId}, ${target.value}`
+          })
+        }
+        yield* organizations.removeMember(params.id, params.userId)
+      })
+    })
+  })
+)
+
+export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(
+  Layer.provide([me, conversations, agents, sessions, organizationsGroup])
+)

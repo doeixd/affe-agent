@@ -5,7 +5,7 @@ import { Context, DateTime, Effect, Layer, Option, Ref, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { AgentRevision, AgentSpec, RevisionInput as RevisionInputSchema } from "../domain/AgentRevision.js"
 import type { RevisionInput } from "../domain/AgentRevision.js"
-import { AgentId, AgentRevisionId, UserId as UserIdSchema } from "../domain/WorkbenchIds.js"
+import { AgentId, AgentRevisionId, OrganizationId, UserId as UserIdSchema } from "../domain/WorkbenchIds.js"
 import type { UserId } from "../domain/WorkbenchIds.js"
 import { failedAs, WorkbenchStorageError } from "./WorkbenchStorageError.js"
 
@@ -15,6 +15,8 @@ export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()
 
 export const NewAgent = Schema.Struct({
   ownerId: UserIdSchema,
+  /** Shared with an organization's members from the start, or the owner's alone. */
+  organizationId: Schema.optional(OrganizationId),
   name: Schema.String,
   description: Schema.optional(Schema.String),
   revision: RevisionInputSchema
@@ -34,6 +36,8 @@ export interface Service {
   /** Oldest first. */
   readonly revisions: (id: AgentId) => Effect.Effect<ReadonlyArray<AgentRevision>, WorkbenchStorageError>
   readonly list: (owner: UserId) => Effect.Effect<ReadonlyArray<AgentSpec>, WorkbenchStorageError>
+  /** Every agent belonging to any of these organizations, by id. Empty for no organizations. */
+  readonly listShared: (organizations: ReadonlyArray<OrganizationId>) => Effect.Effect<ReadonlyArray<AgentSpec>, WorkbenchStorageError>
   readonly create: (input: NewAgent) => Effect.Effect<Created, WorkbenchStorageError>
   /** Write the next revision and make it the active one. Earlier revisions are untouched. */
   readonly revise: (
@@ -63,6 +67,7 @@ const firstRevision = Effect.fn("AgentRegistry.firstRevision")(function*(input: 
   const spec: AgentSpec = {
     id: agentId,
     ownerId: input.ownerId,
+    organizationId: Option.fromNullishOr(input.organizationId),
     name: input.name,
     description: Option.fromNullishOr(input.description),
     activeRevisionId: revision.id,
@@ -148,6 +153,11 @@ export const memory: Layer.Layer<AgentRegistry> = Layer.effect(
             .sort((a, b) => a.revision - b.revision)),
       list: (owner) =>
         Effect.map(Ref.get(state), (current) => [...current.specs.values()].filter((spec) => spec.ownerId === owner)),
+      listShared: (organizations) =>
+        Effect.map(Ref.get(state), (current) =>
+          [...current.specs.values()]
+            .filter((spec) => Option.isSome(spec.organizationId) && organizations.includes(spec.organizationId.value))
+            .sort((a, b) => a.id.localeCompare(b.id))),
       create,
       revise,
       archive
@@ -212,7 +222,7 @@ export const sql: Effect.Effect<Service, never, SqlClient.SqlClient> = Effect.ge
     const created = yield* firstRevision(input)
     const body = yield* encodeSpec(created.spec)
     yield* client.withTransaction(
-      client`INSERT INTO workbench_agents (id, owner_id, body) VALUES (${created.spec.id}, ${created.spec.ownerId}, ${body})`.pipe(
+      client`INSERT INTO workbench_agents (id, owner_id, organization_id, body) VALUES (${created.spec.id}, ${created.spec.ownerId}, ${Option.getOrNull(created.spec.organizationId)}, ${body})`.pipe(
         Effect.andThen(insertRevision(created.revision))
       )
     ).pipe(Effect.mapError(failedAs("AgentRegistry.create")))
@@ -270,6 +280,13 @@ export const sql: Effect.Effect<Service, never, SqlClient.SqlClient> = Effect.ge
         Effect.mapError(failedAs("AgentRegistry.list")),
         Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeSpec(row.body)))
       ),
+    listShared: (organizations) =>
+      organizations.length === 0
+        ? Effect.succeed([])
+        : client<BodyRow>`SELECT body FROM workbench_agents WHERE organization_id IN ${client.in(organizations)} ORDER BY id`.pipe(
+          Effect.mapError(failedAs("AgentRegistry.listShared")),
+          Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeSpec(row.body)))
+        ),
     create,
     revise,
     archive
@@ -282,8 +299,15 @@ export const sqlWithTables: Effect.Effect<Service, never, SqlClient.SqlClient> =
   yield* client`CREATE TABLE IF NOT EXISTS workbench_agents (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
+    organization_id TEXT,
     body TEXT NOT NULL
   )`.pipe(Effect.orDie)
+  // A table from before organizations lacks the column; add it once.
+  const columns = yield* client<{ readonly name: string }>`PRAGMA table_info(workbench_agents)`.pipe(Effect.orDie)
+  if (!columns.some((column) => column.name === "organization_id")) {
+    yield* client`ALTER TABLE workbench_agents ADD COLUMN organization_id TEXT`.pipe(Effect.orDie)
+  }
+  yield* client`CREATE INDEX IF NOT EXISTS workbench_agents_by_organization ON workbench_agents (organization_id)`.pipe(Effect.orDie)
   yield* client`CREATE TABLE IF NOT EXISTS workbench_agent_revisions (
     id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL,
