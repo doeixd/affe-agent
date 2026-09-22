@@ -8,7 +8,7 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, DateTime, Effect, Fiber, Layer, Option } from "effect"
+import { Context, DateTime, Effect, Fiber, Layer, Option, Schedule } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AgentProtocol } from "affe-agent/client"
 import { SessionDirectory } from "affe-agent/sessions"
@@ -142,7 +142,7 @@ const summaryOf = (found: Option.Option<SessionIndex.Summary>) =>
 /** The index lags the session by the follower's write; wait for it to say so. */
 const until = <A>(read: Effect.Effect<A, unknown>, ok: (value: A) => boolean) =>
   read.pipe(
-    Effect.repeat({ until: ok }),
+    Effect.repeat({ until: ok, schedule: Schedule.spaced("50 millis") }),
     Effect.timeout("10 seconds")
   )
 
