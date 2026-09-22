@@ -6043,3 +6043,34 @@ alone. The README install table, the peer-range ledger entry (with its
 `verify:` line), and `STATUS.md` name `rc.115` now. All six typechecks and
 all five Effect-diagnostic projects are clean; portability and the doc-claim
 gates pass.
+
+## 2026-09-22 — plan audit: the docs had drifted from the tree
+
+An audit of every "shipped" claim in the ledger, `STATUS.md`, the two
+process/inbox design briefs and the workbench and control-plane plans
+against `src/`, `apps/` and `test/`. The code held: all 230 `verify:`
+claims, all 19 cited commit shas, roughly 90 prose-named deliverables and
+the spot-opened test assertions. The prose had drifted, and this entry
+records what was corrected, docs only:
+
+* `docs/remaining-work-closed.md` 35 named `DurableModel.wrap`'s
+  `alsoDescribing` option, renamed to `output` in `13179ba`; 26m still
+  listed `SessionInbox.run`, removed in the review commit `8b17d0b`.
+* `docs/effect-plan-2.txt` and `opencode-completion-plan.md` still said the
+  whole session/process architecture was unbuilt. A dated "Outcome" block
+  now says what shipped and names the parts left out on purpose: no
+  `ManagedProcess.write` or `process.write` / `process.signal` projections
+  (the sandbox has no stdin), no query on `list`, no `Lost` state,
+  `ProcessStore` or `ProcessOutputLog`, no `Origin` metadata, no
+  process-exit → inbox example and no monitor recipes.
+* `docs/plan-agent-product-control-plane.md` claimed "specified, not
+  implemented" with Phase 0 built and Phase 1 half built. Its header now
+  says which of its five planned commits landed in full, in part or not.
+* `docs/remaining-work.md` 81 said "W0 is complete"; the separate
+  assistant-ui adapter proof was never written and is now stated as
+  deferred. The localStorage store it names still exists but the browser
+  composes HTTP stores since W1.
+* `STATUS.md` gained a `/process` and `SessionInbox` paragraph under "What
+  ships" (both had been exported and tested for three weeks without a line
+  here), the workbench gates, and regenerated numbers: 2601 tests in 251
+  files, lint at 0 warnings (the chained-`provide` warning is gone).

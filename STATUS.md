@@ -1,6 +1,6 @@
 # Status — what is true now
 
-Last regenerated 2026-09-05. This is the short document: what ships, what
+Last regenerated 2026-09-22. This is the short document: what ships, what
 holds it there, and what is deliberately not done. The chronology -- every
 finding, every falsification, every "what the second subscriber found" --
 moved to [docs/status-history.md](./docs/status-history.md) and keeps growing
@@ -17,9 +17,10 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 2204 passing in 210 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
-| Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`, `lint:cloudflare`) | 0 errors, 1 warning (a chained `provide` in `test/ProcessManager.test.ts`, a colleague's file), 0 messages |
-| types | `npm run typecheck` (+ `:cli`, `:tui`, `:worker`, `:cloudflare`) | clean, examples included |
+| tests | `npm test` | 2601 passing in 251 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
+| Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`, `lint:workbench`, `lint:cloudflare`) | 0 errors, 0 warnings, 0 messages |
+| types | `npm run typecheck` (+ `:cli`, `:tui`, `:workbench`, `:worker`, `:cloudflare`) | clean, examples included |
+| workbench | `npm run test:workbench`, `build:workbench`, `smoke:workbench` | the product's own vitest root (stores, boundaries, control plane, reconnect, the page in happy-dom), its Vite build, and the page's transport over a real socket; all in `check` |
 | doc claims | `npm run verify:remaining-work` | every `verify:` line in the live list, the ledger and this file holds; a stale claim fails the build. It fired three times in its first two days, each time on text that had gone stale that hour |
 | casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
 | CI setup | `.github/workflows/ci.yml` | full Git history and tags; frozen TUI dependency install under Bun; the MCP v1 floor alias is pinned in the root lockfile |
@@ -166,6 +167,22 @@ directories that each die with their acquiring scope. `Presets.coding` takes
 one optionally -- opt-in, because it changes a lifetime. It owns workspaces and
 deliberately not processes: a managed process outlives its handles, so
 reference counting would kill it at exactly the wrong moment.
+
+**Processes and background input.** `/process` (experimental):
+`ProcessManager` owns a process that outlives the tool call that started it
+-- a stable `ProcessId`, `start` / `get` / `list` / `events`, output read by
+cursor, a handle that does not own the lifetime, the workspace held for as
+long as the process runs, and every process terminated when the manager
+closes; the local backend reuses the sandbox's tree-kill rather than
+`ChildProcess`. `ProcessTools` exposes it with `process:start`,
+`process:stop` and `process:read` as separate permission actions, so
+allowing start says nothing about stop. Output history is in memory and
+there is no `write` (the sandbox has no stdin); the design brief's
+persisted store, `Lost` state and reacquisition are deliberately unbuilt
+([docs/effect-plan-2.txt](./docs/effect-plan-2.txt), "Outcome"). `/sessions`
+adds `SessionInbox` over `PersistedQueue`: `enqueue` is idempotent on the
+item's id and `deliver` starts a new submission on an idle session, retries
+on a busy one, and survives a crash between the two.
 
 **Principal.** `Principal.CurrentPrincipal` (root): the caller's subject on
 the fibre that acts -- a `Context.Reference` the host sets per request

@@ -12,6 +12,39 @@ This is the detailed revision of the architecture also summarised in
 [remaining-work.md](./remaining-work.md) still lists that work as **hard /
 not this pass** — do the easy leftover slices there first.
 
+# Outcome (2026-09-22)
+
+The `STATUS (2026-08-26)` notes below and the phase table in §36 were
+written before any of this shipped and are left as they were. Read them
+against this:
+
+**Shipped**, with the ledger entries in
+[remaining-work-closed.md](./remaining-work-closed.md) 26l–26p:
+`SessionProjection` and `SessionDirectory` (`/sessions`), `SessionInbox`
+(`enqueue` + `deliver` only; no `run` loop), `WorkspaceManager` (from
+`/sandbox`, not a `/workspace` entry), `ProcessManager` and `ProcessTools`
+(`/process`), host-wide `AgentSessionHost.events`, `ModelCallCompleted`,
+and the relay. Phases 1–8 of §36 are therefore done.
+
+**Deliberately not built**, and no ledger item claims them:
+
+* `ManagedProcess.write` (§9) and the `process.write` / `process.signal`
+  projections (§21): the sandbox has no stdin, so a process cannot be
+  written to. The shipped projections are `process:start`, `process:stop`
+  and `process:read` (`src/process/ProcessTools.ts`).
+* `list(query) → ProcessPage` (§9): `list` takes no query and returns an
+  array; paging waits for a caller with enough processes to need it.
+* The `Lost` state, reacquisition across a restart, `ProcessStore` and
+  `ProcessOutputLog` (§8, §32, phase 9): output history is in memory and
+  dies with the manager. A process that must outlive its host is the
+  trigger for building them.
+* `Origin` correlation on `ProcessInfo`
+  ([opencode-completion-plan.md](./opencode-completion-plan.md) §11):
+  `Info` carries `label`, `workspace` and `command` only.
+* Phase 10 (a process-exit → `SessionInbox` helper or example) and phase
+  13 (documented monitor recipes): not written. `docs/guide-sessions.md`
+  covers the inbox on its own.
+
 ## Related documents
 
 Read these before implementing anything in this brief. Paths are relative to

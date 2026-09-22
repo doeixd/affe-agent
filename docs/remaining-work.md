@@ -158,9 +158,14 @@ it is still open, so the next pass does not have to re-derive it.
     landed too: a `useConversation` hook and a plain `ConversationPage`
     (rendered in happy-dom: streaming, tool progress, approve, stop),
     `AgentDirectory.http` over `AgentHttp`, a localStorage conversation
-    store, a Vite entry (`workbench:dev` beside `workbench:server`), and
-    `smoke:workbench`, which drives the page's transport over a real socket.
-    W0 is complete. W1's product shell landed (2026-09-14): `WorkbenchApi`
+    store (`ConversationStore.fromStorage`, still tested, no longer what
+    the browser composes since W1's HTTP stores replaced it), a Vite entry
+    (`workbench:dev` beside `workbench:server`), and `smoke:workbench`,
+    which drives the page's transport over a real socket. W0's plain
+    client is complete; its *separate adapter proof* in assistant-ui
+    (`plan-workbench.md`, after the W0 acceptance list) was never built and
+    is deferred until a second frontend needs the presenter. W1's product
+    shell landed (2026-09-14): `WorkbenchApi`
     serves conversations and agents from the server's SQLite database
     (product records only; execution stays on `AgentHttp`), the browser
     composes `ConversationSessions` from HTTP-backed stores, and the
@@ -178,7 +183,9 @@ it is still open, so the next pass does not have to re-derive it.
     conversation with its history and continues it. Workflow handlers register
     on first access to a revision after restart; unattended recovery without
     reopening a conversation is not implemented. Still open in W1: a
-    model catalog and the settings UI to edit agents; W2 onward is open.
+    model catalog, the settings UI to edit agents, and any UI for creating,
+    renaming, archiving or deleting (the API supports all four; the browser
+    opens the owner's first agent); W2 onward is open.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

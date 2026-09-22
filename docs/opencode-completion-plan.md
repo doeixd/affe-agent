@@ -4,7 +4,10 @@ The detailed, tree-annotated revision of this brief is
 [effect-plan-2.txt](./effect-plan-2.txt) (what already ships, closed
 evaluations, related plans, and what to implement first).
 [remaining-work.md](./remaining-work.md) still lists this architecture as
-hard / not this pass.
+hard / not this pass. **Since then it shipped**; the "Outcome (2026-09-22)"
+note at the top of effect-plan-2.txt says what landed and which parts of
+this brief (§10's write/signal projections, §11's `Origin` metadata, §15's
+end-to-end scenario) were deliberately left out.
 
 I would not hand it to an autonomous coding agent completely unchanged, though. It is a very good **design brief**; to make it an implementation brief, I’d append a short section making a few things non-negotiable.
 

@@ -128,7 +128,8 @@ still resolves -- here, if not in the list. Nothing here is next;
     asserting a shape that does not exist would be the wrong kind of test.
 17. ~~**Compress `STATUS.md`**~~ — 2026-08-30: the 3.4k-line chronology is
     `docs/status-history.md` (moved with `git mv`, so its history follows
-    it), and `STATUS.md` is ~130 lines of current truth: the gates as
+    it), and `STATUS.md` was ~130 lines of current truth (it has grown
+    since with each surface that shipped): the gates as
     commands, the two properties, what ships per surface, what holds it
     there, what is deliberately not done. New work appends to the history
     and edits the line here it changes.
@@ -424,7 +425,9 @@ still resolves -- here, if not in the list. Nothing here is next;
 26m. ~~**`SessionInbox`**~~ — **SHIPPED 2026-09-02** (`bc65708`), once
     `ProcessManager` (26n) existed to be its producer. `src/sessions/SessionInbox.ts`
     over `PersistedQueue`: `enqueue` idempotent on the item's id, `deliver`
-    starting a *new* submission on an idle session, `run` looping.
+    starting a *new* submission on an idle session. (A `run` loop shipped
+    with it and was removed in the review commit `8b17d0b`: it was untested
+    and the caller owns the loop.)
     The design correction the tests forced is worth carrying forward: a
     first draft polled for an idle session inside the delivery, which
     duplicated `PersistedQueue.take`'s own retry and held a queue slot doing
@@ -939,7 +942,7 @@ still resolves -- here, if not in the list. Nothing here is next;
     implemented too**: `src/code/callscript.ts` puts CallScript behind
     `CodeExecutor`, with a `./code/callscript` export and `callscript` as an
     optional peer dependency, and `test/CodeCallScript.test.ts` passes (6
-    tests). The plan's step table and `docs/README.md`'s index were both
+    tests at the time; 8 now). The plan's step table and `docs/README.md`'s index were both
     corrected in the same pass. Step 4 was the acceptance test for 1 and 3
     ("a second executor is the only real evidence"), so landing it is the
     claim that seam is a seam.
@@ -1003,8 +1006,10 @@ still resolves -- here, if not in the list. Nothing here is next;
     tool is injected per turn by `AgentTurn` rather than living there, so the
     model's call to it could not be encoded and the submission died with a
     `SchemaError` naming a union that omits it. Nothing combined the two
-    features, so nothing caught it. `DurableModel.wrap` now takes
-    `alsoDescribing` for tools the journal must describe but never executes.
+    features, so nothing caught it. `DurableModel.wrap` now takes the
+    agent's declared `output` and `src/internal/describedTools.ts` builds
+    the set of tools the journal must describe but never executes (the
+    option was first named `alsoDescribing`; `13179ba` renamed it).
 
 51. ~~**A replayed turn is charged to the budget twice**~~ — **FIXED 2026-09-04.** `Budget.spend`/`spendCost` now take an `Occurrence` — `(runId, turnIndex)` — and drop a charge for a turn already counted, so a replayed turn costs what it cost the first time. `test/BudgetCombinations.test.ts` asserted the wrong number until the fix landed and now asserts 2,000; disabling the dedupe returns it to 3,000. The number is also evidence that a run keeps its identity across a suspension, since a fresh `runId` on replay would have made the key differ. *(Original entry follows.)* (found 2026-09-04 by
     `test/BudgetCombinations.test.ts`, pinned at the wrong number so the suite
