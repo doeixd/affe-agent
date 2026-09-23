@@ -327,12 +327,18 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
         }).pipe(Effect.mapError((error) => new AgentClient.AgentTransportError({ sessionId, detail: error.message })))
       )
 
-    const openSession = (sessionId: string): Effect.Effect<AgentClient.RemoteSession, AgentClient.RemoteError> =>
+    const openSession = (
+      sessionId: string,
+      seed?: Prompt.Prompt | undefined
+    ): Effect.Effect<AgentClient.RemoteSession, AgentClient.RemoteError> =>
       Effect.gen(function* () {
         const existing = open.get(sessionId)
         if (existing !== undefined) return existing
         const scope = yield* Scope.make()
-        const history = yield* storedHistory(sessionId)
+        const stored = yield* storedHistory(sessionId)
+        // Only a session with nothing stored is seeded: an existing one keeps its history.
+        const seeded = Option.isNone(stored) && seed !== undefined
+        const history = seeded ? Option.some(seed) : stored
         // A fresh session numbers its events from 1; the journal numbers the
         // conversation. The base is where the previous life stopped.
         const base = yield* delivery.read(sessionId).pipe(
@@ -355,6 +361,9 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
           }),
           scope
         )
+        // A seed is the conversation's start; kept now, not at the first turn,
+        // so a runtime lost before that turn does not lose the branch point.
+        if (seeded) yield* persistHistory(sessionId, session, Option.none())
         // As each turn commits, and at the submission boundaries: a lost
         // runtime costs the turn in flight and nothing committed before it.
         yield* Effect.forkIn(
@@ -402,7 +411,7 @@ const makeClient = <Tools extends Record<string, Tool.Any>, E, R>(
               detail: "this host addresses sessions by id; POST /sessions must name one"
             })
           )
-          : openSession(createOptions.sessionId),
+          : openSession(createOptions.sessionId, createOptions.history),
       // A session whose history the storage holds exists, whether or not
       // this instance has opened it; one that never committed a turn left no
       // row and is reported as not found so the client can create it again.

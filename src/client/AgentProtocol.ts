@@ -156,7 +156,9 @@ export type RemoteError = typeof RemoteError.Type
 
 export const CreateSessionRequest = Schema.Struct({
   requestId: RequestId,
-  sessionId: Schema.optional(SessionId)
+  sessionId: Schema.optional(SessionId),
+  /** History to start from, in place of the agent's instructions (`AgentClient.CreateSessionOptions`). */
+  history: Schema.optional(PromptWire.Prompt)
 })
 export type CreateSessionRequest = typeof CreateSessionRequest.Type
 

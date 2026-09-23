@@ -495,9 +495,7 @@ export interface Service {
    * its sessions outlive every client handle and are reacquired later with
    * `session(id)`, from any process.
    */
-  readonly createSession: (options?: {
-    readonly sessionId?: string | undefined
-  }) => Effect.Effect<RemoteSession, RemoteError, Scope.Scope>
+  readonly createSession: (options?: CreateSessionOptions) => Effect.Effect<RemoteSession, RemoteError, Scope.Scope>
   /**
    * Reach a session that already exists.
    *
@@ -508,6 +506,21 @@ export interface Service {
   readonly session: (
     sessionId: string
   ) => Effect.Effect<RemoteSession, RemoteError>
+}
+
+/** What a session is created with. */
+export interface CreateSessionOptions {
+  readonly sessionId?: string | undefined
+  /**
+   * Canonical history to start from, in place of the agent's instructions --
+   * the same meaning `AgentSession.make({ history })` has, carried to every
+   * client. A branch of another conversation passes that conversation's
+   * history up to the point it branches, system message included.
+   *
+   * Only a *new* session is seeded: creating one that already exists (a
+   * durable client's idempotent create) leaves its history as it is.
+   */
+  readonly history?: Prompt.Prompt | undefined
 }
 
 export class AgentClient extends Context.Service<AgentClient, Service>()(
@@ -827,7 +840,10 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
             ...sessionMake,
             ...(sessionOptions?.sessionId === undefined
               ? {}
-              : { sessionId: sessionOptions.sessionId })
+              : { sessionId: sessionOptions.sessionId }),
+            ...(sessionOptions?.history === undefined
+              ? {}
+              : { history: sessionOptions.history })
           }).pipe(Effect.provide(env))
 
           const remote = fromSession(session, {
@@ -898,9 +914,7 @@ export interface TypedSession<Input, Value = string>
 
 /** `Service`, with its sessions typed by the agent's input and output. */
 export interface TypedService<Input, Value = string> {
-  readonly createSession: (options?: {
-    readonly sessionId?: string | undefined
-  }) => Effect.Effect<TypedSession<Input, Value>, RemoteError, Scope.Scope>
+  readonly createSession: (options?: CreateSessionOptions) => Effect.Effect<TypedSession<Input, Value>, RemoteError, Scope.Scope>
   readonly session: (sessionId: string) => Effect.Effect<TypedSession<Input, Value>, RemoteError>
 }
 

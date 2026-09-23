@@ -829,11 +829,10 @@ export const make = <Principal>(
           const childScope = yield* Scope.fork(sessionScope)
           const acquired = yield* Effect.exit(
             Scope.provide(
-              client.createSession(
-                request.sessionId === undefined
-                  ? undefined
-                  : { sessionId: request.sessionId }
-              ),
+              client.createSession({
+                ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+                ...(request.history === undefined ? {} : { history: request.history })
+              }),
               childScope
             ).pipe(
               Effect.flatMap((session) =>

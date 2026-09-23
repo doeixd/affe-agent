@@ -1,0 +1,24 @@
+{
+  "plain": {
+    "requestId": "c-1",
+    "sessionId": "s-1"
+  },
+  "seeded": {
+    "requestId": "c-2",
+    "sessionId": "s-2",
+    "history": {
+      "content": [
+        {
+          "options": {},
+          "role": "system",
+          "content": "branch system"
+        },
+        {
+          "options": {},
+          "role": "user",
+          "content": "earlier"
+        }
+      ]
+    }
+  }
+}

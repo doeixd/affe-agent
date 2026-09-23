@@ -1,6 +1,6 @@
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Schedule, Schema, Stream } from "effect"
 import type { Layer } from "effect"
-import { LanguageModel, Tool } from "effect/unstable/ai"
+import { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentEvent from "../AgentEvent.js"
@@ -532,6 +532,40 @@ export const cases = (options: Options): ReadonlyArray<Case> => {
               ["user", "assistant", "user", "assistant"],
               "history roles"
             )
+          })
+        )
+    )),
+
+    make("a seeded session starts from the history it was given, in place of the instructions", withClient(
+      options,
+      {
+        agent: Agent.make({ instructions: "the agent's own instructions", loop: AgentLoop.bounded(4) }),
+        turns: [TestLanguageModel.text("continued")]
+      },
+      (client) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const name = "a seeded session starts from the history it was given, in place of the instructions"
+            const seed = Prompt.make([
+              { role: "system", content: "the branch's system message" },
+              { role: "user", content: [{ type: "text", text: "earlier question" }] },
+              { role: "assistant", content: [{ type: "text", text: "earlier answer" }] }
+            ])
+            const session = yield* client.createSession({ history: seed })
+            const result = yield* session.prompt("and next?")
+            yield* equal(name)(result.text, "continued", "text")
+            const history = (yield* session.history).content
+            yield* equal(name)(
+              history.map((m) => m.role),
+              ["system", "user", "assistant", "user", "assistant"],
+              "history roles"
+            )
+            const systems = history.flatMap((m) => (m.role === "system" ? [m.content] : []))
+            yield* equal(name)(systems, ["the branch's system message"], "the seed's system message, and not the agent's")
+            // Unseeded, the same client starts from the instructions, as before.
+            const plain = yield* client.createSession()
+            const plainSystems = (yield* plain.history).content.flatMap((m) => (m.role === "system" ? [m.content] : []))
+            yield* equal(name)(plainSystems, ["the agent's own instructions"], "an unseeded session's system message")
           })
         )
     )),

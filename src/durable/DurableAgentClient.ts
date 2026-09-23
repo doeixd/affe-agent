@@ -885,9 +885,11 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
         Effect.gen(function* () {
           const sessionId =
             sessionOptions?.sessionId ?? (yield* freshSessionId)
+          // A seed replaces the instructions, as it does in process; an existing
+          // record keeps its history (`getOrCreate` is idempotent).
           const record = yield* options.sessionStore.getOrCreate(
             sessionId,
-            initialHistory(agent)
+            sessionOptions?.history ?? initialHistory(agent)
           )
           yield* reconcile(record)
           // Nothing handle-owned is acquired, so there is nothing to release:

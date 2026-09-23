@@ -215,6 +215,54 @@ describe("the Worker entry on workerd", () => {
   )
 
   /**
+   * A session created with a history seed starts from it, and the seed is
+   * kept at creation: a runtime lost before the first turn does not lose the
+   * point a branch was taken from. Broken once by persisting only at turns --
+   * the second life then found no history at all.
+   */
+  it.live("a seeded session starts from its seed, kept before the first turn", () =>
+    Effect.gen(function* () {
+      const { directory, outfile } = yield* bundleWorker()
+      const persist = path.join(directory, "do-storage")
+      const seed = {
+        content: [
+          { options: {}, role: "system", content: "the branch's system message" },
+          { options: {}, role: "user", content: [{ type: "text", options: {}, text: "earlier question" }] },
+          { options: {}, role: "assistant", content: [{ type: "text", options: {}, text: "earlier answer" }] }
+        ]
+      }
+      yield* Effect.scoped(Effect.gen(function* () {
+        const miniflare = yield* workerAt(outfile, persist)
+        const created = json(yield* call(miniflare, "/sessions", jsonRequest("POST", {
+          requestId: "create-seeded",
+          sessionId: "seeded",
+          history: seed
+        })))
+        assert.strictEqual(created.session.sessionId, "seeded")
+      }))
+      yield* Effect.scoped(Effect.gen(function* () {
+        const miniflare = yield* workerAt(outfile, persist)
+        const before = JSON.stringify(json(yield* call(miniflare, "/sessions/seeded/history", {
+          headers: { authorization: "Bearer worker" }
+        })))
+        assert.include(before, "the branch's system message")
+        assert.include(before, "earlier answer")
+        const answered = json(yield* call(miniflare, "/sessions/seeded/prompt", jsonRequest("POST", {
+          requestId: "prompt-seeded",
+          input: wireInput("and next?")
+        })))
+        assert.strictEqual(answered.result.text, "reply-1")
+        const after = JSON.stringify(json(yield* call(miniflare, "/sessions/seeded/history", {
+          headers: { authorization: "Bearer worker" }
+        })))
+        assert.include(after, "earlier question")
+        assert.include(after, "and next?")
+      }))
+    }),
+    120_000
+  )
+
+  /**
    * History is written as each turn commits, so a runtime lost mid-run
    * costs the turn in flight and nothing before it. The scripted model's
    * second prompt in a life runs two tool turns and then hangs; the runtime

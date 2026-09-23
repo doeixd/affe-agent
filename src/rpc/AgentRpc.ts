@@ -481,7 +481,8 @@ export const agentClientFrom = (
           requestId: nextRequestId(),
           ...(sessionOptions?.sessionId === undefined
             ? {}
-            : { sessionId: AgentProtocol.SessionId.make(sessionOptions.sessionId) })
+            : { sessionId: AgentProtocol.SessionId.make(sessionOptions.sessionId) }),
+          ...(sessionOptions?.history === undefined ? {} : { history: sessionOptions.history })
         }, auth)
       ).pipe(Effect.map((created) => remoteSession(created.session.sessionId))),
     session: (sessionId) =>

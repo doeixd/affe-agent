@@ -131,7 +131,7 @@ describe("AgentClientConformance", () => {
     Effect.gen(function* () {
       const report = yield* AgentClientConformance.run(wiring((real) => real))
       assert.deepStrictEqual(report.failed, [])
-      assert.strictEqual(report.passed.length, 28)
+      assert.strictEqual(report.passed.length, 29)
     })
   )
 
@@ -146,6 +146,21 @@ describe("AgentClientConformance", () => {
       assert.deepStrictEqual(
         report.failed.map((failure) => failure.name),
         ["opens a session and reaches it again by id"]
+      )
+    })
+  )
+
+  it.live("a client that drops the history seed fails exactly that case", () =>
+    Effect.gen(function* () {
+      const report = yield* AgentClientConformance.run(
+        wiring((real) => ({
+          ...real,
+          createSession: (options) => real.createSession(options?.sessionId === undefined ? undefined : { sessionId: options.sessionId })
+        }))
+      )
+      assert.deepStrictEqual(
+        report.failed.map((failure) => failure.name),
+        ["a seeded session starts from the history it was given, in place of the instructions"]
       )
     })
   )

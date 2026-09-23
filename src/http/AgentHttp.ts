@@ -524,7 +524,8 @@ export const fromGenerated = (
             requestId: nextRequestId(),
             ...(sessionOptions?.sessionId === undefined
               ? {}
-              : { sessionId: AgentProtocol.SessionId.make(sessionOptions.sessionId) })
+              : { sessionId: AgentProtocol.SessionId.make(sessionOptions.sessionId) }),
+            ...(sessionOptions?.history === undefined ? {} : { history: sessionOptions.history })
           }
         })
       ).pipe(
