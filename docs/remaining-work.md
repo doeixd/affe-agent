@@ -223,7 +223,17 @@ it is still open, so the next pass does not have to re-derive it.
     and the status is a status role; each settled reply has a Copy action;
     and the shell, chat column and board wrap on a narrow screen. Tested in
     happy-dom; letting Shift+Enter send or dropping the focus fails the
-    named test. Still open in W2: attachments, edit-and-resend and other
+    named test. Attachments followed: inline, as file parts of the prompt,
+    which the kernel already carries intact (item 116's by-reference path
+    is not reached for), so the cost is size and there is a cap -- 5 MB a
+    file, 5 a message, refused with a reason before anything is sent
+    (`ui-core/Attachments.ts`). The composer attaches and removes files; a
+    refused send gives them back; Retry resends them; a message shows the
+    files history says it carried. Tested as pure functions, in happy-dom,
+    and over a server, where the bytes come back from the durable history
+    exactly (base64-encoded, a form a file part allows); sending text
+    without the files or dropping the cap fails the named tests. Still open
+    in W2: edit-and-resend and other
     message actions that need the tree, source cards, prompt/command
     catalogs, mentions and suggestions, appearance, and a model picker
     (which D6's pinned revisions would have to allow first).

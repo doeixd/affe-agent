@@ -24,6 +24,8 @@ export interface MessageView {
   readonly role: "user" | "assistant"
   readonly text: string
   readonly reasoning: string
+  /** The names of files the message carried, as history holds them. */
+  readonly files: ReadonlyArray<string>
   /** `streaming` only for a message still forming from deltas. */
   readonly state: "streaming" | "complete" | "interrupted" | "failed"
 }
@@ -66,13 +68,15 @@ const messagesOf = (history: Prompt.Prompt): ReadonlyArray<MessageView> =>
     if (message.role !== "user" && message.role !== "assistant") return []
     let text = ""
     let reasoning = ""
+    const files: Array<string> = []
     for (const part of message.content) {
       if (part.type === "text") text += part.text
       else if (part.type === "reasoning") reasoning += part.text
+      else if (part.type === "file") files.push(part.fileName ?? part.mediaType)
     }
     // An assistant message that only called tools has nothing to read; its
     // calls are activity.
-    return text === "" && reasoning === "" ? [] : [{ role: message.role, text, reasoning, state: "complete" }]
+    return text === "" && reasoning === "" && files.length === 0 ? [] : [{ role: message.role, text, reasoning, files, state: "complete" }]
   })
 
 export const initial = (
@@ -155,7 +159,7 @@ const step = (state: ConversationView, envelope: AgentEvent.AgentEventEnvelope):
     case "MessageStarted":
       return {
         ...state,
-        messages: [...state.messages, { role: "assistant", text: "", reasoning: "", state: "streaming" }]
+        messages: [...state.messages, { role: "assistant", text: "", reasoning: "", files: [], state: "streaming" }]
       }
     case "MessageDelta":
       return {
@@ -172,7 +176,7 @@ const step = (state: ConversationView, envelope: AgentEvent.AgentEventEnvelope):
         ? { ...state, messages: updateLast(state.messages, (message) => ({ ...message, text: event.text, state: "complete" })) }
         : event.text === ""
         ? state
-        : { ...state, messages: [...state.messages, { role: "assistant", text: event.text, reasoning: "", state: "complete" }] }
+        : { ...state, messages: [...state.messages, { role: "assistant", text: event.text, reasoning: "", files: [], state: "complete" }] }
     case "MessageInterrupted":
       return { ...state, messages: updateLast(state.messages, (message) => ({ ...message, state: "interrupted" })) }
     case "MessageFailed":

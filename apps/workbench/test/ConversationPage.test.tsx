@@ -231,6 +231,35 @@ describe("ConversationPage", () => {
     }
   })
 
+  it("files are attached, an oversize one is refused, one is removed, and the rest are sent with the message", async () => {
+    const runtime = await openPage([TestLanguageModel.text("Read them.")])
+    try {
+      const picker = screen.getByLabelText("Attach")
+      const notes = new File(["some notes"], "notes.txt", { type: "text/plain" })
+      const extra = new File(["x"], "extra.txt", { type: "text/plain" })
+      const huge = new File([new Uint8Array(5 * 1024 * 1024 + 1)], "huge.bin")
+      fireEvent.change(picker, { target: { files: [notes, extra, huge] } })
+      const queued = await screen.findByRole("list", { name: "To send" })
+      expect(queued.textContent).toContain("notes.txt")
+      expect(queued.textContent).toContain("extra.txt")
+      expect(queued.textContent).not.toContain("huge.bin")
+      expect(screen.getByRole("alert", { name: "Not attached" }).textContent).toMatch(/huge.bin is 5.0 MB/)
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove extra.txt" }))
+      await waitFor(() => expect(screen.getByRole("list", { name: "To send" }).textContent).not.toContain("extra.txt"))
+
+      send("please read")
+      await screen.findByText("Read them.")
+      // Sent and gone from the composer; the person's message, as history holds it, carries the file.
+      expect(screen.queryByRole("list", { name: "To send" })).toBeNull()
+      const attached = await screen.findByRole("list", { name: "Attached files" })
+      expect(attached.textContent).toContain("notes.txt")
+      expect(attached.textContent).not.toContain("extra.txt")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it("Stop interrupts the running submission", async () => {
     const started = await Effect.runPromise(Deferred.make<void>())
     const runtime = await openPage([{ text: "never", hang: true, started }])

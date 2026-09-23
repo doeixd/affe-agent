@@ -13,6 +13,7 @@ import type React from "react"
 import type { ConversationId } from "../domain/WorkbenchIds.js"
 import type { ConversationSessions } from "../runtime/ConversationSessions.js"
 import type { ActivityView, MessageView } from "../ui-core/ConversationProjection.js"
+import * as Attachments from "../ui-core/Attachments.js"
 import * as Question from "../ui-core/Question.js"
 import { useConversation } from "./useConversation.js"
 
@@ -81,6 +82,11 @@ const Message = ({ children, message }: { readonly message: MessageView; readonl
       </details>
     )}
     <p>{message.text}</p>
+    {message.files.length === 0 ? null : (
+      <ul aria-label="Attached files">
+        {message.files.map((name, index) => <li key={index}>📎 {name}</li>)}
+      </ul>
+    )}
     {children}
   </li>
 )
@@ -98,6 +104,10 @@ const Activity = ({ activity }: { readonly activity: ActivityView }) =>
 export const ConversationPage = ({ conversationId, feedback, runtime }: ConversationPageProps) => {
   const state = useConversation(runtime, conversationId)
   const [ratings, setRatings] = useState<ReadonlyMap<number, Rating>>(new Map())
+  const [attachments, setAttachments] = useState<ReadonlyArray<Attachments.Attachment>>([])
+  const [refusals, setRefusals] = useState<ReadonlyArray<string>>([])
+  /** What this page last sent, files included: what Retry sends, when there is one. */
+  const [lastInput, setLastInput] = useState(Option.none<ReturnType<typeof Attachments.promptOf>>())
   useEffect(() => {
     if (feedback === undefined) return
     void Effect.runPromiseExit(feedback.list).then((exit) => {
@@ -124,10 +134,30 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
   const { conversation, session, view } = state
   const send = () => {
     const text = draft.trim()
-    if (text === "") return
+    const files = attachments
+    if (text === "" && files.length === 0) return
+    const input = Attachments.promptOf(text, files)
     setDraft("")
-    // Refused before it became a run -- busy, disconnected: the text comes back to the box.
-    run(session.prompt(text, { stream: true }), () => setDraft((current) => (current === "" ? text : current)))
+    setAttachments([])
+    setLastInput(Option.some(input))
+    // Refused before it became a run -- busy, disconnected: the text and files come back.
+    run(session.prompt(input, { stream: true }), () => {
+      setDraft((current) => (current === "" ? text : current))
+      setAttachments((current) => (current.length === 0 ? files : current))
+    })
+  }
+  const attach = (list: FileList | null) => {
+    if (list === null) return
+    const chosen = [...list]
+    void Promise.all(chosen.map(async (file): Promise<Attachments.Attachment> => ({
+      fileName: file.name,
+      mediaType: Attachments.mediaTypeOf(file.type),
+      data: new Uint8Array(await file.arrayBuffer())
+    }))).then((incoming) => {
+      const { attached, refused } = Attachments.add(attachments, incoming)
+      setAttachments(attached)
+      setRefusals(refused.map(Attachments.describeRefusal))
+    })
   }
   /** What a retry sends: the person's last message, as they wrote it. */
   const lastPrompt = Option.fromNullishOr(view.messages.filter((message) => message.role === "user").at(-1)?.text)
@@ -217,6 +247,38 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
             }}
           />
         </label>
+        <label>
+          Attach{" "}
+          <input
+            type="file"
+            multiple
+            onChange={(event) => {
+              attach(event.target.files)
+              event.target.value = ""
+            }}
+          />
+        </label>
+        {attachments.length === 0 ? null : (
+          <ul aria-label="To send">
+            {attachments.map((file, index) => (
+              <li key={`${file.fileName}-${index}`}>
+                📎 {file.fileName}{" "}
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.fileName}`}
+                  onClick={() => setAttachments((current) => current.filter((_, at) => at !== index))}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {refusals.length === 0 ? null : (
+          <ul role="alert" aria-label="Not attached">
+            {refusals.map((reason, index) => <li key={index}>{reason}</li>)}
+          </ul>
+        )}
         <span id="compose-keys" hidden>Enter sends, Shift+Enter starts a new line, Escape stops a running reply.</span>
         <button type="submit" disabled={view.status !== "idle"}>Send</button>
         <button type="button" disabled={view.status !== "running"} onClick={() => run(session.interrupt())}>
@@ -228,10 +290,10 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
         onSome: (failure) => (
           <section role="alert" aria-label="Failure">
             <p>The last run failed: {failure.message === "" ? failure.tag : failure.message}</p>
-            {Option.match(lastPrompt, {
+            {Option.match(Option.orElse(lastInput, () => lastPrompt), {
               onNone: () => null,
-              onSome: (text) => (
-                <button type="button" disabled={view.status !== "idle"} onClick={() => run(session.prompt(text, { stream: true }))}>
+              onSome: (input) => (
+                <button type="button" disabled={view.status !== "idle"} onClick={() => run(session.prompt(input, { stream: true }))}>
                   Retry
                 </button>
               )
