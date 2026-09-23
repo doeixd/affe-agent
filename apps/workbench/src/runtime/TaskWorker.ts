@@ -100,6 +100,8 @@ const attempt = (options: Options) =>
     const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
     const delay = (options.backoff ?? defaultBackoff)(item.claims)
     yield* queue.release(item.id, now + Duration.toMillis(delay))
+    // Back on the queue, so back to ready: the failed attempt is recorded, the task is not given up on.
+    yield* tasks.setStatus(item.taskId, "ready").pipe(Effect.catchTag("TaskNotFoundError", () => Effect.void))
   })
 
 /** One poll: claim what is due and attempt each. Answers how many were claimed. */

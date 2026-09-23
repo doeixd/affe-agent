@@ -151,10 +151,10 @@ describe("task worker", () => {
       yield* provided(TaskWorker.enqueue(ready.value))
       assert.strictEqual((yield* queue.listFor(ada)).length, 1)
 
-      // First tick: claimed, start refused, released with backoff. Still ready.
+      // First tick: claimed, start refused, released with backoff. Ready again, not failed: a retry is pending.
       assert.strictEqual(yield* provided(TaskWorker.tick(options)), 1)
       assert.strictEqual(yield* Ref.get(submits), 1)
-      assert.strictEqual(Option.map(yield* tasks.get(task.id), (t) => t.status).pipe(Option.getOrUndefined), "failed")
+      assert.strictEqual(Option.map(yield* tasks.get(task.id), (t) => t.status).pipe(Option.getOrUndefined), "ready")
       // Nothing due before the backoff.
       assert.strictEqual(yield* provided(TaskWorker.tick(options)), 0)
       yield* TestClock.adjust("1 second")
