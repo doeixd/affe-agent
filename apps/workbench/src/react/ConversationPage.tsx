@@ -16,6 +16,7 @@ import type { ActivityView, MessageView } from "../ui-core/ConversationProjectio
 import * as Attachments from "../ui-core/Attachments.js"
 import * as Branch from "../ui-core/Branch.js"
 import * as Question from "../ui-core/Question.js"
+import * as Starters from "../ui-core/Starters.js"
 import { useConversation } from "./useConversation.js"
 
 /** Ratings on replies; optional, so a page without a feedback store still renders. */
@@ -41,6 +42,8 @@ export interface ConversationPageProps {
    * conversation's model is pinned like its revision.
    */
   readonly models?: ReadonlyArray<string> | undefined
+  /** The agent's starter prompts; offered while the conversation is empty. */
+  readonly starters?: ReadonlyArray<string> | undefined
 }
 
 /** Copy a reply's text; says "Copied" until the text is copied again or the page moves on. */
@@ -113,7 +116,7 @@ const Activity = ({ activity }: { readonly activity: ActivityView }) =>
     )
     : <li>unrecognized event {activity.originalTag}</li>
 
-export const ConversationPage = ({ conversationId, feedback, models = [], onBranched, runtime }: ConversationPageProps) => {
+export const ConversationPage = ({ conversationId, feedback, models = [], onBranched, runtime, starters = [] }: ConversationPageProps) => {
   const state = useConversation(runtime, conversationId)
   const [ratings, setRatings] = useState<ReadonlyMap<number, Rating>>(new Map())
   const [editing, setEditing] = useState(Option.none<{ readonly index: number; readonly text: string }>())
@@ -318,6 +321,15 @@ export const ConversationPage = ({ conversationId, feedback, models = [], onBran
           </button>
         </section>
       ))}
+      {Starters.offered(view, starters).length === 0 ? null : (
+        <ul aria-label="Suggested">
+          {Starters.offered(view, starters).map((starter) => (
+            <li key={starter}>
+              <button type="button" onClick={() => run(session.prompt(starter, { stream: true }))}>{starter}</button>
+            </li>
+          ))}
+        </ul>
+      )}
       <form
         aria-label="Compose"
         onSubmit={(event) => {

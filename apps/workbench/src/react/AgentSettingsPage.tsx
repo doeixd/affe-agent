@@ -14,6 +14,7 @@ import { Permission } from "affe-agent"
 import type { AgentRevision, AgentSpec, RevisionInput } from "../domain/AgentRevision.js"
 import type { AgentId, UserId } from "../domain/WorkbenchIds.js"
 import { Catalog } from "../runtime/Catalog.js"
+import * as Starters from "../ui-core/Starters.js"
 import type { View as CatalogView } from "../runtime/Catalog.js"
 import { AgentRegistry } from "../store/AgentRegistry.js"
 
@@ -32,6 +33,8 @@ interface Draft {
   readonly capabilities: ReadonlySet<string>
   readonly skills: ReadonlySet<string>
   readonly maxTurns: number
+  /** One starter per line, as typed. */
+  readonly starters: string
 }
 
 interface Loaded {
@@ -53,7 +56,8 @@ const draftOf = (catalog: CatalogView, agent: Option.Option<AgentSpec>, revision
       model: catalog.models[0] ?? "",
       capabilities: new Set<string>(),
       skills: new Set<string>(),
-      maxTurns: 8
+      maxTurns: 8,
+      starters: ""
     }),
     onSome: (current) => ({
       name: Option.match(agent, { onNone: () => "", onSome: (spec) => spec.name }),
@@ -61,7 +65,8 @@ const draftOf = (catalog: CatalogView, agent: Option.Option<AgentSpec>, revision
       model: current.modelPolicy.profile,
       capabilities: new Set(current.capabilities.map((ref) => ref.id)),
       skills: new Set(current.skills.map((ref) => ref.id)),
-      maxTurns: current.maxTurns
+      maxTurns: current.maxTurns,
+      starters: (current.starters ?? []).join("\n")
     })
   })
 
@@ -146,7 +151,8 @@ export const AgentSettingsPage = ({ agentId, onSaved, owner, runtime }: AgentSet
         onNone: () => ({ recorded: JSON.stringify(Permission.describe(Permission.allowAll)) }),
         onSome: (current) => current.permission
       }),
-      maxTurns: draft.maxTurns
+      maxTurns: draft.maxTurns,
+      starters: Starters.normalize(draft.starters.split("\n"))
     }
     const write = Effect.gen(function*() {
       const registry = yield* AgentRegistry
@@ -215,6 +221,10 @@ export const AgentSettingsPage = ({ agentId, onSaved, owner, runtime }: AgentSet
       </label>
       <Choices legend="Capabilities" names={loaded.catalog.capabilities} chosen={draft.capabilities} onChange={(capabilities) => setDraft({ capabilities })} />
       <Choices legend="Skills" names={loaded.catalog.skills} chosen={draft.skills} onChange={(skills) => setDraft({ skills })} />
+      <label>
+        Starter prompts, one per line{" "}
+        <textarea name="starters" rows={3} value={draft.starters} onChange={(event) => setDraft({ starters: event.target.value })} />
+      </label>
       <label>
         Max turns{" "}
         <input

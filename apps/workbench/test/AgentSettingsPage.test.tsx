@@ -67,6 +67,7 @@ describe("agent settings page", () => {
     select("Model", "fast")
     fireEvent.click(screen.getByLabelText("web"))
     fireEvent.change(screen.getByLabelText("Max turns"), { target: { value: "3" } })
+    fireEvent.change(screen.getByLabelText("Starter prompts, one per line"), { target: { value: "Plan my week\n\n Plan my week \nSummarize a PDF" } })
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
 
     await screen.findByRole("status")
@@ -86,6 +87,7 @@ describe("agent settings page", () => {
       capabilities: [{ id: "web" }],
       skills: [],
       maxTurns: 3,
+      starters: ["Plan my week", "Summarize a PDF"],
       createdBy: owner
     })
   })

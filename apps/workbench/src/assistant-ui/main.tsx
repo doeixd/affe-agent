@@ -8,10 +8,12 @@
  */
 import { Layer, ManagedRuntime } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
+import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { ConversationId } from "../domain/WorkbenchIds.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
+import * as StarterPrompts from "../runtime/StarterPrompts.js"
 import * as HttpStores from "../store/http.js"
 import { AssistantThread } from "./AssistantThread.js"
 
@@ -33,12 +35,20 @@ const runtime = ManagedRuntime.make(
   )
 )
 
+const Thread = ({ id }: { readonly id: ConversationId }) => {
+  const [starters, setStarters] = useState<ReadonlyArray<string>>([])
+  useEffect(() => {
+    void runtime.runPromise(StarterPrompts.of(id)).then(setStarters)
+  }, [id])
+  return <AssistantThread runtime={runtime} conversationId={id} starters={starters} />
+}
+
 const root = document.getElementById("root")
 if (root !== null) {
   const id = decodeURIComponent(window.location.hash.slice(1))
   createRoot(root).render(
     id === ""
       ? <p>Open a conversation from the workbench, then add its id after <code>#</code> here.</p>
-      : <AssistantThread key={id} runtime={runtime} conversationId={ConversationId.make(id)} />
+      : <Thread key={id} id={ConversationId.make(id)} />
   )
 }

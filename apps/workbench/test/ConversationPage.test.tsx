@@ -30,7 +30,8 @@ const openPage = async (
   turns: ReadonlyArray<TestLanguageModel.Turn>,
   feedback?: FeedbackActions,
   onBranched?: (id: ConversationId) => void,
-  models?: ReadonlyArray<string>
+  models?: ReadonlyArray<string>,
+  starters?: ReadonlyArray<string>
 ) => {
   const { layer: model } = await Effect.runPromise(TestLanguageModel.script(turns))
   const bindings = Layer.succeed(AgentResolver.AgentBindings, {
@@ -69,7 +70,7 @@ const openPage = async (
     const { conversation } = yield* sessions.create({ ownerId: owner, agentId: spec.id, title: "Page" })
     return conversation.id
   }))
-  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} onBranched={onBranched} models={models} />)
+  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} onBranched={onBranched} models={models} starters={starters} />)
   await screen.findByRole("heading", { name: "Page" })
   return runtime
 }
@@ -343,6 +344,21 @@ describe("ConversationPage", () => {
       const history = await runtime.runPromise(Effect.flatMap(ConversationSessions.ConversationSessions, (sessions) =>
         Effect.flatMap(sessions.open(branchId), ({ session }) => session.history)))
       expect(history.content.filter((message) => message.role === "user" || message.role === "assistant").length).toBe(2)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("an empty conversation offers the agent's starters, and one sends it", async () => {
+    const runtime = await openPage([TestLanguageModel.text("Planned.")], undefined, undefined, undefined, ["Plan my week", "Summarize a PDF"])
+    try {
+      const suggested = screen.getByRole("list", { name: "Suggested" })
+      expect([...suggested.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Plan my week", "Summarize a PDF"])
+      fireEvent.click(screen.getByRole("button", { name: "Plan my week" }))
+      await screen.findByText("Planned.")
+      expect(screen.getByText("Plan my week")).toBeTruthy()
+      // Once the conversation has begun, they are gone.
+      expect(screen.queryByRole("list", { name: "Suggested" })).toBeNull()
     } finally {
       await runtime.dispose()
     }

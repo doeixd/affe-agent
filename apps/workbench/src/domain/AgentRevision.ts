@@ -36,7 +36,9 @@ const revisionFields = {
   skills: Schema.Array(SkillRef),
   permission: PermissionPolicy,
   /** The run's turn ceiling; the one budget W0 stores. */
-  maxTurns: Schema.Int
+  maxTurns: Schema.Int,
+  /** Openings the agent suggests on an empty conversation (`ui-core/Starters`). Absent is none. */
+  starters: Schema.optional(Schema.Array(Schema.String))
 }
 
 /** What an edit supplies. */

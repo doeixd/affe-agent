@@ -25,6 +25,7 @@ import { TasksPage } from "../react/TasksPage.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import { Catalog } from "../runtime/Catalog.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
+import * as StarterPrompts from "../runtime/StarterPrompts.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as HttpStores from "../store/http.js"
 import * as Question from "../ui-core/Question.js"
@@ -86,6 +87,29 @@ const taskActions = {
   start: (id: TaskId) => overHttp(HttpStores.startTask(server, id)),
   queue: (id: TaskId) => overHttp(HttpStores.queueTask(server, id)),
   cancel: (id: TaskId) => overHttp(HttpStores.cancelTask(server, id))
+}
+
+/** The chat page, with the conversation's starter prompts loaded beside it. */
+const Conversation = ({ id, models }: { readonly id: ConversationId; readonly models: ReadonlyArray<string> }) => {
+  const [starters, setStarters] = useState<ReadonlyArray<string>>([])
+  useEffect(() => {
+    void runtime.runPromise(StarterPrompts.of(id)).then(setStarters)
+  }, [id])
+  return (
+    <ConversationPage
+      runtime={runtime}
+      conversationId={id}
+      starters={starters}
+      feedback={{
+        list: overHttp(HttpStores.feedback(server, id)),
+        rate: (index, rating) => overHttp(HttpStores.rate(server, id, index, rating))
+      }}
+      models={models}
+      onBranched={(next) => {
+        window.location.hash = encodeURIComponent(next)
+      }}
+    />
+  )
 }
 
 /** Polled: the inbox is a read model the page has no stream for yet. */
@@ -170,21 +194,7 @@ const App = ({ agentId, agents, models, owner }: Identity) => {
           />
         )
         : route._tag === "Conversation"
-        ? (
-          <ConversationPage
-            key={route.id}
-            runtime={runtime}
-            conversationId={route.id}
-            feedback={{
-              list: overHttp(HttpStores.feedback(server, route.id)),
-              rate: (index, rating) => overHttp(HttpStores.rate(server, route.id, index, rating))
-            }}
-            models={models}
-            onBranched={(id) => {
-              window.location.hash = encodeURIComponent(id)
-            }}
-          />
-        )
+        ? <Conversation key={route.id} id={route.id} models={models} />
         : (
           <AgentSettingsPage
             key={Option.getOrElse(route.id, () => "new")}

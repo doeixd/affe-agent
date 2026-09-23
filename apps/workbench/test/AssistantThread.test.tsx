@@ -23,7 +23,7 @@ import * as ConversationStore from "../src/store/ConversationStore.js"
 const owner = UserId.make("ada")
 const Dangerous = Tool.make("deleteEverything", { parameters: Schema.Struct({}), success: Schema.String }).setNeedsApproval(true)
 
-const openThread = async (turns: ReadonlyArray<TestLanguageModel.Turn>) => {
+const openThread = async (turns: ReadonlyArray<TestLanguageModel.Turn>, starters?: ReadonlyArray<string>) => {
   const { layer: model } = await Effect.runPromise(TestLanguageModel.script(turns))
   const bindings = Layer.succeed(AgentResolver.AgentBindings, {
     models: { scripted: model },
@@ -55,7 +55,7 @@ const openThread = async (turns: ReadonlyArray<TestLanguageModel.Turn>) => {
       .create({ ownerId: owner, agentId: spec.id, title: "Through assistant-ui" })
     return conversation.id
   }))
-  render(<AssistantThread runtime={runtime} conversationId={conversationId} />)
+  render(<AssistantThread runtime={runtime} conversationId={conversationId} starters={starters} />)
   await screen.findByRole("heading", { name: "Through assistant-ui" })
   return runtime
 }
@@ -108,6 +108,19 @@ describe("assistant-ui thread", () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve" }))
       await screen.findByText("Deleted.")
       expect(screen.queryByRole("region", { name: "Question" })).toBeNull()
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("offers the same starters as assistant-ui suggestions, and one sends it", async () => {
+    const runtime = await openThread([TestLanguageModel.text("Planned.")], ["Plan my week", "Summarize a PDF"])
+    try {
+      await screen.findByRole("button", { name: "Suggested: Plan my week" })
+      expect(screen.getByRole("button", { name: "Suggested: Summarize a PDF" })).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Suggested: Plan my week" }))
+      await screen.findByText("Planned.")
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Suggested: Plan my week" })).toBeNull())
     } finally {
       await runtime.dispose()
     }

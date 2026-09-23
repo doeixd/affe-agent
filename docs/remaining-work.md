@@ -274,9 +274,15 @@ it is still open, so the next pass does not have to re-derive it.
     reopen, continued on another, kept by a branch, refused), in happy-dom,
     and against a record from before the field; ignoring the choice in the
     resolver, sharing one client across models, or accepting any model
-    each fail the named test. Still open in W2: source cards,
-    prompt/command catalogs, mentions and suggestions, and appearance --
-    the assistant-ui adapter they were to be shared with now exists.
+    each fail the named test. Starter prompts followed, as the prompt
+    catalog: a revision may carry `starters` (optional, so every earlier
+    revision decodes), edited one per line in settings; an empty idle
+    conversation offers its *pinned* revision's starters in both adapters --
+    buttons on the plain page, assistant-ui's own suggestions in the other,
+    from the one `ui-core/Starters` rule -- and one click sends it.
+    Offering them regardless of state, or not deduplicating, fails the
+    named tests. Still open in W2: source cards, a command registry,
+    mentions, and appearance.
 
     ```text
     verify: exists apps/workbench/src/ui-core/Branch.ts

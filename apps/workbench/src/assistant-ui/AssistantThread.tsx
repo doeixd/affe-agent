@@ -16,6 +16,7 @@ import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
   MessagePrimitive,
+  SuggestionPrimitive,
   ThreadPrimitive,
   useExternalStoreRuntime
 } from "@assistant-ui/react"
@@ -28,6 +29,7 @@ import { useConversation } from "../react/useConversation.js"
 import type { ConversationSessions } from "../runtime/ConversationSessions.js"
 import type { MessageView } from "../ui-core/ConversationProjection.js"
 import * as Question from "../ui-core/Question.js"
+import * as Starters from "../ui-core/Starters.js"
 
 /** One message as assistant-ui reads it: text, reasoning, and a status assistant-ui knows. */
 export const toThreadMessage = (message: MessageView, index: number): ThreadMessageLike => ({
@@ -57,6 +59,8 @@ export const textOf = (message: Pick<AppendMessage, "content">): string =>
 export interface AssistantThreadProps {
   readonly runtime: ManagedRuntime.ManagedRuntime<ConversationSessions, never>
   readonly conversationId: ConversationId
+  /** The agent's starter prompts, offered as assistant-ui suggestions while the conversation is empty. */
+  readonly starters?: ReadonlyArray<string> | undefined
 }
 
 const Bubble = ({ label }: { readonly label: string }) => (
@@ -66,7 +70,7 @@ const Bubble = ({ label }: { readonly label: string }) => (
   </MessagePrimitive.Root>
 )
 
-export const AssistantThread = ({ conversationId, runtime }: AssistantThreadProps) => {
+export const AssistantThread = ({ conversationId, runtime, starters = [] }: AssistantThreadProps) => {
   const state = useConversation(runtime, conversationId)
   const [refused, setRefused] = useState(Option.none<string>())
 
@@ -80,6 +84,7 @@ export const AssistantThread = ({ conversationId, runtime }: AssistantThreadProp
     messages: ready?.view.messages ?? [],
     isRunning: ready?.view.status === "running",
     isDisabled: ready === undefined,
+    suggestions: ready === undefined ? [] : Starters.offered(ready.view, starters).map((prompt) => ({ prompt })),
     convertMessage: toThreadMessage,
     onNew: async (message) => {
       const text = textOf(message).trim()
@@ -104,6 +109,13 @@ export const AssistantThread = ({ conversationId, runtime }: AssistantThreadProp
               {({ message }) => <Bubble label={message.role === "user" ? "You" : "Agent"} />}
             </ThreadPrimitive.Messages>
           </ThreadPrimitive.Viewport>
+          <ThreadPrimitive.Suggestions>
+            {({ suggestion }) => (
+              <SuggestionPrimitive.Trigger send aria-label={`Suggested: ${suggestion.prompt}`}>
+                {suggestion.prompt}
+              </SuggestionPrimitive.Trigger>
+            )}
+          </ThreadPrimitive.Suggestions>
           {view.pending.map(Question.describe).map((question) => (
             <section key={question.id} aria-label="Question">
               <p>{Question.headline(question)}</p>
