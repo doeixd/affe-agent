@@ -34,13 +34,17 @@ import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
 import * as Catalog from "../runtime/Catalog.js"
 import * as InboxProjection from "../runtime/InboxProjection.js"
+import * as TaskRunner from "../runtime/TaskRunner.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
 import * as IdentityStore from "../store/IdentityStore.js"
 import * as InboxStore from "../store/InboxStore.js"
 import * as OrganizationStore from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
+import * as TaskStore from "../store/TaskStore.js"
 import { authenticated, hostOptions, TokenResolver } from "./Authentication.js"
+import { Host } from "./Host.js"
+import * as HostAttempts from "./HostAttempts.js"
 import { Tokens } from "./Authentication.js"
 import * as Identity from "./Identity.js"
 import { routes as productRoutes } from "./ProductHandlers.js"
@@ -136,8 +140,6 @@ const durableClients = (durability: Durability | undefined) =>
     })
   )
 
-const Host = AgentSessionHost.Tag<UserId>("workbench/server")
-
 /**
  * The server's own principal, for the one host-wide operation the index
  * needs. Fresh per process and never a token's, so no request resolves to it.
@@ -179,6 +181,12 @@ const followSessions = Layer.effectDiscard(Effect.gen(function*() {
     Effect.tapError((error) => Effect.logError("workbench: the inbox stopped following", error)),
     Effect.forkScoped
   )
+  const tasks = yield* TaskStore.TaskStore
+  const forTasks = yield* hostService.hostEvents(indexer).pipe(Effect.orDie)
+  yield* TaskRunner.follow(tasks, forTasks).pipe(
+    Effect.tapError((error) => Effect.logError("workbench: task status stopped following", error)),
+    Effect.forkScoped
+  )
 }))
 
 /** Each person starts with one agent, so their first conversation has something to run. */
@@ -218,6 +226,8 @@ export const serve = (options: {
       seedAgents,
       followSessions
     ).pipe(
+      // Attempts go through the host, as a browser's sessions do, so the followers see them.
+      Layer.provideMerge(HostAttempts.layer),
       Layer.provide(host),
       Layer.provideMerge(Identity.tokenResolver),
       Layer.provideMerge(Identity.layer(options.identity)),
@@ -232,6 +242,7 @@ export const serve = (options: {
           IdentityStore.layerSql,
           InboxStore.layerSql,
           SessionIndex.layerSql,
+          TaskStore.layerSql,
           durableClients(options.durability)
         )
       ),

@@ -11,13 +11,17 @@
  */
 import { Effect, Layer, ManagedRuntime, Option } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
+import type { HttpClient } from "effect/unstable/http"
 import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type * as Conversation from "../domain/Conversation.js"
 import type * as InboxStore from "../store/InboxStore.js"
+import type * as Task from "../domain/Task.js"
 import { AgentId, ConversationId, UserId } from "../domain/WorkbenchIds.js"
+import type { TaskId } from "../domain/WorkbenchIds.js"
 import { AgentSettingsPage } from "../react/AgentSettingsPage.js"
 import { ConversationPage } from "../react/ConversationPage.js"
+import { TasksPage } from "../react/TasksPage.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
@@ -50,12 +54,14 @@ const runtime = ManagedRuntime.make(
  */
 type Route =
   | { readonly _tag: "Home" }
+  | { readonly _tag: "Tasks" }
   | { readonly _tag: "Conversation"; readonly id: ConversationId }
   | { readonly _tag: "Agent"; readonly id: Option.Option<AgentId> }
 
 const routeFromHash = (): Route => {
   const hash = decodeURIComponent(window.location.hash.slice(1))
   if (hash === "") return { _tag: "Home" }
+  if (hash === "tasks") return { _tag: "Tasks" }
   if (hash === "agents/new") return { _tag: "Agent", id: Option.none() }
   if (hash.startsWith("agents/")) return { _tag: "Agent", id: Option.some(AgentId.make(hash.slice("agents/".length))) }
   return { _tag: "Conversation", id: ConversationId.make(hash) }
@@ -64,6 +70,19 @@ const routeFromHash = (): Route => {
 interface Identity {
   readonly owner: UserId
   readonly agentId: AgentId
+  readonly agents: ReadonlyArray<{ readonly id: AgentId; readonly name: string }>
+}
+
+/** The board's server calls, over the page's runtime. */
+const overHttp = <A, E>(effect: Effect.Effect<A, E, HttpClient.HttpClient>) => Effect.provide(effect, FetchHttpClient.layer)
+const taskActions = {
+  list: overHttp(HttpStores.tasks(server)),
+  attempts: (id: TaskId) =>
+    overHttp(Effect.map(HttpStores.task(server, id), (found) =>
+      Option.match(found, { onNone: () => [], onSome: ({ attempts }) => attempts }))),
+  create: (input: Task.New) => overHttp(HttpStores.createTask(server, input)),
+  start: (id: TaskId) => overHttp(HttpStores.startTask(server, id)),
+  cancel: (id: TaskId) => overHttp(HttpStores.cancelTask(server, id))
 }
 
 /** An unreachable server shows an empty list; opening a conversation reports its own failure. */
@@ -76,7 +95,7 @@ const listConversations = (owner: UserId) =>
 /** Polled: the inbox is a read model the page has no stream for yet. */
 const inboxPollMillis = 2_000
 
-const App = ({ agentId, owner }: Identity) => {
+const App = ({ agentId, agents, owner }: Identity) => {
   const [route, setRoute] = useState(routeFromHash)
   const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
   const [inbox, setInbox] = useState<ReadonlyArray<InboxStore.Item>>([])
@@ -135,7 +154,8 @@ const App = ({ agentId, owner }: Identity) => {
           </button>
         </p>
         <p>
-          <a href={`#agents/${encodeURIComponent(agentId)}`}>Agent settings</a> · <a href="#agents/new">New agent</a>
+          <a href="#tasks">Tasks</a> · <a href={`#agents/${encodeURIComponent(agentId)}`}>Agent settings</a> ·{" "}
+          <a href="#agents/new">New agent</a>
         </p>
         {inbox.length === 0 ? null : (
           <section aria-label="Needs you">
@@ -160,6 +180,15 @@ const App = ({ agentId, owner }: Identity) => {
       </nav>
       {route._tag === "Home"
         ? <p>Start or pick a conversation.</p>
+        : route._tag === "Tasks"
+        ? (
+          <TasksPage
+            actions={taskActions}
+            owner={owner}
+            agents={agents}
+            run={(effect) => runtime.runPromise(effect)}
+          />
+        )
         : route._tag === "Conversation"
         ? <ConversationPage key={route.id} runtime={runtime} conversationId={route.id} />
         : (
@@ -230,9 +259,10 @@ if (root !== null) {
   void runtime.runPromise(Effect.gen(function*() {
     const owner = yield* HttpStores.currentUser(server)
     const registry = yield* AgentRegistry.AgentRegistry
-    const [agent] = yield* registry.list(owner)
+    const agents = yield* registry.list(owner)
+    const [agent] = agents
     if (agent === undefined) return yield* Effect.die("the server has no agent registered for this person")
-    return { owner, agentId: agent.id }
+    return { owner, agentId: agent.id, agents: agents.map(({ id, name }) => ({ id, name })) }
   })).then(
     (identity) => createRoot(root).render(<App {...identity} />),
     () => createRoot(root).render(<Login />)

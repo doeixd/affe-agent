@@ -13,11 +13,14 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { AgentRevision, AgentSpec, RevisionInput } from "../domain/AgentRevision.js"
 import * as Conversation from "../domain/Conversation.js"
 import * as Organization from "../domain/Organization.js"
-import { AgentId, AgentRevisionId, ConversationId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
+import * as Task from "../domain/Task.js"
+import { AgentId, AgentRevisionId, ConversationId, OrganizationId, TaskId, UserId } from "../domain/WorkbenchIds.js"
 import * as Catalog from "../runtime/Catalog.js"
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
 import * as InboxStore from "../store/InboxStore.js"
+import { TaskNotFoundError } from "../store/TaskStore.js"
+import { TaskNotStartableError } from "../runtime/TaskRunner.js"
 import { LastOwnerError, OrganizationNotFoundError } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
@@ -189,6 +192,34 @@ export class InboxGroup extends HttpApiGroup.make("inbox").add(
   HttpApiEndpoint.get("list", "/inbox", { success: Schema.Array(InboxStore.Item), error: WorkbenchStorageError })
 ).middleware(Authenticated) {}
 
+/**
+ * Tasks (control plane §8): the caller's work items, their attempts, and the
+ * two things a person does to one -- start it, stop it. Status is read, never
+ * set, here: the runner's projection sets it from the session.
+ */
+export class TasksGroup extends HttpApiGroup.make("tasks").add(
+  HttpApiEndpoint.get("list", "/tasks", { success: Schema.Array(Task.Record), error: WorkbenchStorageError }),
+  HttpApiEndpoint.get("get", "/tasks/:id", {
+    params: { id: TaskId },
+    success: Schema.Option(Schema.Struct({ task: Task.Record, attempts: Schema.Array(Task.Attempt) })),
+    error: WorkbenchStorageError
+  }),
+  HttpApiEndpoint.post("create", "/tasks", {
+    payload: Task.New,
+    success: Task.Record,
+    error: [ForeignOwnerError, AgentNotFoundError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.post("start", "/tasks/:id/start", {
+    params: { id: TaskId },
+    success: Task.Attempt,
+    error: [TaskNotFoundError, TaskNotStartableError, AgentNotFoundError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.post("cancel", "/tasks/:id/cancel", {
+    params: { id: TaskId },
+    error: [TaskNotFoundError, TaskNotStartableError, WorkbenchStorageError]
+  })
+).middleware(Authenticated) {}
+
 export class WorkbenchApi extends HttpApi.make("workbench")
   .add(MeGroup)
   .add(ConversationsGroup)
@@ -199,4 +230,5 @@ export class WorkbenchApi extends HttpApi.make("workbench")
   .add(AccountGroup)
   .add(CatalogGroup)
   .add(InboxGroup)
+  .add(TasksGroup)
 {}

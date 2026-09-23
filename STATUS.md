@@ -393,9 +393,11 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   what the deployment binds, and a settings page that creates an agent or
   saves a new revision from it. Phase 2 began with the Needs You inbox: a
   durable reference to every unanswered question, per owner, kept current
-  from the host's events and settled by the session, never by the inbox.
-  Every page beyond chat and settings, W2 onward, and the rest of Phase 2
-  (tasks, the board, the runner) onward remain open. Inbox
+  from the host's events and settled by the session, never by the inbox;
+  and tasks, whose attempts are ordinary conversations begun through the
+  session host and whose status is whatever the session's events say, on
+  a board by column. The §9 queue and assignment, every page beyond chat,
+  settings and the board, W2 onward, and Phase 3 onward remain open. Inbox
   delivery retains input after transport failures, preserves defects, and
   reports missing or closed sessions at lookup, status or submission.
 

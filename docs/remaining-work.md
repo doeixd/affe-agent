@@ -280,10 +280,30 @@ it is still open, so the next pass does not have to re-derive it.
     "Needs you (n)" linking to the conversations. Tested on both backends,
     against a hand-made event stream for each rule, and over a server
     where a question is in its owner's inbox alone until answered;
-    dropping either settling rule fails the named test. Still open in
-    Phase 2: `Task` / `TaskAttempt`, the board, assignment, `TaskRunner`
-    and the operational queue, and an approval/question UI beyond the chat
-    page's own.
+    dropping either settling rule fails the named test. Tasks followed
+    (§8, 2026-09-22): `Task` / `Attempt` as data and a `TaskStore` (memory
+    and SQL) where starting an attempt marks the task running in the same
+    write; a `TaskRunner` whose attempt is an ordinary conversation on the
+    task's agent plus one submission of its description, begun through
+    `TaskAttempts` -- on the server, the session host itself, as the owner,
+    so the attempt is observed like any session a person opens (a session
+    made on the resolved client directly emitted no host events and its
+    task never settled, which is how the seam was found); the attempt is
+    recorded *before* the submit so a question asked at once finds it, and
+    the submission id is stamped after. Status comes back from the host's
+    events and nowhere else: waiting while a question is open, running
+    otherwise, completed / failed / canceled as the submission settles; a
+    finished task can be run again as a new attempt. Routes for the
+    caller's tasks, start and cancel; a board page by column (backlog,
+    ready, running, needs you, done) with add, start, stop and a link to
+    each attempt's conversation. Tested on both backends, in happy-dom,
+    and over a server (completed; waiting with the question in the inbox;
+    canceled by interruption; run again and answered); dropping the
+    interruption rule fails the named test. Still open in Phase 2:
+    assignment and the operational queue behind `AgentDispatcher`
+    (§9: leases, priority, retry -- today a task runs when a person
+    starts it), tasks for organizations rather than people, and an
+    approval/question UI beyond the chat page's own.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

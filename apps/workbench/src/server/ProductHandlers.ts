@@ -13,12 +13,16 @@ import type { AgentSpec } from "../domain/AgentRevision.js"
 import type { AgentId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
 import { CurrentUser, ForeignOwnerError, InsufficientRoleError } from "../protocol/Authentication.js"
 import { Catalog } from "../runtime/Catalog.js"
+import * as TaskRunner from "../runtime/TaskRunner.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
 import { InboxStore } from "../store/InboxStore.js"
+import { TaskNotFoundError, TaskStore } from "../store/TaskStore.js"
+import type { TaskId } from "../domain/WorkbenchIds.js"
 import { OrganizationNotFoundError, OrganizationStore } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
+import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
 import { Identity } from "./Identity.js"
 
 const ownedBy = <A extends { readonly ownerId: UserId }>(found: Option.Option<A>, user: UserId): Option.Option<A> =>
@@ -274,6 +278,70 @@ const inbox = HttpApiBuilder.group(
   })
 )
 
+const tasks = HttpApiBuilder.group(
+  WorkbenchApi,
+  "tasks",
+  Effect.fn(function*(handlers) {
+    const store = yield* TaskStore
+    const registry = yield* AgentRegistry
+    const organizations = yield* OrganizationStore
+    // The runner's services, captured now: a handler's per-request context is
+    // the router's to provide, so what the runner needs is given to it here.
+    const runner = yield* Effect.context<TaskStore | TaskRunner.TaskAttempts>()
+
+    const ownTask = Effect.fn("tasks.own")(function*(id: TaskId) {
+      const user = yield* CurrentUser
+      const found = ownedBy(yield* store.get(id), user)
+      if (Option.isNone(found)) {
+        return yield* new TaskNotFoundError({ taskId: id })
+      }
+      return found.value
+    })
+
+    /** Everything the runner fails with that a store cannot name is the store being unreachable. */
+    const asStorage = (operation: string) =>
+      <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.catchIf(
+          effect,
+          (error): error is Exclude<E, { readonly _tag: "TaskNotFoundError" | "TaskNotStartableError" | "AgentNotFoundError" | "WorkbenchStorageError" }> =>
+            !["TaskNotFoundError", "TaskNotStartableError", "AgentNotFoundError", "WorkbenchStorageError"].includes(error._tag),
+          (error) => Effect.fail(new WorkbenchStorageError({ operation, detail: String(error) }))
+        )
+
+    return handlers.handleAll({
+      list: Effect.fn(function*() {
+        return yield* store.list(yield* CurrentUser)
+      }),
+      get: Effect.fn(function*({ params }) {
+        const user = yield* CurrentUser
+        const found = ownedBy(yield* store.get(params.id), user)
+        if (Option.isNone(found)) return Option.none()
+        return Option.some({ task: found.value, attempts: yield* store.attempts(params.id) })
+      }),
+      create: Effect.fn(function*({ payload }) {
+        const user = yield* CurrentUser
+        if (payload.ownerId !== user) {
+          return yield* new ForeignOwnerError({ ownerId: payload.ownerId })
+        }
+        const agent = yield* registry.get(payload.agentId)
+        const roles = yield* rolesOf(organizations, user)
+        if (Option.isNone(agent) || !Access.canUse(agent.value, user, roles)) {
+          return yield* new AgentNotFoundError({ agentId: payload.agentId })
+        }
+        return yield* store.create(payload)
+      }),
+      start: Effect.fn(function*({ params }) {
+        const task = yield* ownTask(params.id)
+        return yield* TaskRunner.start(task).pipe(Effect.provide(runner), asStorage("tasks.start"))
+      }),
+      cancel: Effect.fn(function*({ params }) {
+        const task = yield* ownTask(params.id)
+        yield* TaskRunner.cancel(task).pipe(Effect.provide(runner), asStorage("tasks.cancel"))
+      })
+    })
+  })
+)
+
 export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(
-  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog, inbox])
+  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog, inbox, tasks])
 )

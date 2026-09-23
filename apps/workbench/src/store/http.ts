@@ -16,7 +16,10 @@ import { Effect, Layer, Redacted } from "effect"
 import { Option } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
-import type { ConversationId, UserId } from "../domain/WorkbenchIds.js"
+import type { ConversationId, TaskId, UserId } from "../domain/WorkbenchIds.js"
+import type * as Task from "../domain/Task.js"
+import type { TaskNotFoundError } from "./TaskStore.js"
+import type { TaskNotStartableError } from "../runtime/TaskRunner.js"
 import type { InvalidCredentialsError, Issued, UserExistsError } from "../protocol/Authentication.js"
 import { bearer } from "../protocol/Authentication.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
@@ -40,6 +43,8 @@ const client = (options: Options) =>
   }).pipe(Effect.provide(bearer(options.token)))
 
 type Kept =
+  | "TaskNotFoundError"
+  | "TaskNotStartableError"
   | "InvalidCredentialsError"
   | "UserExistsError"
   | "ConversationExistsError"
@@ -50,6 +55,8 @@ type Kept =
   | "WorkbenchStorageError"
 
 const kept: ReadonlySet<string> = new Set<Kept>([
+  "TaskNotFoundError",
+  "TaskNotStartableError",
   "InvalidCredentialsError",
   "UserExistsError",
   "ConversationExistsError",
@@ -95,6 +102,41 @@ export const register = (
 export const setPassword = (options: Options, password: string): Effect.Effect<void, WorkbenchStorageError, HttpClient.HttpClient> =>
   Effect.flatMap(client(options), (api) => api.account.setPassword({ payload: { password: Redacted.make(password) } }))
     .pipe(transport("setPassword"))
+
+/** The caller's tasks, newest first. */
+export const tasks = (options: Options): Effect.Effect<ReadonlyArray<Task.Record>, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.tasks.list()).pipe(transport("tasks"))
+
+export const task = (
+  options: Options,
+  id: TaskId
+): Effect.Effect<
+  Option.Option<{ readonly task: Task.Record; readonly attempts: ReadonlyArray<Task.Attempt> }>,
+  WorkbenchStorageError,
+  HttpClient.HttpClient
+> => Effect.flatMap(client(options), (api) => api.tasks.get({ params: { id } })).pipe(transport("task"))
+
+/** An agent the caller may not use answers as missing, which the store's error already says. */
+export const createTask = (options: Options, input: Task.New): Effect.Effect<Task.Record, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.tasks.create({ payload: input })).pipe(
+    Effect.catchTag("AgentNotFoundError", (error) => Effect.fail(failedAs("createTask")(error))),
+    transport("createTask")
+  )
+
+export const startTask = (
+  options: Options,
+  id: TaskId
+): Effect.Effect<Task.Attempt, TaskNotFoundError | TaskNotStartableError | WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.tasks.start({ params: { id } })).pipe(
+    Effect.catchTag("AgentNotFoundError", (error) => Effect.fail(failedAs("startTask")(error))),
+    transport("startTask")
+  )
+
+export const cancelTask = (
+  options: Options,
+  id: TaskId
+): Effect.Effect<void, TaskNotFoundError | TaskNotStartableError | WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.tasks.cancel({ params: { id } })).pipe(transport("cancelTask"))
 
 /** Every question waiting on the caller, oldest first. */
 export const inbox = (options: Options): Effect.Effect<ReadonlyArray<InboxStore.Item>, WorkbenchStorageError, HttpClient.HttpClient> =>

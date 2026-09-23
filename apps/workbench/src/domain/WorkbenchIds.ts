@@ -29,3 +29,7 @@ export type AgentRevisionId = typeof AgentRevisionId.Type
 /** The SaaS/product tenant (control plane §5). Not `Sandbox.Workspace`, and not `WorkspaceId`. */
 export const OrganizationId = Schema.String.pipe(Schema.brand("workbench/OrganizationId"))
 export type OrganizationId = typeof OrganizationId.Type
+
+/** A product work item (control plane §8). Not a kernel submission. */
+export const TaskId = Schema.String.pipe(Schema.brand("workbench/TaskId"))
+export type TaskId = typeof TaskId.Type
