@@ -11,6 +11,10 @@ after the parent finishes or aborts", with "follow-ups [that] continue the
 same child thread" and durable recovery of "accepted work and pending report
 delivery".
 
+The three-form model this sits in is
+[plan-subagent-execution-forms.md](./plan-subagent-execution-forms.md); this
+file is its form 3, in detail.
+
 ## The problem
 
 `Subagent.tool` is synchronous and attached, by decision. The child session
@@ -120,6 +124,82 @@ restart — so C is a prerequisite for B's durable half, not an alternative to
 it. C is already decided and gated on an adopter that needs forwarded approval
 across a durable delegation.
 
+## What the effect-agent surface adds, and where each piece goes
+
+Four capabilities the `effect-agent` background surface has that the options
+above do not yet name. None is a kernel noun; each is a battery over an
+existing seam, and each wants its own caller.
+
+### Reports and updates
+
+A completion is a report: the child's result (or a bounded failure) delivered
+to the parent. `SessionInbox` is that delivery, and its acknowledgement
+vocabulary — handed over, persisted, accepted, settled (`guide-sessions.md`,
+"What a success means") — is exactly what effect-agent's `{ worker, delivery
+}` / receipt / "pending delivery says nothing about child execution"
+describes. What is new is the **update**: a provisional finding emitted before
+the completion, through a native `emit_update` tool.
+
+```ts
+const HotelResearcher = Agent.make({
+  instructions: "…",
+  updates: AreaConcern,          // installs emit_update
+  output: HotelFindings
+})
+```
+
+An update is data, independent of the final result, and never stops the child.
+Here it is a battery: `emit_update`'s handler publishes to a channel, and the
+background layer forwards each value into the parent's input. The seam under
+it is the same inbox (or an explicit `steer`); the new thing is the tool and
+the `updates` declaration, which is why it is its own item rather than part of
+`Subagent.background`.
+
+**Where a report lands is decided, not accidental.** `SessionInbox`'s rule is
+that a completion starts a new submission on an idle session or waits, and
+never joins one in flight; joining is the explicit act of
+`AgentSession.steer`. effect-agent joins at "an input boundary"; that is
+timing deciding meaning, which `SessionInbox` exists to refuse. A report that
+must land inside the running conversation is a steer the caller asks for.
+
+### Assignments
+
+effect-agent's `runDisposition: { workerLifecycle: "assignment", schema,
+fromOutput }` lets a worker's typed output decide `waiting` (the run ends, the
+assignment stays steerable) versus `completed` (the assignment seals, once its
+latest accepted instructions have applied). Failed or exhausted runs seal too.
+That is a lifecycle state machine, and `/state` (persistent typed state) is
+the seam it would build on. It is a real new concept and the least justified
+of the four: a worker that is a long-lived assignment rather than a one-shot
+task is a caller this plan does not yet have.
+
+### Control: follow-up, inspect, cancel, stop
+
+No new primitive; a toolkit over what exists.
+
+- **Follow-up** — deliver more input to the same child session. `SessionInbox`
+  again; the returned delivery state is its acknowledgement, and the caller
+  keeps the item id rather than resending.
+- **Inspect / list** — `SessionDirectory` enumerates sessions; a delivery's
+  state is the inbox's `Delivered` / `Undelivered`; a saved result is the
+  session's history.
+- **Cancel** — `AgentSession.interrupt`, targeted at one submission. It does
+  not close the worker, matching effect-agent's "cancellation targets one
+  input's receipt; it does not close the worker". An input cancelled before it
+  starts a run produces no completion, because no run happened.
+- **Stop** — a stable command key that seals the worker; the idempotency key
+  is what makes a re-sent stop one request, as `SessionInbox.Item.id` is for a
+  report.
+
+### Authorization
+
+effect-agent's `WorkerHostAuthorizer` authorizes a worker operation by
+principal and source thread, denying by default. That is `AgentSessionHost`'s
+authorization plus `Principal.CurrentPrincipal`, which already denies by
+default and is established per request by the host
+(`AgentSessionHost.Options.subject`); a worker operation is one more
+authorized operation on that host, not a second authorizer.
+
 ## Recommendation
 
 - **A now.** The composition works and is documented; nothing speculative is
@@ -129,6 +209,12 @@ across a durable delegation.
   queued input at the parent's next idle point.
 - **C when forwarded approval across a durable delegation is needed** — the
   already-recorded decision, unchanged.
+
+Updates, assignments and the control toolkit are separate, caller-gated items
+on top of B, in that order of justification: control is a toolkit over
+existing seams, updates add one tool and one declaration, assignments add a
+lifecycle. The full sequence is in
+[plan-subagent-execution-forms.md](./plan-subagent-execution-forms.md).
 
 ## Gate
 
@@ -148,3 +234,8 @@ exists.
   (`SessionInbox`'s persistence, exercised across a process boundary).
 - A background child's spend is charged to its own budget unless the parent
   explicitly shares, and the parent's ceiling is unaffected.
+- An update reaches the parent before the completion, is provisional, and does
+  not stop the child.
+- A worker operation from a principal or source thread other than the
+  authorized one is refused by default; cancel targets one input and does not
+  close the worker; stop seals it under a stable command key.
