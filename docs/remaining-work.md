@@ -204,10 +204,15 @@ it is still open, so the next pass does not have to re-derive it.
     next one starts, the page says why a run failed and offers Retry of the
     person's last message, and a send the session refuses puts the text
     back in the box. Tested in happy-dom and as pure functions; dropping
-    the failure or the approval decoding fails the named tests. Still open
-    in W2: attachments, message actions, source cards, prompt/command
-    catalogs, mentions and suggestions, feedback, appearance, pickers,
-    responsive layout and an accessibility pass.
+    the failure or the approval decoding fails the named tests. The
+    sidebar followed: `react/ConversationList` renames, archives (with a
+    "show archived" toggle) and deletes conversations -- delete asks twice
+    on the page, since a browser `confirm` blocks everything -- and starts
+    a new one on the agent picked; the inbox lists each question by what it
+    asks. Tested in happy-dom; a one-click delete or an ignored pick fails
+    the test. Still open in W2: attachments, message actions, source cards, prompt/command
+    catalogs, mentions and suggestions, feedback, appearance, a model
+    picker, responsive layout and an accessibility pass.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

@@ -14,19 +14,19 @@ import { FetchHttpClient } from "effect/unstable/http"
 import type { HttpClient } from "effect/unstable/http"
 import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
-import type * as Conversation from "../domain/Conversation.js"
 import type * as InboxStore from "../store/InboxStore.js"
 import type * as Task from "../domain/Task.js"
 import { AgentId, ConversationId, UserId } from "../domain/WorkbenchIds.js"
 import type { TaskId } from "../domain/WorkbenchIds.js"
 import { AgentSettingsPage } from "../react/AgentSettingsPage.js"
+import { ConversationList } from "../react/ConversationList.js"
 import { ConversationPage } from "../react/ConversationPage.js"
 import { TasksPage } from "../react/TasksPage.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
-import * as ConversationStore from "../store/ConversationStore.js"
 import * as HttpStores from "../store/http.js"
+import * as Question from "../ui-core/Question.js"
 
 const readToken = (): string => {
   try {
@@ -86,27 +86,14 @@ const taskActions = {
   cancel: (id: TaskId) => overHttp(HttpStores.cancelTask(server, id))
 }
 
-/** An unreachable server shows an empty list; opening a conversation reports its own failure. */
-const listConversations = (owner: UserId) =>
-  Effect.gen(function*() {
-    const store = yield* ConversationStore.ConversationStore
-    return yield* store.list({ ownerId: owner })
-  }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
-
 /** Polled: the inbox is a read model the page has no stream for yet. */
 const inboxPollMillis = 2_000
 
 const App = ({ agentId, agents, owner }: Identity) => {
   const [route, setRoute] = useState(routeFromHash)
-  const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
   const [inbox, setInbox] = useState<ReadonlyArray<InboxStore.Item>>([])
 
-  const refresh = () => {
-    void runtime.runPromise(listConversations(owner)).then(setConversations)
-  }
-
   useEffect(() => {
-    refresh()
     const onHash = () => setRoute(routeFromHash())
     window.addEventListener("hashchange", onHash)
     const poll = () => {
@@ -121,24 +108,9 @@ const App = ({ agentId, agents, owner }: Identity) => {
     }
   }, [])
 
-  const create = () => {
-    void runtime.runPromise(Effect.gen(function*() {
-      const sessions = yield* ConversationSessions.ConversationSessions
-      const { conversation } = yield* sessions.create({
-        ownerId: owner,
-        agentId,
-        title: `Conversation ${new Date().toLocaleTimeString()}`
-      })
-      return conversation.id
-    })).then((id) => {
-      window.location.hash = encodeURIComponent(id)
-      refresh()
-    })
-  }
-
   return (
     <div style={{ display: "flex", gap: "2rem", fontFamily: "system-ui", padding: "1rem" }}>
-      <nav aria-label="Conversations">
+      <aside>
         <p>
           Signed in as {owner}{" "}
           <button
@@ -164,21 +136,25 @@ const App = ({ agentId, agents, owner }: Identity) => {
             <ul>
               {inbox.map((item) => (
                 <li key={`${item.sessionId}/${item.id}`}>
-                  <a href={`#${encodeURIComponent(item.conversationId)}`}>{item.kind}</a>
+                  <a href={`#${encodeURIComponent(item.conversationId)}`}>{Question.headline(Question.describe(item))}</a>
                 </li>
               ))}
             </ul>
           </section>
         )}
-        <button type="button" onClick={create}>New conversation</button>
-        <ul>
-          {conversations.map((conversation) => (
-            <li key={conversation.id}>
-              <a href={`#${encodeURIComponent(conversation.id)}`}>{conversation.title}</a>
-            </li>
-          ))}
-        </ul>
-      </nav>
+        <ConversationList
+          runtime={runtime}
+          owner={owner}
+          agents={agents}
+          selected={route._tag === "Conversation" ? Option.some(route.id) : Option.none()}
+          onOpen={(id) => {
+            window.location.hash = encodeURIComponent(id)
+          }}
+          onClosed={() => {
+            window.location.hash = ""
+          }}
+        />
+      </aside>
       {route._tag === "Home"
         ? <p>Start or pick a conversation.</p>
         : route._tag === "Tasks"
