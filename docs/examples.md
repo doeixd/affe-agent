@@ -49,6 +49,12 @@ inference stayed precise. All *run in CI* as the `smoke:ref-*` scripts.
 - [`ref-delegation.ts`](../examples/ref-delegation.ts) — one policy governing
   a bridged Claude Code and a bridged OpenCode, both entering as ordinary
   tools
+- [`ref-subagent-forms.ts`](../examples/ref-subagent-forms.ts) — background
+  delegation built by hand over `/sessions` and the client seam: a tool starts
+  a child that outlives the parent's run, and its completion comes back as a
+  delivered report. A reference and a *measure*: it names the three things a
+  `Subagent.background` battery would have to supply
+  ([plan-subagent-execution-forms.md](./plan-subagent-execution-forms.md))
 
 ## Sandbox and coding
 

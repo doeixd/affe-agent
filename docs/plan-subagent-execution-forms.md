@@ -334,16 +334,31 @@ The repository's own way to test whether a surface is worth packaging is a
 **reference implementation built only from the public API**
 (`plan-primitives.md` §4): `examples/ref-delegation.ts` did this for the A2A
 bridges and found nothing missing, which is what let the bridges ship with
-confidence. The recommendation is to do the same here before any battery:
+confidence. The same test was run here:
 
-> Write `examples/ref-subagent-forms.ts` that composes **background
-> delegation by hand** over `/sessions` + `/scheduling` — a `start` tool, a
-> `follow_up` tool, and an inbox report back to the parent — and measure it.
+> **Done 2026-09-23 — `examples/ref-subagent-forms.ts`**, run in CI as
+> `npm run smoke:ref-subagent-forms`. It composes and it works: a tool starts
+> a child session that outlives the parent's run, and the child's completion
+> comes back through `SessionInbox` as a delivered report. It is **not** a
+> dozen lines, and it names three things a battery would have to supply:
+>
+> 1. **No portable multi-agent client.** `AgentClient` serves one agent and
+>    only the sessions it created, so a parent and child need two clients
+>    wired by hand; the multi-agent host exists only in the workbench and
+>    `apps/worker`.
+> 2. **The client/agent circularity.** The client is built from the agent,
+>    whose tool needs the client; breaking it took a `Context.Service` plus a
+>    lazy `Ref`, because the tool cannot close over a value that does not
+>    exist yet.
+> 3. **A report is application input.** `SessionInbox.Item.input` is a prompt,
+>    so the completion lands in the parent's history as a **user message**,
+>    indistinguishable from something the person typed — exactly the
+>    framework-message primitive decision 2 says is missing.
 
-If it is a dozen lines, the battery is not worth a new exported concept and
-the plans stay parked. If it is painful, the example *is* the caller, and it
-names precisely what the battery would remove. Either way the answer comes
-from the code rather than from this document.
+So the composition is real but it is not ergonomic, and the three findings
+above are the battery's specification. That is a caller's evidence, not a
+mandate: the work is still gated on someone wanting it, and the example is the
+thing to read first.
 
 The same test applies to `project` (form 1): write it by hand once; if it is
 trivial, decline the option.
@@ -357,4 +372,4 @@ trivial, decline the option.
 | reports joining a run | never implicitly; new run by default, boundary-join opt-in at wiring time |
 | report input path | a framework message bypassing `AgentInput` — a missing primitive the background work supplies |
 | background budgets | own by default |
-| next step | a reference example, not a battery; the example names the caller |
+| next step | the reference example ran; it names the battery's contents (see decision 4) |
