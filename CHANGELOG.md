@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Behaviour changes
 
 - AgentProtocol.CreateSessionRequest gains an optional `history` field (the prompt wire encoding); an unseeded request is byte-identical to before, and a server built before this ignores the field and starts from the agent's instructions (`85a0a8c`; measured by `test/fixtures/create-session-request.json`)
+- a delegation whose child a bound cut off mid-work now fails the parent's tool call with SubagentExhaustedError carrying the partial text, instead of succeeding with the partial (often empty) as the answer; a child that answered on a final turn is unchanged, and AgentSubmission.Result gains endedOnFinalTurn. (`cb157e6`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
