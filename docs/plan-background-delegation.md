@@ -157,10 +157,22 @@ the `updates` declaration, which is why it is its own item rather than part of
 
 **Where a report lands is decided, not accidental.** `SessionInbox`'s rule is
 that a completion starts a new submission on an idle session or waits, and
-never joins one in flight; joining is the explicit act of
-`AgentSession.steer`. effect-agent joins at "an input boundary"; that is
-timing deciding meaning, which `SessionInbox` exists to refuse. A report that
-must land inside the running conversation is a steer the caller asks for.
+never joins one in flight. A background child is, by definition, one the
+parent is not waiting for, so its report has no claim on the current run: the
+default is a new submission. Joining at a boundary is expressible **when
+chosen at wiring time** — `reportToParent: "input-boundary"` steers the report
+into the active run at a turn boundary — but it is off by default, because
+otherwise the arrival time, not the caller, would decide meaning.
+
+That decision exposes the primitive the background work must supply. A report
+is a **framework message**, not application input, and
+`SessionInbox.Item.input` is application input: it is a prompt decoded by the
+session's `AgentInput`, and `SessionInbox.ts` states that a typed-input agent
+"cannot be fed from here yet". So a report needs its own input path — a
+message kind that bypasses `AgentInput` and commits as a framework/system
+message — or a typed-input parent can never receive one. This is the concrete
+missing piece under the battery, and it is why the battery is not a thin
+wrapper over `SessionInbox`.
 
 ### Assignments
 

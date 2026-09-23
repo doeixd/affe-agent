@@ -58,17 +58,22 @@ interrupting the parent interrupts the child through structured concurrency.
 what crosses (budget by default, approval only when asked); `onError` decides
 whether a child failure is returned to the parent model or fails the run.
 
-Three additions worth making, each small and independently gated:
+Two additions worth making, and one effect-agent idea declined:
 
 1. **A result projection.** effect-agent's `projectResult` lets a declaration
    expose *part* of the child's output as the tool's answer. Here the tool's
    success is the child's output schema exactly. A `project` option on
    `Subagent.tool` — `(value: Value) => Tool.Success` — would close the gap
    without a second child or a wrapper tool.
-2. **A failure mapper.** `onError` is `"return" | "die"`. A third form that
-   maps a child's typed failure to the application's own error is what
-   effect-agent's "map failures to an application error" does; it is additive
-   and belongs beside `onError`.
+2. **A failure mapper — declined unless a caller needs it.** effect-agent maps
+   a child's failure to an application error. Here the child's failure is
+   already typed on the child's own error channel and readable as
+   `ToolCallFailed` (whose `failure` carries the class), while the parent
+   model gets a string under `onError: "return"`. A mapper would add a
+   parameter without adding information, because the delegation tool's
+   `failure` schema is a string; a *typed* parent-tool failure would mean
+   changing that schema, which is a different and larger decision. Reopen only
+   if a caller asks for it.
 3. **The exhaustion shape.** *Deliberately different, and decided
   2026-09-23.* effect-agent returns `{ output, budgetExhausted }` as a value;
    here a child a bound cut off mid-work is a `SubagentExhaustedError` on the
@@ -77,8 +82,10 @@ Three additions worth making, each small and independently gated:
    `AgentRun.Result.endedOnFinalTurn`. The reason to keep the typed failure:
    a value the model must remember to inspect is the thing `Exhaustion`'s
    `onExhaustion: "fail"` was added to stop relying on, and `"return"` already
-   puts it in front of the model as data. If a structured `budgetExhausted`
-   field is wanted for a *projection*, that is what item 1 is for.
+   puts it in front of the model as data. A caller who wants a structured
+   partial instead writes a child that *answers on the way out*
+   (`onExhaustion: "final-answer"`), which makes it a success; `project` is
+   for narrowing a success, not for rescuing a failure.
 
 ## Form 2 — durable attached
 
@@ -206,8 +213,8 @@ These are where affe-agent should *not* copy effect-agent, with the reason.
 
 Ordered by dependency and by what a caller can justify.
 
-1. **`Subagent.tool` `project` + failure mapper** — small, additive, useful
-   to the attached form alone. Gate: a caller that wants a projected result.
+1. **`Subagent.tool` `project`** — small, additive, useful to the attached
+   form alone. Gate: a caller that wants a projected result.
 2. **Durable attached (item 113)** — the child workflow. Gate: an adopter
    that needs forwarded approval (or any durable delegation) across a
    restart; already decided, deliberately unbuilt.
@@ -230,7 +237,7 @@ execution form.
 ## Acceptance, when built
 
 - **Attached:** unchanged, plus a projected result type-checked against the
-  tool's success schema, and a mapped failure that a caller can `catchTag`.
+  tool's success schema.
 - **Durable attached:** a parent that suspends on a child resumes with the
   child's recorded result; a restart reconnects to the same child identity; a
   child's forwarded approval parks the child and suspends the parent; aborting
@@ -244,16 +251,110 @@ execution form.
 - **Authorization:** a worker operation from a principal or thread other than
   the source's is refused by default.
 
-## Open decisions for the owner
+## Decisions
 
-1. **The result shape.** Keep the typed `SubagentExhaustedError` (recommended,
-   consistent with `Exhaustion`), or add a structured `{ output,
-   budgetExhausted }` result and a `projectResult`? The two are not exclusive;
-   the question is which is the default.
-2. **Reports joining a run.** Keep `SessionInbox`'s "never implicitly a
-   follow-up" rule (recommended), or add an opt-in that lets a report steer a
-   running parent?
-3. **Background budgets.** Own by default (recommended) or shared from the
-   source as effect-agent does?
-4. **Which slice has a caller now?** Every item above is gated; naming one
-   caller turns a plan into work.
+Reasoned 2026-09-23, in place of asking. Each follows from a commitment the
+library already makes, not from taste.
+
+### 1. The attached result is a typed failure, not a data flag
+
+Interruption and mid-work exhaustion are the **same event** — the child did
+not finish — so they must take the same shape. `SubagentInterruptedError`
+already established that shape (item 50); `SubagentExhaustedError` is its
+twin. A `{ output, budgetExhausted }` value would split two identical events
+into different shapes, and the split would be load-bearing: the parent's model
+would have to learn to check a field for one and catch a failure for the
+other.
+
+Three further reasons, in order of weight:
+
+- **The primary consumer is a model.** `ToolCallFailed` with
+  `returnedToModel: true` guarantees the model is shown the failure; a field
+  in a success object is ignorable. And `toolFailurePolicy` /
+  `toolDenialPolicy` already let the caller choose between failing the run and
+  returning the failure to the model — a choice the data shape cannot express.
+- **The data path already exists, and it is the child's to choose.** A child
+  that wants to hand back a partial declares an `AgentOutput` and configures
+  its loop with `onExhaustion: "final-answer"`: it *answers* on the way out, so
+  the delegation succeeds with a real value and no flag is needed. Partial as
+  data is an explicit child decision, not a harness default that every child
+  inherits.
+- **A programmatic caller already has structure.** The error class is exported
+  and `catchTag`-able, and the same failure is on the parent's event stream as
+  `ToolCallFailed`. Nothing is lost that a flag would return.
+
+The `project` option (form 1, item 1) stays separate: it narrows a *successful*
+child output for the parent tool, which is a different concern from what
+happens when the child does not finish.
+
+### 2. A report never joins a run implicitly; the default is a new run
+
+`SessionInbox`'s rule — a ping-back is future input, never an implicit
+follow-up — exists because timing must not decide meaning. A **background
+child is, by definition, one the parent is not waiting for**, so its report
+has no claim on the parent's current run. The default is therefore: the report
+starts a **new submission**, committed as a **framework message** (system
+role), not as the application input.
+
+That last clause is the design, not a detail. "Delivered separately from the
+parent's application input — no report tags, mapper or input union" is
+achievable here precisely because a report is a *framework message*, not a
+value decoded by the session's `AgentInput`. This exposes the missing
+primitive the background work must supply: **`SessionInbox` feeds application
+input and cannot feed an agent with a declared `AgentInput` at all** (stated
+in `SessionInbox.ts`). A framework report needs its own input path — a message
+kind that bypasses `AgentInput` — or a typed-input parent can never receive
+one.
+
+Joining at a boundary is expressible and safe **when chosen at wiring time**,
+because then the caller, not the arrival time, decides the relationship:
+`reportToParent: "input-boundary"` steers the report into the active run at a
+turn boundary, default off. Updates take the same path and the same default:
+provisional, a framework message, never stopping the child.
+
+### 3. Background budgets are their own by default
+
+An attached child's spend is the parent's because a parent capped at N is
+usually capped *because* it delegates, and the child is part of the same
+submission. A background child is a different session on a different lifetime:
+the parent may have ended before the child does. Charging a dead parent is
+worse than charging nobody, so a background child's budget is its own unless
+the caller explicitly shares one — the reverse of the attached default, and
+deliberately so.
+
+### 4. No caller today; find one with a reference example, not with code
+
+The two consumers that exist — the workbench's task board (`TaskRunner` /
+`TaskWorker` / `WorkQueue`, item 82) and `apps/worker` — each hand-rolled
+their own background execution rather than needing a kernel battery. Building
+the battery now would be speculative, which is exactly what the scope rule
+forbids.
+
+The repository's own way to test whether a surface is worth packaging is a
+**reference implementation built only from the public API**
+(`plan-primitives.md` §4): `examples/ref-delegation.ts` did this for the A2A
+bridges and found nothing missing, which is what let the bridges ship with
+confidence. The recommendation is to do the same here before any battery:
+
+> Write `examples/ref-subagent-forms.ts` that composes **background
+> delegation by hand** over `/sessions` + `/scheduling` — a `start` tool, a
+> `follow_up` tool, and an inbox report back to the parent — and measure it.
+
+If it is a dozen lines, the battery is not worth a new exported concept and
+the plans stay parked. If it is painful, the example *is* the caller, and it
+names precisely what the battery would remove. Either way the answer comes
+from the code rather than from this document.
+
+The same test applies to `project` (form 1): write it by hand once; if it is
+trivial, decline the option.
+
+### Summary
+
+| question | decision |
+| --- | --- |
+| attached result shape | typed failure (`SubagentExhaustedError`); partial-as-data is the child's `final-answer` |
+| failure mapper | declined unless a caller needs a typed parent-tool failure |
+| reports joining a run | never implicitly; new run by default, boundary-join opt-in at wiring time |
+| report input path | a framework message bypassing `AgentInput` — a missing primitive the background work supplies |
+| background budgets | own by default |
+| next step | a reference example, not a battery; the example names the caller |
