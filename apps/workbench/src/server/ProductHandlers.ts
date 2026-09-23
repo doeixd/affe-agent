@@ -16,6 +16,7 @@ import { Catalog } from "../runtime/Catalog.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
+import { InboxStore } from "../store/InboxStore.js"
 import { OrganizationNotFoundError, OrganizationStore } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { Identity } from "./Identity.js"
@@ -262,6 +263,17 @@ const catalog = HttpApiBuilder.group(
   })
 )
 
+const inbox = HttpApiBuilder.group(
+  WorkbenchApi,
+  "inbox",
+  Effect.fn(function*(handlers) {
+    const store = yield* InboxStore
+    return handlers.handle("list", Effect.fn(function*() {
+      return yield* store.listFor(yield* CurrentUser)
+    }))
+  })
+)
+
 export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(
-  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog])
+  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog, inbox])
 )

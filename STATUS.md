@@ -391,8 +391,11 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   ended by logout or a password change, with configured tokens kept for
   the local profile. Workbench W1 is complete the same day: a catalog of
   what the deployment binds, and a settings page that creates an agent or
-  saves a new revision from it. Every page beyond chat and settings, W2
-  onward, and control-plane Phases 2 onward remain open. Inbox
+  saves a new revision from it. Phase 2 began with the Needs You inbox: a
+  durable reference to every unanswered question, per owner, kept current
+  from the host's events and settled by the session, never by the inbox.
+  Every page beyond chat and settings, W2 onward, and the rest of Phase 2
+  (tasks, the board, the runner) onward remain open. Inbox
   delivery retains input after transport failures, preserves defects, and
   reports missing or closed sessions at lookup, status or submission.
 

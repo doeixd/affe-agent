@@ -2,7 +2,8 @@
 
 Written 2026-09-03.
 
-**Status: Phases 0 and 1 built; Phases 2–8 not started.**
+**Status: Phases 0 and 1 built; Phase 2 begun (the §11 inbox, 2026-09-22);
+Phases 3–8 not started.**
 The live entry is [remaining-work.md](./remaining-work.md) item 82.
 
 Audit 2026-09-22 against `apps/workbench/src`: Phase 0 (branded ids,

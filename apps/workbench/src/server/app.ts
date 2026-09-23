@@ -33,9 +33,11 @@ import { UserId } from "../domain/WorkbenchIds.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
 import * as Catalog from "../runtime/Catalog.js"
+import * as InboxProjection from "../runtime/InboxProjection.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
 import * as IdentityStore from "../store/IdentityStore.js"
+import * as InboxStore from "../store/InboxStore.js"
 import * as OrganizationStore from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { authenticated, hostOptions, TokenResolver } from "./Authentication.js"
@@ -163,9 +165,18 @@ const host = Layer.unwrap(Effect.gen(function*() {
 const followSessions = Layer.effectDiscard(Effect.gen(function*() {
   const hostService = yield* Host
   const index = yield* SessionIndex.SessionIndex
-  const events = yield* hostService.hostEvents(yield* Indexer).pipe(Effect.orDie)
-  yield* SessionDirectory.follow(index, events).pipe(
+  const inbox = yield* InboxStore.InboxStore
+  const conversations = yield* ConversationStore.ConversationStore
+  const indexer = yield* Indexer
+  // Two subscriptions, two read models: neither can slow or stop the other.
+  const forIndex = yield* hostService.hostEvents(indexer).pipe(Effect.orDie)
+  yield* SessionDirectory.follow(index, forIndex).pipe(
     Effect.tapError((error) => Effect.logError("workbench: the session index stopped following", error)),
+    Effect.forkScoped
+  )
+  const forInbox = yield* hostService.hostEvents(indexer).pipe(Effect.orDie)
+  yield* InboxProjection.follow(inbox, conversations, forInbox).pipe(
+    Effect.tapError((error) => Effect.logError("workbench: the inbox stopped following", error)),
     Effect.forkScoped
   )
 }))
@@ -219,6 +230,7 @@ export const serve = (options: {
           ConversationStore.layerSql,
           OrganizationStore.layerSql,
           IdentityStore.layerSql,
+          InboxStore.layerSql,
           SessionIndex.layerSql,
           durableClients(options.durability)
         )

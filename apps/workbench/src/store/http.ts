@@ -24,6 +24,7 @@ import { Catalog } from "../runtime/Catalog.js"
 import { AgentRegistry } from "./AgentRegistry.js"
 import { ConversationStore } from "./ConversationStore.js"
 import { OrganizationStore } from "./OrganizationStore.js"
+import type * as InboxStore from "./InboxStore.js"
 import type * as SessionIndex from "./SessionIndex.js"
 import { failedAs } from "./WorkbenchStorageError.js"
 import type { WorkbenchStorageError } from "./WorkbenchStorageError.js"
@@ -94,6 +95,10 @@ export const register = (
 export const setPassword = (options: Options, password: string): Effect.Effect<void, WorkbenchStorageError, HttpClient.HttpClient> =>
   Effect.flatMap(client(options), (api) => api.account.setPassword({ payload: { password: Redacted.make(password) } }))
     .pipe(transport("setPassword"))
+
+/** Every question waiting on the caller, oldest first. */
+export const inbox = (options: Options): Effect.Effect<ReadonlyArray<InboxStore.Item>, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.inbox.list()).pipe(transport("inbox"))
 
 /** The deployment's catalog, read once per page load. */
 export const catalog = (options: Options): Layer.Layer<Catalog, never, HttpClient.HttpClient> =>

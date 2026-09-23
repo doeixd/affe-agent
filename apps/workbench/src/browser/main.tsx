@@ -14,6 +14,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type * as Conversation from "../domain/Conversation.js"
+import type * as InboxStore from "../store/InboxStore.js"
 import { AgentId, ConversationId, UserId } from "../domain/WorkbenchIds.js"
 import { AgentSettingsPage } from "../react/AgentSettingsPage.js"
 import { ConversationPage } from "../react/ConversationPage.js"
@@ -72,9 +73,13 @@ const listConversations = (owner: UserId) =>
     return yield* store.list({ ownerId: owner })
   }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<Conversation.Record>>([])))
 
+/** Polled: the inbox is a read model the page has no stream for yet. */
+const inboxPollMillis = 2_000
+
 const App = ({ agentId, owner }: Identity) => {
   const [route, setRoute] = useState(routeFromHash)
   const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
+  const [inbox, setInbox] = useState<ReadonlyArray<InboxStore.Item>>([])
 
   const refresh = () => {
     void runtime.runPromise(listConversations(owner)).then(setConversations)
@@ -84,7 +89,16 @@ const App = ({ agentId, owner }: Identity) => {
     refresh()
     const onHash = () => setRoute(routeFromHash())
     window.addEventListener("hashchange", onHash)
-    return () => window.removeEventListener("hashchange", onHash)
+    const poll = () => {
+      void runtime.runPromise(HttpStores.inbox(server).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<InboxStore.Item>>([]))))
+        .then(setInbox)
+    }
+    poll()
+    const timer = window.setInterval(poll, inboxPollMillis)
+    return () => {
+      window.removeEventListener("hashchange", onHash)
+      window.clearInterval(timer)
+    }
   }, [])
 
   const create = () => {
@@ -123,6 +137,18 @@ const App = ({ agentId, owner }: Identity) => {
         <p>
           <a href={`#agents/${encodeURIComponent(agentId)}`}>Agent settings</a> · <a href="#agents/new">New agent</a>
         </p>
+        {inbox.length === 0 ? null : (
+          <section aria-label="Needs you">
+            <h2>Needs you ({inbox.length})</h2>
+            <ul>
+              {inbox.map((item) => (
+                <li key={`${item.sessionId}/${item.id}`}>
+                  <a href={`#${encodeURIComponent(item.conversationId)}`}>{item.kind}</a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         <button type="button" onClick={create}>New conversation</button>
         <ul>
           {conversations.map((conversation) => (

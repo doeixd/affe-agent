@@ -267,9 +267,23 @@ it is still open, so the next pass does not have to re-derive it.
     refusal, expiry under the test clock, revocation on logout and on
     password change, nothing secret in a row) and over a server (the
     issued token prompts the agent; logout and password change end it;
-    the configured token survives). **Phase 1 is complete.** Open in Phase
-    1's neighbourhood: the model catalog and settings UI (item 81), and
-    everything from Phase 2 on.
+    the configured token survives). **Phase 1 is complete.** Phase 2 has
+    begun with the Needs You inbox (§11, 2026-09-22): not an approval queue
+    of its own but a durable reference to an unresolved elicitation --
+    `InboxStore` (memory and SQL) kept current by `InboxProjection` from
+    `hostEvents` under the same indexer principal, by three rules: a
+    request appears for the conversation's owner, it settles when
+    resolved, and everything a session had open settles when its
+    submission does (which is what an interrupted run needs, since its
+    questions never resolve). `GET /inbox` lists the caller's, oldest
+    first; answering stays on the session, and the browser's nav shows
+    "Needs you (n)" linking to the conversations. Tested on both backends,
+    against a hand-made event stream for each rule, and over a server
+    where a question is in its owner's inbox alone until answered;
+    dropping either settling rule fails the named test. Still open in
+    Phase 2: `Task` / `TaskAttempt`, the board, assignment, `TaskRunner`
+    and the operational queue, and an approval/question UI beyond the chat
+    page's own.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

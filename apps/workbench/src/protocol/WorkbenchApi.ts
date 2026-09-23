@@ -17,6 +17,7 @@ import { AgentId, AgentRevisionId, ConversationId, OrganizationId, UserId } from
 import * as Catalog from "../runtime/Catalog.js"
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
+import * as InboxStore from "../store/InboxStore.js"
 import { LastOwnerError, OrganizationNotFoundError } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
@@ -183,6 +184,11 @@ export class CatalogGroup extends HttpApiGroup.make("catalog").add(
   HttpApiEndpoint.get("get", "/catalog", { success: Catalog.View, error: WorkbenchStorageError })
 ).middleware(Authenticated) {}
 
+/** Needs You (control plane §11): every question waiting on the caller, oldest first. Answered on the session, not here. */
+export class InboxGroup extends HttpApiGroup.make("inbox").add(
+  HttpApiEndpoint.get("list", "/inbox", { success: Schema.Array(InboxStore.Item), error: WorkbenchStorageError })
+).middleware(Authenticated) {}
+
 export class WorkbenchApi extends HttpApi.make("workbench")
   .add(MeGroup)
   .add(ConversationsGroup)
@@ -192,4 +198,5 @@ export class WorkbenchApi extends HttpApi.make("workbench")
   .add(LoginGroup)
   .add(AccountGroup)
   .add(CatalogGroup)
+  .add(InboxGroup)
 {}
