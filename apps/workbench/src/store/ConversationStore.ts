@@ -40,8 +40,9 @@ export class ConversationStore extends Context.Service<ConversationStore, Servic
   "workbench/ConversationStore"
 ) {}
 
-const stamped = (input: Conversation.New, now: DateTime.Utc): Conversation.Record => ({
+const stamped = ({ modelProfile, ...input }: Conversation.New, now: DateTime.Utc): Conversation.Record => ({
   ...input,
+  modelProfile: Option.fromNullishOr(modelProfile),
   archived: false,
   createdAt: now,
   updatedAt: now

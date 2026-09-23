@@ -25,7 +25,7 @@ describe("catalog over the server", () => {
     Effect.scoped(Effect.gen(function*() {
       yield* Layer.build(serve({ port, database: ":memory:" }).pipe(Layer.provide(tokens({ "ada-token": "ada" }))))
       assert.deepStrictEqual(yield* read("ada-token"), {
-        models: ["scripted"],
+        models: ["alternate", "scripted"],
         capabilities: ["build", "deleteEverything"],
         skills: []
       })

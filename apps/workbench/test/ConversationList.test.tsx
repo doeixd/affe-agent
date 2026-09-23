@@ -52,6 +52,7 @@ const setup = async () => {
       runtime={runtime}
       owner={owner}
       agents={agents}
+      models={["scripted"]}
       selected={Option.none()}
       onOpen={(id) => opened.push(id)}
       onClosed={() => closed++}
@@ -104,6 +105,21 @@ describe("conversation list", () => {
       fireEvent.click(screen.getByRole("button", { name: "Confirm delete Plans" }))
       await waitFor(() => expect(list().textContent).not.toContain("Plans"))
       expect(await stored(runtime)).toEqual([])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("a new conversation records the model picked, and the agent's own when none is", async () => {
+    const { opened, runtime } = await setup()
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+      await waitFor(() => expect(opened.length).toBe(1))
+      fireEvent.change(screen.getByLabelText("Model"), { target: { value: "scripted" } })
+      fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+      await waitFor(() => expect(opened.length).toBe(2))
+      const byId = new Map((await stored(runtime)).map((conversation) => [conversation.id, conversation.modelProfile]))
+      expect(opened.map((id) => byId.get(id))).toEqual([Option.none(), Option.some("scripted")])
     } finally {
       await runtime.dispose()
     }

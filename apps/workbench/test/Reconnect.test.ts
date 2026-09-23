@@ -58,6 +58,7 @@ describe("workbench reconnect", () => {
           agentRevisionId: AgentRevisionId.make("a1@1"),
           sessionId: session.id,
           workspaceId: Option.none(),
+          modelProfile: Option.none(),
           title: "Reconnect",
           archived: false,
           createdAt: now,

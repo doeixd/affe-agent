@@ -5,7 +5,7 @@
  * session, reached through `AgentClient`. A record joins product identity to
  * that session by its stable id and nothing more.
  */
-import { Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { AgentId, AgentRevisionId, ConversationId, UserId, WorkspaceId } from "./WorkbenchIds.js"
 
 export const Record = Schema.Struct({
@@ -18,6 +18,13 @@ export const Record = Schema.Struct({
    * reopens exactly as it was configured (decisions-2026-09-11.md, D6).
    */
   agentRevisionId: AgentRevisionId,
+  /**
+   * The model profile the conversation chose, in place of its revision's --
+   * pinned like the revision, so a conversation never changes model under
+   * itself; another model is a branch. `None` runs the revision's own, and
+   * is what a record written before this field decodes as.
+   */
+  modelProfile: Schema.Option(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(Option.none()))),
   /** The kernel session this conversation is. Stable, so opening it again reaches the same one. */
   sessionId: Schema.String,
   workspaceId: Schema.Option(WorkspaceId),
@@ -34,6 +41,8 @@ export const New = Schema.Struct({
   ownerId: UserId,
   agentId: AgentId,
   agentRevisionId: AgentRevisionId,
+  /** Omit for the revision's own model. */
+  modelProfile: Schema.optional(Schema.String),
   sessionId: Schema.String,
   workspaceId: Schema.Option(WorkspaceId),
   title: Schema.String

@@ -29,7 +29,8 @@ const Dangerous = Tool.make("deleteEverything", { parameters: Schema.Struct({}),
 const openPage = async (
   turns: ReadonlyArray<TestLanguageModel.Turn>,
   feedback?: FeedbackActions,
-  onBranched?: (id: ConversationId) => void
+  onBranched?: (id: ConversationId) => void,
+  models?: ReadonlyArray<string>
 ) => {
   const { layer: model } = await Effect.runPromise(TestLanguageModel.script(turns))
   const bindings = Layer.succeed(AgentResolver.AgentBindings, {
@@ -68,7 +69,7 @@ const openPage = async (
     const { conversation } = yield* sessions.create({ ownerId: owner, agentId: spec.id, title: "Page" })
     return conversation.id
   }))
-  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} onBranched={onBranched} />)
+  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} onBranched={onBranched} models={models} />)
   await screen.findByRole("heading", { name: "Page" })
   return runtime
 }
@@ -312,6 +313,36 @@ describe("ConversationPage", () => {
       const original = conversations.find((conversation) => conversation.id !== branchId)
       if (original === undefined) throw new Error("the original conversation is gone")
       expect(roleTexts(await read(original.id))).toEqual(["user:q1", "assistant:A1", "user:q2", "assistant:A2"])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("continuing on another model branches everything so far onto it, and this conversation keeps its own", async () => {
+    const branched: Array<ConversationId> = []
+    const runtime = await openPage([TestLanguageModel.text("A1")], undefined, (id) => branched.push(id), ["scripted"])
+    try {
+      expect(screen.getByLabelText("Model").textContent).toMatch(/The agent's own model/)
+      send("q1")
+      await screen.findByText("A1")
+      await waitFor(() => expect(button("Continue").disabled).toBe(true))
+      fireEvent.change(screen.getByLabelText("Continue on"), { target: { value: "scripted" } })
+      await waitFor(() => expect(button("Continue").disabled).toBe(false))
+      fireEvent.click(button("Continue"))
+      await waitFor(() => expect(branched.length).toBe(1))
+      const [branchId] = branched
+      if (branchId === undefined) throw new Error("no branch")
+      const records = await runtime.runPromise(
+        Effect.flatMap(ConversationStore.ConversationStore, (store) => store.list({ ownerId: owner }))
+      )
+      const branch = records.find((record) => record.id === branchId)
+      const source = records.find((record) => record.id !== branchId)
+      expect(branch?.modelProfile).toEqual(Option.some("scripted"))
+      expect(source?.modelProfile).toEqual(Option.none())
+      // Everything so far came with it.
+      const history = await runtime.runPromise(Effect.flatMap(ConversationSessions.ConversationSessions, (sessions) =>
+        Effect.flatMap(sessions.open(branchId), ({ session }) => session.history)))
+      expect(history.content.filter((message) => message.role === "user" || message.role === "assistant").length).toBe(2)
     } finally {
       await runtime.dispose()
     }

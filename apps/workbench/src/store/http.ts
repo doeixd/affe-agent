@@ -217,6 +217,7 @@ export const conversationStore = (options: Options): Layer.Layer<ConversationSto
         create: (record) =>
           api.conversations.create({ payload: record }).pipe(
             Effect.catchTag("AgentNotFoundError", (error) => Effect.fail(failedAs("ConversationStore.create")(error))),
+            Effect.catchTag("ModelNotOfferedError", (error) => Effect.fail(failedAs("ConversationStore.create")(error))),
             transport("ConversationStore.create")
           ),
         update: (id, patch) =>

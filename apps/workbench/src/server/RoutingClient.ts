@@ -36,7 +36,7 @@ export const layer: Layer.Layer<AgentClient.AgentClient, never, ConversationStor
       if (Option.isNone(conversation)) {
         return yield* new AgentClient.AgentSessionNotFoundError({ sessionId })
       }
-      return yield* directory.client(conversation.value.agentRevisionId).pipe(
+      return yield* directory.client(conversation.value.agentRevisionId, conversation.value.modelProfile).pipe(
         Effect.mapError((error) =>
           new AgentClient.AgentTransportError({
             sessionId,

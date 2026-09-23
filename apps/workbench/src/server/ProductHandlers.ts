@@ -15,7 +15,7 @@ import { CurrentUser, ForeignOwnerError, InsufficientRoleError } from "../protoc
 import { Catalog } from "../runtime/Catalog.js"
 import * as TaskRunner from "../runtime/TaskRunner.js"
 import * as TaskWorker from "../runtime/TaskWorker.js"
-import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
+import { ModelNotOfferedError, WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
 import { FeedbackStore } from "../store/FeedbackStore.js"
@@ -47,6 +47,7 @@ const conversations = HttpApiBuilder.group(
     const registry = yield* AgentRegistry
     const organizations = yield* OrganizationStore
     const index = yield* SessionIndex.SessionIndex
+    const catalog = yield* Catalog
 
     const ownConversation = Effect.fn("conversations.own")(function*(id: Parameters<typeof store.get>[0]) {
       const user = yield* CurrentUser
@@ -73,6 +74,9 @@ const conversations = HttpApiBuilder.group(
           Option.isNone(revision) || revision.value.agentId !== payload.agentId
         ) {
           return yield* new AgentNotFoundError({ agentId: payload.agentId })
+        }
+        if (payload.modelProfile !== undefined && !(yield* catalog).models.includes(payload.modelProfile)) {
+          return yield* new ModelNotOfferedError({ modelProfile: payload.modelProfile })
         }
         const created = yield* store.create(payload)
         // Indexed under its owner from the start, so it is listed before its

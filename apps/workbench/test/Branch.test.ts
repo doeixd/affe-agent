@@ -46,10 +46,13 @@ describe("branch point", () => {
     assert.isTrue(Option.isNone(Branch.userOrdinal(shown, 9)))
   })
 
-  it("cuts history just before the person's message, system message kept, and refuses past the end", () => {
+  it("cuts history just before the person's message, system message kept, the whole of it at the end, and refuses past that", () => {
     assert.deepStrictEqual(Option.map(Branch.before(history, 0), texts), Option.some(["system:sys"]))
     assert.deepStrictEqual(Option.map(Branch.before(history, 1), texts), Option.some(["system:sys", "user:q1", "assistant:a1"]))
-    assert.isTrue(Option.isNone(Branch.before(history, 2)))
+    // One past the last of the person's messages: the whole history, where "another model" continues.
+    assert.deepStrictEqual(Option.map(Branch.before(history, 2), texts), Option.some(texts(history)))
+    assert.isTrue(Option.isNone(Branch.before(history, 3)))
+    assert.strictEqual(Branch.userCount([view("user", "q1"), view("assistant", "a1"), view("user", "q2")]), 2)
   })
 })
 

@@ -23,6 +23,7 @@ import { ConversationList } from "../react/ConversationList.js"
 import { ConversationPage } from "../react/ConversationPage.js"
 import { TasksPage } from "../react/TasksPage.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
+import { Catalog } from "../runtime/Catalog.js"
 import * as ConversationSessions from "../runtime/ConversationSessions.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as HttpStores from "../store/http.js"
@@ -71,6 +72,7 @@ interface Identity {
   readonly owner: UserId
   readonly agentId: AgentId
   readonly agents: ReadonlyArray<{ readonly id: AgentId; readonly name: string }>
+  readonly models: ReadonlyArray<string>
 }
 
 /** The board's server calls, over the page's runtime. */
@@ -89,7 +91,7 @@ const taskActions = {
 /** Polled: the inbox is a read model the page has no stream for yet. */
 const inboxPollMillis = 2_000
 
-const App = ({ agentId, agents, owner }: Identity) => {
+const App = ({ agentId, agents, models, owner }: Identity) => {
   const [route, setRoute] = useState(routeFromHash)
   const [inbox, setInbox] = useState<ReadonlyArray<InboxStore.Item>>([])
 
@@ -146,6 +148,7 @@ const App = ({ agentId, agents, owner }: Identity) => {
           runtime={runtime}
           owner={owner}
           agents={agents}
+          models={models}
           selected={route._tag === "Conversation" ? Option.some(route.id) : Option.none()}
           onOpen={(id) => {
             window.location.hash = encodeURIComponent(id)
@@ -176,6 +179,7 @@ const App = ({ agentId, agents, owner }: Identity) => {
               list: overHttp(HttpStores.feedback(server, route.id)),
               rate: (index, rating) => overHttp(HttpStores.rate(server, route.id, index, rating))
             }}
+            models={models}
             onBranched={(id) => {
               window.location.hash = encodeURIComponent(id)
             }}
@@ -252,7 +256,12 @@ if (root !== null) {
     const agents = yield* registry.list(owner)
     const [agent] = agents
     if (agent === undefined) return yield* Effect.die("the server has no agent registered for this person")
-    return { owner, agentId: agent.id, agents: agents.map(({ id, name }) => ({ id, name })) }
+    // A catalog that cannot be read offers no model choice; the page still works.
+    const models = yield* Effect.flatMap(Catalog, (read) => read).pipe(
+      Effect.map((view) => view.models),
+      Effect.catch(() => Effect.succeed<ReadonlyArray<string>>([]))
+    )
+    return { owner, agentId: agent.id, agents: agents.map(({ id, name }) => ({ id, name })), models }
   })).then(
     (identity) => createRoot(root).render(<App {...identity} />),
     () => createRoot(root).render(<Login />)

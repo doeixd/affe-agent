@@ -25,8 +25,10 @@ export const userOrdinal = (messages: ReadonlyArray<MessageView>, index: number)
 
 /**
  * History up to, not including, the person's `ordinal`-th message (from 0).
- * `None` when history holds fewer -- the page is ahead of what was committed,
- * and a branch cut from a guess would be a different conversation.
+ * An ordinal one past the last of them is the whole history: a branch that
+ * continues from where the conversation is, as "another model" does. `None`
+ * past that -- the page is ahead of what was committed, and a branch cut
+ * from a guess would be a different conversation.
  */
 export const before = (history: Prompt.Prompt, ordinal: number): Option.Option<Prompt.Prompt> => {
   let seen = 0
@@ -35,5 +37,8 @@ export const before = (history: Prompt.Prompt, ordinal: number): Option.Option<P
     if (seen === ordinal) return Option.some(Prompt.fromMessages(history.content.slice(0, at)))
     seen++
   }
-  return Option.none()
+  return seen === ordinal ? Option.some(history) : Option.none()
 }
+
+/** How many of the person's messages the page shows: the ordinal that branches at the end. */
+export const userCount = (messages: ReadonlyArray<MessageView>): number => messages.filter((m) => m.role === "user").length

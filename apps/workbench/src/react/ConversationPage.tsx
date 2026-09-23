@@ -35,6 +35,12 @@ export interface ConversationPageProps {
    * it the page offers no Edit: a branch nobody navigates to is lost.
    */
   readonly onBranched?: ((id: ConversationId) => void) | undefined
+  /**
+   * The models this deployment offers. With `onBranched`, the page offers to
+   * continue the conversation on another -- as a branch, since a
+   * conversation's model is pinned like its revision.
+   */
+  readonly models?: ReadonlyArray<string> | undefined
 }
 
 /** Copy a reply's text; says "Copied" until the text is copied again or the page moves on. */
@@ -107,10 +113,11 @@ const Activity = ({ activity }: { readonly activity: ActivityView }) =>
     )
     : <li>unrecognized event {activity.originalTag}</li>
 
-export const ConversationPage = ({ conversationId, feedback, onBranched, runtime }: ConversationPageProps) => {
+export const ConversationPage = ({ conversationId, feedback, models = [], onBranched, runtime }: ConversationPageProps) => {
   const state = useConversation(runtime, conversationId)
   const [ratings, setRatings] = useState<ReadonlyMap<number, Rating>>(new Map())
   const [editing, setEditing] = useState(Option.none<{ readonly index: number; readonly text: string }>())
+  const [otherModel, setOtherModel] = useState("")
   const [attachments, setAttachments] = useState<ReadonlyArray<Attachments.Attachment>>([])
   const [refusals, setRefusals] = useState<ReadonlyArray<string>>([])
   /** What this page last sent, files included: what Retry sends, when there is one. */
@@ -151,6 +158,24 @@ export const ConversationPage = ({ conversationId, feedback, onBranched, runtime
     run(session.prompt(input, { stream: true }), () => {
       setDraft((current) => (current === "" ? text : current))
       setAttachments((current) => (current.length === 0 ? files : current))
+    })
+  }
+  /** Everything so far, on another model, as a new conversation. This one is untouched. */
+  const continueOn = (modelProfile: string) => {
+    if (onBranched === undefined) return
+    setCommandError(Option.none())
+    void runtime.runPromiseExit(Effect.gen(function*() {
+      const sessions = yield* ConversationSessions
+      const branched = yield* sessions.branch({
+        from: conversationId,
+        ordinal: Branch.userCount(view.messages),
+        modelProfile,
+        title: `${conversation.title} (${modelProfile})`
+      })
+      return branched.conversation.id
+    })).then((exit) => {
+      if (exit._tag === "Success") onBranched(exit.value)
+      else setCommandError(Option.some("the conversation could not be continued on that model"))
     })
   }
   /** Branch before this message, send the edit there, and go to it. The original is untouched. */
@@ -206,6 +231,26 @@ export const ConversationPage = ({ conversationId, feedback, onBranched, runtime
   return (
     <main style={{ flex: "3 1 24rem", minWidth: 0 }}>
       <h1>{conversation.title}</h1>
+      <p aria-label="Model">
+        {Option.match(conversation.modelProfile, { onNone: () => "The agent's own model", onSome: (name) => `Model: ${name}` })}
+        {onBranched === undefined || models.length === 0 ? null : (
+          <>
+            {" "}
+            <label>
+              Continue on{" "}
+              <select name="other-model" value={otherModel} onChange={(event) => setOtherModel(event.target.value)}>
+                <option value="">another model…</option>
+                {models
+                  .filter((name) => !Option.contains(conversation.modelProfile, name))
+                  .map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>{" "}
+            <button type="button" disabled={otherModel === "" || view.status !== "idle"} onClick={() => continueOn(otherModel)}>
+              Continue
+            </button>
+          </>
+        )}
+      </p>
       {/* Busy while a reply streams, so a screen reader waits for it rather than reading every delta. */}
       <ol aria-label="Messages" aria-live="polite" aria-busy={view.status === "running"}>
         {view.messages.map((message, index) => (

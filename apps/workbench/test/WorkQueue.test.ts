@@ -107,6 +107,7 @@ const conversationOf = (task: Task.Record, n: number): Conversation.Record => ({
   agentRevisionId: AgentRevisionId.make("a@1"),
   sessionId: `conversation-c-${task.id}-${n}`,
   workspaceId: Option.none(),
+  modelProfile: Option.none(),
   title: task.title,
   archived: false,
   createdAt: DateTime.makeUnsafe(0),

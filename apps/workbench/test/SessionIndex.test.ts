@@ -34,6 +34,7 @@ const conversation = (id: string, ownerId: UserId): Conversation.Record => ({
   agentRevisionId: AgentRevisionId.make("builder@2"),
   sessionId: sessionIdOf(ConversationId.make(id)),
   workspaceId: Option.none(),
+  modelProfile: Option.none(),
   title: id,
   archived: false,
   createdAt: DateTime.makeUnsafe(0),

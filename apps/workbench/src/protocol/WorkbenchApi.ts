@@ -36,6 +36,13 @@ import {
   UserExistsError
 } from "./Authentication.js"
 
+/** A conversation asked for a model this deployment does not bind. */
+export class ModelNotOfferedError extends Schema.TaggedError<ModelNotOfferedError>()(
+  "ModelNotOfferedError",
+  { modelProfile: Schema.String },
+  { httpApiStatus: 400 }
+) {}
+
 export class MeGroup extends HttpApiGroup.make("me").add(
   HttpApiEndpoint.get("get", "/me", { success: UserId })
 ).middleware(Authenticated) {}
@@ -54,7 +61,7 @@ export class ConversationsGroup extends HttpApiGroup.make("conversations").add(
   HttpApiEndpoint.post("create", "/conversations", {
     payload: Conversation.New,
     success: Conversation.Record,
-    error: [ConversationExistsError, AgentNotFoundError, ForeignOwnerError, WorkbenchStorageError]
+    error: [ConversationExistsError, AgentNotFoundError, ForeignOwnerError, ModelNotOfferedError, WorkbenchStorageError]
   }),
   HttpApiEndpoint.patch("update", "/conversations/:id", {
     params: { id: ConversationId },

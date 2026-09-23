@@ -51,8 +51,15 @@ export interface ResolvedAgent {
 
 export interface Service {
   /** Scoped: the client's sessions and the model wiring live as long as the scope. */
+  /**
+   * `model` runs the revision on another profile the deployment binds, in
+   * place of its own `modelPolicy` -- a conversation that picked its model
+   * (pinned on the record, as the revision is). Everything else is the
+   * revision's.
+   */
   readonly resolve: (
-    id: AgentRevisionId
+    id: AgentRevisionId,
+    model?: string | undefined
   ) => Effect.Effect<ResolvedAgent, RevisionResolutionError | WorkbenchStorageError, Scope.Scope>
 }
 
@@ -85,7 +92,13 @@ export const inProcess: Layer.Layer<AgentClientFactory> = Layer.succeed(AgentCli
 })
 
 /** A name a workflow engine accepts, derived from a revision id. */
-export const clientNameOf = (id: AgentRevisionId): string => `workbench-${id.replace(/[^A-Za-z0-9]+/g, "-")}`
+/**
+ * The durable client's name for a revision, and for a revision on a chosen
+ * model: a separate name, since a workflow's name is its identity and two
+ * configurations must not answer for each other's sessions.
+ */
+export const clientNameOf = (id: AgentRevisionId, model?: string | undefined): string =>
+  `workbench-${id.replace(/[^A-Za-z0-9]+/g, "-")}${model === undefined ? "" : `--m-${model.replace(/[^A-Za-z0-9]+/g, "-")}`}`
 
 /** Every entry of `refs` bound in `table`, or the first that is not. */
 const bindAll = <A>(
@@ -124,7 +137,7 @@ export const layerWith: Layer.Layer<AgentResolver, never, AgentRegistry | AgentB
     const bindings = yield* AgentBindings
     const factory = yield* AgentClientFactory
 
-    const resolve = Effect.fn("AgentResolver.resolve")(function*(id: AgentRevisionId) {
+    const resolve = Effect.fn("AgentResolver.resolve")(function*(id: AgentRevisionId, chosen?: string | undefined) {
       const refused = (reason: RevisionResolutionError["reason"], ref?: string) =>
         new RevisionResolutionError({ revisionId: id, reason, ...(ref === undefined ? {} : { ref }) })
 
@@ -132,10 +145,9 @@ export const layerWith: Layer.Layer<AgentResolver, never, AgentRegistry | AgentB
       if (Option.isNone(found)) return yield* refused("unknown-revision")
       const revision = found.value
 
-      const model = Object.hasOwn(bindings.models, revision.modelPolicy.profile)
-        ? bindings.models[revision.modelPolicy.profile]
-        : undefined
-      if (model === undefined) return yield* refused("unknown-model", revision.modelPolicy.profile)
+      const profile = chosen ?? revision.modelPolicy.profile
+      const model = Object.hasOwn(bindings.models, profile) ? bindings.models[profile] : undefined
+      if (model === undefined) return yield* refused("unknown-model", profile)
 
       const capabilities = bindAll(bindings.capabilities, revision.capabilities)
       if (capabilities._tag === "Missing") return yield* refused("unknown-capability", capabilities.ref)
@@ -155,7 +167,7 @@ export const layerWith: Layer.Layer<AgentResolver, never, AgentRegistry | AgentB
         loop: AgentLoop.bounded(revision.maxTurns),
         permission: permission.value
       })
-      const name = clientNameOf(id)
+      const name = clientNameOf(id, chosen)
       const client = skills.value.length === 0
         ? factory.make(name, agent)
         : factory.make(name, Skills.install(agent)).pipe(Layer.provide(Skills.layer(skills.value)))

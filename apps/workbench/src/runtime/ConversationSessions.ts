@@ -28,6 +28,8 @@ export interface CreateInput {
   readonly agentId: AgentId
   readonly title: string
   readonly workspaceId?: WorkspaceId | undefined
+  /** A model profile in place of the revision's; pinned for the conversation's life. */
+  readonly modelProfile?: string | undefined
   /**
    * Supply it to make a retry the same conversation. A retry after the record
    * was written opens that conversation rather than failing; one after only
@@ -49,6 +51,8 @@ export interface BranchInput {
   /** Branch just before the person's `ordinal`-th message (from 0). */
   readonly ordinal: number
   readonly title?: string | undefined
+  /** Another model for the branch; omit to keep the source's. */
+  readonly modelProfile?: string | undefined
 }
 
 export interface Service {
@@ -125,7 +129,7 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
        * conversation, not to the call: it lives as long as this service.
        */
       const sessionOf = (conversation: Conversation.Record) =>
-        Effect.flatMap(directory.client(conversation.agentRevisionId), (client) =>
+        Effect.flatMap(directory.client(conversation.agentRevisionId, conversation.modelProfile), (client) =>
           client.session(conversation.sessionId).pipe(
             Effect.catchTag("AgentSessionNotFoundError", () =>
               client.createSession({ sessionId: conversation.sessionId }).pipe(
@@ -162,6 +166,7 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
           agentRevisionId: agent.value.activeRevisionId,
           sessionId: sessionIdOf(id),
           workspaceId: Option.fromNullishOr(input.workspaceId),
+          ...(input.modelProfile === undefined ? {} : { modelProfile: input.modelProfile }),
           title: input.title
         })
         return { conversation, session: yield* sessionOf(conversation) }
@@ -179,11 +184,15 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
           ownerId: source.conversation.ownerId,
           agentId: source.conversation.agentId,
           agentRevisionId: source.conversation.agentRevisionId,
+          ...Option.match(Option.orElse(Option.fromNullishOr(input.modelProfile), () => source.conversation.modelProfile), {
+            onNone: () => ({}),
+            onSome: (modelProfile) => ({ modelProfile })
+          }),
           sessionId: sessionIdOf(id),
           workspaceId: source.conversation.workspaceId,
           title: input.title ?? `${source.conversation.title} (edited)`
         })
-        const client = yield* directory.client(conversation.agentRevisionId)
+        const client = yield* directory.client(conversation.agentRevisionId, conversation.modelProfile)
         const session = yield* client.createSession({ sessionId: conversation.sessionId, history: seed.value }).pipe(
           Scope.provide(lifetime),
           // A retry after the session was made reaches the one that exists; its seed is already in it.

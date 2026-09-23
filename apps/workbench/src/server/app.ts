@@ -61,6 +61,8 @@ const Delete = Tool.make("deleteEverything", { parameters: Schema.Struct({}), su
 
 export const buildReply = "Built it. Send another message and I will ask before deleting."
 export const approvedReply = "Done -- that was the approved step."
+/** What the `alternate` model always answers: a second profile, so choosing a model is observable. */
+export const alternateReply = "Answered by the alternate model."
 
 const turns: ReadonlyArray<TestLanguageModel.Turn> = Array.from({ length: 60 }, (_, round) => [
   { reasoning: { text: "Starting with a build." }, toolCalls: [{ id: `build-${round}`, name: "build", params: {} }] },
@@ -72,8 +74,11 @@ const turns: ReadonlyArray<TestLanguageModel.Turn> = Array.from({ length: 60 }, 
 /** What revisions may name on this deployment. */
 const bindings = Layer.effect(
   AgentResolver.AgentBindings,
-  Effect.map(TestLanguageModel.script(turns), ({ layer: scripted }) => ({
-    models: { scripted },
+  Effect.map(Effect.all([
+    TestLanguageModel.script(turns),
+    TestLanguageModel.script(Array.from({ length: 60 }, () => TestLanguageModel.text(alternateReply)))
+  ]), ([{ layer: scripted }, { layer: alternate }]) => ({
+    models: { scripted, alternate },
     capabilities: {
       build: [
         Agent.tool(Build, (_params, context) =>

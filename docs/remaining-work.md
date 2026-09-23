@@ -249,10 +249,23 @@ it is still open, so the next pass does not have to re-derive it.
     it branched past the first exchange -- and now passes the options
     through. Tested as pure functions, in happy-dom and over a server;
     cutting the whole history, or dropping the seed in the workbench or
-    in the router, each fail the named test. Still open in W2: source
-    cards, prompt/command catalogs, mentions and suggestions, appearance,
-    and a model picker (which D6's pinned revisions would have to allow
-    first).
+    in the router, each fail the named test. The model picker followed,
+    with D6 kept rather than loosened: a conversation's model is chosen
+    when it starts and pinned on its record beside the revision
+    (`modelProfile`, `None` for the agent's own and for records written
+    before it), so it never changes under a conversation; "continue on
+    another model" is a branch at the end of its history. The resolver runs
+    a revision on a chosen profile, and the directory keeps one client per
+    revision and model -- a separate durable workflow name, so two
+    configurations never answer for each other's sessions. The route
+    refuses a model the deployment does not bind (`ModelNotOfferedError`)
+    before anything is made; the demo server binds a second `alternate`
+    profile so the choice is visible. Tested over a server (chosen, kept on
+    reopen, continued on another, kept by a branch, refused), in happy-dom,
+    and against a record from before the field; ignoring the choice in the
+    resolver, sharing one client across models, or accepting any model
+    each fail the named test. Still open in W2: source cards,
+    prompt/command catalogs, mentions and suggestions, and appearance.
 
     ```text
     verify: exists apps/workbench/src/ui-core/Branch.ts

@@ -20,6 +20,8 @@ export interface ConversationListProps {
   readonly owner: UserId
   /** The agents a new conversation can run, by id and name; the first is the default. */
   readonly agents: ReadonlyArray<{ readonly id: AgentId; readonly name: string }>
+  /** The models this deployment offers; a new conversation may pick one in place of its agent's. */
+  readonly models?: ReadonlyArray<string> | undefined
   readonly selected: Option.Option<ConversationId>
   readonly onOpen: (id: ConversationId) => void
   /** The selected conversation was deleted. */
@@ -31,10 +33,12 @@ type Editing =
   | { readonly _tag: "Renaming"; readonly id: ConversationId; readonly title: string }
   | { readonly _tag: "Deleting"; readonly id: ConversationId }
 
-export const ConversationList = ({ agents, onClosed, onOpen, owner, runtime, selected }: ConversationListProps) => {
+export const ConversationList = ({ agents, models = [], onClosed, onOpen, owner, runtime, selected }: ConversationListProps) => {
   const [conversations, setConversations] = useState<ReadonlyArray<Conversation.Record>>([])
   const [showArchived, setShowArchived] = useState(false)
   const [agentId, setAgentId] = useState(agents[0]?.id ?? "")
+  /** "" is the agent's own model. */
+  const [model, setModel] = useState("")
   const [editing, setEditing] = useState<Editing>({ _tag: "None" })
   const [failure, setFailure] = useState(Option.none<string>())
 
@@ -64,7 +68,12 @@ export const ConversationList = ({ agents, onClosed, onOpen, owner, runtime, sel
     if (agent === undefined) return
     setFailure(Option.none())
     void runtime.runPromiseExit(Effect.flatMap(ConversationSessions, (sessions) =>
-      sessions.create({ ownerId: owner, agentId: agent.id, title: `${agent.name} ${new Date().toLocaleTimeString()}` })))
+      sessions.create({
+        ownerId: owner,
+        agentId: agent.id,
+        title: `${agent.name} ${new Date().toLocaleTimeString()}`,
+        ...(model === "" ? {} : { modelProfile: model })
+      })))
       .then((exit) => {
         if (exit._tag === "Success") {
           refresh()
@@ -93,6 +102,15 @@ export const ConversationList = ({ agents, onClosed, onOpen, owner, runtime, sel
             {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
           </select>
         </label>{" "}
+        {models.length === 0 ? null : (
+          <label>
+            Model{" "}
+            <select name="model" value={model} onChange={(event) => setModel(event.target.value)}>
+              <option value="">the agent's own</option>
+              {models.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+        )}{" "}
         <button type="button" onClick={create} disabled={agentId === ""}>New conversation</button>
       </div>
       <label>

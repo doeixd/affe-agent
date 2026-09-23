@@ -224,6 +224,7 @@ describe("task runner", () => {
         agentRevisionId: AgentRevisionId.make("a@1"),
         sessionId: "conversation-c1",
         workspaceId: Option.none(),
+        modelProfile: Option.none(),
         title: "Doomed (attempt 1)",
         archived: false,
         createdAt: DateTime.makeUnsafe(0),
