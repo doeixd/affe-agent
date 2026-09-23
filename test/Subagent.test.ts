@@ -247,3 +247,83 @@ describe("a cut-short child is a failure carrying what it had", () => {
     })
   )
 })
+
+describe("a child that ran out of a bound is a failure too", () => {
+  /**
+   * The exhaustion counterpart of the interrupted case above, and the reason
+   * `AgentRun.Result.endedOnFinalTurn` exists. Before it, a bounded child cut
+   * off mid-work handed the parent its last text -- often `""` -- as a
+   * finished answer. Now it is a `SubagentExhaustedError` on the failure
+   * channel, unless the child was configured to answer on the way out.
+   */
+  const Noop = Tool.make("noop", { parameters: Schema.Struct({}), success: Schema.String })
+  const noop = Agent.tool(Noop, () => Effect.succeed("ok"))
+
+  it.effect("a child a `Stop` cut off mid-work fails, naming the bound and the partial text", () =>
+    Effect.gen(function* () {
+      // One turn: the tool call, then `maxTurns(1)` stops it before any text.
+      const child = yield* FakeModel.layer([{ toolCalls: [{ id: "c1", name: "noop", params: {} }] }])
+      const research = Subagent.tool("research", Agent.make({ tools: [noop], loop: AgentLoop.maxTurns(1) }), {
+        description: "Delegate research.",
+        provide: child.layer
+      })
+      const { layer: parentModel } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "r1", name: "research", params: { prompt: "what broke" } }] },
+        { text: "the parent carried on" }
+      ])
+      const { result, events } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({ tools: [research], loop: AgentLoop.bounded(3) }))
+          const probe = yield* AgentProbe.make(session)
+          const result = yield* AgentSession.prompt(session, "go")
+          return { result, events: yield* probe.events }
+        })
+      ).pipe(Effect.provide(parentModel))
+      assert.strictEqual(result.text, "the parent carried on")
+      const failed = events.flatMap((e) => AgentEvent.is("ToolCallFailed")(e) ? [e.event] : [])
+      assert.strictEqual(failed.length, 1)
+      assert.strictEqual(failed[0]!.name, "research")
+      assert.isTrue(failed[0]!.returnedToModel)
+      assert.include(failed[0]!.failure.message, "ran out of turns after 1 turn and did not finish")
+      assert.include(failed[0]!.failure.message, "it had said nothing yet")
+      assert.include(failed[0]!.failure.message, "did run")
+      // Not a success: the empty partial never reached the parent as an answer.
+      const succeeded = events.flatMap((e) => AgentEvent.is("ToolCallSucceeded")(e) && e.event.name === "research" ? [e.event] : [])
+      assert.deepStrictEqual(succeeded, [])
+    })
+  )
+
+  it.effect("a child that answers on a final turn is a success, though it still ran out", () =>
+    Effect.gen(function* () {
+      // `withFinalTurn` gives the cut-short run one tool-less turn; the bound
+      // is still reported as exhaustion -- deliberately -- but the answer
+      // crosses, which is the distinction `endedOnFinalTurn` carries.
+      const child = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "noop", params: {} }] },
+        { text: "wrapping up" }
+      ])
+      const research = Subagent.tool(
+        "research",
+        Agent.make({ tools: [noop], loop: AgentLoop.withFinalTurn(AgentLoop.maxTurns(1)) }),
+        { description: "Delegate research.", provide: child.layer }
+      )
+      const { layer: parentModel } = yield* FakeModel.layer([
+        { toolCalls: [{ id: "r1", name: "research", params: { prompt: "what broke" } }] },
+        { text: "the parent carried on" }
+      ])
+      const { events } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* AgentSession.make(Agent.make({ tools: [research], loop: AgentLoop.bounded(3) }))
+          const probe = yield* AgentProbe.make(session)
+          yield* AgentSession.prompt(session, "go")
+          return { events: yield* probe.events }
+        })
+      ).pipe(Effect.provide(parentModel))
+      const succeeded = events.flatMap((e) => AgentEvent.is("ToolCallSucceeded")(e) && e.event.name === "research" ? [e.event] : [])
+      assert.strictEqual(succeeded.length, 1)
+      assert.strictEqual(succeeded[0]!.result, "wrapping up")
+      const failed = events.flatMap((e) => AgentEvent.is("ToolCallFailed")(e) ? [e.event] : [])
+      assert.deepStrictEqual(failed, [])
+    })
+  )
+})

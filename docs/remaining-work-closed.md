@@ -2769,3 +2769,20 @@ Items 27 and 30 are in the ledger.
      verify: grep "readonly usage: { readonly turns: number" src/testing/DurableEquivalence.ts
      verify: grep "id: \"D8\"" scripts/falsify.mjs
      ```
+
+## 2026-09-23 - delegation exhaustion reported, not handed over as an answer
+
+Itemless: found by reading `danieljvdm/effect-agent`'s subagent surface, not
+from the live list. A child a bound cut off mid-work returned its last text
+-- often `""` -- to the parent as a successful delegation answer. Now
+`Subagent` fails it with `SubagentExhaustedError`, carrying the bound and the
+partial text, while a child that answered on a final turn crosses normally;
+the distinction is `AgentRun.Result.endedOnFinalTurn`, added for it. Tests in
+`test/Subagent.test.ts` (both directions) and `test/Exhaustion.test.ts` (the
+field), each broken once. Two caller-gated plans came from the same reading:
+`plan-auto-model-routing.md` and `plan-background-delegation.md`.
+
+```text
+verify: grep "export class SubagentExhaustedError" src/subagent/Subagent.ts
+verify: grep "readonly endedOnFinalTurn: boolean" src/AgentRun.ts
+```

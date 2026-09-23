@@ -81,6 +81,7 @@
   "affe-agent/shell/Shell",
   "affe-agent/skills/SkillRegistry",
   "affe-agent/subagent/SubagentDepthExceededError",
+  "affe-agent/subagent/SubagentExhaustedError",
   "affe-agent/subagent/SubagentInterruptedError",
   "affe-agent/tool-source/Credentials/Bindings",
   "affe-agent/tool-source/Credentials/Provider",

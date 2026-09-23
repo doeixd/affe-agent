@@ -47,6 +47,18 @@ says that its tool calls did run, so the parent's model can tell a finished
 answer from half of one. The parent's own interruption takes precedence: an
 interrupted parent ends `interrupted`, whatever `onError` says.
 
+**A child that ran out of a bound.** A child cut off mid-work by one of its
+own ceilings -- `AgentLoop.bounded`, `limits`, a token or cost ceiling -- is a
+child failure too, a `SubagentExhaustedError` naming the bound and carrying
+what it had said, because its last remark may be an intermediate one or
+nothing at all. A child configured to answer on the way out
+(`AgentLoop.withFinalTurn`, `limits({ onExhaustion: "final-answer" })`) ended
+on a final turn instead, so its answer crosses normally even though its
+`exhaustion` is still reported. The distinction is
+`AgentRun.Result.endedOnFinalTurn`, which exists for exactly this: `exhaustion`
+alone cannot tell a bound that produced an answer from a bound that cut one
+off, because `withFinalTurn` deliberately keeps the classification.
+
 **Seeing the child.** By default the child runs on a bus of its own, and the
 parent's stream shows `ToolCallStarted`, then the result. `inherit: { events:
 "parent" }` forwards every envelope of the child's bus onto the parent's, each

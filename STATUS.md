@@ -17,7 +17,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 
 | gate | command | now |
 | --- | --- | --- |
-| tests | `npm test` | 2601 passing in 251 files, `McpServerConformance` included (it no longer runs separately). `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
+| tests | `npm test` | 2612 passing in 252 files, `McpServerConformance` included (it no longer runs separately); one Windows-environment failure in `SandboxDerive` (a derived provider's `list`/`stat` path handling), in a file this work did not touch and failing the same way alone. `vitest.config.ts` caps `maxWorkers` at 8 -- see the caveat below |
 | Effect diagnostics | `npm run lint` (+ `lint:cli`, `lint:tui`, `lint:workbench`, `lint:cloudflare`) | 0 errors, 0 warnings, 0 messages |
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:workbench`, `:worker`, `:cloudflare`) | clean, examples included |
 | workbench | `npm run test:workbench`, `build:workbench`, `smoke:workbench` | the product's own vitest root (stores, boundaries, control plane, reconnect, the page in happy-dom), its Vite build, and the page's transport over a real socket; all in `check` |
@@ -112,8 +112,10 @@ loop and permission policy carrying a description of itself, and
 insist on being the only call in its turn (`ToolExecution.Alone`); and a decided
 delegation boundary (`Subagent.Inherit`: budget crosses by default, approval
 only when asked to and then on the parent's event stream with the path of
-delegating tools, a typed child's value returned as the tool's result, and a
-child holding an approval-requiring tool refused at construction). Every id
+delegating tools, a typed child's value returned as the tool's result, a
+child holding an approval-requiring tool refused at construction, and a child
+a bound cut off mid-work returned as a `SubagentExhaustedError` carrying its
+partial answer). Every id
 the harness mints is qualified by its session, so anything shared across
 sessions is safe by construction.
 
@@ -360,6 +362,8 @@ verify: exists test/fixtures/README.md
 verify: grep "export type Any = AgentDefinition<any, any, any, any, any, any>" src/Agent.ts
 verify: grep "RunLedger.record(" src/AgentRun.ts
 verify: grep "export interface Inherit" src/subagent/Subagent.ts
+verify: grep "export class SubagentExhaustedError" src/subagent/Subagent.ts
+verify: grep "readonly endedOnFinalTurn: boolean" src/AgentRun.ts
 ```
 
 ## Deliberately not done
@@ -407,7 +411,11 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
 
 Wire/storage identifiers are frozen through `internal/namespace.ts`; an
 interrupted delegation returns `SubagentInterruptedError` carrying its partial
-answer. Both decisions shipped 2026-09-05. The reference gateway, code mode,
+answer. Both decisions shipped 2026-09-05. The exhaustion counterpart shipped
+2026-09-23: a delegation a bound cut off mid-work returns
+`SubagentExhaustedError` likewise, while one that answered on a final turn is
+an ordinary result -- the pair is `AgentRun.Result.endedOnFinalTurn`. The
+reference gateway, code mode,
 blob store, A2A bridges and measured overflow handling also ship.
 
 Open implementation, usage evidence and caller-gated work are ranked separately

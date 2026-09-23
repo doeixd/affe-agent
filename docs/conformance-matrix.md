@@ -136,6 +136,11 @@ child's own bound holds under a delegation. That is the decision, not a gap:
 a turn is a fact about one run and is not fungible across agents the way a
 token is, so the bound that means "this child may take at most N turns" is
 on the child's loop, where it means the same thing whoever calls it. Item 56.
+Since 2026-09-23 the child's *report* of a bound is decided too: a child a
+`Stop` cut off mid-work is a `SubagentExhaustedError` carrying the bound and
+the partial text, while a child that answered on a final turn
+(`AgentLoop.withFinalTurn`) is an ordinary result -- both held by
+`Subagent.test.ts`, distinguished by `AgentRun.Result.endedOnFinalTurn`.
 
 ⁶ **Was item 53; crosses when asked to, and is loud when not.** A tool
 marked `needsApproval` asks through the session's elicitation seam, and a

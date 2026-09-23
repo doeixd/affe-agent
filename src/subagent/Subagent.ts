@@ -67,6 +67,15 @@ import * as Telemetry from "../internal/telemetry.js"
  * interruption of the parent takes precedence over any `"die"`, which
  * `test/Subagent.test.ts` holds.
  *
+ * A child that **ran out of a bound** is the same shape, and is why
+ * `AgentRun.Result.endedOnFinalTurn` exists: a child a `Stop` cut off
+ * mid-work is a `SubagentExhaustedError` carrying the bound and the partial
+ * text, while one configured to answer on the way out
+ * (`AgentLoop.withFinalTurn`, `AgentLoop.limits({ onExhaustion:
+ * "final-answer" })`) ended on a final turn and its answer crosses normally.
+ * Without the distinction a bounded child's last remark -- often `""` -- would
+ * read to the parent model as a finished answer.
+ *
  * A child *defect* is still a defect, under either setting, and it kills the
  * parent run. That is deliberate rather than an omission. `onError` is about
  * what an *answer* looks like when the child could not produce one, and a
@@ -333,6 +342,42 @@ export class SubagentDepthExceededError extends Schema.TaggedError<SubagentDepth
 export const defaultMaxDepth = 8
 
 /**
+ * A delegation whose child ran out of a bound -- turns, tool calls, time,
+ * tokens or cost -- before it finished its work. A failure, not a short
+ * success: the child's last text may be an intermediate remark or nothing at
+ * all, and the parent's model must be able to tell that from an answer.
+ *
+ * The exhaustion counterpart of {@link SubagentInterruptedError}, and the
+ * reason `AgentRun.Result.endedOnFinalTurn` exists. A child configured to
+ * answer on the way out (`AgentLoop.withFinalTurn`,
+ * `AgentLoop.limits({ onExhaustion: "final-answer" })`) still carries its
+ * `exhaustion` -- deliberately, so "why did this end" does not change because
+ * the agent was configured to end politely -- but it ended on a final turn, so
+ * its answer crosses normally. Only a child a `Stop` cut off mid-work fails
+ * here. `partial` is what it had said by then.
+ */
+export class SubagentExhaustedError extends Schema.TaggedError<SubagentExhaustedError>()(
+  Namespace.tag("subagent/SubagentExhaustedError"),
+  {
+    toolName: Schema.String,
+    exhaustion: Schema.Literals(["turns", "tool-calls", "duration", "tokens", "cost"]),
+    turns: Schema.Number,
+    partial: Schema.Option(Schema.String)
+  }
+) {
+  override get message() {
+    const said = Option.match(this.partial, {
+      onNone: () => "it had said nothing yet",
+      onSome: (text) => `it had said: ${text}`
+    })
+    return (
+      `The delegation ${this.toolName} ran out of ${this.exhaustion} after ${this.turns} turn${this.turns === 1 ? "" : "s"} ` +
+      `and did not finish; ${said}. Its tool calls up to that point did run.`
+    )
+  }
+}
+
+/**
  * Depth and concurrency, reserved before the child opens (item 111). Depth
  * is refused -- waiting would not make a recursion shallower; concurrency
  * waits for a slot, so a parallel batch of delegations still completes, only
@@ -427,6 +472,18 @@ const askChild = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
             if (result.status === "interrupted") {
               return yield* new SubagentInterruptedError({
                 toolName: name,
+                turns: result.turns,
+                partial: result.text.length === 0 ? Option.none() : Option.some(result.text)
+              })
+            }
+            // The other half of the same decision: a bound that cut the child
+            // off mid-work. `exhaustion` alone cannot say it -- a child that
+            // answered on a final turn keeps its exhaustion too -- so the test
+            // is both: it ran out, and had no final turn to answer on.
+            if (Option.isSome(result.exhaustion) && !result.endedOnFinalTurn) {
+              return yield* new SubagentExhaustedError({
+                toolName: name,
+                exhaustion: result.exhaustion.value,
                 turns: result.turns,
                 partial: result.text.length === 0 ? Option.none() : Option.some(result.text)
               })

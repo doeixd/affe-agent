@@ -6105,3 +6105,44 @@ Three commits, each with its own break-once run, closed the three items
 The review of `62f25c0` took the storage error's detail out of the 401 it
 had been echoed in, and simplified the sign-in form's refusal to a
 boolean. Workbench: 12 files, 75 tests.
+
+## 2026-09-23 - a bounded child's partial is not an answer (delegation exhaustion)
+
+Found by reading the other project's subagent surface
+(`danieljvdm/effect-agent`): its delegation returns `{ output, budgetExhausted }`,
+and this library returned neither a bound's name nor a signal that one was
+hit. Probing it directly: a child bounded with `AgentLoop.maxTurns(1)` that
+makes a tool call on its only turn returns `""` to the parent as a *successful*
+delegation answer -- the empty text of a run cut before it spoke.
+
+The cause was in `Subagent.askChild`, which handled `status === "interrupted"`
+and then handed `result.value` to `answerOf`, discarding `Result.exhaustion`.
+`LimitsAcrossDelegation.test.ts` built exactly that child shape in its third
+case and asserted the bound held, but never what the parent was handed, which
+is why it went unnoticed.
+
+The fix could not be "fail when `exhaustion` is set": `withFinalTurn` carries
+the classification through deliberately (`AgentLoop.ts`; `Exhaustion.test.ts`
+pins it), so a child that answered on a final turn has exhaustion too. The
+distinction needed a fact the engine had and did not publish, so
+`AgentRun.Result` and `AgentSubmission.Result` gained `endedOnFinalTurn` --
+the run's last turn was the loop's `Final` rather than a `Stop`. `Subagent`
+now fails a child that ran out *and* had no final turn, with
+`SubagentExhaustedError` naming the bound and carrying the partial text, and
+lets one that answered on the way out cross normally.
+
+Both new tests were broken once: with the check disabled the "cut off
+mid-work" case fails on `failed.length` 0 vs 1, and the "answered on a final
+turn" case still passes, which is the guard against over-failing.
+`LimitsAcrossDelegation.test.ts` is unchanged -- the bound still holds; what
+changed is the report.
+
+`npm test`: 2612 passing in 252 files, one Windows-environment failure in
+`SandboxDerive` (a derived provider's `list`/`stat` path handling), untouched
+by this work and failing the same way alone. Zero Effect diagnostics;
+typecheck clean.
+
+Two plans written from the same reading, both gated on a caller:
+`plan-auto-model-routing.md` (`AutoModel`, a routing `LanguageModel` layer with
+a per-session selection store) and `plan-background-delegation.md`
+(`Subagent.background`, a named session that outlives its parent).

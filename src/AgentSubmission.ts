@@ -90,6 +90,13 @@ export interface Result<Tools extends Record<string, Tool.Any>, Value = string> 
    * open-ended, and this is the part a caller can branch on.
    */
   readonly exhaustion: Option.Option<AgentLoop.Exhaustion>
+  /**
+   * The last run's `AgentRun.Result.endedOnFinalTurn`: the submission ended on
+   * the loop's final turn rather than being cut off mid-work. A follow-up that
+   * ran to idle after a bounded first run is a submission that ended by going
+   * idle, so this -- like `exhaustion` -- is the last run's answer.
+   */
+  readonly endedOnFinalTurn: boolean
   /** The final model response, so usage and finish reason are not discarded. */
   readonly response: Option.Option<LanguageModel.GenerateTextResponse<Tools, "encoded">>
   /**
@@ -145,6 +152,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       Option.none()
     let stopReason: Option.Option<string> = Option.none()
     let exhaustion: Option.Option<AgentLoop.Exhaustion> = Option.none()
+    let endedOnFinalTurn = false
 
     // `session.progress` is zeroed for this submission by `AgentSession.prompt`,
     // in the uninterruptible claim before this fibre exists, so an interrupt
@@ -199,6 +207,7 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
       // a bounded first run is a submission that ended by going idle.
       stopReason = exit.value.stopReason
       exhaustion = exit.value.exhaustion
+      endedOnFinalTurn = exit.value.endedOnFinalTurn
 
       // Buffered locally rather than re-queued. Putting the tail back on a
       // FIFO one item at a time reverses it, which turned A, B, C into
@@ -288,5 +297,5 @@ export const execute = Effect.fn("AgentSubmission.execute")(function* <
     // the model reported through its tool, or nothing.
     const value = Option.isSome(session.agent.output) ? reported : Option.some(text)
 
-    return { submissionId, runs, turns, text, response, stopReason, exhaustion, value }
+    return { submissionId, runs, turns, text, response, stopReason, exhaustion, endedOnFinalTurn, value }
   })

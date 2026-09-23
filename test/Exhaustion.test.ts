@@ -66,6 +66,8 @@ describe("exhaustion is a classification, not a parsed reason", () => {
       assert.deepStrictEqual(result.exhaustion, Option.some("turns"))
       // The prose survives beside it rather than being replaced by it.
       assert.deepStrictEqual(result.stopReason, Option.some("max turns"))
+      // A plain `Stop` cut the run off; no final turn was taken.
+      assert.isFalse(result.endedOnFinalTurn)
     }))
 
   it.effect("running out of tool calls says so", () =>
@@ -138,6 +140,9 @@ describe("exhaustion is a classification, not a parsed reason", () => {
 
       assert.deepStrictEqual(result.exhaustion, Option.some("turns"))
       assert.strictEqual(result.text, "wrapping up")
+      // The classification survives *and* the run ended on the final turn: the
+      // pair is what lets a delegation tell an answer from a truncation.
+      assert.isTrue(result.endedOnFinalTurn)
     }))
 
   it.effect("the decision that wins a conjunction brings its own classification", () =>

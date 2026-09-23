@@ -29,6 +29,19 @@ export interface Result<Tools extends Record<string, Tool.Any>> {
    * classification a caller can branch on without matching strings.
    */
   readonly exhaustion: Option.Option<AgentLoop.Exhaustion>
+  /**
+   * The run's last turn was the loop's `Final`: the run stopped because the
+   * loop gave it one more, tool-less turn, not because a `Stop` cut it off.
+   *
+   * This is the companion `exhaustion` cannot be on its own. A bound reached
+   * mid-work and a bound that produced a final answer both leave `exhaustion`
+   * set -- deliberately, so "why did this end" does not change because the
+   * agent was configured to end politely. A caller that must not mistake half
+   * an answer for a finished one branches on `exhaustion` and this together;
+   * `Subagent` does, to tell a child that answered on its way out from one
+   * that was cut off.
+   */
+  readonly endedOnFinalTurn: boolean
 }
 
 /**
@@ -204,5 +217,5 @@ export const execute = Effect.fn("AgentRun.execute")(function* <
       ...(Option.isSome(exhaustion) ? { exhaustion: exhaustion.value } : {})
     })
 
-    return { runId, turns: turn, text, response, steeringContinuation, stopReason, exhaustion }
+    return { runId, turns: turn, text, response, steeringContinuation, stopReason, exhaustion, endedOnFinalTurn: finalTurn }
   })
