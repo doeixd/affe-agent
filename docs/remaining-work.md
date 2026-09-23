@@ -281,8 +281,15 @@ it is still open, so the next pass does not have to re-derive it.
     buttons on the plain page, assistant-ui's own suggestions in the other,
     from the one `ui-core/Starters` rule -- and one click sends it.
     Offering them regardless of state, or not deduplicating, fails the
-    named tests. Still open in W2: source cards, a command registry,
-    mentions, and appearance.
+    named tests. A command registry followed: `ui-core/Commands` parses a
+    composer line into a message or an action (/help, /retry, /stop,
+    /model <name>), `//` sends a literal slash, and an unknown command is
+    refused by name rather than sent to the model. Both adapters perform
+    the same actions from the one parser, each refusing plainly what it
+    cannot do (assistant-ui has no navigation, so no /model); the plain
+    page lists matching commands as they are typed. Sending an unknown
+    command, or the page skipping commands, fails the named tests. Still
+    open in W2: source cards, mentions, and appearance.
 
     ```text
     verify: exists apps/workbench/src/ui-core/Branch.ts

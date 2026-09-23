@@ -15,6 +15,7 @@ import { ConversationSessions } from "../runtime/ConversationSessions.js"
 import type { ActivityView, MessageView } from "../ui-core/ConversationProjection.js"
 import * as Attachments from "../ui-core/Attachments.js"
 import * as Branch from "../ui-core/Branch.js"
+import * as Commands from "../ui-core/Commands.js"
 import * as Question from "../ui-core/Question.js"
 import * as Starters from "../ui-core/Starters.js"
 import { useConversation } from "./useConversation.js"
@@ -121,6 +122,8 @@ export const ConversationPage = ({ conversationId, feedback, models = [], onBran
   const [ratings, setRatings] = useState<ReadonlyMap<number, Rating>>(new Map())
   const [editing, setEditing] = useState(Option.none<{ readonly index: number; readonly text: string }>())
   const [otherModel, setOtherModel] = useState("")
+  /** What the last command did, when it was not a message: shown, never sent. */
+  const [notice, setNotice] = useState(Option.none<string | ReadonlyArray<Commands.Command>>())
   const [attachments, setAttachments] = useState<ReadonlyArray<Attachments.Attachment>>([])
   const [refusals, setRefusals] = useState<ReadonlyArray<string>>([])
   /** What this page last sent, files included: what Retry sends, when there is one. */
@@ -149,8 +152,38 @@ export const ConversationPage = ({ conversationId, feedback, models = [], onBran
   if (state._tag === "Failed") return <p role="alert">Could not open this conversation ({state.error._tag}).</p>
 
   const { conversation, session, view } = state
+  /** A command, performed here: what this page can do, and a plain refusal for what it cannot. */
+  const perform = (action: Exclude<Commands.Action, { readonly _tag: "Send" }>) => {
+    setDraft("")
+    setNotice(Option.none())
+    switch (action._tag) {
+      case "Help":
+        return setNotice(Option.some(Commands.commands))
+      case "Refused":
+        return setNotice(Option.some(action.reason))
+      case "Stop":
+        return view.status === "running" ? run(session.interrupt()) : setNotice(Option.some("Nothing is running."))
+      case "Retry":
+        return Option.match(Option.orElse(lastInput, () => lastPrompt), {
+          onNone: () => setNotice(Option.some("There is no message to send again.")),
+          onSome: (input) =>
+            view.status === "idle"
+              ? run(session.prompt(input, { stream: true }))
+              : setNotice(Option.some("Wait for the reply to finish, or /stop it."))
+        })
+      case "ContinueOn":
+        return onBranched === undefined
+          ? setNotice(Option.some("This page cannot open another conversation."))
+          : !models.includes(action.model)
+          ? setNotice(Option.some(`No model called ${action.model} is offered here${models.length === 0 ? "." : `: ${models.join(", ")}.`}`))
+          : continueOn(action.model)
+    }
+  }
+
   const send = () => {
-    const text = draft.trim()
+    const action = Commands.parse(draft)
+    if (action !== undefined && action._tag !== "Send") return perform(action)
+    const text = action === undefined ? "" : action.text
     const files = attachments
     if (text === "" && files.length === 0) return
     const input = Attachments.promptOf(text, files)
@@ -388,12 +421,35 @@ export const ConversationPage = ({ conversationId, feedback, models = [], onBran
             {refusals.map((reason, index) => <li key={index}>{reason}</li>)}
           </ul>
         )}
+        {Commands.matching(draft).length === 0 ? null : (
+          <ul aria-label="Commands">
+            {Commands.matching(draft).map((command) => (
+              <li key={command.name}>
+                <button type="button" onClick={() => setDraft(`/${command.name} `)}>{command.usage}</button> {command.description}
+              </li>
+            ))}
+          </ul>
+        )}
         <span id="compose-keys" hidden>Enter sends, Shift+Enter starts a new line, Escape stops a running reply.</span>
         <button type="submit" disabled={view.status !== "idle"}>Send</button>
         <button type="button" disabled={view.status !== "running"} onClick={() => run(session.interrupt())}>
           Stop
         </button>
       </form>
+      {Option.match(notice, {
+        onNone: () => null,
+        onSome: (shown) => (
+          <div role="note" aria-label="Command">
+            {typeof shown === "string"
+              ? <p>{shown}</p>
+              : (
+                <ul>
+                  {shown.map((command) => <li key={command.name}><code>{command.usage}</code> {command.description}</li>)}
+                </ul>
+              )}
+          </div>
+        )
+      })}
       {Option.match(view.failure, {
         onNone: () => null,
         onSome: (failure) => (

@@ -28,6 +28,7 @@ import type { ConversationId } from "../domain/WorkbenchIds.js"
 import { useConversation } from "../react/useConversation.js"
 import type { ConversationSessions } from "../runtime/ConversationSessions.js"
 import type { MessageView } from "../ui-core/ConversationProjection.js"
+import * as Commands from "../ui-core/Commands.js"
 import * as Question from "../ui-core/Question.js"
 import * as Starters from "../ui-core/Starters.js"
 
@@ -73,6 +74,8 @@ const Bubble = ({ label }: { readonly label: string }) => (
 export const AssistantThread = ({ conversationId, runtime, starters = [] }: AssistantThreadProps) => {
   const state = useConversation(runtime, conversationId)
   const [refused, setRefused] = useState(Option.none<string>())
+  /** What the last command did, when it was not a message. */
+  const [notice, setNotice] = useState(Option.none<string>())
 
   const run = (command: Effect.Effect<unknown, { readonly _tag: string }>) => {
     setRefused(Option.none())
@@ -86,9 +89,29 @@ export const AssistantThread = ({ conversationId, runtime, starters = [] }: Assi
     isDisabled: ready === undefined,
     suggestions: ready === undefined ? [] : Starters.offered(ready.view, starters).map((prompt) => ({ prompt })),
     convertMessage: toThreadMessage,
+    // The same commands as the plain page, through the same parser.
     onNew: async (message) => {
-      const text = textOf(message).trim()
-      if (ready !== undefined && text !== "") run(ready.session.prompt(text, { stream: true }))
+      const action = Commands.parse(textOf(message))
+      if (ready === undefined || action === undefined) return
+      setNotice(Option.none())
+      switch (action._tag) {
+        case "Send":
+          return run(ready.session.prompt(action.text, { stream: true }))
+        case "Stop":
+          return ready.view.status === "running" ? run(ready.session.interrupt()) : setNotice(Option.some("Nothing is running."))
+        case "Retry": {
+          const last = ready.view.messages.filter((m) => m.role === "user").at(-1)
+          return last === undefined
+            ? setNotice(Option.some("There is no message to send again."))
+            : run(ready.session.prompt(last.text, { stream: true }))
+        }
+        case "Help":
+          return setNotice(Option.some(Commands.commands.map((command) => `${command.usage} -- ${command.description}`).join("\n")))
+        case "ContinueOn":
+          return setNotice(Option.some("Continuing on another model is not available on this page; use the workbench."))
+        case "Refused":
+          return setNotice(Option.some(action.reason))
+      }
     },
     onCancel: async () => {
       if (ready !== undefined) run(ready.session.interrupt())
@@ -130,6 +153,7 @@ export const AssistantThread = ({ conversationId, runtime, starters = [] }: Assi
           </ComposerPrimitive.Root>
         </ThreadPrimitive.Root>
         {Option.isSome(refused) ? <p role="alert">The last command was refused ({refused.value}).</p> : null}
+        {Option.isSome(notice) ? <pre role="note" aria-label="Command">{notice.value}</pre> : null}
         <p aria-label="Status" role="status">{view.status}</p>
       </main>
     </AssistantRuntimeProvider>

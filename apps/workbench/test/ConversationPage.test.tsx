@@ -364,6 +364,50 @@ describe("ConversationPage", () => {
     }
   })
 
+  it("slash commands: suggested as typed, performed not sent, and refused plainly", async () => {
+    const branched: Array<ConversationId> = []
+    const runtime = await openPage(
+      [TestLanguageModel.text("First."), TestLanguageModel.text("Again.")],
+      undefined,
+      (id) => branched.push(id),
+      ["scripted"]
+    )
+    try {
+      const box = screen.getByLabelText("Message")
+      // Typing a slash lists the commands; narrowing narrows them.
+      fireEvent.change(box, { target: { value: "/re" } })
+      expect(screen.getByRole("list", { name: "Commands" }).textContent).toMatch(/\/retry/)
+      expect(screen.getByRole("list", { name: "Commands" }).textContent).not.toMatch(/\/stop/)
+
+      // Nothing to retry yet, and nothing running to stop: said, not sent.
+      send("/retry")
+      expect(screen.getByRole("note", { name: "Command" }).textContent).toMatch(/no message to send again/)
+      send("/stop")
+      expect(screen.getByRole("note", { name: "Command" }).textContent).toMatch(/Nothing is running/)
+      send("/deploy")
+      expect(screen.getByRole("note", { name: "Command" }).textContent).toMatch(/no \/deploy command/)
+      send("/help")
+      expect(screen.getByRole("note", { name: "Command" }).textContent).toMatch(/\/model <name>/)
+
+      // A real message, then /retry sends it again.
+      send("hello")
+      await screen.findByText("First.")
+      await waitFor(() => expect(button("Send").disabled).toBe(false))
+      send("/retry")
+      await screen.findByText("Again.")
+      expect(screen.getAllByText("hello").length).toBe(2)
+
+      // /model continues on another model, as a branch; an unknown one is refused.
+      await waitFor(() => expect(button("Send").disabled).toBe(false))
+      send("/model nope")
+      expect(screen.getByRole("note", { name: "Command" }).textContent).toMatch(/No model called nope/)
+      send("/model scripted")
+      await waitFor(() => expect(branched.length).toBe(1))
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it("Stop interrupts the running submission", async () => {
     const started = await Effect.runPromise(Deferred.make<void>())
     const runtime = await openPage([{ text: "never", hang: true, started }])

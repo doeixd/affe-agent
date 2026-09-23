@@ -126,6 +126,25 @@ describe("assistant-ui thread", () => {
     }
   })
 
+  it("honours the same slash commands through assistant-ui's composer", async () => {
+    const runtime = await openThread([TestLanguageModel.text("First."), TestLanguageModel.text("Again.")])
+    try {
+      await send("/stop")
+      expect((await screen.findByRole("note", { name: "Command" })).textContent).toMatch(/Nothing is running/)
+      await send("hello")
+      await screen.findByText("First.")
+      await waitFor(() => expect(screen.getByRole("status").textContent).toBe("idle"))
+      await send("/retry")
+      await screen.findByText("Again.")
+      await send("/model other")
+      expect((await screen.findByRole("note", { name: "Command" })).textContent).toMatch(/not available on this page/)
+      // The commands were never sent to the model as messages.
+      expect(screen.queryByText("/stop")).toBeNull()
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it("Stop interrupts the running reply", async () => {
     const started = await Effect.runPromise(Deferred.make<void>())
     const runtime = await openThread([{ text: "never", hang: true, started }])
