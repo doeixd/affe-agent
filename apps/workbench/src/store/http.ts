@@ -27,6 +27,7 @@ import { Catalog } from "../runtime/Catalog.js"
 import { AgentRegistry } from "./AgentRegistry.js"
 import { ConversationStore } from "./ConversationStore.js"
 import { OrganizationStore } from "./OrganizationStore.js"
+import type * as FeedbackStore from "./FeedbackStore.js"
 import type * as InboxStore from "./InboxStore.js"
 import type * as SessionIndex from "./SessionIndex.js"
 import { failedAs } from "./WorkbenchStorageError.js"
@@ -144,6 +145,32 @@ export const cancelTask = (
   id: TaskId
 ): Effect.Effect<void, TaskNotFoundError | TaskNotStartableError | WorkbenchStorageError, HttpClient.HttpClient> =>
   Effect.flatMap(client(options), (api) => api.tasks.cancel({ params: { id } })).pipe(transport("cancelTask"))
+
+/** The caller's ratings on one of their conversations. */
+export const feedback = (
+  options: Options,
+  id: ConversationId
+): Effect.Effect<ReadonlyArray<FeedbackStore.Entry>, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.feedback.list({ params: { id } })).pipe(
+    Effect.catchTag("ConversationNotFoundError", (error) => Effect.fail(failedAs("feedback")(error))),
+    transport("feedback")
+  )
+
+/** Rate one reply, or withdraw the rating with `None`. */
+export const rate = (
+  options: Options,
+  id: ConversationId,
+  index: number,
+  rating: Option.Option<FeedbackStore.Rating>
+): Effect.Effect<void, WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) =>
+    Option.match(rating, {
+      onNone: () => api.feedback.clear({ params: { id, index } }),
+      onSome: (value) => api.feedback.set({ params: { id, index }, payload: { rating: value } })
+    })).pipe(
+      Effect.catchTag("ConversationNotFoundError", (error) => Effect.fail(failedAs("rate")(error))),
+      transport("rate")
+    )
 
 /** Every question waiting on the caller, oldest first. */
 export const inbox = (options: Options): Effect.Effect<ReadonlyArray<InboxStore.Item>, WorkbenchStorageError, HttpClient.HttpClient> =>

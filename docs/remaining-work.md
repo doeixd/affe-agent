@@ -210,9 +210,15 @@ it is still open, so the next pass does not have to re-derive it.
     on the page, since a browser `confirm` blocks everything -- and starts
     a new one on the agent picked; the inbox lists each question by what it
     asks. Tested in happy-dom; a one-click delete or an ignored pick fails
-    the test. Still open in W2: attachments, message actions, source cards, prompt/command
-    catalogs, mentions and suggestions, feedback, appearance, a model
-    picker, responsive layout and an accessibility pass.
+    the test. Feedback followed: `FeedbackStore` (memory and SQL), one
+    rating per person per reply -- a reply named by its index in history,
+    the only stable name it has -- with thumbs on each settled reply in the
+    chat page, toggled off by a second press, and owner-only routes. Tested
+    on both backends, in happy-dom and over a server; dropping the owner
+    check or the un-rate fails the named test. Still open in W2:
+    attachments, message actions, source cards, prompt/command catalogs,
+    mentions and suggestions, appearance, a model picker, responsive layout
+    and an accessibility pass.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

@@ -8,19 +8,51 @@
  */
 import { Effect, Option } from "effect"
 import type { ManagedRuntime } from "effect"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import type React from "react"
 import type { ConversationId } from "../domain/WorkbenchIds.js"
 import type { ConversationSessions } from "../runtime/ConversationSessions.js"
 import type { ActivityView, MessageView } from "../ui-core/ConversationProjection.js"
 import * as Question from "../ui-core/Question.js"
 import { useConversation } from "./useConversation.js"
 
+/** Ratings on replies; optional, so a page without a feedback store still renders. */
+export interface FeedbackActions {
+  readonly list: Effect.Effect<ReadonlyArray<{ readonly messageIndex: number; readonly rating: Rating }>, { readonly _tag: string }>
+  readonly rate: (messageIndex: number, rating: Option.Option<Rating>) => Effect.Effect<void, { readonly _tag: string }>
+}
+
+export type Rating = "up" | "down"
+
 export interface ConversationPageProps {
   readonly runtime: ManagedRuntime.ManagedRuntime<ConversationSessions, never>
   readonly conversationId: ConversationId
+  readonly feedback?: FeedbackActions | undefined
 }
 
-const Message = ({ message }: { readonly message: MessageView }) => (
+const RateButtons = ({ onRate, rating }: {
+  readonly rating: Option.Option<Rating>
+  readonly onRate: (rating: Option.Option<Rating>) => void
+}) => (
+  <span role="group" aria-label="Rate this reply">
+    {(["up", "down"] as const).map((value) => {
+      const pressed = Option.contains(rating, value)
+      return (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={pressed}
+          aria-label={value === "up" ? "Good reply" : "Bad reply"}
+          onClick={() => onRate(pressed ? Option.none() : Option.some(value))}
+        >
+          {value === "up" ? "👍" : "👎"}
+        </button>
+      )
+    })}
+  </span>
+)
+
+const Message = ({ children, message }: { readonly message: MessageView; readonly children?: React.ReactNode }) => (
   <li data-role={message.role} data-state={message.state}>
     <strong>{message.role === "user" ? "You" : "Agent"}</strong>
     {message.reasoning === "" ? null : (
@@ -30,6 +62,7 @@ const Message = ({ message }: { readonly message: MessageView }) => (
       </details>
     )}
     <p>{message.text}</p>
+    {children}
   </li>
 )
 
@@ -43,8 +76,26 @@ const Activity = ({ activity }: { readonly activity: ActivityView }) =>
     )
     : <li>unrecognized event {activity.originalTag}</li>
 
-export const ConversationPage = ({ conversationId, runtime }: ConversationPageProps) => {
+export const ConversationPage = ({ conversationId, feedback, runtime }: ConversationPageProps) => {
   const state = useConversation(runtime, conversationId)
+  const [ratings, setRatings] = useState<ReadonlyMap<number, Rating>>(new Map())
+  useEffect(() => {
+    if (feedback === undefined) return
+    void Effect.runPromiseExit(feedback.list).then((exit) => {
+      if (exit._tag === "Success") setRatings(new Map(exit.value.map((entry) => [entry.messageIndex, entry.rating])))
+    })
+  }, [conversationId])
+  const rate = (index: number, rating: Option.Option<Rating>) => {
+    if (feedback === undefined) return
+    void Effect.runPromiseExit(feedback.rate(index, rating)).then((exit) => {
+      if (exit._tag === "Failure") return
+      setRatings((current) => {
+        const next = new Map(current)
+        Option.match(rating, { onNone: () => next.delete(index), onSome: (value) => next.set(index, value) })
+        return next
+      })
+    })
+  }
   const [draft, setDraft] = useState("")
   const [commandError, setCommandError] = useState(Option.none<string>())
 
@@ -74,7 +125,14 @@ export const ConversationPage = ({ conversationId, runtime }: ConversationPagePr
     <main>
       <h1>{conversation.title}</h1>
       <ol aria-label="Messages">
-        {view.messages.map((message, index) => <Message key={index} message={message} />)}
+        {view.messages.map((message, index) => (
+          <Message key={index} message={message}>
+            {/* Only once settled: indices are history's, and history is re-read when a run ends. */}
+            {feedback !== undefined && view.status === "idle" && message.role === "assistant" && message.state === "complete"
+              ? <RateButtons rating={Option.fromNullishOr(ratings.get(index))} onRate={(rating) => rate(index, rating)} />
+              : null}
+          </Message>
+        ))}
       </ol>
       <ul aria-label="Activity">
         {view.activity.map((activity, index) => <Activity key={index} activity={activity} />)}

@@ -38,6 +38,7 @@ import * as TaskRunner from "../runtime/TaskRunner.js"
 import * as TaskWorker from "../runtime/TaskWorker.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
+import * as FeedbackStore from "../store/FeedbackStore.js"
 import * as IdentityStore from "../store/IdentityStore.js"
 import * as InboxStore from "../store/InboxStore.js"
 import * as OrganizationStore from "../store/OrganizationStore.js"
@@ -257,6 +258,7 @@ export const serve = (options: {
           SessionIndex.layerSql,
           TaskStore.layerSql,
           WorkQueue.layerSql,
+          FeedbackStore.layerSql,
           durableClients(options.durability)
         )
       ),

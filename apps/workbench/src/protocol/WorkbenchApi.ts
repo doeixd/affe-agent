@@ -18,6 +18,7 @@ import { AgentId, AgentRevisionId, ConversationId, OrganizationId, TaskId, UserI
 import * as Catalog from "../runtime/Catalog.js"
 import { AgentNotFoundError, Created, NewAgent } from "../store/AgentRegistry.js"
 import { ConversationExistsError, ConversationNotFoundError } from "../store/ConversationStore.js"
+import * as FeedbackStore from "../store/FeedbackStore.js"
 import * as InboxStore from "../store/InboxStore.js"
 import { TaskNotFoundError } from "../store/TaskStore.js"
 import { TaskNotStartableError } from "../runtime/TaskRunner.js"
@@ -225,6 +226,24 @@ export class TasksGroup extends HttpApiGroup.make("tasks").add(
   })
 ).middleware(Authenticated) {}
 
+/** A person's rating of a reply in one of their conversations (W2 `FeedbackStore`). */
+export class FeedbackGroup extends HttpApiGroup.make("feedback").add(
+  HttpApiEndpoint.get("list", "/conversations/:id/feedback", {
+    params: { id: ConversationId },
+    success: Schema.Array(FeedbackStore.Entry),
+    error: [ConversationNotFoundError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.put("set", "/conversations/:id/feedback/:index", {
+    params: { id: ConversationId, index: Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)) },
+    payload: Schema.Struct({ rating: FeedbackStore.Rating, note: Schema.optional(Schema.String) }),
+    error: [ConversationNotFoundError, WorkbenchStorageError]
+  }),
+  HttpApiEndpoint.delete("clear", "/conversations/:id/feedback/:index", {
+    params: { id: ConversationId, index: Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)) },
+    error: [ConversationNotFoundError, WorkbenchStorageError]
+  })
+).middleware(Authenticated) {}
+
 export class WorkbenchApi extends HttpApi.make("workbench")
   .add(MeGroup)
   .add(ConversationsGroup)
@@ -236,4 +255,5 @@ export class WorkbenchApi extends HttpApi.make("workbench")
   .add(CatalogGroup)
   .add(InboxGroup)
   .add(TasksGroup)
+  .add(FeedbackGroup)
 {}

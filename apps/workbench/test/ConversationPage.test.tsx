@@ -5,13 +5,14 @@
  * each through the page's controls, over the in-process client.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { Deferred, Effect, Layer, ManagedRuntime, Schema } from "effect"
+import { Deferred, Effect, Layer, ManagedRuntime, Schema, Option } from "effect"
 import { Tool } from "effect/unstable/ai"
 import { afterEach, describe, expect, it } from "vitest"
 import { Agent, Permission } from "affe-agent"
 import { TestLanguageModel } from "affe-agent/testing"
 import { UserId } from "../src/domain/WorkbenchIds.js"
 import { ConversationPage } from "../src/react/ConversationPage.js"
+import type { FeedbackActions, Rating } from "../src/react/ConversationPage.js"
 import * as AgentDirectory from "../src/runtime/AgentDirectory.js"
 import * as AgentResolver from "../src/runtime/AgentResolver.js"
 import * as ConversationSessions from "../src/runtime/ConversationSessions.js"
@@ -23,7 +24,7 @@ const Build = Tool.make("build", { parameters: Schema.Struct({}), success: Schem
 const Dangerous = Tool.make("deleteEverything", { parameters: Schema.Struct({}), success: Schema.String })
   .setNeedsApproval(true)
 
-const openPage = async (turns: ReadonlyArray<TestLanguageModel.Turn>) => {
+const openPage = async (turns: ReadonlyArray<TestLanguageModel.Turn>, feedback?: FeedbackActions) => {
   const { layer: model } = await Effect.runPromise(TestLanguageModel.script(turns))
   const bindings = Layer.succeed(AgentResolver.AgentBindings, {
     models: { scripted: model },
@@ -61,7 +62,7 @@ const openPage = async (turns: ReadonlyArray<TestLanguageModel.Turn>) => {
     const { conversation } = yield* sessions.create({ ownerId: owner, agentId: spec.id, title: "Page" })
     return conversation.id
   }))
-  render(<ConversationPage runtime={runtime} conversationId={conversationId} />)
+  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} />)
   await screen.findByRole("heading", { name: "Page" })
   return runtime
 }
@@ -137,6 +138,37 @@ describe("ConversationPage", () => {
       await waitFor(() => expect(screen.queryByRole("alert", { name: "Failure" })).toBeNull())
       // The retry sent the same words.
       expect(screen.getAllByText("try it").length).toBeGreaterThanOrEqual(1)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("a settled reply can be rated, re-rated and un-rated; the rating is what the store holds", async () => {
+    const stored = new Map<number, Rating>()
+    const feedback: FeedbackActions = {
+      list: Effect.sync(() => [...stored].map(([messageIndex, rating]) => ({ messageIndex, rating }))),
+      rate: (index, rating) =>
+        Effect.sync(() => {
+          if (Option.isSome(rating)) stored.set(index, rating.value)
+          else stored.delete(index)
+        })
+    }
+    const runtime = await openPage([TestLanguageModel.text("A reply.")], feedback)
+    try {
+      send("hello")
+      await screen.findByText("A reply.")
+      const good = await screen.findByRole("button", { name: "Good reply" })
+      // One rating control per settled reply, none on the person's own message.
+      expect(screen.getAllByRole("group", { name: "Rate this reply" }).length).toBe(1)
+      fireEvent.click(good)
+      await waitFor(() => expect(good.getAttribute("aria-pressed")).toBe("true"))
+      expect([...stored.values()]).toEqual(["up"])
+      fireEvent.click(screen.getByRole("button", { name: "Bad reply" }))
+      await waitFor(() => expect(screen.getByRole("button", { name: "Bad reply" }).getAttribute("aria-pressed")).toBe("true"))
+      expect(good.getAttribute("aria-pressed")).toBe("false")
+      expect([...stored.values()]).toEqual(["down"])
+      fireEvent.click(screen.getByRole("button", { name: "Bad reply" }))
+      await waitFor(() => expect(stored.size).toBe(0))
     } finally {
       await runtime.dispose()
     }

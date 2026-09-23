@@ -10,7 +10,7 @@ import { Effect, Layer, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Access from "../domain/Access.js"
 import type { AgentSpec } from "../domain/AgentRevision.js"
-import type { AgentId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
+import type { AgentId, ConversationId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
 import { CurrentUser, ForeignOwnerError, InsufficientRoleError } from "../protocol/Authentication.js"
 import { Catalog } from "../runtime/Catalog.js"
 import * as TaskRunner from "../runtime/TaskRunner.js"
@@ -18,6 +18,7 @@ import * as TaskWorker from "../runtime/TaskWorker.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
+import { FeedbackStore } from "../store/FeedbackStore.js"
 import { InboxStore } from "../store/InboxStore.js"
 import { TaskNotFoundError, TaskStore } from "../store/TaskStore.js"
 import { WorkQueue } from "../store/WorkQueue.js"
@@ -351,6 +352,44 @@ const tasks = HttpApiBuilder.group(
   })
 )
 
+const feedback = HttpApiBuilder.group(
+  WorkbenchApi,
+  "feedback",
+  Effect.fn(function*(handlers) {
+    const store = yield* FeedbackStore
+    const conversations = yield* ConversationStore
+
+    /** Feedback is on one's own conversations; anyone else's answers as missing. */
+    const own = Effect.fn("feedback.own")(function*(id: ConversationId) {
+      const user = yield* CurrentUser
+      if (Option.isNone(ownedBy(yield* conversations.get(id), user))) {
+        return yield* new ConversationNotFoundError({ conversationId: id })
+      }
+      return user
+    })
+
+    return handlers.handleAll({
+      list: Effect.fn(function*({ params }) {
+        return yield* store.list(params.id, yield* own(params.id))
+      }),
+      set: Effect.fn(function*({ params, payload }) {
+        const by = yield* own(params.id)
+        yield* store.set({
+          conversationId: params.id,
+          messageIndex: params.index,
+          by,
+          rating: payload.rating,
+          note: Option.fromNullishOr(payload.note),
+          at: yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        })
+      }),
+      clear: Effect.fn(function*({ params }) {
+        yield* store.clear(params.id, params.index, yield* own(params.id))
+      })
+    })
+  })
+)
+
 export const routes = HttpApiBuilder.layer(WorkbenchApi).pipe(
-  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog, inbox, tasks])
+  Layer.provide([me, conversations, agents, sessions, organizationsGroup, login, account, catalog, inbox, tasks, feedback])
 )

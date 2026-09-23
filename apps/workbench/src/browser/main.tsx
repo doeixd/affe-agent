@@ -167,7 +167,17 @@ const App = ({ agentId, agents, owner }: Identity) => {
           />
         )
         : route._tag === "Conversation"
-        ? <ConversationPage key={route.id} runtime={runtime} conversationId={route.id} />
+        ? (
+          <ConversationPage
+            key={route.id}
+            runtime={runtime}
+            conversationId={route.id}
+            feedback={{
+              list: overHttp(HttpStores.feedback(server, route.id)),
+              rate: (index, rating) => overHttp(HttpStores.rate(server, route.id, index, rating))
+            }}
+          />
+        )
         : (
           <AgentSettingsPage
             key={Option.getOrElse(route.id, () => "new")}
