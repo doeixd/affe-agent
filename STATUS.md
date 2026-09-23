@@ -382,8 +382,9 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
 - **Product applications.** Workbench W0 and the W1 product shell ship with
   authenticated, revision-routed durable conversations. Binding resolution
   accepts only explicitly registered model, capability and skill names.
-  Revision workflow handlers register on first access after restart;
-  unattended startup recovery is not implemented. Control plane Phase 1 is
+  At startup the server reopens every session the index says was running,
+  so a run in flight at a restart -- a task's included -- resumes with
+  nobody opening it. Control plane Phase 1 is
   complete (2026-09-22): a session index over the kernel's directory says
   which of a person's sessions are running, organizations share agents
   with members under owner/admin/member rules decided in one pure module,

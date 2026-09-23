@@ -9,8 +9,9 @@
  *
  * Their sessions are durable, on the same SQLite file as the product records:
  * a restarted server reopens a conversation with its history. Revision
- * clients register their workflow handlers on first access after restart;
- * server startup alone does not resume every unfinished conversation.
+ * clients register their workflow handlers on first access after restart,
+ * and at startup the server makes that access itself for every session the
+ * index says was running (`resumeActive`), so unfinished runs resume.
  *
  * The `scripted` model needs no key: the first prompt runs a tool that
  * reports progress, the next asks for approval before its tool runs, and the
@@ -19,19 +20,20 @@
 import { createServer } from "node:http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect"
+import { Context, Crypto, Duration, Effect, Layer, Option, Schema } from "effect"
 import { SessionDirectory } from "affe-agent/sessions"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { HttpRouter } from "effect/unstable/http"
 import { Tool } from "effect/unstable/ai"
 import { Agent, Permission } from "affe-agent"
-import { AgentSessionHost } from "affe-agent/client"
+import { AgentProtocol, AgentSessionHost } from "affe-agent/client"
 import { DeliveryLog, DurableAgentClient, DurableChannels, DurableSessionStore } from "affe-agent/durable"
 import { AgentHttp } from "affe-agent/http"
 import { TestLanguageModel } from "affe-agent/testing"
 import { UserId } from "../domain/WorkbenchIds.js"
 import * as AgentDirectory from "../runtime/AgentDirectory.js"
 import * as AgentResolver from "../runtime/AgentResolver.js"
+import { conversationIdOf } from "../runtime/ConversationSessions.js"
 import * as Catalog from "../runtime/Catalog.js"
 import * as InboxProjection from "../runtime/InboxProjection.js"
 import * as TaskRunner from "../runtime/TaskRunner.js"
@@ -190,7 +192,40 @@ const followSessions = Layer.effectDiscard(Effect.gen(function*() {
     Effect.tapError((error) => Effect.logError("workbench: task status stopped following", error)),
     Effect.forkScoped
   )
+  // Now that every read model is listening, reopen what was running when the
+  // last server stopped. A durable run resumes only once its revision's client
+  // is reached, and its events reach the followers only through the host: left
+  // alone, a task in flight at a restart would never settle.
+  yield* resumeActive(hostService, index, conversations).pipe(Effect.forkScoped)
 }))
+
+/**
+ * Open, through the host and as its owner, every conversation's session the
+ * index says was running work. One that cannot be reopened is logged and
+ * skipped: the others still resume, and the person can still open it.
+ */
+const resumeActive = (
+  hostService: AgentSessionHost.Service<UserId>,
+  index: SessionDirectory.SessionDirectory,
+  conversations: ConversationStore.Service
+) =>
+  Effect.gen(function*() {
+    let after: string | undefined = undefined
+    do {
+      const page: SessionDirectory.Page = yield* index.active({ limit: SessionDirectory.maxLimit, ...(after === undefined ? {} : { after: AgentProtocol.SessionId.make(after) }) })
+      for (const entry of page.entries) {
+        const conversationId = conversationIdOf(entry.sessionId)
+        if (Option.isNone(conversationId)) continue
+        const conversation = yield* conversations.get(conversationId.value)
+        if (Option.isNone(conversation)) continue
+        yield* hostService.session(conversation.value.ownerId, { sessionId: entry.sessionId }).pipe(
+          Effect.tapError((error) => Effect.logWarning("workbench: an active session could not be reopened", { sessionId: entry.sessionId, error })),
+          Effect.ignore
+        )
+      }
+      after = Option.getOrUndefined(page.next)
+    } while (after !== undefined)
+  }).pipe(Effect.catchCause((cause) => Effect.logError("workbench: resuming active sessions failed", cause)))
 
 /**
  * The worker over the operational queue, for as long as the server runs.

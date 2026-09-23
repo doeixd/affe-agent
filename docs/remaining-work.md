@@ -181,8 +181,13 @@ it is still open, so the next pass does not have to re-derive it.
     delivery log with a single-runner workflow engine, on the same SQLite
     file as the product records -- tested that a restarted server reopens a
     conversation with its history and continues it. Workflow handlers register
-    on first access to a revision after restart; unattended recovery without
-    reopening a conversation is not implemented. The model catalog and the
+    on first access to a revision after restart, and since 2026-09-22 the
+    server reaches them itself: at startup it reopens, through the host and
+    as each owner, every conversation the session index says was running
+    work, so a run in flight at a restart resumes and its events reach the
+    read models with nobody opening it (`test/Resume.test.ts`: a task
+    stopped mid-tool completes after a restart; without the step it stays
+    "running" for ever). The model catalog and the
     settings UI landed 2026-09-22: `Catalog` (`runtime/Catalog.ts`) names
     the model profiles, capabilities and skills the deployment binds, read
     from `AgentBindings` on the server and over `GET /catalog` in the
