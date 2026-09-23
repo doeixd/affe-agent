@@ -20,6 +20,8 @@ export interface TaskActions {
   readonly attempts: (id: TaskId) => Effect.Effect<ReadonlyArray<Task.Attempt>, { readonly _tag: string }>
   readonly create: (input: Task.New) => Effect.Effect<Task.Record, { readonly _tag: string }>
   readonly start: (id: TaskId) => Effect.Effect<unknown, { readonly _tag: string }>
+  /** Hand it to a worker instead of starting it now. */
+  readonly queue: (id: TaskId) => Effect.Effect<unknown, { readonly _tag: string }>
   readonly cancel: (id: TaskId) => Effect.Effect<unknown, { readonly _tag: string }>
 }
 
@@ -130,9 +132,16 @@ export const TasksPage = ({ actions, agents, owner, pollMillis = 2_000, run }: T
                       </>
                     )}
                     {" "}
-                    {Task.isLive(task.status)
+                    {Task.isLive(task.status) || task.status === "ready"
                       ? <button type="button" onClick={() => act(actions.cancel(task.id))}>Stop</button>
-                      : <button type="button" onClick={() => act(actions.start(task.id))}>{task.status === "backlog" ? "Start" : "Run again"}</button>}
+                      : (
+                        <>
+                          <button type="button" onClick={() => act(actions.start(task.id))}>
+                            {task.status === "backlog" ? "Start" : "Run again"}
+                          </button>{" "}
+                          <button type="button" onClick={() => act(actions.queue(task.id))}>Queue</button>
+                        </>
+                      )}
                   </li>
                 )
               })}

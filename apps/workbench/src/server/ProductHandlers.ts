@@ -14,11 +14,13 @@ import type { AgentId, OrganizationId, UserId } from "../domain/WorkbenchIds.js"
 import { CurrentUser, ForeignOwnerError, InsufficientRoleError } from "../protocol/Authentication.js"
 import { Catalog } from "../runtime/Catalog.js"
 import * as TaskRunner from "../runtime/TaskRunner.js"
+import * as TaskWorker from "../runtime/TaskWorker.js"
 import { WorkbenchApi } from "../protocol/WorkbenchApi.js"
 import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
 import { InboxStore } from "../store/InboxStore.js"
 import { TaskNotFoundError, TaskStore } from "../store/TaskStore.js"
+import { WorkQueue } from "../store/WorkQueue.js"
 import type { TaskId } from "../domain/WorkbenchIds.js"
 import { OrganizationNotFoundError, OrganizationStore } from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
@@ -287,7 +289,7 @@ const tasks = HttpApiBuilder.group(
     const organizations = yield* OrganizationStore
     // The runner's services, captured now: a handler's per-request context is
     // the router's to provide, so what the runner needs is given to it here.
-    const runner = yield* Effect.context<TaskStore | TaskRunner.TaskAttempts>()
+    const runner = yield* Effect.context<TaskStore | TaskRunner.TaskAttempts | WorkQueue>()
 
     const ownTask = Effect.fn("tasks.own")(function*(id: TaskId) {
       const user = yield* CurrentUser
@@ -334,8 +336,15 @@ const tasks = HttpApiBuilder.group(
         const task = yield* ownTask(params.id)
         return yield* TaskRunner.start(task).pipe(Effect.provide(runner), asStorage("tasks.start"))
       }),
+      queue: Effect.fn(function*({ params }) {
+        const task = yield* ownTask(params.id)
+        yield* TaskWorker.enqueue(task).pipe(Effect.provide(runner), asStorage("tasks.queue"))
+        return yield* ownTask(params.id)
+      }),
       cancel: Effect.fn(function*({ params }) {
         const task = yield* ownTask(params.id)
+        // A queued task is taken off the queue; an attempted one is interrupted.
+        if (yield* TaskWorker.dequeue(task).pipe(Effect.provide(runner))) return
         yield* TaskRunner.cancel(task).pipe(Effect.provide(runner), asStorage("tasks.cancel"))
       })
     })

@@ -30,6 +30,7 @@ const makeActions = async () => {
         conversationId: ConversationId.make(`c-${id}`),
         sessionId: `conversation-c-${id}`
       }),
+    queue: (id) => store.setStatus(id, "ready"),
     cancel: (id) => store.finishAttempt(`conversation-c-${id}`, "interrupted", "canceled")
   }
   return { store, actions }

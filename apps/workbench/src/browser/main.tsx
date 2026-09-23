@@ -82,6 +82,7 @@ const taskActions = {
       Option.match(found, { onNone: () => [], onSome: ({ attempts }) => attempts }))),
   create: (input: Task.New) => overHttp(HttpStores.createTask(server, input)),
   start: (id: TaskId) => overHttp(HttpStores.startTask(server, id)),
+  queue: (id: TaskId) => overHttp(HttpStores.queueTask(server, id)),
   cancel: (id: TaskId) => overHttp(HttpStores.cancelTask(server, id))
 }
 

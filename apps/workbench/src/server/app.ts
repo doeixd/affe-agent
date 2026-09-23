@@ -35,6 +35,7 @@ import * as AgentResolver from "../runtime/AgentResolver.js"
 import * as Catalog from "../runtime/Catalog.js"
 import * as InboxProjection from "../runtime/InboxProjection.js"
 import * as TaskRunner from "../runtime/TaskRunner.js"
+import * as TaskWorker from "../runtime/TaskWorker.js"
 import * as AgentRegistry from "../store/AgentRegistry.js"
 import * as ConversationStore from "../store/ConversationStore.js"
 import * as IdentityStore from "../store/IdentityStore.js"
@@ -42,6 +43,7 @@ import * as InboxStore from "../store/InboxStore.js"
 import * as OrganizationStore from "../store/OrganizationStore.js"
 import * as SessionIndex from "../store/SessionIndex.js"
 import * as TaskStore from "../store/TaskStore.js"
+import * as WorkQueue from "../store/WorkQueue.js"
 import { authenticated, hostOptions, TokenResolver } from "./Authentication.js"
 import { Host } from "./Host.js"
 import * as HostAttempts from "./HostAttempts.js"
@@ -189,6 +191,16 @@ const followSessions = Layer.effectDiscard(Effect.gen(function*() {
   )
 }))
 
+/**
+ * The worker over the operational queue, for as long as the server runs.
+ * Its lease name is the indexer principal: unique per process, so two
+ * servers on one database are two workers.
+ */
+const runWorker = Layer.effectDiscard(Effect.gen(function*() {
+  const worker = yield* Indexer
+  yield* TaskWorker.run({ worker, lease: "30 seconds", poll: "500 millis" }).pipe(Effect.forkScoped)
+}))
+
 /** Each person starts with one agent, so their first conversation has something to run. */
 const seedAgents = Layer.effectDiscard(Effect.gen(function*() {
   const registry = yield* AgentRegistry.AgentRegistry
@@ -224,7 +236,8 @@ export const serve = (options: {
       AgentHttp.serverLayer({ host: Host }),
       productRoutes.pipe(Layer.provide(authenticated)),
       seedAgents,
-      followSessions
+      followSessions,
+      runWorker
     ).pipe(
       // Attempts go through the host, as a browser's sessions do, so the followers see them.
       Layer.provideMerge(HostAttempts.layer),
@@ -243,6 +256,7 @@ export const serve = (options: {
           InboxStore.layerSql,
           SessionIndex.layerSql,
           TaskStore.layerSql,
+          WorkQueue.layerSql,
           durableClients(options.durability)
         )
       ),

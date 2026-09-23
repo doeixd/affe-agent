@@ -299,11 +299,24 @@ it is still open, so the next pass does not have to re-derive it.
     each attempt's conversation. Tested on both backends, in happy-dom,
     and over a server (completed; waiting with the question in the inbox;
     canceled by interruption; run again and answered); dropping the
-    interruption rule fails the named test. Still open in Phase 2:
-    assignment and the operational queue behind `AgentDispatcher`
-    (§9: leases, priority, retry -- today a task runs when a person
-    starts it), tasks for organizations rather than people, and an
-    approval/question UI beyond the chat page's own.
+    interruption rule fails the named test. The operational queue closed
+    Phase 2 (§9, 2026-09-22): `WorkQueue` (memory and SQL), its own store
+    rather than the kernel's `JobStore`, whose note rules leases out --
+    one item per task, claimed by priority then age under a lease, released
+    with a backoff when the start failed, reclaimable by anyone once the
+    lease has run out, dropped after `maxClaims` with the task marked
+    failed; and `TaskWorker`, polling on the server under the indexer's
+    name as its lease, whose only job is to *start* an attempt reliably
+    (at-least-once for starting, safe because a task already attempted
+    refuses a second start). `POST /tasks/:id/queue` marks a task ready
+    for it; cancel takes a ready task back off the queue. Tested: claim
+    order, leases and take-over on both backends; under the test clock,
+    retry with backoff then success, give-up at `maxClaims`, two workers
+    starting a task once, and a lease that ran out under an attempt already
+    made; over a server, a queued task is started by the server's worker
+    and completes. Not built, and not planned here: assignment to an
+    agent other than the task's own, tasks for organizations rather than
+    people, and an approval UI beyond the chat page's own.
 
     ```text
     verify: exists apps/workbench/src/runtime/AgentResolver.ts

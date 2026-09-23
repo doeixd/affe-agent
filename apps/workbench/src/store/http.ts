@@ -132,6 +132,13 @@ export const startTask = (
     transport("startTask")
   )
 
+/** Put the task on the queue for a worker to start; it is `ready` until then. */
+export const queueTask = (
+  options: Options,
+  id: TaskId
+): Effect.Effect<Task.Record, TaskNotFoundError | TaskNotStartableError | WorkbenchStorageError, HttpClient.HttpClient> =>
+  Effect.flatMap(client(options), (api) => api.tasks.queue({ params: { id } })).pipe(transport("queueTask"))
+
 export const cancelTask = (
   options: Options,
   id: TaskId

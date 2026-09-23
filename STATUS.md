@@ -396,8 +396,11 @@ verify: grep "export interface Inherit" src/subagent/Subagent.ts
   from the host's events and settled by the session, never by the inbox;
   and tasks, whose attempts are ordinary conversations begun through the
   session host and whose status is whatever the session's events say, on
-  a board by column. The §9 queue and assignment, every page beyond chat,
-  settings and the board, W2 onward, and Phase 3 onward remain open. Inbox
+  a board by column, with an operational queue behind it: a worker on the
+  server claims queued tasks under a lease and starts them with bounded
+  retries, and a lease that runs out is taken over. Phase 2 is complete.
+  Every page beyond chat, settings and the board, W2 onward, and Phase 3
+  onward remain open. Inbox
   delivery retains input after transport failures, preserves defects, and
   reports missing or closed sessions at lookup, status or submission.
 

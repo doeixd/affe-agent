@@ -214,6 +214,11 @@ export class TasksGroup extends HttpApiGroup.make("tasks").add(
     success: Task.Attempt,
     error: [TaskNotFoundError, TaskNotStartableError, AgentNotFoundError, WorkbenchStorageError]
   }),
+  HttpApiEndpoint.post("queue", "/tasks/:id/queue", {
+    params: { id: TaskId },
+    success: Task.Record,
+    error: [TaskNotFoundError, TaskNotStartableError, WorkbenchStorageError]
+  }),
   HttpApiEndpoint.post("cancel", "/tasks/:id/cancel", {
     params: { id: TaskId },
     error: [TaskNotFoundError, TaskNotStartableError, WorkbenchStorageError]

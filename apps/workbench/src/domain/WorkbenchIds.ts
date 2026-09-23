@@ -33,3 +33,7 @@ export type OrganizationId = typeof OrganizationId.Type
 /** A product work item (control plane §8). Not a kernel submission. */
 export const TaskId = Schema.String.pipe(Schema.brand("workbench/TaskId"))
 export type TaskId = typeof TaskId.Type
+
+/** A task waiting in the operational queue (control plane §9). */
+export const WorkItemId = Schema.String.pipe(Schema.brand("workbench/WorkItemId"))
+export type WorkItemId = typeof WorkItemId.Type
