@@ -10,13 +10,16 @@ import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Layer, Option, Schedule } from "effect"
+import { Context, DateTime, Effect, Layer, Option, Schedule } from "effect"
 import type { Scope } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
-import type * as Task from "../src/domain/Task.js"
+import { AgentClient } from "affe-agent/client"
+import type * as Conversation from "../src/domain/Conversation.js"
+import * as Task from "../src/domain/Task.js"
 import { AgentId, AgentRevisionId, ConversationId, TaskId, UserId } from "../src/domain/WorkbenchIds.js"
 import * as AgentDirectory from "../src/runtime/AgentDirectory.js"
 import * as ConversationSessions from "../src/runtime/ConversationSessions.js"
+import * as TaskRunner from "../src/runtime/TaskRunner.js"
 import { tokens } from "../src/server/Authentication.js"
 import { approvedReply, buildReply, serve } from "../src/server/app.js"
 import * as AgentRegistry from "../src/store/AgentRegistry.js"
@@ -205,4 +208,43 @@ describe("tasks over the server", () => {
         )
       )
     })), 90_000)
+})
+
+// -- The runner on its own ------------------------------------------------------------
+
+describe("task runner", () => {
+  it.effect("a submit the host refuses fails the attempt, so nothing is left running", () =>
+    Effect.scoped(Effect.gen(function*() {
+      const store = Context.get(yield* Layer.build(TaskStore.memory), TaskStore.TaskStore)
+      const task = yield* store.create({ ownerId: ada, agentId: AgentId.make("a"), title: "Doomed", description: "try" })
+      const conversation: Conversation.Record = {
+        id: ConversationId.make("c1"),
+        ownerId: ada,
+        agentId: AgentId.make("a"),
+        agentRevisionId: AgentRevisionId.make("a@1"),
+        sessionId: "conversation-c1",
+        workspaceId: Option.none(),
+        title: "Doomed (attempt 1)",
+        archived: false,
+        createdAt: DateTime.makeUnsafe(0),
+        updatedAt: DateTime.makeUnsafe(0)
+      }
+      const refusing = TaskRunner.TaskAttempts.of({
+        begin: () => Effect.succeed(conversation),
+        submit: () => Effect.fail(new AgentClient.AgentTransportError({ sessionId: "conversation-c1", detail: "gone" })),
+        interrupt: () => Effect.void
+      })
+      const failed = yield* Effect.flip(
+        TaskRunner.start(task).pipe(
+          Effect.provideService(TaskStore.TaskStore, store),
+          Effect.provideService(TaskRunner.TaskAttempts, refusing)
+        )
+      )
+      assert.strictEqual(failed._tag, "AgentTransportError")
+      assert.strictEqual(Option.map(yield* store.get(task.id), (found) => found.status).pipe(Option.getOrUndefined), "failed")
+      assert.deepStrictEqual((yield* store.attempts(task.id)).map((a) => Option.getOrUndefined(a.outcome)), ["failed"])
+      assert.isTrue(Option.isNone(yield* store.liveAttemptOf("conversation-c1")))
+      // And it can be tried again.
+      assert.isTrue(Task.canStart("failed"))
+    })))
 })

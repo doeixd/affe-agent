@@ -72,7 +72,11 @@ export const start = Effect.fn("TaskRunner.start")(function*(task: Task.Record) 
     conversationId: conversation.id,
     sessionId: conversation.sessionId
   })
-  const submissionId = yield* attempts.submit(task, conversation)
+  // A submit the host refuses leaves nothing running: the attempt is
+  // failed here, since no session event will ever say so.
+  const submissionId = yield* attempts.submit(task, conversation).pipe(
+    Effect.tapError(() => tasks.finishAttempt(conversation.sessionId, "failed", "failed"))
+  )
   const stamped = yield* tasks.recordSubmission(conversation.sessionId, submissionId)
   // Settled before the stamp could land -- the run was that quick. The attempt as recorded is still the answer.
   return Option.getOrElse(stamped, () => recorded)
