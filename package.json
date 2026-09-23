@@ -343,6 +343,7 @@
     "@a2a-js/sdk": "^1.0.1",
     "@ag-ui/client": "^0.0.58",
     "@ag-ui/core": "^0.0.58",
+    "@assistant-ui/react": "^0.15.21",
     "@cloudflare/workers-types": "^5.20260830.1",
     "@durable-streams/client": "^0.2.6",
     "@durable-streams/server": "^0.3.8",

@@ -1,18 +1,27 @@
 import { fileURLToPath } from "node:url"
 import { defineConfig } from "vite"
 import { affeAgentAliases } from "./aliases.ts"
+import { proxiedPrefixes } from "./devProxy.ts"
 
 /**
- * The plain W0 page. `npm run workbench:server` serves the agent over
- * `AgentHttp` on :8787; this dev server proxies its `/sessions` routes so the
- * page and the API share an origin and need no CORS.
+ * The plain page, and the assistant-ui one beside it (`assistant-ui.html`),
+ * with every server route prefix proxied (`devProxy.ts`).
  */
+
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   resolve: { alias: affeAgentAliases },
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("index.html", import.meta.url)),
+        "assistant-ui": fileURLToPath(new URL("assistant-ui.html", import.meta.url))
+      }
+    }
+  },
   server: {
     proxy: Object.fromEntries(
-      ["/sessions", "/conversations", "/agents", "/revisions"].map((path) => [path, "http://localhost:8787"])
+      proxiedPrefixes.map((path) => [path, "http://localhost:8787"])
     )
   }
 })

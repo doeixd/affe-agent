@@ -12,7 +12,7 @@ const src = fileURLToPath(new URL("../src", import.meta.url))
 
 const files = (dir: string): ReadonlyArray<string> =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-    entry.isDirectory() ? files(join(dir, entry.name)) : entry.name.endsWith(".ts") ? [join(dir, entry.name)] : []
+    entry.isDirectory() ? files(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : []
   )
 
 const importsOf = (file: string): ReadonlyArray<string> =>
@@ -41,6 +41,19 @@ describe("workbench boundaries", () => {
           .map((specifier) => `${relative(src, file)} -> ${specifier}`)
       )
     assert.deepStrictEqual(offending, [])
+  })
+
+  it("the assistant-ui adapter is deletable: nothing outside it imports it or assistant-ui", () => {
+    const adapter = join(src, "assistant-ui")
+    const outside = files(src).filter((file) => !file.startsWith(adapter))
+    const offending = outside.flatMap((file) =>
+      importsOf(file)
+        .filter((specifier) => specifier.includes("assistant-ui/"))
+        .map((specifier) => `${relative(src, file)} -> ${specifier}`)
+    )
+    assert.deepStrictEqual(offending, [])
+    // And the rule polices something: the adapter exists and does import assistant-ui.
+    assert.isTrue(files(adapter).some((file) => importsOf(file).some((specifier) => specifier.startsWith("@assistant-ui/"))))
   })
 
   it("reaches affe-agent only through its published subpaths", () => {

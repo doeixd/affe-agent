@@ -162,9 +162,19 @@ it is still open, so the next pass does not have to re-derive it.
     the browser composes since W1's HTTP stores replaced it), a Vite entry
     (`workbench:dev` beside `workbench:server`), and `smoke:workbench`,
     which drives the page's transport over a real socket. W0's plain
-    client is complete; its *separate adapter proof* in assistant-ui
-    (`plan-workbench.md`, after the W0 acceptance list) was never built and
-    is deferred until a second frontend needs the presenter. W1's product
+    client is complete, and its *separate adapter proof* in assistant-ui
+    landed 2026-09-23: `src/assistant-ui/` drives the same
+    `useConversation` view through assistant-ui's external-store runtime
+    (prompt on new, interrupt on cancel) and renders questions through the
+    shared `ui-core/Question`, on its own page (`assistant-ui.html`). The
+    plan's acceptance was checked literally: with the folder and its test
+    removed, the workbench typechecks and its other tests pass, and a
+    boundary rule keeps it that way (nothing outside the folder imports it
+    or assistant-ui). That rule found the boundary test had never walked
+    `.tsx` files; it does now, and they pass. Building the second page also
+    found the dev proxy forwarding only four of the server's route prefixes
+    -- sign-in, tasks and the inbox were unreachable under `workbench:dev` --
+    now fixed and held by `test/DevProxy.test.ts`. W1's product
     shell landed (2026-09-14): `WorkbenchApi`
     serves conversations and agents from the server's SQLite database
     (product records only; execution stays on `AgentHttp`), the browser
@@ -265,7 +275,8 @@ it is still open, so the next pass does not have to re-derive it.
     and against a record from before the field; ignoring the choice in the
     resolver, sharing one client across models, or accepting any model
     each fail the named test. Still open in W2: source cards,
-    prompt/command catalogs, mentions and suggestions, and appearance.
+    prompt/command catalogs, mentions and suggestions, and appearance --
+    the assistant-ui adapter they were to be shared with now exists.
 
     ```text
     verify: exists apps/workbench/src/ui-core/Branch.ts
