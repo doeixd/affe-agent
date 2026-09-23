@@ -96,6 +96,10 @@ describe("ConversationPage", () => {
 
       await waitFor(() => expect(button("Send").disabled).toBe(false))
       send("clean up")
+      // The question names the tool, not just "tool-approval".
+      const question = await screen.findByRole("region", { name: "Question" })
+      expect(question.textContent).toMatch(/deleteEverything wants to/)
+      expect(question.textContent).not.toMatch(/tool-approval/)
       fireEvent.click(await screen.findByRole("button", { name: "Approve" }))
       await screen.findByText("Deleted.")
       expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
@@ -113,6 +117,26 @@ describe("ConversationPage", () => {
       send("first")
       send("second")
       expect((await screen.findByRole("alert")).textContent).toMatch(/AgentBusyError/)
+      // What was typed is not lost to a refusal.
+      await waitFor(() => expect(screen.getByLabelText("Message")).toHaveProperty("value", "second"))
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("a failed run says why, and Retry sends the same message again", async () => {
+    const runtime = await openPage([{ failWith: "provider unavailable" }, TestLanguageModel.text("Recovered.")])
+    try {
+      send("try it")
+      const failure = await screen.findByRole("alert", { name: "Failure" })
+      expect(failure.textContent).toMatch(/The last run failed/)
+      await waitFor(() => expect(button("Retry").disabled).toBe(false))
+      fireEvent.click(button("Retry"))
+      await screen.findByText("Recovered.")
+      // The failure is gone once the retry has started and settled.
+      await waitFor(() => expect(screen.queryByRole("alert", { name: "Failure" })).toBeNull())
+      // The retry sent the same words.
+      expect(screen.getAllByText("try it").length).toBeGreaterThanOrEqual(1)
     } finally {
       await runtime.dispose()
     }

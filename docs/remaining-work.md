@@ -194,7 +194,20 @@ it is still open, so the next pass does not have to re-derive it.
     revision kept, unknown agent) and over a server; emptying the catalog
     fails the page tests. **W1 is complete.** Still no UI for renaming,
     archiving or deleting a conversation, or archiving an agent (the API
-    supports all); W2 onward is open.
+    supports all). W2 has begun (2026-09-22) with pending approvals and
+    error and retry states: `ui-core/Question.ts` describes what an agent
+    asks from the request's detail -- for a tool approval the kernel's
+    `Permission.ApprovalDetail`, so the page says which tool wants to do
+    what, with the reason and any delegation it came through; anything
+    else, or a detail that does not decode, is shown by kind and text,
+    never hidden. The view keeps the last submission's `failure` until the
+    next one starts, the page says why a run failed and offers Retry of the
+    person's last message, and a send the session refuses puts the text
+    back in the box. Tested in happy-dom and as pure functions; dropping
+    the failure or the approval decoding fails the named tests. Still open
+    in W2: attachments, message actions, source cards, prompt/command
+    catalogs, mentions and suggestions, feedback, appearance, pickers,
+    responsive layout and an accessibility pass.
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

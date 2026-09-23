@@ -55,6 +55,8 @@ export interface ConversationView {
   readonly status: SessionStatus
   /** How the latest submission ended, once one has. */
   readonly outcome: Option.Option<Outcome>
+  /** Why the last submission failed, while it is the last one; cleared when the next starts. */
+  readonly failure: Option.Option<AgentEvent.Failure>
   /** The last sequence applied: what a reconnect resumes after. */
   readonly lastSequence: Option.Option<number>
 }
@@ -83,6 +85,7 @@ export const initial = (
   pending,
   status,
   outcome: Option.none(),
+  failure: Option.none(),
   lastSequence: Option.none()
 })
 
@@ -140,11 +143,11 @@ const step = (state: ConversationView, envelope: AgentEvent.AgentEventEnvelope):
   const event = envelope.event
   switch (event._tag) {
     case "SubmissionStarted":
-      return { ...state, status: "running", outcome: Option.none() }
+      return { ...state, status: "running", outcome: Option.none(), failure: Option.none() }
     case "SubmissionCompleted":
       return settle(state, "completed")
     case "SubmissionFailed":
-      return settle(state, "failed")
+      return { ...settle(state, "failed"), failure: Option.some(event.failure) }
     case "SubmissionInterrupted":
       return settle(state, "interrupted")
     case "SessionClosed":
