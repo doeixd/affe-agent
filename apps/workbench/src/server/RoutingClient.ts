@@ -57,7 +57,7 @@ export const layer: Layer.Layer<AgentClient.AgentClient, never, ConversationStor
               detail: "a session is made for a conversation; name it with the conversation's session id"
             })
           )
-          : Effect.flatMap(clientFor(options.sessionId), (client) => client.createSession({ sessionId: options.sessionId })),
+          : Effect.flatMap(clientFor(options.sessionId), (client) => client.createSession(options)),
       session: (sessionId) => Effect.flatMap(clientFor(sessionId), (client) => client.session(sessionId))
     })
   })

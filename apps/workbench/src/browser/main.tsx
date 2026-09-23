@@ -176,6 +176,9 @@ const App = ({ agentId, agents, owner }: Identity) => {
               list: overHttp(HttpStores.feedback(server, route.id)),
               rate: (index, rating) => overHttp(HttpStores.rate(server, route.id, index, rating))
             }}
+            onBranched={(id) => {
+              window.location.hash = encodeURIComponent(id)
+            }}
           />
         )
         : (

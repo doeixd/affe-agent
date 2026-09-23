@@ -5,7 +5,7 @@
  * or `open`, a caller prompts, steers, interrupts and responds through the
  * session's own typed methods, so no parallel "workbench run API" can grow.
  */
-import { Context, Effect, Layer, Option, Scope } from "effect"
+import { Context, Effect, Layer, Option, Schema, Scope } from "effect"
 import type { AgentClient } from "affe-agent/client"
 import type * as Conversation from "../domain/Conversation.js"
 import { ConversationId } from "../domain/WorkbenchIds.js"
@@ -14,6 +14,7 @@ import { AgentNotFoundError, AgentRegistry } from "../store/AgentRegistry.js"
 import { ConversationNotFoundError, ConversationStore } from "../store/ConversationStore.js"
 import type { ConversationExistsError } from "../store/ConversationStore.js"
 import type { WorkbenchStorageError } from "../store/WorkbenchStorageError.js"
+import * as Branch from "../ui-core/Branch.js"
 import { AgentDirectory } from "./AgentDirectory.js"
 import type { RevisionResolutionError } from "./AgentResolver.js"
 
@@ -36,6 +37,20 @@ export interface CreateInput {
   readonly conversationId?: ConversationId | undefined
 }
 
+/** A branch asked for a point the source's history does not reach. */
+export class BranchPointMissingError extends Schema.TaggedError<BranchPointMissingError>()("BranchPointMissingError", {
+  conversationId: ConversationId,
+  ordinal: Schema.Number
+}) {}
+
+export interface BranchInput {
+  /** The conversation branched from. */
+  readonly from: ConversationId
+  /** Branch just before the person's `ordinal`-th message (from 0). */
+  readonly ordinal: number
+  readonly title?: string | undefined
+}
+
 export interface Service {
   /** On the agent's active revision, which the conversation then keeps. */
   readonly create: (
@@ -47,6 +62,23 @@ export interface Service {
     | ConversationExistsError
     // A retry opens the existing record, which can be removed in between.
     | ConversationNotFoundError
+    | WorkbenchStorageError
+    | AgentClient.RemoteError
+  >
+  /**
+   * A new conversation holding the source's history up to, not including,
+   * the person's `ordinal`-th message -- on the source's agent *revision*,
+   * not its active one, so a branch runs what the original ran (D6). The
+   * source is not touched.
+   */
+  readonly branch: (
+    input: BranchInput
+  ) => Effect.Effect<
+    OpenConversation,
+    | BranchPointMissingError
+    | ConversationNotFoundError
+    | ConversationExistsError
+    | RevisionResolutionError
     | WorkbenchStorageError
     | AgentClient.RemoteError
   >
@@ -135,6 +167,31 @@ export const layer: Layer.Layer<ConversationSessions, never, ConversationStore |
         return { conversation, session: yield* sessionOf(conversation) }
       })
 
-      return ConversationSessions.of({ create, open })
+      const branch = Effect.fn("ConversationSessions.branch")(function*(input: BranchInput) {
+        const source = yield* open(input.from)
+        const seed = Branch.before(yield* source.session.history, input.ordinal)
+        if (Option.isNone(seed)) {
+          return yield* new BranchPointMissingError({ conversationId: input.from, ordinal: input.ordinal })
+        }
+        const id = ConversationId.make(globalThis.crypto.randomUUID())
+        const conversation = yield* store.create({
+          id,
+          ownerId: source.conversation.ownerId,
+          agentId: source.conversation.agentId,
+          agentRevisionId: source.conversation.agentRevisionId,
+          sessionId: sessionIdOf(id),
+          workspaceId: source.conversation.workspaceId,
+          title: input.title ?? `${source.conversation.title} (edited)`
+        })
+        const client = yield* directory.client(conversation.agentRevisionId)
+        const session = yield* client.createSession({ sessionId: conversation.sessionId, history: seed.value }).pipe(
+          Scope.provide(lifetime),
+          // A retry after the session was made reaches the one that exists; its seed is already in it.
+          Effect.catchTag("AgentSessionAlreadyExistsError", () => client.session(conversation.sessionId))
+        )
+        return { conversation, session }
+      })
+
+      return ConversationSessions.of({ create, open, branch })
     })
   )

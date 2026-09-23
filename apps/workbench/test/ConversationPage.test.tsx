@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import { Agent, Permission } from "affe-agent"
 import { TestLanguageModel } from "affe-agent/testing"
 import { UserId } from "../src/domain/WorkbenchIds.js"
+import type { ConversationId } from "../src/domain/WorkbenchIds.js"
+import type { Prompt } from "effect/unstable/ai"
 import { ConversationPage } from "../src/react/ConversationPage.js"
 import type { FeedbackActions, Rating } from "../src/react/ConversationPage.js"
 import * as AgentDirectory from "../src/runtime/AgentDirectory.js"
@@ -24,7 +26,11 @@ const Build = Tool.make("build", { parameters: Schema.Struct({}), success: Schem
 const Dangerous = Tool.make("deleteEverything", { parameters: Schema.Struct({}), success: Schema.String })
   .setNeedsApproval(true)
 
-const openPage = async (turns: ReadonlyArray<TestLanguageModel.Turn>, feedback?: FeedbackActions) => {
+const openPage = async (
+  turns: ReadonlyArray<TestLanguageModel.Turn>,
+  feedback?: FeedbackActions,
+  onBranched?: (id: ConversationId) => void
+) => {
   const { layer: model } = await Effect.runPromise(TestLanguageModel.script(turns))
   const bindings = Layer.succeed(AgentResolver.AgentBindings, {
     models: { scripted: model },
@@ -62,7 +68,7 @@ const openPage = async (turns: ReadonlyArray<TestLanguageModel.Turn>, feedback?:
     const { conversation } = yield* sessions.create({ ownerId: owner, agentId: spec.id, title: "Page" })
     return conversation.id
   }))
-  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} />)
+  render(<ConversationPage runtime={runtime} conversationId={conversationId} feedback={feedback} onBranched={onBranched} />)
   await screen.findByRole("heading", { name: "Page" })
   return runtime
 }
@@ -255,6 +261,57 @@ describe("ConversationPage", () => {
       const attached = await screen.findByRole("list", { name: "Attached files" })
       expect(attached.textContent).toContain("notes.txt")
       expect(attached.textContent).not.toContain("extra.txt")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("editing a sent message sends the edit on a new branch, and leaves this conversation as it was", async () => {
+    const branched: Array<ConversationId> = []
+    const runtime = await openPage(
+      [TestLanguageModel.text("A1"), TestLanguageModel.text("A2"), TestLanguageModel.text("B2")],
+      undefined,
+      (id) => branched.push(id)
+    )
+    try {
+      send("q1")
+      await screen.findByText("A1")
+      await waitFor(() => expect(button("Send").disabled).toBe(false))
+      send("q2")
+      await screen.findByText("A2")
+      await waitFor(() => expect(screen.getAllByRole("button", { name: "Edit message" }).length).toBe(2))
+
+      const [, secondEdit] = screen.getAllByRole("button", { name: "Edit message" })
+      if (secondEdit === undefined) throw new Error("no Edit on the second message")
+      fireEvent.click(secondEdit)
+      expect(screen.getByLabelText("Edited message")).toHaveProperty("value", "q2")
+      fireEvent.change(screen.getByLabelText("Edited message"), { target: { value: "q2, edited" } })
+      fireEvent.click(screen.getByRole("button", { name: "Send as a new branch" }))
+      await waitFor(() => expect(branched.length).toBe(1))
+      const [branchId] = branched
+      if (branchId === undefined) throw new Error("no branch")
+
+      const roleTexts = (prompt: Prompt.Prompt) =>
+        prompt.content.flatMap((message) =>
+          message.role === "user"
+            ? [`user:${message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")}`]
+            : message.role === "assistant"
+            ? [`assistant:${message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")}`]
+            : [])
+      const read = (id: ConversationId) =>
+        runtime.runPromise(Effect.flatMap(ConversationSessions.ConversationSessions, (sessions) =>
+          Effect.flatMap(sessions.open(id), ({ session }) => session.history)))
+      // The branch: the first exchange, then the edit and its own reply.
+      await waitFor(async () =>
+        expect(roleTexts(await read(branchId))).toEqual(["user:q1", "assistant:A1", "user:q2, edited", "assistant:B2"])
+      )
+      // The original, untouched.
+      const conversations = await runtime.runPromise(
+        Effect.flatMap(ConversationStore.ConversationStore, (store) => store.list({ ownerId: owner }))
+      )
+      const original = conversations.find((conversation) => conversation.id !== branchId)
+      if (original === undefined) throw new Error("the original conversation is gone")
+      expect(roleTexts(await read(original.id))).toEqual(["user:q1", "assistant:A1", "user:q2", "assistant:A2"])
     } finally {
       await runtime.dispose()
     }

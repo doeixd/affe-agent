@@ -237,11 +237,27 @@ it is still open, so the next pass does not have to re-derive it.
     files history says it carried. Tested as pure functions, in happy-dom,
     and over a server, where the bytes come back from the durable history
     exactly (base64-encoded, a form a file part allows); sending text
-    without the files or dropping the cap fails the named tests. Still open
-    in W2: edit-and-resend and other
-    message actions that need the tree, source cards, prompt/command
-    catalogs, mentions and suggestions, appearance, and a model picker
-    (which D6's pinned revisions would have to allow first).
+    without the files or dropping the cap fails the named tests.
+    Edit-and-resend followed (2026-09-23), after a kernel change:
+    `AgentClient.createSession` takes a `history` seed, carried by every
+    client and the create-session wire, and held by the conformance suite.
+    Editing a message branches: `ConversationSessions.branch` makes a new
+    conversation on the source's *pinned revision* (D6 holds), seeded with
+    the source's history up to that message, and the edit is sent there;
+    the source is untouched. The workbench's routing client dropped the
+    seed on its way to the durable client -- found by the server test once
+    it branched past the first exchange -- and now passes the options
+    through. Tested as pure functions, in happy-dom and over a server;
+    cutting the whole history, or dropping the seed in the workbench or
+    in the router, each fail the named test. Still open in W2: source
+    cards, prompt/command catalogs, mentions and suggestions, appearance,
+    and a model picker (which D6's pinned revisions would have to allow
+    first).
+
+    ```text
+    verify: exists apps/workbench/src/ui-core/Branch.ts
+    verify: grep "readonly history?: Prompt.Prompt | undefined" src/client/AgentClient.ts
+    ```
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

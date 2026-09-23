@@ -11,9 +11,10 @@ import type { ManagedRuntime } from "effect"
 import { useEffect, useState } from "react"
 import type React from "react"
 import type { ConversationId } from "../domain/WorkbenchIds.js"
-import type { ConversationSessions } from "../runtime/ConversationSessions.js"
+import { ConversationSessions } from "../runtime/ConversationSessions.js"
 import type { ActivityView, MessageView } from "../ui-core/ConversationProjection.js"
 import * as Attachments from "../ui-core/Attachments.js"
+import * as Branch from "../ui-core/Branch.js"
 import * as Question from "../ui-core/Question.js"
 import { useConversation } from "./useConversation.js"
 
@@ -29,6 +30,11 @@ export interface ConversationPageProps {
   readonly runtime: ManagedRuntime.ManagedRuntime<ConversationSessions, never>
   readonly conversationId: ConversationId
   readonly feedback?: FeedbackActions | undefined
+  /**
+   * Where to go once an edited message has been sent as a new branch. Without
+   * it the page offers no Edit: a branch nobody navigates to is lost.
+   */
+  readonly onBranched?: ((id: ConversationId) => void) | undefined
 }
 
 /** Copy a reply's text; says "Copied" until the text is copied again or the page moves on. */
@@ -101,9 +107,10 @@ const Activity = ({ activity }: { readonly activity: ActivityView }) =>
     )
     : <li>unrecognized event {activity.originalTag}</li>
 
-export const ConversationPage = ({ conversationId, feedback, runtime }: ConversationPageProps) => {
+export const ConversationPage = ({ conversationId, feedback, onBranched, runtime }: ConversationPageProps) => {
   const state = useConversation(runtime, conversationId)
   const [ratings, setRatings] = useState<ReadonlyMap<number, Rating>>(new Map())
+  const [editing, setEditing] = useState(Option.none<{ readonly index: number; readonly text: string }>())
   const [attachments, setAttachments] = useState<ReadonlyArray<Attachments.Attachment>>([])
   const [refusals, setRefusals] = useState<ReadonlyArray<string>>([])
   /** What this page last sent, files included: what Retry sends, when there is one. */
@@ -146,6 +153,25 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
       setAttachments((current) => (current.length === 0 ? files : current))
     })
   }
+  /** Branch before this message, send the edit there, and go to it. The original is untouched. */
+  const branchWith = (index: number, text: string) => {
+    const ordinal = Branch.userOrdinal(view.messages, index)
+    if (Option.isNone(ordinal) || onBranched === undefined) return
+    setCommandError(Option.none())
+    void runtime.runPromiseExit(Effect.gen(function*() {
+      const sessions = yield* ConversationSessions
+      const branched = yield* sessions.branch({ from: conversationId, ordinal: ordinal.value })
+      yield* branched.session.submit(text.trim())
+      return branched.conversation.id
+    })).then((exit) => {
+      if (exit._tag === "Success") {
+        setEditing(Option.none())
+        onBranched(exit.value)
+      } else {
+        setCommandError(Option.some("the branch could not be made"))
+      }
+    })
+  }
   const attach = (list: FileList | null) => {
     if (list === null) return
     const chosen = [...list]
@@ -184,6 +210,32 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
       <ol aria-label="Messages" aria-live="polite" aria-busy={view.status === "running"}>
         {view.messages.map((message, index) => (
           <Message key={index} message={message}>
+            {onBranched !== undefined && view.status === "idle" && message.role === "user"
+              ? Option.match(Option.filter(editing, (e) => e.index === index), {
+                onNone: () => (
+                  <button type="button" aria-label="Edit message" onClick={() => setEditing(Option.some({ index, text: message.text }))}>
+                    Edit
+                  </button>
+                ),
+                onSome: (edit) => (
+                  <form
+                    aria-label="Edit message"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      branchWith(index, edit.text)
+                    }}
+                  >
+                    <textarea
+                      aria-label="Edited message"
+                      value={edit.text}
+                      onChange={(event) => setEditing(Option.some({ index, text: event.target.value }))}
+                    />
+                    <button type="submit" disabled={edit.text.trim() === ""}>Send as a new branch</button>
+                    <button type="button" onClick={() => setEditing(Option.none())}>Cancel</button>
+                  </form>
+                )
+              })
+              : null}
             {/* Only once settled: indices are history's, and history is re-read when a run ends. */}
             {message.role === "assistant" && message.state === "complete" ? <CopyButton text={message.text} /> : null}
             {feedback !== undefined && view.status === "idle" && message.role === "assistant" && message.state === "complete"
