@@ -109,8 +109,8 @@ const App = ({ agentId, agents, owner }: Identity) => {
   }, [])
 
   return (
-    <div style={{ display: "flex", gap: "2rem", fontFamily: "system-ui", padding: "1rem" }}>
-      <aside>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "2rem", fontFamily: "system-ui", padding: "1rem" }}>
+      <aside aria-label="Sidebar" style={{ flex: "1 1 16rem", maxWidth: "24rem" }}>
         <p>
           Signed in as {owner}{" "}
           <button

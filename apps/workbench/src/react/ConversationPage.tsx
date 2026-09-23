@@ -30,6 +30,25 @@ export interface ConversationPageProps {
   readonly feedback?: FeedbackActions | undefined
 }
 
+/** Copy a reply's text; says "Copied" until the text is copied again or the page moves on. */
+const CopyButton = ({ text }: { readonly text: string }) => {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      aria-label="Copy reply"
+      onClick={() => {
+        // No clipboard (an insecure origin, a test without one): nothing to say "copied" about.
+        const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard
+        if (clipboard === undefined) return
+        void clipboard.writeText(text).then(() => setCopied(true), () => setCopied(false))
+      }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  )
+}
+
 const RateButtons = ({ onRate, rating }: {
   readonly rating: Option.Option<Rating>
   readonly onRate: (rating: Option.Option<Rating>) => void
@@ -103,6 +122,13 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
   if (state._tag === "Failed") return <p role="alert">Could not open this conversation ({state.error._tag}).</p>
 
   const { conversation, session, view } = state
+  const send = () => {
+    const text = draft.trim()
+    if (text === "") return
+    setDraft("")
+    // Refused before it became a run -- busy, disconnected: the text comes back to the box.
+    run(session.prompt(text, { stream: true }), () => setDraft((current) => (current === "" ? text : current)))
+  }
   /** What a retry sends: the person's last message, as they wrote it. */
   const lastPrompt = Option.fromNullishOr(view.messages.filter((message) => message.role === "user").at(-1)?.text)
   // A run that fails is reported by the session and rendered from the view.
@@ -122,12 +148,14 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
   }
 
   return (
-    <main>
+    <main style={{ flex: "3 1 24rem", minWidth: 0 }}>
       <h1>{conversation.title}</h1>
-      <ol aria-label="Messages">
+      {/* Busy while a reply streams, so a screen reader waits for it rather than reading every delta. */}
+      <ol aria-label="Messages" aria-live="polite" aria-busy={view.status === "running"}>
         {view.messages.map((message, index) => (
           <Message key={index} message={message}>
             {/* Only once settled: indices are history's, and history is re-read when a run ends. */}
+            {message.role === "assistant" && message.state === "complete" ? <CopyButton text={message.text} /> : null}
             {feedback !== undefined && view.status === "idle" && message.role === "assistant" && message.state === "complete"
               ? <RateButtons rating={Option.fromNullishOr(ratings.get(index))} onRate={(rating) => rate(index, rating)} />
               : null}
@@ -137,7 +165,7 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
       <ul aria-label="Activity">
         {view.activity.map((activity, index) => <Activity key={index} activity={activity} />)}
       </ul>
-      {view.pending.map(Question.describe).map((question) => (
+      {view.pending.map(Question.describe).map((question, questionIndex) => (
         <section key={question.id} aria-label="Question">
           {question._tag === "ToolApproval"
             ? (
@@ -150,7 +178,12 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
               </>
             )
             : <p>{Question.headline(question)}</p>}
-          <button type="button" onClick={() => run(session.respond({ id: question.id, granted: true }))}>
+          <button
+            type="button"
+            // A question stops the run until it is answered: the answer is where the focus goes.
+            autoFocus={questionIndex === 0}
+            onClick={() => run(session.respond({ id: question.id, granted: true }))}
+          >
             Approve
           </button>
           <button type="button" onClick={() => run(session.respond({ id: question.id, granted: false }))}>
@@ -159,18 +192,32 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
         </section>
       ))}
       <form
+        aria-label="Compose"
         onSubmit={(event) => {
           event.preventDefault()
-          const text = draft.trim()
-          if (text === "") return
-          setDraft("")
-          // Refused before it became a run -- busy, disconnected: the text comes back to the box.
-          run(session.prompt(text, { stream: true }), () => setDraft((current) => (current === "" ? text : current)))
+          send()
         }}
       >
         <label>
-          Message <input value={draft} onChange={(event) => setDraft(event.target.value)} />
+          Message{" "}
+          <textarea
+            rows={3}
+            value={draft}
+            aria-describedby="compose-keys"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter is a new line; an IME composing text keeps its Enter.
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                if (view.status === "idle") send()
+              } else if (event.key === "Escape" && view.status === "running") {
+                event.preventDefault()
+                run(session.interrupt())
+              }
+            }}
+          />
         </label>
+        <span id="compose-keys" hidden>Enter sends, Shift+Enter starts a new line, Escape stops a running reply.</span>
         <button type="submit" disabled={view.status !== "idle"}>Send</button>
         <button type="button" disabled={view.status !== "running"} onClick={() => run(session.interrupt())}>
           Stop
@@ -196,7 +243,7 @@ export const ConversationPage = ({ conversationId, feedback, runtime }: Conversa
         onNone: () => null,
         onSome: (tag) => <p role="alert">The last command was refused ({tag}).</p>
       })}
-      <p aria-label="Status">
+      <p aria-label="Status" role="status">
         {view.status}
         {Option.match(view.outcome, { onNone: () => "", onSome: (outcome) => ` (last: ${outcome})` })}
       </p>

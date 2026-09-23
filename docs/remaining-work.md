@@ -215,10 +215,18 @@ it is still open, so the next pass does not have to re-derive it.
     the only stable name it has -- with thumbs on each settled reply in the
     chat page, toggled off by a second press, and owner-only routes. Tested
     on both backends, in happy-dom and over a server; dropping the owner
-    check or the un-rate fails the named test. Still open in W2:
-    attachments, message actions, source cards, prompt/command catalogs,
-    mentions and suggestions, appearance, a model picker, responsive layout
-    and an accessibility pass.
+    check or the un-rate fails the named test. A keyboard and
+    accessibility pass on the chat page followed: Enter sends, Shift+Enter
+    is a new line (and an IME's Enter is left alone), Escape stops a running
+    reply; a question takes the focus, since the run waits on it; the
+    transcript is a polite live region marked busy while a reply streams,
+    and the status is a status role; each settled reply has a Copy action;
+    and the shell, chat column and board wrap on a narrow screen. Tested in
+    happy-dom; letting Shift+Enter send or dropping the focus fails the
+    named test. Still open in W2: attachments, edit-and-resend and other
+    message actions that need the tree, source cards, prompt/command
+    catalogs, mentions and suggestions, appearance, and a model picker
+    (which D6's pinned revisions would have to allow first).
 
     ```text
     verify: exists apps/workbench/src/ui-core/ConversationPresenter.ts

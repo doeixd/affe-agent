@@ -174,6 +174,63 @@ describe("ConversationPage", () => {
     }
   })
 
+  it("the keyboard drives the composer: Enter sends, Shift+Enter does not, Escape stops", async () => {
+    const started = await Effect.runPromise(Deferred.make<void>())
+    const runtime = await openPage([TestLanguageModel.text("First."), { text: "never", hang: true, started }])
+    try {
+      const box = screen.getByLabelText("Message")
+      fireEvent.change(box, { target: { value: "not yet" } })
+      fireEvent.keyDown(box, { key: "Enter", shiftKey: true })
+      expect(screen.queryByText("First.")).toBeNull()
+      expect(box).toHaveProperty("value", "not yet")
+
+      fireEvent.change(box, { target: { value: "now" } })
+      fireEvent.keyDown(box, { key: "Enter" })
+      await screen.findByText("First.")
+      expect(box).toHaveProperty("value", "")
+
+      await waitFor(() => expect(button("Send").disabled).toBe(false))
+      fireEvent.change(box, { target: { value: "wait" } })
+      fireEvent.keyDown(box, { key: "Enter" })
+      await Effect.runPromise(Deferred.await(started))
+      await waitFor(() => expect(button("Stop").disabled).toBe(false))
+      fireEvent.keyDown(box, { key: "Escape" })
+      await screen.findByText(/idle \(last: interrupted\)/)
+      // The status is announced, and the transcript says when it is mid-reply.
+      expect(screen.getByRole("status").textContent).toMatch(/interrupted/)
+      expect(screen.getByRole("list", { name: "Messages" }).getAttribute("aria-busy")).toBe("false")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it("a question takes the focus, and a reply can be copied", async () => {
+    const written: Array<string> = []
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text: string) => Promise.resolve(void written.push(text)) }
+    })
+    const runtime = await openPage([
+      TestLanguageModel.text("Copy me."),
+      { toolCalls: [{ id: "d1", name: "deleteEverything", params: {} }] },
+      TestLanguageModel.text("Deleted.")
+    ])
+    try {
+      send("first")
+      await screen.findByText("Copy me.")
+      fireEvent.click(screen.getByRole("button", { name: "Copy reply" }))
+      await waitFor(() => expect(written).toEqual(["Copy me."]))
+      expect(screen.getByRole("button", { name: "Copy reply" }).textContent).toBe("Copied")
+
+      await waitFor(() => expect(button("Send").disabled).toBe(false))
+      send("clean up")
+      const approve = await screen.findByRole("button", { name: "Approve" })
+      await waitFor(() => expect(document.activeElement).toBe(approve))
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it("Stop interrupts the running submission", async () => {
     const started = await Effect.runPromise(Deferred.make<void>())
     const runtime = await openPage([{ text: "never", hang: true, started }])

@@ -115,7 +115,7 @@ export const TasksPage = ({ actions, agents, owner, pollMillis = 2_000, run }: T
         <button type="submit" disabled={title.trim() === "" || description.trim() === "" || agentId === ""}>Add task</button>
       </form>
       {Option.isSome(failure) ? <p role="alert">That did not work; the board may be behind. {failure.value}</p> : null}
-      <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "flex-start" }}>
         {columns.map(([name, statuses]) => (
           <section key={name} aria-label={name} style={{ minWidth: "12rem" }}>
             <h3>{name}</h3>
