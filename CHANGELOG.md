@@ -9,7 +9,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 <!-- behavior-changes:start -->
 ### Behaviour changes
 
-_None since v0.1.0._
+- AgentProtocol.CreateSessionRequest gains an optional `history` field (the prompt wire encoding); an unseeded request is byte-identical to before, and a server built before this ignores the field and starts from the agent's instructions (`85a0a8c`; measured by `test/fixtures/create-session-request.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
