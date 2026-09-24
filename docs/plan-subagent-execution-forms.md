@@ -168,15 +168,22 @@ and `Workflow.suspend(instance)` parks one. The build is therefore:
    the parent's event stream does not carry the child's requests, and the
    in-process `inherit: { approval: "parent" }` is not the durable path.
 
-Build order, and the risk: **a probe first.** D5 asserts the engine "handles
-one case cleanly — a workflow started from inside another suspends its parent
-through the parent-instance path", but that has never been run; the closest
-measurement, a durable sleep inside a handler, did *not* resume. The probe is
-`WorkflowEngine.execute` + poll + `Workflow.suspend` from a workflow body,
-children completing under `ClusterWorkflowEngine`. If it holds, (2) and (3)
-are a build and (4) is its own decision; if it does not, item 113 is blocked
-on an upstream engine capability and the refusal stays. Nothing here is
-written until the probe says which.
+Build order, and the risk: **probed 2026-09-24, and it holds.** A workflow body
+*is* given `WorkflowEngine` (and `WorkflowInstance`), and `Child.execute({ n })`
+from a parent's body completes with the child's result; `test/ChildWorkflow.test.ts`
+pins it and fails if the engine stops providing the context. (The first attempt
+failed on wiring, not the engine: `Layer.mergeAll` leaves `toLayer`'s own
+`WorkflowEngine` requirement unsatisfied. The working wiring is
+`Layer.mergeAll(parentLayer, childLayer).pipe(Layer.provideMerge(engine))`,
+which is what `DurableAgentClient`'s own tests do — worth knowing before
+blaming the engine.)
+
+So the child-workflow design is **reachable**: parts (2) and (3) are a build,
+part (4) is its own decision, and the refusal stays only until someone builds
+them. What the probe does *not* yet show is **suspension** — a child that parks
+on an approval and a parent that resumes behind it. That wants a second probe
+with a `DurableDeferred` before (4) is designed, and it is the one with a
+recorded failure nearby (a durable sleep inside a handler did not resume).
 
 ## Form 3 — background
 

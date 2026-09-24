@@ -765,9 +765,11 @@ acceptance test for 105, 107 and 108.*
      handler *cannot* start the child — it is `never`-requirement and runs
      inside an `Activity` — so the design is a *marked* delegation that
      `DurableToolkit.handle` runs in the **workflow body** via
-     `WorkflowEngine.execute` + `Workflow.suspend`, not as an activity. A
-     probe of the engine's parent-suspend path comes first; item 113 is
-     blocked if it fails.
+     `WorkflowEngine.execute` + `Workflow.suspend`, not as an activity. The
+     probe holds (`test/ChildWorkflow.test.ts`): a body is given
+     `WorkflowEngine` and executes a child, completing with its result. The
+     next probe is suspension — a child parked on an approval and a parent
+     resumed behind it.
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;

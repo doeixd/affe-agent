@@ -2818,3 +2818,21 @@ verify: exists test/BackgroundSubagent.test.ts
 verify: grep "list_background" src/subagent/Background.ts
 verify: grep "export const reportToParent" src/subagent/Background.ts
 ```
+
+## 2026-09-24 - item 113 probe: a workflow body can start a child workflow
+
+The scoping pass for item 113 hypothesized two halves and the probe confirmed
+both. A tool handler cannot start the child — `DurableToolkit` wraps every call
+in an `Activity`, a handler's requirements are `never`, and a suspending
+activity records `Unresolved`. A **workflow body** can: it is given
+`WorkflowEngine` (and `WorkflowInstance`), and `Child.execute({ n })` from a
+parent's body completes with the child's result. `test/ChildWorkflow.test.ts`
+pins it; if the engine stops providing the context, the test fails and item 113
+reopens. Not the design yet — suspension (a child parked on an approval, a
+parent resumed behind it) is the next probe. The first attempt at the probe
+failed on wiring, not the engine: `toLayer`'s layer needs the engine, so the
+wiring is `Layer.mergeAll(...).pipe(Layer.provideMerge(engine))`.
+
+```text
+verify: exists test/ChildWorkflow.test.ts
+```
