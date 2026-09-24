@@ -2816,4 +2816,5 @@ the client that serves its own agent, a layer cycle. `test/BackgroundSubagent.te
 verify: exists src/subagent/Background.ts
 verify: exists test/BackgroundSubagent.test.ts
 verify: grep "list_background" src/subagent/Background.ts
+verify: grep "export const reportToParent" src/subagent/Background.ts
 ```

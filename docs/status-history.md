@@ -6201,3 +6201,13 @@ worker's status, `cancel_background` ends one run and leaves the worker
 followable, and `stop_background` seals it. They are always in the toolkit,
 not opt-in: a conditional toolkit is a union of two toolkits, which defeats
 `Agent.make`'s inference at the parent, and the battery is opt-in already.
+
+`reportToParent` followed, closing the loop: a helper the caller forks,
+consuming `reports` and delivering each to the session that started the worker
+as a `kind: "framework"` item -- retrying a busy parent rather than
+interrupting it. `Report` gained `sequence` (a stable idempotency key) and
+`parent` (read from `CurrentSessionId` at the `start` call). It stayed a
+helper rather than a flag on `background` because the layer cycle is
+permanent: a self-delivering battery would need the client that serves its own
+agent. The test asserts the person's input is alone in the history and the
+report arrives as a system message.

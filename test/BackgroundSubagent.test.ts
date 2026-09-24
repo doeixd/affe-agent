@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Stream } from "effect"
+import { Effect, Fiber, Layer, Schedule, Stream } from "effect"
+import { PersistedQueue } from "effect/unstable/persistence"
 import * as Agent from "../src/Agent.js"
 import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"
+import { AgentClient } from "../src/client/index.js"
 import { Subagent } from "../src/subagent/index.js"
 import { AgentProbe, TestLanguageModel } from "../src/testing/index.js"
 
@@ -139,5 +141,66 @@ describe("background delegation", () => {
       assert.strictEqual(failed.length, 1)
       assert.strictEqual(failed[0]!.name, "follow_up_background")
       assert.include(failed[0]!.failure.message, "no background worker")
+    }))
+
+  it.live("reportToParent delivers a report to the parent session as a framework message", () =>
+    Effect.gen(function* () {
+      const childModel = yield* TestLanguageModel.script([TestLanguageModel.text("findings")])
+      const { layer: parentModel } = yield* TestLanguageModel.script([
+        { toolCalls: [{ id: "p1", name: "start_background", params: { question: "food" } }] },
+        TestLanguageModel.text("started"),
+        // The report-triggered run: the parent is told, and answers.
+        TestLanguageModel.text("read the report")
+      ])
+
+      const { userTexts, systemTexts } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const background = yield* Subagent.background("research", Agent.make({ instructions: "Research." }), {
+            description: "Research in the background.",
+            provide: childModel.layer
+          })
+          const Coordinator = Agent.make({ instructions: "Start research.", toolkit: background.toolkit })
+          const env = yield* Layer.build(
+            Layer.mergeAll(
+              AgentClient.layer(Coordinator).pipe(Layer.provide(Layer.merge(parentModel, background.layer))),
+              PersistedQueue.layer.pipe(Layer.provide(PersistedQueue.layerStoreMemory))
+            )
+          )
+          return yield* Effect.gen(function* () {
+            const client = yield* AgentClient.AgentClient
+            const session = yield* client.createSession({ sessionId: "coordinator" })
+            // The caller delivers: the battery publishes, `reportToParent`
+            // consumes and delivers through the inbox.
+            yield* Effect.forkScoped(Subagent.reportToParent(background))
+            yield* session.prompt("go")
+            // The report commits when its submission starts, and the run
+            // settles: both together are race-free.
+            yield* Effect.repeat(
+              Effect.all({ status: session.status, history: session.history }),
+              {
+                until: ({ history, status }) =>
+                  status === "idle" &&
+                  history.content.some((message) =>
+                    message.role === "system" && typeof message.content === "string" &&
+                    message.content.includes("Background worker")),
+                schedule: Schedule.spaced("10 millis")
+              }
+            )
+            const history = yield* session.history
+            return {
+              userTexts: TestLanguageModel.userTexts(history),
+              systemTexts: history.content.flatMap((message) =>
+                message.role === "system" && typeof message.content === "string" ? [message.content] : [])
+            }
+          }).pipe(Effect.provide(env))
+        })
+      )
+
+      // The person's input is alone: the report is a system message.
+      assert.deepStrictEqual(userTexts, ["go"])
+      assert.isTrue(
+        systemTexts.some((text) => text.includes("Background worker worker-1 finished. Findings: findings")),
+        `the report did not arrive as a framework message: ${JSON.stringify(systemTexts)}`
+      )
     }))
 })

@@ -779,4 +779,5 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
  * surface with `Subagent.tool`.
  */
 export { background } from "./Background.js"
-export type { Options as BackgroundOptions, Report as BackgroundReport } from "./Background.js"
+export { reportToParent } from "./Background.js"
+export type { Options as BackgroundOptions, Report as BackgroundReport, WorkerStatus as BackgroundWorkerStatus } from "./Background.js"

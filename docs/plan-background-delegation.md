@@ -229,7 +229,15 @@ returns `{ toolkit, layer, reports }`:
   *application*, not one run — a child is forked into its scope, so
   `Effect.provide(layer)` around a single `Agent.run` would cancel the child
   when the run returns;
-- **`reports`** is a `Stream` of `{ worker, status, text, turns }`.
+- **`reports`** is a `Stream` of `{ worker, status, text, turns, sequence,
+  parent }` — `parent` read from `CurrentSessionId` at the `start` call, so a
+  report knows the session that asked for it;
+- **`Subagent.reportToParent(background)`** is the delivery helper the caller
+  forks: it consumes `reports` and delivers each to its `parent` as a
+  `kind: "framework"` inbox item, retrying a busy session rather than
+  interrupting it. It is a helper and not a flag on `background` on purpose —
+  a battery that delivered its own reports would need the client that serves
+  its own agent, the layer cycle below.
 
 **Reports are the caller's to deliver**, and that is the design decision the
 build forced. A battery that delivered its own reports would need the
@@ -240,8 +248,8 @@ the delivery policy (when a report lands, what a busy parent does) where
 `SessionInbox` says it belongs — with the caller. `SessionInbox` remains the
 durable way, as a `kind: "framework"` item.
 
-Still open, as before: `reportToParent` as a convenience over that stream,
-updates, assignments, and the durable half (item 113).
+Still open, as before: updates, assignments, and the durable half (item
+113).
 Budgets are the child's own by default (`Budget.fresh()`), the reverse of the
 attached form's, as decided above.
 

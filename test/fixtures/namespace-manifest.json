@@ -84,6 +84,7 @@
   "affe-agent/subagent/SubagentDepthExceededError",
   "affe-agent/subagent/SubagentExhaustedError",
   "affe-agent/subagent/SubagentInterruptedError",
+  "affe-agent/subagent/background-reports",
   "affe-agent/tool-source/Credentials/Bindings",
   "affe-agent/tool-source/Credentials/Provider",
   "affe-agent/tool-source/ToolSourceId",

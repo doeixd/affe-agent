@@ -1,11 +1,13 @@
-import { Cause, Context, Effect, Layer, Queue, Ref, Schema, Scope, Stream } from "effect"
-import type { LanguageModel, Prompt } from "effect/unstable/ai"
-import { Tool } from "effect/unstable/ai"
+import { Cause, Context, Effect, Layer, Option, Queue, Ref, Schedule, Schema, Scope, Stream } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
+import { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Budget from "../budget/Budget.js"
+import { CurrentSessionId } from "../internal/currentSession.js"
 import * as Namespace from "../internal/namespace.js"
+import * as SessionInbox from "../sessions/SessionInbox.js"
 
 /**
  * Background delegation: a child that outlives the run that started it, and
@@ -40,6 +42,18 @@ export interface Report {
   /** The child's final text, or the failure's description. */
   readonly text: string
   readonly turns: number
+  /**
+   * A per-background sequence, assigned when the run ends. It is what makes a
+   * report's idempotency key stable — `background:<worker>:<sequence>` — so a
+   * replay or a redelivery is one report rather than a second one.
+   */
+  readonly sequence: number
+  /**
+   * The session that started the worker, read from `CurrentSessionId` at the
+   * `start` call; `None` when nothing started it (a direct call in a test).
+   * `reportToParent` delivers only where there is a parent.
+   */
+  readonly parent: Option.Option<string>
 }
 
 /** One background worker, as `list` reports it. */
@@ -163,46 +177,62 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
         // The scope the caller opened around `background`: a child forked here
         // outlives the run that started it.
         const scope = yield* Effect.scope
-        const workers = yield* Ref.make<ReadonlyMap<string, AgentSession.AgentSession<Tools, E, Value, Prompt.RawInput>>>(new Map())
+        const workers = yield* Ref.make<
+          ReadonlyMap<string, {
+            readonly session: AgentSession.AgentSession<Tools, E, Value, Prompt.RawInput>
+            readonly parent: Option.Option<string>
+          }>
+        >(new Map())
         const counter = yield* Ref.make(0)
+        const reportSeq = yield* Ref.make(0)
+
+        /** Assign the report's sequence and publish it. */
+        const offer = (
+          worker: string,
+          status: Report["status"],
+          text: string,
+          turns: number,
+          parent: Option.Option<string>
+        ): Effect.Effect<void> =>
+          Effect.flatMap(Ref.updateAndGet(reportSeq, (n) => n + 1), (sequence) =>
+            Queue.offer(reports, { worker, status, text, turns, sequence, parent }))
 
         const runChild = (
           session: AgentSession.AgentSession<Tools, E, Value, Prompt.RawInput>,
           worker: string,
-          question: string
+          question: string,
+          parent: Option.Option<string>
         ): Effect.Effect<void> =>
           AgentSession.prompt<Tools, E, Value, Prompt.RawInput>(session, question).pipe(
             Effect.provide(services),
-            Effect.map((result): Report => ({
-              worker,
-              status: result.status === "interrupted" ? "failed" : "completed",
-              text: result.text,
-              turns: result.turns
-            })),
-            Effect.catchCause((cause): Effect.Effect<Report> =>
-              Effect.succeed({ worker, status: "failed", text: Cause.pretty(cause), turns: 0 })),
-            Effect.flatMap((report) => Queue.offer(reports, report))
+            Effect.flatMap((result) =>
+              offer(worker, result.status === "interrupted" ? "failed" : "completed", result.text, result.turns, parent)),
+            Effect.catchCause((cause) => offer(worker, "failed", Cause.pretty(cause), 0, parent))
           )
 
         const start = (question: string): Effect.Effect<string> =>
           Effect.gen(function* () {
             const worker = `worker-${yield* Ref.updateAndGet(counter, (n) => n + 1)}`
+            // Read here, inside the tool call: the report's destination is the
+            // session that started the worker, not whichever session happens
+            // to exist when it finishes.
+            const parent = yield* CurrentSessionId
             const session = yield* AgentSession.makeEngine(agent, {}).pipe(
               Effect.provide(services),
               Effect.provideService(Scope.Scope, scope)
             )
-            yield* Ref.update(workers, (all) => new Map(all).set(worker, session))
-            yield* Effect.forkIn(scope)(runChild(session, worker, question))
+            yield* Ref.update(workers, (all) => new Map(all).set(worker, { session, parent }))
+            yield* Effect.forkIn(scope)(runChild(session, worker, question, parent))
             return worker
           })
 
         const followUp = (worker: string, question: string): Effect.Effect<string, string> =>
           Effect.gen(function* () {
-            const session = (yield* Ref.get(workers)).get(worker)
-            if (session === undefined) {
+            const found = (yield* Ref.get(workers)).get(worker)
+            if (found === undefined) {
               return yield* Effect.fail(`no background worker "${worker}"; start one first`)
             }
-            yield* Effect.forkIn(scope)(runChild(session, worker, question))
+            yield* Effect.forkIn(scope)(runChild(found.session, worker, question, found.parent))
             return `sent to ${worker}`
           })
 
@@ -210,7 +240,7 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
           const all = Array.from(yield* Ref.get(workers))
           return yield* Effect.forEach(
             all,
-            ([worker, session]) =>
+            ([worker, { session }]) =>
               Effect.map(AgentSession.status(session), (status): WorkerStatus => ({ worker, status })),
             { concurrency: "unbounded" }
           )
@@ -218,9 +248,9 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
 
         const cancel = (worker: string): Effect.Effect<string, string> =>
           Effect.gen(function* () {
-            const session = (yield* Ref.get(workers)).get(worker)
-            if (session === undefined) return yield* Effect.fail(`no background worker "${worker}"`)
-            return yield* AgentSession.interrupt(session).pipe(
+            const found = (yield* Ref.get(workers)).get(worker)
+            if (found === undefined) return yield* Effect.fail(`no background worker "${worker}"`)
+            return yield* AgentSession.interrupt(found.session).pipe(
               Effect.as(`cancelled ${worker}'s current run`),
               Effect.catchTags({
                 AgentIdleError: () => Effect.succeed(`${worker} is not running`),
@@ -231,9 +261,9 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
 
         const stop = (worker: string): Effect.Effect<string, string> =>
           Effect.gen(function* () {
-            const session = (yield* Ref.get(workers)).get(worker)
-            if (session === undefined) return yield* Effect.fail(`no background worker "${worker}"`)
-            yield* AgentSession.interrupt(session).pipe(Effect.ignore)
+            const found = (yield* Ref.get(workers)).get(worker)
+            if (found === undefined) return yield* Effect.fail(`no background worker "${worker}"`)
+            yield* AgentSession.interrupt(found.session).pipe(Effect.ignore)
             // Sealed by removing it, so a later follow-up finds no worker. The
             // session's own resources release with the scope `background` was
             // opened in -- the application's, not one run.
@@ -259,4 +289,74 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     })
 
     return { toolkit, layer, reports: Stream.fromQueue(reports) }
+  })
+
+/** The default report rendering: a system message the parent's model reads. */
+const defaultRender = (report: Report): string =>
+  report.status === "completed"
+    ? `Background worker ${report.worker} finished. Findings: ${report.text}`
+    : `Background worker ${report.worker} did not finish: ${report.text}`
+
+/**
+ * Deliver every report to the session that started its worker, as a framework
+ * item through `SessionInbox` -- committed with framework provenance and no
+ * application input, so the parent's model reads it as the framework's message
+ * and never as something the person typed.
+ *
+ * An `Effect` the caller forks, deliberately. The battery cannot deliver its
+ * own reports: it would need the `AgentClient` that serves the agent whose
+ * tools use it, and that is a layer cycle. `SessionInbox` says the reporting
+ * decision is the caller's, so this is a helper the caller runs, not a flag
+ * the battery hides. Provide the same `AgentClient` the parent runs on, plus
+ * a `PersistedQueue` for the inbox.
+ *
+ * A busy parent is retried, not interrupted: the item waits for the session's
+ * next idle point. A report whose worker nothing started (`CurrentSessionId`
+ * was `None`) has no parent and is skipped. An `Undeliverable` item is logged
+ * and dropped -- a session that is gone is gone.
+ */
+export const reportToParent = (
+  background: { readonly reports: Stream.Stream<Report> },
+  options?: {
+    /** The inbox's name, and so its identity in the store. */
+    readonly name?: string | undefined
+    /** How a report becomes the parent model's message. Defaults to a system message. */
+    readonly render?: ((report: Report) => string) | undefined
+  }
+) =>
+  Effect.gen(function* () {
+    const inbox = yield* SessionInbox.make({
+      name: options?.name ?? Namespace.tag("subagent/background-reports")
+    })
+    const render = options?.render ?? defaultRender
+    yield* Stream.runForEach(background.reports, (report) =>
+      Option.match(report.parent, {
+        onNone: () => Effect.void,
+        onSome: (sessionId) =>
+          Effect.gen(function* () {
+            const id = `background:${report.worker}:${report.sequence}`
+            yield* inbox.enqueue({
+              id,
+              sessionId,
+              kind: "framework",
+              input: Prompt.fromMessages([Prompt.systemMessage({ content: render(report) })]),
+              source: { kind: "background", id: report.worker },
+              createdAt: 0
+            })
+            yield* inbox.deliver.pipe(
+              Effect.retry({
+                while: (error) => error._tag === "SessionBusyError",
+                schedule: Schedule.spaced("25 millis")
+              }),
+              Effect.tap((outcome) =>
+                outcome._tag === "Undeliverable"
+                  ? Effect.logWarning(`background report ${id}: ${outcome.reason}`)
+                  : Effect.void),
+              Effect.catchTag("InboxError", (error) =>
+                Effect.logWarning(`background report ${id}: ${error.message}`)),
+              Effect.asVoid
+            )
+          })
+      })
+    )
   })
