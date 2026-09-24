@@ -164,15 +164,18 @@ chosen at wiring time** — `reportToParent: "input-boundary"` steers the report
 into the active run at a turn boundary — but it is off by default, because
 otherwise the arrival time, not the caller, would decide meaning.
 
-That decision exposes the primitive the background work must supply. A report
-is a **framework message**, not application input, and
-`SessionInbox.Item.input` is application input: it is a prompt decoded by the
-session's `AgentInput`, and `SessionInbox.ts` states that a typed-input agent
-"cannot be fed from here yet". So a report needs its own input path — a
-message kind that bypasses `AgentInput` and commits as a framework/system
-message — or a typed-input parent can never receive one. This is the concrete
-missing piece under the battery, and it is why the battery is not a thin
-wrapper over `SessionInbox`.
+A report is a **framework message**, and its provenance is already
+expressible: `SessionInbox` carries a `Prompt`, so a system-role message
+commits as a *system* message rather than user input —
+`examples/ref-subagent-forms.ts` does exactly that. What is missing is
+delivery to an agent with a declared `AgentInput`: `SessionInbox.ts` states a
+typed-input agent "cannot be fed from here yet", because the wire carries that
+schema's encoded value and the inbox carries a prompt. The primitive is a
+**framework submission** — a run opened by framework messages with no
+application input; the design is in
+[plan-subagent-execution-forms.md](./plan-subagent-execution-forms.md),
+decision 2. That, not provenance, is why the battery is not a thin wrapper
+over `SessionInbox`.
 
 ### Assignments
 

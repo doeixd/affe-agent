@@ -102,18 +102,33 @@ const report = (worker: string, sequence: number, text: string): SessionInbox.It
   // same worker distinct.
   id: `worker:${worker}:done:${sequence}`,
   sessionId: PARENT_SESSION,
-  input: Prompt.make(`Background worker ${worker} finished. Findings: ${text}`),
+  // A system-role message, not a string: `SessionInbox` carries a `Prompt`, so
+  // a report is committed with framework provenance and is never mistaken for
+  // something the person typed. (A string would become a *user* message.)
+  input: Prompt.fromMessages([
+    Prompt.systemMessage({ content: `Background worker ${worker} finished. Findings: ${text}` })
+  ]),
   source: { kind: "worker", id: worker },
   createdAt: 0
 })
 
-/** The assistant's text, read back from a history. */
-const assistantTexts = (history: Prompt.Prompt): Array<string> =>
-  history.content.flatMap((message) =>
-    message.role === "assistant"
-      ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
-      : []
-  )
+/** Every text of the messages in a history with the given role. */
+const byRole = (history: Prompt.Prompt, role: string): Array<string> =>
+  history.content
+    .filter((message) => message.role === role)
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
+    )
+
+/**
+ * The reports in a history: system-role messages the inbox delivered. The
+ * agent's instructions are also a system message, so the marker is what tells
+ * the framework's report from its prompt.
+ */
+const reportTexts = (history: Prompt.Prompt): Array<string> =>
+  byRole(history, "system").filter((text) => text.startsWith("Background worker"))
 
 const program = Effect.gen(function* () {
   // Workers are forked here, not into a tool's scope, so they outlive the run
@@ -225,18 +240,18 @@ const program = Effect.gen(function* () {
 
   /**
    * Wait until the parent has settled *and* has committed at least
-   * `expectedUserTexts` messages. `deliver` returns at admission, not at
+   * `expectedReports` reports. `deliver` returns at admission, not at
    * settlement (item 97), so this is how the application knows a delivered
-   * report has been processed. The two conditions together are race-free:
-   * the report commits when the submission *starts*, so the count proves it
+   * report has been processed. The two conditions together are race-free: the
+   * report commits when the submission *starts*, so the count proves it
    * started, and `idle` proves it finished.
    */
-  const settled = (session: AgentClient.RemoteSession, expectedUserTexts: number) =>
+  const settled = (session: AgentClient.RemoteSession, expectedReports: number) =>
     Effect.repeat(
       Effect.all({ status: session.status, history: session.history }),
       {
         until: ({ history, status }) =>
-          status === "idle" && TestLanguageModel.userTexts(history).length >= expectedUserTexts,
+          status === "idle" && reportTexts(history).length >= expectedReports,
         schedule: Schedule.spaced("1 millis")
       }
     )
@@ -248,12 +263,12 @@ const program = Effect.gen(function* () {
   // The worker's completion arrives as a report, delivered as a new submission.
   yield* Queue.take(reports)
   const delivered1 = yield* deliverReport
-  yield* settled(parent, 2)
+  yield* settled(parent, 1)
 
   // Run 2: the parent reads the report and sends a follow-up to the same worker.
   yield* Queue.take(reports)
   const delivered2 = yield* deliverReport
-  yield* settled(parent, 3)
+  yield* settled(parent, 2)
 
   // Run 3: the parent answers with the follow-up's findings.
   const history = yield* parent.history
@@ -265,11 +280,12 @@ const program = Effect.gen(function* () {
     // parent did not wait for the worker.
     handOffRunText: first.text,
     deliveries: [delivered1._tag, delivered2._tag],
-    // Both reports, plus the original prompt. The reports arrive as *user*
-    // messages -- the finding below.
-    parentUserTexts: TestLanguageModel.userTexts(history),
-    parentAssistantTexts: assistantTexts(history),
-    childUserTexts: TestLanguageModel.userTexts(childHistory)
+    // The person's input, and the reports with framework provenance: the
+    // reports are *system* messages, so they cannot be mistaken for user input.
+    parentUserTexts: byRole(history, "user"),
+    parentReportTexts: reportTexts(history),
+    parentAssistantTexts: byRole(history, "assistant").filter((text) => text.length > 0),
+    childUserTexts: byRole(childHistory, "user")
   }
 })
 
@@ -300,11 +316,15 @@ Effect.runPromise(main).then(
 //   2. The client/agent circularity. The client is built from the agent, whose
 //      tool needs the client. Breaking it took a service plus a lazy `Ref`,
 //      because the tool cannot close over a value that does not exist yet.
-//   3. A report is application input. `SessionInbox.Item.input` is a prompt,
-//      so the completion lands in the parent's history as a *user* message —
-//      indistinguishable from something the person typed. A real report needs
-//      a framework message kind that bypasses `AgentInput`, which is the
-//      missing primitive the plan named.
+//   3. Provenance is expressible, but only for a raw-input agent. Delivering a
+//      `Prompt` with a system-role message commits a *system* message, so a
+//      report is not mistaken for the person's input -- the example does this
+//      (`parentSystemTexts`). What is *not* expressible is delivering to an
+//      agent with a declared `AgentInput`: the wire carries the schema's
+//      encoded value and the inbox carries a prompt, so a typed-input parent
+//      cannot receive a report at all. The missing primitive is narrower than
+//      "framework messages do not exist"; it is a submission opened by
+//      framework messages with no application input.
 //
 // So the composition is real but it is not a dozen lines: it needs a service,
 // a lazy binding, two clients, an inbox and an application scope. That is the

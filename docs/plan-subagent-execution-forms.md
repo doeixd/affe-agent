@@ -297,14 +297,42 @@ starts a **new submission**, committed as a **framework message** (system
 role), not as the application input.
 
 That last clause is the design, not a detail. "Delivered separately from the
-parent's application input — no report tags, mapper or input union" is
-achievable here precisely because a report is a *framework message*, not a
-value decoded by the session's `AgentInput`. This exposes the missing
-primitive the background work must supply: **`SessionInbox` feeds application
-input and cannot feed an agent with a declared `AgentInput` at all** (stated
-in `SessionInbox.ts`). A framework report needs its own input path — a message
-kind that bypasses `AgentInput` — or a typed-input parent can never receive
-one.
+parent's application input" is already achievable for a raw-input agent:
+`AgentInput.prompt`'s schema accepts any `Prompt.RawInput`, so an item whose
+input is a `Prompt` carrying a **system-role** message commits a *system*
+message, not a user one. `examples/ref-subagent-forms.ts` does exactly that
+(its `parentReportTexts`), and a direct probe confirmed the committed role is
+`system`. So framework *provenance* is not the missing primitive — this plan
+said it was, and the example corrected it.
+
+The primitive that **is** missing is narrower: `SessionInbox` cannot feed an
+agent with a declared `AgentInput` at all (`SessionInbox.ts`: "cannot be fed
+from here yet"), because the wire carries that schema's encoded value and the
+inbox carries a prompt. A typed-input parent therefore cannot receive a report,
+and the run a report starts has no application input to give
+`AgentInput.Current`.
+
+**The framework submission, as a design.** A submission opened by framework
+messages with no application input. It has the same lifecycle as any other --
+submission, runs, turns, budget, events, canonical history -- with one
+difference: it carries no `AgentInput` value, so `AgentInput.Current` is
+`None` for its tools, and its messages commit with framework provenance.
+
+- **Entry.** `AgentSession.framework(messages)` in process, and
+  `SessionInbox.Item.input` becomes a small union --
+  `{ kind: "input", input } | { kind: "framework", messages }` -- so the inbox
+  can carry either.
+- **Committed, not injected.** The messages go to canonical history, so a
+  report is auditable, replayable and durable like everything else. A
+  `ContextTransform` injection would be ephemeral and would not survive a
+  replay.
+- **In process first.** The wire form (`AgentProtocol`) and the durable journal
+  are deliberately *not* decided here: they are the same work as item 113's
+  child-workflow host, and a request nobody has made should not mint a wire
+  field and a fixture. The first slice is `AgentSession.framework` plus the
+  inbox union, in process, no fixture change.
+- **Rejected: do nothing.** It leaves a typed-input parent unable to receive a
+  report at all, which is the gap this decision is about.
 
 Joining at a boundary is expressible and safe **when chosen at wiring time**,
 because then the caller, not the arrival time, decides the relationship:
@@ -350,10 +378,12 @@ confidence. The same test was run here:
 >    whose tool needs the client; breaking it took a `Context.Service` plus a
 >    lazy `Ref`, because the tool cannot close over a value that does not
 >    exist yet.
-> 3. **A report is application input.** `SessionInbox.Item.input` is a prompt,
->    so the completion lands in the parent's history as a **user message**,
->    indistinguishable from something the person typed — exactly the
->    framework-message primitive decision 2 says is missing.
+> 3. **Provenance is expressible, but only for a raw-input agent.** Delivering
+>    a `Prompt` with a system-role message commits a *system* message, so a
+>    report is not mistaken for the person's input — the example does this.
+>    What is *not* expressible is delivering to an agent with a declared
+>    `AgentInput`; that is the framework submission decision 2 names, and it is
+>    narrower than "framework messages do not exist".
 
 So the composition is real but it is not ergonomic, and the three findings
 above are the battery's specification. That is a caller's evidence, not a
