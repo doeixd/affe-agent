@@ -215,6 +215,33 @@ default and is established per request by the host
 (`AgentSessionHost.Options.subject`); a worker operation is one more
 authorized operation on that host, not a second authorizer.
 
+## Landed 2026-09-24 — the battery's first slice
+
+`Subagent.background(name, child, { description, provide })` ships, in
+`src/subagent/Background.ts`, with `test/BackgroundSubagent.test.ts`. It
+returns `{ toolkit, layer, reports }`:
+
+- **`toolkit`** is the parent's `start_background` / `follow_up_background`;
+- **`layer`** supplies their handlers and must be provided for the
+  *application*, not one run — a child is forked into its scope, so
+  `Effect.provide(layer)` around a single `Agent.run` would cancel the child
+  when the run returns;
+- **`reports`** is a `Stream` of `{ worker, status, text, turns }`.
+
+**Reports are the caller's to deliver**, and that is the design decision the
+build forced. A battery that delivered its own reports would need the
+`AgentClient` serving the agent whose tools use the battery — the client is
+built from the agent, the agent's tools need the battery, the battery would
+need the client: a layer cycle. Publishing on a stream removes it, and keeps
+the delivery policy (when a report lands, what a busy parent does) where
+`SessionInbox` says it belongs — with the caller. `SessionInbox` remains the
+durable way, as a `kind: "framework"` item.
+
+Still open, as before: `reportToParent` as a convenience over that stream,
+updates, assignments, the control toolkit, and the durable half (item 113).
+Budgets are the child's own by default (`Budget.fresh()`), the reverse of the
+attached form's, as decided above.
+
 ## Recommendation
 
 - **A now.** The composition works and is documented; nothing speculative is

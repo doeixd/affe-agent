@@ -80,6 +80,7 @@
   "affe-agent/session-inbox",
   "affe-agent/shell/Shell",
   "affe-agent/skills/SkillRegistry",
+  "affe-agent/subagent/Background",
   "affe-agent/subagent/SubagentDepthExceededError",
   "affe-agent/subagent/SubagentExhaustedError",
   "affe-agent/subagent/SubagentInterruptedError",

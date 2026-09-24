@@ -291,7 +291,9 @@ can run a command is a sandbox, shell-derived operations reported as such);
 `/coding` and `/pi` tool batteries over it; `/shell` with construction-time
 dialects; `/tool-source` (OpenAPI, GraphQL, MCP; approval hints become
 `needsApproval`; `Credentials` -- method, binding, provider -- `Redacted`
-until the header is written); `/subagent`; `/state`; `/skills`; `/memory`; `/evals`;
+until the header is written); `/subagent` (`Subagent.tool` attached, and
+`Subagent.background`: a child that outlives the run that started it,
+publishing reports for the caller to deliver); `/state`; `/skills`; `/memory`; `/evals`;
 `/observability`; `/model` (what upstream's `Model` omits: context window, max
 output, vision/tools/reasoning, per-million cost with `cacheRead` and
 `cacheWrite` priced apart -- with a built-in Anthropic table guarded by an
@@ -369,6 +371,7 @@ verify: grep "export class SubagentExhaustedError" src/subagent/Subagent.ts
 verify: grep "readonly endedOnFinalTurn: boolean" src/AgentRun.ts
 verify: grep "export const framework = Effect.fn" src/AgentSession.ts
 verify: grep "readonly framework?:" src/client/AgentClient.ts
+verify: grep "export const background = " src/subagent/Background.ts
 ```
 
 ## Deliberately not done

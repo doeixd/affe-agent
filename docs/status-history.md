@@ -6172,3 +6172,26 @@ The persisted item change is measured by `test/fixtures/session-inbox-item.json`
 and pinned in `test/SessionInbox.test.ts`; `test/FrameworkSubmission.test.ts`
 holds the kernel primitive. The plan is `plan-subagent-execution-forms.md`,
 decision 2.
+
+## 2026-09-24 - background delegation, the battery's first slice
+
+`Subagent.background` ships in `src/subagent/Background.ts`. A tool starts a
+child and returns; the child runs to completion in the scope the caller opened
+around `background`, and its completion is published as a report on a stream.
+
+The build forced the design's one real decision. A battery that delivered its
+own reports would need the `AgentClient` that serves the agent whose tools use
+the battery: the client is built from the agent, the agent's tools need the
+battery, and the battery would need the client -- a layer cycle. So the
+battery publishes `reports` and the caller delivers them, which is also what
+`SessionInbox` says (the reporting decision stays with the caller). The
+durable delivery is a `kind: "framework"` inbox item.
+
+The other finding was a lifetime contract, caught by the test: a child is
+forked into the layer's scope, so `Effect.provide(layer)` around a single
+`Agent.run` cancels the child when the run returns. The layer belongs to the
+application. A fresh `Budget` per child is the reverse of the attached form's
+default, as `plan-background-delegation.md` decides.
+
+Still open: `reportToParent` over the stream, updates, assignments, the
+control toolkit, and the durable half (item 113).

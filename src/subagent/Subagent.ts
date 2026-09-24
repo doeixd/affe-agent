@@ -768,3 +768,15 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
 
     return Agent.tool(definition, handler)
   }))
+
+// ---------------------------------------------------------------------------
+// Background delegation
+// ---------------------------------------------------------------------------
+
+/**
+ * A child that outlives the run that started it. See `./Background.js` for the
+ * full contract; re-exported here so `Subagent.background` reads as one
+ * surface with `Subagent.tool`.
+ */
+export { background } from "./Background.js"
+export type { Options as BackgroundOptions, Report as BackgroundReport } from "./Background.js"
