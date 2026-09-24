@@ -6292,3 +6292,16 @@ The journal change the earlier entry recorded as the reopen condition is not
 needed, and neither is the `hasOutput` field: both were fixes for the wrong
 substrate. The lesson is in the plan -- two durable workflows existed, and
 delegation had been built on the weaker one.
+
+## 2026-09-24 - a durable child cut short is a failure too
+
+Reviewing `Subagent.durable` after moving it onto the session-backed
+submission found the durable twin of the session's first bug: `Outcome.Succeeded`
+carries a `status` of `"completed"` or `"interrupted"`, and `answerOf` ignored
+it -- so a child the harness cut short returned its partial text as a
+*successful* delegation, the parent model reading half an answer as a finished
+one. Now a `Succeeded` with `status: "interrupted"` is a failure carrying what
+the child had said, exactly as `SubagentInterruptedError` is for the attached
+form. `test/DurableSubagent.test.ts` interrupts a parked child through the
+session store and asserts the parent's model reads "did not finish"; broken
+once (the check disabled) and restored.

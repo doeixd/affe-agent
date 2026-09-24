@@ -256,8 +256,11 @@ agent and the stores (`{ store, sessionStore, delivery? }`) and returns
   a reused tool-call id cannot reach another parent's child, and it inherits the
   principal onto the payload;
 - the child's `Outcome` maps as a tool result: `Succeeded` carries the value or
-  the text, `Failed` is the failure the parent model reads, and
-  `Infrastructure` is a defect, because it is the store and not the agent.
+  the text, `Failed` is the failure the parent model reads,
+  `Infrastructure` is a defect, because it is the store and not the agent, and a
+  `Succeeded` whose `status` is `interrupted` is a **failure too** — a child the
+  harness cut short is not a short success, the durable twin of
+  `SubagentInterruptedError`.
 
 `test/DurableSubagent.test.ts` holds two rows: a text child, and a **typed
 child** whose declared input and output both cross. The application provides

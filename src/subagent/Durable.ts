@@ -87,6 +87,15 @@ const answerOf = (
     if (outcome._tag === "Failed") {
       return yield* Effect.fail(outcome.failure.message)
     }
+    // A child the harness cut short is not a short success: what it said is
+    // what it *had* said, not an answer. The durable twin of
+    // `SubagentInterruptedError` — without this, a partial reads as a result.
+    if (outcome.status === "interrupted") {
+      return yield* Effect.fail(
+        `the child was interrupted after ${outcome.turns} turn${outcome.turns === 1 ? "" : "s"} and did not finish; ` +
+          `it had said: ${outcome.text}`
+      )
+    }
     if (Option.isSome(child.output)) {
       if (outcome.value === undefined) {
         return yield* Effect.fail("the child finished without reporting its declared output")

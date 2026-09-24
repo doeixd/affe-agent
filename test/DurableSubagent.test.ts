@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Schema } from "effect"
+import { Deferred, Effect, Exit, Layer, Schema } from "effect"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
 import * as AgentInput from "../src/AgentInput.js"
@@ -9,6 +9,7 @@ import * as DeliveryLog from "../src/durable/DeliveryLog.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import * as DurableSubmission from "../src/durable/DurableSubmission.js"
 import { Subagent } from "../src/subagent/index.js"
 import * as FakeModel from "./FakeModel.js"
 
@@ -110,4 +111,51 @@ it.live("a typed child crosses: its output's value is the tool's result", () =>
     assert.isTrue(Exit.isSuccess(exit), Exit.isFailure(exit) ? String(exit.cause) : "")
     // The typed value, not a remark: the parent's model was handed the JSON.
     assert.include(JSON.stringify(yield* recorder.prompts), "the order is late")
+  })), 30_000)
+
+it.live("a child cut short is a failure, not a partial read as an answer", () =>
+  Effect.scoped(Effect.gen(function* () {
+    const childStarted = yield* Deferred.make<void>()
+    const { layer: model, recorder } = yield* FakeModel.script([
+      { toolCalls: [{ id: "p1", name: "research", params: { prompt: "why" } }] },
+      { hang: true, started: childStarted },
+      { text: "parent done" }
+    ])
+    const { store, sessionStore, delivery } = yield* stores
+
+    const research = Subagent.durable("research", Agent.make({ instructions: "child" }), {
+      description: "Research a question.",
+      store,
+      sessionStore,
+      delivery
+    })
+    const parentWorkflow = DurableAgent.workflow(
+      "DurableSubagentCutParent",
+      Agent.make({ instructions: "Delegate.", tools: [research.tool], loop: AgentLoop.bounded(3) }),
+      { store }
+    )
+
+    const layers = Layer.merge(parentWorkflow.layer, research.workflow.layer).pipe(
+      Layer.provideMerge(Engine),
+      Layer.provideMerge(model)
+    )
+    const context = yield* Layer.build(layers)
+
+    yield* Effect.gen(function* () {
+      const executionId = yield* DurableAgent.submit(parentWorkflow, store, "p", "go")
+      yield* Deferred.await(childStarted)
+      // The child's session id is a pure function of the parent's execution id
+      // and the tool call id, so the test can address it.
+      const parentExecutionId = yield* DurableAgent.executionIdFor(parentWorkflow, "p")
+      const childSessionId = `subagent:${parentExecutionId}:p1`
+      yield* DurableSubmission.interrupt(store, childSessionId, childSessionId)
+
+      const exit = yield* DurableAgent.result(parentWorkflow, executionId).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.exit
+      )
+      assert.isTrue(Exit.isSuccess(exit), Exit.isFailure(exit) ? String(exit.cause) : "")
+      // The parent's model read a cut-short failure, not the partial as a result.
+      assert.include(JSON.stringify(yield* recorder.prompts), "did not finish")
+    }).pipe(Effect.provide(context))
   })), 30_000)

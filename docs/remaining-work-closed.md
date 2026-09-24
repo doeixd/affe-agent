@@ -2883,3 +2883,17 @@ gone. The entry above is the current state.
 ```text
 verify: grep "DurableSubmission.workflow" src/subagent/Durable.ts
 ```
+
+## 2026-09-24 - a durable child cut short is a failure, not a partial success
+
+`Outcome.Succeeded.status` can be `"interrupted"`, and `Subagent.durable`'s
+`answerOf` ignored it, so a child the harness cut short returned its partial as
+a successful delegation. Now it is a failure carrying the partial -- the durable
+twin of `SubagentInterruptedError`; `test/DurableSubagent.test.ts` interrupts a
+parked child through the session store and asserts the parent reads "did not
+finish".
+
+```text
+verify: grep "did not finish" src/subagent/Durable.ts
+verify: grep "cut short" test/DurableSubagent.test.ts
+```
