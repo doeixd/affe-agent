@@ -2786,3 +2786,19 @@ field), each broken once. Two caller-gated plans came from the same reading:
 verify: grep "export class SubagentExhaustedError" src/subagent/Subagent.ts
 verify: grep "readonly endedOnFinalTurn: boolean" src/AgentRun.ts
 ```
+
+## 2026-09-24 - a framework submission, in process
+
+Itemless: the in-process slice of `plan-subagent-execution-forms.md` decision
+2, built because `examples/ref-subagent-forms.ts` found that `SessionInbox`
+cannot feed a typed-input agent. `AgentSession.framework` opens a submission
+with framework messages and no application input (`AgentInput.Current` is
+`None`, nothing recorded on `SubmissionStarted`); `RemoteSession.framework` is
+an optional method the in-process client implements; `SessionInbox.Item`
+gains an optional `kind`, so a delivery may be a report. The wire form and the
+durable journal stay with item 113.
+
+```text
+verify: exists test/fixtures/session-inbox-item.json
+verify: exists test/FrameworkSubmission.test.ts
+```

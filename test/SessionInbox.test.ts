@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Layer, Option, Ref, Schedule } from "effect"
+import { Cause, Deferred, Effect, Layer, Option, Ref, Schedule, Schema } from "effect"
 import { PersistedQueue } from "effect/unstable/persistence"
 import { Prompt } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
@@ -8,6 +8,7 @@ import { SessionId } from "../src/internal/ids.js"
 import { AgentClient } from "../src/client/index.js"
 import * as SessionInbox from "../src/sessions/SessionInbox.js"
 import { TestLanguageModel } from "../src/testing/index.js"
+import recorded from "./fixtures/session-inbox-item.json" with { type: "json" }
 
 /**
  * `effect-plan-2.txt` §1–§5. The inbox is where background work reaches a
@@ -321,6 +322,90 @@ describe("SessionInbox: what Delivered promises (item 97, A8.1)", () => {
       })).pipe(Effect.provide(Layer.mergeAll(AgentClient.layer(Agent.make({})).pipe(Layer.provide(fresh)), queue)))
       assert.isTrue(Option.isNone(again), "the inbox redelivered an item it had already reported Delivered")
     }).pipe(Effect.scoped))
+})
+
+describe("SessionInbox: framework deliveries (a report, not the input)", () => {
+  it.live("delivers a framework item as framework messages, never as the person's input", () =>
+    Effect.gen(function* () {
+      const layer = yield* harness([TestLanguageModel.text("noted")])
+      yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        const session = yield* client.createSession({ sessionId: "s1" })
+        const inbox = yield* SessionInbox.make()
+        yield* inbox.enqueue(item({
+          kind: "framework",
+          input: Prompt.fromMessages([Prompt.systemMessage({ content: "a background report" })])
+        }))
+
+        const outcome = yield* inbox.deliver
+        assert.strictEqual(outcome._tag, "Delivered")
+        yield* until(session.status, (status) => status === "idle")
+
+        const history = yield* session.history
+        assert.deepStrictEqual(
+          history.content.filter((message) => message.role === "user"),
+          [],
+          "a framework item committed as the person's input"
+        )
+        assert.isTrue(
+          history.content.some((message) =>
+            message.role === "system" && typeof message.content === "string" &&
+            message.content === "a background report"),
+          "the report did not commit with framework provenance"
+        )
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }))
+
+  it.effect("is undeliverable on a transport that cannot carry one", () =>
+    Effect.gen(function* () {
+      const layer = yield* harness([])
+      yield* Effect.gen(function* () {
+        const client = yield* Effect.service(AgentClient.AgentClient)
+        yield* client.createSession({ sessionId: "s1" })
+        // The wire adapters do not implement `framework` yet; a delivery that
+        // needs it is refused rather than mis-delivered as application input.
+        const withoutFramework = AgentClient.AgentClient.of({
+          ...client,
+          session: (id) => Effect.map(client.session(id), (session) => ({ ...session, framework: undefined }))
+        })
+        const inbox = yield* SessionInbox.make().pipe(
+          Effect.provideService(AgentClient.AgentClient, withoutFramework)
+        )
+        yield* inbox.enqueue(item({ kind: "framework" }))
+
+        const outcome = yield* inbox.deliver
+        assert.strictEqual(outcome._tag, "Undeliverable")
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }))
+})
+
+describe("the recorded SessionInbox item", () => {
+  /**
+   * The persisted shape, so adding `kind` is measured rather than believed
+   * additive. `withoutKind` is every item written before the field existed;
+   * it must keep decoding, and the framework item must be it plus exactly the
+   * one field the trailer declares.
+   */
+  it("an item written before `kind` decodes as an application input", () => {
+    const decoded = Schema.decodeUnknownSync(SessionInbox.Item)(recorded.withoutKind)
+    assert.isUndefined(decoded.kind)
+    assert.strictEqual(decoded.sessionId, "s1")
+  })
+
+  it("a framework item decodes with its kind", () => {
+    const decoded = Schema.decodeUnknownSync(SessionInbox.Item)(recorded.framework)
+    assert.strictEqual(decoded.kind, "framework")
+  })
+
+  it("the field is the only thing that changed", () => {
+    const { kind, ...rest } = recorded.framework
+    assert.strictEqual(kind, "framework")
+    assert.deepStrictEqual(
+      Object.keys(rest).sort(),
+      Object.keys(recorded.withoutKind).sort(),
+      "an item gained more than the one field the trailer declared"
+    )
+  })
 })
 
 const until = <A, E>(observation: Effect.Effect<A, E>, done: (value: A) => boolean) =>

@@ -184,7 +184,10 @@ persisted store, `Lost` state and reacquisition are deliberately unbuilt
 ([docs/effect-plan-2.txt](./docs/effect-plan-2.txt), "Outcome"). `/sessions`
 adds `SessionInbox` over `PersistedQueue`: `enqueue` is idempotent on the
 item's id and `deliver` starts a new submission on an idle session, retries
-on a busy one, and survives a crash between the two.
+on a busy one, and survives a crash between the two. Since 2026-09-24 an item
+may be `kind: "framework"`: a submission opened by framework messages with no
+application input (`AgentSession.framework`), so a typed-input session can
+receive a report it cannot be *asked* with.
 
 **Principal.** `Principal.CurrentPrincipal` (root): the caller's subject on
 the fibre that acts -- a `Context.Reference` the host sets per request
@@ -364,6 +367,8 @@ verify: grep "RunLedger.record(" src/AgentRun.ts
 verify: grep "export interface Inherit" src/subagent/Subagent.ts
 verify: grep "export class SubagentExhaustedError" src/subagent/Subagent.ts
 verify: grep "readonly endedOnFinalTurn: boolean" src/AgentRun.ts
+verify: grep "export const framework = Effect.fn" src/AgentSession.ts
+verify: grep "readonly framework?:" src/client/AgentClient.ts
 ```
 
 ## Deliberately not done

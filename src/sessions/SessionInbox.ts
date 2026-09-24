@@ -55,10 +55,14 @@ import * as Namespace from "../internal/namespace.js"
  * ## The boundary, stated
  *
  * An item carries a **prompt**. An agent that declares a typed input
- * (`AgentInput`) cannot be fed from here yet: the queue would have to carry
- * the encoded value and the delivery decode it with that session's schema,
- * which is the same widening every other surface needs. Named here rather
- * than discovered later.
+ * (`AgentInput`) still cannot be *asked* from here: the queue would have to
+ * carry the encoded value and the delivery decode it with that session's
+ * schema, which is the same widening every other surface needs. It can be
+ * *told*, though -- an item with `kind: "framework"` is a framework
+ * submission, committed with framework provenance and no application input, so
+ * a typed-input session receives a background report without a schema to
+ * decode it with. A transport that cannot carry one says so by omitting
+ * `RemoteSession.framework`, and the delivery is `Undeliverable`.
  */
 
 /** A completion waiting to reach a session. */
@@ -72,6 +76,16 @@ export const Item = Schema.Struct({
    */
   id: Schema.String,
   sessionId: Schema.String,
+  /**
+   * How the delivery reaches the session.
+   *
+   * `"input"` (or absent, for an item written before this field existed) is
+   * the application's input, delivered through the session's `AgentInput`.
+   * `"framework"` is a framework submission -- messages committed with
+   * framework provenance and no application input -- which is what lets a
+   * typed-input session receive a report at all. See `AgentSession.framework`.
+   */
+  kind: Schema.optional(Schema.Literals(["input", "framework"])),
   /** What the session is prompted with when this is delivered. */
   input: PromptWire.Prompt,
   /** Who observed the completion. Carried for the reader, never interpreted. */
@@ -254,9 +268,22 @@ export const make = Effect.fn("SessionInbox.make")(function*(options?: Options) 
       //
       // A competing submission or transport failure is worth another
       // attempt. A session that closed or disappeared is terminal instead.
-      yield* session.submit(item.input, { idempotencyKey: item.id }).pipe(
-        Effect.mapError(remoteFailure(`submit ${item.id}`))
-      )
+      if ((item.kind ?? "input") === "framework") {
+        // A report, not the application's input. A transport that cannot
+        // carry one is not a transient problem -- retrying learns nothing --
+        // so it is undeliverable rather than a failure.
+        const deliverFramework = session.framework
+        if (deliverFramework === undefined) {
+          return undeliverable(item, `session ${item.sessionId}'s transport cannot deliver framework messages`)
+        }
+        yield* deliverFramework(item.input, { idempotencyKey: item.id }).pipe(
+          Effect.mapError(remoteFailure(`submit ${item.id}`))
+        )
+      } else {
+        yield* session.submit(item.input, { idempotencyKey: item.id }).pipe(
+          Effect.mapError(remoteFailure(`submit ${item.id}`))
+        )
+      }
       return { _tag: "Delivered", item } as const
     }).pipe(
       Effect.catchTags({

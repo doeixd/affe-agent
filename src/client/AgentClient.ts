@@ -338,6 +338,19 @@ export interface RemoteSession {
     options?: RemotePromptOptions
   ) => Effect.Effect<SubmissionReceipt, RemoteError>
   /**
+   * Admit a framework submission: messages committed with framework
+   * provenance and no application input. See `AgentSession.framework`.
+   *
+   * Optional by design. A transport that cannot carry one omits it, and a
+   * delivery that needs it (a background worker's report) refuses rather than
+   * mis-delivering it as the application's input. The in-process client
+   * implements it; the wire adapters do not yet, which is the wire decision
+   * `plan-subagent-execution-forms.md` deliberately leaves open.
+   */
+  readonly framework?:
+    | ((messages: Prompt.RawInput, options?: RemotePromptOptions) => Effect.Effect<SubmissionReceipt, RemoteError>)
+    | undefined
+  /**
    * What `prompt` would have returned for a submitted submission.
    *
    * Joins one still running; returns the retained outcome of one that
@@ -753,6 +766,38 @@ export const fromSession = <Value, Input>(
         return receipt
       }),
     awaitSubmission,
+    framework: (messages, promptOptions) =>
+      Effect.gen(function* () {
+        const stream = promptOptions?.stream === true
+        const key = promptOptions?.idempotencyKey
+        if (key !== undefined) {
+          const fingerprint = yield* fingerprintOf(messages, stream)
+          const known = byKey.get(key)
+          if (known !== undefined) {
+            if (known.fingerprint !== fingerprint) {
+              return yield* new AgentRequestConflictError({
+                sessionId: Option.some(sessionId),
+                requestId: RequestId.make(key)
+              })
+            }
+            return { submissionId: SubmissionId.make(known.submissionId) }
+          }
+          const receipt = yield* remote(session.framework(messages, { stream }))
+          yield* remember(
+            receipt.submissionId,
+            remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.flatMap(toRemoteResult)),
+            key
+          )
+          byKey.set(key, { fingerprint, submissionId: receipt.submissionId })
+          return receipt
+        }
+        const receipt = yield* remote(session.framework(messages, { stream }))
+        yield* remember(
+          receipt.submissionId,
+          remote(session.awaitSubmission(receipt.submissionId)).pipe(Effect.flatMap(toRemoteResult))
+        )
+        return receipt
+      }),
     steer: (input) => session.steer(input),
     followUp: (input) => session.followUp(input),
     interrupt: () => session.interrupt(),

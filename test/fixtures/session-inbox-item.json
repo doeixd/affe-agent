@@ -1,0 +1,39 @@
+{
+  "withoutKind": {
+    "id": "process:proc-1:exit",
+    "sessionId": "s1",
+    "input": {
+      "content": [
+        {
+          "options": {},
+          "role": "user",
+          "content": "the build finished"
+        }
+      ]
+    },
+    "source": {
+      "kind": "process",
+      "id": "proc-1"
+    },
+    "createdAt": 0
+  },
+  "framework": {
+    "id": "worker:worker-1:done:1",
+    "sessionId": "coordinator",
+    "kind": "framework",
+    "input": {
+      "content": [
+        {
+          "options": {},
+          "role": "system",
+          "content": "a background report"
+        }
+      ]
+    },
+    "source": {
+      "kind": "worker",
+      "id": "worker-1"
+    },
+    "createdAt": 0
+  }
+}

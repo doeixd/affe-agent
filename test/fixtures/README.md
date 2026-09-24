@@ -29,6 +29,7 @@ going quiet.
 | `busy-error.json` | item 97, T8.2 | `test/BehaviorFixtures.test.ts` | `AgentBusyError` as the wire carries it: before, with the session alone, and after, naming the submission that holds it. Asserted that the older one still decodes and that the newer one is it plus exactly `submissionId`. |
 | `history-blob-row.json` | item 116 | `test/DurableSessionStore.test.ts` | A durable session store's history row written with `blobs`: a 4 KB image replaced by its content-addressed `Blob` reference (id and sha256 of the bytes, media type, length, file name). A change here is a storage change: rows already written hold this shape, and every read must resolve it back to the inline encoding. |
 | `durable-event-log.json` | item 88 | `test/DurableAgentClient.test.ts` | What a host created after a durable session's prompt reads of it through `eventLog`: `oldest` and the events' tags, read whole from the session's `DeliveryLog`. Before the durable reader, the same host held only a bounded tail from its own start. Ids are random, so they are not recorded. |
+| `session-inbox-item.json` | this commit | `test/SessionInbox.test.ts` | A `SessionInbox.Item` written before `kind` existed (an application input) and one carrying `kind: "framework"` (a report, committed with system provenance). Asserted that the older one still decodes as an input and that the newer one is it plus exactly `kind`. |
 
 To record one: write a throwaway test that runs the real path (a client, an
 adapter, a store) at the commit *before* the change, encode with the same

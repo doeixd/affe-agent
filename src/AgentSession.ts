@@ -132,6 +132,20 @@ export interface AgentSession<
   ) => Effect.Effect<SubmissionReceipt, SubmitError | E>
 
   /**
+   * Admit a submission opened by framework messages, with no application
+   * input.
+   *
+   * The framework counterpart of `submit`: what a harness reports to a
+   * session, as opposed to what a person asks it. No `AgentInput` value is
+   * set, so an agent with a declared input can be told something without
+   * being asked something. See the module function for the full contract.
+   */
+  readonly framework: (
+    messages: Prompt.RawInput,
+    options?: PromptOptions
+  ) => Effect.Effect<SubmissionReceipt, SubmitError>
+
+  /**
    * Wait for a submission admitted by `submit`, and get what `prompt` would
    * have returned for it.
    *
@@ -472,6 +486,7 @@ export const makeEngine = <
       // inference does not reach a generic `Input` -- it falls to the default.
       prompt: (input, options) => prompt<Tools, E, Value, Input>(handle, input, options),
       submit: (input, options) => submit<Tools, E, Input>(handle, input, options),
+      framework: (messages, options) => framework<Tools, E>(handle, messages, options),
       awaitSubmission: (submissionId) => awaitSubmission(handle, submissionId),
       steer: (input) => steer(handle, input),
       followUp: (input) => followUp(handle, input),
@@ -636,43 +651,27 @@ const release = (self: Session<any>): Effect.Effect<void> =>
  * before doing any work, so even a synchronously completing submission cannot
  * clear the session and then be installed as a stale `activeFiber`.
  */
-const startSubmission = Effect.fn("AgentSession.startSubmission")(
-  function* <Tools extends Record<string, Tool.Any>, E>(
-    self: Session<Tools, E, never>,
-    // `Input` at every public signature; the agent's own declaration is
-    // what the value is encoded and rendered with, so it is `unknown` here.
-    input: unknown,
-    options: PromptOptions
-  ) {
-    // The value and its rendering, per `AgentInput`, resolved *before* the
-    // claim: a renderer that fails must not leave the session claimed, and
-    // a busy session is refused after rendering rather than holding the
-    // claim across it. Rendering runs under the captured environment, since
-    // the renderer's `R` joined the agent's; its failure is the agent's `E`,
-    // which `PromptError` and `submit` carry. Encoding a value the signature
-    // typed cannot fail except by a schema bug, which is a defect.
-    //
-    // Every agent has an input, so there is one path: for the default it
-    // encodes the prompt to the prompt wire and renders it as itself.
-    const declared = self.agent.input
-    // A string to the default input skips the schema: its encoding is one
-    // fixed shape (`internal/promptText.ts`, pinned to the schema by test).
-    const encoded = AgentInput.isPrompt(declared) && typeof input === "string"
-      ? PromptText.encodedText(input)
-      : yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
-    const raw = yield* AgentInput.rendered(declared, input).pipe(Effect.provide(self.env))
-    const resolved = {
-      prompt: Prompt.make(raw),
-      // On the fibre for every submission, so `AgentInput.Current` is `None`
-      // exactly outside one. On the *record* -- the event, a journal -- only
-      // for a declared input, until `plan-input-default.md` step 3 makes the
-      // wire carry one shape; a prompt's record stays the prompt it always was.
-      current: Option.some(encoded),
-      encoded: AgentInput.isPrompt(declared) ? Option.none<unknown>() : Option.some(encoded)
-    }
+/**
+ * What a submission is opened with, resolved before the claim.
+ *
+ * `current` is what `AgentInput.Current` is set to on the submission's fibre
+ * -- `None` for a framework submission, which carries no application input;
+ * `encoded` is what a record (the `SubmissionStarted` event, a journal)
+ * carries, and is `None` for the default input and for framework messages.
+ */
+interface Resolved {
+  readonly prompt: Prompt.Prompt
+  readonly current: Option.Option<unknown>
+  readonly encoded: Option.Option<unknown>
+}
 
-    return yield* Effect.uninterruptible(
-      Effect.gen(function* () {
+const admitResolved = <Tools extends Record<string, Tool.Any>, E>(
+  self: Session<Tools, E, never>,
+  resolved: Resolved,
+  options: PromptOptions
+) =>
+  Effect.uninterruptible(
+    Effect.gen(function* () {
         const claimed = yield* claim(self)
         if (claimed._tag !== "Claimed") return claimed
         const submissionId = claimed.submissionId
@@ -743,8 +742,68 @@ const startSubmission = Effect.fn("AgentSession.startSubmission")(
         return { _tag: "Started" as const, submissionId, fiber }
       })
     )
+
+/**
+ * Resolve the input a submission is opened with, then admit it.
+ *
+ * The value and its rendering, per `AgentInput`, are resolved *before* the
+ * claim: a renderer that fails must not leave the session claimed, and a busy
+ * session is refused after rendering rather than holding the claim across it.
+ * Rendering runs under the captured environment, since the renderer's `R`
+ * joined the agent's; its failure is the agent's `E`, which `PromptError` and
+ * `submit` carry. Encoding a value the signature typed cannot fail except by a
+ * schema bug, which is a defect.
+ *
+ * Every agent has an input, so there is one path: for the default it encodes
+ * the prompt to the prompt wire and renders it as itself.
+ */
+const startSubmission = Effect.fn("AgentSession.startSubmission")(
+  function* <Tools extends Record<string, Tool.Any>, E>(
+    self: Session<Tools, E, never>,
+    // `Input` at every public signature; the agent's own declaration is
+    // what the value is encoded and rendered with, so it is `unknown` here.
+    input: unknown,
+    options: PromptOptions
+  ) {
+    const declared = self.agent.input
+    // A string to the default input skips the schema: its encoding is one
+    // fixed shape (`internal/promptText.ts`, pinned to the schema by test).
+    const encoded = AgentInput.isPrompt(declared) && typeof input === "string"
+      ? PromptText.encodedText(input)
+      : yield* Schema.encodeUnknownEffect(declared.schema)(input).pipe(Effect.orDie)
+    const raw = yield* AgentInput.rendered(declared, input).pipe(Effect.provide(self.env))
+    return yield* admitResolved(self, {
+      prompt: Prompt.make(raw),
+      // On the fibre for every submission, so `AgentInput.Current` is `None`
+      // exactly outside one. On the *record* -- the event, a journal -- only
+      // for a declared input, until `plan-input-default.md` step 3 makes the
+      // wire carry one shape; a prompt's record stays the prompt it always was.
+      current: Option.some(encoded),
+      encoded: AgentInput.isPrompt(declared) ? Option.none<unknown>() : Option.some(encoded)
+    }, options)
   }
 )
+
+/**
+ * Admit a submission opened by framework messages, with no application input.
+ *
+ * The deliberate differences from `startSubmission`: `current` is `None`, so
+ * `AgentInput.Current` is `None` for every tool and transform under this
+ * submission -- a typed-input agent can be *told* something without being
+ * *asked* something -- and `encoded` is `None`, so no input is recorded on
+ * `SubmissionStarted`. The messages are committed to canonical history like
+ * any other input, which is what makes a report auditable and replayable.
+ */
+const startFramework = <Tools extends Record<string, Tool.Any>, E>(
+  self: Session<Tools, E, never>,
+  messages: Prompt.RawInput,
+  options: PromptOptions
+) =>
+  admitResolved(self, {
+    prompt: Prompt.make(messages),
+    current: Option.none(),
+    encoded: Option.none()
+  }, options)
 
 /**
  * Admit a submission without retaining or awaiting its eventual result.
@@ -809,6 +868,42 @@ export const prompt = Effect.fn("AgentSession.prompt")(function* <
     // Explicit `Value`: `settle`'s default is `string`, and through the
     // generator that default is what the return type would carry.
     return yield* settle<Tools, E, Value>(self, submissionId, fiber, { interruptWithCaller: true })
+  })
+
+/**
+ * Admit a submission opened by framework messages, with no application input.
+ *
+ * The framework counterpart of `submit`: a report, a completion, or any other
+ * message a harness produces rather than a person. It is committed to
+ * canonical history like any input, but no `AgentInput` value is set, so a
+ * tool that reads `AgentInput.current` gets `None` — an agent with a declared
+ * input can be *told* something without being *asked* something, which is what
+ * lets a typed-input session receive a background worker's report at all. Use
+ * a system-role message for framework provenance: a plain string would read as
+ * the person's input.
+ *
+ * Admits and returns, as `submit` does; the result is had with
+ * `awaitSubmission`.
+ */
+export const framework = Effect.fn("AgentSession.framework")(function* <
+  Tools extends Record<string, Tool.Any>,
+  E
+>(
+  session: AgentSession<Tools, E, any, any>,
+  messages: Prompt.RawInput,
+  options: PromptOptions = {}
+) {
+    const self = unwrap(session)
+    yield* Telemetry.annotateSession(self.id)
+    const started = yield* startFramework(self, messages, options)
+
+    if (started._tag === "Closed") {
+      return yield* new AgentClosedError({ sessionId: self.id })
+    }
+    if (started._tag === "Busy") {
+      return yield* busy(self.id, started.incumbent)
+    }
+    return { submissionId: started.submissionId } satisfies SubmissionReceipt
   })
 
 /**

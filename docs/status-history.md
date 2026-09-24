@@ -6146,3 +6146,29 @@ Two plans written from the same reading, both gated on a caller:
 `plan-auto-model-routing.md` (`AutoModel`, a routing `LanguageModel` layer with
 a per-session selection store) and `plan-background-delegation.md`
 (`Subagent.background`, a named session that outlives its parent).
+
+## 2026-09-24 - a framework submission (a report, not the input)
+
+The background reference (`examples/ref-subagent-forms.ts`) found that a
+report can already reach a raw-input session as a system message, but not a
+typed-input one: `SessionInbox` feeds application input, the wire carries a
+typed agent's encoded value, and `SessionInbox.ts` said a typed-input agent
+"cannot be fed from here yet".
+
+So the primitive is a **framework submission**: a run opened by framework
+messages with no application input. `AgentSession.framework` admits one;
+`AgentInput.Current` is `None` for its tools (a typed agent can be *told*
+something without being *asked* something), no input is recorded on
+`SubmissionStarted`, and the messages commit to canonical history like any
+input. `RemoteSession.framework` is optional -- the in-process client
+implements it, the wire adapters do not yet -- and `SessionInbox.Item` gained
+an optional `kind` (`"input"` when absent), so an inbox item can carry a
+report. A transport that omits the method makes the delivery `Undeliverable`
+rather than mis-delivering it as the person's input.
+
+The wire form and the durable journal remain open, deliberately: they are the
+same work as item 113's child-workflow host, and nothing has asked for them.
+The persisted item change is measured by `test/fixtures/session-inbox-item.json`
+and pinned in `test/SessionInbox.test.ts`; `test/FrameworkSubmission.test.ts`
+holds the kernel primitive. The plan is `plan-subagent-execution-forms.md`,
+decision 2.

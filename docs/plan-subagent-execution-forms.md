@@ -329,10 +329,23 @@ difference: it carries no `AgentInput` value, so `AgentInput.Current` is
 - **In process first.** The wire form (`AgentProtocol`) and the durable journal
   are deliberately *not* decided here: they are the same work as item 113's
   child-workflow host, and a request nobody has made should not mint a wire
-  field and a fixture. The first slice is `AgentSession.framework` plus the
-  inbox union, in process, no fixture change.
+  field. The first slice is `AgentSession.framework` plus the inbox union, in
+  process; the inbox item is persisted, so its additive `kind` is measured by
+  a fixture even though nothing on the wire changed.
 - **Rejected: do nothing.** It leaves a typed-input parent unable to receive a
   report at all, which is the gap this decision is about.
+
+**Landed 2026-09-24 (the in-process slice).** `AgentSession.framework` admits
+a submission opened by framework messages; `AgentInput.Current` is `None` for
+its tools, no input is recorded on `SubmissionStarted`, and the messages are
+committed like any input (`test/FrameworkSubmission.test.ts`).
+`RemoteSession.framework` is an *optional* method the in-process client
+implements; a transport that omits it makes a framework delivery
+`Undeliverable` rather than mis-delivering it as application input.
+`SessionInbox.Item` gains an optional `kind` (`"input"` when absent), measured
+by `test/fixtures/session-inbox-item.json` and held by
+`test/SessionInbox.test.ts`. Still open: the wire form and the durable journal,
+which remain item 113's decision.
 
 Joining at a boundary is expressible and safe **when chosen at wiring time**,
 because then the caller, not the arrival time, decides the relationship:
