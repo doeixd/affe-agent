@@ -2935,3 +2935,13 @@ from a UI's own identifiers. `test/DurableSubagent.test.ts`.
 ```text
 verify: grep "export const childSessionId" src/subagent/Durable.ts
 ```
+
+## 2026-09-24 - Subagent.durable requires a unique workflow name
+
+The default `subagent:<name>` could silently collide across two durable
+subagents (the engine registers by name; a tool name is only toolkit-unique),
+so `workflowName` is required. `test/DurableSubagent.test.ts` passes one.
+
+```text
+verify: grep "readonly workflowName: string" src/subagent/Durable.ts
+```

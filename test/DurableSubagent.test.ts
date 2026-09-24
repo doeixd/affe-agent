@@ -46,6 +46,7 @@ it.live("a durable parent delegates to a child session and reads its text", () =
 
     const research = Subagent.durable("research", Agent.make({ instructions: "child" }), {
       description: "Research a question and return a short findings summary.",
+      workflowName: "DurableSubagentText",
       store,
       sessionStore,
       delivery
@@ -91,7 +92,7 @@ it.live("a typed child crosses: its output's value is the tool's result", () =>
         input: AgentInput.make(Lookup, ({ orderId }) => `order ${orderId}`),
         output: AgentOutput.make(Answer, { name: "record_answer" })
       }),
-      { description: "Look an order up.", store, sessionStore, delivery }
+      { description: "Look an order up.", workflowName: "DurableSubagentLookup", store, sessionStore, delivery }
     )
 
     const parentWorkflow = DurableAgent.workflow(
@@ -128,6 +129,7 @@ it.live("a child cut short is a failure, not a partial read as an answer", () =>
 
     const research = Subagent.durable("research", Agent.make({ instructions: "child" }), {
       description: "Research a question.",
+      workflowName: "DurableSubagentCut",
       store,
       sessionStore,
       delivery
@@ -190,7 +192,7 @@ it.live("a parked child survives the parent's suspension, and its result arrives
     const research = Subagent.durable(
       "research",
       Agent.make({ instructions: "child", contextTransform: gating }),
-      { description: "Research.", store, sessionStore, delivery }
+      { description: "Research.", workflowName: "DurableSubagentParked", store, sessionStore, delivery }
     )
     const parentWorkflow = DurableAgent.workflow(
       "DurableSubagentSuspendParent",
@@ -231,7 +233,7 @@ it.live("the engine propagates a parent's abort to the child it awaits", () =>
     const research = Subagent.durable(
       "research",
       Agent.make({ instructions: "child", contextTransform: gating }),
-      { description: "Research.", store, sessionStore, delivery }
+      { description: "Research.", workflowName: "DurableSubagentParked", store, sessionStore, delivery }
     )
     const parentWorkflow = DurableAgent.workflow(
       "DurableSubagentAbortParent",

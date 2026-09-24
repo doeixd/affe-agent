@@ -247,8 +247,11 @@ the typed input are not gaps (see (3)).
 **`Subagent.durable` landed 2026-09-24** (`src/subagent/Durable.ts`), the
 user-facing constructor over the seam, built on **`DurableSubmission.workflow`**
 — the session-backed path — and not `DurableAgent.workflow`. It takes the child
-agent and the stores (`{ store, sessionStore, delivery? }`) and returns
-`{ tool, workflow }`:
+agent and `{ store, sessionStore, delivery?, workflowName }` and returns
+`{ tool, workflow }`. `workflowName` is **required and must be unique across the
+deployment**: the engine registers workflows by name, so a default like
+`subagent:<name>` would let two durable subagents silently dispatch to each
+other's child, since a tool name is only unique within its own toolkit.
 
 - the tool's parameters are the child's `AgentInput` (or `{ prompt }`) and its
   success the child's `AgentOutput` (or a string) — `Subagent.tool`'s typing;

@@ -6355,3 +6355,12 @@ That is the enabler for approval surfacing rather than the surfacing itself:
 a child's questions are in the session store, and now they are reachable from
 the parent's identifiers; the host that reads them for a delegated child is the
 remaining integration.
+
+## 2026-09-24 - Subagent.durable requires its child workflow's name
+
+The constructor defaulted its child workflow name to `subagent:<name>`, which
+was a silent-wrong-agent hazard: the engine registers workflows by name, and a
+tool name is only unique within its own toolkit, so two durable subagents
+sharing one would dispatch to each other's child. `workflowName` is now
+required, as `DurableAgentClient.layer` requires one, so the caller names it
+and owns its uniqueness.

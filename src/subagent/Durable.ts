@@ -46,8 +46,15 @@ export interface DurableOptions {
   readonly sessionStore: DurableSessionStore.DurableSessionStore
   /** Where the child's client-facing events are recorded, when there is a host to feed. */
   readonly delivery?: DeliveryLog.DeliveryLog | undefined
-  /** The child workflow's name. Default `subagent:<name>`. */
-  readonly workflowName?: string | undefined
+  /**
+   * The child workflow's name. **Required, and it must be unique across the
+   * deployment.** The engine registers workflows by name, so two durable
+   * subagents that share one would silently dispatch to each other's child —
+   * and a default like `subagent:<name>` invites exactly that, since a tool
+   * name is only unique within its own toolkit. `DurableAgentClient.layer`
+   * requires a name for the same reason.
+   */
+  readonly workflowName: string
 }
 
 const PromptParams = Schema.Struct({ prompt: Schema.String })
@@ -129,7 +136,7 @@ export const durable = <Tools extends Record<string, Tool.Any>, E, R, Value, Inp
   options: DurableOptions
 ) => {
   const declared = InputBoundary.declared(child)
-  const workflow = DurableSubmission.workflow(options.workflowName ?? `subagent:${name}`, child, {
+  const workflow = DurableSubmission.workflow(options.workflowName, child, {
     store: options.store,
     sessionStore: options.sessionStore,
     ...(options.delivery === undefined ? {} : { delivery: options.delivery })
