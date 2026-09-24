@@ -198,6 +198,53 @@ elicitation, the parent awaits it, and an answer resumes the child. What is
 reach it — the child's execution id, not the parent's — which is a product/UX
 decision as much as a kernel one.
 
+#### Build spec for (2), the `DurableToolkit` seam
+
+The engine half is proven; this is what the build has to do, so the next
+effort executes rather than rediscovers. It is **not** written yet, and it is
+the first piece in this feature that changes the durable engine rather than
+composing it.
+
+- **A delegation is a marked tool.** New annotation
+  `DurableDelegation: Context.Reference<Delegation>` on the tool, where
+  `Delegation = { readonly run: (params: unknown, toolCallId: string) =>
+  Effect.Effect<unknown, unknown, WorkflowEngine | WorkflowInstance> }`. The
+  child workflow *definition* and the payload it is given from the call's
+  parameters are `run`'s business, not the seam's — that keeps `DurableToolkit`
+  from knowing about agents at all.
+- **The seam branch.** In `DurableToolkit.wrap`'s `handle`, before the start
+  marker and the `Activity`: if the tool carries the annotation, do **not**
+  create an activity. Run `delegation.run(params, id)` under the captured
+  `workflowContext` (`Effect.provide(workflowContext)`), exactly as
+  `Activity.make` is provided today, and map the result to the handler's
+  `Journalled` results. The child workflow's own journal is the durability;
+  there is no start marker, so the per-attempt-marker hazard does not arise.
+- **Result and failure mapping.** Success encodes through the tool's
+  `successSchema` for `encodedResult`, as `toolkit.handle` does for a normal
+  call. A child failure is a *tool failure* the parent model reads (the
+  `"return"` disposition), not a defect — the same choice `Subagent.tool`
+  makes, so the two delegation forms behave alike.
+- **Replay.** On re-execution after the parent suspends, `handle` runs again
+  and `run` calls `Child.execute` with the same execution id (derived from the
+  child's idempotency key, which must be a pure function of the delegation's
+  parameters and the parent's execution id). The engine returns the child's
+  recorded result or re-suspends it. Nothing here records `Unresolved`.
+- **The safety argument changes, deliberately and narrowly.** `wrap`'s comment
+  says "a handler cannot suspend the workflow, and this relies on it." The
+  delegation seam is the one exception, and it is opt-in by annotation: a
+  normal handler gains nothing, and a marked tool must never be run without the
+  durable wrapper, which the constructor refuses.
+- **What the seam does not do.** It does not build the child's payload (that is
+  `Subagent.durable`'s constructor), does not widen the child's success beyond
+  `Schema.String` (part 3), and does not route approvals (part 4).
+
+Test plan: a durable parent whose one tool is a delegation to a child
+workflow, run under `ClusterWorkflowEngine`; assert the parent completes with
+the child's result, that the parent suspends while the child is parked,
+and — the money assertion — that a resume does **not** run the child twice,
+in the shape `test/SubagentDurable.test.ts` already uses for an in-activity
+delegation.
+
 ## Form 3 — background
 
 The pieces ship; the battery does not. Full design in
