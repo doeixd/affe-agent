@@ -126,6 +126,58 @@ detail worth copying: recovery can only reconnect to a child the host can
 resolve. Here that means the child's `AgentDefinition` and its model binding
 must be resolvable by the same registry the parent's is.
 
+### The concrete design — scoping pass, 2026-09-24
+
+D5's sentence "the delegating tool starts the child's own durable submission"
+cannot be read literally, and `src/durable/DurableToolkit.ts` says why in its
+own comments:
+
+- `DurableToolkit.wrap` wraps **every** tool call in an `Activity.make`; the
+  handler runs inside its `execute`.
+- A handler's requirements are `never`, so it cannot name `WorkflowEngine`.
+- The engine suspends by interrupting the fibre, which the activity's
+  interruption branch cannot catch, so a suspending activity comes back
+  `Suspended` and its re-execution records `Unresolved`.
+
+So **the handler cannot start the child, and must not suspend**. The
+delegation has to happen one level up: in the **workflow body**, where
+`DurableAgent.workflow`'s `toLayer` already resolves `WorkflowEngine` and
+`WorkflowInstance`, and where the engine does expose what is needed —
+`WorkflowEngine.execute(workflow, payload, executionId?)` starts a workflow,
+and `Workflow.suspend(instance)` parks one. The build is therefore:
+
+1. **A delegation is marked, not handled.** A durable subagent tool carries
+   its child workflow definition as an annotation (a `Context.Reference`),
+   because the handler cannot hold it and `DurableToolkit` must read it.
+2. **`DurableToolkit.handle` special-cases the marker.** For a marked tool it
+   does *not* build an `Activity`. From the workflow body it calls
+   `engine.execute(child, payload, childExecutionId)` — the child id derived
+   deterministically from the parent's execution id and the tool call id, so a
+   re-execution addresses the same child — then polls. If the child has not
+   finished it calls `Workflow.suspend(instance)`; on re-execution it polls
+   again and, once the child has completed, returns its result as the call's
+   journalled result.
+3. **The child's result shape.** `DurableAgent.workflow`'s success is
+   `Schema.String` (the child's text). A typed child needs the child
+   workflow's success to carry the encoded value, or the delegation to read it
+   from the child's recorded session. First slice: text.
+4. **Approval.** The child parks on its *own* durable elicitation, and the
+   parent is suspended behind it because it awaits the child's completion; the
+   answer is given against the child's execution id. What the *parent's* user
+   is shown, and how they reach the child's elicitation, has no design yet:
+   the parent's event stream does not carry the child's requests, and the
+   in-process `inherit: { approval: "parent" }` is not the durable path.
+
+Build order, and the risk: **a probe first.** D5 asserts the engine "handles
+one case cleanly — a workflow started from inside another suspends its parent
+through the parent-instance path", but that has never been run; the closest
+measurement, a durable sleep inside a handler, did *not* resume. The probe is
+`WorkflowEngine.execute` + poll + `Workflow.suspend` from a workflow body,
+children completing under `ClusterWorkflowEngine`. If it holds, (2) and (3)
+are a build and (4) is its own decision; if it does not, item 113 is blocked
+on an upstream engine capability and the refusal stays. Nothing here is
+written until the probe says which.
+
 ## Form 3 — background
 
 The pieces ship; the battery does not. Full design in

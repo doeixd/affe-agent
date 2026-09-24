@@ -761,6 +761,13 @@ acceptance test for 105, 107 and 108.*
      behind it. General suspendable handlers (and the per-attempt marker
      sketched above) are refused: they would hand engine semantics to every
      tool author to serve one pattern the child workflow serves alone.
+     **Scoped 2026-09-24** (`plan-subagent-execution-forms.md`, form 2): the
+     handler *cannot* start the child — it is `never`-requirement and runs
+     inside an `Activity` — so the design is a *marked* delegation that
+     `DurableToolkit.handle` runs in the **workflow body** via
+     `WorkflowEngine.execute` + `Workflow.suspend`, not as an activity. A
+     probe of the engine's parent-suspend path comes first; item 113 is
+     blocked if it fails.
 
 112. **Recovery snapshots for O(suffix) cold recovery (plan E20, §24).**
      Parked until 100 measures a session where cold recovery cost matters;
