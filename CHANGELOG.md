@@ -14,6 +14,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - SessionInbox.Item gains an optional kind; an item without it decodes as an application input as before, and kind: "framework" opens a submission with framework messages and no application input. (`9b415ac`; measured by `test/fixtures/session-inbox-item.json`)
 - a new internal subagent/Background service key joins the namespace manifest; it never crosses a wire and no existing identifier changes. (`b68912b`; measured by `test/fixtures/namespace-manifest.json`)
 - a new persisted inbox name subagent/background-reports joins the namespace manifest; it names the queue reportToParent delivers through and changes no existing identifier. (`211f7cd`; measured by `test/fixtures/namespace-manifest.json`)
+- a new durable/DurableDelegation annotation key joins the namespace manifest; it never crosses a wire and no existing identifier changes. (`93c1a94`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
