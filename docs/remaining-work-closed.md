@@ -2828,10 +2828,12 @@ activity records `Unresolved`. A **workflow body** can: it is given
 `WorkflowEngine` (and `WorkflowInstance`), and `Child.execute({ n })` from a
 parent's body completes with the child's result. `test/ChildWorkflow.test.ts`
 pins it; if the engine stops providing the context, the test fails and item 113
-reopens. Not the design yet — suspension (a child parked on an approval, a
-parent resumed behind it) is the next probe. The first attempt at the probe
-failed on wiring, not the engine: `toLayer`'s layer needs the engine, so the
-wiring is `Layer.mergeAll(...).pipe(Layer.provideMerge(engine))`.
+reopens. The suspension probe holds too: a child parked on a `DurableDeferred`,
+with the parent awaiting it, resumes and completes. Not the design yet - the
+`DurableToolkit` seam and how the parent's user reaches the child's parked
+elicitation remain. The first attempt at the probe failed on wiring, not the
+engine: `toLayer`'s layer needs the engine, so the wiring is
+`Layer.mergeAll(...).pipe(Layer.provideMerge(engine))`.
 
 ```text
 verify: exists test/ChildWorkflow.test.ts

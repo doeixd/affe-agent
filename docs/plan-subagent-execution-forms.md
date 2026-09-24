@@ -180,10 +180,23 @@ blaming the engine.)
 
 So the child-workflow design is **reachable**: parts (2) and (3) are a build,
 part (4) is its own decision, and the refusal stays only until someone builds
-them. What the probe does *not* yet show is **suspension** — a child that parks
-on an approval and a parent that resumes behind it. That wants a second probe
-with a `DurableDeferred` before (4) is designed, and it is the one with a
-recorded failure nearby (a durable sleep inside a handler did not resume).
+them.
+
+**The suspension probe holds too** (same file, 2026-09-24). A child that parks
+on a `DurableDeferred` — the mechanism `DurableElicitation` uses — and a parent
+awaiting `Child.execute` from its body, resumed by an outside
+`DurableDeferred.succeed`, completes with the child's result. So the part with
+a recorded failure nearby (a durable sleep inside a *handler* never resumed) is
+sound from the *body*: the failure was the handler's, not the engine's. What
+this does not measure is whether the parent releases its execution slot while
+it waits — that is the engine's business, and the mechanism `Workflow.suspend`
+exists for.
+
+So (4) approval routing is designable: the child parks on its own durable
+elicitation, the parent awaits it, and an answer resumes the child. What is
+*not* designed is how the parent's user is shown that request and how they
+reach it — the child's execution id, not the parent's — which is a product/UX
+decision as much as a kernel one.
 
 ## Form 3 — background
 

@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
-import { Workflow } from "effect/unstable/workflow"
+import { DurableDeferred, Workflow } from "effect/unstable/workflow"
 
 /**
  * Item 113's probe: can a durable workflow start a **child workflow** from its
@@ -51,4 +51,55 @@ describe("probe: a workflow body executing a child workflow", () => {
       }),
       Effect.provide(wired)
     ), 30_000)
+})
+
+// ---------------------------------------------------------------------------
+// The suspension probe: a child parks on a durable deferred and the parent
+// resumes behind it. This is the part with a recorded failure nearby, and it
+// is what decides whether approval routing is designable.
+
+describe("probe: a child that parks, and a parent waiting on it", () => {
+  it.live("the parent resumes behind the child and completes", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const parked = yield* Deferred.make<DurableDeferred.Token>()
+      const Gate = DurableDeferred.make("probe-suspend-gate", { success: Schema.String })
+
+      const Child = Workflow.make("probe-suspend-child", {
+        payload: { n: Schema.Number },
+        idempotencyKey: ({ n }) => `probe-suspend-child-${n}`,
+        success: Schema.String
+      })
+      const childLayer = Child.toLayer(() =>
+        Effect.gen(function* () {
+          // Park: hand the token out, then wait to be resumed.
+          const token = yield* DurableDeferred.token(Gate)
+          yield* Deferred.succeed(parked, token)
+          yield* DurableDeferred.await(Gate)
+          return "child resumed"
+        })
+      )
+
+      const Parent = Workflow.make("probe-suspend-parent", {
+        payload: { n: Schema.Number },
+        idempotencyKey: ({ n }) => `probe-suspend-parent-${n}`,
+        success: Schema.String
+      })
+      const parentLayer = Parent.toLayer(({ n }) =>
+        Effect.gen(function* () {
+          const child = yield* Child.execute({ n })
+          return `parent(${child})`
+        })
+      )
+
+      const wired = Layer.mergeAll(parentLayer, childLayer).pipe(Layer.provideMerge(Engine))
+      const context = yield* Layer.build(wired)
+
+      yield* Effect.gen(function* () {
+        const running = yield* Effect.forkChild(Parent.execute({ n: 1 }))
+        const token = yield* Deferred.await(parked)
+        yield* DurableDeferred.succeed(Gate, { token, value: "go" })
+        const result = yield* Fiber.join(running)
+        assert.strictEqual(result, "parent(child resumed)")
+      }).pipe(Effect.provide(context), Effect.timeout("10 seconds"))
+    })), 30_000)
 })
