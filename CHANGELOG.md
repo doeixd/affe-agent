@@ -13,6 +13,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a delegation whose child a bound cut off mid-work now fails the parent's tool call with SubagentExhaustedError carrying the partial text, instead of succeeding with the partial (often empty) as the answer; a child that answered on a final turn is unchanged, and AgentSubmission.Result gains endedOnFinalTurn. (`cb157e6`; measured by `test/fixtures/namespace-manifest.json`)
 - SessionInbox.Item gains an optional kind; an item without it decodes as an application input as before, and kind: "framework" opens a submission with framework messages and no application input. (`9b415ac`; measured by `test/fixtures/session-inbox-item.json`)
 - a new internal subagent/Background service key joins the namespace manifest; it never crosses a wire and no existing identifier changes. (`b68912b`; measured by `test/fixtures/namespace-manifest.json`)
+- a new persisted inbox name subagent/background-reports joins the namespace manifest; it names the queue reportToParent delivers through and changes no existing identifier. (`211f7cd`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
