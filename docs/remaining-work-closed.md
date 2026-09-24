@@ -2897,3 +2897,15 @@ finish".
 verify: grep "did not finish" src/subagent/Durable.ts
 verify: grep "cut short" test/DurableSubagent.test.ts
 ```
+
+## 2026-09-24 - the parent-await probe (cancellation design)
+
+`test/ChildWorkflow.test.ts` pins that a workflow body awaiting a child
+workflow is interrupted with the parent `WorkflowInstance.suspended` true --
+the discriminator a cancellation-propagation hook must key on (cancel the child
+only when `!suspended`). Not built; whether the interrupt reaches a delegation
+runner through `ToolExecution` is the next probe.
+
+```text
+verify: grep "a parent awaiting a child is suspended" test/ChildWorkflow.test.ts
+```

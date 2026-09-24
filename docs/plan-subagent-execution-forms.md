@@ -267,6 +267,19 @@ child** whose declared input and output both cross. The application provides
 `workflow.layer` to the engine beside the parent's, as `DurableAgentClient` does
 for one agent.
 
+**Cancellation propagation — probed 2026-09-24, design named, not built.**
+effect-agent says aborting a parent propagates cancellation to its children.
+The naive hook is *wrong*: a durable parent **suspends by interrupting its own
+body**, so `Child.execute(...).pipe(Effect.onInterrupt(...))` fires on every
+suspension. The probe (`test/ChildWorkflow.test.ts`) shows the discriminator:
+while a parent awaits a child, the engine interrupts its body **and** sets the
+parent's `WorkflowInstance.suspended` to `true` (`interrupted` false). So a hook
+should cancel the child — `child.definition.interrupt(childExecutionId)` — only
+when `!suspended`. The open question, which wants its own probe before a line is
+written: whether that interrupt reaches the delegation runner *through
+`ToolExecution`* as it does a raw workflow body. Tool handlers may run forked,
+and a hook that never fires is a silent no-op.
+
 ## Form 3 — background
 
 **Built 2026-09-24.** `Subagent.background(name, child, { description, provide })`

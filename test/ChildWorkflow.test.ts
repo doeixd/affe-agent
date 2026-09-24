@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
-import { DurableDeferred, Workflow } from "effect/unstable/workflow"
+import { DurableDeferred, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 
 /**
  * Item 113's probe: can a durable workflow start a **child workflow** from its
@@ -100,6 +100,74 @@ describe("probe: a child that parks, and a parent waiting on it", () => {
         yield* DurableDeferred.succeed(Gate, { token, value: "go" })
         const result = yield* Fiber.join(running)
         assert.strictEqual(result, "parent(child resumed)")
+      }).pipe(Effect.provide(context), Effect.timeout("10 seconds"))
+    })), 30_000)
+})
+
+// ---------------------------------------------------------------------------
+// The cancellation probe: while a parent awaits a child, does the engine
+// interrupt its body (so `onInterrupt` fires), and what does the parent's
+// `WorkflowInstance` say? That discriminates a cancellation design.
+
+describe("probe: what a parent sees while it awaits a child", () => {
+  it.live("a parent awaiting a child is suspended, and its body is interrupted", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const parked = yield* Deferred.make<DurableDeferred.Token>()
+      const Gate = DurableDeferred.make("probe-flag-gate", { success: Schema.String })
+      const observed = yield* Ref.make<ReadonlyArray<string>>([])
+
+      const Child = Workflow.make("probe-flag-child", {
+        payload: { n: Schema.Number },
+        idempotencyKey: ({ n }) => `probe-flag-child-${n}`,
+        success: Schema.String
+      })
+      const childLayer = Child.toLayer(() =>
+        Effect.gen(function* () {
+          const token = yield* DurableDeferred.token(Gate)
+          yield* Deferred.succeed(parked, token)
+          yield* DurableDeferred.await(Gate)
+          return "child done"
+        })
+      )
+
+      const Parent = Workflow.make("probe-flag-parent", {
+        payload: { n: Schema.Number },
+        idempotencyKey: ({ n }) => `probe-flag-parent-${n}`,
+        success: Schema.String
+      })
+      const parentLayer = Parent.toLayer(() =>
+        Effect.gen(function* () {
+          const child = yield* Child.execute({ n: 1 }).pipe(
+            Effect.onInterrupt(() =>
+              Effect.gen(function* () {
+                const instance = yield* WorkflowEngine.WorkflowInstance
+                yield* Ref.update(observed, (all) => [
+                  ...all,
+                  `suspended=${instance.suspended} interrupted=${instance.interrupted}`
+                ])
+              })
+            )
+          )
+          return `parent(${child})`
+        })
+      )
+
+      const wired = Layer.mergeAll(parentLayer, childLayer).pipe(Layer.provideMerge(Engine))
+      const context = yield* Layer.build(wired)
+
+      yield* Effect.gen(function* () {
+        const running = yield* Effect.forkChild(Parent.execute({ n: 1 }))
+        const token = yield* Deferred.await(parked)
+        // Let the parent's await settle into whatever the engine does with it.
+        yield* Effect.sleep("50 millis")
+        const seen = yield* Ref.get(observed)
+        yield* DurableDeferred.succeed(Gate, { token, value: "go" })
+        const result = yield* Fiber.join(running)
+        assert.strictEqual(result, "parent(child done)")
+        // The finding, pinned: awaiting a child suspends the parent and
+        // interrupts its body -- `suspended` is the discriminator a
+        // cancellation hook would key on, so a suspension is not an abort.
+        assert.deepStrictEqual(seen, ["suspended=true interrupted=false"])
       }).pipe(Effect.provide(context), Effect.timeout("10 seconds"))
     })), 30_000)
 })

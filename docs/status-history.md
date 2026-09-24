@@ -6305,3 +6305,19 @@ the child had said, exactly as `SubagentInterruptedError` is for the attached
 form. `test/DurableSubagent.test.ts` interrupts a parked child through the
 session store and asserts the parent's model reads "did not finish"; broken
 once (the check disabled) and restored.
+
+## 2026-09-24 - what a parent sees while it awaits a child (cancellation probe)
+
+Cancellation propagation -- aborting a durable parent should cancel its child --
+looked like a small hook until the mechanism was checked. A durable parent
+suspends by interrupting its own body, so an `onInterrupt` on the child await
+fires on every suspension, and cancelling there would cancel a child the resumed
+parent still needs.
+
+The probe (`test/ChildWorkflow.test.ts`) pins what discriminates: while a parent
+awaits a child, the engine interrupts the body and sets the parent
+`WorkflowInstance.suspended` to `true` (`interrupted` false). So a hook should
+read that flag and cancel only when `!suspended`. Not built: whether the
+interrupt reaches the delegation runner through `ToolExecution` -- where
+handlers may run forked -- is the next probe, because a hook that never fires is
+a silent no-op.
