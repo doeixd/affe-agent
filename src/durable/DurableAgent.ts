@@ -645,7 +645,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   const admit = (operation: "prompt" | "submit", input: InputBoundary.RemoteInput) =>
     InputBoundary.admit(agent, operation, input)
 
-  return { definition, layer, admit } as const
+  return { definition, layer, admit, hasOutput: Option.isSome(agent.output) } as const
 }
 
 /**

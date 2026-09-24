@@ -42,8 +42,20 @@ export const durable = (
   name: string,
   child: ReturnType<typeof DurableAgent.workflow>,
   options: DurableOptions
-) =>
-  Agent.tool(
+) => {
+  // Refused at construction, the way `Subagent.tool` refuses an unanswerable
+  // approval: a durable child's value is not carried. The workflow's success is
+  // its text, so a typed child would hand its parent a closing remark instead
+  // of the value it was asked for -- a silent degradation, and one the child's
+  // author cannot see. A loud fault before the agent starts beats that.
+  if (child.hasOutput) {
+    throw new TypeError(
+      `Subagent.durable: "${name}" has a child that declares an AgentOutput, ` +
+        `and a durable workflow carries only the child's text, not that value. ` +
+        `Declare no output for a durable child, or read the value from the child's session.`
+    )
+  }
+  return Agent.tool(
     DurableToolkit.delegate(
       Tool.make(name, {
         description: options.description,
@@ -67,3 +79,4 @@ export const durable = (
     // and a delegation running without the durable wrapper is a wiring fault.
     () => Effect.die("a durable delegation handler must never run")
   )
+}

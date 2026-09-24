@@ -6252,3 +6252,19 @@ alone would collide across sessions.
 
 Still open: widening the child's success beyond `Schema.String`, and approval
 routing.
+
+## 2026-09-24 - the durable child's typed result is not journalled, and now says so
+
+Part 3 of item 113 was the typed child result. Measured, and it is not a
+bounded slice: `DurableAgent.workflow`'s success is `Schema.String` and its
+body returns `result.text`, so a typed child's `AgentOutput` value is not
+journalled at all -- the parent would get the child's closing remark as if it
+were the answer. Widening the success schema is a journal change across
+`DurableAgent.result`, the durable client, and thirty-odd call sites.
+
+So `Subagent.durable` refuses a child that declares an `AgentOutput`, at
+construction, the way `Subagent.tool` refuses an unanswerable approval: loud
+beats the silent degradation, which the child's author cannot see. `workflow()`
+gained `hasOutput: boolean` for the check -- exposing the agent itself broke
+`ReturnType<typeof workflow>` on variance. Reopen the journal change when a
+caller needs the value at the tool boundary.

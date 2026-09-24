@@ -157,10 +157,21 @@ and `Workflow.suspend(instance)` parks one. The build is therefore:
    finished it calls `Workflow.suspend(instance)`; on re-execution it polls
    again and, once the child has completed, returns its result as the call's
    journalled result.
-3. **The child's result shape.** `DurableAgent.workflow`'s success is
-   `Schema.String` (the child's text). A typed child needs the child
-   workflow's success to carry the encoded value, or the delegation to read it
-   from the child's recorded session. First slice: text.
+3. **The child's result shape — measured 2026-09-24, and not bounded.** The
+   workflow's success is `Schema.String` and its body returns `result.text`, so
+   a typed child's `AgentOutput` value is **not journalled at all**: for a
+   typed child the result is its last text, which may be a closing remark or
+   nothing. Carrying the value means changing that success schema to
+   something like `{ text, value? }` (the shape `RemoteResult` already has),
+   which is a **journal change**: `DurableAgent.result`'s success type,
+   `DurableAgentClient`'s mapping, and thirty-odd call sites all move with it.
+   It is not the next bounded slice. `Subagent.durable` therefore returns the
+   child's text and **refuses a child that declares an `AgentOutput` at
+   construction** — the way `Subagent.tool` refuses an unanswerable approval,
+   so the degradation is loud rather than silent. (`workflow()` gained
+   `hasOutput: boolean` for the check; exposing the agent itself broke
+   `ReturnType<typeof workflow>` on variance.) Reopen with a caller that needs
+   the value at the tool boundary.
 4. **Approval.** The child parks on its *own* durable elicitation, and the
    parent is suspended behind it because it awaits the child's completion; the
    answer is given against the child's execution id. What the *parent's* user

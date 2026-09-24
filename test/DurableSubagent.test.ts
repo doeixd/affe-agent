@@ -3,6 +3,7 @@ import { Effect, Exit, Layer, Schema } from "effect"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import * as Agent from "../src/Agent.js"
 import * as AgentLoop from "../src/AgentLoop.js"
+import * as AgentOutput from "../src/AgentOutput.js"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import { Subagent } from "../src/subagent/index.js"
@@ -57,3 +58,20 @@ it.live("a durable parent delegates to a child workflow and reads its result", (
     // The child's answer reached the parent's model as the tool's result.
     assert.include(JSON.stringify(yield* recorder.prompts), "child findings")
   })), 30_000)
+
+it.effect("refuses a child that declares an AgentOutput, whose value the workflow does not carry", () =>
+  Effect.gen(function* () {
+    const store = yield* DurableChannels.memoryStore
+    const Typed = DurableAgent.workflow(
+      "DurableSubagentTyped",
+      Agent.make({
+        instructions: "answer",
+        output: AgentOutput.make(Schema.Struct({ answer: Schema.String }), { name: "record_answer" })
+      }),
+      { store }
+    )
+    assert.throws(
+      () => Subagent.durable("typed", Typed, { description: "x" }),
+      /AgentOutput/
+    )
+  }))

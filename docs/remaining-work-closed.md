@@ -2864,3 +2864,17 @@ parent execution id for it.
 verify: grep "export const durable" src/subagent/Durable.ts
 verify: exists test/DurableSubagent.test.ts
 ```
+
+## 2026-09-24 - the durable child's typed result: refused, not silently lost
+
+`DurableAgent.workflow`'s success is the child's text, so a typed child's
+`AgentOutput` value is not journalled; `Subagent.durable` now refuses such a
+child at construction (the `Subagent.tool`-refuses-an-approval pattern), and
+`workflow()` exposes `hasOutput: boolean` for the check. Widening the workflow
+success is a journal change across thirty-odd call sites, recorded as the
+reopen condition.
+
+```text
+verify: grep "hasOutput" src/durable/DurableAgent.ts
+verify: grep "Declare no output for a durable child" src/subagent/Durable.ts
+```
