@@ -221,7 +221,10 @@ authorized operation on that host, not a second authorizer.
 `src/subagent/Background.ts`, with `test/BackgroundSubagent.test.ts`. It
 returns `{ toolkit, layer, reports }`:
 
-- **`toolkit`** is the parent's `start_background` / `follow_up_background`;
+- **`toolkit`** is the parent's five tools: `start_background` /
+  `follow_up_background`, and the control surface — `list_background`,
+  `cancel_background` (ends one run, keeps the worker followable) and
+  `stop_background` (seals it, so a later follow-up is refused);
 - **`layer`** supplies their handlers and must be provided for the
   *application*, not one run — a child is forked into its scope, so
   `Effect.provide(layer)` around a single `Agent.run` would cancel the child
@@ -238,7 +241,7 @@ the delivery policy (when a report lands, what a busy parent does) where
 durable way, as a `kind: "framework"` item.
 
 Still open, as before: `reportToParent` as a convenience over that stream,
-updates, assignments, the control toolkit, and the durable half (item 113).
+updates, assignments, and the durable half (item 113).
 Budgets are the child's own by default (`Budget.fresh()`), the reverse of the
 attached form's, as decided above.
 

@@ -42,9 +42,19 @@ export interface Report {
   readonly turns: number
 }
 
+/** One background worker, as `list` reports it. */
+export interface WorkerStatus {
+  readonly worker: string
+  /** The child session's status: `"idle"`, `"running"` or `"closed"`. */
+  readonly status: string
+}
+
 interface BackgroundShape {
   readonly start: (question: string) => Effect.Effect<string>
   readonly followUp: (worker: string, question: string) => Effect.Effect<string, string>
+  readonly list: Effect.Effect<ReadonlyArray<WorkerStatus>>
+  readonly cancel: (worker: string) => Effect.Effect<string, string>
+  readonly stop: (worker: string) => Effect.Effect<string, string>
 }
 
 class Background extends Context.Service<Background, BackgroundShape>()(
@@ -91,6 +101,11 @@ export interface Options<R, LE = never> {
  * `Agent.run` ties the child to that run and cancels it when the run returns.
  * Build the layer in the application's scope — `Layer.build(layer)` beside the
  * client, or `Effect.provide` around the whole program.
+ *
+ * The toolkit carries five tools. `start_background` and
+ * `follow_up_background` do the work; `list_background`, `cancel_background`
+ * (ends one run, keeps the worker followable) and `stop_background` (seals it,
+ * so a later follow-up is refused) are the control surface.
  */
 export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, LE = never>(
   name: string,
@@ -116,6 +131,27 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
     const FollowUp = Tool.make("follow_up_background", {
       description: "Send more input to a background worker started by start_background.",
       parameters: Schema.Struct({ worker: Schema.String, question: Schema.String }),
+      success: Schema.String,
+      failure: Schema.String,
+      dependencies: [Background]
+    })
+    const List = Tool.make("list_background", {
+      description: "List the background workers this session started, with their status.",
+      parameters: Schema.Struct({}),
+      success: Schema.Array(Schema.Struct({ worker: Schema.String, status: Schema.String })),
+      failure: Schema.String,
+      dependencies: [Background]
+    })
+    const Cancel = Tool.make("cancel_background", {
+      description: "Cancel a background worker's current run. The worker stays and can be followed up.",
+      parameters: Schema.Struct({ worker: Schema.String }),
+      success: Schema.String,
+      failure: Schema.String,
+      dependencies: [Background]
+    })
+    const Stop = Tool.make("stop_background", {
+      description: "Stop a background worker for good: cancel its run and seal it, so follow-ups are refused.",
+      parameters: Schema.Struct({ worker: Schema.String }),
       success: Schema.String,
       failure: Schema.String,
       dependencies: [Background]
@@ -170,14 +206,56 @@ export const background = <Tools extends Record<string, Tool.Any>, E, R, Value, 
             return `sent to ${worker}`
           })
 
-        return { start, followUp }
+        const list: Effect.Effect<ReadonlyArray<WorkerStatus>> = Effect.gen(function* () {
+          const all = Array.from(yield* Ref.get(workers))
+          return yield* Effect.forEach(
+            all,
+            ([worker, session]) =>
+              Effect.map(AgentSession.status(session), (status): WorkerStatus => ({ worker, status })),
+            { concurrency: "unbounded" }
+          )
+        })
+
+        const cancel = (worker: string): Effect.Effect<string, string> =>
+          Effect.gen(function* () {
+            const session = (yield* Ref.get(workers)).get(worker)
+            if (session === undefined) return yield* Effect.fail(`no background worker "${worker}"`)
+            return yield* AgentSession.interrupt(session).pipe(
+              Effect.as(`cancelled ${worker}'s current run`),
+              Effect.catchTags({
+                AgentIdleError: () => Effect.succeed(`${worker} is not running`),
+                AgentClosedError: () => Effect.fail(`${worker} is sealed`)
+              })
+            )
+          })
+
+        const stop = (worker: string): Effect.Effect<string, string> =>
+          Effect.gen(function* () {
+            const session = (yield* Ref.get(workers)).get(worker)
+            if (session === undefined) return yield* Effect.fail(`no background worker "${worker}"`)
+            yield* AgentSession.interrupt(session).pipe(Effect.ignore)
+            // Sealed by removing it, so a later follow-up finds no worker. The
+            // session's own resources release with the scope `background` was
+            // opened in -- the application's, not one run.
+            yield* Ref.update(workers, (all) => {
+              const next = new Map(all)
+              next.delete(worker)
+              return next
+            })
+            return `stopped ${worker}`
+          })
+
+        return { start, followUp, list, cancel, stop }
       })
     )
 
-    const toolkit = Agent.toolkit([Start, FollowUp], {
+    const toolkit = Agent.toolkit([Start, FollowUp, List, Cancel, Stop], {
       start_background: ({ question }) => Effect.flatMap(Background, (background) => background.start(question)),
       follow_up_background: ({ worker, question }) =>
-        Effect.flatMap(Background, (background) => background.followUp(worker, question))
+        Effect.flatMap(Background, (background) => background.followUp(worker, question)),
+      list_background: () => Effect.flatMap(Background, (background) => background.list),
+      cancel_background: ({ worker }) => Effect.flatMap(Background, (background) => background.cancel(worker)),
+      stop_background: ({ worker }) => Effect.flatMap(Background, (background) => background.stop(worker))
     })
 
     return { toolkit, layer, reports: Stream.fromQueue(reports) }

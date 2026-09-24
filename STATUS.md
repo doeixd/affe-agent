@@ -293,7 +293,8 @@ dialects; `/tool-source` (OpenAPI, GraphQL, MCP; approval hints become
 `needsApproval`; `Credentials` -- method, binding, provider -- `Redacted`
 until the header is written); `/subagent` (`Subagent.tool` attached, and
 `Subagent.background`: a child that outlives the run that started it,
-publishing reports for the caller to deliver); `/state`; `/skills`; `/memory`; `/evals`;
+publishing reports for the caller to deliver, with `list` / `cancel` / `stop`
+control tools); `/state`; `/skills`; `/memory`; `/evals`;
 `/observability`; `/model` (what upstream's `Model` omits: context window, max
 output, vision/tools/reasoning, per-million cost with `cacheRead` and
 `cacheWrite` priced apart -- with a built-in Anthropic table guarded by an

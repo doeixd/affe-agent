@@ -6193,5 +6193,11 @@ forked into the layer's scope, so `Effect.provide(layer)` around a single
 application. A fresh `Budget` per child is the reverse of the attached form's
 default, as `plan-background-delegation.md` decides.
 
-Still open: `reportToParent` over the stream, updates, assignments, the
-control toolkit, and the durable half (item 113).
+Still open: `reportToParent` over the stream, updates, assignments, and the
+durable half (item 113).
+
+The control tools landed with the slice: `list_background` reports each
+worker's status, `cancel_background` ends one run and leaves the worker
+followable, and `stop_background` seals it. They are always in the toolkit,
+not opt-in: a conditional toolkit is a union of two toolkits, which defeats
+`Agent.make`'s inference at the parent, and the battery is opt-in already.

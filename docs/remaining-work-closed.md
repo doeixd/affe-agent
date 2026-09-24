@@ -2806,12 +2806,14 @@ verify: exists test/FrameworkSubmission.test.ts
 ## 2026-09-24 - background delegation (`Subagent.background`), first slice
 
 `plan-background-delegation.md`: a child that outlives the run that started
-it. `start_background` / `follow_up_background` tools; the child runs in the
-scope the caller opened around `background`; completions publish on a
+it. `start_background` / `follow_up_background` tools, plus `list_background`
+/ `cancel_background` (one run) / `stop_background` (seals it); the child runs
+in the scope the caller opened around `background`; completions publish on a
 `reports` stream the caller delivers -- a self-delivering battery would need
 the client that serves its own agent, a layer cycle. `test/BackgroundSubagent.test.ts`.
 
 ```text
 verify: exists src/subagent/Background.ts
 verify: exists test/BackgroundSubagent.test.ts
+verify: grep "list_background" src/subagent/Background.ts
 ```
