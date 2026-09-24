@@ -2909,3 +2909,18 @@ runner through `ToolExecution` is the next probe.
 ```text
 verify: grep "a parent awaiting a child is suspended" test/ChildWorkflow.test.ts
 ```
+
+## 2026-09-24 - cancellation propagation is the engine's
+
+Aborting a durable parent cancels the child it awaits -- by the engine's
+parent-instance path, not by a hook: a delegation runner's `onInterrupt` does
+fire on a parent's suspension (pinned), but a hook cancelling there would be
+dead code, and the naive `suspended` discriminator is wrong (a parent is
+suspended while awaiting a child). The client's interrupt is an intent a
+suspended body never consumes, so aborting a suspended parent needs the
+engine's `Workflow.interrupt`.
+
+```text
+verify: grep "the engine propagates a parent's abort" test/DurableSubagent.test.ts
+verify: grep "reaches the delegation runner" test/DelegationSeam.test.ts
+```

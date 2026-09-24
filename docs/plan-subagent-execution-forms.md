@@ -267,18 +267,23 @@ child** whose declared input and output both cross. The application provides
 `workflow.layer` to the engine beside the parent's, as `DurableAgentClient` does
 for one agent.
 
-**Cancellation propagation — probed 2026-09-24, design named, not built.**
+**Cancellation propagation — resolved 2026-09-24: the engine already does it.**
 effect-agent says aborting a parent propagates cancellation to its children.
-The naive hook is *wrong*: a durable parent **suspends by interrupting its own
-body**, so `Child.execute(...).pipe(Effect.onInterrupt(...))` fires on every
-suspension. The probe (`test/ChildWorkflow.test.ts`) shows the discriminator:
-while a parent awaits a child, the engine interrupts its body **and** sets the
-parent's `WorkflowInstance.suspended` to `true` (`interrupted` false). So a hook
-should cancel the child — `child.definition.interrupt(childExecutionId)` — only
-when `!suspended`. The open question, which wants its own probe before a line is
-written: whether that interrupt reaches the delegation runner *through
-`ToolExecution`* as it does a raw workflow body. Tool handlers may run forked,
-and a hook that never fires is a silent no-op.
+Two probes settled it without a line of code in the delegation:
+
+- A parent's suspension interrupt **does** reach a delegation runner through
+  `DurableToolkit.handle` and `ToolExecution`
+  (`test/DelegationSeam.test.ts`), so a hook there is *possible* — and first
+  looked necessary, because a suspension interrupts the parent's body too.
+- But it is **not** needed: interrupting the parent at the engine
+  (`definition.interrupt(parentExecutionId)`) already cancels the child the
+  parent awaits (`test/DurableSubagent.test.ts`), so a hook would be dead code.
+  A parked child whose parent is aborted comes back terminal with no help.
+
+One limit found on the way: the *client's* interrupt is an **intent a suspended
+body never consumes**, so a parent suspended on a child cannot be aborted by
+`DurableAgentClient.interrupt`; the abort must go through the engine's
+`Workflow.interrupt`. Worth knowing when a host builds a stop button.
 
 ## Form 3 — background
 

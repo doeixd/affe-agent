@@ -6321,3 +6321,21 @@ read that flag and cancel only when `!suspended`. Not built: whether the
 interrupt reaches the delegation runner through `ToolExecution` -- where
 handlers may run forked -- is the next probe, because a hook that never fires is
 a silent no-op.
+
+## 2026-09-24 - cancellation propagation: the engine already does it
+
+Two probes about "aborting a durable parent cancels its child", and the answer
+was that no code is needed. The first (`test/DelegationSeam.test.ts`) pins that
+a parent's suspension interrupt *does* reach a delegation runner through
+`DurableToolkit.handle` and `ToolExecution` -- so a hook there is possible, and
+first looked necessary, because a suspension interrupts the parent's body too.
+The second (`test/DurableSubagent.test.ts`) shows it is not needed: interrupting
+the parent at the engine cancels the child the parent awaits, so a hook would be
+dead code (removed after the test passed without it).
+
+A limit surfaced on the way: the client's interrupt is an *intent a suspended
+body never consumes*, so a parent suspended on a child cannot be aborted by
+`DurableAgentClient.interrupt`; the abort must go through the engine's
+`Workflow.interrupt`. The earlier `suspended`-flag idea was wrong for the same
+reason it looked right -- the parent is suspended while awaiting the child, so
+that flag cannot distinguish a suspension from an abort.

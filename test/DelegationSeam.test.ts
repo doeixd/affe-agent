@@ -152,3 +152,69 @@ it.live("a suspension after the delegation replays it from the child's journal, 
       assert.strictEqual(yield* Ref.get(runs), 1, "the child ran again across the resume")
     }).pipe(Effect.provide(context))
   })), 30_000)
+
+it.live("a parent's suspension interrupt reaches the delegation runner", () =>
+  Effect.scoped(Effect.gen(function* () {
+    const parked = yield* Deferred.make<DurableDeferred.Token>()
+    const Gate = DurableDeferred.make("DelegationCancelGate", { success: Schema.String })
+    const observed = yield* Ref.make(false)
+
+    const child = Workflow.make("delegation-cancel-child", {
+      payload: { n: Schema.Number },
+      idempotencyKey: ({ n }) => `delegation-cancel-child-${n}`,
+      success: Schema.String
+    })
+    const childLayer = child.toLayer(() =>
+      Effect.gen(function* () {
+        const token = yield* DurableDeferred.token(Gate)
+        yield* Deferred.succeed(parked, token)
+        yield* DurableDeferred.await(Gate)
+        return "child done"
+      })
+    )
+
+    const ParamsN = Schema.Struct({ n: Schema.Number })
+    const ToChild = DurableToolkit.delegate(
+      Tool.make("to_child_cancel", { parameters: ParamsN, success: Schema.String, failure: Schema.String }),
+      (params) =>
+        child.execute(Schema.decodeUnknownSync(ParamsN)(params)).pipe(
+          // The question: does this fire while the *parent* is suspended, when
+          // the runner sits inside `DurableToolkit.handle` and `ToolExecution`?
+          Effect.onInterrupt(() => Ref.set(observed, true))
+        )
+    )
+    const toChild = Agent.tool(ToChild, () => Effect.die("a delegation handler must never run"))
+
+    const { layer: model } = yield* FakeModel.script([
+      { toolCalls: [{ id: "p1", name: "to_child_cancel", params: { n: 1 } }] },
+      { text: "parent done" }
+    ])
+    const store = yield* DurableChannels.memoryStore
+    const durable = DurableAgent.workflow(
+      "DelegationCancelParent",
+      Agent.make({ tools: [toChild], loop: AgentLoop.bounded(3) }),
+      { store }
+    )
+    const layers = Layer.merge(durable.layer, childLayer).pipe(
+      Layer.provideMerge(Engine),
+      Layer.provideMerge(model)
+    )
+    const context = yield* Layer.build(layers)
+
+    yield* Effect.gen(function* () {
+      const executionId = yield* DurableAgent.submit(durable, store, "w", "go")
+      const token = yield* Deferred.await(parked)
+      // Let the parent's await settle into whatever the engine does with it.
+      yield* Effect.sleep("50 millis")
+      const seen = yield* Ref.get(observed)
+      yield* DurableDeferred.succeed(Gate, { token, value: "go" })
+      const exit = yield* DurableAgent.result(durable, executionId).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.exit
+      )
+      assert.isTrue(Exit.isSuccess(exit), Exit.isFailure(exit) ? String(exit.cause) : "")
+      // The finding, pinned: a parent's suspension interrupt does reach the
+      // delegation runner through `DurableToolkit.handle` and `ToolExecution`.
+      assert.isTrue(seen, "the parent's suspension interrupt did not reach the runner")
+    }).pipe(Effect.provide(context))
+  })), 30_000)
