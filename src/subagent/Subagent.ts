@@ -780,4 +780,6 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
  */
 export { background } from "./Background.js"
 export { reportToParent } from "./Background.js"
+export { durable } from "./Durable.js"
 export type { Options as BackgroundOptions, Report as BackgroundReport, WorkerStatus as BackgroundWorkerStatus } from "./Background.js"
+export type { DurableOptions } from "./Durable.js"

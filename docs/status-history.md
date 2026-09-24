@@ -6231,3 +6231,24 @@ joins the namespace manifest, which is why the commit carries a
 
 Still open: `Subagent.durable`'s construction, the child's typed result, and
 approval routing.
+
+## 2026-09-24 - Subagent.durable, the child-workflow constructor
+
+`src/subagent/Durable.ts` is the user-facing constructor over the delegation
+seam: it takes the child's `DurableAgent.workflow` and marks a tool whose call
+admits the child with a session id derived from the parent's execution id and
+the tool call id -- so a replay addresses the same child, and a tool-call id
+reused by another session cannot reach it. `test/DurableSubagent.test.ts` runs
+a durable parent delegating to a child agent as its own workflow, reads the
+child's text as the tool's result, and completes. One `LanguageModel` serves
+both workflows (they share the engine's context), so the script is written in
+call order.
+
+The seam gained the parent's execution id for this: `Delegation.run` now takes
+`(params, toolCallId, parentExecutionId)`, read where the workflow body's
+context is current. Provider tool-call ids are only unique within a response
+(a scripted model reuses "d1"), so deriving a child id from the tool-call id
+alone would collide across sessions.
+
+Still open: widening the child's success beyond `Schema.String`, and approval
+routing.

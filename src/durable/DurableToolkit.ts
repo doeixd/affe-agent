@@ -193,11 +193,17 @@ export const DurableDelegation = Context.Reference<Option.Option<Delegation>>(
 
 export interface Delegation {
   /**
-   * Run the delegation. `params` is the call's decoded parameters and
-   * `toolCallId` the provider's id for the call; the runner derives the
-   * child's execution id from them, so a replay addresses the same child.
+   * Run the delegation. `params` is the call's decoded parameters,
+   * `toolCallId` the provider's id for the call, and `parentExecutionId` the
+   * workflow execution the call is in — the three facts a child's execution id
+   * must be a pure function of, so a replay addresses the same child and two
+   * parents can never collide on a reused tool-call id.
    */
-  readonly run: (params: unknown, toolCallId: string) => Effect.Effect<unknown, unknown, WorkflowContext>
+  readonly run: (
+    params: unknown,
+    toolCallId: string,
+    parentExecutionId: string
+  ) => Effect.Effect<unknown, unknown, WorkflowContext>
 }
 
 /**
@@ -221,6 +227,11 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
 ): Effect.Effect<Toolkit.WithHandler<Tools>, never, WorkflowContext> =>
   Effect.gen(function* () {
     const workflowContext = yield* Effect.context<WorkflowContext>()
+    // The parent's execution id: read here, where the workflow body's context
+    // is current, and handed to a delegation so its child's id is a pure
+    // function of the parent -- a reused tool-call id from another session
+    // cannot address this parent's child.
+    const parentExecutionId = (yield* WorkflowEngine.WorkflowInstance).executionId
 
     // See `nextOccurrence`: identity counts repeats of a given call, rather
     // than position in a global sequence.
@@ -260,7 +271,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         // activity cannot survive that. See `DurableDelegation`.
         const delegation = Context.get(tool.annotations, DurableDelegation)
         if (Option.isSome(delegation)) {
-          const outcome: Outcome = yield* delegation.value.run(params, id).pipe(
+          const outcome: Outcome = yield* delegation.value.run(params, id, parentExecutionId).pipe(
             Effect.provide(workflowContext),
             Effect.flatMap((value) =>
               Schema.encodeUnknownEffect(tool.successSchema)(value).pipe(

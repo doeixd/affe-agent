@@ -231,9 +231,18 @@ What the build does, for the record:
   delegation seam is the one exception, opt-in by annotation; a normal handler
   gains nothing.
 
-**Still open:** `Subagent.durable`'s construction (the payload from the call's
-parameters: a child session id and prompt), widening the child's success beyond
-`Schema.String`, and approval routing (part 4).
+**Still open:** widening the child's success beyond `Schema.String`, and
+approval routing (part 4).
+
+**`Subagent.durable` landed 2026-09-24** (`src/subagent/Durable.ts`), the
+user-facing constructor over the seam. It takes the child's
+`DurableAgent.workflow` and marks a tool whose call admits the child with a
+session id derived from the **parent's execution id and the tool call id**, so
+a replay addresses the same child and a tool-call id reused by another session
+cannot reach it. `test/DurableSubagent.test.ts` is the end-to-end test: a
+durable parent delegates to a child agent running as its own workflow, reads
+its text as the tool's result, and completes. The application provides both
+workflows' layers to the engine, as `DurableAgentClient` does for one agent.
 
 ## Form 3 — background
 

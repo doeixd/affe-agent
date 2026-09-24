@@ -2851,3 +2851,16 @@ spec is now the record of what was built.
 verify: grep "export const delegate" src/durable/DurableToolkit.ts
 verify: exists test/DelegationSeam.test.ts
 ```
+
+## 2026-09-24 - Subagent.durable (item 113, the user-facing constructor)
+
+`src/subagent/Durable.ts`: mark a tool that admits a child `DurableAgent.workflow`
+with a session id derived from the parent's execution id and the tool call id.
+`test/DurableSubagent.test.ts` runs a durable parent delegating to a child agent
+as its own workflow and reads the child's text. `Delegation.run` gained the
+parent execution id for it.
+
+```text
+verify: grep "export const durable" src/subagent/Durable.ts
+verify: exists test/DurableSubagent.test.ts
+```
