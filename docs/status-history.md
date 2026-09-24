@@ -6268,3 +6268,27 @@ beats the silent degradation, which the child's author cannot see. `workflow()`
 gained `hasOutput: boolean` for the check -- exposing the agent itself broke
 `ReturnType<typeof workflow>` on variance. Reopen the journal change when a
 caller needs the value at the tool boundary.
+
+## 2026-09-24 - Subagent.durable moves onto the session-backed submission
+
+Thinking the decisions through again overturned the day's earlier answer. The
+typed durable result looked "not bounded" because `DurableAgent.workflow`'s
+success is the child's text -- but the value is on the other durable path.
+`DurableSubmission.workflow` (the client's, and exported) has an `Outcome` that
+already carries the encoded `AgentOutput` `value`, a `Payload` that already
+carries a typed `input`, and a session store. So the fix was not to widen the
+bare workflow; it was to stop using it for delegation.
+
+`Subagent.durable` is rebuilt on `DurableSubmission.workflow`: it takes the
+child agent and the stores, derives the tool's parameters from the child's
+`AgentInput` and its success from the child's `AgentOutput`, starts a child
+session whose id comes from the parent execution id and the tool call id, and
+maps the child's `Outcome` as a tool result. The `hasOutput` refusal and the
+`hasOutput` field are gone -- there is nothing to refuse.
+`test/DurableSubagent.test.ts` now has a typed row where the child's declared
+input and output both cross.
+
+The journal change the earlier entry recorded as the reopen condition is not
+needed, and neither is the `hasOutput` field: both were fixes for the wrong
+substrate. The lesson is in the plan -- two durable workflows existed, and
+delegation had been built on the weaker one.

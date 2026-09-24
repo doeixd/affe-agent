@@ -301,7 +301,7 @@ until the header is written); `/subagent` (`Subagent.tool` attached, and
 publishing reports the caller delivers with `Subagent.reportToParent`
 (framework items through `SessionInbox`), with `list` / `cancel` / `stop`
 control tools; `Subagent.durable`: a child that runs as its own durable
-workflow, over `DurableToolkit.delegate`); `/state`; `/skills`; `/memory`; `/evals`;
+session (`DurableSubmission`), over `DurableToolkit.delegate`); `/state`; `/skills`; `/memory`; `/evals`;
 `/observability`; `/model` (what upstream's `Model` omits: context window, max
 output, vision/tools/reasoning, per-million cost with `cacheRead` and
 `cacheWrite` priced apart -- with a built-in Anthropic table guarded by an
@@ -384,6 +384,7 @@ verify: grep "export const reportToParent" src/subagent/Background.ts
 verify: grep "export const delegate" src/durable/DurableToolkit.ts
 verify: grep "DurableDelegation" src/durable/DurableToolkit.ts
 verify: grep "export const durable" src/subagent/Durable.ts
+verify: grep "DurableSubmission.workflow" src/subagent/Durable.ts
 ```
 
 ## Deliberately not done

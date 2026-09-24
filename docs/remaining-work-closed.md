@@ -2854,27 +2854,32 @@ verify: exists test/DelegationSeam.test.ts
 
 ## 2026-09-24 - Subagent.durable (item 113, the user-facing constructor)
 
-`src/subagent/Durable.ts`: mark a tool that admits a child `DurableAgent.workflow`
-with a session id derived from the parent's execution id and the tool call id.
-`test/DurableSubagent.test.ts` runs a durable parent delegating to a child agent
-as its own workflow and reads the child's text. `Delegation.run` gained the
-parent execution id for it.
+`src/subagent/Durable.ts`: mark a tool that admits a child **session** — built
+on `DurableSubmission.workflow`, whose `Outcome` already carries the encoded
+`AgentOutput` `value` and whose `Payload` already carries a typed `input` — with
+a session id derived from the parent's execution id and the tool call id.
+`test/DurableSubagent.test.ts` runs a durable parent delegating to a text child
+and to a **typed** child whose input and output both cross. `Delegation.run`
+gained the parent execution id for it.
 
 ```text
 verify: grep "export const durable" src/subagent/Durable.ts
+verify: grep "DurableSubmission.workflow" src/subagent/Durable.ts
 verify: exists test/DurableSubagent.test.ts
 ```
 
-## 2026-09-24 - the durable child's typed result: refused, not silently lost
+## 2026-09-24 - the durable child's typed result: refused, then superseded
 
-`DurableAgent.workflow`'s success is the child's text, so a typed child's
-`AgentOutput` value is not journalled; `Subagent.durable` now refuses such a
-child at construction (the `Subagent.tool`-refuses-an-approval pattern), and
-`workflow()` exposes `hasOutput: boolean` for the check. Widening the workflow
-success is a journal change across thirty-odd call sites, recorded as the
-reopen condition.
+First pass, that day: `DurableAgent.workflow`'s success is the child's text, so
+a typed child's value was not journalled; `Subagent.durable` refused such a
+child at construction and `workflow()` exposed `hasOutput` for the check.
+
+**Superseded the same day, by correcting the substrate.** The value is on the
+other durable path: `DurableSubmission.workflow`'s `Outcome` carries it and its
+`Payload` carries a typed input. `Subagent.durable` was moved onto it, so a
+typed child crosses with no journal change, and the refusal and `hasOutput` are
+gone. The entry above is the current state.
 
 ```text
-verify: grep "hasOutput" src/durable/DurableAgent.ts
-verify: grep "Declare no output for a durable child" src/subagent/Durable.ts
+verify: grep "DurableSubmission.workflow" src/subagent/Durable.ts
 ```

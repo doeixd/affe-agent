@@ -1,82 +1,157 @@
-import { Effect, Schema } from "effect"
-import { Tool } from "effect/unstable/ai"
+import { Effect, Option, Schema } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
+import { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
-import type * as DurableAgent from "../durable/DurableAgent.js"
+import type { AgentDefinition } from "../Agent.js"
+import type * as AgentOutput from "../AgentOutput.js"
+import type * as DeliveryLog from "../durable/DeliveryLog.js"
+import type * as DurableChannels from "../durable/DurableChannels.js"
+import * as DurableSubmission from "../durable/DurableSubmission.js"
 import * as DurableToolkit from "../durable/DurableToolkit.js"
+import type * as DurableSessionStore from "../durable/DurableSessionStore.js"
+import * as InputBoundary from "../internal/inputBoundary.js"
+import { CurrentPrincipal } from "../Principal.js"
 
 /**
- * Durable delegation: a subagent that runs as a **child workflow**.
+ * Durable delegation: a subagent that runs as a **child session**, its own
+ * durable submission.
  *
- * `Subagent.tool` runs the child inside the parent's tool call, so the parent
- * waits and a crash mid-child is the parent's problem. This is the durable
- * shape: the call is a delegation (`DurableToolkit.delegate`), so it runs in
- * the parent's workflow body, starts the child's own durable submission, and
- * suspends the parent behind it. A restart reconnects to the same child, and
- * the child's approval parks it rather than the parent's process.
+ * `Subagent.tool` runs the child inside the parent's tool call; this runs it in
+ * the parent's workflow body as a delegation (`DurableToolkit.delegate`), so
+ * the parent suspends behind the child, a restart reconnects to the same
+ * child, and the child's approval parks the child rather than the parent's
+ * process.
  *
- * The child is a durable workflow the caller built — `DurableAgent.workflow`
- * — and both the parent's and the child's layers are provided to the engine by
- * the application, exactly as `DurableAgentClient` does for one agent:
+ * **It is built on `DurableSubmission.workflow`, not `DurableAgent.workflow`,
+ * and that is the whole design.** `DurableAgent.workflow`'s success is the
+ * child's *text* and it keeps no session; `DurableSubmission`'s success is an
+ * `Outcome` that already carries the child's encoded `AgentOutput` `value`,
+ * its payload already carries a typed `input`, and it is backed by a session
+ * store. So a typed child crosses — as input and as result — with no journal
+ * change, and the child is a real session a host can enumerate and answer.
  *
  * ```ts
- * const childWorkflow = DurableAgent.workflow("Research", Researcher, { store })
- * const research = Subagent.durable("research", childWorkflow, {
- *   description: "Research a question and return a short findings summary."
- * })
- * const Lead = Agent.make({ instructions: "Delegate research.", tools: [research] })
+ * const research = Subagent.durable("research", Researcher, { store, sessionStore })
+ * const Lead = Agent.make({ instructions: "Delegate research.", tools: [research.tool] })
+ * // provide `research.workflow.layer` to the engine beside the parent's
  * ```
- *
- * The child's execution id is derived from the parent's execution id and the
- * tool call id, so it is a pure function of the call: a replay after a
- * suspension addresses the same child, and a tool-call id reused by another
- * session cannot reach it.
  */
 export interface DurableOptions {
   /** What the tool is for, written for the parent model. */
   readonly description: string
+  /** Where steering and admission markers live; shared with the parent's stores. */
+  readonly store: DurableChannels.Store
+  /** The session store the child is recorded in, so a host can see and answer it. */
+  readonly sessionStore: DurableSessionStore.DurableSessionStore
+  /** Where the child's client-facing events are recorded, when there is a host to feed. */
+  readonly delivery?: DeliveryLog.DeliveryLog | undefined
+  /** The child workflow's name. Default `subagent:<name>`. */
+  readonly workflowName?: string | undefined
 }
 
-const Params = Schema.Struct({ prompt: Schema.String })
+const PromptParams = Schema.Struct({ prompt: Schema.String })
 
-export const durable = (
+/** The child's declared input as the tool's parameters, or `{ prompt }`. */
+const parametersOf = (declared: InputBoundary.Declared): Schema.Codec<unknown, unknown> =>
+  Option.match(declared, {
+    onNone: (): Schema.Codec<unknown, unknown> => PromptParams,
+    onSome: (input): Schema.Codec<unknown, unknown> => input.schema
+  })
+
+/** The child's declared output as the tool's success, or a string. */
+const successOf = <Value>(agent: {
+  readonly output: Option.Option<AgentOutput.AgentOutput<any, any>>
+}): Schema.Codec<Value, unknown> =>
+  Option.match(agent.output, {
+    onNone: (): Schema.Codec<any, unknown> => Schema.String,
+    onSome: (output): Schema.Codec<any, unknown> => output.schema
+  })
+
+/**
+ * A child's outcome as the delegation's answer.
+ *
+ * `Succeeded` carries the encoded `value` when the child declared an output and
+ * the text otherwise; `Failed` is the tool failure the parent model reads;
+ * `Infrastructure` is the store, not the agent, so it stays a defect.
+ */
+const answerOf = (
+  child: { readonly output: Option.Option<AgentOutput.AgentOutput<any, any>> },
+  outcome: DurableSubmission.Outcome
+): Effect.Effect<unknown, string> =>
+  Effect.gen(function* () {
+    if (outcome._tag === "Infrastructure") {
+      return yield* Effect.die(
+        new Error(`durable child: the store failed, not the agent: ${outcome.detail}`)
+      )
+    }
+    if (outcome._tag === "Failed") {
+      return yield* Effect.fail(outcome.failure.message)
+    }
+    if (Option.isSome(child.output)) {
+      if (outcome.value === undefined) {
+        return yield* Effect.fail("the child finished without reporting its declared output")
+      }
+      // Decoded here; the seam re-encodes it through the tool's success schema.
+      return yield* Schema.decodeUnknownEffect(child.output.value.schema)(outcome.value).pipe(
+        Effect.mapError((error) => `the child's output did not decode: ${error.message}`)
+      )
+    }
+    return outcome.text
+  })
+
+export const durable = <Tools extends Record<string, Tool.Any>, E, R, Value, Input>(
   name: string,
-  child: ReturnType<typeof DurableAgent.workflow>,
+  child: AgentDefinition<Tools, E, R, LanguageModel.LanguageModel, Value, Input>,
   options: DurableOptions
 ) => {
-  // Refused at construction, the way `Subagent.tool` refuses an unanswerable
-  // approval: a durable child's value is not carried. The workflow's success is
-  // its text, so a typed child would hand its parent a closing remark instead
-  // of the value it was asked for -- a silent degradation, and one the child's
-  // author cannot see. A loud fault before the agent starts beats that.
-  if (child.hasOutput) {
-    throw new TypeError(
-      `Subagent.durable: "${name}" has a child that declares an AgentOutput, ` +
-        `and a durable workflow carries only the child's text, not that value. ` +
-        `Declare no output for a durable child, or read the value from the child's session.`
-    )
-  }
-  return Agent.tool(
-    DurableToolkit.delegate(
-      Tool.make(name, {
-        description: options.description,
-        parameters: Params,
-        success: Schema.String,
-        failure: Schema.String
-      }),
-      (params, toolCallId, parentExecutionId) =>
-        Effect.gen(function* () {
-          const { prompt } = Schema.decodeUnknownSync(Params)(params)
-          const admitted = yield* child.admit("submit", prompt)
-          const payload = {
-            sessionId: `subagent:${parentExecutionId}:${toolCallId}`,
-            prompt: admitted.prompt,
-            ...(admitted.input === undefined ? {} : { input: admitted.input })
-          }
-          return yield* child.definition.execute(payload)
-        })
-    ),
-    // The handler is a placeholder: under durability the seam never calls it,
-    // and a delegation running without the durable wrapper is a wiring fault.
-    () => Effect.die("a durable delegation handler must never run")
+  const declared = InputBoundary.declared(child)
+  const workflow = DurableSubmission.workflow(options.workflowName ?? `subagent:${name}`, child, {
+    store: options.store,
+    sessionStore: options.sessionStore,
+    ...(options.delivery === undefined ? {} : { delivery: options.delivery })
+  })
+
+  const tool = DurableToolkit.delegate(
+    Tool.make(name, {
+      description: options.description,
+      parameters: parametersOf(declared),
+      success: successOf<Value>(child),
+      failure: Schema.String
+    }),
+    (params, toolCallId, parentExecutionId) =>
+      Effect.gen(function* () {
+        // A fresh child session per call, named so a replay addresses the same
+        // one and a reused tool-call id cannot reach another parent's child.
+        const sessionId = `subagent:${parentExecutionId}:${toolCallId}`
+        const principal = yield* CurrentPrincipal
+        const payload = yield* (Option.isSome(declared)
+          ? Schema.encodeUnknownEffect(child.input.schema)(params).pipe(
+            Effect.orDie,
+            Effect.map((encoded) => ({
+              sessionId,
+              submissionId: sessionId,
+              prompt: Prompt.empty,
+              input: encoded,
+              initialHistory: Prompt.empty,
+              stream: false,
+              ...(Option.isSome(principal) ? { principal: principal.value } : {})
+            }))
+          )
+          : Effect.map(Effect.sync(() => Schema.decodeUnknownSync(PromptParams)(params)), ({ prompt }) => ({
+            sessionId,
+            submissionId: sessionId,
+            prompt: Prompt.make(prompt),
+            initialHistory: Prompt.empty,
+            stream: false,
+            ...(Option.isSome(principal) ? { principal: principal.value } : {})
+          })))
+        const outcome = yield* workflow.definition.execute(payload)
+        return yield* answerOf(child, outcome)
+      })
   )
+
+  return {
+    tool: Agent.tool(tool, () => Effect.die("a durable delegation handler must never run")),
+    workflow
+  }
 }

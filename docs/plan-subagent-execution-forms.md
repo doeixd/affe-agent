@@ -157,21 +157,16 @@ and `Workflow.suspend(instance)` parks one. The build is therefore:
    finished it calls `Workflow.suspend(instance)`; on re-execution it polls
    again and, once the child has completed, returns its result as the call's
    journalled result.
-3. **The child's result shape — measured 2026-09-24, and not bounded.** The
-   workflow's success is `Schema.String` and its body returns `result.text`, so
-   a typed child's `AgentOutput` value is **not journalled at all**: for a
-   typed child the result is its last text, which may be a closing remark or
-   nothing. Carrying the value means changing that success schema to
-   something like `{ text, value? }` (the shape `RemoteResult` already has),
-   which is a **journal change**: `DurableAgent.result`'s success type,
-   `DurableAgentClient`'s mapping, and thirty-odd call sites all move with it.
-   It is not the next bounded slice. `Subagent.durable` therefore returns the
-   child's text and **refuses a child that declares an `AgentOutput` at
-   construction** — the way `Subagent.tool` refuses an unanswerable approval,
-   so the degradation is loud rather than silent. (`workflow()` gained
-   `hasOutput: boolean` for the check; exposing the agent itself broke
-   `ReturnType<typeof workflow>` on variance.) Reopen with a caller that needs
-   the value at the tool boundary.
+3. **The child's result shape — solved 2026-09-24 by changing the substrate.**
+   The value is not missing; it is on the other durable path.
+   `DurableAgent.workflow` returns the child's text, but
+   `DurableSubmission.workflow` — the client's, and exported — has an `Outcome`
+   that already carries the encoded `AgentOutput` `value`, a `Payload` that
+   already carries a typed `input`, and a session store. So `Subagent.durable`
+   is built on `DurableSubmission`: a typed child crosses as input *and* as
+   result, with **no journal change**, and the child is a real session. The
+   earlier "unify `DurableAgent.workflow`'s success" idea and the `hasOutput`
+   refusal are both superseded — each was a fix for the wrong substrate.
 4. **Approval.** The child parks on its *own* durable elicitation, and the
    parent is suspended behind it because it awaits the child's completion; the
    answer is given against the child's execution id. What the *parent's* user
@@ -243,23 +238,31 @@ What the build does, for the record:
   delegation seam is the one exception, opt-in by annotation; a normal handler
   gains nothing.
 
-**Still open:** the typed child result — refused at construction, because the
-workflow's success is the child's text and widening it is a journal change
-(part 3) — and approval routing (part 4). A third, found reviewing this: a
-durable child with a declared `AgentInput` cannot be asked with its schema
-either, because `Subagent.durable`'s parameters are always `{ prompt }` and
-`workflow()` does not expose the agent's input schema (the same reason the
-output check needed `hasOutput`).
+**Still open:** approval surfacing (part 4) — the child is a session, so its
+pending requests are already in the session store, but making them reach a
+host's inbox is an integration. Nothing else: the typed result and the typed
+input are not gaps (see (3)).
 
 **`Subagent.durable` landed 2026-09-24** (`src/subagent/Durable.ts`), the
-user-facing constructor over the seam. It takes the child's
-`DurableAgent.workflow` and marks a tool whose call admits the child with a
-session id derived from the **parent's execution id and the tool call id**, so
-a replay addresses the same child and a tool-call id reused by another session
-cannot reach it. `test/DurableSubagent.test.ts` is the end-to-end test: a
-durable parent delegates to a child agent running as its own workflow, reads
-its text as the tool's result, and completes. The application provides both
-workflows' layers to the engine, as `DurableAgentClient` does for one agent.
+user-facing constructor over the seam, built on **`DurableSubmission.workflow`**
+— the session-backed path — and not `DurableAgent.workflow`. It takes the child
+agent and the stores (`{ store, sessionStore, delivery? }`) and returns
+`{ tool, workflow }`:
+
+- the tool's parameters are the child's `AgentInput` (or `{ prompt }`) and its
+  success the child's `AgentOutput` (or a string) — `Subagent.tool`'s typing;
+- the runner starts a child session whose id derives from the **parent's
+  execution id and the tool call id**, so a replay addresses the same child and
+  a reused tool-call id cannot reach another parent's child, and it inherits the
+  principal onto the payload;
+- the child's `Outcome` maps as a tool result: `Succeeded` carries the value or
+  the text, `Failed` is the failure the parent model reads, and
+  `Infrastructure` is a defect, because it is the store and not the agent.
+
+`test/DurableSubagent.test.ts` holds two rows: a text child, and a **typed
+child** whose declared input and output both cross. The application provides
+`workflow.layer` to the engine beside the parent's, as `DurableAgentClient` does
+for one agent.
 
 ## Form 3 — background
 
