@@ -238,10 +238,11 @@ What the build does, for the record:
   delegation seam is the one exception, opt-in by annotation; a normal handler
   gains nothing.
 
-**Still open:** approval surfacing (part 4) — the child is a session, so its
-pending requests are already in the session store, but making them reach a
-host's inbox is an integration. Nothing else: the typed result and the typed
-input are not gaps (see (3)).
+**Still open:** approval surfacing (part 4) — a child is a session and
+`Subagent.childSessionId` makes it findable, so its `pendingRequests` are
+reachable; what is left is the host that reads them for a delegated child, which
+is an integration rather than a mechanism. Nothing else: the typed result and
+the typed input are not gaps (see (3)).
 
 **`Subagent.durable` landed 2026-09-24** (`src/subagent/Durable.ts`), the
 user-facing constructor over the seam, built on **`DurableSubmission.workflow`**
@@ -260,7 +261,14 @@ agent and the stores (`{ store, sessionStore, delivery? }`) and returns
   `Infrastructure` is a defect, because it is the store and not the agent, and a
   `Succeeded` whose `status` is `interrupted` is a **failure too** — a child the
   harness cut short is not a short success, the durable twin of
-  `SubagentInterruptedError`.
+  `SubagentInterruptedError`;
+- **`Subagent.childSessionId(parentSessionId, toolCallId)`** is the id
+  convention, exported. A child's session id is a pure function of the
+  *conversation and the call*, not of the parent's hashed execution id, so a
+  host can find a child — and its `sessionStore.pendingRequests` — from what a
+  UI already has: the session, and the call in its history. That is the enabler
+  for approval surfacing; the host that reads them is the remaining
+  integration, not a new mechanism.
 
 `test/DurableSubagent.test.ts` holds two rows: a text child, and a **typed
 child** whose declared input and output both cross. The application provides

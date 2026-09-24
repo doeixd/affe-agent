@@ -2924,3 +2924,14 @@ engine's `Workflow.interrupt`.
 verify: grep "the engine propagates a parent's abort" test/DurableSubagent.test.ts
 verify: grep "reaches the delegation runner" test/DelegationSeam.test.ts
 ```
+
+## 2026-09-24 - durable children are addressable by conversation and call
+
+`Subagent.childSessionId(parentSessionId, toolCallId)`: the child session id is
+a pure function of the conversation and the call, not the parent's hashed
+execution id, so a host can find a child and its `sessionStore.pendingRequests`
+from a UI's own identifiers. `test/DurableSubagent.test.ts`.
+
+```text
+verify: grep "export const childSessionId" src/subagent/Durable.ts
+```

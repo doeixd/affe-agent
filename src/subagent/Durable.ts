@@ -10,6 +10,7 @@ import * as DurableSubmission from "../durable/DurableSubmission.js"
 import * as DurableToolkit from "../durable/DurableToolkit.js"
 import type * as DurableSessionStore from "../durable/DurableSessionStore.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
+import { CurrentSessionId } from "../internal/currentSession.js"
 import { CurrentPrincipal } from "../Principal.js"
 
 /**
@@ -50,6 +51,20 @@ export interface DurableOptions {
 }
 
 const PromptParams = Schema.Struct({ prompt: Schema.String })
+
+/**
+ * The durable session id a delegation gives its child.
+ *
+ * A pure function of the **conversation and the call** — the parent session's
+ * id and the tool call's id — not of the parent's hashed execution id, so a
+ * host can find a child from what a UI already has: the session, and the call
+ * in its history. That is what makes a child's questions findable
+ * (`sessionStore.pendingRequests`) and answerable where every other session's
+ * are. The id is stable across a replay, so a re-execution addresses the same
+ * child.
+ */
+export const childSessionId = (parentSessionId: string, toolCallId: string): string =>
+  `subagent:${parentSessionId}:${toolCallId}`
 
 /** The child's declared input as the tool's parameters, or `{ prompt }`. */
 const parametersOf = (declared: InputBoundary.Declared): Schema.Codec<unknown, unknown> =>
@@ -129,9 +144,14 @@ export const durable = <Tools extends Record<string, Tool.Any>, E, R, Value, Inp
     }),
     (params, toolCallId, parentExecutionId) =>
       Effect.gen(function* () {
-        // A fresh child session per call, named so a replay addresses the same
-        // one and a reused tool-call id cannot reach another parent's child.
-        const sessionId = `subagent:${parentExecutionId}:${toolCallId}`
+        // A fresh child session per call, named from the parent session and the
+        // tool call id, so a replay addresses the same child and a host can
+        // find it from the conversation and the call.
+        const parentSession = yield* CurrentSessionId
+        const sessionId = childSessionId(
+          Option.match(parentSession, { onNone: () => parentExecutionId, onSome: String }),
+          toolCallId
+        )
         const principal = yield* CurrentPrincipal
         const payload = yield* (Option.isSome(declared)
           ? Schema.encodeUnknownEffect(child.input.schema)(params).pipe(

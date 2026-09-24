@@ -6339,3 +6339,19 @@ body never consumes*, so a parent suspended on a child cannot be aborted by
 `Workflow.interrupt`. The earlier `suspended`-flag idea was wrong for the same
 reason it looked right -- the parent is suspended while awaiting the child, so
 that flag cannot distinguish a suspension from an abort.
+
+## 2026-09-24 - a durable child is addressable by the conversation
+
+`Subagent.childSessionId(parentSessionId, toolCallId)` is exported, and the
+delegation derives its child's session id from the **parent session id** --
+available in the runner through `CurrentSessionId`, which `ToolExecution`
+provides around the handler fold -- rather than the parent's hashed execution
+id. So a host can find a durable child, and its `sessionStore.pendingRequests`,
+from what a UI already has: the conversation, and the call in its history. The
+tests that address a child (the cut-short and abort rows) now compute the id
+with the helper.
+
+That is the enabler for approval surfacing rather than the surfacing itself:
+a child's questions are in the session store, and now they are reachable from
+the parent's identifiers; the host that reads them for a delegated child is the
+remaining integration.

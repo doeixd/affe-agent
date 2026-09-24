@@ -147,10 +147,9 @@ it.live("a child cut short is a failure, not a partial read as an answer", () =>
     yield* Effect.gen(function* () {
       const executionId = yield* DurableAgent.submit(parentWorkflow, store, "p", "go")
       yield* Deferred.await(childStarted)
-      // The child's session id is a pure function of the parent's execution id
-      // and the tool call id, so the test can address it.
-      const parentExecutionId = yield* DurableAgent.executionIdFor(parentWorkflow, "p")
-      const childSessionId = `subagent:${parentExecutionId}:p1`
+      // The child's session id is a pure function of the conversation and the
+      // call, so the test can address it.
+      const childSessionId = Subagent.childSessionId("p", "p1")
       yield* DurableSubmission.interrupt(store, childSessionId, childSessionId)
 
       const exit = yield* DurableAgent.result(parentWorkflow, executionId).pipe(
@@ -249,7 +248,7 @@ it.live("the engine propagates a parent's abort to the child it awaits", () =>
       const executionId = yield* DurableAgent.submit(parentWorkflow, store, "p", "go")
       const token = yield* Deferred.await(parked)
       const parentExecutionId = yield* DurableAgent.executionIdFor(parentWorkflow, "p")
-      const childSessionId = `subagent:${parentExecutionId}:p1`
+      const childSessionId = Subagent.childSessionId("p", "p1")
       // The idempotency key is name + session + submission, so the prompt is
       // not part of the child's execution id.
       const childExecutionId = yield* research.workflow.definition.executionId({
