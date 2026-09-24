@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Option, Queue, Ref, Schedule, Schema, Scope, Stream } from "effect"
+import { Cause, Clock, Context, Duration, Effect, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Prompt, Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
@@ -7,6 +7,7 @@ import * as AgentSession from "../AgentSession.js"
 import * as Budget from "../budget/Budget.js"
 import { CurrentSessionId } from "../internal/currentSession.js"
 import * as Namespace from "../internal/namespace.js"
+import * as Schedules from "../internal/schedules.js"
 import * as SessionInbox from "../sessions/SessionInbox.js"
 
 /**
@@ -341,12 +342,17 @@ export const reportToParent = (
               kind: "framework",
               input: Prompt.fromMessages([Prompt.systemMessage({ content: render(report) })]),
               source: { kind: "background", id: report.worker },
-              createdAt: 0
+              createdAt: yield* Clock.currentTimeMillis
             })
             yield* inbox.deliver.pipe(
               Effect.retry({
+                // Start fast, back off, and never poll harder than the cap: a
+                // parent busy for a long time must not be spun at 25ms for ever.
                 while: (error) => error._tag === "SessionBusyError",
-                schedule: Schedule.spaced("25 millis")
+                schedule: Schedules.backoff({
+                  start: Duration.millis(25),
+                  cap: Schedules.defaultPollCap
+                })
               }),
               Effect.tap((outcome) =>
                 outcome._tag === "Undeliverable"

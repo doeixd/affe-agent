@@ -32,7 +32,9 @@ import { CurrentPrincipal } from "../Principal.js"
  * change, and the child is a real session a host can enumerate and answer.
  *
  * ```ts
- * const research = Subagent.durable("research", Researcher, { store, sessionStore })
+ * const research = Subagent.durable("research", Researcher, {
+ *   description: "…", store, sessionStore, workflowName: "ResearchDurable"
+ * })
  * const Lead = Agent.make({ instructions: "Delegate research.", tools: [research.tool] })
  * // provide `research.workflow.layer` to the engine beside the parent's
  * ```
@@ -187,7 +189,11 @@ export const durable = <Tools extends Record<string, Tool.Any>, E, R, Value, Inp
   )
 
   return {
-    tool: Agent.tool(tool, () => Effect.die("a durable delegation handler must never run")),
+    tool: Agent.tool(tool, () =>
+      Effect.die(
+        "a durable delegation ran outside a durable host: only DurableToolkit runs it, " +
+          "so run the agent through a durable client"
+      )),
     workflow
   }
 }

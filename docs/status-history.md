@@ -6364,3 +6364,14 @@ tool name is only unique within its own toolkit, so two durable subagents
 sharing one would dispatch to each other's child. `workflowName` is now
 required, as `DurableAgentClient.layer` requires one, so the caller names it
 and owns its uniqueness.
+
+## 2026-09-24 - review pass over the session's subagent code
+
+Reading the session's own work found four things. `Subagent.durable`'s doc
+example still omitted the now-required `workflowName`. `reportToParent` retried
+a busy parent at a fixed 25ms for ever and stamped every report
+`createdAt: 0`; it now uses the repository's `Schedules.backoff` and reads the
+clock. Three tests waited on `Effect.sleep` where the rule is a latch: the two
+suspension probes now await the interrupt on a `Deferred`, and the abort test
+polls the child's execution to a terminal state rather than sleeping. The
+durable placeholder's defect now says why it fired instead of only that it did.

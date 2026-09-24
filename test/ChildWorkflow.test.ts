@@ -115,6 +115,7 @@ describe("probe: what a parent sees while it awaits a child", () => {
       const parked = yield* Deferred.make<DurableDeferred.Token>()
       const Gate = DurableDeferred.make("probe-flag-gate", { success: Schema.String })
       const observed = yield* Ref.make<ReadonlyArray<string>>([])
+      const interrupted = yield* Deferred.make<void>()
 
       const Child = Workflow.make("probe-flag-child", {
         payload: { n: Schema.Number },
@@ -145,6 +146,7 @@ describe("probe: what a parent sees while it awaits a child", () => {
                   ...all,
                   `suspended=${instance.suspended} interrupted=${instance.interrupted}`
                 ])
+                yield* Deferred.succeed(interrupted, void 0)
               })
             )
           )
@@ -158,8 +160,8 @@ describe("probe: what a parent sees while it awaits a child", () => {
       yield* Effect.gen(function* () {
         const running = yield* Effect.forkChild(Parent.execute({ n: 1 }))
         const token = yield* Deferred.await(parked)
-        // Let the parent's await settle into whatever the engine does with it.
-        yield* Effect.sleep("50 millis")
+        // Wait on the suspension's interrupt itself, not on a clock.
+        yield* Deferred.await(interrupted)
         const seen = yield* Ref.get(observed)
         yield* DurableDeferred.succeed(Gate, { token, value: "go" })
         const result = yield* Fiber.join(running)

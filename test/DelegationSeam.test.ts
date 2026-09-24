@@ -158,6 +158,7 @@ it.live("a parent's suspension interrupt reaches the delegation runner", () =>
     const parked = yield* Deferred.make<DurableDeferred.Token>()
     const Gate = DurableDeferred.make("DelegationCancelGate", { success: Schema.String })
     const observed = yield* Ref.make(false)
+    const interrupted = yield* Deferred.make<void>()
 
     const child = Workflow.make("delegation-cancel-child", {
       payload: { n: Schema.Number },
@@ -180,7 +181,8 @@ it.live("a parent's suspension interrupt reaches the delegation runner", () =>
         child.execute(Schema.decodeUnknownSync(ParamsN)(params)).pipe(
           // The question: does this fire while the *parent* is suspended, when
           // the runner sits inside `DurableToolkit.handle` and `ToolExecution`?
-          Effect.onInterrupt(() => Ref.set(observed, true))
+          Effect.onInterrupt(() =>
+            Effect.andThen(Ref.set(observed, true), Deferred.succeed(interrupted, void 0)))
         )
     )
     const toChild = Agent.tool(ToChild, () => Effect.die("a delegation handler must never run"))
@@ -204,8 +206,8 @@ it.live("a parent's suspension interrupt reaches the delegation runner", () =>
     yield* Effect.gen(function* () {
       const executionId = yield* DurableAgent.submit(durable, store, "w", "go")
       const token = yield* Deferred.await(parked)
-      // Let the parent's await settle into whatever the engine does with it.
-      yield* Effect.sleep("50 millis")
+      // Wait on the suspension's interrupt itself, not on a clock.
+      yield* Deferred.await(interrupted)
       const seen = yield* Ref.get(observed)
       yield* DurableDeferred.succeed(Gate, { token, value: "go" })
       const exit = yield* DurableAgent.result(durable, executionId).pipe(

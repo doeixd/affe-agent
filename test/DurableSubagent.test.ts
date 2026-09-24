@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Exit, Layer, Option, Schema, Schedule } from "effect"
 import { Prompt } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { DurableDeferred } from "effect/unstable/workflow"
@@ -262,13 +262,19 @@ it.live("the engine propagates a parent's abort to the child it awaits", () =>
       })
 
       // Terminally abort the parent at the engine (the intent path is not
-      // consumed by a *suspended* body), then give the engine a moment.
+      // consumed by a *suspended* body), then wait for the child's execution to
+      // reach a terminal state rather than on a clock.
       yield* parentWorkflow.definition.interrupt(parentExecutionId)
-      yield* Effect.sleep("200 millis")
+      const polled = yield* Effect.repeat(
+        research.workflow.definition.poll(childExecutionId),
+        {
+          until: (polled) => Option.isSome(polled) && polled.value._tag !== "Suspended",
+          schedule: Schedule.spaced("10 millis")
+        }
+      ).pipe(Effect.timeout("5 seconds"))
 
-      const polled = yield* research.workflow.definition.poll(childExecutionId)
-      // Left suspended, the child would still be `Suspended`; cancelled, it is
-      // terminal. (Resume the gate either way so nothing leaks.)
+      // Left suspended, the child would stay `Suspended`; cancelled, it is
+      // terminal.
       assert.isFalse(
         Option.isSome(polled) && polled.value._tag === "Suspended",
         `the child is still suspended: ${JSON.stringify(polled)}`
