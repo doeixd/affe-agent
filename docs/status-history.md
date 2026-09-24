@@ -6211,3 +6211,23 @@ helper rather than a flag on `background` because the layer cycle is
 permanent: a self-delivering battery would need the client that serves its own
 agent. The test asserts the person's input is alone in the history and the
 report arrives as a system message.
+
+## 2026-09-24 - the durable delegation seam (item 113, part 2)
+
+Item 113's engine half is built. A tool marked `DurableToolkit.delegate` is the
+one exception to "a handler cannot suspend": `wrap`'s `handle` branches on the
+marker before the start marker and the `Activity`, and runs the delegation in
+the workflow body under the captured `workflowContext` -- so its call can start
+and await a child workflow and suspend the parent behind it. The child's own
+journal is the durability; no start marker is written, so the
+per-attempt-marker hazard stays unreachable.
+
+`test/DelegationSeam.test.ts` runs a durable parent whose tool is a child
+workflow: the parent completes with the child's result, and a suspension after
+the delegation replays it from the child's journal with the child running
+exactly once. Broken once (seam disabled) and restored. `DurableDelegation`
+joins the namespace manifest, which is why the commit carries a
+`Behavior-Change` trailer.
+
+Still open: `Subagent.durable`'s construction, the child's typed result, and
+approval routing.

@@ -43,6 +43,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "a tool annotation: none declared means every contract change is refused, the safe default"
   },
+  "src/durable/DurableToolkit.ts:DurableDelegation": {
+    class: "no-feature",
+    why: "a tool annotation: none means an ordinary tool, which runs as an activity as before"
+  },
   "src/internal/failpoint.ts:Failpoint": {
     class: "seam",
     why: "no-op outside the crash tests"

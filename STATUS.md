@@ -146,7 +146,12 @@ offline peer is a typed error rather than a queue.
 **Durability and scale.** `/durable` runs the same agent inside a Workflow
 with journaled events, typed `StorageError`s at every store, a delivery log
 that makes resumption a property of the backing, and a durable client that
-survives the process; `/cluster` makes a session an entity (typed
+survives the process. A tool marked with `DurableToolkit.delegate` is the
+exception to "a handler cannot suspend": it runs in the workflow body, not an
+`Activity`, so its call can start and await a **child workflow** and suspend
+the parent behind it — the engine half of durable delegation (item 113), with
+the child's own journal as the durability and a replay that does not run the
+child twice; `/cluster` makes a session an entity (typed
 `StorageError` on the wire) and adds scheduled agents; `/durable-streams`
 delivers events across nodes.
 
@@ -375,6 +380,8 @@ verify: grep "export const framework = Effect.fn" src/AgentSession.ts
 verify: grep "readonly framework?:" src/client/AgentClient.ts
 verify: grep "export const background = " src/subagent/Background.ts
 verify: grep "export const reportToParent" src/subagent/Background.ts
+verify: grep "export const delegate" src/durable/DurableToolkit.ts
+verify: grep "DurableDelegation" src/durable/DurableToolkit.ts
 ```
 
 ## Deliberately not done

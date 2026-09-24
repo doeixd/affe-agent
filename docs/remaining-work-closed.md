@@ -2838,3 +2838,16 @@ engine: `toLayer`'s layer needs the engine, so the wiring is
 ```text
 verify: exists test/ChildWorkflow.test.ts
 ```
+
+## 2026-09-24 - the durable delegation seam (item 113, part 2)
+
+`DurableToolkit.delegate` marks a tool whose call runs in the workflow body,
+not an `Activity`, so it can start and await a child workflow and suspend the
+parent behind it. `test/DelegationSeam.test.ts` pins the parent completing with
+the child's result, and a resume not re-running the child. The plan's build
+spec is now the record of what was built.
+
+```text
+verify: grep "export const delegate" src/durable/DurableToolkit.ts
+verify: exists test/DelegationSeam.test.ts
+```

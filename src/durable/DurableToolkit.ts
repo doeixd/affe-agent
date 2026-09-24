@@ -1,9 +1,10 @@
-import { Cause, Context, Effect, Ref, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Option, Ref, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import { activityName, nextOccurrence, startMarkerName } from "../internal/toolActivity.js"
 import { InsideToolActivity } from "../internal/insideToolActivity.js"
+import * as Namespace from "../internal/namespace.js"
 
 /**
  * Makes every tool call a durable `Activity`.
@@ -169,6 +170,52 @@ export class DurableToolFailure extends Schema.TaggedError<DurableToolFailure>()
  */
 export type WorkflowContext = WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 
+/**
+ * Marks a tool whose call is a **delegation**: it runs in the workflow body
+ * and may start and await a child workflow, suspending the parent behind it.
+ *
+ * This is the one deliberate exception to "a handler cannot suspend the
+ * workflow" (see `wrap`'s comment). A normal tool is wrapped in an `Activity`,
+ * and a suspending activity records `Unresolved`; a marked tool is **not**
+ * wrapped at all, so there is no activity to resolve — the child workflow's
+ * own journal is the durability. It is opt-in by annotation, so no ordinary
+ * handler gains the ability, and no start marker is written, so the
+ * per-attempt-marker hazard does not arise.
+ *
+ * The runner is the tool's real implementation. The handler bound to the tool
+ * is a placeholder that durability never calls; whoever builds a delegation
+ * must not let that tool run without this wrapper.
+ */
+export const DurableDelegation = Context.Reference<Option.Option<Delegation>>(
+  Namespace.tag("durable/DurableDelegation"),
+  { defaultValue: () => Option.none() }
+)
+
+export interface Delegation {
+  /**
+   * Run the delegation. `params` is the call's decoded parameters and
+   * `toolCallId` the provider's id for the call; the runner derives the
+   * child's execution id from them, so a replay addresses the same child.
+   */
+  readonly run: (params: unknown, toolCallId: string) => Effect.Effect<unknown, unknown, WorkflowContext>
+}
+
+/**
+ * Mark a tool as a delegation. The authoring path, so the stored `Option` is
+ * not a caller's concern:
+ *
+ * ```ts
+ * const research = DurableToolkit.delegate(
+ *   Tool.make("research", { parameters: Params, success: Schema.String }),
+ *   (params) => childWorkflow.execute(Schema.decodeUnknownSync(Params)(params))
+ * )
+ * ```
+ */
+export const delegate = <T extends Tool.Any>(tool: T, run: Delegation["run"]): T =>
+  // Returns the same tool type, as `Permission.annotate` does: Effect AI's
+  // `annotate` widens to the structural `Tool<Name, Config, R>`, which is `T`.
+  tool.annotate(DurableDelegation, Option.some({ run })) as T
+
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>
 ): Effect.Effect<Toolkit.WithHandler<Tools>, never, WorkflowContext> =>
@@ -206,6 +253,28 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           return yield* Effect.die(
             new Error(`DurableToolkit: unknown tool ${String(name)}`)
           )
+        }
+
+        // A delegation runs in the workflow body, not in an activity: it may
+        // start and await a child workflow, which suspends the parent, and an
+        // activity cannot survive that. See `DurableDelegation`.
+        const delegation = Context.get(tool.annotations, DurableDelegation)
+        if (Option.isSome(delegation)) {
+          const outcome: Outcome = yield* delegation.value.run(params, id).pipe(
+            Effect.provide(workflowContext),
+            Effect.flatMap((value) =>
+              Schema.encodeUnknownEffect(tool.successSchema)(value).pipe(
+                Effect.orDie,
+                Effect.map((encoded): Outcome => ({
+                  _tag: "Succeeded",
+                  results: [{ _tag: "Ok", result: value, encodedResult: encoded, preliminary: false }]
+                }))
+              )
+            ),
+            Effect.catchCause((cause): Effect.Effect<Outcome> =>
+              Effect.succeed({ _tag: "Failed", failure: AgentEvent.failureFromCause(cause) }))
+          )
+          return Stream.fromIterable(yield* reraise(outcome, String(name), id))
         }
 
         const outcomeSchema = Schema.Union([
