@@ -22,7 +22,7 @@ execution model and no subagent runtime: every form below is a child
 | --- | --- | --- | --- |
 | **attached** (in-memory) | a session in the tool handler's scope | the delegating call | waits for the batch |
 | **durable attached** | a durable submission (a child workflow) | the parent's submission, recoverable | suspends, resumes with the result |
-| **background** | a session of its own, addressed by an inbox | independent of the parent | keeps running |
+| **background** | a session in the application's scope | outlives the parent's run | keeps running |
 
 This is why `Subagent.tool` and `Subagent.background` should share one
 declaration (`Agent.make`) and differ only in how the parent is wired to it.
@@ -228,9 +228,10 @@ What the build does, for the record:
   it is given from the call's parameters are `run`'s business, so
   `DurableToolkit` never learns about agents.
 - **The seam branch.** In `handle`, before the start marker and the
-  `Activity`: for a marked tool, no activity — `delegation.run(params, id)`
-  under the captured `workflowContext`, mapped to the handler's journalled
-  results. No start marker, so the per-attempt-marker hazard does not arise.
+  `Activity`: for a marked tool, no activity — `delegation.run(params, id,
+  parentExecutionId)` under the captured `workflowContext`, mapped to the
+  handler's journalled results. No start marker, so the per-attempt-marker
+  hazard does not arise.
 - **Result and failure mapping.** Success encodes through the tool's
   `successSchema`; a child failure is a tool failure the parent model reads,
   via the existing `reraise` rule, so it matches a normal call's disposition.
@@ -242,8 +243,13 @@ What the build does, for the record:
   delegation seam is the one exception, opt-in by annotation; a normal handler
   gains nothing.
 
-**Still open:** widening the child's success beyond `Schema.String`, and
-approval routing (part 4).
+**Still open:** the typed child result — refused at construction, because the
+workflow's success is the child's text and widening it is a journal change
+(part 3) — and approval routing (part 4). A third, found reviewing this: a
+durable child with a declared `AgentInput` cannot be asked with its schema
+either, because `Subagent.durable`'s parameters are always `{ prompt }` and
+`workflow()` does not expose the agent's input schema (the same reason the
+output check needed `hasOutput`).
 
 **`Subagent.durable` landed 2026-09-24** (`src/subagent/Durable.ts`), the
 user-facing constructor over the seam. It takes the child's
@@ -257,50 +263,49 @@ workflows' layers to the engine, as `DurableAgentClient` does for one agent.
 
 ## Form 3 — background
 
-The pieces ship; the battery does not. Full design in
-[plan-background-delegation.md](./plan-background-delegation.md); the shape:
+**Built 2026-09-24.** `Subagent.background(name, child, { description, provide })`
+returns `{ toolkit, layer, reports }`: the parent's `start_background` /
+`follow_up_background` and the control tools (`list_background`,
+`cancel_background`, `stop_background`), the handlers' layer, and a `Stream` of
+completions. Full design in
+[plan-background-delegation.md](./plan-background-delegation.md).
 
-```ts
-const research = Subagent.background(Researcher, {
-  start: true, followUp: true, reportToParent: true
-})
-// research.toolkit → the parent's start / follow-up tools
-// research.layer   → handlers over /sessions' SessionInbox and /scheduling
-```
+A background child is a session in the **application's scope** — the scope
+opened around `background`, which is why the layer must be provided for the
+application and not for one run — so it outlives the submission that started
+it, and is never a detached fibre (see "Divergences"). `start` and `follow_up`
+submit to it **directly**: the tool that starts a worker holds its handle, and
+`SessionInbox` exists for a producer that does not.
 
-A background child is a **named session** that outlives the submission that
-started it — never a detached fibre (see "Divergences"). `start` and
-`followUp` deliver input to it through `SessionInbox`; `reportToParent`
-delivers the child's completion back as a *new submission* on the parent
-session. The acknowledgement vocabulary the effect-agent docs describe —
-`{ worker, delivery }`, a receipt after destination acceptance, "pending
-delivery is queued and says nothing about child execution" — is exactly
-`SessionInbox`'s, which already distinguishes handed-over / persisted /
-accepted / settled (`guide-sessions.md`, "What a success means").
+**Reports are the caller's to deliver**, and that is the design decision the
+build forced. A self-delivering battery would need the `AgentClient` that
+serves the agent whose tools use the battery — the client is built from the
+agent, the agent's tools need the battery, the battery would need the client: a
+layer cycle. So the battery publishes `reports`, and
+`Subagent.reportToParent(background)` is the helper the caller forks: it
+consumes the stream and delivers each report to the session that started the
+worker, as a `kind: "framework"` item through `SessionInbox` — framework
+provenance, no application input, retrying a busy parent rather than
+interrupting it. The acknowledgement vocabulary the effect-agent docs describe
+is exactly `SessionInbox`'s (`guide-sessions.md`, "What a success means").
 
-Three capabilities the effect-agent surface has that this plan adds to the
-background design:
+Still not built, each a new concept wanting its own caller:
 
-- **Updates.** `Agent.make({ updates: Schema })` installs a native
-  `emit_update` tool; with `reportToParent` the parent receives provisional
-  findings before the completion. This is new here and is a battery, not a
-  kernel noun: an `emit_update` tool whose handler publishes to a channel,
-  plus forwarding into the parent's input. It is the one piece of the
-  background surface with no existing seam under it.
+- **Updates.** `Agent.make({ updates: Schema })` installing a native
+  `emit_update` tool whose handler publishes provisional findings before the
+  completion — the one piece of the background surface with no existing seam
+  under it.
 - **Assignments.** A worker whose typed output decides `waiting` (steerable)
-  versus `completed` (sealed) is a lifecycle state machine. `/state` is the
-  persistent-state seam it would build on; it is a real new concept and wants
-  its own caller before it exists.
-- **Control.** Inspect / list / cancel / stop map to existing seams:
-  `SessionDirectory` lists sessions, `AgentSession.interrupt` cancels,
-  idempotency keys make a re-sent command one request, and a stable command
-  key seals a worker. No new primitive; the work is a toolkit and its
-  authorization.
+  versus `completed` (sealed) — a lifecycle over `/state`.
 
-**Authorization.** effect-agent's `WorkerHostAuthorizer` (authorize by
-principal and source thread, deny by default) is `AgentSessionHost`'s
-authorization plus `Principal.CurrentPrincipal`, which already denies by
-default and is set per request by the host (`AgentSessionHost.Options.subject`).
+**Authorization.** effect-agent's `WorkerHostAuthorizer` is
+`AgentSessionHost`'s authorization plus `Principal.CurrentPrincipal`, which
+already denies by default and is set per request by the host
+(`AgentSessionHost.Options.subject`).
+
+**The durable half is `Subagent.durable`, not a background mode**: a child that
+runs as its own durable workflow, so it survives a restart and suspends the
+parent behind it. A background child is in-process by design.
 
 ## Deliberate divergences
 
