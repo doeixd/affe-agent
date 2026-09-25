@@ -652,7 +652,10 @@ export const eventsOf = (result: CommandResult): ReadonlyArray<ExecEvent> => [
 
 const defaultClassify = (context: ClassifyContext): FileError => {
   const text = context.result.stderr + "\n" + context.result.stdout
-  if (/no such file|not a directory/i.test(text)) {
+  // "no such file" is the POSIX wording; `NtOpenFile … / system cannot find`
+  // is the same fact from an MSYS `stat` on Windows. `Permission denied` is
+  // checked after, so adding the Windows codes here does not shadow it.
+  if (/no such file|not a directory|NtOpenFile|system cannot find/i.test(text)) {
     return new FileMissingError({ path: context.path })
   }
   if (/permission denied|operation not permitted/i.test(text)) {
@@ -663,6 +666,15 @@ const defaultClassify = (context: ClassifyContext): FileError => {
     detail: `${context.operation} ${context.path}: exit ${context.result.exitCode}: ${context.result.stderr.slice(0, 300)}`
   })
 }
+
+/**
+ * A workspace path is `/`-separated whatever the shell is. An MSYS `sh` on
+ * Windows prints `stat %n` and `readlink -f` results with backslashes, so the
+ * derived operations normalise before a path reaches the `Sandbox` surface.
+ * (The derived tier is documented as POSIX-userland; this is the one place its
+ * stand-in differs in what it returns rather than in what it does.)
+ */
+const toWorkspacePath = (value: string): string => value.replace(/\\/g, "/")
 
 /**
  * Tier 1: a provider from one `exec` plus whatever it does natively.
@@ -796,7 +808,7 @@ export const fromOperations = (
               .filter((line) => line !== "")
               .map((line) => {
                 const [kind = "", size = "", ...rest] = line.split("|")
-                const raw = rest.join("|")
+                const raw = toWorkspacePath(rest.join("|"))
                 return entryOf(kind, size, raw.startsWith("./") ? raw.slice(2) : raw)
               })
               .sort(byPath)
@@ -822,7 +834,7 @@ export const fromOperations = (
             path,
             'p="$1"; rest=""; while [ ! -e "$p" ] && [ "$p" != "/" ] && [ "$p" != "." ]; do rest="/$(basename "$p")$rest"; p=$(dirname "$p"); done; printf "%s%s" "$(readlink -f "$p")" "$rest"',
             [path]
-          ).pipe(Effect.map((result) => result.stdout.trim()))
+          ).pipe(Effect.map((result) => toWorkspacePath(result.stdout.trim())))
 
       return {
         workspace,

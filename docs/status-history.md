@@ -6375,3 +6375,17 @@ clock. Three tests waited on `Effect.sleep` where the rule is a latch: the two
 suspension probes now await the interrupt on a `Deferred`, and the abort test
 polls the child's execution to a terminal state rather than sleeping. The
 durable placeholder's defect now says why it fired instead of only that it did.
+
+## 2026-09-25 - the derived sandbox on an MSYS shell
+
+The one red gate on Windows -- `test/SandboxDerive.test.ts`, a provider derived
+from `exec` alone run against `SandboxConformance` -- was the tier-0 derivation
+assuming a POSIX userland. Git's coreutils are almost that, and differ in three
+ways the suite caught: `stat %n` and `readlink -f` print backslash paths (a
+workspace path is `/`-separated, so `list` and `canonical` normalise), and a
+missing file's `stat` says `NtOpenFile failed` rather than "No such file" (the
+classifier now recognises the Windows wording, with "permission denied" still
+checked after it). The suite is green on Windows now: 2635 tests, 0 failures.
+
+This file is not part of the session's subagent work and failed identically at
+`origin/main`; it was fixed at the owner's request.

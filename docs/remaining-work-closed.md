@@ -2945,3 +2945,16 @@ so `workflowName` is required. `test/DurableSubagent.test.ts` passes one.
 ```text
 verify: grep "readonly workflowName: string" src/subagent/Durable.ts
 ```
+
+## 2026-09-25 - the derived sandbox tolerates an MSYS shell
+
+`Sandbox.fromOperations`/`fromExec`: workspace paths normalise backslashes
+(MSYS `stat %n` / `readlink -f`) and the classifier recognises the Windows
+missing-file wording (`NtOpenFile` / "system cannot find"), so the derived
+provider passes `SandboxConformance` on Windows as on POSIX.
+`test/SandboxDerive.test.ts`.
+
+```text
+verify: grep "toWorkspacePath" src/sandbox/Sandbox.ts
+verify: grep "NtOpenFile" src/sandbox/Sandbox.ts
+```
