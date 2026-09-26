@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
+import { expectTypeOf } from "vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Cause, Effect, Exit, Layer, Ref, Schema } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { Workflow } from "effect/unstable/workflow"
@@ -24,6 +25,23 @@ import * as FakeModel from "./FakeModel.js"
  * an activity, so a replay reads what the first run recorded instead of
  * doing it again.
  */
+
+describe("Journal.step's types", () => {
+  it("the value is the schema's type, and the requirement is the effect's", () => {
+    class Clock2 extends Context.Service<Clock2, { readonly now: number }>()("test/Journal/Clock2") {}
+    const read = Journal.step("now", Schema.Number, Effect.map(Effect.service(Clock2), (c) => c.now))
+    expectTypeOf(read).toEqualTypeOf<Effect.Effect<number, never, Clock2>>()
+    const dated = Journal.step("when", Schema.Date, Effect.succeed(new Date(0)))
+    expectTypeOf(dated).toEqualTypeOf<Effect.Effect<Date, never, never>>()
+  })
+
+  it("a step that could fail is refused: model the failure as a value", () => {
+    // @ts-expect-error a step's effect cannot fail
+    Journal.step("risky", Schema.String, Effect.fail("no"))
+    const handled = Journal.step("risky", Schema.Option(Schema.String), Effect.option(Effect.fail("no")))
+    expectTypeOf(handled).toEqualTypeOf<Effect.Effect<Option.Option<string>, never, never>>()
+  })
+})
 
 describe("Journal, locally", () => {
   it.effect("the default runs every step, and records nothing", () =>
