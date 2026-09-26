@@ -1075,17 +1075,6 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: no-grep "\"workspaces\"" package.json
      ```
 
-135. **Recovery as one pure, explainable decision (plan §7.3).** Recovery
-     today is spread across `DurableAgentClient`'s reconciliation on
-     `session(id)` and the workflow engine's resume. `effect-agent` names
-     each recovery decision in a pure `classifyRecovery(snapshot, evidence)`,
-     which an admin `explain`/`verify` command reads. After 133 (done), because
-     a parked call is the first thing an operator needs explained. Medium.
-
-     ```text
-     verify: no-grep "classifyRecovery" src/durable/DurableAgentClient.ts
-     ```
-
 ### Messaging, monitors and supervision — 2026-09-26 — [plan-supervision.md](./plan-supervision.md)
 
 *The owner asked for `effect-agent`'s messaging, and OTP-style supervision

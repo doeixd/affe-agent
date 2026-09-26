@@ -278,6 +278,7 @@ describe("durable and cluster surfaces", () => {
       "DurableSessionStore",
       "DurableSubmission",
       "DurableToolkit",
+      "Recovery",
       "ToolContracts"
     ])
   })

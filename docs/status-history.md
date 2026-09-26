@@ -6668,3 +6668,11 @@ the run when its outcome is unknown. The run asks an operator through the
 session's ordinary elicitation (`"tool-outcome"`). Answering with the result,
 or with a failure, is what the model sees. The handler still runs once. The
 default is unchanged.
+
+## 2026-09-26 - recovery, explained
+
+Item 135. What a durable session's reconciliation owes is now one pure
+decision, `Recovery.classify`, which `DurableAgentClient` switches on. An
+operator can run the same decision with `Recovery.inspect`, which reads only.
+It returns the decision in a sentence, any tool outcomes parked for an
+answer, and any place where the stores disagree with themselves.

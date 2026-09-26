@@ -89,6 +89,20 @@ sees "unknown" dressed up as a failure it might retry. With nobody to ask,
 or with an answer that is not the tool's result, the run ends as it would
 without the annotation.
 
+**Recovery can be explained.** Each time a client acquires a session,
+`DurableAgentClient` reconciles what a lost process may have left owed. It
+might dispatch a claim that never started, release a claim whose run ended,
+or deliver answers that were accepted but never handed over. The decision is
+`Recovery.classify`, a pure function of what the stores hold, and an
+operator can ask for it without acting on it:
+
+```ts
+const inspection = yield* Recovery.inspect({ store, sessionStore }, sessionId)
+inspection.explanation // "Submission s:submission-3 is running, and nothing is owed. It is waiting on 1 tool call(s) whose outcome is unknown, ..."
+inspection.parked      // those tool-outcome requests, to answer with respond
+inspection.findings    // where the stores disagree with themselves, if anywhere
+```
+
 A tool handler that *dies* fails the run, as it does in-process, and so does
 a model call that dies: the journal records the defect as a value so a
 replay fails the same way, and the wrapper re-raises it as a defect rather

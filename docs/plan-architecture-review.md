@@ -8,6 +8,8 @@ Status: **proposal**, except items built 2026-09-26:
 - item 133 (§7.3), as `DurableToolkit.askWhenUnknown`: an opt-in question to
   an operator through elicitation;
 - item 134 (§7.3), as `DurableEquivalence.sweep` with stores of your own;
+- item 135 (§7.3), as `/durable`'s `Recovery`: `classify`, `explain` and
+  `inspect`;
 - item 130 (§4), as an in-process session's bounded event record. The
   host's tail is kept for finite reads, as the ledger says why. Items 125–132 in
 [remaining-work.md](./remaining-work.md) track each part, and each item

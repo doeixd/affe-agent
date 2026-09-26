@@ -3365,3 +3365,47 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "Context.get(tool.annotations, OnUnknownOutcome) === \"ask\"" src/durable/DurableToolkit.ts
      verify: grep "an operator who says it succeeded supplies the result" test/UnknownOutcome.test.ts
      ```
+
+## 2026-09-26 - item 135: recovery, explained
+
+135. ~~**Recovery as one pure, explainable decision (plan §7.3).**~~ **DONE
+     2026-09-26 for the client's reconciliation. The engine's own journal
+     replay is out of scope.**
+     - **The decision.** `/durable`'s `Recovery.classify(evidence)` decides
+       what a session's reconciliation owes. The evidence is the record, the
+       admission marker, the undelivered answers and the pending questions.
+       The possible decisions:
+       - `Missing` or `Idle`: nothing is owed;
+       - `Dispatch`: claimed, never started;
+       - `FinishEnded`: the run ended, and the claim is still held;
+       - `DeliverAnswers`: answers were accepted and never handed over;
+       - `Running`: nothing is owed.
+
+       `DurableAgentClient`'s `reconcile` now gathers that evidence and
+       switches on the decision. It no longer decides inline. The reasoning
+       it carried, why an ended claim is finishable by anyone, stays with the
+       `FinishEnded` branch.
+     - **For an operator.** `Recovery.inspect(stores, sessionId)` reads the
+       same evidence and returns:
+       - the decision, and `explain`'s sentence for it;
+       - `parked`: the item-133 `"tool-outcome"` questions waiting for an
+         operator;
+       - `findings`: where the stores disagree with themselves, such as
+         status versus claim, or questions and answers orphaned on an idle
+         session.
+
+       It reads and changes nothing. Acquiring the session is what acts on
+       the decision.
+     - **Out of scope: the engine's journal replay.** That is the workflow
+       engine's, and a journal is not a store this library reads.
+
+     `test/Recovery.test.ts` holds `classify` as a table, and checks
+       `explain`, `findings` and a read-only `inspect` over memory stores.
+     Dropping the `FinishEnded` case was broken once. The table failed, and so
+     did the real reacquisition test in `DurableAgentClient.test.ts` (R173).
+
+     ```text
+     verify: exists src/durable/Recovery.ts
+     verify: grep "const decision = Recovery.classify(evidence)" src/durable/DurableAgentClient.ts
+     verify: grep "ended wins over undelivered answers" test/Recovery.test.ts
+     ```
