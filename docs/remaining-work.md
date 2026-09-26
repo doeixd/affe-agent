@@ -1022,23 +1022,6 @@ steps are each rebuilt, whole or in part, wherever they are needed. The plan
 holds the argument. Two items conflict with `PLAN.md` and wait on the
 owner. Client capabilities were considered and left declined (item 86).*
 
-126. **One internal path for every tool call (plan 1a).** Extract the
-     per-call stages (strategy slot, host scheduling, decide, approval,
-     handler and progress, settlement) from `ToolExecution.execute` into one
-     internal function. Code mode, subagents and the A2A bridges then call
-     that function instead of rebuilding a subset.
-     - Tools are still defined with Effect AI, which keeps within `PLAN.md`
-       §17.
-     - Open question: do nested calls emit their own correlated tool-call
-       events, or stay on the progress channel?
-
-     Item 125 (closed) routed code mode's nested handlers through host
-     scheduling directly; this would make that one shared path. Medium.
-
-     ```text
-     verify: grep "ToolExecution.decide(tool, {" src/code/CodeMode.ts
-     ```
-
 127. **A public tool middleware chain (plan 1b). Gated on the owner amending
      `PLAN.md` §17.** §17 says "Do not create a large tool middleware
      system" and "Do not create parallel harness-specific tool abstractions."

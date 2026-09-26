@@ -1,7 +1,8 @@
 # Architecture review — 2026-09-26
 
-Status: **proposal**, except item 125 (§1's code-mode bypass), **built
-2026-09-26** as `ToolScheduling.Container`. Items 125–132 in
+Status: **proposal**, except items built 2026-09-26:
+- item 125 (§1's code-mode bypass), as `ToolScheduling.Container`;
+- item 126 (§1a), as `ToolExecution.authorize` and `ToolExecution.scheduled`. Items 125–132 in
 [remaining-work.md](./remaining-work.md) track each part, and each item
 names its gate. This document holds the argument. The description of the
 architecture it reviews is [architecture.md](./architecture.md).

@@ -2993,7 +2993,7 @@ verify: grep "NtOpenFile" src/sandbox/Sandbox.ts
 
      ```text
      verify: grep "export const Container = Context.Reference<boolean>(Namespace.tag(\"ToolScheduling/Container\")" src/ToolScheduling.ts
-     verify: grep "scheduling.around({ name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
+     verify: grep "ToolExecution.scheduled(tool, { name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
      verify: grep "a subagent under maxConcurrent(1) finishes" test/ToolScheduling.test.ts
      verify: grep "code mode's nested calls are scheduled like direct ones" test/ToolScheduling.test.ts
      ```
@@ -3155,5 +3155,38 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "with its reason (nine files)" STATUS.md
      verify: grep "captures everything the fibre has, a \`Scope\`" AGENTS.md
      verify: grep "except \`/sandbox/local\`, \`/blob/fs\` and \`/cloudflare\`" README.md
+     ```
+
+## 2026-09-26 - item 126: one internal path for every tool call
+
+126. ~~**One internal path for every tool call (plan 1a).**~~ **DONE
+     2026-09-26.** Two internal functions in `ToolExecution` hold the stages
+     that decide whether and when a call runs:
+     - `authorize`: the decision, the tool's floor, the question for an
+       `Ask`, and a remembered grant;
+     - `scheduled`: the host's scheduling, skipping a container.
+
+     The direct path and code mode's nested calls both go through them. Each
+     still settles its own way: the first with events and a result for the
+     model, the second as a value the program reads. This keeps within
+     `PLAN.md` §17: tools are still defined with Effect AI, and nothing
+     public changed.
+
+     The unification fixed one gap: code mode dropped an "allow always"
+     answer, and never called the policy's `remember`. It now does, and
+     `test/CodeMode.test.ts` pins it.
+
+     Moving the approval wait inside `authorize` briefly announced an
+     interrupted approval twice. `AgentSession`'s "every started tool call
+     gets exactly one terminal event" test caught it before the commit.
+
+     Breaking the shared `remember` step fails the code-mode test and five
+     direct-path tests at once, which is the evidence the two paths share
+     it.
+
+     ```text
+     verify: grep "export const authorize = Effect.fn(\"ToolExecution.authorize\")" src/ToolExecution.ts
+     verify: grep "ToolExecution.authorize(tool, {" src/code/CodeMode.ts
+     verify: grep "ToolExecution.scheduled(tool, { name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
      ```
 

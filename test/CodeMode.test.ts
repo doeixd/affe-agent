@@ -287,6 +287,37 @@ describe("CodeMode", () => {
     })
   )
 
+  it.effect("allow always is remembered: a second nested call is not asked again (item 126)", () =>
+    Effect.gen(function*() {
+      const { admin } = yield* fixture
+      const asked: Array<Elicitation.Request> = []
+      // Granted with "remember", as a person choosing "allow always" answers.
+      const always: Elicitation.Elicitor = {
+        elicit: (request, announce) =>
+          Effect.as(
+            Effect.andThen(announce, Effect.sync(() => void asked.push(request))),
+            { id: request.id, granted: true, value: { remember: true } }
+          ),
+        respond: () => Effect.succeed(false),
+        pending: Effect.succeed([])
+      }
+      const runtime = CodeMode.make({
+        tools: { admin },
+        permission: yield* Permission.remembered(asksAboutDeletes),
+        elicitor: always
+      })
+      const out = yield* runtime.execute([
+        "await tools.admin.wipe({ target: \"staging\" })",
+        "const again = await tools.admin.wipe({ target: \"staging\" })",
+        "return again.value"
+      ].join("\n"))
+      assert.deepStrictEqual(out.outcome, { _tag: "Returned", value: "wiped staging" })
+      // Code mode used to keep the answer only for the call it was given
+      // for; it now shares the direct path's stage, grant included.
+      assert.strictEqual(asked.length, 1)
+    })
+  )
+
   it.effect("a refused approval throws into the program, and is catchable", () =>
     Effect.gen(function*() {
       const { admin, data } = yield* fixture

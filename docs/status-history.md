@@ -6617,3 +6617,14 @@ A review of `ce79090..HEAD` found two faults. Both are fixed, test first.
 The timeout race itself cannot be driven deterministically. It rests on the
 same atomic claim the tested path uses.
 
+## 2026-09-26 - one internal path for every tool call
+
+Item 126. The stages that decide whether and when a tool call runs are now
+two internal functions, and every entry point passes through them:
+- `ToolExecution.authorize`: the decision, the floor, the question, and a
+  remembered grant;
+- `ToolExecution.scheduled`: the host's scheduling, skipping containers.
+
+Code mode's nested calls had their own copy of the permission handling, and
+it dropped "allow always". Now they share the direct path's copy.
+

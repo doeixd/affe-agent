@@ -489,6 +489,84 @@ export const decide = Effect.fn("ToolExecution.decide")(function* <
   return { _tag: "Decided" as const, decision, request }
 })
 
+/**
+ * How a call that needs approval asks for it: the caller's own route to a
+ * person, since a direct call and a nested one reach different elicitors.
+ */
+export type Ask<R> = (
+  detail: Permission.ApprovalDetail,
+  request: Permission.Request
+) => Effect.Effect<Elicitation.Response, never, R>
+
+/** What `authorize` found. */
+export type Authorization =
+  | { readonly _tag: "InvalidParameters" }
+  | { readonly _tag: "Allowed" }
+  | { readonly _tag: "Denied"; readonly request: Permission.Request; readonly reason: Option.Option<string> }
+  /** Asked, and the answer was no. */
+  | { readonly _tag: "Refused"; readonly request: Permission.Request }
+  /** Approval is required and there is nobody to ask. */
+  | { readonly _tag: "Unaskable"; readonly request: Permission.Request; readonly reason: Option.Option<string> }
+
+/**
+ * The permission stages every tool call passes, however it was issued (item
+ * 126): the decision, the tool's floor, and, for an `Ask`, the question and
+ * a remembered grant.
+ *
+ * One function, so that no entry point can skip a stage. The direct path and
+ * code mode's nested calls both use it; each settles the answer its own way,
+ * the first with events and a result for the model, the second as a value
+ * the program reads.
+ */
+export const authorize = Effect.fn("ToolExecution.authorize")(function* <T extends Tool.Any, R, AR>(
+  tool: T,
+  call: { readonly id: string; readonly name: string; readonly params: unknown },
+  options: {
+    readonly sessionId: string
+    readonly messages: ReadonlyArray<Prompt.Message>
+    readonly permission: Permission.Policy<R>
+    readonly ask: Option.Option<Ask<AR>>
+  }
+) {
+  const outcome = yield* decide(tool, call, options)
+  if (outcome._tag === "InvalidParameters") return outcome
+  const { decision, request } = outcome
+  if (decision._tag === "Allow") return { _tag: "Allowed" } as const
+  const reason = Option.fromNullishOr(decision.reason)
+  if (decision._tag === "Deny") return { _tag: "Denied", request, reason } as const
+  if (Option.isNone(options.ask)) return { _tag: "Unaskable", request, reason } as const
+  const detail: Permission.ApprovalDetail = {
+    toolName: call.name,
+    toolCallId: call.id,
+    action: request.action,
+    resource: request.resource,
+    ...(request.subject === undefined ? {} : { subject: request.subject }),
+    ...(decision.reason === undefined ? {} : { reason: decision.reason })
+  }
+  const answer = yield* options.ask.value(detail, request)
+  if (!answer.granted) return { _tag: "Refused", request } as const
+  // "Allow always" is two things: this answer, and a grant the policy keeps.
+  // The answer is in hand; the grant is the policy's, if it keeps any. A
+  // malformed value is an answer for this call only.
+  const remember = Schema.decodeUnknownOption(approvalValueJson)(answer.value)
+  if (Option.isSome(remember) && remember.value.remember && options.permission.remember !== undefined) {
+    yield* options.permission.remember(request)
+  }
+  return { _tag: "Allowed" } as const
+})
+
+/**
+ * Hold `run` under the host's scheduling, unless the tool is a
+ * `ToolScheduling.Container`, whose nested calls are held instead. Every
+ * entry point that runs a tool goes through this, direct or nested.
+ */
+export const scheduled = (tool: Tool.Any | undefined, call: { readonly name: string; readonly params: unknown }) =>
+<A, E, R>(run: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  Effect.flatMap(ToolScheduling.Current, (scheduling) =>
+    tool !== undefined && Context.get(tool.annotations, ToolScheduling.Container)
+      ? run
+      : scheduling.around({ name: call.name, params: call.params })(run))
+
 const executeOne = Effect.fn("ToolExecution.tool")(function* <
   Tools extends Record<string, Tool.Any>,
   R
@@ -536,10 +614,48 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
     if (tool === undefined) {
       return yield* Effect.die(new Error(`Tool ${String(call.name)} is not in the toolkit`))
     }
-    const decisionEffect = decide(tool, call, {
+    const decisionEffect = authorize(tool, call, {
       sessionId: session.id,
       messages,
-      permission: agent.permission
+      permission: agent.permission,
+      // The direct path always has someone to ask: the session's elicitor,
+      // whose default answers "no", so an agent with no way to ask still
+      // fails closed.
+      ask: Option.some<Ask<never>>((detail) =>
+        Effect.gen(function* () {
+          // A tool call only ever runs inside a submission, so the correlation
+          // carries one; a call without it is a harness bug, not a case.
+          const submissionId = correlation.submissionId
+          if (submissionId === undefined) {
+            return yield* Effect.die(new Error("tool call outside a submission"))
+          }
+          const id = yield* session.nextElicitationId(submissionId)
+          const elicitationRequest = {
+            id,
+            kind: "tool-approval",
+            detail: Schema.encodeSync(approvalDetailJson)(detail)
+          }
+          // The longest wait in the whole call, and the one most likely to be
+          // interrupted: a person is being asked a question. Its interruption
+          // is announced by the `onInterrupt` around all of `authorize` below,
+          // once; announcing it here as well sent two terminal events.
+          const answer = yield* session.elicitation.elicit(
+            elicitationRequest,
+            EventBus.emit(session.bus, correlation, {
+              _tag: "ElicitationRequested",
+              id,
+              kind: elicitationRequest.kind,
+              detail: elicitationRequest.detail
+            })
+          )
+          yield* EventBus.emit(session.bus, correlation, {
+            _tag: "ElicitationResolved",
+            id,
+            kind: elicitationRequest.kind,
+            granted: answer.granted
+          })
+          return answer
+        }))
     })
     // Parameter decoding services are one constituent of HandlerServices, but
     // TypeScript cannot reduce that conditional type after the indexed tool
@@ -565,85 +681,24 @@ const executeOne = Effect.fn("ToolExecution.tool")(function* <
         return returnedToModel ? failureResultPart(call, error) : yield* error
       })
 
-    if (outcome._tag === "Decided" && outcome.decision._tag === "Deny") {
+    if (outcome._tag === "Denied") {
       return yield* refuse(
         new ToolPermissionDeniedError({
           toolName: String(call.name),
           toolCallId: call.id,
           action: outcome.request.action,
           resource: outcome.request.resource,
-          ...(outcome.decision.reason === undefined
-            ? {}
-            : { reason: outcome.decision.reason })
+          ...(Option.isNone(outcome.reason) ? {} : { reason: outcome.reason.value })
         })
       )
     }
-
-    if (outcome._tag === "Decided" && outcome.decision._tag === "Ask") {
-      // Asked, not refused: the run *pauses* until an answer arrives. The
-      // default elicitor answers "no", so an agent with no way to ask still
-      // fails closed.
-      // A tool call only ever runs inside a submission, so the correlation
-      // carries one; a call without it is a harness bug, not a case.
-      const submissionId = correlation.submissionId
-      if (submissionId === undefined) {
-        return yield* Effect.die(new Error("tool call outside a submission"))
-      }
-      const id = yield* session.nextElicitationId(submissionId)
-      const detail: Permission.ApprovalDetail = {
-        toolName: String(call.name),
-        toolCallId: call.id,
-        action: outcome.request.action,
-        resource: outcome.request.resource,
-        ...(outcome.request.subject === undefined
-          ? {}
-          : { subject: outcome.request.subject }),
-        ...(outcome.decision.reason === undefined
-          ? {}
-          : { reason: outcome.decision.reason })
-      }
-      const elicitationRequest = {
-        id,
-        kind: "tool-approval",
-        detail: Schema.encodeSync(approvalDetailJson)(detail)
-      }
-      // The longest wait in the whole call, and the one most likely to be
-      // interrupted: a person is being asked a question.
-      const answer = yield* session.elicitation.elicit(
-        elicitationRequest,
-        EventBus.emit(session.bus, correlation, {
-          _tag: "ElicitationRequested",
-          id,
-          kind: elicitationRequest.kind,
-          detail: elicitationRequest.detail
+    if (outcome._tag === "Refused" || outcome._tag === "Unaskable") {
+      return yield* refuse(
+        new ToolApprovalRequiredError({
+          toolName: String(call.name),
+          toolCallId: call.id
         })
-      ).pipe(Effect.onInterrupt(() => announceInterrupted))
-      yield* EventBus.emit(session.bus, correlation, {
-        _tag: "ElicitationResolved",
-        id,
-        kind: elicitationRequest.kind,
-        granted: answer.granted
-      })
-
-      if (!answer.granted) {
-        return yield* refuse(
-          new ToolApprovalRequiredError({
-            toolName: String(call.name),
-            toolCallId: call.id
-          })
-        )
-      }
-      // "Allow always" is two things: this answer, and a grant the policy
-      // keeps. The answer is in hand; the grant is the policy's, if it keeps
-      // any. A malformed value is an answer for this call only.
-      const remember = Schema.decodeUnknownOption(approvalValueJson)(answer.value)
-      if (
-        Option.isSome(remember) &&
-        remember.value.remember &&
-        agent.permission.remember !== undefined
-      ) {
-        yield* agent.permission.remember(outcome.request)
-      }
+      )
     }
 
     // A handler returns a stream so it can emit preliminary results before its
@@ -841,15 +896,12 @@ const executeSettled = <Tools extends Record<string, Tool.Any>, R>(
   call: Response.ToolCallParts<Tools, "encoded">,
   context: TurnContext<R>
 ) =>
-  Effect.flatMap(ToolScheduling.Current, (scheduling) => {
-    const tool = handler.tools[call.name as keyof Tools]
+  Effect.tap(
     // A container's nested calls are scheduled one by one; holding the
     // container as well would deadlock them (`ToolScheduling.Container`).
-    const scheduled = tool !== undefined && Context.get(tool.annotations, ToolScheduling.Container)
-      ? executeOne(handler, call, context)
-      : scheduling.around({ name: call.name, params: call.params })(executeOne(handler, call, context))
-    return Effect.tap(scheduled, () => turnFailpoints.hit("after-tool-call"))
-  })
+    scheduled(handler.tools[call.name as keyof Tools], call)(executeOne(handler, call, context)),
+    () => turnFailpoints.hit("after-tool-call")
+  )
 
 /** What a handler's stream folds into: its final result, and its last. */
 interface Collected<Tools extends Record<string, Tool.Any>> {
