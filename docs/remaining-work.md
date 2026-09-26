@@ -1187,6 +1187,49 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: no-grep "classifyRecovery" src/durable/DurableAgentClient.ts
      ```
 
+### Messaging, monitors and supervision — 2026-09-26 — [plan-supervision.md](./plan-supervision.md)
+
+*The owner asked for `effect-agent`'s messaging, and OTP-style supervision
+over it. §2, peer messaging, landed the same day and is in the ledger.*
+
+136. **Monitors (plan §3).** `Monitor.watch({ watcher, target })` turns a
+     target's `SubmissionFailed`, `SubmissionInterrupted` or `SessionClosed`
+     into a framework inbox item in the watcher's inbox.
+     - The item id is taken from the event, `down:<target>:<submission>`, so
+       seeing the event twice enqueues once.
+     - A completed submission is not a `down`.
+     - It watches live; a cursor over a resumable client is the caller's to
+       pass.
+
+     Small.
+
+     ```text
+     verify: absent src/sessions/Monitor.ts
+     ```
+
+137. **An in-process supervisor (plan §4).**
+     - Child specs: `permanent`, `transient` or `temporary`, restarted
+       `fresh`, by `resubmit` or by `rewind`.
+     - OTP's three strategies.
+     - Intensity as N restarts within T, plus a budget ceiling.
+     - Failure classification: an unknown tool outcome is never restarted.
+     - Escalation to a parent supervisor, or to an agent's inbox.
+
+     After 136. Large.
+
+     ```text
+     verify: absent src/sessions/Supervisor.ts
+     ```
+
+138. **A durable supervisor (plan §5).** A supervisor as a cluster
+     `Entity`, with restart history in entity state and its children as
+     durable sessions. **Gated on item 133**, because an auto-restarting
+     durable child must be able to park an unknown outcome first. Large.
+
+     ```text
+     verify: no-grep "Supervisor" src/cluster/AgentEntity.ts
+     ```
+
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
 *Available usage and release work. The owner declined the proposed feature

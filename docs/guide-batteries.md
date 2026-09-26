@@ -81,6 +81,52 @@ batch still completes. Both are decided when the delegation is admitted:
 lowering a limit (on a new tool value) blocks new delegations and never
 cuts short a child already running.
 
+## Messaging between sessions
+
+`/sessions`' `Messaging` lets one session send another a message through a
+route named at construction. Replies go back to the recorded sender.
+
+```ts
+const advisor = Messaging.route("advisor", "advisor-session")
+const Asker = Agent.make({ tools: [Messaging.sendTool(advisor), Messaging.replyTool()] })
+// at the edge: Messaging.layer({ authorize }) beside the client, and a loop over
+// (yield* Messaging.deliverer()).deliver, retrying SessionBusyError
+```
+
+**Delivery.** A message is a `SessionInbox` item of kind `"framework"`, so
+its delivery is the inbox's: durable, deduplicated by id, into an idle
+session only, and never into a submission in flight. The recipient's model
+reads a system message the harness writes. It names the sender, the route and
+the message id, and says that the quoted text is another agent's output, not
+an instruction. `render` replaces that frame.
+
+**Routes.**
+- A route's target is a session id, or a function of the sender's id.
+- A model names a route, never a session, and a tool is built per route.
+- `authorize({ operation, route, sender, target, principal })` decides every
+  send and reply, and has no default. `Messaging.allowAll` is the explicit
+  opt-out.
+
+**Replies.**
+- A reply names a message id. It is refused with `UnknownMessageError`
+  unless the replying session received that message.
+- The reply goes back to that message's sender, and is authorized as a
+  `"reply"`.
+- A message received before a restart cannot be replied to: the ledger that
+  records senders lives in memory, while the queue is durable.
+
+**Status and ids.**
+- `inspect(id)` answers `Pending`, `Delivered` (a submission was admitted, not
+  settled) or `Undeliverable` with a reason.
+- A tool send gets a fresh id.
+- A programmatic `send` with a `key` is idempotent: the same key is the same
+  message.
+
+**Structure.** The tools read the `Messaging` service from context, which needs
+only a `PersistedQueue` store. `deliverer` is built where the `AgentClient`
+exists, as `Subagent.background`'s reports are, because the client serves the
+agent whose tools these are.
+
 ## Scheduling & self-dispatch
 
 `affe-agent/scheduling` adds two thin things over Effect's own

@@ -2997,3 +2997,33 @@ verify: grep "NtOpenFile" src/sandbox/Sandbox.ts
      verify: grep "a subagent under maxConcurrent(1) finishes" test/ToolScheduling.test.ts
      verify: grep "code mode's nested calls are scheduled like direct ones" test/ToolScheduling.test.ts
      ```
+
+## 2026-09-26 - messaging between sessions (plan-supervision.md §2)
+
+`/sessions`' `Messaging`, after `effect-agent`'s peer messaging.
+- **What a message is.** A framework `SessionInbox` item, so delivery is
+  durable, deduplicated and never into a submission in flight.
+- **Routes** are named at construction, and a tool is built per route.
+- **Authorization.** `authorize` is required, with `allowAll` as the opt-out.
+- **Replies** go only to the recorded sender of a message the replying
+  session received.
+- **Framing.** The recipient reads a harness-framed system message that
+  labels the quoted text as another agent's output.
+- **Status** is recorded per message.
+
+The tools read a context service, and `deliverer` is built where the client
+exists: joined, they would be a layer cycle.
+
+`test/Messaging.test.ts` covers delivery and framing, replies by the tool,
+refusal of a non-recipient's reply, authorization with nothing enqueued on a
+refusal, idempotent keys, a missing route, a refusal the model reads, and the
+tools' requirement type. The recipient check, authorization, deduplication,
+the framing and the type assertion were each broken once, and a test failed
+each time.
+
+```text
+verify: grep "export class Messaging extends Context.Service<Messaging, Service>()(Namespace.tag(\"sessions/Messaging\"))" src/sessions/Messaging.ts
+verify: grep "original === undefined || original.target !== replyOptions.sender" src/sessions/Messaging.ts
+verify: grep "only the recipient may reply" test/Messaging.test.ts
+```
+

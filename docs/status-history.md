@@ -6476,3 +6476,30 @@ still catch it.
 - **Its subagent budget reservation is left to the owner.** Item 99 kept
   "counted, not capped" because reserving needs `Budget` to carry ceilings.
 
+## 2026-09-26 - messaging between sessions
+
+The owner asked for `effect-agent`'s messaging, and for OTP-style supervision
+built on it. `docs/plan-supervision.md` maps the pieces:
+- a session is a process;
+- `SessionInbox` is the mailbox;
+- `Messaging` is send and reply;
+- a monitor turns a terminal outcome into a `down` item;
+- a supervisor is a value that a host runs.
+
+Its first slice is built: `/sessions`' `Messaging`.
+- **Messages.** Named routes, with a required `authorize`.
+- **Replies** go only to a recorded sender.
+- **Framing.** The recipient reads a harness-framed system message.
+- **Status** is recorded per message.
+- **Delivery** is the inbox's own.
+
+One decision changed while building it. The plan first said user-role text,
+so that peer text would not borrow the harness's voice. But
+`AgentSession.framework` asks for a system role, because a plain string
+reads as the person's input, and `reportToParent` already renders a child's
+output that way. So a message is a system message whose frame labels the
+quoted text as another agent's output, and `render` can replace the frame.
+
+Items 136 (monitors), 137 (an in-process supervisor) and 138 (a durable
+supervisor, gated on item 133) track the rest.
+

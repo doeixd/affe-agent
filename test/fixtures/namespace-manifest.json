@@ -12,6 +12,8 @@
   "affe-agent/RunId",
   "affe-agent/RunLedger",
   "affe-agent/SessionId",
+  "affe-agent/sessions/messages",
+  "affe-agent/sessions/Messaging",
   "affe-agent/SubmissionId",
   "affe-agent/ToolExecution/Alone",
   "affe-agent/ToolScheduling/Container",

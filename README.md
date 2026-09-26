@@ -190,7 +190,8 @@ ceilings through the loop · `/model` — context window, modalities and cost
 per model · `/evals` · `/observability` · `/redaction` · `/data` · `/hooks` ·
 `/scheduling` · `/tree` — sessions as a branchable tree · `/sessions` — a
 session's events folded into current state, and a paginated directory over
-every session (memory or SQL) kept current from the host's events · `/export` — snapshot envelope
+every session (memory or SQL) kept current from the host's events, and
+messages between sessions over routes · `/export` — snapshot envelope
 and JSONL commit log · `/blob` (`/blob/fs`) — content-addressed blob storage ·
 `/plugins` — Agent Plugins packages over `/skills` + `/mcp` · `/presets` —
 `Presets.coding` and `Presets.gateway`, composition and defaults only; `Presets.policy`, a run's bounds as one record that expands to the loop and layer.
