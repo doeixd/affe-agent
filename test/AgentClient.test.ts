@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import { AgentBusyError } from "../src/Errors.js"
@@ -93,6 +93,40 @@ describe("AgentClient (local specifics)", () => {
  * the RPC or HTTP encoding failed later instead of the agent failure being
  * reported at all.
  */
+describe("AgentClient.layer: a session's lifetime is its handle's scope", () => {
+  it.live("closing the createSession scope closes the session, and its observers see SessionClosed", () =>
+    Effect.gen(function*() {
+      // The client layer captured its own build scope along with the model,
+      // and provided that over the caller's: sessions lived until the whole
+      // client closed, emitted no `SessionClosed`, and left observers hanging.
+      const { layer: model } = yield* TestLanguageModel.script([TestLanguageModel.text("answered")])
+      yield* Effect.gen(function*() {
+        const client = yield* AgentClient.AgentClient
+        const outer = yield* Effect.scope
+        const seen = yield* Ref.make<ReadonlyArray<string>>([])
+        const observer = yield* Effect.scoped(Effect.gen(function*() {
+          const session = yield* client.createSession({ sessionId: "short-lived" })
+          // In the outer scope: the observer outlives the handle.
+          const observer = yield* Effect.forkIn(
+            Stream.runForEach(session.events(), (envelope) => Ref.update(seen, (all) => [...all, envelope.event._tag])),
+            outer
+          )
+          yield* Effect.yieldNow
+          yield* session.prompt("go")
+          return observer
+        }))
+        yield* Fiber.join(observer).pipe(
+          Effect.timeoutOrElse({
+            duration: "3 seconds",
+            orElse: () => Effect.die("the session outlived its handle's scope: no SessionClosed")
+          })
+        )
+        const tags = yield* Ref.get(seen)
+        assert.strictEqual(tags[tags.length - 1], "SessionClosed")
+      }).pipe(Effect.scoped, Effect.provide(AgentClient.layer(Agent.make({})).pipe(Layer.provide(model))))
+    }))
+})
+
 describe("AgentClient remote-error recognition", () => {
   const failWith = (failure: unknown) =>
     Effect.gen(function* () {

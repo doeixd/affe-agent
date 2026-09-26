@@ -881,6 +881,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
       const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
           const { maxObservationLag, maxRetainedSubmissions, ...sessionMake } = options ?? {}
+          const scope = yield* Effect.scope
           const session = yield* AgentSession.make(agent, {
             ...sessionMake,
             ...(sessionOptions?.sessionId === undefined
@@ -889,11 +890,18 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
             ...(sessionOptions?.history === undefined
               ? {}
               : { history: sessionOptions.history })
-          }).pipe(Effect.provide(env))
+          }).pipe(
+            // The caller's scope, innermost. `env` was captured while the
+            // layer was being built, so it carries the layer's own `Scope`
+            // too, and providing it alone bound every session to the
+            // client's lifetime instead of its handle's.
+            Scope.provide(scope),
+            Effect.provide(env)
+          )
 
           const remote = fromSession(session, {
             output: agent.output,
-            scope: yield* Effect.scope,
+            scope,
             maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions,
             ...(maxObservationLag === undefined ? {} : { maxObservationLag })
           })
