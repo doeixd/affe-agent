@@ -156,6 +156,7 @@ These all speak `AgentClient`, not `AgentSession`.
 | **`TestLanguageModel`** | `/testing` | Scripted provider, including `failingAfter`. | In `src/` rather than `test/` on purpose: **test code counts as user code**, so the cast it needs lives in the one place licensed to hold it. |
 | **`TestWebSearch` / `TestWebFetch`** | `/testing` | Doubles for the `/web` capabilities. | |
 | **`AgentClientConformance`, `DeliveryLogConformance`, `NodeStoreConformance`, `DurableSessionStoreConformance`** | `/testing` | The contract suites, framework-agnostic: `cases(...)` as named Effects, `run(...)` as a report. | What the in-tree clients and stores pass, published so yours can be held to the same rows -- the shape `SandboxConformance` and `ChannelConformance` already had. |
+| **`DurableEquivalence`** | `/testing` | The durability oracle: a run crashed at a boundary and finished by a second process must equal one that never crashed. `sweep` crashes at every boundary. | The second tier of certifying a store: pass yours as `stores`, with the stock `certification` scenario. |
 
 ## 9. Plugins and extension
 

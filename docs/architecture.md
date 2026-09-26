@@ -625,6 +625,14 @@ therefore re-emit events without duplicating them. `SessionDirectory` and
 `AgentState` have tables of their own, but execution does not depend on
 either.
 
+A store over your own backing is certified in two tiers, both exported from
+`/testing`:
+- **conformance**: `DurableSessionStoreConformance` and
+  `DeliveryLogConformance` check each operation's contract;
+- **the sweep**: `DurableEquivalence.sweep`, given your stores as `stores`,
+  crashes the stock `certification` scenario at every in-turn boundary. It
+  compares each recovery with the run that never crashed.
+
 ### 9.6 Checking the guarantees
 
 The durability invariants are stated in
@@ -653,6 +661,7 @@ from those trailers.
 verify: exists src/durable/DurableModel.ts
 verify: exists src/durable/DurableToolkit.ts
 verify: exists src/testing/DurableEquivalence.ts
+verify: grep "export const sweep = " src/testing/DurableEquivalence.ts
 verify: grep "A durable agent cannot carry an ExecutionPlan" src/durable/DurableAgent.ts
 ```
 

@@ -6652,3 +6652,11 @@ atomic section, and one table-driven suite holds all three to it.
 The item's second half, one reducer for the dispatch outbox, was dropped.
 The cluster's row and Cloudflare's intent have different lifecycles, so
 there is no shared rule for a reducer to state.
+
+## 2026-09-26 - certifying a store of your own
+
+Item 134. `DurableEquivalence` takes your own stores (`stores`). Its new
+`sweep` crashes a run at every in-turn boundary and compares each recovery
+with the run that never crashed. With the conformance suites, that is two
+tiers of certification, both from `/testing`. A delivery log that forgets
+its keys is caught at `after-commit`.

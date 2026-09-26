@@ -17,6 +17,11 @@ import { checks, report, type Report } from "./internal/conformance.js"
  * and SQL logs and the Durable Streams log all run this; a log over your own
  * backing is held to the same rows.
  *
+ * **The second tier is `DurableEquivalence.sweep`.** This suite checks
+ * each operation's contract. The sweep checks that the store, under the
+ * real engine, carries a run across a process lost at each boundary. Pass
+ * it through `Options.stores` (item 134).
+ *
  * Framework-agnostic, as `SandboxConformance` is. The cases run on the live
  * clock: `live` subscriptions on a remote backing need real time to settle.
  */

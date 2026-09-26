@@ -3277,3 +3277,42 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "two unkeyed requests are two requests" test/Admission.test.ts
      verify: grep "const plan = RestartPlan.siblingsOf(strategy, all, entry.id, (id) => running.has(id))" src/sessions/Supervisor.ts
      ```
+
+## 2026-09-26 - item 134: a store of your own, certified
+
+134. ~~**An exported failpoint sweep for store certification (plan
+     §7.3).**~~ **DONE 2026-09-26, in `DurableEquivalence`, not
+     `Failpoints`.**
+     - **Why there.** `Failpoints.covered` crashes at a subsystem's own
+       declared boundaries, but a third-party store calls none: the
+       boundaries live inside the shipped stores. The boundaries that matter
+       for any store are the engine's, between the model call, the tools and
+       the commit. The equivalence oracle already crashes there.
+     - **`Options.stores`.** Any of the channels store, session store and
+       delivery log can replace the SQL one. It has two levels, because a run
+       has two processes over one backing: the outer effect runs once per
+       run and builds a fresh backing; the function it returns hands each
+       process its view of it.
+     - **`sweep(scenario, options)`.** One straight run, then a crash at
+       every boundary (or those named in `at`), each finished by a second
+       process. It returns a row per boundary with `equivalent` and the
+       observation. A difference is a row, not a failure, so a certifier
+       sees every boundary at once.
+     - **`certification`.** A stock scenario that reaches every boundary.
+     - **The suites.** Both conformance suites now point to the sweep as the
+       second tier.
+
+     `test/EquivalenceSweep.test.ts` has two tests. Memory stores pass at all
+     four boundaries. A delivery log that never deduplicates is found at
+     `after-commit`, where the replacement re-emits a replayed turn. Making
+     every row `equivalent` was broken once, and that test failed.
+
+     The first version shared one store instance across the sweep's runs,
+     and the second run died at `after-tool-call`. It was reading the first
+     run's session. That is why the outer level exists.
+
+     ```text
+     verify: grep "export const sweep = " src/testing/DurableEquivalence.ts
+     verify: grep "export const certification = scenario(" src/testing/DurableEquivalence.ts
+     verify: grep "a delivery log that does not deduplicate is found" test/EquivalenceSweep.test.ts
+     ```

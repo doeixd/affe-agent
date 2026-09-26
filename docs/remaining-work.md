@@ -1101,20 +1101,6 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: no-grep "resolveUnknown" src/client/AgentClient.ts
      ```
 
-134. **An exported failpoint sweep for store certification (plan §7.3).**
-     `/testing` exports the store conformance suites and `Failpoints`, but a
-     third-party store can only run the conformance cases. `effect-agent`'s
-     second tier sweeps named crash points and checks that each converges.
-     The proposal: a `Failpoints.sweep` that runs a scenario once per named
-     boundary, crashing there, then asserts recovery with
-     `DurableEquivalence`. The durable session store and `DeliveryLog`
-     conformance suites would offer it. Medium.
-
-     ```text
-     verify: no-grep "sweep" src/testing/Failpoints.ts
-     verify: exists src/testing/DurableEquivalence.ts
-     ```
-
 135. **Recovery as one pure, explainable decision (plan §7.3).** Recovery
      today is spread across `DurableAgentClient`'s reconciliation on
      `session(id)` and the workflow engine's resume. `effect-agent` names
