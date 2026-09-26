@@ -15,6 +15,7 @@ import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
+import * as Journal from "../Journal.js"
 import * as Permission from "../Permission.js"
 import * as ToolScheduling from "../ToolScheduling.js"
 import * as Ids from "../internal/ids.js"
@@ -26,6 +27,7 @@ import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
 import * as DurableModel from "./DurableModel.js"
+import * as DurableJournal from "./DurableJournal.js"
 import * as DurablePermission from "./DurablePermission.js"
 import * as DurablePolling from "./DurablePolling.js"
 import * as DurableToolkit from "./DurableToolkit.js"
@@ -651,6 +653,9 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       const channels = yield* DurableChannels.factory(options.store, {
         prefix: scopePrefix
       })
+      // The body's `Journal`: a step anything in the run takes is an activity
+      // here (item 129).
+      const journal = yield* DurableJournal.make(scopePrefix)
       const instance = yield* WorkflowEngine.WorkflowInstance
 
       // The interrupt intent this submission watches for. Declared here,
@@ -853,6 +858,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
         })
       ).pipe(
         Effect.provide(modelLayer),
+        Effect.provideService(Journal.Journal, journal),
         Effect.provideService(
           ToolScheduling.Current,
           ToolScheduling.delegating(admittedScheduling, hostScheduling.description)

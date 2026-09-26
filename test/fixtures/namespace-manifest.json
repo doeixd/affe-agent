@@ -6,6 +6,7 @@
   "affe-agent/CurrentPrincipal",
   "affe-agent/DurableStreams/Offset",
   "affe-agent/Elicitation/Current",
+  "affe-agent/Journal",
   "affe-agent/ModelCapabilities",
   "affe-agent/Permission/Projection",
   "affe-agent/RequestId",

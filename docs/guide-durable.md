@@ -89,6 +89,23 @@ sees "unknown" dressed up as a failure it might retry. With nobody to ask,
 or with an answer that is not the tool's result, the run ends as it would
 without the annotation.
 
+**Your own nondeterminism can be journalled.** Anything that runs inside a
+submission, such as a context transform, a hook or an input renderer, can
+wrap what it must not repeat in `Journal.step`. Locally that is the identity.
+Under `/durable` it is an activity, so a replay reads the recorded value:
+
+```ts
+const recall = ContextTransform.make((context) =>
+  Journal.step("recall", Schema.Array(Schema.String), searchMemory(context)).pipe(
+    Effect.map((notes) => withNotes(context.prompt, notes))
+  )
+)
+```
+
+A step cannot fail. Model a failure as a value, so a replay receives the
+failure the first run did. Steps are named, and the same name again is its
+next occurrence, so make the same calls in the same order.
+
 **Recovery can be explained.** Each time a client acquires a session,
 `DurableAgentClient` reconciles what a lost process may have left owed. It
 might dispatch a claim that never started, release a claim whose run ended,

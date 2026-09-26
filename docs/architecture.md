@@ -58,8 +58,8 @@ Almost every module is one of five kinds. Dependencies point downward only:
      │         state · compaction · budget · hooks · tool-source · ...     out of seams
      │
   seams        Loop · ContextTransform · Permission · Elicitation ·        substitution points
-     │         InputChannel · ToolExecution · ToolExposure · Toolkit ·
-     │         LanguageModel · Sandbox
+     │         InputChannel · Journal · ToolExecution · ToolExposure ·
+     │         Toolkit · LanguageModel · Sandbox
      │
   kernel       Agent · AgentSession · AgentSubmission · AgentRun ·         the only code that executes
                AgentTurn · AgentEvent · ToolExecution
@@ -537,6 +537,7 @@ toolkit          handlers                        DurableToolkit.wrap          �
 permission       policy                          DurablePermission.wrap       → decision journaled
 InputChannel     Queue                           DurableChannels.factory      → each drain journaled
 Elicitation      Deferred                        DurableElicitation           → DurableDeferred
+Journal.step     runs the effect                 DurableJournal.make          → one Activity per step
 event sink       none                            delivery recorder            → DeliveryLog
 tool strategy    agent's                         captured once at admission, then replayed
 ```

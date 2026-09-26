@@ -36,6 +36,9 @@ describe("public API", () => {
       "ContextTransform",
       "Elicitation",
       "InputChannel",
+      // Where a run records what it must not do twice: the identity locally,
+      // an activity under /durable (item 129).
+      "Journal",
       "Permission",
       // The caller's subject on the fibre that acts: a Context.Reference the
       // host sets per request, None outside any host. Decided in
@@ -272,6 +275,7 @@ describe("durable and cluster surfaces", () => {
       "DurableAgentClient",
       "DurableChannels",
       "DurableElicitation",
+      "DurableJournal",
       "DurableModel",
       "DurablePermission",
       "DurablePolling",

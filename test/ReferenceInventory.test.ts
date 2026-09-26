@@ -51,6 +51,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "a tool annotation: none means an unknown outcome ends the run, as it always has"
   },
+  "src/Journal.ts:Journal": {
+    class: "seam",
+    why: "the identity journal: a step runs and nothing is recorded, which is what a run that is not durable wants"
+  },
   "src/internal/failpoint.ts:Failpoint": {
     class: "seam",
     why: "no-op outside the crash tests"

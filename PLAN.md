@@ -1619,6 +1619,23 @@ are already the substitution mechanism. Do not add `AgentExecution` until a
 durable implementation demonstrates interception that the Layer boundary cannot
 express.
 
+**Amended 2026-09-26, by the owner's decision (item 129).** The condition is
+met, for the reasons `docs/plan-architecture-review.md` §2 gives:
+- Cloudflare is a durable host that cannot use the Layer substitution at all,
+  because Workflow stalls on workerd.
+- `ExecutionPlan` is a seam the substitution set cannot make durable, so a
+  durable agent refuses it.
+- `InputChannel` already had to become a seam for the same reason.
+
+What is added is still not `AgentExecution`. It is a `Journal` with one
+operation, `step(name, schema, effect)`, whose default is the identity, so
+the kernel still does not know durability exists. It knows only where its
+nondeterminism is. The constraint the owner set with the decision: **the seam
+stays at `step` and a few commit points.** `effect-agent`'s durability hook
+grew into an eight-member protocol with its coordinator, and that is the
+failure mode to avoid. Land it in slices, each moving one substitution onto
+`step` with the equivalence oracle holding.
+
 ### Friction the durable package must absorb
 
 * `LanguageModel.make` pins its provider's requirements to `IdGenerator`, so an

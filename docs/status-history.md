@@ -6676,3 +6676,14 @@ decision, `Recovery.classify`, which `DurableAgentClient` switches on. An
 operator can run the same decision with `Recovery.inspect`, which reads only.
 It returns the decision in a sentence, any tool outcomes parked for an
 answer, and any place where the stores disagree with themselves.
+
+## 2026-09-26 - the Journal seam, slice 1
+
+Item 129, which the owner approved. `PLAN.md` §30.1 is amended to record the
+decision and its constraint: the seam stays at `step` and a few commit
+points. The new `Journal.step(name, schema, effect)` is the identity
+locally. Under `/durable` it is an activity (`DurableJournal`), provided in
+both workflow bodies, so a transform or hook can journal what it must not
+repeat. A crash test shows that a replayed turn reads the recorded value.
+The model call, tools, a shared body assembly and a Cloudflare journal are
+the next slices.

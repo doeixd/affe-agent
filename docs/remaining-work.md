@@ -1042,28 +1042,43 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: grep "as unknown as Toolkit.WithHandler<Tools>[\"handle\"]" src/durable/DurableToolkit.ts
      ```
 
-129. **A `Journal` seam in place of the durable wrapper set (plan 2). Gated
-     on the owner's reading of `PLAN.md` §30.1.** Today `/durable` swaps
-     about eight things in the workflow body, and the assembly is written
-     twice (`DurableAgent`, `DurableSubmission`). `ExecutionPlan` is refused,
-     and Cloudflare cannot use Workflow at all.
-     - Proposal: `step(name, schema, effect)`, where the local default runs
-       the effect directly, `/durable` backs it with an Activity and
-       Cloudflare with DO SQLite.
-     - §30.1: "Do not add `AgentExecution` until a durable implementation
-       demonstrates interception that the Layer boundary cannot express."
-       The plan argues that Cloudflare meets that condition.
-     - **Evidence, 2026-09-26** (plan §7.1): `effect-agent` runs one journal
-       seam at turn granularity on SQLite, Postgres and Durable Object
-       SQLite, with no Workflow, and its Cloudflare host resumes from the
-       journal. Its hook bag is also the warning: keep the seam at `step` and
-       a few commit points.
+129. **A `Journal` seam in place of the durable wrapper set (plan 2).
+     Approved by the owner 2026-09-26. `PLAN.md` §30.1 is amended; slice 1
+     is built.** Today `/durable` swaps about eight things in the workflow
+     body, and the assembly is written twice (`DurableAgent`,
+     `DurableSubmission`). `ExecutionPlan` is refused, and Cloudflare cannot
+     use Workflow at all.
+     - **Slice 1, built.** `Journal.step(name, schema, effect)`. Locally it is
+       the identity. `/durable`'s `DurableJournal` backs it with an activity,
+       provided in both workflow bodies. Anything that runs inside a
+       submission can use it (a transform, a hook, a renderer). A crash test
+       shows a transform's step is not repeated on replay.
+     - **Next slices**, each with the equivalence oracle holding:
+       1. the model call onto `step`, which retires `DurableModel` and lets
+          a durable agent carry an `ExecutionPlan`, since the step then wraps
+          the whole ladder;
+       2. tool calls onto `step`, retiring the outcome half of
+          `DurableToolkit`. The start marker stays.
+       3. one shared body assembly for `DurableAgent` and
+          `DurableSubmission`;
+       4. a Cloudflare `Journal` over DO SQLite, so a crash there resumes
+          the turn in flight.
+     - **The question slice 1 settled.** `step` takes an effect that cannot
+       fail. A typed error cannot be rebuilt from a journal without its
+       schema, and a replay would then fail differently from the run it
+       replays. The model and tool slices already carry failures as values
+       (`ModelOutcome`, `Outcome`), so they fit.
+     - **The owner's constraint**: the seam stays at `step` and a few commit
+       points (plan §7.1: `effect-agent`'s hook bag is the warning).
 
-     Large.
+     Large, in slices.
 
      ```text
      verify: grep "A durable agent cannot carry an ExecutionPlan" src/durable/DurableAgent.ts
      verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
+     verify: grep "Amended 2026-09-26, by the owner's decision (item 129)." PLAN.md
+     verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableSubmission.ts
+     verify: grep "a replayed turn reads the step's recorded value instead of repeating it" test/Journal.test.ts
      ```
 
 131. **Version the core apart from experimental subpaths (plan 6). Gated on
