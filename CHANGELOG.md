@@ -19,6 +19,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - new identifiers sessions/Messaging (a service key) and sessions/messages (a persisted queue name) join the namespace manifest, and MessageRefusedError, MessageRouteError, NoSenderError and UnknownMessageError join the error tags; no existing identifier changes. (`f5b8b4f`; measured by `test/fixtures/error-tags-manifest.json`, `test/fixtures/namespace-manifest.json`)
 - SupervisorEscalatedError and TaskInterruptedError join the error-tags manifest; no existing tag changes. (`80e969e`; measured by `test/fixtures/error-tags-manifest.json`)
 - a new sessions/CurrentChild reference key joins the namespace manifest; it never crosses a wire and no existing identifier changes. (`1868ec3`; measured by `test/fixtures/namespace-manifest.json`)
+- a new durable/OnUnknownOutcome tool-annotation key joins the namespace manifest; it never crosses a wire, defaults to today's behaviour, and no existing identifier changes. (`2302d7d`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
