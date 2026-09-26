@@ -1191,20 +1191,17 @@ owner. Client capabilities were considered and left declined (item 86).*
 
 *The owner asked for `effect-agent`'s messaging, and OTP-style supervision
 over it. §2 (peer messaging), §3 (monitors, item 136) and the first slice of
-§4 (the in-process supervisor, item 137) landed the same day and are in the
-ledger.*
+§4 (the in-process supervisor, item 137) and §4.1 (an agent as supervisor,
+items 139 and 140) landed the same day and are in the ledger.*
 
-140. **An agent as supervisor, slice 2 (plan §4.1).**
-     - `steer_child`.
-     - Templates and `start_child`.
-     - `"ask"` as a classifier answer, so an agent can decide every exit.
-     - Charging the supervising agent's turns to the supervisor's budget.
-     - `rewind`, when a use appears.
-
-     Slice 1 (139) has landed. Medium.
+141. **`rewind` restarts, gated on a use (plan §4.1).** A restart that
+     branches a task from its last good node through `/tree`, rather than
+     starting fresh or asking the same session again. It waits for a
+     supervised task whose failed attempt leaves history worth keeping up
+     to a point, which neither `fresh` nor `resubmit` serves.
 
      ```text
-     verify: no-grep "steer_child" src/sessions/Supervisor.ts
+     verify: no-grep "rewind" src/sessions/Supervisor.ts
      ```
 
 138. **A durable supervisor (plan §5).** A supervisor as a cluster

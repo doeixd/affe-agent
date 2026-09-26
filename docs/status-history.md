@@ -6581,3 +6581,18 @@ with the agent's context rather than the supervisor's. Every start now runs
 in the supervisor's captured context, replaced whole, and a test with a
 supervisor-only service pins it.
 
+## 2026-09-26 - an agent as supervisor, slice 2
+
+Item 140. A supervising agent can now:
+- steer a running task (`steer_child`), with a note framed as the
+  supervisor's, which the task reads at its next turn;
+- start children from templates declared on the spec (`start_child`). The
+  supervisor names them, a cap limits how many, and a spent budget refuses
+  a start;
+- be asked about any exit, through `"ask"` as a classifier answer.
+
+One part of the slice was decided against rather than built: charging the
+agent's own turns to `maxTokens`. The agent is a session made outside
+`run`, and an ambient `Budget` provided to both already caps them together.
+`rewind` became item 141, gated on a use.
+

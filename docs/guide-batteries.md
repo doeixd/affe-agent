@@ -262,10 +262,30 @@ yield* Supervisor.run({
 - **Instructions** are refused for a child that cannot take them: every
   child except a `fresh` task.
 
+**Steering and new children.**
+- `steer_child(id, text)` gives a running task a note, framed as the
+  supervisor's, which it reads at its next turn.
+- `start_child(template, input)` starts a new child from a template declared
+  on the spec (`templates: { name: { description, make } }`). Templates are
+  listed by `list_children`.
+- The supervisor names a new child `<template>-<n>`. The model supplies only
+  the input.
+- `maxTemplateStarts` (default 8) caps how many children the agent can start,
+  and a spent budget refuses any start.
+
+**`"ask"`.** A `classify` that answers `"ask"` sends that exit to the agent,
+even where the rules would have restarted it, so an agent can decide every
+failure. With no agent configured, `"ask"` is `"escalate"`.
+
 **When the tools act.** The tools that change anything act only while a
 decision is pending. `control`'s operations (`list`, `inspect`, `restart`,
-`stop`, `resume`, `giveUp`) are the same thing as plain effects, for an
-operator or a UI to decide with.
+`stop`, `steer`, `start`, `resume`, `giveUp`) are the same thing as plain
+effects, for an operator or a UI to decide with.
+
+**The supervising agent's own turns** are not charged to the supervisor's
+`maxTokens`. The agent is its own session, created before `run` and outside
+it. To cap both, provide one ambient `Budget` to both: the supervisor
+forwards its children's spending to it.
 
 **Where restarts run.** Every start runs in the supervisor's own context, so
 a restart asked for from an agent's tool call sees the supervisor's

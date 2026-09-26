@@ -82,10 +82,12 @@ export const child = <E, R>(
   options?: { readonly restart?: Restart | undefined }
 ): Child<E, R> => ({ id, run, restart: options?.restart ?? "transient" })
 
-/** What a supervisor can read of a child's session. */
+/** What a supervisor can read of a child's session, and how it steers one that is running. */
 export interface SessionView {
   readonly sessionId: string
   readonly history: Effect.Effect<Prompt.Prompt>
+  /** Steer the session's running submission. Fails with a sentence when it is not running. */
+  readonly steer: (text: string) => Effect.Effect<void, string>
 }
 
 /**
@@ -157,7 +159,15 @@ export const task = <
   const ask = (session: AgentSession.AgentSession<Tools, E, Value, Input>, context: Option.Option<ChildContext>) =>
     Effect.gen(function*() {
       if (Option.isSome(context)) {
-        yield* context.value.publish({ sessionId: session.id, history: AgentSession.history(session) })
+        yield* context.value.publish({
+          sessionId: session.id,
+          history: AgentSession.history(session),
+          // A user-role steer, framed: it is the supervisor's, not the person's.
+          steer: (text) =>
+            AgentSession.steer(session, `A note from your supervisor: ${text}`).pipe(
+              Effect.mapError((error) => error.message)
+            )
+        })
       }
       // Explicit type arguments: a generic `Input` is not inferred through
       // `Effect.fn`'s wrapper when it is the caller's own type parameter.
@@ -244,6 +254,8 @@ interface Attached {
   readonly inspect: (id: string) => Effect.Effect<string, string>
   readonly restart: (id: string, instructions: Option.Option<string>) => Effect.Effect<string, string>
   readonly stop: (id: string) => Effect.Effect<string, string>
+  readonly steer: (id: string, text: string) => Effect.Effect<string, string>
+  readonly start: (template: string, input: string) => Effect.Effect<string, string>
   readonly decide: (
     decision: { readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }
   ) => Effect.Effect<string, string>
@@ -280,6 +292,23 @@ const stopDefinition = (prefix: string) =>
   Tool.make(`${prefix}stop_child`, {
     description: "Stop a running child. It is not restarted.",
     parameters: Schema.Struct({ id: Schema.String }),
+    success: Schema.String,
+    failure: Schema.String
+  })
+
+const steerDefinition = (prefix: string) =>
+  Tool.make(`${prefix}steer_child`, {
+    description: "Give a running agent task a note it reads at its next turn.",
+    parameters: Schema.Struct({ id: Schema.String, text: Schema.String }),
+    success: Schema.String,
+    failure: Schema.String
+  })
+
+const startDefinition = (prefix: string) =>
+  Tool.make(`${prefix}start_child`, {
+    description:
+      "Start a new child from one of the supervisor's templates, which list_children names, with an input for it. Returns its id.",
+    parameters: Schema.Struct({ template: Schema.String, input: Schema.String }),
     success: Schema.String,
     failure: Schema.String
   })
@@ -324,6 +353,8 @@ export const control = Effect.fn("Supervisor.control")(function*(options?: {
   const restart = (id: string, instructions?: string) =>
     on((supervisor) => supervisor.restart(id, Option.fromNullishOr(instructions)))
   const stop = (id: string) => on((supervisor) => supervisor.stop(id))
+  const steer = (id: string, text: string) => on((supervisor) => supervisor.steer(id, text))
+  const start = (template: string, input: string) => on((supervisor) => supervisor.start(template, input))
   const resume = (note?: string) =>
     on((supervisor) => supervisor.decide({ _tag: "resume", note: Option.fromNullishOr(note) }))
   const giveUp = (reason: string) => on((supervisor) => supervisor.decide({ _tag: "give_up", note: Option.some(reason) }))
@@ -332,6 +363,8 @@ export const control = Effect.fn("Supervisor.control")(function*(options?: {
     Agent.tool(inspectDefinition(prefix), ({ id }) => inspect(id)),
     Agent.tool(restartDefinition(prefix), ({ id, instructions }) => restart(id, instructions)),
     Agent.tool(stopDefinition(prefix), ({ id }) => stop(id)),
+    Agent.tool(steerDefinition(prefix), ({ id, text }) => steer(id, text)),
+    Agent.tool(startDefinition(prefix), ({ template, input }) => start(template, input)),
     Agent.tool(resumeDefinition(prefix), ({ note }) => resume(note)),
     Agent.tool(giveUpDefinition(prefix), ({ reason }) => giveUp(reason))
   ] as const
@@ -341,6 +374,8 @@ export const control = Effect.fn("Supervisor.control")(function*(options?: {
     inspect,
     restart,
     stop,
+    steer,
+    start,
     resume,
     giveUp,
     /** Which supervisor is attached. `run` sets it; nothing else should. */
@@ -412,11 +447,30 @@ export interface Spec<Children extends ReadonlyArray<Child<any, any>>> {
    * when there is one.
    */
   readonly maxTokens?: number | undefined
-  /** Whether an abnormal exit is restarted. See the module notes for the default. */
-  readonly classify?: ((cause: Cause.Cause<unknown>) => "restart" | "escalate") | undefined
+  /**
+   * Whether an abnormal exit is restarted. See the module notes for the
+   * default. `"ask"` consults `onGiveUp`'s agent about this exit, and without
+   * one it is `"escalate"`.
+   */
+  readonly classify?: ((cause: Cause.Cause<unknown>) => "restart" | "escalate" | "ask") | undefined
   /** Consult an agent where the supervisor would give up (§4.1). */
   readonly onGiveUp?: Ask | undefined
+  /**
+   * Children the agent may start with `start_child`, by name. A template
+   * makes a child that requires nothing: the model supplies only its input.
+   */
+  readonly templates?: Readonly<Record<string, Template>> | undefined
+  /** How many children `start_child` may start, over the supervisor's life. Default 8. */
+  readonly maxTemplateStarts?: number | undefined
   readonly children: Children
+}
+
+/** A child the supervising agent may start, from a string it supplies. */
+export interface Template {
+  /** What the child does, written for the supervising model. */
+  readonly description: string
+  /** Make the child. Its id is `id`, which the supervisor chooses. */
+  readonly make: (options: { readonly id: string; readonly input: string }) => Child<unknown, never>
 }
 
 /** One child's requirement. A naked type parameter, so it distributes over `never` and yields `never`. */
@@ -563,6 +617,11 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
   // consultation, which may be long after.
   const consultTimeout = consult === undefined ? undefined : Duration.fromInputUnsafe(consult.timeout)
   const grantRestarts = consult?.grant?.restarts ?? 0
+  const templates = spec.templates ?? {}
+  const maxTemplateStarts = spec.maxTemplateStarts ?? 8
+  if (!Number.isSafeInteger(maxTemplateStarts) || maxTemplateStarts < 0) {
+    return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: maxTemplateStarts must be a non-negative integer`))
+  }
   if (!Number.isSafeInteger(grantRestarts) || grantRestarts < 0) {
     return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: grant.restarts must be a non-negative integer`))
   }
@@ -605,14 +664,19 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     const lock = yield* Semaphore.make(1)
     const running = new Map<string, { readonly fiber: Fiber.Fiber<void>; readonly generation: number }>()
     const generations = new Map<string, number>()
-    const states = new Map<string, ChildState>(spec.children.map((entry) => [entry.id, {
+    const fresh = (): ChildState => ({
       status: "exited",
       starts: 0,
       last: Option.none(),
       unknownOutcome: false,
       guidance: Option.none(),
       view: Option.none()
-    }]))
+    })
+    const states = new Map<string, ChildState>(spec.children.map((entry) => [entry.id, fresh()]))
+    // Children the agent started from templates, in the order it started
+    // them: after the spec's own, so `rest_for_one` reads them as later.
+    const started: Array<Child<any, any>> = []
+    const children = (): ReadonlyArray<Child<any, any>> => [...spec.children, ...started]
     const stateOf = (id: string): ChildState => states.get(id)!
     const decisions: Array<Decision> = []
     let restarts: ReadonlyArray<number> = []
@@ -666,7 +730,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
 
     /** Stop every running child, last started first. */
     const stopAll = Effect.suspend(() =>
-      Effect.forEach([...spec.children].reverse(), (entry) => stop(entry.id), { discard: true })
+      Effect.forEach([...children()].reverse(), (entry) => stop(entry.id), { discard: true })
     )
 
     const escalate = (id: string, reason: SupervisorEscalatedError["reason"], detail: string) =>
@@ -698,7 +762,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     }
 
     const find = (id: string): Effect.Effect<Child<any, any>, string> => {
-      const entry = spec.children.find((candidate) => candidate.id === id)
+      const entry = children().find((candidate) => candidate.id === id)
       return entry === undefined
         ? Effect.fail(`${id} is not a child of supervisor ${spec.name}; list_children names them`)
         : Effect.succeed(entry)
@@ -723,7 +787,11 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         const spent = Option.isSome(budget)
           ? `\nSpent: ${yield* budget.value.own.spent} of ${spec.maxTokens} tokens.`
           : ""
-        return `${spec.children.map((entry) => summary(entry.id)).join("\n")}${spent}`
+        const names = Object.keys(templates)
+        const offered = names.length === 0
+          ? ""
+          : `\nTemplates for start_child:\n${names.map((name) => `- ${name}: ${templates[name]!.description}`).join("\n")}`
+        return `${children().map((entry) => summary(entry.id)).join("\n")}${spent}${offered}`
       })),
       inspect: (id) =>
         Effect.gen(function*() {
@@ -765,6 +833,49 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           yield* stop(id)
           return `stop ${id}`
         })),
+      steer: (id, text) =>
+        change((done: string) => done, Effect.gen(function*() {
+          yield* find(id)
+          if (!running.has(id)) return yield* Effect.fail(`${id} is not running; only a running task can be steered`)
+          const view = stateOf(id).view
+          if (Option.isNone(view)) return yield* Effect.fail(`${id} is not an agent task; it has no session to steer`)
+          yield* view.value.steer(text)
+          return `steer ${id}`
+        })),
+      start: (name, input) =>
+        change((done: string) => `start ${done}`, Effect.gen(function*() {
+          const template = templates[name]
+          if (template === undefined) {
+            const names = Object.keys(templates)
+            return yield* Effect.fail(
+              names.length === 0
+                ? `supervisor ${spec.name} has no templates`
+                : `there is no template ${name}; the templates are ${names.join(", ")}`
+            )
+          }
+          if (started.length >= maxTemplateStarts) {
+            return yield* Effect.fail(`${maxTemplateStarts} children have been started from templates; no more may be`)
+          }
+          if (Option.isSome(budget) && spec.maxTokens !== undefined) {
+            if ((yield* budget.value.own.spent) >= spec.maxTokens) {
+              return yield* Effect.fail("the children have spent their token budget; no child can be started")
+            }
+          }
+          // The supervisor names it, never the model: the id is unique by
+          // construction and cannot collide with or impersonate another child.
+          const taken = new Set(children().map((entry) => entry.id))
+          let n = 1
+          while (taken.has(`${name}-${n}`)) n += 1
+          const id = `${name}-${n}`
+          const made = template.make({ id, input })
+          if (made.id !== id) {
+            return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: template ${name} made a child named ${made.id}, not ${id}`))
+          }
+          started.push(made)
+          states.set(id, fresh())
+          yield* start(made)
+          return id
+        })),
       decide: (decision) =>
         lock.withPermits(1)(Effect.gen(function*() {
           if (Option.isNone(pending)) {
@@ -799,8 +910,8 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           `Supervisor ${spec.name} needs a decision.`,
           `Child ${step.child} ${reasonText[step.reason]}: ${step.detail}.`,
           "Children:",
-          ...spec.children.map((entry) => `- ${summary(entry.id)}`),
-          "Use list_children and inspect_child to look, and restart_child or stop_child to act.",
+          ...children().map((entry) => `- ${summary(entry.id)}`),
+          "Use list_children and inspect_child to look; restart_child, stop_child, steer_child and start_child to act.",
           "Then call resume to let the supervisor carry on, or give_up to let it escalate.",
           `Without a decision within ${Duration.format(timeout)}, it gives up.`
         ].join("\n")
@@ -828,8 +939,9 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         // earlier start of a child already restarted: not news.
         if (generations.get(exited.id) !== exited.generation) return { _tag: "Continue" }
         running.delete(exited.id)
-        const index = spec.children.findIndex((entry) => entry.id === exited.id)
-        const entry = spec.children[index]!
+        const all = children()
+        const index = all.findIndex((entry) => entry.id === exited.id)
+        const entry = all[index]!
         const state = stateOf(entry.id)
         if (Exit.isSuccess(exited.exit)) {
           state.status = "exited"
@@ -847,8 +959,17 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         const due = entry.restart === "permanent" || (entry.restart === "transient" && !normal)
         if (!due) return { _tag: "Continue" }
 
-        if (Exit.isFailure(exited.exit) && classify(exited.exit.cause) === "escalate") {
-          return { _tag: "GiveUp", child: entry.id, reason: "failure", detail: describe(exited.exit.cause) }
+        if (Exit.isFailure(exited.exit)) {
+          const answer = classify(exited.exit.cause)
+          if (answer !== "restart") {
+            const detail = describe(exited.exit.cause)
+            return {
+              _tag: "GiveUp",
+              child: entry.id,
+              reason: "failure",
+              detail: answer === "ask" ? `${detail} (the classifier asked for a decision)` : detail
+            }
+          }
         }
         const refused = yield* admitRestart
         if (Option.isSome(refused)) {
@@ -862,11 +983,11 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         // Who restarts with it: nobody, everyone running, or everyone after it.
         const siblings = strategy === "one_for_one"
           ? []
-          : spec.children.filter((other, position) =>
+          : all.filter((other, position) =>
             other.id !== entry.id && running.has(other.id) && (strategy === "one_for_all" || position > index)
           )
         for (const other of [...siblings].reverse()) yield* stop(other.id)
-        for (const other of spec.children) {
+        for (const other of all) {
           if (other.id === entry.id || siblings.some((sibling) => sibling.id === other.id && other.restart !== "temporary")) {
             yield* start(other)
           }
@@ -883,7 +1004,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     }
 
     const report: Report = {
-      children: spec.children.map((entry) => ({ id: entry.id, starts: stateOf(entry.id).starts })),
+      children: children().map((entry) => ({ id: entry.id, starts: stateOf(entry.id).starts })),
       decisions
     }
     return report

@@ -178,8 +178,8 @@ below, and judgement is applied where the policy gives up.
 
 ## 4.1 An agent as supervisor
 
-Status: **slice 1 built, 2026-09-26** (item 139). **Slice 2 is open**
-(item 140).
+Status: **slices 1 and 2 built, 2026-09-26** (items 139 and 140).
+`rewind` waits on a use (item 141).
 
 **The shape.** The deterministic supervisor handles what a rule can:
 restarting a provider hiccup, and giving up after too many restarts. Where
@@ -270,10 +270,25 @@ a context reference the supervisor provides to each start.
 reason, what the agent did, and how it ended (`resumed`, `gave-up` or
 `timed-out`).
 
-**Not in slice 1.**
-- The supervising agent's own turns are not charged to the supervisor's
-  budget. It is a separate session, under whatever budget it has.
-- `rewind` waits on a use.
+**Decided in slice 2: the supervising agent's own turns are not charged to
+`maxTokens`.** The agent is a session the application makes before `run`,
+and the supervisor's budget exists only inside `run`. Charging the agent
+would mean the control owning a budget that the application threads into
+the agent's session. That is a second way to scope a budget, beside the
+ambient one that already works: provide one `Budget` to both, and the
+supervisor forwards its children's spend to it. It reopens if a caller
+needs `maxTokens` itself to cover the agent.
+
+**As built in slice 2.**
+- `steer_child` steers through the task's published session, as a framed
+  user-role note that the task reads at its next turn.
+- Templates are on the spec. A template makes a child that requires nothing,
+  and the supervisor names it `<template>-<n>`, skipping ids in use.
+- `maxTemplateStarts` caps how many children the agent can start, and a spent
+  budget refuses a start.
+- `"ask"` is a classifier answer, and without an agent it is `"escalate"`.
+
+**Not built.** `rewind` waits on a use (item 141).
 
 ## 5. A durable supervisor (parked)
 

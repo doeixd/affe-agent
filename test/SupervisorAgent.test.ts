@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { expectTypeOf } from "vitest"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { TestClock } from "effect/testing"
-import { AiError, Prompt } from "effect/unstable/ai"
+import { AiError, Prompt, Tool } from "effect/unstable/ai"
 import { PersistedQueue } from "effect/unstable/persistence"
 import * as Agent from "../src/Agent.js"
 import * as AgentSession from "../src/AgentSession.js"
@@ -51,6 +51,8 @@ const consulted = Effect.gen(function*() {
     inspect: control.inspect,
     restart: control.restart,
     stop: control.stop,
+    steer: control.steer,
+    start: control.start,
     resume: control.resume,
     giveUp: control.giveUp
   }
@@ -327,6 +329,136 @@ describe("Supervisor with an agent (§4.1)", () => {
       const message = item.input.content[0]
       assert.isTrue(message?.role === "system" && message.content === "decide, please")
     }).pipe(Effect.provide(PersistedQueue.layer.pipe(Layer.provide(PersistedQueue.layerStoreMemory)))))
+
+  it.live("steer_child reaches a running task at its next turn, framed as the supervisor's", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const inTool = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const Wait = Tool.make("wait", { parameters: Schema.Struct({}), success: Schema.String })
+      const writer = Agent.make({
+        tools: [Agent.tool(Wait, () => Effect.andThen(Deferred.succeed(inTool, void 0), Effect.as(Deferred.await(gate), "waited")))]
+      })
+      const { layer: model, recorder } = yield* TestLanguageModel.script([
+        TestLanguageModel.toolCall("wait", {}),
+        TestLanguageModel.text("written")
+      ])
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute" }),
+        children: [
+          Supervisor.task("writer", writer, { prompt: "write it", provide: model }),
+          Supervisor.child("a", Effect.fail(new Broken()))
+        ]
+      }))
+      yield* Deferred.await(inTool)
+      yield* agent.next
+      assert.strictEqual(yield* agent.steer("writer", "focus on the introduction"), "steer writer")
+      yield* Deferred.succeed(gate, void 0)
+      yield* agent.resume()
+      const report = yield* Fiber.join(fiber)
+      assert.deepStrictEqual(report.decisions[0]!.actions, ["steer writer"])
+      const second = (yield* recorder.prompts)[1]!
+      assert.include(TestLanguageModel.userTexts(second), "A note from your supervisor: focus on the introduction")
+    }))
+
+  it.effect("steer_child is refused for a child that is not a running task", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const release = yield* Deferred.make<void>()
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute" }),
+        children: [Supervisor.child("plain", Deferred.await(release)), Supervisor.child("a", Effect.fail(new Broken()))]
+      }))
+      yield* agent.next
+      assert.include(yield* Effect.flip(agent.steer("plain", "hi")), "not an agent task")
+      assert.include(yield* Effect.flip(agent.steer("a", "hi")), "is not running")
+      yield* Deferred.succeed(release, void 0)
+      yield* agent.resume()
+      yield* Fiber.join(fiber)
+    }))
+
+  it.effect("start_child starts a child from a template, named by the supervisor", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const inputs = yield* Ref.make<ReadonlyArray<string>>([])
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute" }),
+        templates: {
+          helper: {
+            description: "Looks one thing up.",
+            make: ({ id, input }) => Supervisor.child(id, Ref.update(inputs, (all) => [...all, input]))
+          }
+        },
+        // A spec child already named as the first helper would be.
+        children: [Supervisor.child("helper-1", Effect.void), Supervisor.child("a", Effect.fail(new Broken()))]
+      }))
+      yield* agent.next
+      assert.include(yield* agent.list, "- helper: Looks one thing up.")
+      assert.strictEqual(yield* agent.start("helper", "the release date"), "helper-2")
+      yield* agent.resume()
+      const report = yield* Fiber.join(fiber)
+      assert.deepStrictEqual(report.children.map((entry) => entry.id), ["helper-1", "a", "helper-2"])
+      assert.deepStrictEqual(report.decisions[0]!.actions, ["start helper-2"])
+      assert.deepStrictEqual(yield* Ref.get(inputs), ["the release date"])
+    }))
+
+  it.effect("start_child refuses an unknown template, past its cap, and once the budget is spent", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute" }),
+        maxTemplateStarts: 1,
+        templates: { helper: { description: "Helps.", make: ({ id }) => Supervisor.child(id, Effect.never) } },
+        children: [Supervisor.child("a", Effect.fail(new Broken()))]
+      }))
+      yield* agent.next
+      assert.include(yield* Effect.flip(agent.start("wizard", "x")), "there is no template wizard; the templates are helper")
+      yield* agent.start("helper", "x")
+      assert.include(yield* Effect.flip(agent.start("helper", "y")), "no more may be")
+      yield* agent.giveUp("done")
+      yield* Fiber.await(fiber)
+
+      const spent = yield* consulted
+      const second = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        maxTokens: 0,
+        onGiveUp: Supervisor.ask({ control: spent.control, notify: spent.notify, timeout: "1 minute" }),
+        templates: { helper: { description: "Helps.", make: ({ id }) => Supervisor.child(id, Effect.void) } },
+        children: [Supervisor.child("a", Effect.fail(new Broken()))]
+      }))
+      yield* spent.next
+      assert.include(yield* Effect.flip(spent.start("helper", "x")), "spent their token budget")
+      yield* spent.giveUp("done")
+      yield* Fiber.await(second)
+    }))
+
+  it.effect("classify can ask: the agent decides an exit the rules would have restarted", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const a = yield* flaky(retryable, 1)
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        classify: () => "ask",
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute" }),
+        children: [Supervisor.child("a", a.run)]
+      }))
+      assert.include(yield* agent.next, "(the classifier asked for a decision)")
+      yield* agent.restart("a")
+      yield* agent.resume()
+      assert.deepStrictEqual((yield* Fiber.join(fiber)).decisions.map((decision) => decision.outcome), ["resumed"])
+
+      // With nobody to ask, asking is escalating.
+      const alone = yield* Effect.exit(Supervisor.run({
+        name: "alone",
+        classify: () => "ask",
+        children: [Supervisor.child("a", Effect.fail(retryable))]
+      }))
+      assert.strictEqual(failureOf(alone).reason, "failure")
+    }))
 
   it("the tools need nothing from context", () => {
     const control = Effect.runSync(Supervisor.control())

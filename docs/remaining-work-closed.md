@@ -3109,3 +3109,30 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "an unknown tool outcome cannot be restarted by the agent either" test/SupervisorAgent.test.ts
      ```
 
+## 2026-09-26 - item 140: an agent as supervisor, slice 2 (plan-supervision.md §4.1)
+
+140. ~~**An agent as supervisor, slice 2.**~~ **DONE 2026-09-26.**
+     - **`steer_child`** steers a running task through its published session,
+       as a framed supervisor's note.
+     - **`start_child`** starts a child from a template declared on the spec.
+       - The supervisor names it `<template>-<n>`, skipping ids in use.
+       - `maxTemplateStarts` caps it, default 8.
+       - A spent budget refuses a start.
+     - **`"ask"`** is a classifier answer, and `"escalate"` without an agent.
+     - **Not built, by decision.** Charging the supervising agent's own turns
+       to `maxTokens`. The agent is a session made outside `run`, and an
+       ambient `Budget` provided to both already caps them together. The
+       plan records it and when it reopens.
+     - **Split out.** `rewind`, to item 141.
+
+     `test/SupervisorAgent.test.ts` gained five cases, and was stable over 10
+     runs. Seven rules were each broken once, and a test failed each time:
+     the steer, its framing, the cap, the id collision, the budget refusal,
+     the ask marker, and `"ask"` not restarting.
+
+     ```text
+     verify: grep "steer_child" src/sessions/Supervisor.ts
+     verify: grep "while (taken.has(`${name}-${n}`)) n += 1" src/sessions/Supervisor.ts
+     verify: grep "classify can ask: the agent decides an exit the rules would have restarted" test/SupervisorAgent.test.ts
+     ```
+
