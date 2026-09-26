@@ -5,6 +5,7 @@ import * as NodeFs from "node:fs"
 import * as NodeOs from "node:os"
 import * as NodePath from "node:path"
 import * as DeliveryLog from "../src/durable/DeliveryLog.js"
+import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
 import { DurableEquivalence } from "../src/testing/index.js"
@@ -45,7 +46,11 @@ describe("DurableEquivalence.sweep (item 134)", () => {
         // A fresh backing per run, and one instance for both of its
         // processes: the backing two deployments share.
         stores: Effect.map(
-          Effect.all({ sessionStore: DurableSessionStore.memoryStore, delivery: DeliveryLog.memoryLog }),
+          Effect.all({
+            channels: DurableChannels.memoryStore,
+            sessionStore: DurableSessionStore.memoryStore,
+            delivery: DeliveryLog.memoryLog
+          }),
           (stores) => () => Effect.succeed(stores)
         )
       })
