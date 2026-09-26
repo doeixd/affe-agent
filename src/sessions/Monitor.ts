@@ -42,6 +42,8 @@ export interface Down {
   readonly submissionId: Option.Option<string>
   /** Why it failed, for `"failed"`: the event's lossy projection of the cause. */
   readonly failure: Option.Option<AgentEvent.Failure>
+  /** The event's sequence in the target session, unique within it. */
+  readonly sequence: number
 }
 
 /** The default rendering: a system message the harness writes. */
@@ -70,22 +72,42 @@ export const downOf = (target: string, envelope: AgentEvent.AgentEventEnvelope):
         target,
         reason: "failed",
         submissionId: envelope.submissionId,
-        failure: Option.some(envelope.event.failure)
+        failure: Option.some(envelope.event.failure),
+        sequence: envelope.sequence
       })
     case "SubmissionInterrupted":
-      return Option.some({ target, reason: "interrupted", submissionId: envelope.submissionId, failure: Option.none() })
+      return Option.some({
+        target,
+        reason: "interrupted",
+        submissionId: envelope.submissionId,
+        failure: Option.none(),
+        sequence: envelope.sequence
+      })
     case "SessionClosed":
-      return Option.some({ target, reason: "closed", submissionId: Option.none(), failure: Option.none() })
+      return Option.some({
+        target,
+        reason: "closed",
+        submissionId: Option.none(),
+        failure: Option.none(),
+        sequence: envelope.sequence
+      })
     default:
       return Option.none()
   }
 }
 
-/** The inbox item id for a `Down`: the event's own coordinates, never generated. */
+/**
+ * The inbox item id for a `Down`: the event's own coordinates, never generated.
+ *
+ * A failure is named by its submission. One without a submission id, which no
+ * engine emits today, falls back to the event's sequence: a shared fallback
+ * would make every such down a duplicate of the first, and the inbox would
+ * drop them.
+ */
 export const itemId = (down: Down): string =>
   down.reason === "closed"
     ? `down:${down.target}:closed`
-    : `down:${down.target}:${Option.getOrElse(down.submissionId, () => "unknown")}`
+    : `down:${down.target}:${Option.getOrElse(down.submissionId, () => `event-${down.sequence}`)}`
 
 export interface WatchOptions {
   /** The session told. */

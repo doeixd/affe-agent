@@ -161,4 +161,16 @@ describe("Monitor", () => {
     }
     assert.isTrue(Option.isSome(Monitor.downOf("t", envelope(AgentEvent.SubmissionFailed.make({ failure })))))
   })
+
+  it("a down without a submission id is named by its event, never by a shared fallback", () => {
+    const down = (sequence: number): Monitor.Down => ({
+      target: "t",
+      reason: "failed",
+      submissionId: Option.none(),
+      failure: Option.none(),
+      sequence
+    })
+    assert.notStrictEqual(Monitor.itemId(down(3)), Monitor.itemId(down(4)))
+    assert.strictEqual(Monitor.itemId(down(3)), Monitor.itemId(down(3)))
+  })
 })
