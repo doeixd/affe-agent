@@ -20,9 +20,12 @@ import * as SessionInbox from "./SessionInbox.js"
  * A completed submission is not a `down`. OTP's monitors fire when a process
  * exits, and an agent that answered has not exited.
  *
- * **The item id is the event's.** It is `down:<target>:<submission>`, or
- * `down:<target>:closed`, so the same event seen twice (two monitors, or a
- * watch resumed from a cursor) enqueues once.
+ * **The item id is the event's, for this watcher.** It is
+ * `down:<watcher>:<target>:<submission>`, or `down:<watcher>:<target>:closed`.
+ * The same event seen twice for one watcher (two monitors, or a watch resumed
+ * from a cursor) enqueues once. Two watchers of one target each get their
+ * own: the queue drops a repeated id, so an id without the watcher would tell
+ * only the first.
  *
  * **One pump.** By default the item goes onto `Messaging`'s queue, so the
  * loop that delivers messages also delivers these, and the watcher's model
@@ -104,10 +107,10 @@ export const downOf = (target: string, envelope: AgentEvent.AgentEventEnvelope):
  * would make every such down a duplicate of the first, and the inbox would
  * drop them.
  */
-export const itemId = (down: Down): string =>
+export const itemId = (watcher: string, down: Down): string =>
   down.reason === "closed"
-    ? `down:${down.target}:closed`
-    : `down:${down.target}:${Option.getOrElse(down.submissionId, () => `event-${down.sequence}`)}`
+    ? `down:${watcher}:${down.target}:closed`
+    : `down:${watcher}:${down.target}:${Option.getOrElse(down.submissionId, () => `event-${down.sequence}`)}`
 
 export interface WatchOptions {
   /** The session told. */
@@ -139,7 +142,7 @@ export const watch = Effect.fn("Monitor.watch")(function*(options: WatchOptions)
       onNone: () => Effect.void,
       onSome: (down) =>
         Effect.gen(function*() {
-          const id = itemId(down)
+          const id = itemId(options.watcher, down)
           const item: SessionInbox.Item = {
             id,
             sessionId: options.watcher,

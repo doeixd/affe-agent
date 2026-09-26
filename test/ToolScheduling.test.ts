@@ -172,6 +172,37 @@ describe("ToolScheduling (item 105)", () => {
       assert.deepStrictEqual(yield* names, ["read"])
     }))
 
+  it.live("a subagent called from code mode is a container there too: no deadlock under maxConcurrent(1)", () =>
+    Effect.gen(function*() {
+      const { scheduling, names } = yield* recorder
+      const child = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "read", params: { path: "x" } }] },
+        { text: "child done" }
+      ])
+      const research = Subagent.tool(
+        "research",
+        Agent.make({ tools: [Agent.tool(Read, ({ path }) => Effect.succeed(`read ${path}`))] }),
+        { description: "Delegate research.", provide: child.layer }
+      )
+      const bound = yield* CodeTool.tool({
+        tools: { team: yield* Agent.toolkit([research.tool], { research: research.handler }) }
+      })
+      const program = "const answer = await tools.team.research({ prompt: \"look\" })\nreturn answer.ok"
+      yield* withSession(
+        [{ toolCalls: [{ id: "e1", name: "execute", params: { program } }] }, { text: "done" }],
+        Agent.make({ tools: [bound] }),
+        ({ session }) => AgentSession.prompt(session, "go")
+      ).pipe(
+        Effect.provide(ToolScheduling.layer(ToolScheduling.all(scheduling, ToolScheduling.maxConcurrent(1)))),
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.die("the nested subagent call held the permit its child's call needed")
+        })
+      )
+      // Only the leaf was scheduled: neither `execute` nor the delegation.
+      assert.deepStrictEqual(yield* names, ["read"])
+    }))
+
   it.live("code mode's nested calls are scheduled like direct ones, and the execute call is not", () =>
     Effect.gen(function*() {
       const { busy, read } = yield* meter

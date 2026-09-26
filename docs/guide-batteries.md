@@ -142,9 +142,11 @@ down, as a framework item in the watcher's inbox.
 A completed submission is not a down.
 
 **Ids and delivery.**
-- The item id comes from the event (`down:<target>:<submission>`, or
-  `down:<target>:closed`), so two monitors, or a watch resumed over a cursor,
-  enqueue each down once.
+- The item id comes from the event and the watcher
+  (`down:<watcher>:<target>:<submission>`, or
+  `down:<watcher>:<target>:closed`).
+- Two monitors, or a watch resumed over a cursor, enqueue each down once per
+  watcher, and two watchers of one target are each told.
 - By default the item goes onto `Messaging`'s queue, so one delivery loop
   carries messages and downs.
 

@@ -4,6 +4,7 @@ import { Context, Deferred, Effect, Exit, Ref, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { AiError } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
+import * as Budget from "../src/budget/Budget.js"
 import { DurableToolUnresolvedError } from "../src/durable/DurableToolkit.js"
 import { Supervisor } from "../src/sessions/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -246,6 +247,30 @@ describe("Supervisor", () => {
       const error = escalation(exit)
       assert.strictEqual(error.reason, "budget")
       assert.include(error.detail, "100 of 50 tokens spent")
+    }))
+
+  it.effect("a capped supervisor's children read the ambient spend, while its ceiling counts only theirs", () =>
+    Effect.gen(function*() {
+      const seen = yield* Ref.make(-1)
+      yield* Effect.gen(function*() {
+        const ambient = yield* Effect.service(Budget.Budget)
+        yield* ambient.spend(100, "before-the-supervisor")
+        const a = yield* flaky(retryable, 1)
+        const report = yield* Supervisor.run({
+          name: "top",
+          // Below what the application spent before: the ceiling is the
+          // children's own spend, so it does not refuse the restart.
+          maxTokens: 50,
+          children: [
+            Supervisor.child("a", Effect.flatMap(Effect.service(Budget.Budget), (budget) =>
+              Effect.flatMap(budget.spent, (spent) => Effect.andThen(Ref.set(seen, spent), a.run))))
+          ]
+        })
+        assert.deepStrictEqual(report.children, [{ id: "a", starts: 2 }])
+      }).pipe(Effect.provide(Budget.fresh()))
+      // `Budget.within` in a child reads this: it must see what the
+      // application spent before, or it can overrun the application's limit.
+      assert.strictEqual(yield* Ref.get(seen), 100)
     }))
 
   it("run requires exactly what its children require", () => {

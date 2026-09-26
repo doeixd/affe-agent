@@ -55,7 +55,7 @@ describe("Monitor", () => {
         assert.isTrue(Exit.isFailure(yield* Effect.exit(t.prompt("go"))))
         const outcome = yield* deliver
         assert.strictEqual(outcome._tag, "Delivered")
-        assert.strictEqual(outcome.item.id, "down:t:t:submission-1")
+        assert.strictEqual(outcome.item.id, "down:w:t:t:submission-1")
         assert.strictEqual(outcome.item.sessionId, "w")
         assert.deepStrictEqual(outcome.item.source, { kind: "monitor", id: "t" })
         yield* until(w.status, (status) => status === "idle")
@@ -84,7 +84,7 @@ describe("Monitor", () => {
         yield* Fiber.join(fiber)
         // FIFO: had the completed submission been a down, it would come first.
         const outcome = yield* deliver
-        assert.strictEqual(outcome.item.id, "down:t:closed")
+        assert.strictEqual(outcome.item.id, "down:w:t:closed")
         yield* until(w.status, (status) => status === "idle")
         assert.include(systemTexts(yield* w.history)[0]!, "Session t closed")
       }).pipe(Effect.scoped, Effect.provide(layer))
@@ -104,7 +104,7 @@ describe("Monitor", () => {
         yield* Deferred.await(started)
         yield* t.interrupt()
         const outcome = yield* deliver
-        assert.strictEqual(outcome.item.id, "down:t:t:submission-1")
+        assert.strictEqual(outcome.item.id, "down:w:t:t:submission-1")
         const input = outcome.item.input.content[0]
         assert.isTrue(input?.role === "system" && typeof input.content === "string" &&
           input.content.includes("was interrupted"))
@@ -132,10 +132,36 @@ describe("Monitor", () => {
         }))
         yield* Fiber.join(first)
         yield* Fiber.join(second)
-        assert.strictEqual((yield* deliver).item.id, "down:t:t:submission-1")
+        assert.strictEqual((yield* deliver).item.id, "down:w:t:t:submission-1")
         yield* until(w.status, (status) => status === "idle")
         // Were the failure queued twice, its duplicate would come next.
-        assert.strictEqual((yield* deliver).item.id, "down:t:closed")
+        assert.strictEqual((yield* deliver).item.id, "down:w:t:closed")
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }))
+
+  it.live("two watchers of one target are each told", () =>
+    Effect.gen(function*() {
+      const layer = yield* harness([
+        { failWith: "provider down" },
+        TestLanguageModel.text("noted"),
+        TestLanguageModel.text("noted")
+      ])
+      yield* Effect.gen(function*() {
+        const client = yield* AgentClient.AgentClient
+        yield* client.createSession({ sessionId: "w" })
+        yield* client.createSession({ sessionId: "w2" })
+        const t = yield* client.createSession({ sessionId: "t" })
+        const { deliver } = yield* Messaging.deliverer()
+        const scope = yield* Effect.scope
+        yield* Effect.forkIn(Monitor.watch({ watcher: "w", target: "t" }), scope)
+        yield* Effect.forkIn(Monitor.watch({ watcher: "w2", target: "t" }), scope)
+        yield* Effect.yieldNow
+        yield* Effect.exit(t.prompt("go"))
+        const first = yield* deliver
+        const second = yield* deliver
+        // The shared queue drops a repeated id: were the watcher not part of
+        // it, the second watcher's down would be taken for the first's.
+        assert.deepStrictEqual([first.item.sessionId, second.item.sessionId].sort(), ["w", "w2"])
       }).pipe(Effect.scoped, Effect.provide(layer))
     }))
 
@@ -170,7 +196,7 @@ describe("Monitor", () => {
       failure: Option.none(),
       sequence
     })
-    assert.notStrictEqual(Monitor.itemId(down(3)), Monitor.itemId(down(4)))
-    assert.strictEqual(Monitor.itemId(down(3)), Monitor.itemId(down(3)))
+    assert.notStrictEqual(Monitor.itemId("w", down(3)), Monitor.itemId("w", down(4)))
+    assert.strictEqual(Monitor.itemId("w", down(3)), Monitor.itemId("w", down(3)))
   })
 })

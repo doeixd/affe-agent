@@ -6541,3 +6541,21 @@ that.
 Item 139 holds `resubmit`, `rewind` and escalation into an agent's inbox.
 Item 138 holds the durable supervisor, gated on 133.
 
+## 2026-09-26 - a review of the session's changes
+
+A review of `add04a3..HEAD` found three faults in this session's own code.
+Each is fixed, with a test that failed first.
+
+- **A second watcher of one target was never told.** A down's id left out
+  the watcher, and the shared queue drops a repeated id. It is now
+  `down:<watcher>:<target>:...`.
+- **A subagent called from `/code` could still deadlock** under
+  `maxConcurrent(1)`. `CodeMode.invoke` held every nested call under the host
+  scheduling, containers included. It now skips a `ToolScheduling.Container`
+  there too.
+- **A capped supervisor hid the ambient spend from its children.** Its
+  budget wrapper answered `spent` with the supervisor's own count, so a
+  child's `Budget.within` could overrun a limit the application set. Children
+  now read the ambient totals, as a delegated child does, while `maxTokens`
+  counts only the children's own spend. That second half has its own test.
+

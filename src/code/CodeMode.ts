@@ -647,8 +647,13 @@ export const make = <Groups extends ToolGroups, R = never>(
           >
           // The handler, not the approval wait above: a program parked on a
           // question holds no lock another session's call is queued behind.
+          // A container (a subagent, a nested `execute`) is not held here
+          // either: its own nested calls are, and holding both deadlocks, as
+          // `ToolScheduling.Container` explains.
           const handled = yield* Effect.result(
-            scheduling.around({ name: tool.name, params: inputData.success })(drained)
+            Context.get(tool.annotations, ToolScheduling.Container)
+              ? drained
+              : scheduling.around({ name: tool.name, params: inputData.success })(drained)
           )
 
           if (Result.isFailure(handled)) {

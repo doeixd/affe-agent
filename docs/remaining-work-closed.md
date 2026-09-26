@@ -3075,7 +3075,7 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      supervisor's.
 
      ```text
-     verify: grep "if (unresolved(cause)) return yield* escalate(entry.id, \"unresolved\", describe(cause))" src/sessions/Supervisor.ts
+     verify: grep "if (Exit.isFailure(exited.exit) && unresolved(exited.exit.cause)) {" src/sessions/Supervisor.ts
      verify: grep "an unknown tool outcome escalates even when classify would restart it" test/Supervisor.test.ts
      ```
 

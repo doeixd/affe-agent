@@ -247,20 +247,26 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
   // The children's budget, when the spec caps them. It counts their turns
   // and forwards each charge to the ambient budget, so a supervisor inside a
   // budgeted parent is still charged to it.
-  const budget = spec.maxTokens === undefined ? Option.none<Budget.Budget["Service"]>() : Option.some(
-    yield* Effect.gen(function*() {
+  const budget = spec.maxTokens === undefined
+    ? Option.none<{ readonly own: Budget.Budget["Service"]; readonly provided: Budget.Budget["Service"] }>()
+    : Option.some(yield* Effect.gen(function*() {
       const own = yield* Effect.provide(Budget.Budget, Budget.fresh())
       const ambient = yield* Effect.serviceOption(Budget.Budget)
-      return Option.match(ambient, {
+      const provided = Option.match(ambient, {
         onNone: () => own,
+        // The ambient totals are what a child reads, as a delegated child
+        // reads its parent's: `Budget.within` in a child must see what the
+        // application spent before, or it could overrun the application's
+        // own limit. The supervisor's count is only for `maxTokens`, and it
+        // reads `own` directly.
         onSome: (outer): Budget.Budget["Service"] => ({
-          ...own,
-          spend: (tokens, key) => Effect.andThen(outer.spend(tokens, key), own.spend(tokens, key)),
-          spendCost: (amount, key) => Effect.andThen(outer.spendCost(amount, key), own.spendCost(amount, key))
+          ...outer,
+          spend: (tokens, key) => Effect.andThen(own.spend(tokens, key), outer.spend(tokens, key)),
+          spendCost: (amount, key) => Effect.andThen(own.spendCost(amount, key), outer.spendCost(amount, key))
         })
       })
-    })
-  )
+      return { own, provided }
+    }))
 
   return yield* Effect.scoped(Effect.gen(function*() {
     const scope = yield* Effect.scope
@@ -277,7 +283,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         starts.set(entry.id, (starts.get(entry.id) ?? 0) + 1)
         const body = Option.match(budget, {
           onNone: () => entry.run,
-          onSome: (service) => Effect.provideService(entry.run, Budget.Budget, service)
+          onSome: ({ provided }) => Effect.provideService(entry.run, Budget.Budget, provided)
         })
         const fiber = yield* body.pipe(
           Effect.exit,
@@ -338,7 +344,8 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         return yield* escalate(entry.id, "intensity", `${restarts.length} restarts within ${window}ms`)
       }
       if (Option.isSome(budget) && spec.maxTokens !== undefined) {
-        const spent = yield* budget.value.spent
+        // The children's own spend, not the ambient total they read.
+        const spent = yield* budget.value.own.spent
         if (spent >= spec.maxTokens) {
           return yield* escalate(entry.id, "budget", `${spent} of ${spec.maxTokens} tokens spent`)
         }

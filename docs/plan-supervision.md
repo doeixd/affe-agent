@@ -114,9 +114,12 @@ and the application loops with its own schedule, as `reportToParent` does.
 through `AgentClient`. On `SubmissionFailed`, `SubmissionInterrupted` or
 `SessionClosed`, it enqueues a framework item into the watcher's inbox.
 
-- **Id.** The item id is `down:<target>:<submission>`, or
-  `down:<target>:closed` for a close. It comes from the event, so seeing the
-  same event twice enqueues once.
+- **Id.** The item id is `down:<watcher>:<target>:<submission>`, or
+  `down:<watcher>:<target>:closed` for a close. It comes from the event, so
+  the same event seen twice for one watcher enqueues once.
+- **The watcher is in the id.** The queue drops a repeated id, so an id
+  without the watcher would tell only the first of two watchers. A review
+  found this after the first version shipped without it.
 - **What does not count as down.** A completed submission is not a `down`.
   OTP monitors fire on exit, and an agent that answered has not exited.
 - **This slice watches live.** The watcher sees what happens after it
