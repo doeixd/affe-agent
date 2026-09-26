@@ -1055,7 +1055,7 @@ owner. Client capabilities were considered and left declined (item 86).*
      Subsumes 125's fix if done first. Medium.
 
      ```text
-     verify: grep "const drained = group.handle(name, inputData.success)" src/code/CodeMode.ts
+     verify: grep "ToolExecution.decide(tool, {" src/code/CodeMode.ts
      ```
 
 127. **A public tool middleware chain (plan 1b). Gated on the owner amending
