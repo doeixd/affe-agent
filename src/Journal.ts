@@ -38,7 +38,10 @@ export interface Service {
    *   name again is the next occurrence of it (`recall`, `recall`, ... are
    *   occurrences 1, 2, ...), so a replay that makes the same calls in the
    *   same order reads the same values. Use distinct names for distinct
-   *   questions.
+   *   questions, and for steps that run concurrently: two concurrent steps
+   *   under one name take their occurrences in whatever order the scheduler
+   *   picks, and a replay may pick the other. Parallel tool calls are the
+   *   usual case, so name a step there by its call.
    * - **`schema`** encodes the value for the journal. It must round-trip.
    * - **`effect`** cannot fail. Model a failure as a value (a `Result`, an
    *   `Option`) so that the replay receives the same failure the first run
@@ -49,6 +52,10 @@ export interface Service {
    * A step interrupted before its value is recorded may run again, as a tool
    * marked `Tool.Idempotent` may. Nothing is recorded for it until it
    * completes.
+   *
+   * Inside a durable tool call, the call's own activity already records the
+   * call's outcome, so a replay never re-enters the handler. A step there
+   * matters only to a `Tool.Idempotent` tool, whose handler may run again.
    */
   readonly step: <A, I, R>(
     name: string,
