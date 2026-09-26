@@ -3132,7 +3132,7 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
 
      ```text
      verify: grep "steer_child" src/sessions/Supervisor.ts
-     verify: grep "while (taken.has(`${name}-${n}`)) n += 1" src/sessions/Supervisor.ts
+     verify: grep "while (taken.has(`${name}-${n}`)) n += 1" src/internal/restartPlan.ts
      verify: grep "classify can ask: the agent decides an exit the rules would have restarted" test/SupervisorAgent.test.ts
      ```
 
@@ -3228,3 +3228,52 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "a cursor behind the window is refused, never answered with a hole" test/EventRetention.test.ts
      ```
 
+## 2026-09-26 - item 128: admission as one pure transition
+
+128. ~~**The session state machine as one pure reducer (plan 3).**~~ **DONE
+     2026-09-26 for admission. The outbox half was dropped, with the reason
+     below.**
+     - **Admission.** `internal/admission.ts` states it once, as
+       `admit(slot, key) → decision`:
+       - a missing or closed session refuses;
+       - an idle one opens `submissionCount + 1`;
+       - a held one is busy unless the caller presents the holder's key, in
+         which case it rejoins.
+
+       `AgentSession`'s `claim`, the memory store and the SQL store each call
+       it inside their own atomic section: a `SubscriptionRef.modify`, a
+       `Ref.modify`, a transaction. The two durable stores also share
+       `openClaim`, which builds the claim an `Open` allocates. The SQL
+       store's write-then-read-back check stays its own, because it guards
+       the database's concurrency, not the rule.
+     - **The suite.** `test/Admission.test.ts` holds the rule as a table.
+       It runs the same slots against the memory store, the SQL store and
+       a local session, so a store that grows its own variant fails there.
+       Two things were broken once, and a test failed each time: letting two
+       unkeyed requests rejoin, and the SQL store refusing its own key.
+     - **The Supervisor, the same way.** Its rules were written inline in
+       the loop. They are now pure functions in `internal/restartPlan.ts`:
+       `siblingsOf` (who is stopped and started with a failed child, per
+       strategy), `intensity` (the restart window) and `freshId`.
+       `test/RestartPlan.test.ts` states them as tables. Its state stays
+       mutable under its one lock, which already serialises every change.
+       Letting `rest_for_one` take earlier siblings was broken once; both
+       the table and `Supervisor.test.ts` failed.
+     - **The outbox half, dropped.** The item said the dispatch outbox exists
+       twice. Read closely, the two are different machines:
+       - the cluster's row is one per session, written before the
+         acknowledgement and cleared once dispatch lands;
+       - Cloudflare's intent is one per alarm, moves through `pending`,
+         `running` and `settled`, and settles inside the history
+         transaction.
+
+       One reducer over both would be a union of two lifecycles, not a
+       shared rule.
+
+     ```text
+     verify: exists src/internal/admission.ts
+     verify: grep "Admission.admit(slotOf(found), Option.fromUndefinedOr(submission.key))" src/durable/DurableSessionStore.ts
+     verify: grep "const decision = Admission.admit<Option.Option<SubmissionId>>(" src/AgentSession.ts
+     verify: grep "two unkeyed requests are two requests" test/Admission.test.ts
+     verify: grep "const plan = RestartPlan.siblingsOf(strategy, all, entry.id, (id) => running.has(id))" src/sessions/Supervisor.ts
+     ```

@@ -6641,3 +6641,14 @@ The host's own tail still serves `eventLog`. When the record was offered in
 its place, five host tests failed: it would have ignored the operator's
 `maxRetainedEvents` and the host's own `oldest` boundary.
 
+
+## 2026-09-26 - admission stated once
+
+Item 128. Whether a submission may take a session was written three times:
+in the local session, the memory store and the SQL store. It is now one pure
+`admit` in `internal/admission.ts`. Each store still runs it inside its own
+atomic section, and one table-driven suite holds all three to it.
+
+The item's second half, one reducer for the dispatch outbox, was dropped.
+The cluster's row and Cloudflare's intent have different lifecycles, so
+there is no shared rule for a reducer to state.

@@ -6,6 +6,7 @@ import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Budget from "../budget/Budget.js"
+import * as RestartPlan from "../internal/restartPlan.js"
 import * as Namespace from "../internal/namespace.js"
 import { positiveInteger } from "../internal/positive.js"
 import * as Messaging from "./Messaging.js"
@@ -745,13 +746,12 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         Effect.fail(new SupervisorEscalatedError({ supervisor: spec.name, child: id, reason, detail }))
       )
 
-    /** Whether one more restart fits: the window, then the allowance, then the budget. */
+    /** Whether one more restart fits: the window, then the budget. */
     const admitRestart = Effect.gen(function*() {
       const now = yield* Clock.currentTimeMillis
-      restarts = restarts.filter((at) => at > now - window)
-      if (restarts.length >= maxRestarts) {
-        return Option.some<SupervisorEscalatedError["reason"]>("intensity")
-      }
+      const fits = RestartPlan.intensity(restarts, now, window, maxRestarts)
+      restarts = fits.recent
+      if (!fits.admitted) return Option.some<SupervisorEscalatedError["reason"]>("intensity")
       if (Option.isSome(budget) && spec.maxTokens !== undefined) {
         // The children's own spend, not the ambient total they read.
         if ((yield* budget.value.own.spent) >= spec.maxTokens) return Option.some<SupervisorEscalatedError["reason"]>("budget")
@@ -876,10 +876,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           }
           // The supervisor names it, never the model: the id is unique by
           // construction and cannot collide with or impersonate another child.
-          const taken = new Set(children().map((entry) => entry.id))
-          let n = 1
-          while (taken.has(`${name}-${n}`)) n += 1
-          const id = `${name}-${n}`
+          const id = RestartPlan.freshId(name, new Set(children().map((entry) => entry.id)))
           const made = template.make({ id, input })
           if (made.id !== id) {
             return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: template ${name} made a child named ${made.id}, not ${id}`))
@@ -965,8 +962,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         if (generations.get(exited.id) !== exited.generation) return { _tag: "Continue" }
         running.delete(exited.id)
         const all = children()
-        const index = all.findIndex((entry) => entry.id === exited.id)
-        const entry = all[index]!
+        const entry = all.find((candidate) => candidate.id === exited.id)!
         const state = stateOf(entry.id)
         if (Exit.isSuccess(exited.exit)) {
           state.status = "exited"
@@ -1006,17 +1002,9 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         yield* Effect.annotateCurrentSpan({ "supervisor.restarted": entry.id })
 
         // Who restarts with it: nobody, everyone running, or everyone after it.
-        const siblings = strategy === "one_for_one"
-          ? []
-          : all.filter((other, position) =>
-            other.id !== entry.id && running.has(other.id) && (strategy === "one_for_all" || position > index)
-          )
-        for (const other of [...siblings].reverse()) yield* stop(other.id)
-        for (const other of all) {
-          if (other.id === entry.id || siblings.some((sibling) => sibling.id === other.id && other.restart !== "temporary")) {
-            yield* start(other)
-          }
-        }
+        const plan = RestartPlan.siblingsOf(strategy, all, entry.id, (id) => running.has(id))
+        for (const id of plan.stop) yield* stop(id)
+        for (const id of plan.start) yield* start(all.find((other) => other.id === id)!)
         return { _tag: "Continue" }
       })
 

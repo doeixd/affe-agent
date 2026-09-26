@@ -1042,21 +1042,6 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: grep "as unknown as Toolkit.WithHandler<Tools>[\"handle\"]" src/durable/DurableToolkit.ts
      ```
 
-128. **The session state machine as one pure reducer (plan 3).** Admission
-     (`Claimed` / `Busy` / `Missing`) is written in `AgentSession`'s `claim`,
-     in `DurableSessionStore`'s memory store and in its SQL store. The
-     dispatch outbox exists twice: the cluster's channel rows and
-     Cloudflare's `affe_dispatch`.
-     - Proposal: a synchronous `(state, command) → (state, effects)` with one
-       transition suite, run inside each store's own atomic section.
-
-     Medium.
-
-     ```text
-     verify: grep "SubscriptionRef.modify(self.state" src/AgentSession.ts
-     verify: grep "if (found === undefined) return [{ _tag: \"Missing\" }, all]" src/durable/DurableSessionStore.ts
-     ```
-
 129. **A `Journal` seam in place of the durable wrapper set (plan 2). Gated
      on the owner's reading of `PLAN.md` §30.1.** Today `/durable` swaps
      about eight things in the workflow body, and the assembly is written
@@ -1088,6 +1073,57 @@ owner. Client capabilities were considered and left declined (item 86).*
 
      ```text
      verify: no-grep "\"workspaces\"" package.json
+     ```
+
+133. **Park an unknown tool outcome instead of ending the run (plan
+     §7.3).** Today a non-idempotent call that was interrupted with a start
+     marker and no outcome raises `DurableToolUnresolvedError` as a defect,
+     and the submission settles `Failed`. That is deliberate: a typed failure
+     would reach the model, which would call the tool again.
+
+     `effect-agent` parks the call instead:
+     - it becomes an obligation;
+     - later input still runs;
+     - an operator resolves it with an explicit `resolveUnknown`.
+
+     The design questions:
+     - where the parked call lives (the session store's pending projection,
+       beside elicitations);
+     - how the resolution crosses the client protocol;
+     - what the model sees once it is resolved (an operator-supplied result,
+       or a failure the operator chose).
+
+     It must keep today's property that the model never sees an unknown
+     outcome as a failure. Large.
+
+     ```text
+     verify: grep "new DurableToolUnresolvedError({" src/durable/DurableToolkit.ts
+     verify: no-grep "resolveUnknown" src/client/AgentClient.ts
+     ```
+
+134. **An exported failpoint sweep for store certification (plan §7.3).**
+     `/testing` exports the store conformance suites and `Failpoints`, but a
+     third-party store can only run the conformance cases. `effect-agent`'s
+     second tier sweeps named crash points and checks that each converges.
+     The proposal: a `Failpoints.sweep` that runs a scenario once per named
+     boundary, crashing there, then asserts recovery with
+     `DurableEquivalence`. The durable session store and `DeliveryLog`
+     conformance suites would offer it. Medium.
+
+     ```text
+     verify: no-grep "sweep" src/testing/Failpoints.ts
+     verify: exists src/testing/DurableEquivalence.ts
+     ```
+
+135. **Recovery as one pure, explainable decision (plan §7.3).** Recovery
+     today is spread across `DurableAgentClient`'s reconciliation on
+     `session(id)` and the workflow engine's resume. `effect-agent` names
+     each recovery decision in a pure `classifyRecovery(snapshot, evidence)`,
+     which an admin `explain`/`verify` command reads. After 133, because a
+     parked call is the first thing an operator needs explained. Medium.
+
+     ```text
+     verify: no-grep "classifyRecovery" src/durable/DurableAgentClient.ts
      ```
 
 ### Messaging, monitors and supervision — 2026-09-26 — [plan-supervision.md](./plan-supervision.md)
