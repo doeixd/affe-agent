@@ -67,7 +67,7 @@ Almost every module is one of five kinds. Dependencies point downward only:
 
 The kernel is the root entry, `affe-agent`. Every other module is an
 explicit subpath of the package (`affe-agent/durable`, `affe-agent/http`,
-...). `package.json` lists 48 entries. The maturity label of each subpath
+...), listed in `package.json`'s `exports`. The maturity label of each subpath
 (core, supported, experimental, reference) is in the README's maturity map.
 
 `AgentTurn` and the engine entry points `AgentSession.makeEngine`,
@@ -112,7 +112,8 @@ handler, many calls below, needs to read.
 | `AgentRun` | One contiguous loop episode. It runs turns until the loop says stop. | inside a submission |
 | `AgentTurn` | One model call, plus the tool calls it asked for. It commits atomically. | inside a run |
 
-Ids are hierarchical and derived, never random. A submission is
+A session id is either given by the caller or generated. Submission and run
+ids are derived from it, never random: a submission is
 `${sessionId}:submission-${n}`, and a run is `${sessionId}:run-${n}`
 (`src/internal/ids.ts`). The durable layer depends on this, because it can
 recompute an execution id instead of storing it.
@@ -638,8 +639,10 @@ The durability invariants are stated in
 - D8: recovery is indistinguishable from never having crashed.
 
 `npm run verify:durability` (`scripts/falsify.mjs`) removes each guarantee
-from the code in turn and records whether the tests notice. D4b survives
-because interruption is already terminal without the removed code.
+from the code in turn and records whether the tests notice. Every break
+fails the tests except D4b. D4b removes two interrupt checks, and the plan
+records that it is not yet settled whether those checks are redundant or
+guard a scenario that no test constructs.
 
 Changing a journal-bearing fixture under `test/fixtures/` requires a
 `Behavior-Change:` trailer on the commit, and `CHANGELOG.md` is generated
@@ -673,7 +676,7 @@ On this surface:
 - Transport failures are a separate type, the retryable `AgentTransportError`.
 
 `AgentClient.typed(agent)` restores typed input and output for an agent the
-caller knows. The same five operations are implemented four ways:
+caller knows. The service has these implementations:
 
 | client | where the session lives |
 | --- | --- |
@@ -681,7 +684,8 @@ caller knows. The same five operations are implemented four ways:
 | `AgentHttp.agentClientLayer` / `AgentRpc.agentClientLayer` | behind a server |
 | `DurableAgentClient.layer` | in a workflow; the handle can die and reattach |
 
-Every transport and every client is held to one conformance suite,
+Every `AgentClient` implementation (in-process, HTTP, RPC, durable, and RPC
+over the relay) is held to one conformance suite,
 `test/AgentClientContract.ts`. The cross-adapter matrix is
 [`conformance-matrix.md`](./conformance-matrix.md).
 
@@ -707,7 +711,9 @@ All adapters share one host, and the host holds everything request-facing:
   dashboards.
 
 The adapters translate a protocol into host operations. They add no
-execution:
+execution. `/openai` is the exception to the shared host: it runs directly
+over an `AgentClient`, and it opens a fresh session per request unless a
+header names one.
 
 | adapter | serves | consumes |
 | --- | --- | --- |
@@ -762,6 +768,7 @@ Workflow stalls on workerd. The durability is the platform's:
 ```text
 verify: exists src/client/AgentSessionHost.ts
 verify: exists test/AgentClientContract.ts
+verify: grep "AgentClientContract" test/RelayContract.test.ts
 verify: grep "Entity.make(\"AgentSession\"" src/cluster/AgentEntity.ts
 verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
 ```
