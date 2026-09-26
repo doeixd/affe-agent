@@ -627,8 +627,13 @@ export const make = <Groups extends ToolGroups, R = never>(
            * `ServicesOf<Groups>`, which `execute` already declares and the
            * caller already provides.
            */
-          started = true
-          const drained = group.handle(name, inputData.success).pipe(
+          // `started` is set when the handler begins, inside the host's
+          // scheduling: a call still queued there when interrupted did not
+          // start, and reports `not-started`, not `uncertain`.
+          const drained = Effect.suspend(() => {
+            started = true
+            return group.handle(name, inputData.success)
+          }).pipe(
             Effect.flatMap((stream) => Stream.runCollect(stream)),
             Effect.map((results) => {
               const all = Array.from(results)
