@@ -18,6 +18,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a new ToolScheduling/Container annotation key joins the namespace manifest; it never crosses a wire. A host scheduling no longer holds execute or a subagent tool call, only their nested calls, so a delegation under maxConcurrent(1) completes instead of deadlocking. (`c5c4def`; measured by `test/fixtures/namespace-manifest.json`)
 - new identifiers sessions/Messaging (a service key) and sessions/messages (a persisted queue name) join the namespace manifest, and MessageRefusedError, MessageRouteError, NoSenderError and UnknownMessageError join the error tags; no existing identifier changes. (`f5b8b4f`; measured by `test/fixtures/error-tags-manifest.json`, `test/fixtures/namespace-manifest.json`)
 - SupervisorEscalatedError and TaskInterruptedError join the error-tags manifest; no existing tag changes. (`80e969e`; measured by `test/fixtures/error-tags-manifest.json`)
+- a new sessions/CurrentChild reference key joins the namespace manifest; it never crosses a wire and no existing identifier changes. (`1868ec3`; measured by `test/fixtures/namespace-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
