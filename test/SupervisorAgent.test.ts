@@ -6,6 +6,7 @@ import { AiError, Prompt, Tool } from "effect/unstable/ai"
 import { PersistedQueue } from "effect/unstable/persistence"
 import * as Agent from "../src/Agent.js"
 import * as AgentSession from "../src/AgentSession.js"
+import * as Budget from "../src/budget/Budget.js"
 import { DurableToolUnresolvedError } from "../src/durable/DurableToolkit.js"
 import { Messaging, SessionInbox, Supervisor } from "../src/sessions/index.js"
 import { TestLanguageModel } from "../src/testing/index.js"
@@ -458,6 +459,55 @@ describe("Supervisor with an agent (§4.1)", () => {
         children: [Supervisor.child("a", Effect.fail(retryable))]
       }))
       assert.strictEqual(failureOf(alone).reason, "failure")
+    }))
+
+  it.effect("the allowance lifts the restart limit, never the budget", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const starts = yield* Ref.make(0)
+      // The second start spends past the ceiling, then fails: the restart
+      // limit is what the supervisor gives up on, and the budget is spent too.
+      const run = Effect.gen(function*() {
+        const n = yield* Ref.updateAndGet(starts, (count) => count + 1)
+        if (n === 2) yield* (yield* Effect.service(Budget.Budget)).spend(100, "second-start")
+        return yield* retryable
+      })
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        maxTokens: 50,
+        intensity: { maxRestarts: 1, within: "1 minute" },
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute", grant: { restarts: 3 } }),
+        children: [Supervisor.child("a", run)]
+      }).pipe(Effect.provide(Budget.fresh())))
+      assert.include(yield* agent.next, "exceeded the restart intensity")
+      assert.include(yield* Effect.flip(agent.restart("a")), "spent their token budget")
+      yield* agent.giveUp("out of budget")
+      yield* Fiber.await(fiber)
+      assert.strictEqual(yield* Ref.get(starts), 2)
+    }))
+
+  it.effect("a decision is made once: a second answer is refused, not reported as taken", () =>
+    Effect.gen(function*() {
+      const agent = yield* consulted
+      const fiber = yield* Effect.forkChild(Supervisor.run({
+        name: "team",
+        onGiveUp: Supervisor.ask({ control: agent.control, notify: agent.notify, timeout: "1 minute" }),
+        children: [Supervisor.child("a", Effect.fail(new Broken()))]
+      }))
+      yield* agent.next
+      // Both in one batch, as a model might call them.
+      const [first, second, late] = yield* Effect.all([
+        Effect.result(agent.resume()),
+        Effect.result(agent.giveUp("no")),
+        Effect.result(agent.restart("a"))
+      ])
+      assert.strictEqual(first._tag, "Success")
+      assert.strictEqual(second._tag, "Failure")
+      if (second._tag === "Failure") assert.include(second.failure, "already made")
+      // A change after the answer is refused too: it would act on a decision
+      // the supervisor has already taken.
+      assert.strictEqual(late._tag, "Failure")
+      assert.deepStrictEqual((yield* Fiber.join(fiber)).decisions.map((decision) => decision.outcome), ["resumed"])
     }))
 
   it("the tools need nothing from context", () => {

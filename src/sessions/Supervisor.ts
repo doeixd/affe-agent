@@ -555,6 +555,12 @@ const renderHistory = (prompt: Prompt.Prompt): string => {
   return text.length > inspectCharacters ? `…${text.slice(-inspectCharacters)}` : text
 }
 
+/** What ends a consultation: the agent's answer, or the supervisor's own when it times out. */
+interface Answer {
+  readonly _tag: "resume" | "give_up" | "timeout"
+  readonly note: Option.Option<string>
+}
+
 interface Exited {
   readonly id: string
   readonly generation: number
@@ -683,7 +689,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     let grantLeft = grantRestarts
     let pending = Option.none<{
       readonly child: string
-      readonly deferred: Deferred.Deferred<{ readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }>
+      readonly deferred: Deferred.Deferred<Answer>
       readonly actions: Array<string>
     }>()
 
@@ -776,6 +782,9 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
             `supervisor ${spec.name} is not waiting for a decision; it is handling its children itself`
           )
         }
+        if (yield* Deferred.isDone(pending.value.deferred)) {
+          return yield* Effect.fail(`the decision is already made; supervisor ${spec.name} takes no more changes to it`)
+        }
         const done = yield* act
         pending.value.actions.push(label(done))
         return done
@@ -810,14 +819,18 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           if (Option.isSome(instructions) && entry.guidance !== true) {
             return yield* Effect.fail(`${id} takes no instructions; restart it without them`)
           }
+          // The budget first and on its own: `admitRestart` reports the
+          // restart limit before it reaches the budget, and the allowance
+          // lifts only the limit.
+          if (Option.isSome(budget) && spec.maxTokens !== undefined) {
+            if ((yield* budget.value.own.spent) >= spec.maxTokens) {
+              return yield* Effect.fail(`the children have spent their token budget; ${id} cannot be restarted`)
+            }
+          }
           const refused = yield* admitRestart
           if (Option.isSome(refused)) {
-            if (refused.value === "budget" || grantLeft === 0) {
-              return yield* Effect.fail(
-                refused.value === "budget"
-                  ? `the children have spent their token budget; ${id} cannot be restarted`
-                  : `the restart limit is reached and no allowance is left; ${id} cannot be restarted`
-              )
+            if (grantLeft === 0) {
+              return yield* Effect.fail(`the restart limit is reached and no allowance is left; ${id} cannot be restarted`)
             }
             grantLeft -= 1
           }
@@ -881,7 +894,11 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           if (Option.isNone(pending)) {
             return yield* Effect.fail(`supervisor ${spec.name} is not waiting for a decision`)
           }
-          yield* Deferred.succeed(pending.value.deferred, decision)
+          // One answer wins: the first `resume` or `give_up`, or the timeout.
+          // A later one is told so, never that it took effect.
+          if (!(yield* Deferred.succeed(pending.value.deferred, decision))) {
+            return yield* Effect.fail("the decision is already made; this answer changes nothing")
+          }
           return decision._tag === "resume" ? "The supervisor carries on." : "The supervisor gives up."
         }))
     }
@@ -902,7 +919,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     const giveUp = (step: Extract<Step, { readonly _tag: "GiveUp" }>) =>
       Effect.gen(function*() {
         if (consult === undefined) return yield* escalate(step.child, step.reason, step.detail)
-        const deferred = yield* Deferred.make<{ readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }>()
+        const deferred = yield* Deferred.make<Answer>()
         const actions: Array<string> = []
         yield* lock.withPermits(1)(Effect.sync(() => void (pending = Option.some({ child: step.child, deferred, actions }))))
         const timeout = consultTimeout ?? Duration.fromInputUnsafe(consult.timeout)
@@ -916,11 +933,19 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           `Without a decision within ${Duration.format(timeout)}, it gives up.`
         ].join("\n")
         yield* consult.notify(situation)
-        const decided = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeout))
-        yield* lock.withPermits(1)(Effect.sync(() => void (pending = Option.none())))
+        const awaited = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeout))
+        // Settled under the lock, where `decide` answers too: on a timeout the
+        // supervisor claims the decision itself, so an answer arriving now is
+        // refused; if an answer won the race, it stands.
+        const decided = yield* lock.withPermits(1)(Effect.gen(function*() {
+          pending = Option.none()
+          if (Option.isSome(awaited)) return awaited
+          const claimed = yield* Deferred.succeed(deferred, { _tag: "timeout", note: Option.none() })
+          return claimed ? Option.none<Answer>() : Option.some(yield* Deferred.await(deferred))
+        }))
         const outcome: Outcome = Option.match(decided, {
           onNone: () => "timed-out",
-          onSome: (decision) => decision._tag === "resume" ? "resumed" : "gave-up"
+          onSome: (decision) => decision._tag === "resume" ? "resumed" : decision._tag === "give_up" ? "gave-up" : "timed-out"
         })
         const note = Option.flatMap(decided, (decision) => decision.note)
         decisions.push({ child: step.child, reason: step.reason, actions, outcome, note })

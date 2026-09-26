@@ -6596,3 +6596,24 @@ agent's own turns to `maxTokens`. The agent is a session made outside
 `run`, and an ambient `Budget` provided to both already caps them together.
 `rewind` became item 141, gated on a use.
 
+## 2026-09-26 - a review of the supervising agent
+
+A review of `ce79090..HEAD` found two faults. Both are fixed, test first.
+
+- **The allowance lifted the budget as well as the restart limit.**
+  `admitRestart` reports the restart limit before it reaches the budget, and
+  `restart_child` let `grant.restarts` override whatever it reported. So a
+  child could be restarted after `maxTokens` was spent. The budget is now
+  checked first and on its own; the allowance lifts only the limit.
+- **A second answer was reported as taken.** `decide` completed the
+  decision without checking whether it was already made. So a `give_up`
+  after a `resume` in the same batch was told "the supervisor gives up"
+  while the supervisor carried on. Now:
+  - one answer wins, and a later answer, or a change after it, is refused;
+  - on a timeout the supervisor claims the decision itself, under the lock
+    `decide` takes, so an answer arriving in that window is refused rather
+    than ignored.
+
+The timeout race itself cannot be driven deterministically. It rests on the
+same atomic claim the tested path uses.
+
