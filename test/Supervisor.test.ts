@@ -82,6 +82,29 @@ describe("Supervisor", () => {
       assert.strictEqual(yield* Ref.get(starts), 1, "a child with an unknown side effect was started again")
     }))
 
+  it.effect("an unknown tool outcome escalates from a temporary child too, which is never restarted", () =>
+    Effect.gen(function*() {
+      const exit = yield* Effect.exit(Supervisor.run({
+        name: "top",
+        children: [
+          Supervisor.child(
+            "a",
+            Effect.die(new DurableToolUnresolvedError({ toolName: "charge_card", toolCallId: "c1" })),
+            { restart: "temporary" }
+          )
+        ]
+      }))
+      assert.strictEqual(escalation(exit).reason, "unresolved")
+    }))
+
+  it.effect("a maxTokens that is not a finite, non-negative number is refused", () =>
+    Effect.gen(function*() {
+      for (const maxTokens of [-1, Number.NaN]) {
+        const exit = yield* Effect.exit(Supervisor.run({ name: "top", maxTokens, children: [] }))
+        assert.isTrue(Exit.isFailure(exit), String(maxTokens))
+      }
+    }))
+
   it.effect("more than maxRestarts within the window escalates", () =>
     Effect.gen(function*() {
       const a = yield* flaky(retryable, 100)
@@ -236,6 +259,10 @@ describe("Supervisor", () => {
     } as const
     expectTypeOf(Supervisor.run(spec)).toEqualTypeOf<
       Effect.Effect<Supervisor.Report, Supervisor.SupervisorEscalatedError, Db>
+    >()
+    // No children require nothing: `never`, not `unknown`.
+    expectTypeOf(Supervisor.run({ name: "empty", children: [] })).toEqualTypeOf<
+      Effect.Effect<Supervisor.Report, Supervisor.SupervisorEscalatedError, never>
     >()
   })
 })

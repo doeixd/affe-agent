@@ -148,8 +148,11 @@ export interface Spec<Children extends ReadonlyArray<Child<any, any>>> {
   readonly children: Children
 }
 
-type RequirementsOf<Children extends ReadonlyArray<Child<any, any>>> = Children[number] extends Child<any, infer R> ? R
-  : never
+/** One child's requirement. A naked type parameter, so it distributes over `never` and yields `never`. */
+type RequirementOf<C> = C extends Child<any, infer R> ? R : never
+
+/** What `run` requires: the union of its children's requirements, `never` for none. */
+type RequirementsOf<Children extends ReadonlyArray<Child<any, any>>> = RequirementOf<Children[number]>
 
 /** Why a supervisor gave up. */
 export class SupervisorEscalatedError extends Schema.TaggedError<SupervisorEscalatedError>()(
@@ -237,6 +240,9 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
   const maxRestarts = positiveInteger("Supervisor maxRestarts", spec.intensity?.maxRestarts ?? 3)
   const window = Duration.toMillis(Duration.fromInputUnsafe(spec.intensity?.within ?? "1 minute"))
   const classify = spec.classify ?? defaultClassify
+  if (spec.maxTokens !== undefined && !(Number.isFinite(spec.maxTokens) && spec.maxTokens >= 0)) {
+    return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: maxTokens must be a finite, non-negative number`))
+  }
 
   // The children's budget, when the spec caps them. It counts their turns
   // and forwards each charge to the ambient budget, so a supervisor inside a
@@ -313,14 +319,17 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
       running.delete(exited.id)
       const index = spec.children.findIndex((entry) => entry.id === exited.id)
       const entry = spec.children[index]!
+      // Before the restart type: an unknown side effect needs someone told,
+      // even from a temporary child that would not be restarted anyway.
+      if (Exit.isFailure(exited.exit) && unresolved(exited.exit.cause)) {
+        return yield* escalate(entry.id, "unresolved", describe(exited.exit.cause))
+      }
       const normal = Exit.isSuccess(exited.exit)
       const due = entry.restart === "permanent" || (entry.restart === "transient" && !normal)
       if (!due) continue
 
-      if (Exit.isFailure(exited.exit)) {
-        const cause = exited.exit.cause
-        if (unresolved(cause)) return yield* escalate(entry.id, "unresolved", describe(cause))
-        if (classify(cause) === "escalate") return yield* escalate(entry.id, "failure", describe(cause))
+      if (Exit.isFailure(exited.exit) && classify(exited.exit.cause) === "escalate") {
+        return yield* escalate(entry.id, "failure", describe(exited.exit.cause))
       }
 
       const now = yield* Clock.currentTimeMillis
