@@ -6410,3 +6410,29 @@ so it is the fourth file `verify:remaining-work` scans. It pins the mechanisms
 it names and the test case behind each invariant in its table. One pin was
 broken once to confirm the check fires on it.
 
+## 2026-09-26 - an architecture review
+
+`docs/plan-architecture-review.md` reviews the design that `architecture.md`
+describes. Items 125–132 in the live list track its proposals.
+
+The main finding: two mechanisms are rebuilt, whole or in part, wherever
+they are needed.
+- **The tool-call pipeline.** Code mode's `invoke` runs `decide` and the
+  handler, but not host scheduling. A tool the host serialises is therefore
+  not serialised when it is called through `execute` (item 125, open).
+- **The session's nondeterministic steps.** `/durable` swaps about eight of
+  them, and writes that assembly twice.
+
+In addition, 19 of the 24 inventoried erasing casts come from wrapping,
+merging or restating Effect AI's closed toolkit and model types.
+
+The proposals, and how each stands against the record:
+- **One internal tool path** (item 126) fits within `PLAN.md` §17.
+- **A public tool middleware chain** (item 127) contradicts §17 as written.
+- **A `Journal` seam** (item 129) turns on whether Cloudflare meets §30.1's
+  condition. Both of these conflicts are quoted, and both are left to the
+  owner.
+- **Explicit client capabilities** were declined on 2026-09-11 (item 86).
+  This review found no case that meets that item's reopen trigger, so the
+  proposal is recorded but not reopened.
+

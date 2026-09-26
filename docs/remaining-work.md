@@ -1014,6 +1014,142 @@ history; 90 holds it.)*
      verify: grep "released by the sweep" test/Relay.test.ts
      ```
 
+### Architecture review — 2026-09-26 — [plan-architecture-review.md](./plan-architecture-review.md)
+
+*A review of the whole architecture after `docs/architecture.md` was written.
+Its main finding: the tool-call pipeline and the session's nondeterministic
+steps are each rebuilt, whole or in part, wherever they are needed. The plan
+holds the argument. Two items conflict with `PLAN.md` and wait on the
+owner. Client capabilities were considered and left declined (item 86).*
+
+125. **Code mode bypasses host scheduling.** `CodeMode.invoke` calls
+     `ToolExecution.decide` and then `group.handle`, and
+     `ToolScheduling.Current` is applied only in `ToolExecution`'s
+     `executeSettled`. A tool the host serialises with
+     `ToolScheduling.serialize` is therefore not serialised when a model
+     calls it through `execute`.
+     - Fix: route nested calls through the host's `around`.
+     - Test: write one first that overlaps two nested calls of a serialised
+       tool, and watch it fail.
+     - Also check under `/durable`. An `Ask` inside a program likely meets
+       `DurableElicitationInToolCallError`, and no test pairs `/code` with a
+       durable host.
+
+     Small.
+
+     ```text
+     verify: no-grep "ToolScheduling" src/code/CodeMode.ts
+     verify: grep "group.handle(name, inputData.success)" src/code/CodeMode.ts
+     ```
+
+126. **One internal path for every tool call (plan 1a).** Extract the
+     per-call stages (strategy slot, host scheduling, decide, approval,
+     handler and progress, settlement) from `ToolExecution.execute` into one
+     internal function. Code mode, subagents and the A2A bridges then call
+     that function instead of rebuilding a subset.
+     - Tools are still defined with Effect AI, which keeps within `PLAN.md`
+       §17.
+     - Open question: do nested calls emit their own correlated tool-call
+       events, or stay on the progress channel?
+
+     Subsumes 125's fix if done first. Medium.
+
+     ```text
+     verify: grep "const drained = group.handle(name, inputData.success)" src/code/CodeMode.ts
+     ```
+
+127. **A public tool middleware chain (plan 1b). Gated on the owner amending
+     `PLAN.md` §17.** §17 says "Do not create a large tool middleware
+     system" and "Do not create parallel harness-specific tool abstractions."
+     - The case: convert the toolkit once at the edge into an owned,
+       `Tools`-typed representation, with each stage a
+       `(call, next) => Effect`.
+     - Durable journaling, test counting and redaction become middleware, not
+       casts over a closed type. 17 of the 24 inventoried erasing casts come
+       from wrapping or merging Effect AI's closed toolkit and model types.
+     - Needs a spike to show that the owned representation retires those
+       casts, and rules for the order of permission relative to middleware
+       that rewrites arguments.
+
+     Large.
+
+     ```text
+     verify: grep "Do not create a large tool middleware system." PLAN.md
+     verify: grep "as unknown as Toolkit.WithHandler<Tools>[\"handle\"]" src/durable/DurableToolkit.ts
+     ```
+
+128. **The session state machine as one pure reducer (plan 3).** Admission
+     (`Claimed` / `Busy` / `Missing`) is written in `AgentSession`'s `claim`,
+     in `DurableSessionStore`'s memory store and in its SQL store. The
+     dispatch outbox exists twice: the cluster's channel rows and
+     Cloudflare's `affe_dispatch`.
+     - Proposal: a synchronous `(state, command) → (state, effects)` with one
+       transition suite, run inside each store's own atomic section.
+
+     Medium.
+
+     ```text
+     verify: grep "SubscriptionRef.modify(self.state" src/AgentSession.ts
+     verify: grep "if (found === undefined) return [{ _tag: \"Missing\" }, all]" src/durable/DurableSessionStore.ts
+     ```
+
+129. **A `Journal` seam in place of the durable wrapper set (plan 2). Gated
+     on the owner's reading of `PLAN.md` §30.1.** Today `/durable` swaps
+     about eight things in the workflow body, and the assembly is written
+     twice (`DurableAgent`, `DurableSubmission`). `ExecutionPlan` is refused,
+     and Cloudflare cannot use Workflow at all.
+     - Proposal: `step(name, schema, effect)`, where the local default runs
+       the effect directly, `/durable` backs it with an Activity and
+       Cloudflare with DO SQLite.
+     - §30.1: "Do not add `AgentExecution` until a durable implementation
+       demonstrates interception that the Layer boundary cannot express."
+       The plan argues that Cloudflare meets that condition.
+
+     Large.
+
+     ```text
+     verify: grep "A durable agent cannot carry an ExecutionPlan" src/durable/DurableAgent.ts
+     verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
+     ```
+
+130. **One event-retention seam (plan 4).** Three mechanisms retain events
+     today: the host's bounded tail (default 256), `Agent.start`'s trace,
+     and `DeliveryLog`. The in-process client cannot resume at all.
+     - Proposal: an `EventLog` on the session, with a bounded ring by
+       default, which refuses rather than serve a gap. `DeliveryLog` becomes
+       its durable implementation.
+
+     Medium.
+
+     ```text
+     verify: grep "options.maxRetainedEvents ?? 256" src/client/internal/sessionHost.ts
+     verify: grep "this session has no delivery log, so events cannot be resumed from a sequence" src/client/AgentClient.ts
+     ```
+
+131. **Version the core apart from experimental subpaths (plan 6). Gated on
+     the owner's release plans; decide before 1.0.** One package, one
+     version, 53 import subpaths, most labelled experimental, so the "core"
+     label carries no semver promise of its own.
+
+     ```text
+     verify: no-grep "\"workspaces\"" package.json
+     ```
+
+132. **Doc drift found by the review.**
+     - The erasing-cast count: `AGENTS.md` says "seven files", `STATUS.md`
+       says "six files", and the enforced inventory in `test/Casts.test.ts`
+       has nine.
+     - `docs/transport.md` lists only `ask_agent` for the MCP server.
+     - The README's host modules omit `/cloudflare`.
+     - `docs/plan-workbench.md` says "specified, not implemented".
+
+     Trivial.
+
+     ```text
+     verify: grep "Twenty-four erasing casts exist, in seven files" AGENTS.md
+     verify: grep "(six files)" STATUS.md
+     ```
+
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
 *Available usage and release work. The owner declined the proposed feature

@@ -922,7 +922,9 @@ Answer these in order. The first "yes" is the place.
 ## 15. Known edges
 
 These are the known edges, stated as they stand. The open work that
-addresses them is ranked in [`remaining-work.md`](./remaining-work.md).
+addresses them is ranked in [`remaining-work.md`](./remaining-work.md), and
+[`plan-architecture-review.md`](./plan-architecture-review.md) argues the
+structural changes proposed on top of this design.
 
 - **`framework` submissions do not cross a wire.** They are implemented by
   the in-process client, and the wire adapters do not implement them yet.
