@@ -155,6 +155,63 @@ A completed submission is not a down.
 - It is live. `after` resumes over a client that can, which is the durable
   client.
 
+### Supervisors
+
+`Supervisor.run(spec)` runs a list of children and restarts them by a policy
+taken from OTP. It ends when no child is left running.
+
+```ts
+yield* Supervisor.run({
+  name: "research",
+  strategy: "one_for_one",
+  intensity: { maxRestarts: 3, within: "1 minute" },
+  maxTokens: 200_000,
+  children: [
+    Supervisor.task("search", Searcher, { prompt: "find sources", provide: model }),
+    Supervisor.task("summarise", Writer, { prompt: "write it up", provide: model, restart: "permanent" })
+  ]
+})
+```
+
+**Children.**
+- A child is any effect, with an id and a restart type:
+  - `permanent`: restarted after any exit;
+  - `transient` (the default): restarted after an abnormal exit only;
+  - `temporary`: never restarted.
+- `Supervisor.task` runs an agent on a prompt in a fresh session each time it
+  starts. A completed submission is a normal exit.
+- A nested supervisor is `Supervisor.child(id, Supervisor.run(spec))`.
+
+**Strategies.**
+- `one_for_one` restarts the child that exited.
+- `one_for_all` stops and restarts every running sibling with it.
+- `rest_for_one` does that for the siblings after it.
+- A temporary sibling is stopped but not restarted.
+
+**When a restart is refused.** Before restarting an abnormal exit, the
+supervisor checks, in order:
+1. **An unknown tool outcome.** A failure carrying
+   `DurableToolUnresolvedError` always escalates, whatever `classify` says,
+   because a restart would repeat a side effect that may already have
+   happened.
+2. **`classify`.** The default restarts only an `AiError` that its provider
+   marks `isRetryable`, and escalates everything else.
+3. **Intensity.** More than `maxRestarts` restarts within `within` escalates.
+4. **The budget.** With `maxTokens`, the children's turns are charged to a
+   budget of the supervisor's, and to the ambient one too. A restart once
+   they have spent it escalates.
+
+**Escalation.**
+- It stops every running child, last started first.
+- `run` then fails with `SupervisorEscalatedError`, naming the child and the
+  reason (`failure`, `unresolved`, `intensity` or `budget`).
+- A parent supervisor classifies that like any other failure, and escalates
+  it by default.
+
+**Limits.** In process only, with restart history in memory. Only `fresh`
+restarts exist; `resubmit` and `rewind` are specified in
+`plan-supervision.md` §4. Escalation into an agent's inbox is not built.
+
 ## Scheduling & self-dispatch
 
 `affe-agent/scheduling` adds two thin things over Effect's own

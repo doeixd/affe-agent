@@ -57,6 +57,8 @@
   "SessionDirectoryConformanceFailure",
   "SessionNotIndexed",
   "StorageError",
+  "SupervisorEscalatedError",
+  "TaskInterruptedError",
   "ToolApprovalRequiredError",
   "ToolBatchRejectedError",
   "ToolContractChangedError",

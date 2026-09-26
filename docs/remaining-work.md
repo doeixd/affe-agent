@@ -1190,21 +1190,23 @@ owner. Client capabilities were considered and left declined (item 86).*
 ### Messaging, monitors and supervision — 2026-09-26 — [plan-supervision.md](./plan-supervision.md)
 
 *The owner asked for `effect-agent`'s messaging, and OTP-style supervision
-over it. §2 (peer messaging) and §3 (monitors, item 136) landed the same day
-and are in the ledger.*
+over it. §2 (peer messaging), §3 (monitors, item 136) and the first slice of
+§4 (the in-process supervisor, item 137) landed the same day and are in the
+ledger.*
 
-137. **An in-process supervisor (plan §4).**
-     - Child specs: `permanent`, `transient` or `temporary`, restarted
-       `fresh`, by `resubmit` or by `rewind`.
-     - OTP's three strategies.
-     - Intensity as N restarts within T, plus a budget ceiling.
-     - Failure classification: an unknown tool outcome is never restarted.
-     - Escalation to a parent supervisor, or to an agent's inbox.
+139. **Supervisor restart modes and escalation to an agent (plan §4).**
+     Item 137 built `fresh` restarts and escalation as a typed failure.
+     Still open:
+     - **`resubmit`**: the same session, asked again. The child has to hold a
+       session across starts.
+     - **`rewind`**: a branch from the last good node, through `/tree`.
+     - **An escalation into an agent's inbox**, with `restart_child`,
+       `replace_child` and `give_up` tools for the model that reads it.
 
-     Monitors (136) have landed. Large.
+     Medium.
 
      ```text
-     verify: absent src/sessions/Supervisor.ts
+     verify: no-grep "resubmit" src/sessions/Supervisor.ts
      ```
 
 138. **A durable supervisor (plan §5).** A supervisor as a cluster

@@ -3052,3 +3052,30 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "two monitors of one target for one watcher enqueue each down once" test/Monitor.test.ts
      ```
 
+## 2026-09-26 - item 137: an in-process supervisor (plan-supervision.md §4)
+
+137. ~~**An in-process supervisor.**~~ **DONE 2026-09-26**, as `fresh`
+     restarts; item 139 has the rest. `/sessions`' `Supervisor.run` provides:
+     - OTP's restart types and strategies, with temporary siblings stopped
+       but never restarted;
+     - an intensity window;
+     - a token ceiling on a budget the children share, which also forwards
+       each charge to the ambient budget;
+     - escalation as `SupervisorEscalatedError`, which a parent supervisor
+       classifies like any failure.
+
+     Children are effects, and `task` makes an agent one. The default
+     classifier restarts only an `AiError` its provider marks retryable. A
+     `DurableToolUnresolvedError` escalates whatever `classify` says.
+
+     `test/Supervisor.test.ts` has 14 cases and was stable over 10 runs.
+     Six rules were each broken once, and a test failed each time: the
+     unresolved rule, the default classifier, the window, `rest_for_one`'s
+     scope, the temporary sibling, and a task's budget shadowing the
+     supervisor's.
+
+     ```text
+     verify: grep "if (unresolved(cause)) return yield* escalate(entry.id, \"unresolved\", describe(cause))" src/sessions/Supervisor.ts
+     verify: grep "an unknown tool outcome escalates even when classify would restart it" test/Supervisor.test.ts
+     ```
+

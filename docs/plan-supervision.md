@@ -3,7 +3,9 @@
 Status: **in progress.**
 - §2 (peer messaging) is **built, 2026-09-26**.
 - §3 (monitors) is **built, 2026-09-26** (item 136).
-- §4 (an in-process supervisor) follows it (item 137).
+- §4 (an in-process supervisor) is **built, 2026-09-26**, with `fresh`
+  restarts (item 137). `resubmit`, `rewind` and escalation to an agent are
+  item 139.
 - §5 (a durable supervisor) is parked behind item 133 (item 138).
 
 Written 2026-09-26, after a source review of `danieljvdm/effect-agent`
@@ -124,7 +126,13 @@ through `AgentClient`. On `SubmissionFailed`, `SubmissionInterrupted` or
 
 ## 4. An in-process supervisor
 
-This section is specified here and built after §2 and §3.
+Built 2026-09-26 as `Supervisor`, except `resubmit`, `rewind` and
+escalation into an agent's inbox (item 139).
+
+**As built, a child is any effect.** An agent task is one kind of child. A
+nested supervisor is another: its escalation is its parent's child failure,
+which the default classifier escalates again. So a tree is one piece of
+code, and a managed process could be a child with no new mechanism.
 
 **Child spec.**
 - An `id`.

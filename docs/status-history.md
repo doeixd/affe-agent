@@ -6520,3 +6520,24 @@ that over the caller's. As a result:
 The caller's scope is now provided innermost (`b0a7c26`), and a test pins
 it.
 
+## 2026-09-26 - an in-process supervisor
+
+`/sessions`' `Supervisor` is plan-supervision §4 (item 137).
+- **OTP's policy.** Restart types, the three strategies and an intensity
+  window.
+- **What agents add:**
+  - a token ceiling on a budget the children share;
+  - a classifier that restarts only a retryable `AiError` by default;
+  - a rule no classifier overrides: an unknown tool outcome is never
+    restarted.
+- **Children are effects,** so a nested supervisor is a child, and its
+  escalation climbs the tree.
+
+Re-reading before the tests found one fault: `task` provided a fresh budget
+innermost, which would have hidden a task's spending from the supervisor's
+ceiling. It now uses the ambient budget, and the ceiling test fails without
+that.
+
+Item 139 holds `resubmit`, `rewind` and escalation into an agent's inbox.
+Item 138 holds the durable supervisor, gated on 133.
+
