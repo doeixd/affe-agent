@@ -22,7 +22,7 @@ Regenerate these from the commands; do not hand-edit the numbers.
 | types | `npm run typecheck` (+ `:cli`, `:tui`, `:workbench`, `:worker`, `:cloudflare`) | clean, examples included |
 | workbench | `npm run test:workbench`, `build:workbench`, `smoke:workbench` | the product's own vitest root (stores, boundaries, control plane, reconnect, the page in happy-dom), its Vite build, and the page's transport over a real socket; all in `check` |
 | doc claims | `npm run verify:remaining-work` | every `verify:` line in the live list, the ledger, this file and `docs/architecture.md` holds; a stale claim fails the build. It fired three times in its first two days, each time on text that had gone stale that hour |
-| casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (six files) |
+| casts | `test/Casts.test.ts` | every erasing cast in `src/` is inventoried in `AGENTS.md` with its reason (nine files) |
 | CI setup | `.github/workflows/ci.yml` | full Git history and tags; frozen TUI dependency install under Bun; the MCP v1 floor alias is pinned in the root lockfile |
 | portability | `npm run lint:portability`, `verify:workerd` | no host coupling outside host modules; the worker bundle builds. Widened 2026-09-01 to reject `effect-cf`, `@cloudflare/*`, `@effect/sql-sqlite-do` and the `bun:` / `deno` specifiers as well as Effect's own host bindings, each proved to fire; syntax-aware import and host-global checks also cover side-effect imports and bracket access without flagging comments, strings or local bindings. |
 | package | `npm run verify:package` | every published entry point imports from the packed tarball |

@@ -3136,3 +3136,24 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "classify can ask: the agent decides an exit the rules would have restarted" test/SupervisorAgent.test.ts
      ```
 
+## 2026-09-26 - item 132: doc drift found by the architecture review
+
+132. ~~**Doc drift found by the review.**~~ **DONE 2026-09-26.**
+     - **The cast count.** `AGENTS.md` and `STATUS.md` now agree with the
+       enforced inventory: 24 erasing casts in nine files.
+     - **`transport.md`** names the MCP server's `agent_*` tools, not only
+       `ask_agent`.
+     - **The README** names `/cloudflare` among the host entries.
+     - **`plan-workbench.md`** says W0 is complete and W1 is under way.
+
+     `AGENTS.md` also gained the `Effect.context()` trap, which bit twice in
+     one day (`b0a7c26`, and a supervisor restart caught while typing
+     `1868ec3`).
+
+     ```text
+     verify: grep "Twenty-four erasing casts exist, in nine files" AGENTS.md
+     verify: grep "with its reason (nine files)" STATUS.md
+     verify: grep "captures everything the fibre has, a \`Scope\`" AGENTS.md
+     verify: grep "except \`/sandbox/local\`, \`/blob/fs\` and \`/cloudflare\`" README.md
+     ```
+

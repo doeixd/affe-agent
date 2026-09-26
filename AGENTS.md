@@ -24,7 +24,7 @@ A plain `x as T` is still checked for overlap — it can narrow, it cannot claim
 string is a number. `src/` has around a hundred of those and they are ordinary.
 What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
 which routes around it. A third form erases too, from the other end: `x as never`, since `never` is
-assignable to everything. **Twenty-four erasing casts exist, in seven files**, and they
+assignable to everything. **Twenty-four erasing casts exist, in nine files**, and they
 are the list below. `test/Casts.test.ts` enforces it: adding one fails the build
 until it is written down here, with its reason.
 
@@ -226,6 +226,18 @@ they sit on, and the post-commit review checks the commit against both.
   needs a fresh layer *value* (`Budget.fresh()` is the pattern: `Layer.effect`
   called anew), not a second `provide`. Any `Layer.effect` constant that
   closes over a `Ref` has this property.
+* **`Effect.context()` captures everything the fibre has, a `Scope`
+  included.** Captured inside `Layer.effect`, it holds the *layer's* build
+  scope. Providing it later over a caller's effect replaces the caller's
+  scope, so a resource that should close with the caller lives as long as
+  the layer instead. `AgentClient.layer` did exactly this: every session
+  outlived its handle, and no `SessionClosed` was emitted. When captured
+  services are provided around something that opens a scoped resource,
+  provide the caller's `Scope` innermost (`Scope.provide`). When work must
+  run in another fibre's context whatever fibre starts it, replace the whole
+  context with `Effect.updateContext(self, () => captured)`, never merge it
+  with `provideContext`. `Supervisor` does this, so that a restart requested
+  from an agent's tool call does not run with the agent's services.
 * Tracing export is application wiring, never a harness dependency. v4 ships an
   OTLP exporter at `effect/unstable/observability`; `@effect/opentelemetry` is
   only for interop with an existing OTel SDK. See `examples/tracing.ts`.

@@ -279,11 +279,12 @@ the subpaths marked experimental above as the fastest-moving surface.
 ## Runtimes
 
 The package declares no Node engine requirement, because it has none. Every
-entry except `/sandbox/local` and `/blob/fs` reaches the host only through
-Effect's platform services (`SqlClient`, `HttpServer`, `HttpClient`, …), and
-the application supplies the concrete Layer for Node, Bun, Deno or an edge
-runtime. The two host entries live at their own paths so importing the
-portable surface never loads them.
+entry except `/sandbox/local`, `/blob/fs` and `/cloudflare` reaches the host
+only through Effect's platform services (`SqlClient`, `HttpServer`,
+`HttpClient`, …), and the application supplies the concrete Layer for Node,
+Bun, Deno or an edge runtime. The three host entries live at their own paths,
+so importing the portable surface never loads them. `/cloudflare` is the
+Durable Object host, on `effect-cf`.
 
 This is verified, not promised: `npm run lint:portability` rejects host
 coupling in portable source, and `npm run verify:package` imports every entry

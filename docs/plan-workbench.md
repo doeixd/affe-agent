@@ -2,7 +2,9 @@
 
 Written 2026-09-01.
 
-**Status: specified, not implemented.**
+**Status: in progress.** W0 is complete: the domain, the presenter, the plain
+browser client, and the assistant-ui adapter proof in `apps/workbench`. W1's
+persistence is under way. Item 81 has the detail.
 
 Audit 2026-09-08: W0–W9 are tracked as live item 81 and coordinated with the
 persistent-agent control plane (item 82). The existing `SessionProjection` and
