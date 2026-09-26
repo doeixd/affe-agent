@@ -234,7 +234,7 @@ describe("ToolScheduling (item 105)", () => {
       assert.deepStrictEqual(yield* names, ["book_room", "book_room"])
       const succeeded = events.filter(AgentEvent.is("ToolCallSucceeded"))
       assert.strictEqual(succeeded.length, 1)
-      assert.strictEqual((succeeded[0]!.event.result as { readonly value: unknown }).value, 2)
+      assert.propertyVal(succeeded[0]!.event.result, "value", 2)
     }))
 
   it("maxConcurrent refuses a limit that would wait forever", () => {

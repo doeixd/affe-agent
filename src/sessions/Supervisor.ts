@@ -387,9 +387,11 @@ export const toInbox = Effect.fn("Supervisor.toInbox")(function*(
         createdAt: yield* Clock.currentTimeMillis
       }, { id })
     }).pipe(
-      // A notice that cannot be queued is the timeout's to handle: the
-      // supervisor gives up as it would have, rather than failing here.
-      Effect.catchCause((cause) => Effect.logWarning("Supervisor.toInbox: the decision notice was not queued", cause))
+      // A notice the queue refused is the timeout's to handle: the
+      // supervisor gives up as it would have, rather than failing here. The
+      // typed failure only: an interruption is not a refusal, and must not
+      // be turned into a success.
+      Effect.catch((error) => Effect.logWarning("Supervisor.toInbox: the decision notice was not queued", error))
     )
 })
 
@@ -557,6 +559,9 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: maxTokens must be a finite, non-negative number`))
   }
   const consult = spec.onGiveUp
+  // Parsed here, so a bad timeout fails the spec at once, not at the first
+  // consultation, which may be long after.
+  const consultTimeout = consult === undefined ? undefined : Duration.fromInputUnsafe(consult.timeout)
   const grantRestarts = consult?.grant?.restarts ?? 0
   if (!Number.isSafeInteger(grantRestarts) || grantRestarts < 0) {
     return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: grant.restarts must be a non-negative integer`))
@@ -789,7 +794,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         const deferred = yield* Deferred.make<{ readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }>()
         const actions: Array<string> = []
         yield* lock.withPermits(1)(Effect.sync(() => void (pending = Option.some({ child: step.child, deferred, actions }))))
-        const timeout = Duration.fromInputUnsafe(consult.timeout)
+        const timeout = consultTimeout ?? Duration.fromInputUnsafe(consult.timeout)
         const situation = [
           `Supervisor ${spec.name} needs a decision.`,
           `Child ${step.child} ${reasonText[step.reason]}: ${step.detail}.`,
