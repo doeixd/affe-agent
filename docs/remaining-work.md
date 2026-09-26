@@ -1056,7 +1056,17 @@ owner. Client capabilities were considered and left declined (item 86).*
      - **Next slices**, each with the equivalence oracle holding:
        1. the model call onto `step`, which retires `DurableModel` and lets
           a durable agent carry an `ExecutionPlan`, since the step then wraps
-          the whole ladder;
+          the whole ladder. **One open question for the owner.** A streamed
+          durable call hands the provider's deltas to the session live, from
+          inside the model activity, and journals only the completed
+          response. A plain `step(name, schema, effect)` cannot express that
+          tap. The choices are:
+          - a second operation, a streaming commit point: a step whose
+            effect emits as it runs and records only its result;
+          - leaving streamed calls on `DurableModel`, and moving the batch
+            path (and `ExecutionPlan`) first.
+
+          The constraint of "`step` and a few commit points" allows either.
        2. tool calls onto `step`, retiring the outcome half of
           `DurableToolkit`. The start marker stays.
        3. one shared body assembly for `DurableAgent` and
